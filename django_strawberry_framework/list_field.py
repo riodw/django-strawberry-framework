@@ -153,8 +153,10 @@ def DjangoListField(  # noqa: N802  # PascalCase for graphene-django parity - co
     # ``_default`` uses runtime ``in_async_context()`` per-call so the same
     # factory output dispatches correctly under both ``schema.execute_sync``
     # and ``await schema.execute``. The consumer-wrapper branch below commits
-    # per-construction via ``inspect.iscoroutinefunction(user_resolver)``
-    # because Strawberry inspects the resolver signature once at schema
+    # per-construction via ``is_async_callable(user_resolver)`` (the
+    # ``__call__``/``functools.partial``-aware superset of
+    # ``inspect.iscoroutinefunction``) because Strawberry inspects the resolver
+    # signature once at schema
     # construction and freezes the sync-vs-async handling.
     if resolver is None:
 

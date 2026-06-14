@@ -61,25 +61,14 @@ def test_export_schema_raises_command_error_for_missing_positional_argument():
         call_command("export_schema")
 
 
-def test_export_schema_raises_command_error_when_path_directory_missing(monkeypatch, tmp_path):
-    _make_test_module(monkeypatch, schema=_make_schema())
-    missing_dir_path = tmp_path / "nonexistent_dir" / "schema.graphql"
-    with pytest.raises(CommandError, match="No such file or directory"):
-        call_command(
-            "export_schema",
-            "test_module:schema",
-            "--path",
-            str(missing_dir_path),
-        )
-
-
 def test_export_schema_raises_command_error_when_path_flag_has_no_value(monkeypatch):
     _make_test_module(monkeypatch, schema=_make_schema())
     with pytest.raises(CommandError):
         call_command("export_schema", "test_module:schema", "--path")
 
 
-def test_export_schema_raises_command_error_when_path_flag_is_empty_string(monkeypatch):
-    _make_test_module(monkeypatch, schema=_make_schema())
-    with pytest.raises(CommandError, match="--path requires a non-empty value"):
-        call_command("export_schema", "test_module:schema", "--path", "")
+# The ``--path`` directory-missing and empty-string failure branches moved to
+# the fakeshop project suite (examples/fakeshop/tests/test_export_schema.py),
+# where they run against the real ``config.schema`` per feedback4.md. The
+# parser-only ``--path`` no-value contract above stays package-side (it short-
+# circuits in argparse, before any project schema matters).

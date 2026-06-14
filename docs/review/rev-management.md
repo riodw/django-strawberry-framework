@@ -2,42 +2,42 @@
 
 Status: verified
 
+Fresh 0.0.9 folder pass for the management namespace — the parent of `management/commands/`. Supersedes a stale 0.0.7-era artifact on disk (`Status: verified`, dated Jun 4) per the recurring stale-artifact-replacement pattern; the active plan box `review-0_0_9.md:89` was unchecked, confirming the replacement. This folder's only direct source is `management/__init__.py`; the nested `commands/` subpackage (two `BaseCommand` siblings + its own `__init__.py`) was reviewed in the file cycles and the `commands/` folder pass `rev-management__commands.md` (all `Status: verified`, boxes `[x]` at `review-0_0_9.md:86-88`). This pass therefore covers **only** `management/__init__.py` correctness and the management-namespace structure/integration — it does NOT re-review the command files, whose findings are closed in their own artifacts.
+
 ## DRY analysis
 
-- None — the folder is a minimal Django `management/` namespace with exactly one source surface at this level: `__init__.py` (one-line module docstring, zero imports, zero symbols, zero executable code per the shadow overview at `docs/shadow/django_strawberry_framework__management____init__.overview.md`). The only nested member is the `commands/` subpackage, already passed and verified in `rev-management__commands.md` (`Status: verified`, single `export_schema.py` sibling). With one docstring-only file at this layer and one verified subfolder pass, there is no cross-file duplication surface to consolidate at the `management/` scope: no shared helpers, no repeated literals across siblings, no naming convention to align, no import-direction concern. Revisit only if a second nested subpackage (e.g. a future `management/loaders/` for data-loader registration entry points, or any non-`commands/` Django management surface) lands — at which point this folder pass would re-grep for cross-subpackage shared shapes (a `management/_common.py`, shared discovery helpers, shared error-message phrasings) and decide whether a folder-level helper is warranted. The same defer-with-trigger established in `rev-management__commands.md` for the second-management-command condition continues to apply one layer down.
+- None — `management/__init__.py` is a one-line docstring-only package marker (0 imports, 0 symbols, 0 executable code per the shadow overview), so there is nothing in this folder's own surface to consolidate. The only cross-command DRY candidates (the `import_module_symbol → CommandError` 2-site idiom, the `_render_annotation`/`_render_strawberry_type` twin, and the cross-folder `_is_relay_shaped` re-spell) live inside `commands/` and are already adjudicated in `rev-management__commands.md` (two deferred-with-trigger, one forwarded to the project pass `rev-django_strawberry_framework.md`); re-promoting them at the `management/` parent level would duplicate that audit trail with no new action, so they are referenced, not restated, here.
 
 ## High:
 
-None.
+None. `management/__init__.py` carries no logic; nothing to crash. The one folder High in the subtree (`inspect_django_type._relation_row` `KeyError` on a `"connection"`-shaped relation) was root-cause-fixed and verified in `rev-management__commands__inspect_django_type.md` and re-confirmed in the `commands/` folder pass — it belongs to the nested folder, not this one, and is not re-promoted.
 
 ## Medium:
 
-None.
+None. No namespace-structure defect, no import-time side effect, no package-discovery integrity problem (see `What looks solid`).
 
 ## Low:
 
-None.
+None. `management/__init__.py` is a pure empty/docstring-only package marker, so there is no comment-pass surface beyond the docstring, which is accurate and consistent with the namespace's purpose (see the skip rationale in `What looks solid`). No GLOSSARY drift attaches to the management *namespace* itself — the two GLOSSARY entries that mention `management/` (`#schema-export-management-command` `GLOSSARY:1169-1175`, `#schema-introspection-management-command` `GLOSSARY:1177-1187`) are **command-specific** and were resolved/verified in their respective file cycles; there is no GLOSSARY entry for the management package/namespace as such, so nothing for this folder pass to correct.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** The folder's single direct sibling (`__init__.py`) carries only the one-line module docstring `"""Django management entry points for django-strawberry-framework."""` — the canonical empty-namespace shape for a Django `management/` package, mirroring Django's own `django/core/management/__init__.py` shape (Django's own `management/` carries module code, but third-party app packages exposing only `management/commands/` reach for this minimal `__init__.py` shape; e.g. `django.contrib.auth.management/__init__.py` is one line of imports, no exports). Auto-discovery is driven by Django walking `INSTALLED_APPS` for any app with a `management/commands/` subdirectory; the `management/__init__.py` is required only as a Python package marker and intentionally exposes no `__all__` and no re-exports.
-- **New helpers considered.** A folder-level `management/_common.py` (shared command-discovery helpers, shared `CommandError` phrasing, shared positional/argparse conventions) was considered for the case where a second management command or a non-`commands/` subpackage lands. Rejected at this pass because: (a) there is no second nested subpackage today (the only nested member is `commands/`, and the `commands/`-level folder pass already records the defer-with-trigger Low gating its own `_common.py` candidate on a second management command landing); (b) speculating a shared shape against a single concrete subpackage is exactly the `START.md` "Don't preemptively populate" anti-pattern; (c) any shared helper at the `management/` layer would today have a single caller (`commands/export_schema.py`), which is below the AGENTS.md / sibling-cycle DRY threshold for extraction. Same defer-with-trigger as `rev-management__commands.md`: extract when the second consumer arrives, not before.
-- **Duplication risk in the current folder.** None — with one docstring-only `__init__.py` and one already-passed subfolder there is no cross-file repeated-literal surface at this scope (the shadow overview's repeated-literals counter is zero for `management/__init__.py`, and the `commands/`-level folder pass already confirmed zero cross-file literal duplication at its layer). No risk surface to flag.
+- **Existing patterns reused.** `management/__init__.py` reuses nothing because it imports nothing — it is the canonical Django package-marker shape (a single module docstring). The cross-command reuse audit (Django `CommandError(...) from e` convention, Strawberry `import_module_symbol(..., default_symbol_name="schema")`, the canonical `handle(self, *args, **options)` override) is recorded in full in `rev-management__commands.md` and is out of scope for this parent-folder pass.
+- **New helpers considered.** None at this folder level — there is no executable surface in `management/__init__.py` to factor. The `commands/_common.py::load_schema_symbol` and `_is_relay_shaped`-promotion candidates were evaluated in the `commands/` folder pass (rejected-for-now / forwarded respectively); not re-evaluated here.
+- **Duplication risk in the current folder.** None. The shadow overview reports `repeated string literals: 0` for `management/__init__.py`, and there are no sibling source files at the `management/` level (only `__init__.py` and the `commands/` subpackage), so there is no intra-folder near-copy or shared literal to hoist.
 
 ### Other positives
 
-- **`__init__.py` is the canonical empty namespace.** `django_strawberry_framework/management/__init__.py` qualifies as a structural skip (shape #2 in `REVIEW.md`'s "No-op / skip / consolidated single-spawn cycles" list — module contains only a docstring; zero imports, zero symbols, zero executable code, zero `__all__`, zero first-party imports). The shadow overview at `docs/shadow/django_strawberry_framework__management____init__.overview.md` confirms every counter is zero: "imports: 0; symbols: 0; control-flow hotspots: 0; executable marker lines: 0; calls of interest: 0; TODO comments: 0; repeated string literals: 0." Django's auto-discovery mechanism walks `INSTALLED_APPS` looking for a `management/commands/` subdirectory and does not read `management/__init__.py` for command enumeration, so no re-export is required and adding one would obscure the auto-discovery contract.
-- **Module docstring is accurate and terse.** The one-line docstring `"""Django management entry points for django-strawberry-framework."""` correctly describes the folder's role (Django management entry points) without overpromising or naming any specific command (which would couple the folder docstring to the `commands/` subpackage's current single sibling). When a second nested subpackage lands the docstring continues to read accurately.
-- **Naming convention matches Django.** The folder is `management/` (matches Django's own contrib package layout: `django.contrib.auth.management/`, `django.contrib.contenttypes.management/`, etc.); the nested subpackage is `commands/` (also matches Django's convention). No naming drift to flag.
-- **Import direction is downward.** `management/__init__.py` imports nothing; `management/commands/__init__.py` imports nothing; only `management/commands/export_schema.py` imports any modules (Django + Strawberry first-party only, zero first-party `django_strawberry_framework.*` imports per `rev-management__commands.md`'s import-direction confirmation). The folder has zero exposure to circular-import risk from sibling packages (`registry`, `conf`, `_django_patches`, `optimizer`, `types`, `filters`, `utils`, `testing`, `sets_mixins`, `list_field`, `scalars`, `exceptions`).
-- **GLOSSARY coverage for the folder is appropriate.** The `commands/` subpackage's single command already has a GLOSSARY entry (`Schema export management command` at `docs/GLOSSARY.md:1007-1013`, refreshed under the per-file cycle's Medium fix); no separate folder-level GLOSSARY entry is warranted for the `management/` directory itself or for its `__init__.py` (there is no consumer-visible folder-level symbol — `management/` is a Django convention enforced by app-walking, not a re-exported namespace). The folder-pass GLOSSARY drift quick-check confirms: zero backticked symbols in `management/__init__.py`, the single user-visible command in the subtree (`Schema export management command`) is already documented and verified.
-- **Single-sibling folder-pass shape correctly recognised.** A single-`__init__.py`-plus-one-subfolder folder pass is the second-most-common Django `management/` shape (after Django-contrib's `management/commands/` + `management/__init__.py` + sibling submodules pattern). The right shape is shape #5 (no-source-edit cycle, skip Worker 2) with a `## DRY analysis` that names the defer-with-trigger gate established one layer down. Do NOT speculate a folder-level `_common.py` or re-export module against a single concrete subpackage — that's the `START.md` "preemptively populate" anti-pattern.
+- **`management/__init__.py` is a correct, side-effect-free package marker.** Exactly one line — a module docstring (`"""Django management namespace for the framework's ``manage.py`` commands."""`, `management/__init__.py:1`). Shadow overview confirms 0 imports, 0 symbols, 0 control-flow, 0 executable marker lines, 0 calls of interest, 0 TODOs. This is a shape #2 skip-by-structure module: it carries no logic and produces **no import-time side effect**, so importing the `management` package (which Django does implicitly when walking installed apps for management commands) is free of first-party execution, registry mutation, or settings access. The docstring accurately names the namespace's single purpose and needs no edit.
+- **Django management-command discovery integrity is intact.** Django's `django.core.management.find_commands` discovers commands by **filesystem convention** — it globs `<app>/management/commands/*.py` for the package directory; it does not import or read `management/__init__.py` for an `__all__` or any export list. Both `management/__init__.py` and `management/commands/__init__.py` are present (confirmed on disk), so both are importable packages and discovery succeeds. No `__all__` is needed or appropriate at either level — adding one would be dead config, since discovery never consults it. The `commands/__init__.py` docstring (reviewed in the nested folder pass) correctly names both shipped commands; this parent `__init__.py` correctly stays generic about the namespace rather than re-enumerating the commands, so the two docstrings do not drift or duplicate each other.
+- **No import-time side effects, no circular-import risk.** `management/__init__.py` imports nothing, so it can introduce no cycle and no eager package load. Grep confirms no module anywhere in `django_strawberry_framework/`, `tests/`, or `examples/` imports *from* the `management` package as a re-export source (`from ... management import <symbol>`); the only matches for `management/__init__.py` are path-string literals in an example app's tracked-path allowlist (`examples/fakeshop/apps/kanban/constants.py:16`), not imports. The one-way dependency direction established in the `commands/` folder pass (`export_schema` first-party-free, `inspect_django_type` a downstream leaf consumer of `registry`/`types`/`scalars`/`utils`, no back-edge into `management.commands`) holds, and nothing at the `management/` parent level alters it.
+- **Proper package nesting.** `management/` is a regular package (`__init__.py` present) containing exactly the package marker and the `commands/` subpackage (also a regular package). The nesting matches Django's required `<app>/management/commands/` layout exactly; no misplaced source, no stray top-level command module bypassing the `commands/` subdir.
 
 ### Summary
 
-The `management/` folder is a minimal Django app-extension namespace with exactly one source file at this level (`__init__.py`, one-line module docstring) plus the already-passed `commands/` subfolder (`rev-management__commands.md`, `Status: verified`, single `export_schema.py` sibling). The `__init__.py` qualifies as a skip artifact (shape #2 by structure: docstring-only, zero imports, zero symbols, zero executable code, no `__all__`, no first-party imports — confirmed via the shadow overview) and the folder pass has no cross-file surface to find issues against. No High, no Medium, no Low at folder scope; no DRY opportunity until a second nested subpackage lands or the `commands/`-layer defer-with-trigger fires. The folder pass qualifies for shape #5 (no-source-edit cycle, skip Worker 2) per `worker-1.md`: zero edits to any tracked file, no High / no behaviour-changing Medium, no GLOSSARY-only fix in scope, both ruff runs clean. Worker 1 fills the Worker 2 sections inline; Worker 0 dispatches Worker 3 directly for terminal verification.
+A textbook thin Django management namespace. `management/__init__.py` is a one-line, docstring-only package marker — 0 imports, 0 symbols, 0 executable code (shadow-overview-confirmed shape #2 skip-by-structure) — with an accurate docstring, no import-time side effects, and no circular-import surface. Management-command discovery integrity is intact: Django finds commands by filesystem convention (`management/commands/*.py`), never by an `__all__` in either `__init__.py`, and both package markers are present. The two GLOSSARY mentions of `management/` are command-specific and were resolved in their file cycles; there is no namespace-level GLOSSARY entry to drift. All real review surface in this subtree lives in the already-verified command files and the `commands/` folder pass; this parent pass introduces no new findings and touches nothing. **No High, no Medium, no Low, and zero edits to any tracked file — a no-findings folder pass (shape #3) that additionally qualifies as a no-source-edit cycle (shape #5): Worker 1 fills the Worker 2 sections inline, runs both ruff commands, and sets bare `Status: fix-implemented`.**
 
 ---
 
@@ -46,26 +46,25 @@ The `management/` folder is a minimal Django app-extension namespace with exactl
 Filled by Worker 1 per no-source-edit cycle pattern.
 
 ### Files touched
-
-None — no-source-edit cycle.
+- None — no-source-edit cycle. (The on-disk `rev-management.md` was a stale 0.0.7-era folder pass — `Status: verified`, dated Jun 4 — superseded wholesale by this fresh 0.0.9 folder pass per the recurring stale-artifact-replacement pattern. The active plan box `review-0_0_9.md:89` was unchecked, confirming the replacement.)
 
 ### Tests added or updated
-
-None — no-source-edit cycle.
+- None — no-source-edit cycle.
 
 ### Validation run
-
-- `uv run ruff format --check django_strawberry_framework/management/` — pass ("3 files already formatted"; harmless `COM812`-vs-formatter conflict warning is a global config notice, not a folder-specific issue).
-- `uv run ruff check django_strawberry_framework/management/` — pass ("All checks passed!").
+- `uv run ruff format --check django_strawberry_framework/management/__init__.py` — "1 file already formatted" (the `COM812`-vs-formatter notice is the standing global config warning, harmless).
+- `uv run ruff check django_strawberry_framework/management/__init__.py` — "All checks passed!".
 
 ### Notes for Worker 3
-
-- Folder pass over the `management/` namespace: one docstring-only `__init__.py` at this layer plus the already-passed `commands/` subfolder (`rev-management__commands.md`, `Status: verified`). With one docstring-only file at this level and one already-passed nested subfolder, there is no cross-file naming drift, no shared helper candidate, no repeated literal, and no import-direction concern to flag — these checks all returned zero hits.
-- `__init__.py` is structurally shape #2 (skip artifact: docstring-only module, zero imports/symbols/exec-code, no `__all__`, no first-party imports). The shadow overview at `docs/shadow/django_strawberry_framework__management____init__.overview.md` confirms every counter is zero.
-- No GLOSSARY-only fix in scope — the only user-visible symbol in the subtree (`Schema export management command` at `docs/GLOSSARY.md:1011`) was already refreshed under the per-file sibling cycle's Medium and verified there; the folder has no consumer-visible folder-level symbol (Django's app-walking discovery is convention-driven, not via `__all__`), so no folder-level GLOSSARY entry is warranted.
-- Defer-with-trigger carry-forward from `rev-management__commands.md`'s DRY analysis: the per-folder `_common.py` candidate (or any `management/`-level shared helper) waits on a second nested subpackage landing under `management/` (or, one layer down, on a second management command landing inside `commands/`). Until either trigger fires, the empty-namespace shape is correct.
-- No shadow file regeneration required — the existing `docs/shadow/django_strawberry_framework__management____init__.overview.md` was the plan-time `--all` sweep output and the `__init__.py` source has not changed since.
-- Out-of-scope dirty paths at dispatch are presumptively concurrent maintainer work per `AGENTS.md` rule 33 and ignored.
+- Parent-folder pass over the `management/` namespace: `management/__init__.py` (a one-line docstring-only package marker) plus the namespace structure/integration. The nested `commands/` subpackage is OUT of scope (its files + folder pass `rev-management__commands.md` are all `Status: verified`, boxes `[x]` at `review-0_0_9.md:86-88`); its findings/DRY are referenced, not re-reviewed.
+- No High/Medium/Low at this folder level; all severities `None.`
+- `management/__init__.py` is shape #2 skip-by-structure (0 imports, 0 symbols, 0 executable code — shadow overview confirms) and produces no import-time side effect; docstring accurate, no edit.
+- Management-command discovery is filesystem-convention (`management/commands/*.py` via `django.core.management.find_commands`), never `__all__`-driven — no `__all__` needed at either `__init__.py`; both package markers present.
+- No back-edge: grep confirms nothing imports *from* the `management` package as a re-export source; the only `management/__init__.py` references are path-string literals in `examples/fakeshop/apps/kanban/constants.py:16` (an allowlist, not an import).
+- The three `commands/`-subtree DRY items (2 deferred-with-trigger, 1 cross-folder `_is_relay_shaped` re-spell forwarded to `rev-django_strawberry_framework.md`) are adjudicated in `rev-management__commands.md` and not re-promoted here.
+- No GLOSSARY-only fix in scope. The two GLOSSARY entries touching `management/` are command-specific (`GLOSSARY:1169-1187`), resolved in their file cycles and accurate vs current source; there is no namespace-level GLOSSARY entry.
+- No shadow file regenerated — the plan-time overview for `management/__init__.py` is current (source unchanged, single docstring line).
+- Out-of-scope dirty paths at dispatch are presumptively concurrent maintainer / closed-sibling-cycle work per `AGENTS.md` rule 33 and left untouched.
 
 ---
 
@@ -73,21 +72,7 @@ None — no-source-edit cycle.
 
 Filled by Worker 1 per no-source-edit cycle pattern.
 
-### Files touched
-
-None — no-source-edit cycle.
-
-### Per-finding dispositions
-
-- No High / Medium / Low at folder scope — every finding from the nested `commands/`-level sibling artifact was resolved or deferred-with-trigger inside the `commands/`-layer cycle. No comment/docstring text to adjust at the `management/__init__.py` layer: the existing one-line module docstring (`"""Django management entry points for django-strawberry-framework."""`) is accurate, terse, and idiomatic for a Django `management/` namespace.
-
-### Validation run
-
-- Shared with the logic pass above; both ruff commands pass.
-
-### Notes for Worker 3
-
-Per-finding dispositions above cover the full set; consolidated no-source-edit shape means the validation run is shared with the logic pass.
+No comment/docstring edits. `management/__init__.py`'s single module docstring accurately names the namespace's purpose and does not drift from or duplicate the `commands/__init__.py` docstring (which names the two commands — the parent stays generic about the namespace by design). No stale TODO, no restating-the-obvious comment, no docstring promising behavior the marker does not provide.
 
 ---
 
@@ -95,53 +80,56 @@ Per-finding dispositions above cover the full set; consolidated no-source-edit s
 
 Filled by Worker 1 per no-source-edit cycle pattern.
 
-### State
-
-`Not warranted`.
-
-### Reason
-
-No source / test / GLOSSARY / CHANGELOG edits this cycle — folder pass produced zero findings at folder scope. Per `AGENTS.md` rule 21 ("Do not update CHANGELOG.md unless explicitly instructed") and the active plan's silence on changelog authorization for this cycle item (`docs/review/review-0_0_7.md:25` lists the folder-pass artifact with no changelog notation), no CHANGELOG entry is warranted.
-
-### What was done
-
-No `CHANGELOG.md` edit.
-
-### Validation run
-
-- Shared with the logic / comment pass above; both ruff commands pass.
+`Not warranted`. No source/test/GLOSSARY/CHANGELOG edits this cycle. Cited per the "Not warranted" gate: (1) `AGENTS.md` rule 21 — "Do not update CHANGELOG.md unless explicitly instructed"; (2) the active plan (`review-0_0_9.md`) records no changelog authorization for this folder-pass item, and the dispatch prompt forbids touching `CHANGELOG.md` (folder pass = review only; cross-folder concerns forward to the project pass).
 
 ---
 
 ## Verification (Worker 3)
 
+Terminal-verify of a no-findings folder pass over the `management/` namespace (shape #5 no-source-edit). All claims independently re-confirmed against source; the artifact holds.
+
 ### Logic verification outcome
 
-Shape #5 no-source-edit folder pass — zero High / Medium / Low at folder scope, single forward-looking `None — …` DRY bullet with a defer-with-trigger condition (a second nested subpackage landing under `management/`, or equivalently the `commands/`-layer trigger of a second management command landing). No findings to address; nothing to reject.
+No High/Medium/Low findings at this folder level — all severities are correctly `None.` Independently confirmed:
+
+- **`management/__init__.py` is a pure docstring-only package marker.** Read at source: exactly one line, byte-identical to the artifact's quoted text — `"""Django management namespace for the framework's ``manage.py`` commands."""`. Shadow overview (`docs/shadow/django_strawberry_framework__management____init__.overview.md`) confirms 0 imports, 0 symbols, 0 control-flow, 0 executable marker lines, 0 calls, 0 TODOs, 0 repeated literals. No import-time side effect (nothing to execute).
+- **Discovery is filesystem-convention, no `__all__` needed.** `grep "__all__" management/` → none at either `__init__.py` level. Django's `find_commands` globs `management/commands/*.py` and never reads an `__all__`; both package markers present on disk. Adding one would be dead config — correctly absent.
+- **No back-edge / circular-import.** Grep for imports *from* the `management` package as a re-export source returns only `from django.core.management import ...` (Django's own namespace) and a test importing the command MODULE directly (`...management.commands.inspect_django_type import ...`) — neither re-exports a symbol from `management/__init__.py`. The two `management/__init__.py` path-string matches are allowlist literals in `examples/fakeshop/apps/kanban/constants.py` (:16, :101), not imports. One-way dependency direction intact.
+- **Correct package nesting.** `management/` (regular package) contains the marker `__init__.py` plus the `commands/` subpackage (also a regular package); matches Django's required `<app>/management/commands/` layout. No stray top-level command module.
+- **No namespace-level GLOSSARY drift.** No GLOSSARY entry exists for the `management` package/namespace as such; the entries that mention `management/` are command-specific (`#schema-export-management-command`, `#schema-introspection-management-command`) and were resolved in their file cycles. Nothing for this folder pass to correct.
 
 ### DRY findings disposition
 
-Forward-looking deferral carried as the artifact's DRY bullet: a folder-level `management/_common.py` (or any cross-subpackage shared helper) is gated on a second nested subpackage arriving under `management/`. Until that trigger fires, the empty-namespace shape is correct. Worker 1's analysis correctly mirrored the one-layer-down trigger established in `rev-management__commands.md`'s DRY analysis.
+No folder-level DRY surface — `management/__init__.py` imports nothing and has no executable surface, and there are no sibling source files at the `management/` level. The three cross-command DRY items (the `import_module_symbol → CommandError` 2-site idiom, the `_render_*` twin, the cross-folder `_is_relay_shaped` re-spell) are adjudicated in `rev-management__commands.md` (2 deferred-with-trigger, 1 forwarded to the project pass `rev-django_strawberry_framework.md`) and are correctly referenced, not re-promoted here.
 
 ### Temp test verification
 
-- Temp test files used: none.
-- Disposition: n/a (shape #5 no-source-edit cycle).
+None used — a no-source-edit folder pass with no executable surface needs no behavioral probe; structural claims are settled by source read + grep + shadow overview.
 
-### Shape #5 checks
+### Shape #5 sibling-cycle attribution
 
-1. Scoped `git diff --stat HEAD -- django_strawberry_framework/management/ tests/ docs/GLOSSARY.md CHANGELOG.md` is **not** literally empty — `django_strawberry_framework/management/commands/export_schema.py` (+2/-1) and `docs/GLOSSARY.md` (+1/-1) carry dirty hunks against the HEAD baseline named in dispatch. Both hunks are attributable to the immediately-preceding per-file sibling cycle `rev-management__commands__export_schema.md` (`Status: verified` on disk; `docs/review/review-0_0_7.md:69` checkbox `[x]`): the `export_schema.py` hunk is the Low (a) docstring citation swap from `CHANGELOG-23` line-number token to the AGENTS rule 27 substring anchor `"now requires a value when the flag is given"`, and the GLOSSARY hunk is the Medium five-behaviour rewrite at `docs/GLOSSARY.md:1011`. The dispatch prompt explicitly anticipated this attribution ("prior cycle's edits to `commands/export_schema.py` are out-of-scope for THIS cycle baseline since they're attributable to the verified sibling cycle"). The folder-pass artifact's own `### Files touched` correctly records "None — no-source-edit cycle." Scope check passes by attribution.
-2. All three Worker 2 sections (`## Fix report (Worker 2)`, `## Comment/docstring pass`, `## Changelog disposition`) open verbatim with `Filled by Worker 1 per no-source-edit cycle pattern.` ✓
-3. No Lows in the artifact; the DRY bullet is the only forward-looking deferral and carries an explicit defer-with-trigger ("Revisit only if a second nested subpackage … lands"). No GLOSSARY-only fix in scope (the only consumer-visible symbol in the subtree, `Schema export management command` at `docs/GLOSSARY.md:1011`, was already refreshed under the sibling per-file cycle's Medium and verified there). ✓
-4. Changelog disposition `Not warranted` cites both `AGENTS.md` rule 21 ("Do not update CHANGELOG.md unless explicitly instructed") and the active plan's silence at `docs/review/review-0_0_7.md:25` (folder-pass artifact listed with no changelog notation). Both citations present. ✓
-5. Spot-ran `uv run ruff format --check django_strawberry_framework/management/` → "3 files already formatted" (with the standard global `COM812`-vs-formatter notice, which is a global config notice not a folder-specific issue per Worker 2's own reading) and `uv run ruff check django_strawberry_framework/management/` → "All checks passed!" Both gates outcome-match Worker 2's claims. ✓
+Baseline SHA `0872a20fcbecf870b3669742f108364202709e26`. `git diff --stat` against baseline for owned paths is NOT empty, but every dirty hunk attributes to a CLOSED sibling cycle (`Status: verified` AND `[x]` in `review-0_0_9.md`) — none touches `management/__init__.py`, the only path THIS folder pass owns:
 
-### What-looks-solid spot-verify
+- `conf.py` → `rev-conf.md` (verified, `[x]` review-0_0_9.md:70)
+- `exceptions.py` → `rev-exceptions.md` (verified, `[x]` :72)
+- `list_field.py` → `rev-list_field.md` (verified, `[x]` :73)
+- `filters/factories.py` → `rev-filters__factories.md` (verified, `[x]` :80)
+- `filters/sets.py` → `rev-filters__sets.md` (verified, `[x]` :82)
+- `management/commands/inspect_django_type.py` (+61/-2) + `tests/management/test_inspect_django_type.py` → `rev-management__commands__inspect_django_type.md` (verified, `[x]` :86)
+- `docs/GLOSSARY.md` hunks at 286 (DjangoConnection → `rev-connection.md`, verified, `[x]` :71), 991/1001 (RelatedFilter/RelatedOrder → `rev-filters.md`, verified, `[x]` :84), 1178 (inside `#schema-introspection-management-command` → the inspect file cycle, verified, `[x]` :86)
 
-- `django_strawberry_framework/management/__init__.py` source on disk is literally one line: `"""Django management entry points for django-strawberry-framework."""` — matches the shape #2 skip-artifact claim (docstring-only, zero imports, zero symbols, zero executable code).
-- Shadow overview exists at `docs/shadow/django_strawberry_framework__management____init__.overview.md` per the artifact's citation.
-- Sibling artifact `docs/review/rev-management__commands.md` carries `Status: verified` and its checkbox is `[x]` at `docs/review/review-0_0_7.md:70`, matching the artifact's chain-of-pass claim.
+The cycle's own "Files touched: None" claim holds: `git diff --stat 0872a20… -- management/` shows ONLY `commands/inspect_django_type.py` (closed sibling), and `management/__init__.py` is byte-unchanged. No GLOSSARY-only fix authored by this folder pass (the GLOSSARY hunks belong to closed siblings, not this cycle). No hunk attributes to an unplanned path (no AGENTS.md #33 concurrent work in scope).
+
+### Changelog & lint
+
+- `git diff -- CHANGELOG.md` empty; `Not warranted` correctly cites BOTH AGENTS.md rule 21 and the active plan's/dispatch's silence on changelog authorization. Internal-only framing matches the zero-edit scope.
+- `uv run ruff format --check django_strawberry_framework/management/__init__.py` → "1 file already formatted" (the COM812 notice is the standing global config warning).
+- `uv run ruff check django_strawberry_framework/management/__init__.py` → "All checks passed!".
 
 ### Verification outcome
 
-`cycle accepted; verified`
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `management/` folder-pass checklist box at `review-0_0_9.md:89`.
+
+---
+
+## Iteration log

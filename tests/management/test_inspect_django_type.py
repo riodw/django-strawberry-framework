@@ -25,15 +25,23 @@ demonstrated live and inspected from the example tier against
 ``OverriddenScalarSpecimenType`` / ``BranchType`` in
 ``examples/fakeshop/tests/test_inspect_django_type.py`` (the scalars app's
 ``Base36Field`` supplies the unsupported column).
+
+Also holds the ``relation_shapes = {<rel>: "connection"}`` regression: no example
+type declares a connection-only relation shape, and adding one to an existing
+example type would drop its list field from the SDL and break the live API /
+relation-row coverage that asserts the list form. So the connection-only shape is
+pinned here against real fakeshop models, finalized in registry isolation.
 """
 
 import sys
 import types
+from io import StringIO
 
 import pytest
 from apps.products.models import Category, Item
 from django.core.management import CommandError, call_command
 from django.db import models
+from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.management.commands.inspect_django_type import (
@@ -167,3 +175,56 @@ def test_inspect_unresolved_forward_ref_relation_raises_command_error():
     finalize_django_types()
     with pytest.raises(CommandError, match=r"unresolved Strawberry forward reference"):
         call_command("inspect_django_type", "CatType")
+
+
+def _connection_row(text: str, field_name: str) -> str:
+    """Return the table row whose first token is ``field_name`` (per-row isolation)."""
+    for line in text.splitlines():
+        if line.strip().split(" ", 1)[:1] == [field_name]:
+            return line
+    raise AssertionError(f"no row for field {field_name!r} in:\n{text}")
+
+
+def test_inspect_connection_only_relation_shape_renders_row():
+    """A ``relation_shapes = {<rel>: "connection"}`` relation renders, never KeyErrors.
+
+    The Phase-2.5 synthesizer pops the relation's generated ``list[T]``
+    annotation for the ``"connection"`` shape
+    (``types/finalizer.py::_suppress_relation_list_form``) while leaving the
+    Django field in ``selected_fields``, so ``_relation_row`` used to index
+    ``origin.__annotations__[field.name]`` for a key that no longer exists and
+    crash with an unhandled ``KeyError`` (a raw traceback, not a clean
+    ``CommandError``) on a legitimately finalized, schema-buildable type.
+
+    The row must instead render from the synthesized ``<rel>_connection``
+    sibling's authoritative Strawberry field metadata: the resolved connection
+    type (``ItemNodeConnection!``) and a converter column naming the
+    connection-only shape. Both types are Relay-Node-shaped so the many-side
+    relation is eligible for connection synthesis.
+    """
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+            interfaces = (relay.Node,)
+            relation_shapes = {"items": "connection"}
+
+    finalize_django_types()
+    out = StringIO()
+    call_command("inspect_django_type", "CategoryNode", stdout=out)
+    text = out.getvalue()
+
+    items_row = _connection_row(text, "items")
+    # Resolved connection type from the synthesized sibling, not a KeyError and
+    # not the suppressed ``[ItemNode!]!`` list form.
+    assert "ItemNodeConnection!" in items_row
+    assert "[ItemNode!]!" not in items_row
+    # The converter names the relation cardinality AND the connection-only shape.
+    assert "relation: reverse FK (connection-only)" in items_row

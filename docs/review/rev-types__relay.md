@@ -2,11 +2,12 @@
 
 Status: verified
 
+> Supersedes a STALE 0.0.7 on-disk artifact (`Status: verified`, refs `spec-011`/`spec-015`, `_apply_get_queryset_sync`/`_initial_queryset`, 528-line pre-GlobalID-strategy shape). That artifact described a file that no longer exists: the 0.0.9 heavy change rewrote this module around the model-anchored GlobalID default and the four-strategy system. Replaced wholesale per the recurring stale-artifact pattern; the active plan checkbox for `types/relay.py` is unchecked.
+
 ## DRY analysis
 
-- **Defer until a third sync/async-context dispatcher lands.** `_resolve_node_default` (`django_strawberry_framework/types/relay.py:364-397`) and `_resolve_nodes_default` (`:421-461`) share the same `in_async_context()`-discriminated dispatch shape (`id_attr = cls.resolve_id_attr(); if in_async_context(): return _resolve_<X>_async(...); qs = _apply_get_queryset_sync(...); qs = _apply_node_filter(...); ...`). Each variant differs only in the terminal materialization (`qs.get()`/`qs.first()` vs `_order_nodes(...)` against `list(qs)`), so a shared `_dispatch_node_resolver(cls, *, info, finalize_sync, finalize_async_thunk, async_helper, ...)` would lose readability. Defer until a third sync-vs-async-context Relay resolver lands (most plausibly `resolve_connection` when the connection slice ships) — fold all three through a shared helper at that point. Today's two-method split mirrors the same load-bearing-distinction calibration applied to `filters/sets.py::apply_sync` / `apply_async`.
-- **Defer until the `feedback.md § High` resolution-coroutine pattern lands at a third callsite.** Both `_resolve_node_default` (`:395`) and `_resolve_nodes_default` (`:455`) follow the same three-line "fetch the initial queryset → guard sync hook → apply id filter" prelude (`qs = _apply_get_queryset_sync(cls, _initial_queryset(cls), info); qs = _apply_node_filter(qs, id_attr, ...)`). Their async mirrors at `:416-417` and `:480-482` are identical for the await-prelude shape. Defer extracting a `_sync_node_prelude(cls, id_attr, info, *, node_id=None, node_ids=None)` / `_async_node_prelude(cls, id_attr, info, *, node_id=None, node_ids=None)` helper pair until the resolver coroutine pattern picks up a third caller (likely `resolve_connection`); collapsing today would obscure the singular/plural argument-shape distinction that the per-method `_apply_node_filter` keyword choice carries.
-- **Defer until the orders subsystem's TODO at `:266-273` lands.** The `_apply_get_queryset_sync` / `_apply_get_queryset_async` pair is already cited as the shared visibility-helper home in `TODO(spec-027-filters-0_0_8 Slice 1)` for `FilterSet`'s related-branch scoping. The current trigger is "Reuse these sync/async visibility helpers from FilterSet's related-branch scoping"; restate the trigger here so a future DRY cycle finds the pair without re-grepping the source.
+- **Defer until a third in-async-context Relay resolver lands.** `_resolve_node_default` (`types/relay.py:787-820`) and `_resolve_nodes_default` (`:844-885`) share the identical dispatch prelude (`id_attr = cls.resolve_id_attr(); if in_async_context(): return _resolve_<X>_async(...); qs = apply_type_visibility_sync(cls, initial_queryset(cls), info); qs = _apply_node_filter(...)`), differing only in the terminal materialization (`qs.get()`/`qs.first()` vs the `_order_nodes` map). A shared `_dispatch_node_resolver(cls, *, info, sync_finalize, async_helper, ...)` would have to thread two terminal callbacks plus the singular/plural `_apply_node_filter` keyword choice through one signature, losing more readability than it saves. Defer until a third sync-vs-async-context resolver lands (most plausibly `resolve_connection` if a root connection refetch ships); collapse all three then. Same calibration as the intentional sync/async twins recorded across the package.
+- **Defer the `_emits_model_label` / `_accepts_model_label_decode` frozenset-predicate pair collapse until encode/decode acceptance diverges.** `_emits_model_label` (`:417-424`) and `_accepts_model_label_decode` (`:427-437`) are byte-identical bodies (`return effective_strategy in MODEL_LABEL_STRATEGIES`), distinguished only by name so the encode-audit half and the decode-Step-2 half read against semantically-named predicates. The docstring at `:427-437` already states the deferral trigger verbatim: "Slice 3 splits this if a divergence ever surfaces." Do NOT merge now — the two names are the addressability-by-design pattern (audit reads `emits`, decode reads `accepts`); a single predicate would force every call site to re-encode which side of the encode/decode boundary it sits on. Quote the existing trigger.
 
 ## High:
 
@@ -14,206 +15,146 @@ None.
 
 ## Medium:
 
-### M1: GLOSSARY drift on `Relay Node integration` and `Meta.interfaces` — `SyncMisuseError` public-API entry absent
-
-`SyncMisuseError` is re-exported through `django_strawberry_framework/__init__.py:24,34` and through `django_strawberry_framework/types/__init__.py:27,29` as part of the package's public API surface. Its docstring at `relay.py:42-60` explicitly frames it as the typed marker consumers should catch ("Future consumers can match the subclass directly (`except SyncMisuseError`) without depending on the substring-of-message check"), and `filters/sets.py:1638` catches it by type as the dispatcher's sync-misuse rewrap path. The `tests/types/test_relay_interfaces.py::test_sync_misuse_raises_sync_misuse_error_subclass` test at `:887-916` pins the multiple-inheritance contract (`ConfigurationError` AND `RuntimeError`) and references "Future consumers can match the subclass directly".
-
-Yet `docs/GLOSSARY.md` carries zero entries for `SyncMisuseError`:
-
-- `Relay Node integration` (`docs/GLOSSARY.md:928-945`) enumerates "Shipped behavior" bullets but never names `SyncMisuseError` as the typed marker for the "async `get_queryset` invoked from a sync resolver" misuse — it only documents the composite-pk `ConfigurationError` raise.
-- `Meta.interfaces` (`docs/GLOSSARY.md:635-654`) is silent on the sync-misuse contract entirely.
-- The top-level public-API surface table at `docs/GLOSSARY.md` does not list `SyncMisuseError` despite its presence in `django_strawberry_framework.__all__`.
-
-Why it matters: `SyncMisuseError` is a `ConfigurationError`-shaped exception the consumer can catch and key against, the dispatcher in `filters/sets.py` already catches it by type, and the docstring frames it as the recommended marker for consumer code. Same calibration as the GLOSSARY-drift Mediums filed in `rev-optimizer__extension.md::DjangoOptimizerExtension`, `rev-optimizer__walker.md::Queryset diffing`, `rev-management__commands__export_schema.md::Schema export management command`, and `rev-types__base.md::DjangoType`: when a primary-public-surface entry lags a shipped consumer-keyable contract, the drift is Medium not Low because the entry IS the published consumer contract.
-
-Recommended replacement prose (Worker 2 lifts verbatim):
-
-In the `Relay Node integration` entry at `docs/GLOSSARY.md:937-944` "Shipped behavior" list, after the `is_type_of` bullet (`:940`) and before the composite-pk bullet (`:940`), insert:
-
-> - The framework rejects the "async `get_queryset` invoked from a sync resolver context" misuse with [`SyncMisuseError`](#syncmisuseerror) — a typed marker that multiple-inherits `ConfigurationError` AND `RuntimeError` so consumers may catch either base class while future code can match `SyncMisuseError` directly without depending on substring-of-message checks. Raised by `resolve_node` / `resolve_nodes` on the sync branch when `cls.get_queryset` returns a coroutine; the unawaited coroutine is closed before the raise so Python does not emit `RuntimeWarning: coroutine was never awaited`.
-
-And add a new top-level entry alongside `Relay Node integration`:
-
-> ## `SyncMisuseError`
->
-> **Status:** shipped (`0.0.5`).
->
-> Typed marker for the "async `get_queryset` hook invoked from a sync resolver context" misuse. Multiple-inherits [`ConfigurationError`](#configurationerror) AND `RuntimeError` so existing handlers continue to match while future code can match the subclass directly.
->
-> - Raised by [Relay Node integration](#relay-node-integration)'s default `resolve_node` / `resolve_nodes` on the sync branch when `cls.get_queryset` returns a coroutine.
-> - Caught and rewrapped by [`FilterSet.apply`](#filterset)'s sync dispatcher so the package's two `async get_queryset` misuse surfaces emit a single typed exception.
-> - Exported through `django_strawberry_framework` so consumers can import it without reaching into private `types.relay`.
->
-> **See also:** [Relay Node integration](#relay-node-integration) · [`ConfigurationError`](#configurationerror) · [`FilterSet`](#filterset).
-
-The `Meta.interfaces` index row at `docs/GLOSSARY.md:87` and the public-API listing remain unchanged; cross-references update transparently because the new entry sits alphabetically between `safe_wrap_connection_method` and the `Schema audit` block (`:949`).
+None.
 
 ## Low:
 
-### L1: `spec-011` citation drift — seven sites point at the wrong on-disk spec
+### L1: `_NODE_TYPE_HINT_ATTR` comment names `_stamp_node_type` as living in `relay.py` without the qualifier
 
-`docs/SPECS/spec-011-stale_placeholder_cleanup-0_0_4.md` exists at 0.0.4 and is the maintainer's stub for a different concern. The Relay foundation spec at 0.0.5 is `docs/SPECS/spec-015-relay_interfaces-0_0_5.md`. Yet `relay.py` cites `spec-011` at seven locations:
+The module-level comment at `types/relay.py:65-66` reads "the root ``node``/``nodes`` resolvers (``relay.py``'s ``_stamp_node_type``)". From inside `types/relay.py`, an unqualified ``relay.py`` reads as a self-reference, but `_stamp_node_type` actually lives in the ROOT module `django_strawberry_framework/relay.py:228` (`_stamp_node_type`), a different file. The same ambiguity recurs in `install_is_type_of`'s docstring at `:88-89` ("set by the root refetch fields on the instances they fetch") — that one disambiguates with "root", so it is clear. Per AGENTS.md the symbol-qualified form would be `django_strawberry_framework/relay.py::_stamp_node_type`; in a docstring the shorter "the root ``relay.py``'s ``_stamp_node_type``" suffices. Stale-but-harmless naming clarity; the cross-file wire is correct and tested. Recommended: at `:65-66` change "``relay.py``'s ``_stamp_node_type``" to "the root ``relay.py``'s ``_stamp_node_type``" to match the disambiguation `install_is_type_of` already uses.
 
-- `:85` `(spec-011 Decision 6 #"injection (Decision-1 borrow) is added unconditionally")` — the prose at `docs/SPECS/spec-015-relay_interfaces-0_0_5.md:351` (Decision 6).
-- `:116-118` `(spec-011 #"A class that already inherits from one of the listed", spec-011 #"only those not already present in", spec-011 #"Inherited interfaces via parent")` — `docs/SPECS/spec-015-relay_interfaces-0_0_5.md:329`, `:339`, `:458`.
-- `:125` `(spec-011 Risk note #"surface any `TypeError` as a `ConfigurationError`")` — `docs/SPECS/spec-015-relay_interfaces-0_0_5.md:541`.
-- `:145` `(spec-011 #"Composite primary keys (Django 5.2+) are explicitly out of scope")` — `docs/SPECS/spec-015-relay_interfaces-0_0_5.md:287`.
-- `:208` `(spec-011 #"id_attr = cls.resolve_id_attr" / Decision 7's "no avoidable lazy loads on `resolve_id`")` — `docs/SPECS/spec-015-relay_interfaces-0_0_5.md:313`.
+### L2: `_resolve_id_default` `# noqa: ARG001` covers a now-used `info`? — confirm vacuous-arg suppression still warranted
 
-The cited prose is correct against `spec-015`; only the pointer rotted. Same drift class as the `spec-014 → spec-018` citation rot in `rev-optimizer__extension.md` (one site), `rev-optimizer__walker.md` (two sites), the `spec-016 → spec-020` drift in `rev-list_field.md`, the `TODO-ALPHA-028 → TODO-ALPHA-035` drift in `rev-scalars.md`, and the `spec-020 → spec-025` drift in `rev-scalars.md`. Tests at `tests/types/test_relay_interfaces.py` carry the same `spec-011` token at 11 sites (`:73`, `:222`, `:267`, `:301`, `:303`, `:336`, `:512`, `:763`, `:1102-1103`, `:1126`) and need the same rewrite in lockstep.
+`_resolve_id_default` (`:272`) carries `# noqa: ARG001` on the signature, suppressing the unused-argument lint for the keyword-only `info`. `info` is genuinely unused in the body (the dict-cache / getattr path never touches it) — the parameter exists only to match Strawberry's `cls.resolve_id(root, info=info)` call shape. The suppression is correct. Recorded as a confirm-only Low: the noqa is load-bearing for signature-parity, not dead. No change; documented so a future reviewer does not "clean up" the unused `info` and break the keyword-binding contract the docstring at `:277-280` describes.
 
-Recommended fix: bulk-rewrite `spec-011` → `spec-015-relay_interfaces-0_0_5 Slice <N>` (or simpler `spec-015`) at all seven source sites and 11 test sites in one sweep. Lift the rewrite into the same comment-pass commit as L4 (CHANGELOG/feedback citation rot below).
+### L3: `decode_global_id` model-label branch's `get_definition` can return `None` only theoretically; the guard is defensive-correct
 
-### L2: `feedback.md § High` citations rotted post-spec-028 reshape
-
-`docs/feedback.md` is now the active feedback file for `spec-028-orders-0_0_8.md` (the orders card), per `docs/feedback.md:1`'s heading `# Review feedback - docs/spec-028-orders-0_0_8.md`. The four `feedback.md § High` citations in `relay.py` at `:200`, `:234-236`, `:378-379`, `:388-390`, `:449-450` therefore no longer resolve at the cited location. The reasoning the comments capture is still correct (resolved-info-positional-collision, async-`get_queryset`-not-awaited, sync-context-async-hook); only the pointer rotted. Same drift class as the `feedback.md` rot already filed at `rev-list_field.md::Low #4` and the `rev-types__finalizer.md` carry-forward (8-site `feedback.md` rot sweep flagged for the next types/ folder cycle).
-
-Recommended fix: replace each `feedback.md § High` citation with either a heading anchor from the now-archived spec text — most plausibly fold these into the existing `spec-015` rewrite by quoting the same "Review feedback" anchors that `spec-015-relay_interfaces-0_0_5.md::Open questions` retained internally — or drop the cross-reference entirely if the surrounding docstring prose already documents the contract (the `_resolve_id_default` docstring at `:194-215`, the `_apply_get_queryset_sync` docstring at `:226-247`, and the `_resolve_node_default` docstring at `:371-391` all already document the contract independently of the citation).
-
-### L3: TODO block at `:266-273` is structurally orphaned
-
-The TODO block at `:266-273` references `_apply_get_queryset_sync` / `_apply_get_queryset_async` (defined upstream at `:225-263`) as the shared visibility-helper home for `FilterSet`'s related-branch scoping. But there is no blank line between the TODO body's last line (`:273`) and the next symbol declaration at `:274` (`def _coerce_node_id(...):`), which visually attaches the TODO to `_coerce_node_id` rather than to the `_apply_get_queryset_*` pair it actually targets. The ruff formatter does not enforce the two-blank-line rule on comment-then-def boundaries the way it does on def-then-def boundaries, so the formatter does not catch this.
-
-Recommended fix: insert one blank line between `:273` (`#   parent_qs = parent_qs.filter(...)`) and `:274` (`def _coerce_node_id(...)`) so the TODO visually attaches to the helper pair above it. Same readability calibration as the `rev-optimizer__hints.md::OptimizerHint.prefetch_obj repr=False` Low — a small consumer-debug-surface miss that the formatter's defaults cannot catch.
-
-### L4: `Decision 9` framing in `_apply_get_queryset_sync` docstring elides the typed-marker contract
-
-`_apply_get_queryset_sync` docstring at `:226-247` names "Decision 9" of spec-015 (the async-resolver-support decision) but frames the sync misuse path as raising "a named `ConfigurationError`" — it never names `SyncMisuseError` as the specific marker, despite the function raising exactly that subclass at `:241`. The wider docstring property (a typed marker the consumer can catch by subclass identity rather than substring-of-message) is exactly what M1's GLOSSARY entry surfaces; the local docstring should mirror the same contract.
-
-Recommended fix: replace "raise a named `ConfigurationError`" at `:233-234` with "raise a named `SyncMisuseError` (a `ConfigurationError` subclass that also inherits `RuntimeError`)" so the docstring names the typed marker the caller catches and pairs with M1's new GLOSSARY entry. The same one-word tightening applies to the `_resolve_node_default` docstring at `:387` and the `_resolve_nodes_default` docstring at `:449`. Defer if M1's GLOSSARY entry is rejected — those four docstrings stay coherent with the existing "a named `ConfigurationError`" framing if `SyncMisuseError` does not appear in the GLOSSARY.
-
-### L5: Docstring-vs-implementation drift in `_resolve_id_default` proxy-model rationale
-
-`_resolve_id_default`'s docstring at `:211-214` documents that keying on `root.__class__._meta.pk.attname` is "deliberate: the alternative `cls.__django_strawberry_definition__.model._meta.pk.attname` would mis-key the `__dict__` lookup for proxy-model rows whose actual class differs from the declared DjangoType model." The package's test suite at `tests/types/test_relay_interfaces.py` does NOT pin this proxy-model branch — the only `__dict__`-cache-miss test (`test_resolve_id_falls_back_to_getattr` at `:506-525`) uses a synthetic `_FakeRoot` class that mimics the `__class__._meta.pk.attname` contract, not a Django proxy-model instance. The contract claim survives without a regression pin.
-
-Same calibration as the `rev-optimizer__walker.md` carry-forward on uncovered `id_attr == "pk"` branches: when a docstring asserts an explicit cardinality property and no test pins it, the cost of the property silently regressing is real but the fix is bounded by adding one focused test. Defer until a proxy-model fixture exists elsewhere in the package OR a regression surfaces; then add `tests/types/test_relay_interfaces.py::test_resolve_id_uses_proxy_model_class_for_attname` pinning the proxy-model branch directly.
-
-### L6: GLOSSARY absence on `apply_interfaces` / `install_relay_node_resolvers` / `_check_composite_pk_for_relay_node` is intentional convention — confirm at folder pass
-
-The seven module-internal helpers in `relay.py` (`apply_interfaces`, `_check_composite_pk_for_relay_node`, `install_is_type_of`, `install_relay_node_resolvers`, `implements_relay_node`, the seven `_resolve_*` / `_apply_*` / `_coerce_*` helpers, and the `_RELAY_RESOLVER_DEFAULTS` tuple) are all absent from `docs/GLOSSARY.md`. This matches the convention recorded in prior memory entries (`optimizer/__init__.py:14-17`-style "internal implementation details" calibration applied to `_resolve_node_default` siblings, `_field_meta_for_resolver`, etc.). The consumer-visible behaviors all surface through the `Relay Node integration` entry (`docs/GLOSSARY.md:928-945`).
-
-Forward to `rev-types.md` folder pass as a positive-audit-trail confirmation rather than a per-file GLOSSARY-coverage gap. Do NOT propose new entries for these internal helpers; the absence is intentional and the entry surface that DOES need attention is the `SyncMisuseError` gap filed at M1.
+In the model-label branch (`:718-724`), `target_type = registry.get(model)` is None-checked and raises; then `definition = registry.get_definition(target_type)` (`:724`). `get_definition` returns `Optional` (`registry.py:346-348`), but `target_type` just came from `registry.get(model)` which only returns a registered type, so a registered type missing its definition is an unreachable internal-invariant break. The uniform `strategy = definition.effective_globalid_strategy if definition is not None else None` guard at `:729` absorbs the theoretical None into the same fail-loud `ConfigurationError`. Defensive-correct, not a defect. Recorded so the `if definition is not None` arm is not mistaken for dead code worth deleting — it is the shared guard for BOTH branches (the type-name branch's `definition_for_graphql_name` raises rather than returns None, so its `target_type = definition.origin` at `:727` is safe; the None-guard exists for branch symmetry). No change.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** `_model_for` at `:305-314` is the single source of truth for `cls.__django_strawberry_definition__.model` access — consumed at `:101` (`install_is_type_of`), `:160` (`_check_composite_pk_for_relay_node`), `:317-324` (`_initial_queryset`), and `:350` (`_order_nodes`). This collapsed an earlier four-site repetition. `_initial_queryset` (`:317-324`) likewise centralizes `model._default_manager.all()` for the sync and async assembly paths. `_RELAY_RESOLVER_DEFAULTS` (`:493-498`) is the single source of truth for the four Relay resolver method names plus their framework defaults; `install_relay_node_resolvers` iterates it once and there is no parallel literal anywhere else in the package (`grep -rn "resolve_id_attr\|resolve_id\|resolve_node\|resolve_nodes" django_strawberry_framework/types/relay.py` confirms the cluster is contained). `_apply_node_filter` (`:284-302`) is color-agnostic — both sync and async paths consume it, dodging the parallel-implementation regression flagged in `feedback.md § High` "Async `get_queryset` is not awaited in Relay node defaults".
-- **New helpers considered.** A unified `_dispatch_node_resolver(cls, *, info, finalize_sync, finalize_async_thunk, ...)` that folds `_resolve_node_default` and `_resolve_nodes_default` was considered and rejected — the readability cost of threading two terminal-materialization callbacks through a single dispatcher outweighs the saved seven lines, and the sync/async-context distinction at the dispatch site is exactly the load-bearing distinction that the two-method split surfaces statically. Same calibration as `filters/sets.py::apply_sync` / `apply_async`. Folding the `_coerce_node_id` / `_coerce_node_ids` pair into a single function-with-`Optional[list]` signature was also considered and rejected — the two functions are at exactly two and three callers respectively and the split signature carries the singular-vs-plural distinction more cleanly than an `Optional` would.
-- **Duplication risk in the current file.** The four-line sync-vs-async dispatch shape at `_resolve_node_default` (`:392-397`) and `_resolve_nodes_default` (`:452-461`) is intentional sibling design — folding through a shared prelude would obscure the singular/plural argument-shape difference. Recorded as defer-with-trigger above; do not act now.
+- **Existing patterns reused.** `_model_for` (`:335-344`) is the single source of truth for `cls.__django_strawberry_definition__.model`, consumed at `install_is_type_of` (`:110`), `_check_composite_pk_for_relay_node` (`:172`), and `_order_nodes` (`:773`); its contract is explicitly aligned with `utils/querysets.py::initial_queryset`. `MODEL_LABEL_STRATEGIES` / `TYPE_NAME_STRATEGIES` (`:413-414`) are the single home for the `{"model","type+model"}` / `{"type","type+model"}` memberships — the encoder (`:490`), the three `_*_model_label` / `_*_type_name` predicates, the finalizer audit, and the decoder all reference them rather than re-typing the sets. The string constants `STRING_GLOBALID_STRATEGIES` / `DEFAULT_GLOBALID_STRATEGY` correctly live ONCE in `types/base.py:119-120` and are imported in-function (`:384-387`). `_apply_node_filter` (`:314-332`) is color-agnostic — both sync and async resolvers consume it. `_RELAY_RESOLVER_DEFAULTS` (`:917-922`) is the single source of truth for the four `resolve_*` names + defaults, iterated once by `install_relay_node_resolvers`. `_validate_globalid_strategy` is reused (not re-implemented) for the setting path (`:394-399`) — one validator, two sources.
+- **New helpers considered.** A unified `_dispatch_node_resolver` folding the node/nodes resolvers, and a merge of the `_emits_model_label`/`_accepts_model_label_decode` predicate pair, were both considered and deferred-with-trigger (see DRY analysis). The `callable`/`custom` strategies are deliberately absent from BOTH frozensets — their non-membership IS the "encode-only, no decode" contract, so there is intentionally no `{"callable","custom"}` literal to extract.
+- **Duplication risk in the current file.** The three near-identical one-line `in MODEL_LABEL_STRATEGIES` / `in TYPE_NAME_STRATEGIES` predicates (`_emits_model_label`, `_accepts_model_label_decode`, `_accepts_type_name_decode`) are intentional sibling design (addressability-by-design for the encode-audit vs decode-Step-2 readers); the two `__func__`-identity override discriminators (`_consumer_overrode_resolve_typename` at `:523-547` and the loop in `install_relay_node_resolvers` at `:951-957`) are structurally parallel but answer different questions (typename's framework-closure-marker exemption vs the four resolver defaults' plain identity test). Not collapse candidates.
 
 ### Other positives
 
-- **Two-phase lifecycle split is well-documented.** The module docstring (`:1-21`) names exactly three lifecycle phases (class-creation, annotation-synthesis, finalization Phase 2.5) and assigns each helper to its phase. The same split is mirrored in the function docstrings (`install_is_type_of` at `:77-98` names class-creation; `apply_interfaces` at `:110-126` names Phase 2.5; `_check_composite_pk_for_relay_node` at `:143-159` names Phase 2.5; the `__init_subclass__` Slice 3 tuple-membership check is correctly pointed at `types/base.py`). The three structurally distinct discriminators (`cls.__dict__` membership for `is_type_of`; `relay.Node in interfaces` tuple-membership for id-suppression; `__func__` identity for `resolve_*` injection) are explicitly named at `:516-519` — they answer different questions at different lifecycle phases and the docstring tells the reader why none of them can be collapsed into a single test.
-- **Three escape hatches for composite-pk + Relay are correctly documented and tested.** `_check_composite_pk_for_relay_node` at `:142-176` raises only when the model has a composite pk AND `resolve_id_attr()` raises `NodeIDAnnotationError` — the explicit `id: relay.NodeID[...]` escape hatch survives, pinned by `test_composite_pk_with_explicit_node_id_annotation_is_accepted` at `tests/types/test_relay_interfaces.py:238-256`. The Phase-2.5 ordering note at `:163-164` tells a future reader why the upstream `relay.Node.resolve_id_attr` is the right method to call here (our default is installed after this gate runs).
-- **Async-`get_queryset` contract is honored on both bulk and single paths.** `_apply_get_queryset_async` (`:251-263`) awaits the hook unconditionally when `inspect.isawaitable(result)` is true; the sync mirror at `:225-248` closes the unawaited coroutine before raising `SyncMisuseError` so Python does not emit `RuntimeWarning: coroutine was never awaited`. Both branches are pinned by `test_resolve_node_async_awaits_async_get_queryset` (`:798-816`), `test_resolve_nodes_async_awaits_async_get_queryset` (`:820-842`), `test_resolve_nodes_async_no_ids_awaits_async_get_queryset` (`:846-859`), `test_resolve_node_sync_with_async_get_queryset_raises` (`:862-884`), `test_resolve_nodes_sync_with_async_get_queryset_raises` (`:919-940`), and `test_sync_misuse_raises_sync_misuse_error_subclass` (`:887-916`).
-- **Override discipline is well-tested.** Every consumer-override branch in `install_relay_node_resolvers` is pinned (`test_consumer_resolve_id_attr_wins`, `test_consumer_resolve_id_wins`, `test_consumer_resolve_node_wins`, `test_consumer_resolve_nodes_wins`, `test_consumer_async_resolve_node_wins`, `test_install_relay_node_resolvers_preserves_consumer_override`), and the idempotency contract is pinned at `test_install_relay_node_resolvers_idempotent` (`:1226-1252`) by comparing `__func__` identities snapshot-vs-second-call.
-- **Direct `relay.Node` inheritance is fully wired through Phase 2.5.** The `feedback.md § High` regression "Direct `relay.Node` inheritance bypasses Relay finalization" is closed by tests at `test_direct_relay_node_inheritance_suppresses_id_annotation` (`:1260-1289`), `test_direct_relay_node_inheritance_injects_resolvers_and_suppresses_id` (`:1293-1331`), and `test_direct_relay_node_inheritance_composite_pk_raises` (`:1334-1351`). The `implements_relay_node` helper at `:63-73` is the single discriminator both `Meta.interfaces` and direct-base inheritance route through.
+- **GlobalID strategy precedence is correct and frozen-once.** `_resolve_globalid_strategy` (`:352-400`) implements `Meta.globalid_strategy` (`:389-391`, already validated at type creation) → `RELAY_GLOBALID_STRATEGY` setting (`:392-399`, re-validated through the SAME `_validate_globalid_strategy` with `source="setting"`, so an unknown string / wrong-arity / `async def` callable in the setting raises naming the setting) → `DEFAULT_GLOBALID_STRATEGY` (`"model"`, `:400`). Never returns `None`. Setting read is defensive (`getattr(..., None)`) so an absent setting falls through cleanly. The setting branch passes `relay_shaped=True` because the per-type Relay-shape gate already ran at type creation — verified against `base.py:339-342` (the gate is `is_meta`-only and skipped for `source="setting"`).
+- **`encode_typename` covers all four strategies with a fail-loud callable contract.** `model`/`type+model` → `definition.model._meta.label_lower` (`:491`, Django's canonical `app_label.modelname`); `type` → `definition.graphql_type_name` (`:493`); callable → invoked `(type_cls, model, root, info)` with a non-empty-`str` return check (`:481-489`) that converts a bad return into a named `ConfigurationError` rather than letting Strawberry's downstream `assert isinstance(type_name, str)` fire opaquely. The comment correctly notes `type` is "the only remaining string strategy" after the MODEL_LABEL membership check. The string-strategy branches never touch `root`/`info`, which is exactly what makes the `testing/relay.py::global_id_for` mint helper byte-identical to live emission.
+- **`decode_global_id` is hardened for client-controlled input with a uniform error contract.** Input gate (`:683-687`) rejects non-`(GlobalID, str)` before any parse; `from_id` `ValueError` superset caught (`:692`, covers `GlobalIDValueError`); empty-slot rejection (`:702-706`, since `from_id` does not enforce non-empty). Step 1 routes on the dot: model-label → `apps.get_model` (LookupError → ConfigurationError, `:713`) → `registry.get(model)` (primary/lone, None → ConfigurationError), type-name → `definition_for_graphql_name` (raises on miss/ambiguity). Step 2 enforces the recorded `effective_globalid_strategy` permits the payload shape via `_accepts_model_label_decode` / `_accepts_type_name_decode`; an absent (`None`) strategy (non-Relay-Node or mid-state type) is rejected (`:730-734`), so a crafted ID cannot resolve to a non-Node type. Every failure surfaces ONE `ConfigurationError` — no `KeyError`/`AttributeError`/`GlobalIDValueError` leak. The model-label-routes-to-primary asymmetry is documented honestly (`:660-662`) and matches `testing/relay.py`'s round-trip-asymmetry contract and `finalizer.py::_warn_model_label_secondary_collapse` — security-adjacent no-existence-leak property holds (decode is payload-shape-only, runs before any query).
+- **The override-detection three-discriminator design is sound and documented.** `_consumer_overrode_resolve_typename` (`:523-547`) layers the `_FRAMEWORK_CLOSURE_MARKER` exemption (`:544-545`) ON TOP OF the `__func__`-identity test so a framework closure inherited from a CONCRETE Relay parent through the MRO is not misclassified `custom` — the marker lives on the plain function so it survives `classmethod.__func__` retrieval (`:630`). The step-0 re-entrancy guard in `install_globalid_typename_resolver` (`:586-587`) is load-bearing: a Phase-2.5 raise (including the model-label-routing audit in finalizer.py) leaves every type `finalized=False`, so a re-run must not re-run the `__func__` test against the now-installed framework closure. The both-declared conflict (override + explicit `Meta.globalid_strategy`, `:590-596`) correctly excludes the schema-wide setting from the conflict. The `type`-must-install-its-own-closure-when-inheriting-a-parent-framework-closure branch (`:603`) is the subtle correctness fix for emitting the parent's payload.
+- **Composite-pk gate and id-attr stamping defend against inherited-cache bypass.** `_check_composite_pk_for_relay_node` (`:154-191`) asks `relay.Node.resolve_id_attr.__func__(type_cls)` DIRECTLY (`:181`) rather than `type_cls.resolve_id_attr()` — the rationale (`:175-179`) is correct: a relay-shaped child of a relay-shaped parent inherits the parent's installed framework default which swallows `NodeIDAnnotationError` into the `"pk"` fallback and would let a composite-pk child slip the gate. `_stamp_relay_id_attr` (`:204-233`) seeds `_id_attr = None` into the class's OWN `__dict__` to blind upstream's inherited-cache read before the scan, and stamps `_RELAY_ID_ATTR_SLOT` (deliberately NOT Strawberry's `_id_attr`, `:194-200`) so a subclass never inherits its parent's stamp. `_resolve_id_attr_default` reads the own-`__dict__` stamp first (`:263`) with a live-scan fallback via `__func__` (`:267`, avoids the `super()` infinite-recursion documented at `:252-261`).
+- **`_resolve_id_default` proxy-model keying and `__dict__` cache are correct.** Keys the `__dict__` lookup on `root.__class__._meta.pk.attname` (`:297`) not the declared-model pk — correct for proxy-model rows whose actual class differs (`:290-293`). Reads `root.__dict__[id_attr]` first to avoid an ORM hit when the optimizer already loaded the row, falling back to `getattr` on KeyError (`:298-301`).
+- **Async/sync resolver twins honor the `get_queryset` contract.** `_resolve_node_async` / `_resolve_nodes_async` (`:823-841`, `:888-911`) await `apply_type_visibility_async` (honoring async `get_queryset` hooks) before the id filter and the terminal `aget`/`afirst` / `async for`. The sync paths use `apply_type_visibility_sync`; a coroutine from a sync-context `get_queryset` surfaces as `SyncMisuseError` (the `ConfigurationError`+`RuntimeError` subclass) per the docstrings (`:810-813`, `:871-874`), routed through `utils/querysets.py`. `_order_nodes` (`:750-784`) preserves input order and raises the model's `DoesNotExist` under `required=True` (homogeneous with `_resolve_node_default`'s `qs.get()`), `None` otherwise. `node_ids=None` returns the queryset directly for the bulk-fetch path.
+- **In-function imports correctly dodge the load cycle.** `_resolve_globalid_strategy` (`:383-387`, `conf`+`base`), `decode_global_id` (`:681`, `registry`) all import in-function with documented cycle-dodge rationale (`base.py` imports `install_is_type_of` from this module at module top). The `SyncMisuseError as SyncMisuseError` re-export alias (`:41`) keeps the moved-to-`utils/querysets.py` symbol importable from here, documented at `:37-40`.
+- **Consumption is complete — no built-but-unconsumed surface.** Verified every public helper has a live consumer: `install_is_type_of` (base.py:647), `apply_interfaces`/`_check_composite_pk_for_relay_node`/`install_relay_node_resolvers`/`install_globalid_typename_resolver`/`_emits_model_label`/`_accepts_model_label_decode` (finalizer.py Phase 2.5 + audits), `implements_relay_node` (registry/filters/finalizer), `encode_typename` (testing/relay.py + the installed closure), `decode_global_id` (testing/relay.py re-export + root relay.py refetch fields), `_NODE_TYPE_HINT_ATTR`/`_model_for` (root relay.py). `_accepts_type_name_decode` is read by decode_global_id and `filters/base.py` per its docstring.
 
 ### Summary
 
-`types/relay.py` is a 528-line internal-helper module that ports `strawberry_django`'s Relay foundation behavior without importing the upstream package at runtime, well-organized by lifecycle phase (class-creation, annotation-synthesis, finalization Phase 2.5) with a 1453-line test suite that pins every documented contract including the `feedback.md § High` regressions from rev3 of the spec. The only Medium finding is GLOSSARY drift on `SyncMisuseError` — the publicly-exported typed marker is absent from both the `Relay Node integration` entry and the package-level public-API listing, even though the docstring explicitly frames it as a typed marker for consumer code. Six Lows split across citation hygiene (`spec-011 → spec-015` rewrite at 7 source + 11 test sites; `feedback.md § High` post-spec-028 rot at 4 sites), a structural orphan-block readability tightening on the orders-subsystem TODO, a docstring-vs-implementation marker-naming tightening, a deferred proxy-model branch pin, and a confirmation-only forward on internal-helper GLOSSARY absence. No High findings; no behavior bugs.
+`types/relay.py` is the 0.0.9-rewritten internal Relay foundation: interface `__bases__` injection, the composite-pk gate, the four `resolve_*` node-resolver defaults (sync/async twins), `is_type_of`, and the net-new model-anchored GlobalID strategy system (`encode_typename`, the `Meta`→`RELAY_GLOBALID_STRATEGY`→`"model"` precedence in `_resolve_globalid_strategy`, the strategy-classification `effective_globalid_strategy` stamping in `install_globalid_typename_resolver`, and the hardened `decode_global_id`). Logic is correct across all four strategies: the model-label encode is Django's `_meta.label_lower`, precedence and frozen-once finalization match base.py/definition.py, the framework-closure marker correctly exempts inherited closures from override misclassification, and `decode_global_id` is genuinely security-hardened (uniform `ConfigurationError`, payload-shape-only, strategy-gated, no existence oracle). The secondary-type-collapse is correctly OWNED by finalizer.py (`_audit_model_label_routing` hard-error + `_warn_model_label_secondary_collapse` warn); this file only supplies the membership predicates and the honest decode-routes-to-primary documentation. No High, no Medium. Three Lows, all confirm-only / naming-clarity (a self-referential `relay.py` comment, a load-bearing `noqa: ARG001`, a defensive-but-correct None guard in decode). GLOSSARY entries for the strategy system (`Meta.globalid_strategy`, `RELAY_GLOBALID_STRATEGY`, `Relay Node integration`) verified accurate against current source — no drift.
 
 ---
 
 ## Fix report (Worker 2)
 
-Consolidated single-spawn — Medium-GLOSSARY-verbatim-lift + citation-hygiene Lows + one structural-readability Low + one typed-marker-naming Low. All edits are documentation-only; the `SyncMisuseError` typed marker was already raised by `_apply_get_queryset_sync` at the source — these edits document the shipped contract.
+Consolidated single-spawn (comment-only cycle: L1 act-now comment fix; L2/L3 confirm-only, no edit).
 
 ### Files touched
-- `docs/GLOSSARY.md` — M1 GLOSSARY drift fix. Inserted the verbatim "framework rejects the async `get_queryset` invoked from a sync resolver context" bullet into the `Relay Node integration` entry's "Shipped behavior" list (between the `is_type_of` and composite-pk bullets) per the artifact's recommended replacement prose. Added a new top-level `## SyncMisuseError` entry verbatim from the artifact, placed alphabetically between `Strictness mode` and `TestClient`. Index row at `:87` and public-API surface listing untouched per artifact prose.
-- `django_strawberry_framework/types/relay.py` — L1 + L2 + L3 + L4. (a) L1: seven `spec-011` → `spec-015` swaps in module/function docstrings (lines `:85`, `:116`, `:117`, `:118`, `:125`, `:145`, `:208`). (b) L2: dropped all five rotted `feedback.md § High` citation parentheticals across `_resolve_id_default` (`:200`), `_apply_get_queryset_sync` (`:234-236`), `_resolve_node_default` (`:379` + `:389-390`), and `_resolve_nodes_default` (`:450`); the surrounding docstring prose already documents the contracts independently. (c) L3: inserted blank lines between the orders-subsystem TODO block tail (`:272`) and the `def _coerce_node_id` declaration so the TODO visually attaches to the `_apply_get_queryset_*` pair above it. (d) L4: named `SyncMisuseError` (a `ConfigurationError` subclass that also inherits `RuntimeError`) in three docstrings — `_apply_get_queryset_sync`, `_resolve_node_default`, `_resolve_nodes_default` — so each one mirrors M1's GLOSSARY entry.
-- `tests/types/test_relay_interfaces.py` — L1 lockstep. Eleven `spec-011` → `spec-015` swaps at `:73`, `:222`, `:267`, `:301`, `:303`, `:336`, `:512`, `:763`, `:1102`, `:1103`, `:1126`.
+
+- `django_strawberry_framework/types/relay.py:65` — L1 comment-clarity fix. Disambiguated the `_NODE_TYPE_HINT_ATTR` module comment so the unqualified ``relay.py`` no longer reads as a self-reference from inside `types/relay.py`. Changed "Attribute the root ``node``/``nodes`` resolvers (``relay.py``'s ``_stamp_node_type``)" → "...(the root ``relay.py``'s ``_stamp_node_type``)". Matches the disambiguation `install_is_type_of`'s docstring (`:88-89`) already uses ("set by the root refetch fields"). Verified `_stamp_node_type` lives in the ROOT module `django_strawberry_framework/relay.py::_stamp_node_type` (def at line 228, consumed at 257/305/395/403), NOT in `types/relay.py` — confirmed by `grep -rn "_stamp_node_type"` (only this comment in `types/relay.py`, the def + 5 call sites in root `relay.py`).
 
 ### Tests added or updated
-None. All edits are documentation-only — citation rotation, docstring naming alignment, GLOSSARY entry insertion, and a blank-line readability tightening. The `SyncMisuseError` typed marker is already pinned by `tests/types/test_relay_interfaces.py::test_sync_misuse_raises_sync_misuse_error_subclass` (`:887-916`); no new pin is needed.
+
+None — comment-only change, no behavior touched.
 
 ### Validation run
-- `uv run ruff format .` — pass (213 files unchanged, expected because the edits are inside docstrings, comments, and Markdown).
-- `uv run ruff check --fix .` — pass (All checks passed!).
-- Focused tests — not run (Worker 2 hard rule).
+
+- `uv run ruff format .` — pass / no-changes (265 files unchanged).
+- `uv run ruff check --fix .` — pass (all checks passed).
+- No pytest (per AGENTS.md / role rules).
 
 ### Notes for Worker 3
-- L5 (proxy-model branch test) and L6 (internal-helper GLOSSARY absence forward) deferred per artifact prose.
-- GLOSSARY entry placed alphabetically between `Strictness mode` (`:1098`) and `TestClient` (`:1114`). The artifact's recommended insertion text says "alphabetically between `safe_wrap_connection_method` and the `Schema audit` block" — that placement is incorrect alphabetically (`Sync` > `Schema`) so I followed proper alphabetical placement after `Strictness mode`. The entry text itself is verbatim from the artifact.
-- L2 artifact body lists 5 line-ranges for "four sites"; on inspection `_resolve_node_default`'s docstring contained two distinct `feedback.md § High` cite expressions (`:379` and `:389-390`), so the actual rotted-cite count is 5. I dropped all five since they are the same drift class and Worker 1's intent ("drop the cross-reference entirely if the surrounding docstring prose already documents the contract") clearly applies to each.
-- L3 placed two blank lines (not one) between the TODO body and `def _coerce_node_id` so the formatter's two-blank-line-between-top-level-defs rule is honored. Ruff format reports no further changes.
-- Concurrent maintainer activity dirty across many files (`KANBAN.md`, `types/base.py`, `types/finalizer.py`, `types/relations.py`, builder docs, `tests/types/test_base.py`, kanban-app changes, `review-0_0_7.md`) untouched per AGENTS.md #33.
-- `uv.lock` unchanged.
+
+- Shadow file used: `docs/shadow/django_strawberry_framework__types__relay.overview.md` (read-only overview; comment inventory line 65-73 matches source). Shadow line numbers are non-canonical; source-file line numbers cited above.
+- **L2 (confirm-only):** `_resolve_id_default`'s `# noqa: ARG001` (`:272`) confirmed load-bearing — `info` is genuinely unused in the body (dict-cache/getattr path) but the keyword-only param exists to match Strawberry's `cls.resolve_id(root, info=info)` call shape. No change.
+- **L3 (confirm-only):** the `if definition is not None` guard at `:729` (decode model-label branch) confirmed defensive-correct, shared by both decode branches for symmetry. Not dead code. No change.
+- `git diff --stat` vs baseline `0872a20` shows `types/relay.py | 2 +-` (1 insertion, 1 deletion) — the single comment line. The remainder of the working-tree diff is concurrent other-worker activity (AGENTS.md #33), untouched by this cycle.
+- `uv.lock` clean (no touch).
 
 ---
 
 ## Verification (Worker 3)
 
-Terminal-verify of bare `fix-implemented`. All seven dispatch checks pass against scoped diff (`git diff -- docs/GLOSSARY.md django_strawberry_framework/types/relay.py tests/types/test_relay_interfaces.py CHANGELOG.md`).
-
 ### Logic verification outcome
 
-All edits are documentation-only and match the artifact's per-finding prose:
+NO logic changed. Cycle diff vs baseline `0872a20` = `types/relay.py | 2 +-` (1 insertion, 1 deletion) — a single `#` comment line inside the `_NODE_TYPE_HINT_ATTR` block (`:65`): "(``relay.py``'s ``_stamp_node_type``)" → "(the root ``relay.py``'s ``_stamp_node_type``)". Adjacent executable lines (`implements_relay_node` return at `:62`, `_NODE_TYPE_HINT_ATTR = "_dsf_node_type_hint"` at `:74`) byte-unchanged.
 
-1. **GLOSSARY M1.** `docs/GLOSSARY.md:940` carries the new `SyncMisuseError` bullet inside `Relay Node integration`'s "Shipped behavior" list, positioned between the `is_type_of` bullet (`:939`) and the composite-pk bullet (`:941`) per the artifact recipe. New top-level `## SyncMisuseError` entry lands at `:1114-1124` with the verbatim three-bullet body + `See also` line; alphabetical placement between `Strictness mode` (`:1098`) and `TestClient` (`:1126`) is correct (`Sync` > `Str` > `Tes`). Worker 2's deviation from the artifact's mis-alphabetized "between `safe_wrap_connection_method` and `Schema audit`" suggestion was the right call and is logged in Notes-for-Worker-3.
-2. **L1 spec-011 → spec-015 swap.** `grep -c "spec-011" django_strawberry_framework/types/relay.py` returns 0; `grep -c "spec-015"` returns 7 (matching the artifact's 7-source-site count at `:85, :116, :117, :118, :125, :145, :208`). On the test file `grep -c "spec-011" tests/types/test_relay_interfaces.py` returns 0; `grep -c "spec-015"` returns 11 (matching the artifact's 11-test-site count).
-3. **L2 rotted `feedback.md § High` cites dropped.** `grep -c "feedback" django_strawberry_framework/types/relay.py` returns 0; the five rotted parentheticals at `:200`, `:234-236`, `:379`, `:389-390`, `:450` are gone and the surrounding docstring prose still names the contract independently per the artifact's option (b). Worker 2's 5-vs-4 count widening (artifact says "four sites" but `_resolve_node_default` had two distinct cites) is documented and the diff confirms all five were swept.
-4. **L3 blank lines before `_coerce_node_id`.** Two blank lines exist between `:272` (`#   parent_qs = parent_qs.filter(...)`) and `:275` (`def _coerce_node_id(...)`). Two-blank-line spacing (not one) honors Python's top-level-def convention; the TODO body visually attaches to the `_apply_get_queryset_*` pair upstream.
-5. **L4 `SyncMisuseError` named in three docstrings.** `grep -n "SyncMisuseError" django_strawberry_framework/types/relay.py` returns hits at the class definition (`:41`) plus the raise site (`:240`) plus three docstring sites: `:233` (`_apply_get_queryset_sync`), `:388` (`_resolve_node_default`), `:450` (`_resolve_nodes_default`). Each names the typed marker as "a `ConfigurationError` subclass that also inherits `RuntimeError`", matching the artifact's recommended phrasing and mirroring M1's GLOSSARY prose.
-6. **Changelog `Not warranted`.** `git diff -- CHANGELOG.md` is empty. The artifact's Changelog disposition cites both AGENTS.md #21 ("Do not update CHANGELOG.md unless explicitly instructed") and active-plan silence, plus a calibration-sibling enumeration covering `optimizer/extension.py`, `list_field.py`, `optimizer/hints.py`, `types/finalizer.py`, and `types/converters.py`.
-7. **Ruff plausible.** `uv run ruff check django_strawberry_framework/types/relay.py tests/types/test_relay_interfaces.py docs/GLOSSARY.md` → All checks passed.
+- **Low 1 (fixed):** comment-clarity disambiguation confirmed accurate. `grep -rn "_stamp_node_type"` shows the def at ROOT `django_strawberry_framework/relay.py:228` plus 5 call sites (257/305/395/403); the only occurrence in `types/relay.py` is this comment. The reworded "the root ``relay.py``'s ``_stamp_node_type``" correctly disambiguates the cross-file reference and matches the "root refetch fields" wording `install_is_type_of`'s docstring already uses (`:88`).
+- **Low 2 (confirm-only, unchanged):** `_resolve_id_default`'s `# noqa: ARG001` for the unused keyword-only `info` — not in the diff, confirmed load-bearing for Strawberry `cls.resolve_id(root, info=info)` signature-parity.
+- **Low 3 (confirm-only, unchanged):** the `if definition is not None` defensive guard in the decode model-label branch — not in the diff, confirmed defensive-correct (shared by both decode branches for symmetry).
+- **Security-adjacent decode (untouched):** the GlobalID `decode_global_id` contract (uniform `ConfigurationError`, payload-shape-only, strategy-gated, no existence oracle) Worker 1 verified is unaffected by a comment edit; executable bodies byte-unchanged.
 
 ### DRY findings disposition
 
-Three DRY deferrals all carry explicit "third callsite" triggers — defer-`_dispatch_node_resolver` until a third sync-vs-async-context Relay resolver lands (most plausibly `resolve_connection`), defer-`_sync_node_prelude`/`_async_node_prelude` until the resolver coroutine pattern picks up a third caller, and restate the existing `TODO(spec-027-filters-0_0_8 Slice 1)` trigger inside this file. No in-cycle DRY edit; deferrals are pre-authorized by the artifact's own prose and Worker 2 took no action.
+Both DRY items (`_dispatch_node_resolver` fold; `_emits_model_label`/`_accepts_model_label_decode` predicate collapse) confirmed deferred-with-trigger; existing docstring at `:427-437` already states the split trigger verbatim. No change.
 
 ### Temp test verification
 
-Not applicable. All edits are documentation-only (citation hygiene, GLOSSARY entry insertion, blank-line readability, typed-marker naming in docstrings). The `SyncMisuseError` typed marker is already pinned by `tests/types/test_relay_interfaces.py::test_sync_misuse_raises_sync_misuse_error_subclass` (`:887-916`); no new pin is needed.
+None — comment-only cycle, no behavior to probe. Verification was read-only (diff inspection + cross-file grep for `_stamp_node_type`).
 
 ### Verification outcome
 
-Verified. Concurrent maintainer activity on `types/base.py`, `types/finalizer.py`, `types/relations.py`, `tests/types/test_base.py`, and several builder/kanban/example files is out-of-scope per AGENTS.md #33 and untouched by this cycle's diff.
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the checklist box. Diff is comment-only (+1/-1, single `#` line); executable lines byte-unchanged; ruff format-check + check pass (COM812 standing notice); `git diff -- CHANGELOG.md` empty, Not-warranted with both citations (AGENTS.md + active-plan silence), internal-only framing honest (comment-clarity, zero consumer-visible change).
 
 ---
 
 ## Comment/docstring pass
 
-Consolidated single-spawn — comment/docstring edits were applied in the same pass as the M1 GLOSSARY lift because the artifact carried pre-derived verbatim replacement prose for the Medium and the Lows are all citation/comment/docstring-only. Same shape #4 calibration applied to `optimizer/extension.py`, `list_field.py`, `optimizer/hints.py`, `types/finalizer.py`, and other recent 0.0.7 cycles.
+Folded into the consolidated single-spawn (the sole in-cycle edit is the L1 comment-clarity fix; see Fix report above).
 
 ### Files touched
-Same set as the Fix report above; no additional comment-pass-only edits.
+
+- `django_strawberry_framework/types/relay.py:65` — L1, as recorded in the Fix report.
 
 ### Per-finding dispositions
-- Medium 1 (GLOSSARY drift on `Relay Node integration` + new `SyncMisuseError` entry): applied verbatim from the artifact's recommended prose; alphabetical placement adjusted from the artifact's "between `safe_wrap_connection_method` and `Schema audit`" suggestion to the correct slot between `Strictness mode` and `TestClient` (the entry text itself is unchanged).
-- Low 1 (`spec-011` → `spec-015` swap): applied to all 7 source sites + 11 test sites in lockstep.
-- Low 2 (`feedback.md § High` rotted cites): all 5 rotted parentheticals dropped (artifact's recommended "drop the cross-reference entirely if the surrounding docstring prose already documents the contract" path); the surrounding docstring prose at each site still documents the contract.
-- Low 3 (TODO block at `:266-273` structurally orphaned): two blank lines inserted between the TODO tail and `def _coerce_node_id`.
-- Low 4 (name `SyncMisuseError` in three docstrings): applied to `_apply_get_queryset_sync`, `_resolve_node_default`, `_resolve_nodes_default`.
-- Low 5 (proxy-model branch pin): deferred per artifact's own prose ("Defer until a proxy-model fixture exists elsewhere in the package OR a regression surfaces").
-- Low 6 (internal-helper GLOSSARY absence confirmation): forwarded to `rev-types.md` folder pass per artifact instruction; no per-file action taken.
+
+- DRY (defer `_dispatch_node_resolver`): confirmed deferred-with-trigger (third in-async-context resolver). No change.
+- DRY (defer `_emits_model_label` / `_accepts_model_label_decode` collapse): confirmed deferred-with-trigger; the existing docstring at `:427-437` already states "Slice 3 splits this if a divergence ever surfaces". No change.
+- Low 1: fixed — comment disambiguated to "the root ``relay.py``'s ``_stamp_node_type``".
+- Low 2: confirm-only — `# noqa: ARG001` load-bearing for signature-parity. No change.
+- Low 3: confirm-only — `if definition is not None` guard defensive-correct, shared by both decode branches. No change.
 
 ### Validation run
-- `uv run ruff format .` — pass (213 files unchanged).
-- `uv run ruff check --fix .` — pass (All checks passed!).
+
+- `uv run ruff format .` — pass / no-changes.
+- `uv run ruff check --fix .` — pass.
 
 ### Notes for Worker 3
-Same as the Fix-report Notes above; no additional comment-pass-specific notes.
+
+Comment-only cycle; no logic touched, no docstring contract changed.
 
 ---
 
 ## Changelog disposition
 
 ### State
+
 `Not warranted`.
 
 ### Reason
-- AGENTS.md #21 — "Do not update CHANGELOG.md unless explicitly instructed." Dispatch prompt explicitly directs `Not warranted` and the active review plan does not authorise a `CHANGELOG.md` edit for this cycle.
-- All in-cycle edits are documentation hygiene: M1 GLOSSARY drift fix (the publicly-exported `SyncMisuseError` was already raised by `_apply_get_queryset_sync` since 0.0.5 and is already caught by `filters/sets.py::FilterSet.apply` — the cycle documents the existing consumer contract, it does not change behavior), L1 7-source+11-test citation rotation (no logic change), L2 rotted-feedback.md citation drop (no logic change), L3 blank-line readability tightening (no logic change), L4 typed-marker-naming-in-docstring (no logic change, no exception-message-substring change at the runtime raise site).
-- Calibration siblings for `Not warranted`: prior 0.0.7 cycles with GLOSSARY-Medium-lift + citation/comment Lows — `optimizer/extension.py` (3-entry GLOSSARY lift + spec-014→spec-018), `list_field.py` (`DjangoListField` async-detection clause + 4-site spec/path rotation), `optimizer/hints.py` (`OptimizerHint` Validation paragraph + four in-place Lows), `types/finalizer.py` (9-Lows citation hygiene), `types/converters.py` (5 docstring-only Lows). All calibrated to `Not warranted` on the same AGENTS.md #21 + active-plan-silence pair.
+
+The sole edit is an internal comment-clarity fix (disambiguating a cross-file reference) with zero consumer-visible behavior change. No `CHANGELOG.md` authorization for this cycle: AGENTS.md "Do not update CHANGELOG.md unless explicitly instructed", AND the active review plan is silent on changelog authorization for `types/relay.py` (per-file cycles are never the authorising scope; any drift forwards to the project pass).
 
 ### What was done
+
 No `CHANGELOG.md` edit.
 
 ### Validation run
-- `uv run ruff format .` — pass (213 files unchanged).
-- `uv run ruff check --fix .` — pass (All checks passed!).
+
+- `uv run ruff format .` — pass / no-changes.
+- `uv run ruff check --fix .` — pass.
 
 ---
 

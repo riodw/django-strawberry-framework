@@ -1,17 +1,30 @@
-"""Filter input-class BFS factory + the dynamic-FilterSet cache for connection fields.
+"""Filter input-class BFS factory + the (currently unconsumed) dynamic-FilterSet cache.
 
 Layer 5 of the spec-027 six-layer pipeline (the BFS that builds every
 reachable Strawberry input class via the named converter
 ``convert_filter_to_input_annotation``) plus Layer 6 (the dynamic-class
-cache keyed by ``(model, fields, extra_meta)`` for connection fields
-that target the same model without an explicit ``filterset_class``).
+cache keyed by ``(model, fields, extra_meta)`` for an auto-FilterSet
+surface that would let a field target a model without an explicit
+``filterset_class``).
+
+Layer 6 has no source consumer: ``DjangoConnectionField`` (spec-030,
+shipped ``0.0.9``) reads the wrapped type's already-resolved
+``Meta.filterset_class`` sidecar directly and never builds a FilterSet
+from ``model`` / ``fields``. Auto-generation of a ``FilterSet`` from
+``Meta.fields`` without an explicit class is a standing deferred
+Non-goal (``spec-027`` Non-goals #"Auto-generation of ``FilterSet`` from
+``Meta.fields``"); the cache plumbing was landed ahead of that consumer,
+which is not yet built. Layer 6 stays build-and-test-only until that
+surface ships.
 
 The BFS factory consumes resolved ``django-filter`` filter instances --
 NOT a parallel ``FILTER_DEFAULTS`` map -- so the runtime filter shape
 and the GraphQL input shape stay downstream of one decision site
 (Decision 4 H1 / spec-027 lines 579-584). The finalizer materializes the
-built classes as module globals at finalize time; this module owns
-build-only.
+BFS factory's built input classes as module globals at finalize time;
+this module owns build-only. (Layer 6's dynamic FilterSet classes are
+plain ``type(...)`` products cached below, never materialized as module
+globals.)
 """
 
 from __future__ import annotations
@@ -30,9 +43,11 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
 # Module-level dynamic-FilterSet cache per Layer 6 of Decision 3. Keys
 # are produced by ``_make_cache_key`` so dict / list / scalar shapes for
 # ``Meta.fields`` collapse onto stable tuple keys. The cache is the
-# duplicate-``__name__`` collision break-glass: two connection fields
-# targeting the same model without an explicit ``filterset_class``
-# resolve to the same generated class.
+# duplicate-``__name__`` collision break-glass for the (deferred,
+# unconsumed) auto-FilterSet surface: two fields that auto-derive a
+# FilterSet against the same model from equivalent ``Meta`` would resolve
+# to the same generated class. No source path exercises this yet -- see
+# the module docstring; the cache is build-and-test-only at ``0.0.9``.
 #
 # Lifecycle (M-filters-3 review, accepted as-is): this cache has NO clear
 # hook, so after ``registry.clear()`` rebuilds model classes a dynamic
@@ -193,8 +208,14 @@ def get_filterset_class(filterset_class: type[FilterSet] | None, **meta: Any) ->
     Mirrors the cookbook's same-named helper at
     ``django_graphene_filters/filterset_factories.py::get_filterset_class``
     (NOT graphene-django's same-named function -- spec Decision 4
-    name-collision note). The function trusts its caller; the
-    connection-field surface owning this entry point lands in ``0.0.9``.
+    name-collision note). The function trusts its caller. It has no source
+    consumer yet: the auto-FilterSet surface that would call it (a field
+    targeting a model without an explicit ``filterset_class``) is a
+    standing deferred Non-goal (``spec-027`` Non-goals #"Auto-generation of
+    ``FilterSet`` from ``Meta.fields``"). ``DjangoConnectionField``
+    (spec-030, ``0.0.9``) consumes the already-resolved
+    ``Meta.filterset_class`` sidecar directly and does not route through
+    here. Built-and-tested ahead of that consumer.
 
     Args:
         filterset_class: An optional pre-declared ``FilterSet`` subclass.

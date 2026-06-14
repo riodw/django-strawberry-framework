@@ -62,7 +62,7 @@ def implements_relay_node(type_cls: type) -> bool:
     return issubclass(type_cls, relay.Node)
 
 
-# Attribute the root ``node``/``nodes`` resolvers (``relay.py``'s
+# Attribute the root ``node``/``nodes`` resolvers (the root ``relay.py``'s
 # ``_stamp_node_type``) set on a fetched model instance to carry the
 # decode-resolved ``DjangoType`` into abstract-type resolution. Without it, a
 # model with TWO registered Relay types makes every candidate's installed

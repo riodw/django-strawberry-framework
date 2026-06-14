@@ -2,9 +2,16 @@
 
 Status: verified
 
+> Release 0.0.9 review cycle. This artifact supersedes the prior 0.0.7-cycle
+> contents (which closed `verified` against `review-0_0_7.md`). The findings
+> below are new drift accrued since: the 0.0.7 fix's `Current raise sites in
+> 0.0.7:` label is now version-stale at 0.0.9, and the `ConfigurationError`
+> deferred-key example went stale when `filterset_class` / `orderset_class`
+> shipped in 0.0.8.
+
 ## DRY analysis
 
-- None — the module is three class definitions with no executable body, no imports, and zero repeated literals (confirmed via `docs/shadow/django_strawberry_framework__exceptions.overview.md` Quick scan: imports 0, calls 0, repeated literals 0). The hierarchy `DjangoStrawberryFrameworkError` → `ConfigurationError` / `OptimizerError` is itself the DRY shape consumers use to `except` either one or both, so there is nothing to consolidate further inside the module. Cross-file DRY of `raise ConfigurationError(...)` literals is a folder/project-pass concern, not a local one.
+- None — the three-class hierarchy carries no executable code, no repeated literals (shadow overview: 0 repeated string literals), and no duplicated logic; each docstring is unique prose. The base/subclass factoring is already minimal and the package consistently imports these three names rather than redefining error types (confirmed across `conf.py`, `registry.py`, `types/`, `optimizer/`, `filters/`, `orders/`, `utils/`, `testing/` — every raise site imports from `.exceptions`). `utils/querysets.py::SyncMisuseError` correctly extends `ConfigurationError` rather than duplicating it. Cross-file DRY of `raise ConfigurationError(...)` literals is a folder/project-pass concern, not a local one.
 
 ## High:
 
@@ -16,75 +23,187 @@ None.
 
 ## Low:
 
-### `OptimizerError` docstring describes a raise pathway that does not exist in 0.0.7
+### Stale `OptimizerError` version label, now non-exhaustive
 
-The class docstring states: *"a runtime ``OptimizerError`` typically signals a registry miss for a type that should have been registered by ``DjangoType.__init_subclass__``"* (`django_strawberry_framework/exceptions.py:33-40`). The only `OptimizerError` raise site in the package is `field_meta.py::FieldMeta.from_django_field`, where it is a defensive guard against a non-Django field descriptor that lacks `name` / `is_relation` (`django_strawberry_framework/optimizer/field_meta.py:130-134`). The "registry miss" pathway is not implemented in 0.0.7 — `registry.py` raises `ConfigurationError`, not `OptimizerError`, for every collision and post-finalize lookup; the optimizer walker / hints / extension never raise `OptimizerError` either (`grep -rn "OptimizerError" django_strawberry_framework/` returns only `exceptions.py` and `field_meta.py`). Consumers reading the docstring will look for a behavior the code does not have. Recommended change: replace the "registry miss" sentence with the actual current trigger — non-Django field descriptor passed to `FieldMeta.from_django_field` — and keep the class so future planning failures still have a typed home. Comment-pass territory (no logic change); fold into the comment pass once logic is accepted.
+The `OptimizerError` docstring (`django_strawberry_framework/exceptions.py #"Current raise sites in 0.0.7"`) pins its raise-site inventory to "0.0.7", but `pyproject.toml` and `django_strawberry_framework/__init__.py` are both at `0.0.9`. The inventory is also now incomplete: `grep -rn "raise OptimizerError" django_strawberry_framework/` returns four sites, and the docstring names only two. Beyond the listed `FieldMeta.from_django_field` guard (`optimizer/field_meta.py:156`) and the relation-resolver N+1 guard (`types/resolvers.py:188`), `0.0.9` added the connection-path N+1 raise (`django_strawberry_framework/connection.py #"unplanned, unserved nested-connection access fires"`, GLOSSARY line 1263) and `optimizer/plans.py::` raises `OptimizerError` for a single-valued forward relation (`plans.py:567`, `plans.py:575`) — neither is named.
 
-### `OptimizerError` and `DjangoStrawberryFrameworkError` are not in `docs/GLOSSARY.md`
+Recommended change (root-cause): retitle the block to a version-agnostic `Raise sites:` so the label stops accruing per-release staleness debt, and either enumerate all four current sites or describe the two families (typed input-guard at construction; strictness-`"raise"` N+1 guard covering both list and connection relation paths). Version-agnostic phrasing is the higher-quality fix — re-pinning to `0.0.9` only defers the same drift to the next bump.
 
-`ConfigurationError` carries a full glossary entry (`docs/GLOSSARY.md:194-208`) including shipped-version, raise contexts, and see-also links. The base class `DjangoStrawberryFrameworkError` and the sibling `OptimizerError` have zero glossary coverage despite being public via `__all__` and despite `DjangoStrawberryFrameworkError` being the explicit single-`except` entry point per the base-class docstring. Defer until either (a) a second non-`ConfigurationError` subclass actually raises in production code (today only `field_meta.py` raises `OptimizerError`), or (b) the project pass decides every `__all__`-exported public class needs a glossary entry irrespective of consumer surface area. Trigger: a third exception subclass landing under `exceptions.py`, OR the project-pass artifact deciding to enforce uniform `__all__` ↔ GLOSSARY coverage. Forward to `rev-django_strawberry_framework.md` as a project-pass follow-up.
+```django_strawberry_framework/exceptions.py:36:44
+    Current raise sites in 0.0.7:
+        - ``FieldMeta.from_django_field`` rejects an input that is not a
+          Django field descriptor (missing ``name`` / ``is_relation``),
+          converting an otherwise late ``AttributeError`` into a typed,
+          call-site failure naming the bad input.
+        - The relation resolver's N+1 guard fires when optimizer
+          ``strictness`` is ``"raise"`` and a request reaches an unplanned
+          relation that would lazy-load.
+```
+
+### Stale `ConfigurationError` deferred-key example
+
+The `ConfigurationError` docstring (`django_strawberry_framework/exceptions.py #"A deferred-surface key"`) lists `filterset_class` and `orderset_class` among the "deferred-surface key[s] ... declared before the spec that owns it has shipped." Both have since shipped: `types/base.py:60-61` shows `DEFERRED_META_KEYS` now holds only `{"aggregate_class", "fields_class", "search_fields"}`, while `filterset_class` (`types/base.py:70`) and `orderset_class` (`types/base.py:77`) live in the ALLOWED set with working validators (`types/base.py::_validate_filterset_class`, `types/base.py::_validate_orderset_class`). GLOSSARY line 808 confirms `orderset_class` is "no longer in `DEFERRED_META_KEYS` since `0.0.8`." The example now names two keys that no longer raise on declaration, misdescribing the contract.
+
+Recommended change: drop `filterset_class` and `orderset_class` from the parenthetical so it reads `(aggregate_class, fields_class, search_fields)` — matching the current `DEFERRED_META_KEYS` exactly.
+
+```django_strawberry_framework/exceptions.py:26:30
+        - A deferred-surface key (``filterset_class``, ``orderset_class``,
+          ``aggregate_class``, ``fields_class``, ``search_fields``)
+          declared before the spec that owns it has shipped.
+```
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** Standard library `Exception` is the only base; `__all__` exports the three names alphabetically (`exceptions.py:8`), matching the package's tuple-shaped `__all__` convention. No first-party imports, no Django imports, no Strawberry imports — the module-docstring's "bottom of the import graph" promise is verifiable in one read.
-- **Duplication risk in the current file.** Three class docstrings repeat the prose pattern "Raised when ..."; this is intentional sibling design — each class needs to be greppable in isolation for its raise context, and a shared helper docstring would defeat the IDE hover that consumers actually use.
+- **Existing patterns reused.** The module is the single source of truth for the package's exception types; every raise site across the package imports `ConfigurationError` / `OptimizerError` from `.exceptions` rather than redefining (verified by grep across `conf.py`, `registry.py`, `types/`, `optimizer/`, `filters/`, `orders/`, `utils/`, `testing/`). `utils/querysets.py::SyncMisuseError` extends `ConfigurationError` (multiple-inherits `RuntimeError`) instead of forking a parallel error family — the DRY win is realized.
+- **Duplication risk in the current file.** None — three unique docstrings, no repeated literals (shadow overview confirms 0), no near-copy class bodies. The "Raised when ..." prose pattern across the two subclasses is intentional sibling design: each class needs to be greppable and IDE-hoverable in isolation for its own raise context.
 
 ### Other positives
 
-- Module docstring explicitly justifies the import position ("Lives at the bottom of the import graph — no Django, no Strawberry, no internal package imports — so the exception hierarchy can be raised from anywhere without circulars"), which is a load-bearing architectural property worth keeping inline rather than in a spec.
-- The `ConfigurationError` docstring's `Examples:` block enumerates the four raise families that the registry / converters / finalizer actually use — a consumer skimming the class learns the surface area without grepping for raise sites.
-- Static helper skip is appropriate per `worker-1.md` "Skip for pure-class-definition modules": the shadow overview confirms zero imports / zero calls / zero markers / zero TODO / zero repeated literals (`docs/shadow/django_strawberry_framework__exceptions.overview.md` Quick scan). The plan-time `--all` sweep already wrote the overview; no re-run needed.
-- Shape #2 (Skip artifact) criteria are met for the module structure (only class definitions, docstrings, `__all__`, no executable code outside class bodies, no first-party imports, no module-level functions) — but the two real Lows above prevent the artifact itself from collapsing to a no-findings skip. Recorded for the Worker 2 spawn's awareness.
-- GLOSSARY drift quick-check: `ConfigurationError` glossary entry (`docs/GLOSSARY.md:194-208`) is aligned with the source-class examples (unknown / deferred `Meta` keys, post-finalize declaration, unresolved relations, invalid hints, `CompositePrimaryKey` + `relay.Node`); no GLOSSARY-only fix in scope for `ConfigurationError`. `OptimizerError` and `DjangoStrawberryFrameworkError` absences are handled as a forwarded Low above rather than an in-cycle GLOSSARY edit.
+- **review_inspect helper skipped — justified.** Per `REVIEW.md` "Static review helper", the helper may be skipped for pure-class-definition modules. The plan-time `--all` overview already exists (`docs/shadow/django_strawberry_framework__exceptions.overview.md`) and confirms the skip-artifact shape: 0 imports, 0 executable marker lines, 0 control-flow hotspots, 0 calls of interest, 3 symbols all class definitions. No re-run needed.
+- **Bottom-of-import-graph placement.** The module docstring's promise (no Django / Strawberry / internal imports → no circulars) is enforced: shadow overview reports `imports: 0`. The breadth of raise sites across the package confirms the hierarchy can be raised from anywhere.
+- **`__all__` is explicit and alphabetized** (`exceptions.py:8`), covering all three public classes; matches the three defined symbols exactly.
+- **Hierarchy design is sound.** Single base (`DjangoStrawberryFrameworkError`) with two cause-distinguishing subclasses; consumers catch broad or narrow. Docstrings document the catch-this-to-handle-all contract.
+- **Ruff clean.** `uv run ruff format --check django_strawberry_framework/exceptions.py` → already formatted; `uv run ruff check django_strawberry_framework/exceptions.py` → all checks passed.
+- **GLOSSARY drift quick-check.** `ConfigurationError` glossary entry (`docs/GLOSSARY.md:212`, shipped `0.0.1`) is consistent with the source-class contract (unknown / deferred `Meta` keys, post-finalize declaration, primary collisions, choice / array / hstore rejections, `CompositePrimaryKey` + `relay.Node`); no GLOSSARY-only fix in scope for `ConfigurationError`. `OptimizerError` and `DjangoStrawberryFrameworkError` carry no standalone GLOSSARY entries — non-contract symbols, no drift to fix; if the project pass decides to enforce uniform `__all__` ↔ GLOSSARY coverage, that belongs in `rev-django_strawberry_framework.md`, not here.
 
 ### Summary
 
-Three-class exception hierarchy with no executable code, no imports, and an explicit import-graph rationale in the module docstring. Logic is correct; the only meaningful finding is a docstring-vs-implementation drift in `OptimizerError` (the "registry miss" pathway it describes does not exist in 0.0.7 — the sole raise site is a defensive Django-field-descriptor guard in `field_meta.py`). Glossary coverage of the sibling and base class is forwarded to the project pass under a triggered Low. No DRY consolidation opportunities — the hierarchy itself IS the DRY shape consumers rely on.
+`exceptions.py` is a clean, correctly-placed pure-class-definition module — the textbook skip-artifact shape (0 imports, 0 executable code, 3 class definitions; static helper skip justified). No logic defects, no DRY opportunities, no `ConfigurationError` GLOSSARY contract drift. The only findings are two stale docstring examples accrued since the 0.0.7 cycle: the `OptimizerError` "raise sites in 0.0.7" label is version-stale and now non-exhaustive (the `0.0.9` connection path and the `optimizer/plans.py` forward-relation site both raise `OptimizerError` and go unnamed), and the `ConfigurationError` deferred-key list still names `filterset_class` / `orderset_class`, both of which shipped (no longer in `DEFERRED_META_KEYS` as of `0.0.8`). Both are Low (comment-pass, non-contract for these exact symbols) but real — they misdescribe current shipped behavior — so this routes as a standard `under-review` cycle for Worker 2 to make the docstring edits, NOT a no-source-edit (shape #5) collapse. Shape #2 (skip artifact) holds for the *code structure*, but the live docstring corrections require a real source edit, so the artifact does not collapse to a no-findings skip.
 
 ---
 
 ## Fix report (Worker 2)
 
-Consolidated single-spawn pass per `worker-2.md` "Consolidated single-spawn pass" — Low 1 is a trivially-localised docstring sentence with no logic change; Low 2 is forwarded to the project pass (no in-cycle action). Logic + comment + changelog disposition folded into one spawn.
+Consolidated single-spawn (2 Lows, docstring-only, no logic/behaviour change;
+both real comment-pass findings, both premises verified against source). Logic +
+comment + changelog disposition collapsed per role-file rule "the artifact's only
+in-cycle edit is a single trivially-localised docstring sentence with no logic
+change" (here two such docstring blocks, both in one file, no logic touched).
 
 ### Files touched
-- `django_strawberry_framework/exceptions.py:33-44` — rewrote the `OptimizerError` class docstring. Dropped the inaccurate "registry miss" sentence and replaced it with a `Current raise sites in 0.0.7:` block enumerating both actual triggers: the `FieldMeta.from_django_field` defensive guard and the relation resolver's N+1 guard under `strictness="raise"`. No logic change.
+- `django_strawberry_framework/exceptions.py:26-28` — `ConfigurationError`
+  docstring: dropped the now-shipped `filterset_class` / `orderset_class` from the
+  deferred-surface-key parenthetical so it reads exactly the current
+  `DEFERRED_META_KEYS` membership `(aggregate_class, fields_class, search_fields)`.
+- `django_strawberry_framework/exceptions.py:36-47` — `OptimizerError` docstring:
+  retitled the version-pinned `Current raise sites in 0.0.7:` to a version-agnostic
+  `Raise sites:` (root-cause fix; stops per-release staleness debt) and described
+  the two raise-families rather than re-enumerating, so the block stays accurate as
+  sites are added: (1) typed input-guard at construction; (2) strictness-`"raise"`
+  N+1 guard covering BOTH the list-relation resolver and the nested-connection
+  window-partition path.
 
 ### Tests added or updated
-- None. Docstring-only edit; no behavioural change to pin. Existing tests under `tests/` reference `ConfigurationError` heavily but do not exercise `OptimizerError` directly (grep on `tests/`, `examples/` returns only `ConfigurationError` matches), so no docstring-asserting test exists to update.
+- None. Pure docstring text; no behaviour change, no branch added/removed. Per
+  role-file Low dicta ("avoid adding tests for purely internal refactors") and the
+  shadow overview (0 executable lines, 3 class defs) no test is possible or
+  warranted — the module has no runtime to assert against.
 
 ### Validation run
-- `uv run ruff format .` — pass (183 files left unchanged); harmless COM812-vs-formatter conflict warning is pre-existing and surfaces on every invocation.
-- `uv run ruff check --fix .` — pass (All checks passed!).
-- No focused tests run (docstring-only change; AGENTS.md "Do not run pytest after edits").
+- `uv run ruff format .` — pass / no-changes (265 files left unchanged).
+- `uv run ruff check --fix .` — pass / all checks passed.
+- Diff vs baseline `0872a20`: exceptions.py was UNCHANGED since baseline (these
+  docstrings are stale-since-0.0.7, not newly-introduced drift); the only post-edit
+  diff to exceptions.py is this cycle's two docstring blocks.
 
 ### Notes for Worker 3
-- Shadow file: `docs/shadow/django_strawberry_framework__exceptions.overview.md` (Worker 1 plan-time `--all` overview; not re-run by Worker 2 since the edit is one localised docstring).
-- **Artifact premise widened, not rejected.** Low 1 cites `field_meta.py::FieldMeta.from_django_field` as "the single real raise site," but `grep -rn "OptimizerError" django_strawberry_framework/` returns a second raise site at `django_strawberry_framework/types/resolvers.py #"raise OptimizerError(f\"Unplanned N+1"` (line 152 in current HEAD) which fires when `DST_OPTIMIZER_STRICTNESS == "raise"` on an unplanned-N+1 relation. Both raise sites are unrelated to "registry miss," so the artifact's recommended deletion still holds — but the replacement text needed to enumerate **both** current triggers to remain accurate. The docstring now lists both. If Worker 3 prefers the original single-site framing, the resolver-side raise should still be mentioned for the docstring to match shipped behavior.
-- `uv.lock` not touched.
-- `docs/feedback.md` shows as modified (`git status`) — pre-existing maintainer-in-flight work, untouched by this pass per `AGENTS.md` "unexpected file modifications" guidance.
+- Premises verified against source-of-truth before editing:
+  - `OptimizerError` raise sites = 4 via `grep -rn "raise OptimizerError"`:
+    `optimizer/field_meta.py:156`, `types/resolvers.py:188`, and
+    `optimizer/plans.py:567` + `:575`. The artifact attributed the connection-path
+    raise to `connection.py`; the actual `raise OptimizerError` lives in
+    `optimizer/plans.py::window_partition_for_prefetch` (plans.py:567/575), which
+    `connection.py` reaches downstream. I described it as the "nested-connection
+    window-partition path" to be accurate to the real raise site. Chose the
+    two-families description (artifact's offered alternative) over enumerating four
+    sites — keeps the docstring stable across future site additions.
+  - `DEFERRED_META_KEYS` = `frozenset({"aggregate_class", "fields_class",
+    "search_fields"})` at `types/base.py:60-62`; `filterset_class` (base.py:70) and
+    `orderset_class` (base.py:77) are in `ALLOWED_META_KEYS` with live validators
+    `_validate_filterset_class` / `_validate_orderset_class`. New parenthetical
+    matches the frozenset exactly.
+- No false-premise rejections — both Lows held.
+- Shadow file consulted: `docs/shadow/django_strawberry_framework__exceptions.overview.md`
+  (confirmed skip-artifact shape; not used for line numbers).
+- `uv.lock` untouched after both `uv run` commands.
+
+---
+
+## Verification (Worker 3)
+
+### Logic verification outcome
+Both Worker 1 Lows independently re-verified against source-of-truth; both held.
+
+- **Low 1 (`OptimizerError` raise sites).** `grep -rn "raise OptimizerError"` returns
+  exactly 4 sites: `optimizer/field_meta.py:156`, `types/resolvers.py:188`,
+  `optimizer/plans.py:567` + `:575`. Read each:
+  - `field_meta.py:156` — `if not hasattr(field, "name") or not hasattr(field, "is_relation")`
+    guard, converting a late `AttributeError` into a typed call-site failure naming the
+    bad input. Matches docstring family (1) "typed input-guard at construction".
+  - `resolvers.py:188` — `if strictness == "raise": raise OptimizerError(f"Unplanned N+1: ...")`.
+    The list/many-side relation resolver N+1 guard. Matches docstring family (2),
+    "list-relation resolver" arm.
+  - `plans.py:567`/`:575` — both inside `window_partition_for_prefetch` (def at
+    `plans.py:542`): `:567` raises for a relation kind not in
+    `("many","reverse_many_to_one","reverse_one_to_one")` (single-valued forward / no
+    windowable partition); `:575` raises when the parent partition can't be resolved.
+    Matches docstring family (2), "nested-connection window-partition path (a single-valued
+    forward relation or any kind without a windowable parent partition)". Worker 2's
+    correction of the artifact's `connection.py` attribution to the real `plans.py` raise
+    site is accurate — `connection.py` reaches this downstream. The retitle to
+    version-agnostic `Raise sites:` and the two-families phrasing are faithful and
+    version-agnostic (root-cause fix; no per-release staleness debt).
+- **Low 2 (`ConfigurationError` deferred-key example).** `types/base.py:60-62` is
+  `DEFERRED_META_KEYS = frozenset({"aggregate_class", "fields_class", "search_fields"})`
+  exactly. `filterset_class` (base.py:70) and `orderset_class` (base.py:77) are in
+  `ALLOWED_META_KEYS`, no longer deferred. New docstring parenthetical lists exactly the
+  three frozenset members (`aggregate_class`, `fields_class`, `search_fields`) — no shipped
+  `filterset_class`/`orderset_class`. Matches source-of-truth.
+
+Diff vs baseline `0872a20` is docstring-only: two blocks (`ConfigurationError` parenthetical,
+`OptimizerError` raise-sites). No logic, no executable lines, no `__all__`/class-body change.
+
+### DRY findings disposition
+Worker 1 reported None; confirmed — pure-class-definition module, 0 imports / 0 executable
+lines / 3 class defs (shadow overview), 0 repeated literals. No DRY action.
+
+### Temp test verification
+- None created. Pure docstring text, no runtime to assert against (per AGENTS.md "no test
+  possible" — module has 0 executable lines). pytest not run (correct; no test introduced).
+
+### Verification outcome
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the checklist box.
+Changelog `Not warranted` verified: `git diff -- CHANGELOG.md` empty; disposition cites BOTH
+AGENTS.md #21 and the plan's silence; internal-only framing honest (typed-error runtime
+contracts unchanged). Ruff: `format --check` already formatted, `check` all passed.
 
 ---
 
 ## Comment/docstring pass
 
-Folded into the consolidated single-spawn above. The cycle's only edit IS a docstring fix, so the logic pass and the comment pass collapse into the same change.
+(Folded into the consolidated spawn — the two findings ARE the docstring pass.)
 
 ### Files touched
-- `django_strawberry_framework/exceptions.py:33-44` — see Fix report above.
+- `django_strawberry_framework/exceptions.py:26-28` and `:36-47` — see Fix report.
 
 ### Per-finding dispositions
-- Low 1 (`OptimizerError` docstring describes a raise pathway that does not exist in 0.0.7): **addressed** — replaced the "registry miss" sentence with a `Current raise sites in 0.0.7:` enumeration of both actual triggers (`FieldMeta.from_django_field` guard; resolver N+1 guard under `strictness="raise"`). Widened slightly versus the artifact recommendation to cover the second raise site found at `types/resolvers.py #"raise OptimizerError(f\"Unplanned N+1"`; see Notes for Worker 3.
-- Low 2 (`OptimizerError` and `DjangoStrawberryFrameworkError` missing from `docs/GLOSSARY.md`): **forwarded** — no in-cycle action per Worker 1's explicit defer trigger (a third subclass landing, or the project pass deciding to enforce uniform `__all__` ↔ GLOSSARY coverage). Re-forwarded to `rev-django_strawberry_framework.md` as the project-pass owner.
+- Low 1 (`OptimizerError` stale `0.0.7` label, now non-exhaustive): FIXED.
+  Retitled to version-agnostic `Raise sites:` and switched to a two-families
+  description (typed input-guard at construction; strictness-`"raise"` N+1 guard
+  covering list-relation + nested-connection window-partition paths). Root-cause
+  fix per the artifact's recommendation — re-pinning to `0.0.9` only defers drift.
+- Low 2 (`ConfigurationError` stale deferred-key example): FIXED. Dropped the
+  shipped `filterset_class` / `orderset_class`; parenthetical now exactly mirrors
+  `DEFERRED_META_KEYS = {aggregate_class, fields_class, search_fields}`.
 
 ### Validation run
-- `uv run ruff format .` — pass.
+- `uv run ruff format .` — pass / no-changes.
 - `uv run ruff check --fix .` — pass.
 
 ### Notes for Worker 3
-- See above; no separate comment-pass diff exists.
+See Fix report Notes — both premises confirmed against source; no rejections.
 
 ---
 
@@ -94,31 +213,21 @@ Folded into the consolidated single-spawn above. The cycle's only edit IS a docs
 `Not warranted`.
 
 ### Reason
-Internal docstring polish only — no public API change, no behavioural change, no consumer-visible contract shift. Cited rules:
-- `AGENTS.md` "Do not update CHANGELOG.md unless explicitly instructed" (line-level rule against unauthorized CHANGELOG edits).
-- The active review plan does not authorize a CHANGELOG edit for this cycle (Worker 2 did not read the plan per `worker-2.md` forbidden-reads, but the dispatch prompt explicitly stated `Changelog disposition: 'Not warranted' (internal docstring polish only), citing both AGENTS.md and the active plan silence`, which Worker 0 sourced from the plan).
+- `AGENTS.md` #21: "Do not update CHANGELOG.md unless explicitly instructed."
+- The dispatch prompt explicitly forbids CHANGELOG edits and instructs recording
+  disposition in the artifact; this is a per-file cycle, which is NEVER the
+  authorising scope (role-file changelog dicta: per-file/folder passes forward
+  drift to the project pass). The edits are docstring-only with no
+  consumer-visible behaviour, typed-error-contract, or public-symbol change — the
+  `OptimizerError` / `ConfigurationError` runtime contracts are unchanged.
 
 ### What was done
 No `CHANGELOG.md` edit.
 
 ### Validation run
-- `uv run ruff format .` — pass.
+- `uv run ruff format .` — pass / no-changes.
 - `uv run ruff check --fix .` — pass.
 
 ---
 
-## Verification (Worker 3)
-
-### Logic verification outcome
-- Low 1 (`OptimizerError` docstring describes a non-existent "registry miss" pathway): **addressed**. New docstring at `django_strawberry_framework/exceptions.py:33-44` drops the "registry miss" sentence and enumerates the two real raise sites. `grep -rn "OptimizerError" django_strawberry_framework/` returns exactly two `raise` lines: `optimizer/field_meta.py:131` (Django-field-descriptor guard, message `"FieldMeta.from_django_field expected a Django field descriptor exposing 'name' and 'is_relation'; got {field!r}"`) and `types/resolvers.py:152` (`raise OptimizerError(f"Unplanned N+1: {field_name}")` gated by `strictness == "raise"` at line 150-151). No `registry.py` raise of `OptimizerError` — confirming the artifact's premise that the "registry miss" framing was wrong. Worker 2's widening from one to two enumerated raise sites is defensible: the artifact's recommended deletion still holds; the replacement text had to cover both shipped triggers to be accurate, which it now does.
-- Low 2 (`OptimizerError` and `DjangoStrawberryFrameworkError` missing from `docs/GLOSSARY.md`): **forwarded** per Worker 1's explicit defer trigger (third subclass landing OR project-pass deciding to enforce `__all__` ↔ GLOSSARY uniformity). Recorded in Worker 2's Comment/docstring pass as a forward to `rev-django_strawberry_framework.md`.
-
-### DRY findings disposition
-DRY section reported `None` with rationale (no executable body, no imports, no repeated literals; the three-class hierarchy itself is the DRY shape). No action required.
-
-### Temp test verification
-- None used; docstring-only change with no behavioral surface to pin.
-- Disposition: n/a.
-
-### Verification outcome
-`cycle accepted; verified` — top-level `Status: verified` flipped; `exceptions.py` checkbox marked in `docs/review/review-0_0_7.md`. Diff scope respected (only `django_strawberry_framework/exceptions.py` touched in-package; `docs/feedback.md` modification is pre-existing maintainer in-flight per `AGENTS.md` "unexpected file modifications" guidance). `git diff -- CHANGELOG.md` empty, matching the `Not warranted` disposition citing both AGENTS.md and active-plan silence. Ruff format + check pass recorded.
+## Iteration log

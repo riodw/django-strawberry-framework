@@ -10,8 +10,9 @@ Slice 2 input-data adapters (``_build_input_fields`` /
 ``convert_order_field_to_input_annotation`` / ``normalize_input_value`` /
 ``build_input_class``), the ``Meta.fields = "__all__"`` helper
 (``_get_concrete_field_names_for_order``), the per-(orderset, attr)
-provenance ledger (``_field_specs``), and the namespace-clear pair
-(``clear_order_input_namespace`` / ``_iter_orderset_subclasses``).
+provenance ledger (``_field_specs``), and the module-global
+materialization / namespace-clear pair (``materialize_input_class`` /
+``clear_order_input_namespace``).
 
 Slice 3 wires ``registry.clear()`` to call ``clear_order_input_namespace``
 plus the separate ``_helper_referenced_ordersets.clear()`` block per

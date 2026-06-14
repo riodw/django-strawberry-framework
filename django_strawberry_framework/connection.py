@@ -64,7 +64,7 @@ from .optimizer.plans import (
     deterministic_order,
     ends_in_unique_column,
 )
-from .optimizer.selections import direct_child_selected
+from .optimizer.selections import direct_child_selected, prime_selected_fields
 from .optimizer.walker import _relation_connection_to_attr
 from .types.resolvers import _check_n1
 from .utils.connections import (
@@ -431,6 +431,14 @@ def _resolve_connection_fast_path(
     stay explicit in the ``totalCount`` variant, per the review.
     """
     _guard_first_and_last(first, last)
+    # Seed ``info.selected_fields`` with the package's anonymous-inline-fragment-safe
+    # conversion BEFORE either the ``want_count`` lambda (``_total_count_requested``)
+    # or Strawberry's own ``ListConnection.resolve_connection`` reads it. Both reach
+    # the same crashing ``convert_selections`` via the cached property; priming the
+    # cache once here routes every later read through the package's safe adapter.
+    # Runs AFTER the guard so a ``first`` + ``last`` error still short-circuits
+    # before ``info`` is touched (``test_first_and_last_guard_on_generated_subclass``).
+    prime_selected_fields(info)
     resolved_want_count = want_count() if callable(want_count) else want_count
     built = _consume_window(
         cls,

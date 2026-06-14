@@ -189,6 +189,56 @@ def test_direct_child_selected_matches_direct_and_fragment_wrapped():
     assert direct_child_selected(wrapped, "totalCount") is True
 
 
+def test_direct_child_selected_honors_skip_include():
+    """A directive-excluded ``totalCount`` does NOT match, direct or fragment-wrapped.
+
+    ``direct_child_selected`` is a converted-selection walk and must apply the same
+    ``should_include`` gate as ``included_field_selections`` / ``named_children``:
+    Strawberry's ``convert_selections`` carries live ``@skip`` / ``@include`` args on
+    the selection (it does not pre-drop the node), so a ``totalCount @skip(if: true)``
+    that reaches the connection resolver would otherwise fire a spurious ``COUNT``.
+    The ``@skip(if: false)`` / ``@include(if: true)`` cases still match.
+    """
+    # Direct field excluded by @skip(if: true) / @include(if: false).
+    assert (
+        direct_child_selected(
+            [_field("edges"), _field("totalCount", directives={"skip": {"if": True}})],
+            "totalCount",
+        )
+        is False
+    )
+    assert (
+        direct_child_selected(
+            [_field("totalCount", directives={"include": {"if": False}})],
+            "totalCount",
+        )
+        is False
+    )
+    # A @skip(if: true) fragment shell prunes its whole subtree, hiding totalCount.
+    assert (
+        direct_child_selected(
+            [_fragment(selections=[_field("totalCount")], directives={"skip": {"if": True}})],
+            "totalCount",
+        )
+        is False
+    )
+    # Directives that resolve to "keep" still match (no over-pruning).
+    assert (
+        direct_child_selected(
+            [_field("totalCount", directives={"skip": {"if": False}})],
+            "totalCount",
+        )
+        is True
+    )
+    assert (
+        direct_child_selected(
+            [_fragment(selections=[_field("totalCount")], directives={"include": {"if": True}})],
+            "totalCount",
+        )
+        is True
+    )
+
+
 def test_direct_child_selected_ignores_nested_field_selections():
     """A ``totalCount`` nested inside a regular field's selections does NOT match.
 

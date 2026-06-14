@@ -811,8 +811,8 @@ def _bind_filterset_owner(filterset_cls: type, definition: DjangoTypeDefinition)
     targets are invariant and cannot diverge. The own-PK identity is the
     real owner-dependent axis. Widening the relation walk to every FK / PK
     declared via ``Meta.fields`` would therefore guard a non-divergent
-    surface and stays deferred (spec lines 575-576) until real demand
-    surfaces.
+    surface and stays deferred (spec-027 #"Relation traversal under") until
+    real demand surfaces.
     """
     _bind_set_owner_common(
         filterset_cls,

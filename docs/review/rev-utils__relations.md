@@ -4,7 +4,7 @@ Status: verified
 
 ## DRY analysis
 
-- None — the module is the single canonical home for the four-branch Django cardinality classifier; every consumer (`optimizer/walker.py:14`, `optimizer/walker.py:70`, `optimizer/walker.py:478-479`, `optimizer/walker.py:652`, `optimizer/field_meta.py:26`, `optimizer/field_meta.py:108-110`, `optimizer/field_meta.py:115`, `optimizer/field_meta.py:173`, `types/relations.py:24`, `types/resolvers.py:50`, `types/resolvers.py:148`, plus the `utils/__init__.py:20` re-export surface for `tests/test_registry.py`) imports from here rather than duplicating the four-way `many_to_many` / `one_to_many` / `one_to_one` / `auto_created` ladder. The membership shortcut is published as a single `MANY_SIDE_RELATION_KINDS` frozenset that the helper closes over, and `is_many_side_relation_kind` consumes the same set so the "many-side" definition has exactly one source of truth (`django_strawberry_framework/utils/relations.py:14-16, 71-73`). No further factoring available without inventing artificial seams.
+- None — the module is the single canonical home for the four-branch Django cardinality classifier and the instance-accessor three-tier read. Every consumer imports from here rather than re-implementing either ladder: `relation_kind` / `is_many_side_relation_kind` are read by `optimizer/walker.py:112, 621-622, 816`, `optimizer/field_meta.py:131, 136, 196`, `optimizer/plans.py:565`, `orders/sets.py:76`, `types/resolvers.py:179, 267`, `types/base.py:1597`, `management/commands/inspect_django_type.py:241, 285`; `instance_accessor` is read by `optimizer/walker.py:479, 608, 1297`, `optimizer/field_meta.py:223`, `types/resolvers.py:265`, `types/finalizer.py:490`; the curated public surface is re-exported once at `utils/__init__.py:29` (consumed by `tests/utils/test_relations.py`). `MANY_SIDE_RELATION_KINDS` is published as one frozenset (`relations.py:14-16`) that `is_many_side_relation_kind` closes over (`relations.py:82`), so "many-side" has exactly one source of truth. No further factoring available without inventing artificial seams.
 
 ## High:
 
@@ -16,127 +16,105 @@ None.
 
 ## Low:
 
-### L1 — Reachability gap between docstring and the `one_to_many=True, auto_created=False` branch
+### L1 — `instance_accessor` precomputed-slot guard treats an empty-string accessor as "present" (forward-looking)
 
-`relation_kind`'s body at `django_strawberry_framework/utils/relations.py:62-65` distinguishes two cases under `one_to_many=True`: when `auto_created=True` it returns `"reverse_many_to_one"`, otherwise it returns `"many"`. The docstring (`django_strawberry_framework/utils/relations.py:36-58`) names every shape this classifier intends to recognise — `ManyToManyField` → `"many"`, `ManyToOneRel` → `"reverse_many_to_one"`, `OneToOneRel` → `"reverse_one_to_one"`, `ForeignKey` → `"forward_single"` — but never explains what real Django shape lands on the bare `one_to_many=True, auto_created=False` fallback that maps to `"many"`. In stock Django this combination is not produced by any built-in relation field: `ManyToManyField` sets `many_to_many=True`, reverse FK/M2M descriptors always set `auto_created=True`, and forward FK / forward `OneToOneField` set `one_to_many=False`. The branch is nevertheless test-pinned by `tests/utils/test_relations.py::test_relation_kind_classifies_one_to_many_as_many` (lines 30-38) with a hand-rolled `SimpleNamespace` whose semantics aren't grounded in any Django shape. Either the docstring should add a one-line note that `one_to_many=True` without `auto_created` is a defensive fallback (e.g., custom relation descriptors a third-party app might supply, or future Django private relation flags), or the test should be re-pinned to a documented Django shape so the contract and the body agree. Recommended fix: docstring-only sentence under the bullet list — "Any `one_to_many` shape without `auto_created` falls back to `"many"` as a defensive mapping; stock Django relation descriptors never produce that combination." Drop the corresponding plain bullet ahead of this in the docstring example list if useful. Citation hygiene only — behaviour preserved.
+`instance_accessor` (`relations.py:111-113`) reads the precomputed `FieldMeta.accessor_name` slot first and accepts it whenever `precomputed is not None`. For every real shape the package builds this is correct — `FieldMeta.accessor_name` is `None` only on hand-built instances (per `field_meta.py:108-109`: "both builders always populate it"), and a real Django accessor name is never the empty string. The `is not None` check (rather than truthiness) is the right discriminator today: it lets the genuinely-unset hand-built case fall through to the `get_accessor_name` / `name` tiers while a populated slot short-circuits. There is no current code path that can seat `accessor_name=""`. Defer-with-trigger: revisit only if a future builder can produce a `FieldMeta` whose `accessor_name` is the empty string (e.g. a synthetic descriptor); at that point the guard would need to read `precomputed` truthiness instead. No action now — behaviour is correct for every shape the package constructs.
 
-### L2 — `_RelationFieldLike` Protocol's runtime contract is documented twice in slightly different terms
+### L2 — `_RelationFieldLike` Protocol's "always present" wording vs. the runtime `getattr(..., False)` defaults (forward-looking)
 
-`django_strawberry_framework/utils/relations.py:19-32` declares the Protocol with four `bool` attributes and a docstring that explains why the body uses `getattr(..., False)` (defends against shapes that omit a flag). The runtime helper then re-implements the defensive read on every branch (`getattr(field, "many_to_many", False)`, etc., lines 60-66). The Protocol contract says the attributes are "always present" for the real callers, while the body's `getattr` default contradicts that for the test-double / custom-descriptor case. The two parts agree in spirit but the Protocol's narrower wording ("always present") is the load-bearing claim for type-checkers; the runtime `getattr` defaults exist for non-Django shapes that legitimately omit attributes. Defer-with-trigger: when a fifth caller lands or the test surface grows beyond `SimpleNamespace` fixtures, fold the Protocol's "always present" claim into an `attribute or False` accessor and drop the `getattr(..., False)` repetition. The trigger condition is "next consumer that shapes a `_RelationFieldLike` from a non-Django source." Citation hygiene only — behaviour preserved.
+`_RelationFieldLike` (`relations.py:19-32`) annotates four `bool` attributes and its docstring states every caller hands in a real Django relation field whose flags "are always present," while the body of `relation_kind` (`relations.py:69-75`) still reads each flag through `getattr(field, "<flag>", False)`. The two agree in spirit: the Protocol's narrow annotation is the type-checker contract for the Django call sites, and the `getattr` defaults exist for the `SimpleNamespace` test doubles / any non-Django shape that legitimately omits a flag. No drift exists today. Defer-with-trigger: when a consumer shapes a `_RelationFieldLike` from a non-Django source (or the test surface stops using `SimpleNamespace`), fold the "always present" claim into an `attribute or False` accessor and drop the per-branch `getattr` repetition. (Carried verbatim from the prior cycle's deferred L2; trigger condition unchanged and still unmet.)
 
-### L3 — Public re-export at `utils/__init__.py` documents `RelationKind` / `relation_kind` / `is_many_side_relation_kind` but the module itself has no `__all__`
+### L3 — submodule has no `__all__` while `utils/__init__.py` curates the public surface (forward-looking)
 
-`django_strawberry_framework/utils/relations.py` exposes `RelationKind`, `MANY_SIDE_RELATION_KINDS`, `_RelationFieldLike`, `relation_kind`, and `is_many_side_relation_kind` to the wildcard surface (none have an `__all__` gate). The `utils/__init__.py` re-export curates the three public symbols (`utils/__init__.py:20, 25-28`) and the module-level docstring at `utils/__init__.py:7-8` names them as the public surface. Submodule-level `__all__` is not a hard requirement — the sibling `utils/strings.py` / `utils/typing.py` shapes apply too — but adding `__all__ = ("RelationKind", "is_many_side_relation_kind", "relation_kind")` would (a) gate `_RelationFieldLike` and `MANY_SIDE_RELATION_KINDS` away from `from .relations import *` consumers (today there are none, so this is forward-looking), and (b) make the public/private split explicit at the submodule for the next reviewer. Defer-with-trigger: revisit when the sibling utils submodules grow an `__all__` or when a fourth public symbol lands here.
+`relations.py` exposes `RelationKind`, `MANY_SIDE_RELATION_KINDS`, `_RelationFieldLike`, `relation_kind`, `is_many_side_relation_kind`, and now `instance_accessor` to a `from .relations import *` consumer (no `__all__` gate). The curated package-root surface is the three symbols re-exported at `utils/__init__.py:29, 34-37` (`RelationKind` / `is_many_side_relation_kind` / `relation_kind`); `instance_accessor` is deliberately submodule-public only (imported by path, not re-exported at the package root) which matches its internal-seam role. Sibling submodules (`utils/strings.py`, `utils/typing.py`) likewise carry no `__all__`, so this is consistent house style, not a defect. Defer-with-trigger: revisit when the sibling utils submodules grow an `__all__`, or when a fourth package-root public symbol lands here. (Carried verbatim from the prior cycle's deferred L3; trigger unchanged and still unmet.)
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** The module is the canonical home for the four-branch cardinality classifier; every consumer imports from here rather than re-implementing the `many_to_many` / `one_to_many + auto_created` / `one_to_one + auto_created` / fallback ladder (`optimizer/walker.py:14, 70, 478-479, 652`, `optimizer/field_meta.py:26, 108-110, 115, 173`, `types/resolvers.py:50, 148`, `types/relations.py:24`, `utils/__init__.py:20`). `MANY_SIDE_RELATION_KINDS` is the single source of truth for the "many-side" membership set; `is_many_side_relation_kind` closes over it so the predicate cannot drift from the literal.
-- **New helpers considered.** Considered: pull the four-branch dispatch into a `tuple[predicate, kind]` table (e.g. `((attrgetter("many_to_many"), "many"), ...)`); rejected — the second branch (`one_to_many`) is a two-step composite test that doesn't fit the flat table, and the current straight-line if-chain reads more clearly than a table-plus-fallback. Considered: collapse `_RelationFieldLike` into a `TypedDict`; rejected — Django relation fields are class instances, not mappings, so the Protocol is the correct typing shape.
-- **Duplication risk in the current file.** The `getattr(field, "<flag>", False)` shape repeats four times (`relations.py:60, 62, 63, 66`) but each call reads a distinct attribute; folding through a helper (`_flag(field, "many_to_many")`) would obscure the branch structure rather than DRY meaningful code. Intentional sibling-line repetition, not duplication.
+- **Existing patterns reused.** Canonical home for both the four-branch cardinality classifier and the instance-accessor three-tier read; every optimizer / types / orders / management / registry consumer imports from here (call sites enumerated in `## DRY analysis`). `MANY_SIDE_RELATION_KINDS` is the single source of truth for "many-side" membership; `is_many_side_relation_kind` closes over it (`relations.py:82`) so the predicate cannot drift from the literal. `FieldMeta.accessor_name` is precomputed via this same `instance_accessor` helper at `field_meta.py:223`, so the frozen-snapshot slot is consistent-by-construction with the live-descriptor read — no second accessor-derivation site.
+- **New helpers considered.** Considered folding the four-branch dispatch into a `tuple[predicate, kind]` table; rejected — the `one_to_many` branch is a two-step composite test (`one_to_many` then `auto_created`) that does not fit a flat predicate table, and the straight-line if-chain reads more clearly. Considered collapsing `_RelationFieldLike` into a `TypedDict`; rejected — Django relation fields are class instances, not mappings, so the Protocol is the correct typing shape.
+- **Duplication risk in the current file.** `getattr(field, "<flag>", False)` repeats across the `relation_kind` branches (`relations.py:69, 71, 72, 75`) and `getattr(field, "<attr>", None)` twice in `instance_accessor` (`relations.py:111, 114`), but each call reads a distinct attribute; folding through a `_flag(field, name)` helper would obscure the branch structure rather than DRY meaningful code. Intentional sibling-line repetition.
 
 ### Other positives
 
-- The docstring distinguishes the runtime cardinality (`"reverse_many_to_one"` "collapses into the many-side for plan building today") from the descriptor identity (the typed `PendingRelation` sentinel needs to disambiguate forward M2M from reverse FK), which is a load-bearing contract — `types/relations.py:53` and the registry tests at `tests/test_registry.py:268, 577, 607, 640, 1193, 1202` consume the descriptor-identity facet.
-- Branch coverage is complete in `tests/utils/test_relations.py`: forward M2M (`test_relation_kind_classifies_many_to_many_as_many`), `one_to_many=True` without `auto_created` (`test_relation_kind_classifies_one_to_many_as_many`), reverse FK descriptor (`test_relation_kind_classifies_auto_created_one_to_many_as_reverse_many_to_one`), reverse O2O (`test_relation_kind_classifies_auto_created_one_to_one_as_reverse`), forward single (`test_relation_kind_classifies_forward_single_relations`), the `RelationKind` literal enumeration audit (`test_relation_kind_reverse_many_to_one_is_in_literal`), the `is_many_side_relation_kind` per-kind sweep (`test_is_many_side_relation_kind_matches_list_valued_shapes`), and the re-export identity assertion (`test_utils_init_reexports_match_submodule`). Every public surface symbol is pinned.
-- GLOSSARY drift quick-check: `relation_kind`, `RelationKind`, `is_many_side_relation_kind`, `MANY_SIDE_RELATION_KINDS`, and `_RelationFieldLike` are all internal mechanics (consumer-visible relation behaviour is documented under [`Relation handling`](../GLOSSARY.md#relation-handling) at `docs/GLOSSARY.md:888-926`, which describes the GraphQL type shape per Django relation cardinality without naming the helper symbols). Per the memory calibration "Internal-mechanics GLOSSARY absence is correct convention" this is the expected coverage — the helper names are not part of the published consumer contract. Not a finding.
-- The `tests/utils/test_relations.py` re-export identity test (`test_utils_init_reexports_match_submodule`) pins `utils.relation_kind is utils.relations.relation_kind` for all three public symbols. This is the right shape — it asserts identity, not just equality, so an accidental re-import via wildcard or a future shim that wraps the helpers would surface as a test failure.
-- `from __future__ import annotations` (line 3) demotes the `_RelationFieldLike` parameter annotation on `relation_kind` (line 35) and the `RelationKind | None` annotation on `is_many_side_relation_kind` (line 71) to forward references, so the runtime import of `Protocol` at line 5 is purely for the class-definition base class — no runtime cost on the call path. Correct discipline per the memory calibration "`get_type_hints` / `from __future__ import annotations` discipline."
-- `RelationKind` is a `TypeAlias` over a closed `Literal`, which means strict type-checkers will flag any new caller passing an unenumerated string at the call site (e.g. the rev2/rev3 drift documented in `docs/SPECS/spec-023-multi_db-0_0_7.md:38` where `"many_to_one"` was discovered as a non-`RelationKind` string at review-time). This is exactly the contract the alias is designed to enforce.
-- Static helper not run for this 73-line module per `REVIEW.md` "Static review helper" optional-under-150-lines threshold; the module is not under `optimizer/` or `types/`. The straight-line classifier has no control-flow hotspots and no reflective access beyond the four `getattr` defaults already audited inline. Skipping the helper does not change the review surface.
+- **Stale-artifact L1 already merged — NOT re-raised.** The prior 0.0.7 on-disk artifact's lone substantive Low (the docstring did not explain the `one_to_many=True, auto_created=False → "many"` defensive fallback) is ALREADY FIXED in live source: `relations.py:54-61` carries the four-reason paragraph ("Any `one_to_many=True` shape without `auto_created` falls back to `"many"` as a defensive mapping; stock Django relation descriptors never produce that combination…") and cites the pinning test `test_relation_kind_classifies_one_to_many_as_many` by qualified path. Classic resolved-Low trap per the worker-1 recurring calibration — diffed live source first, did not re-raise.
+- **`instance_accessor` (0.0.9 addition, absent from the prior artifact) verified correct.** Three-tier read precisely matches the two field shapes the package passes around: (1) precomputed `FieldMeta.accessor_name` slot wins (a frozen `FieldMeta` cannot answer `get_accessor_name()` live — the builders precompute it via this same helper at `field_meta.py:223`); (2) raw Django reverse-relation descriptor answers `get_accessor_name()`; (3) forward fields / test doubles fall back to `name`. The Round-4 S3 split (reverse FK without `related_name`: query name `"book"` vs instance accessor `"book_set"`) is the load-bearing reason this helper exists — `getattr(root, field.name)` would `AttributeError` and `prefetch_related` would reject the query name. All three tiers test-pinned: `test_relations.py:107` (get_accessor_name), `:118` (name fallback), `:124` (precomputed-slot wins over a deliberately-wrong live lookup). The docstring's "ONLY for the seams Django resolves against the instance" scoping matches the actual consumers (Phase-2 resolver `getattr` at `resolvers.py:265-283`, spec-032 synthesized relation connections, optimizer prefetch paths at `walker.py:479/608/1297`).
+- **`is_many_side_relation_kind` is `None`-safe.** `kind in MANY_SIDE_RELATION_KINDS` returns `False` for `None` (frozenset membership, no `TypeError`); test-pinned at `test_relations.py:82`. The `RelationKind | None` annotation honestly admits the optional input the optimizer can hand it.
+- **GFK is a task red-herring — confirmed absent by design, not a gap.** The prompt names "GFK" as a classification target, but `relation_kind` has no GenericForeignKey branch and needs none: GFK is rejected upstream at `types/base.py:1574` with a `ConfigurationError` (`related_model is None` guard) before any `relation_kind` call, so a GFK descriptor never reaches this classifier. M2M and reverse-M2M both legitimately map through the existing tokens (forward M2M → `"many"` via `many_to_many=True`; reverse M2M is an `auto_created` `one_to_many` descriptor → `"reverse_many_to_one"`). The 4-token `RelationKind` literal is the complete contract; no missing branch.
+- **`_meta` reflection correctness.** This file performs no `_meta` access itself (zero ORM markers in the shadow overview); all `_meta` reflection lives in the callers (`field_meta.py`, `base.py`). The classifier reads only the four cardinality flags Django stamps directly on the field/rel descriptor (`many_to_many` / `one_to_many` / `one_to_one` / `auto_created`), the correct minimal contract — it stays decoupled from `_meta` traversal.
+- **Closed-literal typing discipline.** `RelationKind` is a `TypeAlias` over a closed `Literal`; strict type-checkers flag any caller passing an unenumerated string. `from __future__ import annotations` (`relations.py:3`) demotes the parameter/return annotations to forward references, so the `Protocol` import is purely for the class base — no runtime cost on the hot classification path.
+- **Re-export identity pinned.** `test_utils_init_reexports_match_submodule` (`test_relations.py:70-74`) asserts `utils.relation_kind is utils.relations.relation_kind` (identity, not equality) for all three re-exported symbols, so a future wrapper/shim would surface as a failure.
+- **GLOSSARY drift quick-check: clean.** Zero `docs/GLOSSARY.md` hits for `relation_kind`, `RelationKind`, `is_many_side_relation_kind`, `MANY_SIDE_RELATION_KINDS`, `_RelationFieldLike`, or `instance_accessor`. These are internal mechanics; consumer-visible relation behaviour is documented under `Relation handling` without naming the helper symbols. No GLOSSARY edit in scope — correct convention per the internal-mechanics calibration.
 
 ### Summary
 
-`utils/relations.py` is a focused 73-line module hosting the four-branch Django relation cardinality classifier (`relation_kind`), its closed-literal type alias (`RelationKind`), the many-side membership predicate (`is_many_side_relation_kind`), and the single source of truth for what counts as "many-side" (`MANY_SIDE_RELATION_KINDS`). The module is the canonical home for this logic — every optimizer, types, and registry consumer imports from here. Three forward-looking Lows around docstring-vs-body reachability commentary, Protocol-vs-runtime-defaults consistency, and a future `__all__` gate; no High or Medium findings. GLOSSARY absence is correct convention per the internal-mechanics calibration.
+`utils/relations.py` is a focused 118-line module hosting the four-branch Django relation cardinality classifier (`relation_kind`), its closed-literal alias (`RelationKind`), the `None`-safe many-side predicate (`is_many_side_relation_kind`) over the single-source `MANY_SIDE_RELATION_KINDS` frozenset, and the 0.0.9-added three-tier `instance_accessor` (the Round-4 S3 query-name-vs-accessor seam). All logic verified correct against live source and the full `tests/utils/test_relations.py` grid. The prior 0.0.7 artifact's substantive Low is already merged into the live docstring (not re-raised per the resolved-Low calibration); the prompt's "FK/reverse-FK/O2O/M2M/reverse-M2M/GFK" framing is looser than the actual 4-token contract — GFK is rejected upstream by design, not a missing branch. No High, no Medium; three forward-looking Lows (empty-accessor guard, Protocol-vs-`getattr` wording, submodule `__all__`), all defer-with-trigger with unmet triggers. No source edit warranted → no-source-edit cycle (shape #5).
 
 ---
 
 ## Fix report (Worker 2)
 
+Filled by Worker 1 per no-source-edit cycle pattern.
+
 ### Files touched
-- `django_strawberry_framework/utils/relations.py::relation_kind` — appended a paragraph to the docstring after the four-bullet shape list explaining that `one_to_many=True, auto_created=False → "many"` is a defensive fallback unreachable from stock Django relation descriptors (with the three concrete reasons: `ManyToManyField` sets `many_to_many=True`; reverse FK/M2M descriptors always set `auto_created=True`; forward FK / forward `OneToOneField` set `one_to_many=False`), and cited the pinning test `tests/utils/test_relations.py::test_relation_kind_classifies_one_to_many_as_many` so the fallback semantics cannot drift. L1 only.
+- None — no-source-edit cycle.
 
 ### Tests added or updated
-- None. L1 is a docstring-only fix; the contract is already pinned by the existing `test_relation_kind_classifies_one_to_many_as_many` test which the new docstring text now names by qualified path.
+- None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — pass (213 files unchanged)
-- `uv run ruff check --fix .` — pass (All checks passed)
+- `uv run ruff format .` — pass (265 files unchanged).
+- `uv run ruff check --fix .` — pass (All checks passed).
 
 ### Notes for Worker 3
-- L2 (`_RelationFieldLike` Protocol's "always present" wording vs. `getattr(..., False)` runtime defaults) deferred-with-trigger per dispatch prompt: next consumer that shapes a `_RelationFieldLike` from a non-Django source.
-- L3 (submodule `__all__` gate) deferred-with-trigger per dispatch prompt: when sibling utils submodules grow an `__all__` or when a fourth public symbol lands here.
-- Shadow file not used; module is 73 lines and outside `optimizer/` / `types/`.
-- Concurrent maintainer activity flagged in `git status` (KANBAN/types/optimizer/builder docs/kanban-app/review plan/rev-* sibling artifacts) left untouched per AGENTS.md #33; only `django_strawberry_framework/utils/relations.py` and this artifact were touched by Worker 2 this cycle.
-- `uv.lock` unchanged.
+- L1 (empty-string accessor guard): forward-looking defer-with-trigger; trigger = a future builder seats `FieldMeta.accessor_name=""`. No path exists today; `is not None` guard correct for every constructed shape.
+- L2 (Protocol "always present" vs `getattr` defaults): forward-looking defer-with-trigger; trigger = a `_RelationFieldLike` shaped from a non-Django source. Carried verbatim from prior cycle; unmet.
+- L3 (submodule `__all__`): forward-looking defer-with-trigger; trigger = sibling utils submodules adopt `__all__` OR fourth package-root public symbol lands here. Carried verbatim from prior cycle; unmet.
+- Prior 0.0.7 artifact's substantive L1 (fallback-branch docstring) ALREADY merged into live source (`relations.py:54-61`) — deliberately NOT re-raised.
+- No GLOSSARY-only fix in scope (zero hits for any target symbol — internal mechanics, correct convention).
+- Shadow overview at `docs/shadow/django_strawberry_framework__utils__relations.overview.md` consulted; module is 118 lines, outside `optimizer/` and `types/`, single control-flow hotspot (`relation_kind`, 5 branches) — no Medium-tier complexity concern.
 
 ---
 
 ## Comment/docstring pass
 
-Consolidated single-spawn: the in-cycle edit IS a docstring change, so the logic and comment passes collapse into the same edit. L1 was applied above as part of the single edit; no additional comment-pass work.
+Filled by Worker 1 per no-source-edit cycle pattern.
 
-### Files touched
-- (None beyond the single docstring edit recorded under Fix report.)
-
-### Per-finding dispositions
-- Low 1: docstring sentence appended to `relation_kind` per artifact's recommended fix; cites the pinning test by qualified path.
-- Low 2: deferred-with-trigger per artifact prose (next non-Django-shape consumer).
-- Low 3: deferred-with-trigger per artifact prose (sibling `__all__` adoption or fourth public symbol).
-
-### Validation run
-- `uv run ruff format .` — pass (213 files unchanged)
-- `uv run ruff check --fix .` — pass
-
-### Notes for Worker 3
-Same as Fix report's Notes for Worker 3.
+No comment/docstring edits warranted. The `relation_kind` fallback paragraph and the `instance_accessor` three-tier rationale are already complete and accurate in live source; the `FieldMeta.accessor_name` field docstring (`field_meta.py:101-109`) correctly cross-references this helper. No stale comments, no restating-the-obvious, no docstring overpromise.
 
 ---
 
 ## Changelog disposition
 
-### State
-Not warranted.
+Filled by Worker 1 per no-source-edit cycle pattern.
 
-### Reason
-Cites BOTH halves required by the worker-2 rule for `Not warranted`: AGENTS.md #21 ("Do not update CHANGELOG.md unless explicitly instructed") AND the active plan `docs/review/review-0_0_7.md` is silent on changelog authorization for this cycle. The edit is docstring-polish only — no public-API surface, no exception message substring, no consumer-visible behaviour change. Behaviour was preserved bit-for-bit; the docstring now describes what the body already did.
-
-### What was done
-No `CHANGELOG.md` edit.
-
-### Validation run
-- `uv run ruff format .` — pass (213 files unchanged)
-- `uv run ruff check --fix .` — pass
-
----
+Not warranted. Per AGENTS.md #21 ("Do not update CHANGELOG.md unless explicitly instructed") AND the active plan `docs/review/review-0_0_9.md` is silent on changelog authorization for this cycle. No source edit was made; behaviour is unchanged.
 
 ---
 
 ## Verification (Worker 3)
 
 ### Logic verification outcome
-- **L1** (docstring reachability gap): addressed. The 9-line paragraph at `relations.py:54-61` lands between the four-bullet shape list and the `Examples:` block, enumerates all three reasons no stock Django descriptor produces the `one_to_many=True, auto_created=False` combination (`ManyToManyField` → `many_to_many=True`; reverse FK/M2M → `auto_created=True`; forward FK / `OneToOneField` → `one_to_many=False`), and cites the pinning test by fully-qualified path. Behaviour bit-preserved; the docstring now describes what the body already did.
-- **L2** (Protocol "always present" vs `getattr(..., False)` runtime defaults): deferred-with-trigger per the artifact's own verbatim prose — next consumer that shapes a `_RelationFieldLike` from a non-Django source. Source un-changed (`getattr(field, "<flag>", False)` repetition intact at `relations.py:69-75`).
-- **L3** (submodule `__all__` gate): deferred-with-trigger per the artifact's own verbatim prose — sibling utils submodules adopt `__all__` OR fourth public symbol lands here. Source un-changed.
+No-source-edit cycle (shape #5). `git diff --stat 0872a20 -- django_strawberry_framework/utils/relations.py` is EMPTY (byte-unchanged); "Files touched: None" holds. The owned-paths diff stat shows other dirty files (conf.py, connection.py, exceptions.py, filters/factories.py, filters/sets.py, list_field.py, inspect_django_type.py, optimizer/extension.py, optimizer/selections.py, optimizer/walker.py, orders/factories.py, orders/inputs.py, types/__init__.py, types/base.py, types/finalizer.py, types/relay.py, docs/GLOSSARY.md, tests/management/*, tests/optimizer/test_selections.py) — every hunk attributes to a closed verified+`[x]` sibling cycle (logged in worker-3 memory accepted-cycles); none touch `relations.py`. `git diff -- CHANGELOG.md` empty.
+
+Independently verified the two load-bearing claims LIVE (`DJANGO_SETTINGS_MODULE=config.settings`, all fakeshop models, 161 relation fields):
+- **4-token `RelationKind` contract complete; GFK absent by design.** All four tokens observed (`forward_single`/`many`/`reverse_many_to_one`/`reverse_one_to_one`); none escaped the closed literal. GFK rejected UPSTREAM: `types/base.py #"is a GenericForeignKey"` raises `ConfigurationError` on the `related_model is None` guard (base.py:1573-1579) BEFORE `field_meta.relation_kind` is read at the `PendingRelation(...)` construction (base.py:1597) — a GFK descriptor never reaches `relation_kind`, so the missing branch is correct, not a gap. M2M→`"many"`, reverse-M2M→`"reverse_many_to_one"` confirmed via the existing tokens.
+- **`instance_accessor` consistent-by-construction with `FieldMeta.accessor_name`.** Over all 161 relation fields, `FieldMeta.from_django_field(f).accessor_name == instance_accessor(f)` (zero mismatches) — the slot is derived through this same helper at `field_meta.py:223` (`accessor_name=instance_accessor(field)`). Precomputed-slot tier round-trips (`instance_accessor(fm) == fm.accessor_name`, zero failures). Round-4 S3 split is REAL: 6 reverse-FK-without-`related_name` fields where query name != instance accessor (`group`→`group_set`, `user`→`user_set`, `logentry`→`logentry_set`). `is_many_side_relation_kind(None) is False` (frozenset membership, no TypeError).
+
+Three tiers test-pinned: `tests/utils/test_relations.py::test_instance_accessor_uses_get_accessor_name_for_reverse_relations` (:107), `::test_instance_accessor_falls_back_to_name_for_forward_fields` (:118), `::test_instance_accessor_prefers_precomputed_field_meta_slot` (:124, decisive — deliberately-wrong live `get_accessor_name` proves slot precedence). Fallback branch pinned at `::test_relation_kind_classifies_one_to_many_as_many` (:35); reexport identity at `::test_utils_init_reexports_match_submodule` (:70); None-safety at `::test_is_many_side_relation_kind_matches_list_valued_shapes` (:77).
+
+Three Lows confirmed forward-looking with UNMET triggers: L1 (empty-string accessor guard — no path seats `accessor_name=""`; `is not None` correct today); L2 (Protocol "always present" vs `getattr` defaults — no non-Django `_RelationFieldLike` source; carried verbatim, all verbatim trigger phrasing present); L3 (submodule `__all__` — confirmed `relations.py`/`strings.py`/`typing.py` carry NO `__all__`, consistent house style). No GLOSSARY-only fix: `grep -c` over `docs/GLOSSARY.md` for all six target symbols = 0 (internal mechanics, correct convention).
 
 ### DRY findings disposition
-DRY analysis explicitly recorded "None — no further factoring available without inventing artificial seams"; Worker 2 introduced no DRY edits this cycle and Worker 1's recap stands.
+DRY analysis = "None" (single canonical home; `MANY_SIDE_RELATION_KINDS` is the sole many-side source `is_many_side_relation_kind` closes over). Nothing to carry forward.
 
 ### Temp test verification
-- None used. The artifact's L1 fix is docstring-only and is already pinned by `tests/utils/test_relations.py::test_relation_kind_classifies_one_to_many_as_many` (line 30) plus the seven sibling tests in the same file. No focused pytest run required.
-
-### Changelog verification
-- `git diff -- CHANGELOG.md` empty — matches `Not warranted` claim.
-- Both required citations present in the disposition: AGENTS.md #21 ("Do not update CHANGELOG.md unless explicitly instructed") AND active plan `docs/review/review-0_0_7.md` silence on changelog authorization for this cycle.
-- "Internal-only" framing honest: `_RelationFieldLike` is leading-underscore private, and `relation_kind` / `RelationKind` / `is_many_side_relation_kind` / `MANY_SIDE_RELATION_KINDS` are internal mechanics per the artifact's GLOSSARY-absence calibration (consumer-visible relation behaviour is documented under `Relation handling` at `docs/GLOSSARY.md:888-926` without naming the helper symbols). The cycle's edit is docstring-polish only; no public-API surface, no exception message substring, no consumer-visible behaviour change.
-
-### Ruff
-- `uv run ruff format --check django_strawberry_framework/utils/relations.py` → "1 file already formatted".
-- `uv run ruff check django_strawberry_framework/utils/relations.py` → "All checks passed!"
+- None used — claims verified via one ephemeral `uv run python` probe (no files written) and grep of the live test grid.
+- Disposition: n/a.
 
 ### Verification outcome
-cycle accepted; verified.
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `utils/relations.py` checklist box in `docs/review/review-0_0_9.md`.
 
 ---
 

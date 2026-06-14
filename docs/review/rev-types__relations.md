@@ -4,7 +4,7 @@ Status: verified
 
 ## DRY analysis
 
-- None — the module is 82 lines and hosts exactly two public dataclasses plus one private metaclass at the single canonical home for `PendingRelation` / `PendingRelationAnnotation` scaffolding; the shadow overview confirms 0 control-flow hotspots, 0 calls-of-interest, 0 Django/ORM markers, 0 repeated string literals. The producer (`types/base.py::_build_annotations`) and the consumer (`types/finalizer.py::finalize_django_types`) each import from this module, so the cross-folder consolidation point already exists — every alternative shape would re-introduce the dual-import / split-truth pattern this module was authored to eliminate (per the module docstring at `relations.py:1-16` framing).
+- None — the module is 83 lines hosting exactly two public scaffolding objects (`PendingRelation` frozen dataclass, `PendingRelationAnnotation` sentinel) plus the private `_PendingRelationAnnotationMeta` metaclass at the single canonical home for relation-pending records. The shadow overview confirms 0 control-flow hotspots, 0 calls-of-interest, 0 Django/ORM markers, 0 repeated string literals. The producer (`types/base.py::_build_annotations`, `base.py:1583-1594`) and consumer (`types/finalizer.py::finalize_django_types`, `finalizer.py:575-613`) each import from this module, so the cross-folder consolidation point already exists; any alternative shape would re-introduce the split-truth pattern this module was authored to eliminate (module docstring `relations.py:1-16`).
 
 ## High:
 
@@ -16,170 +16,85 @@ None.
 
 ## Low:
 
-### `path:symbol` cross-file references in module + class docstrings drift from `AGENTS.md` rule-27 `path::QualifiedName` convention
+None — the three Lows on the prior-release (0.0.7, `Status: verified`) artifact are all stale and superseded:
 
-The module docstring at `relations.py:7-13` and the class docstring at `relations.py:31-35` both cite `types/base.py:_build_annotations` and `types/finalizer.py:finalize_django_types` using a single-colon `path:symbol` separator, e.g.:
-
-```django_strawberry_framework/types/relations.py:31-34
-    Constructed by ``_build_annotations`` (``types/base.py:_build_annotations``)
-    when a relation target type is not yet registered; resolved by
-    ``finalize_django_types`` (``types/finalizer.py:finalize_django_types``)
-    after every ``DjangoType`` has registered.
-```
-
-`AGENTS.md` rule 27 mandates `path::QualifiedName` (double-colon separator) for cross-file symbol references in source comments / docstrings, and explicitly says raw `path:NN` line-number citations are allowed only in per-cycle scratchpads. The single-colon `path:symbol` form is neither — it reads as a malformed line-number citation rather than a symbol-qualified path. The package's own sibling at `types/finalizer.py:196` already follows the canonical shape (`` ``types/base.py::_build_annotations`` ``). Same severity calibration as the citation-hygiene Lows recorded in earlier cycles (`spec-016` → `spec-020` drift in `list_field.py`, `spec-014` → `spec-018` drift in `optimizer/extension.py` + `optimizer/walker.py`) — citation-style hygiene, not logic. Recommended replacements:
-
-- `relations.py:7-8` — `` ``_build_annotations`` (``types/base.py:_build_annotations``) `` → `` ``_build_annotations`` (``types/base.py::_build_annotations``) ``
-- `relations.py:10-11` — `` ``finalize_django_types`` (``types/finalizer.py:finalize_django_types``) `` → `` ``finalize_django_types`` (``types/finalizer.py::finalize_django_types``) ``
-- `relations.py:32` — `` ``_build_annotations`` (``types/base.py:_build_annotations``) `` → `` ``_build_annotations`` (``types/base.py::_build_annotations``) ``
-- `relations.py:33-34` — `` ``finalize_django_types`` (``types/finalizer.py:finalize_django_types``) `` → `` ``finalize_django_types`` (``types/finalizer.py::finalize_django_types``) ``
-
-### Module docstring cites spec-014 H1 but does not anchor the rev / decision sub-heading
-
-The module docstring at `relations.py:3-5` cites:
-
-```django_strawberry_framework/types/relations.py:3-5
-This module owns the two scaffolding objects that close the import-order trap
-addressed by spec-014 H1: ``PendingRelation`` (a frozen dataclass capturing a
-relation field whose target ``DjangoType`` was not yet registered at collection
-```
-
-`spec-014` is the canonical home for the H1 closure (the registry-side identity contract); the citation correctly survives `docs/SPECS/NEXT.md` Step 8 archive sweeps because the H-number anchor is rev-relative, not path-relative (per the `rev-registry.md` carry-forward calibration: "when an inline rev-anchor citation cites sub-revision numbers / H-numbers, it's audit-trail not link rot"). Drift risk is still non-zero — `optimizer/extension.py` carried a `spec-014 Slice 1` citation that drifted to `spec-018 Slice 1` because the actual reasoning lived in a different spec, and this file's `_build_annotations` post-rename narrative ultimately landed under `spec-018` H2 / H3 per the `rev-optimizer__extension.md::Calibration` audit trail. Defer until a regression in the spec mapping fires or until the spec-NN sweep at the project pass; today the citation is correct against the spec on disk. (`docs/SPECS/spec-014-testing_shift-0_0_4.md` confirms the H1 anchor lives there — verified by the same calibration in earlier optimizer-folder cycles.)
-
-### `PendingRelation.field_name` semantics enclosed in `relations.py:40-42` are pinned by `tests/types/test_relations.py` only at the identity / equality / set-membership layer
-
-The class docstring at `relations.py:40-42` documents:
-
-```django_strawberry_framework/types/relations.py:40-42
-    ``field_name`` is the raw Django ``field.name`` as stored on the model; the
-    snake-cased form used as a ``field_map`` key is rebuilt at the consumer via
-    ``snake_case(pending.field_name)``. ``nullable`` and ``relation_kind`` are
-```
-
-The contract is correct against `types/finalizer.py:209` (`field_meta = definition.field_map[snake_case(pending.field_name)]`), but the only tests for `PendingRelation` (`tests/types/test_relations.py:1-69`) pin only the `__hash__` / `__eq__` / set-membership identity surfaces with a non-hashable `_NonHashableField()` stand-in — none of them verify the producer-stores-raw / consumer-rebuilds-via-`snake_case` contract directly. The indirect coverage exists at `tests/types/test_definition_order.py` (every "PendingRelation registered with raw `field.name` then snake_cased at finalize" path), but the file-local test module would benefit from one regression pin that fails loud if `_build_annotations` ever lowercases `field.name` before stuffing it into `PendingRelation` (which would silently double-snake at the finalizer). Defer until either (a) a regression surfaces consumer-side or (b) a third producer of `PendingRelation` lands (today the only producer is `types/base.py:937-947` via `_build_annotations`); the contract is single-sourced and the consumer-side `snake_case` rebuild is documented in the docstring.
-
-### `_PendingRelationAnnotationMeta` lacks an explicit `# noqa: D101` justification for the inline `__repr__` comment block at `relations.py:62-66`
-
-The metaclass at `relations.py:59-72` carries a one-line class docstring at `:60` (`"""Metaclass that gives the sentinel a useful schema-construction error repr."""`) plus a five-line inline `# ...` audit-trail comment at `:62-66` explaining the rewrite contract. The audit-trail comment is correct and grep-stable, but its content (a full sentence-form claim about what `finalize_django_types()` rewrites, naming `resolved_relation_annotation` and `source_type.__annotations__`) duplicates the same explanation already given in the module docstring at `:7-13` AND in the `PendingRelationAnnotation` docstring at `:76-82`. Three physically separate prose-of-truth sites for the same rewrite rule is a brittleness signal — same calibration as the `optimizer/field_meta.py:62-76` vs `:140-152` prose-duplication Low recorded earlier. Defer until a fourth prose site for the rewrite rule lands (or until a fact in the comment block drifts vs the module docstring), at which point fold to one canonical home and `See docstring above` at the other sites. Today the three sites agreed at authoring; the drift risk is forward-looking.
+- **Citation-style drift (single-colon `path:symbol`)** — ALREADY FIXED in live source. The module docstring (`relations.py:7,10`) and class docstring (`relations.py:33,34`) now use the canonical AGENTS.md rule-27 `path::QualifiedName` double-colon form (`` ``types/base.py::_build_annotations`` ``, `` ``types/finalizer.py::finalize_django_types`` ``). Re-raising would be a resolved-Low re-raise.
+- **spec-014 H1 anchor (defer-with-trigger, no action)** — still correct against the spec on disk; the docstring at `relations.py:3-5` cites the H1 import-order-trap closure. No regression in the spec mapping has fired. No edit warranted.
+- **`field_name` raw-vs-snake_case producer pin (defer-with-trigger, no action)** — the contract is single-sourced (one producer: `base.py:1583-1594` stamps `field_name=field.name` raw; one consumer: `finalizer.py:597` rebuilds via `snake_case(pending.field_name)`), and the documented behavior is correct. `tests/types/test_relations.py` pins the identity/equality/set-membership surfaces; the producer-stores-raw / consumer-rebuilds path is indirectly covered through `tests/types/test_definition_order.py`. No third producer has landed; trigger unmet.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** The module is the canonical home for `PendingRelation` / `PendingRelationAnnotation`, with single-import boundaries at every consumer (`registry.py:30,49,323,328,341`, `types/base.py:45,938-948`, `types/finalizer.py:58,71,187,188,189`). The `__hash__ = object.__hash__` override at `relations.py:56` is the single-source-of-truth for the identity contract that `TypeRegistry.discard_pending` reads at `registry.py:341-352` (verified via `id(record)` set comprehension on the kwargs).
-- **New helpers considered.** A shared `_pending_record_repr(record)` formatter was considered for use across `types/finalizer.py::_format_unresolved_targets_error` (`:71`) and the existing identity-stable repr on `PendingRelation` — rejected because `_format_unresolved_targets_error` produces a user-facing `ConfigurationError` message with a different shape from a debug repr, and the dataclass-default `__repr__` is sufficient for in-test inspection (`tests/types/test_relations.py:34-67` reads `hash(pending)` and `pending in {pending}` rather than the repr). A shared `_relation_kind_to_str(kind)` helper was considered for the docstring framing — rejected because `RelationKind` is already a `TypeAlias = Literal[...]` at `utils/relations.py:7-12` and string conversion is implicit.
-- **Duplication risk in the current file.** Three docstring sites (`relations.py:7-13`, `:31-34`, `:76-82`) plus one inline comment block (`:62-66`) restate the producer / consumer / rewrite contract — flagged as a forward-looking Low; the agreement is current. The `__hash__ = object.__hash__` override at `:56` has a single inline justification comment (`# identity-based hash; django_field may be unhashable`) — single-sourced, no duplication risk.
+- **Existing patterns reused.** `PendingRelation` is the sole typed carrier between producer and consumer; both `registry.py` (`add_pending_relation`/`iter_pending_relations`/`discard_pending`, `registry.py:396-425`) and `finalizer.py` type-annotate against this one import. `RelationKind` is reused from `utils/relations.py` (`relations.py:24`), not re-declared — `PendingRelation.relation_kind` shares the same alias the optimizer's `FieldMeta.relation_kind` uses.
+- **New helpers considered.** None — the file is two data carriers and a repr-shaping metaclass; there is no logic to extract.
+- **Duplication risk in the current file.** None — zero repeated literals per the shadow overview; the `field_name`/`snake_case` split across producer/consumer is deliberate single-sourcing, not duplication.
 
 ### Other positives
 
-- **Module shape.** 82 lines, two public symbols (`PendingRelation`, `PendingRelationAnnotation`), one private metaclass (`_PendingRelationAnnotationMeta`); shadow overview confirms 0 control-flow hotspots, 0 Django/ORM repeat markers, 0 calls-of-interest, 0 TODO comments, 0 repeated string literals. The module's purpose is single-responsibility (definition-order-independence scaffolding) and the file does that and only that.
-- **Frozen dataclass + identity-hash contract.** The `@dataclass(frozen=True)` decorator at `:27` synthesizes value-based `__eq__` (so the test at `tests/test_registry.py:580-581` builds two distinct records from the same kwargs and the equality assertion holds), and the explicit `__hash__ = object.__hash__` at `:56` restores identity-based `__hash__` so `discard_pending`'s `{id(record) for record in resolved}` set comprehension at `registry.py:351` is the canonical removal predicate. The full pin lives at `tests/types/test_relations.py:34-67` (three tests covering hash-identity / equality / set-membership) plus `tests/test_registry.py:564-590` (`test_discard_pending_uses_identity_match_with_real_pending_relation`).
-- **Sentinel repr metaclass.** The `_PendingRelationAnnotationMeta.__repr__` at `:68-72` returns `"<unfinalized DjangoType relation; call finalize_django_types() before constructing strawberry.Schema>"` — pinned by `tests/types/test_base.py:841` (`assert "finalize_django_types()" in repr(PendingRelationAnnotation)`). The metaclass is the right shape: it shapes the Strawberry-side `TypeError` consumer message that fires only when the rewrite was skipped (the unhappy path), without affecting the happy-path (where `finalize_django_types()` rewrites `source_type.__annotations__` before `strawberry.type` ever sees the class).
-- **Snapshot fields documented as informational.** `nullable` and `relation_kind` at `:53-54` are documented at `:42-45` as "snapshot fields kept for self-contained record introspection; the production consumer reads the live `FieldMeta` from `DjangoTypeDefinition.field_map` instead" — the docstring correctly disowns the snapshot fields from the production read-path, which prevents a future regression where `PendingRelation`'s snapshot drifts from the live `FieldMeta` and a reader keys against the wrong source. Verified against `types/finalizer.py:209` which reads `definition.field_map[snake_case(pending.field_name)]` rather than `pending.nullable` / `pending.relation_kind`.
-- **Imports.** Four imports — `from __future__ import annotations` (annotation forward-ref), `from dataclasses import dataclass`, `from django.db import models`, `from ..utils.relations import RelationKind`. No first-party imports of sibling `types/` modules — the file is at the bottom of the `types/` import DAG and consumed by `types/base.py:45` + `types/finalizer.py:58` + `registry.py:30` (TYPE_CHECKING). No circular-import risk.
-- **GLOSSARY drift quick-check confirmation.** `PendingRelationAnnotation`, `PendingRelation`, `_PendingRelationAnnotationMeta` are all absent from `docs/GLOSSARY.md` — correct per the internal-mechanics convention recorded in earlier cycles (`optimizer/__init__.py:14-17` "internal implementation details" calibration applied uniformly across the optimizer + types subpackages). Consumer-visible behavior surfaces through `Definition-order independence` (`docs/GLOSSARY.md:231-257`) and `Relation handling` (`docs/GLOSSARY.md:888-926`); both entries are aligned with the module's role (definition-order-independence scaffolding for relation finalization). No in-cycle GLOSSARY edit warranted; the absence is intentional convention, not drift. Per dispatch, the GLOSSARY drift check on `PendingRelationAnnotation` and `Relation handling` is closed.
-- **Test placement discipline.** The hash-contract pin lives at `tests/types/test_relations.py` (package-internal tree, system-under-test is the dataclass identity contract per `AGENTS.md` line 6) — the right tree because the identity contract is a Python-language property of `PendingRelation`, not an end-to-end GraphQL behavior reachable through a `/graphql` query. The complementary `tests/test_registry.py::test_discard_pending_uses_identity_match_with_real_pending_relation` at `tests/test_registry.py:564-590` exercises the same identity contract through the `discard_pending` consumer. No real-usage-rule miss.
+- **Identity-hash contract is correct and triple-pinned.** `__hash__ = object.__hash__` (`relations.py:56`) overrides the `@dataclass(frozen=True)`-synthesized value hash so a non-hashable `django_field` (Django rel descriptor with `__hash__ = None`) cannot raise `TypeError`. This matches `registry.discard_pending`'s `id()`-based matching exactly (`registry.py:424-425`), and is pinned by `tests/types/test_relations.py` (hash/eq/set-membership with a `_NonHashableField()` stand-in) plus `tests/test_registry.py::test_discard_pending_uses_identity_match_with_real_pending_relation`. The synthesized value-based `__eq__` is preserved (only `__hash__` is overridden) so the registry value-equality test still holds.
+- **Sentinel metaclass is a genuine UX improvement, not cleverness.** `_PendingRelationAnnotationMeta.__repr__` (`relations.py:68-72`) shapes the Strawberry-side `TypeError` message when `finalize_django_types()` is skipped, so the failure names the missing finalize call rather than emitting `<class '...PendingRelationAnnotation'>`. The comment at `relations.py:62-66` documents the precise fire condition (un-rewritten sentinel reaching `strawberry.type`).
+- **Producer/consumer contract verified end-to-end.** `_build_annotations` always defers auto-synthesized relations to a `PendingRelation` + installs `PendingRelationAnnotation` (`base.py:1583-1594`); the finalizer rewrites `source_type.__annotations__[field_name]` via `resolved_relation_annotation` and hands the original instances back by identity (`finalizer.py:607-613`). The `consumer_authored` branch (`finalizer.py:590-592`) is documented defense-in-depth — `_build_annotations` already skips the pending append for consumer-annotated fields. Definition-order-independence is real: the finalizer resolves targets through `registry.get(pending.related_model)` post-registration, closing the import-order trap.
+- **`nullable`/`relation_kind` snapshot fields honestly scoped.** The docstring (`relations.py:43-46`) states these are self-contained-introspection snapshots and that the production consumer reads the live `FieldMeta` from `field_map` instead — and indeed the finalizer reads `definition.field_map[snake_case(...)]` (`finalizer.py:597`), never `pending.nullable`/`pending.relation_kind`. No stale-snapshot risk.
 
 ### Summary
 
-`django_strawberry_framework/types/relations.py` is a single-purpose 82-line scaffolding module hosting `PendingRelation` (frozen dataclass with explicit `object.__hash__` override for identity-based registry tracking) and `PendingRelationAnnotation` (sentinel annotation carrying a custom metaclass repr for friendly schema-construction error messages when `finalize_django_types()` was skipped). Zero High / zero Medium; four Lows are all forward-looking or comment-pass: (a) four cross-file references in module + class docstrings use single-colon `path:symbol` instead of `AGENTS.md` rule-27 `path::QualifiedName` (canonical shape already followed at `types/finalizer.py:196`); (b) module docstring's `spec-014 H1` citation correctly survives Step 8 archive sweeps as a rev-anchor but inherits the same drift-risk class as the optimizer-folder `spec-014 → spec-018` rotations; (c) `PendingRelation.field_name` snake_case-rebuild contract documented but not pinned in `tests/types/test_relations.py` — defer until second producer lands; (d) the producer-consumer-rewrite contract is duplicated across three docstring sites + one inline comment block — defer until a fourth restating site lands or until any of the three drifts. The shadow overview confirms zero control-flow hotspots / zero ORM markers / zero calls-of-interest / zero repeated literals. The GLOSSARY drift quick-check on `PendingRelationAnnotation` and `Relation handling` closes with no in-cycle edit warranted — internal-mechanics convention per the cross-cycle calibration. Standard three-spawn cycle; `Status: under-review`.
+Clean two-carrier module at the single canonical home for definition-order-independent finalization scaffolding. The identity-hash override, the sentinel repr metaclass, and the raw-`field_name`/consumer-`snake_case` split are all correct and verified against the live producer (`base.py`), consumer (`finalizer.py`), and registry (`registry.py`) sites, plus the dedicated test module. The prior-release artifact's three Lows are stale: the citation-style Low is already fixed in live source (now `::` throughout), and the other two were no-action defer-with-trigger items whose triggers remain unmet. No GLOSSARY entry exists for `PendingRelation`/`PendingRelationAnnotation` (correct — internal scaffolding, not public contract). No High, no Medium, no actionable Low, zero edits to any tracked file: a no-source-edit (shape #5) cycle.
 
 ---
 
 ## Fix report (Worker 2)
 
-### Files touched
+Filled by Worker 1 per no-source-edit cycle pattern.
 
-- `django_strawberry_framework/types/relations.py` — Low #1 citation hygiene per AGENTS.md rule 27: rewrote four cross-file `path:symbol` references to `path::QualifiedName` form. Two sites in the module docstring (`types/base.py:_build_annotations` → `types/base.py::_build_annotations`; `types/finalizer.py:finalize_django_types` → `types/finalizer.py::finalize_django_types`) and the matching pair in the `PendingRelation` class docstring. Brings the file in line with the canonical shape already in use at `types/finalizer.py::_format_unresolved_targets_error #"types/base.py::_build_annotations"`.
+### Files touched
+None — no-source-edit cycle.
 
 ### Tests added or updated
-
-- None. Citation-hygiene comment-only change; no behavior surface to pin. Consistent with prior citation-hygiene Lows (`list_field.py` spec-016→spec-020, `optimizer/extension.py` spec-014→spec-018, `types/finalizer.py` 9× spec rotations) which all shipped without test surface.
+None — no-source-edit cycle.
 
 ### Validation run
-
-- `uv run ruff format .` — pass (212 files unchanged)
-- `uv run ruff check --fix .` — pass (All checks passed!)
+- `uv run ruff format django_strawberry_framework/types/relations.py` — `1 file left unchanged`.
+- `uv run ruff check django_strawberry_framework/types/relations.py` — `All checks passed!`.
 
 ### Notes for Worker 3
+- No High / no Medium. Three Lows, all no-action:
+  - Citation-style Low: ALREADY FIXED in live source (`relations.py:7,10,33,34` use `::`). Verified by reading the live file; not re-raised.
+  - spec-014 H1 anchor Low: correct against spec on disk; defer-with-trigger, trigger unmet; no edit.
+  - `field_name` raw-vs-snake_case producer-pin Low: contract single-sourced (`base.py:1587` producer, `finalizer.py:597` consumer), correct, indirectly tested via `tests/types/test_definition_order.py`; defer-with-trigger (third producer), trigger unmet; no edit.
+- No GLOSSARY-only fix in scope: grep of `docs/GLOSSARY.md` for `PendingRelation`/`PendingRelationAnnotation` returned zero hits — these are internal scaffolding symbols, not documented public contract, so no roster/prose drift exists.
 
-- Lows #2-4 deferred-with-trigger per dispatch and artifact prose:
-  - Low #2 (`spec-014 H1` citation): correct against spec on disk; defer until a regression in the spec mapping fires or the next project-pass spec-NN sweep.
-  - Low #3 (`field_name` snake_case rebuild contract not pinned in `tests/types/test_relations.py`): defer until (a) a regression surfaces consumer-side or (b) a third producer of `PendingRelation` lands; today the single producer is `types/base.py::_build_annotations`.
-  - Low #4 (producer/consumer/rewrite prose duplicated across 3 docstring sites + 1 inline comment block): defer until a fourth restating site lands or any of the three drifts; today the three sites agree at authoring.
-- No shadow file used during implementation; the edits are localized to 4 docstring lines.
-- Concurrent maintainer activity per AGENTS.md #33: working tree carries unrelated modifications to `types/base.py`, `types/finalizer.py`, `docs/builder/bld-slice-3-wiring.md`, `docs/builder/build-028-orders-0_0_8.md`, `docs/review/review-0_0_7.md`, `tests/types/test_base.py`, plus untracked `docs/review/rev-types__finalizer.md`. Left untouched.
-- `uv.lock` unchanged.
+## Comment/docstring pass
+
+Filled by Worker 1 per no-source-edit cycle pattern. Logic was accepted with no edits; the docstrings and comments are accurate against live source (producer/consumer/registry sites and the test module all verified). No comment or docstring changes warranted.
+
+## Changelog disposition
+
+Filled by Worker 1 per no-source-edit cycle pattern. Not warranted — zero edits to any tracked file (AGENTS.md: "Do not update CHANGELOG.md unless explicitly instructed"; active plan `review-0_0_9.md` records no changelog directive for this item).
 
 ---
 
 ## Verification (Worker 3)
 
 ### Logic verification outcome
+No-source-edit (shape #5) cycle; no High/Medium/actionable Low to address. Independently verified the load-bearing contracts:
 
-Terminal-verify on a consolidated single-spawn (shape #4) cycle. Worker 2 applied Low #1 verbatim per the artifact's four recommended replacements — four `path:Name` → `path::QualifiedName` swaps confirmed via `git diff -- django_strawberry_framework/types/relations.py`: two in the module docstring (`types/base.py:_build_annotations` → `types/base.py::_build_annotations` at `:7-8`; `types/finalizer.py:finalize_django_types` → `types/finalizer.py::finalize_django_types` at `:10-11`) and the matching pair in the `PendingRelation` class docstring at `:31-34`. Post-fix `grep -n "path:" relations.py` returns zero hits on the single-colon `path:symbol` form. Canonical shape at `types/finalizer.py:196` (`# Defense-in-depth: ``types/base.py::_build_annotations`` already skips the`) grep-confirmed in-repo. Lows #2-4 deferred-with-trigger per the artifact's own verbatim prose, pre-authorized by dispatch.
+- **Cycle diff empty.** `git diff --stat 0872a20 -- django_strawberry_framework/types/relations.py` produces no output; `relations.py` absent from `git status` (byte-unchanged at baseline). "Files touched: None" holds. `git diff -- CHANGELOG.md` empty.
+- **Identity-hash override correct (the headline).** Drove live (`config.settings`, fakeshop): `PendingRelation.__hash__ is object.__hash__` (NOT the `@dataclass(frozen=True)` value-hash). A `PendingRelation` carrying a `__hash__ = None` (non-hashable) `django_field` stand-in: `hash(pr)` succeeds, equals `object.__hash__(pr)`, and set-membership works — the value-hash would have raised `TypeError`. The dataclass VALUE `__eq__` is preserved (two distinct-identity, equal-field records compare `==`) while their identity hashes differ.
+- **Registry identity-match matches the override.** `discard_pending([pr])` over `{pr, pr2}` (value-equal but distinct identity) removed only `pr` and left `pr2 is` the surviving record — proving `registry.py:424-425` `id()`-keyed matching, exactly what the `object.__hash__` override is for.
+- **Single producer / single consumer / snake_case split.** `grep "PendingRelation("` over source = one producer (`base.py:1584`, stamps `field_name=field.name` RAW at :1587). Consumer rebuilds via `definition.field_map[snake_case(pending.field_name)]` (`finalizer.py:597`). No third producer landed → the field_name raw-vs-snake_case defer-with-trigger Low is correctly unmet.
+- **Definition-order-independence real.** Producer always defers auto-synthesized relations to a `PendingRelation` + `PendingRelationAnnotation` sentinel (`base.py:1583-1594`); consumer resolves the target through `registry.get(pending.related_model)` post-registration (`finalizer.py:593`), so import order cannot mis-bind (the spec-014 H1 import-order trap). Frozen-dataclass immutability confirmed (`FrozenInstanceError` on attribute set).
+- **Sentinel metaclass repr.** `repr(PendingRelationAnnotation)` returns the `finalize_django_types()`-naming message, not `<class '...PendingRelationAnnotation'>`.
+- **Test pins grep-match.** `tests/types/test_relations.py` (`_NonHashableField` + `test_pending_relation_hash_is_identity_based...` / `_equality_still_works...` / `_is_set_member...`), `tests/test_registry.py:651` (`test_discard_pending_uses_identity_match_with_real_pending_relation`).
 
 ### DRY findings disposition
-
-`None — …` DRY bullet at `relations.py:7` framing the 82-line module as the single canonical home for `PendingRelation` / `PendingRelationAnnotation` scaffolding with cross-folder consolidation already in place (producer at `types/base.py::_build_annotations`, consumer at `types/finalizer.py::finalize_django_types`). No in-cycle DRY action; deferral premise (single producer + single consumer) holds.
+None — module is two data carriers + a repr metaclass; `RelationKind` reused from `utils/relations.py`, not re-declared. No extraction warranted (confirmed: 0 DRY items in artifact, consistent with shadow overview's 0 hotspots / 0 repeated literals).
 
 ### Temp test verification
-
-None used; the cycle is a citation-hygiene comment-only edit with no behavior surface to pin.
+- No temp test files; all verification via one read-only `uv run python` probe (not persisted).
+- Disposition: n/a — no new behavior introduced; existing permanent pins cover the contract.
 
 ### Verification outcome
+- `cycle accepted; verified` — sets top-level `Status: verified` AND marks the checklist box.
 
-cycle accepted; verified
-
-Concurrent maintainer activity per AGENTS.md #33 acknowledged in Worker 2's Notes-for-Worker-3 and confirmed via `git status` (modifications to `types/base.py`, `types/finalizer.py`, `docs/builder/bld-slice-3-wiring.md`, `docs/builder/build-028-orders-0_0_8.md`, `docs/review/review-0_0_7.md`, `tests/types/test_base.py`, plus untracked `docs/review/rev-types__finalizer.md`) — all left untouched, none overlap the four-line relations.py docstring edit. Changelog disposition `Not warranted` cites both AGENTS.md rule 21 ("Do not update CHANGELOG.md unless explicitly instructed") AND the active plan's silence on changelog authorization for this cycle; `git diff -- CHANGELOG.md` is empty as required. Ruff spot-verify on relations.py: `uv run ruff format --check` (1 file already formatted) + `uv run ruff check` (All checks passed!).
-
----
-
-## Comment/docstring pass
-
-(Consolidated single-spawn — Low #1 is the comment/docstring edit itself; Lows #2-4 are defer-with-trigger.)
-
-### Files touched
-
-- `django_strawberry_framework/types/relations.py` — see Fix report above. Four `path:symbol` → `path::QualifiedName` rewrites in module and class docstrings.
-
-### Per-finding dispositions
-
-- Low #1: applied verbatim per artifact's four recommended replacements; reads as canonical AGENTS.md rule 27 shape.
-- Low #2: deferred-with-trigger (rev-anchor `spec-014 H1` citation is correct today; revisit if/when the optimizer-folder-style spec-NN sweep fires for `types/` or a regression surfaces).
-- Low #3: deferred-with-trigger (defer until second `PendingRelation` producer lands or consumer-side regression appears).
-- Low #4: deferred-with-trigger (defer until a fourth restating site lands or any of the three drifts; today the three docstring sites + inline-comment-block agree).
-
-### Validation run
-
-- `uv run ruff format .` — pass
-- `uv run ruff check --fix .` — pass
-
-### Notes for Worker 3
-
-Lows #2-4 deferral triggers preserved verbatim from artifact prose; no in-cycle edit warranted on any of them.
-
----
-
-## Changelog disposition
-
-### State
-
-Not warranted.
-
-### Reason
-
-Per AGENTS.md ("Do not update CHANGELOG.md unless explicitly instructed") AND the active plan's silence on changelog authorization for this cycle. The in-cycle edit is citation-style hygiene on four docstring lines — no consumer-visible behavior change, no public-symbol surface change, no typed-error contract change. Calibration siblings (`list_field.py`, `optimizer/extension.py`, `optimizer/walker.py`, `types/finalizer.py` citation-rotation cycles) all closed `Not warranted` on the same shape.
-
-### What was done
-
-No `CHANGELOG.md` edit.
-
-### Validation run
-
-- `uv run ruff format .` — pass
-- `uv run ruff check --fix .` — pass
-
----
-
-## Iteration log
+The three prior-release Lows are correctly stale/superseded: citation-style already `::` in live source (`relations.py:7,10,33,34` confirmed); spec-014 H1 anchor + field_name raw-vs-snake_case are no-action defer-with-trigger items, triggers unmet (single producer/consumer confirmed by grep). No GLOSSARY entry (`grep PendingRelation docs/GLOSSARY.md` = 0), so no GLOSSARY-only fix in scope. Ruff format-check + check pass (COM812 standing warning).

@@ -10,10 +10,13 @@ GraphQL input shape stay downstream of one decision site (mirror of
 
 The finalizer materializes the built classes as module globals at
 finalize time; this module owns build-only. Layer 6 (dynamic
-``OrderSet`` generation against a connection-field meta dict) is
-deferred to ``0.0.9`` per spec-028 Decision 12; the forward-reserved
-symbols ``_dynamic_orderset_cache`` and ``get_orderset_class`` are NOT
-shipped in this slice (see the TODO anchor at the bottom of the file).
+``OrderSet`` generation against a connection-field meta dict) is a
+standing deferred non-goal per spec-028 Decision 12: the connection
+field (``connection.py::DjangoConnectionField``) resolves ordering from
+the already-resolved ``Meta.orderset_class`` sidecar directly rather
+than auto-generating an ``OrderSet``, so the forward-reserved symbols
+``_dynamic_orderset_cache`` and ``get_orderset_class`` are NOT shipped
+(see the TODO anchor at the bottom of the file).
 """
 
 from __future__ import annotations
@@ -79,12 +82,15 @@ class OrderArgumentsFactory(GeneratedInputArgumentsFactory):
         return _build_input_fields(set_cls, owner_definition)
 
 
-# TODO(spec-028-orders-0_0_8 Decision 12; deferred to 0.0.9): Layer 6 of
-# the six-layer pipeline -- the dynamic ``OrderSet`` cache keyed by
-# ``(model, fields, extra_meta)`` for connection fields that target the
-# same model without an explicit ``orderset_class``. The forward-reserved
-# symbols are ``_dynamic_orderset_cache: dict[tuple, type[OrderSet]]``
-# and ``get_orderset_class(orderset_class, **meta) -> type[OrderSet]``
+# TODO(spec-028-orders-0_0_8 Decision 12; standing deferred non-goal):
+# Layer 6 of the six-layer pipeline -- the dynamic ``OrderSet`` cache
+# keyed by ``(model, fields, extra_meta)`` for connection fields that
+# target the same model without an explicit ``orderset_class``. The
+# forward-reserved symbols are
+# ``_dynamic_orderset_cache: dict[tuple, type[OrderSet]]`` and
+# ``get_orderset_class(orderset_class, **meta) -> type[OrderSet]``
 # (mirrors ``filters/factories.py::get_filterset_class`` /
 # ``_dynamic_filterset_cache``). Slice 2 ships only the BFS layer; the
-# dynamic factory lands with the connection-field surface in ``0.0.9``.
+# dynamic factory has no shipped consumer -- the connection-field surface
+# chose the explicit ``Meta.orderset_class`` declaration path, so this
+# remains a standing deferred non-goal until a card revives it.

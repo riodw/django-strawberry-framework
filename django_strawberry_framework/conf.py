@@ -144,7 +144,7 @@ class Settings:
         probes by design - bad configuration should fail loud rather than
         masquerade as a missing attribute.
         """
-        if name in {"user_settings", "_user_settings", "reload"} or name.startswith("__"):
+        if name in {"user_settings", "_user_settings"} or name.startswith("__"):
             raise AttributeError(name)
         try:
             # ``self.user_settings`` is a descriptor (``@property``), not a
@@ -166,7 +166,9 @@ def reload_settings(setting: str, value: Any, **kwargs: Any) -> None:
     global so callers that did ``from .conf import settings`` keep seeing
     fresh values.  ``value`` is whatever Django's ``setting_changed`` signal
     sends; ``None`` (e.g. when an ``override_settings`` block exits) restores
-    lazy reload on next attribute access.
+    lazy reload on next attribute access.  ``**kwargs`` absorbs the remaining
+    ``setting_changed`` payload (``enter``, ``sender``, ``signal``) so the
+    receiver matches the signal signature; it is required, not optional.
     """
     if setting == DJANGO_SETTINGS_KEY:
         settings.reload(value)

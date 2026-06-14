@@ -13,6 +13,7 @@ from strawberry import relay
 from ..exceptions import ConfigurationError, OptimizerError
 from ..registry import registry
 from ..utils.connections import (
+    UnwindowableConnection,
     derive_connection_window_bounds,
     has_connection_sidecar_kwargs,
 )
@@ -214,6 +215,45 @@ def _build_child_queryset(
     return queryset
 
 
+def _resolver_identities_for(
+    sel: Any,
+    field_name: str,
+    type_cls: type | None,
+    runtime_prefixes: tuple[tuple[str, ...], ...],
+) -> tuple[tuple[tuple[str, ...], ...], tuple[str, ...]]:
+    """Return ``(runtime_paths, resolver_identities)`` for one selection.
+
+    Shared by the list-relation walk (``_walk_selections``, keyed on the
+    Django field name) and the nested-connection planner
+    (``_plan_connection_relation``, keyed on ``relation_field_name`` - the
+    underlying relation field, NOT the generated ``<field>_connection``
+    accessor). ``field_name`` is the resolver-key vocabulary, so passing
+    ``relation_field_name`` at the connection site keeps the walker's emitted
+    key MATCHING the resolve-time key ``connection.py``'s
+    ``_check_n1(kind="connection_to_attr")`` rebuilds via
+    ``resolver_key(type_cls, relation_field_name, runtime_path)`` - the
+    load-bearing "planned -> silent" parity (``connection.py`` resolver doc).
+
+    A selection-specific ``_optimizer_runtime_prefixes`` (set by connection
+    extraction) overrides the inherited ``runtime_prefixes``; the runtime path
+    is the cartesian product over those prefixes and ``_response_keys(sel)``.
+    """
+    selection_runtime_prefixes = (
+        tuple(sel._optimizer_runtime_prefixes)
+        if getattr(sel, "_optimizer_runtime_prefixes", None) is not None
+        else runtime_prefixes
+    )
+    runtime_paths = tuple(
+        (*runtime_prefix, response_key)
+        for runtime_prefix in selection_runtime_prefixes
+        for response_key in _response_keys(sel)
+    )
+    resolver_identities = tuple(
+        resolver_key(type_cls, field_name, runtime_path) for runtime_path in runtime_paths
+    )
+    return runtime_paths, resolver_identities
+
+
 def _walk_selections(
     selections: list[Any],
     model: type[models.Model],
@@ -322,18 +362,11 @@ def _walk_selections(
             continue
 
         full_path = f"{prefix}{django_name}"
-        selection_runtime_prefixes = (
-            tuple(sel._optimizer_runtime_prefixes)
-            if getattr(sel, "_optimizer_runtime_prefixes", None) is not None
-            else runtime_prefixes
-        )
-        runtime_paths = tuple(
-            (*runtime_prefix, response_key)
-            for runtime_prefix in selection_runtime_prefixes
-            for response_key in _response_keys(sel)
-        )
-        resolver_identities = tuple(
-            resolver_key(type_cls, django_name, runtime_path) for runtime_path in runtime_paths
+        runtime_paths, resolver_identities = _resolver_identities_for(
+            sel,
+            django_name,
+            type_cls,
+            runtime_prefixes,
         )
         target_type = _resolve_relation_target(definition, django_name, django_field)
 
@@ -1100,6 +1133,14 @@ def _connection_window_slice(sel: Any, info: Any) -> tuple[int, int | None, bool
     nested field path raises at its own error locality (Decision 4 step f). The
     resolver calls the same helper directly with already-coerced Strawberry
     arguments and lets the pagination error propagate instead.
+
+    ``UnwindowableConnection`` (the offset-bearing backward shape, ``after`` +
+    ``last``) is deliberately NOT caught here: it is a VALID query that resolves
+    correctly per-parent, so ``_plan_connection_relation`` must treat it as a
+    fully-unplanned Decision-6 fallback (no ``planned_resolver_keys`` entry, like
+    the sidecar / divergent-alias / distinct shapes) rather than the
+    malformed-pagination ``None`` path that records the field as accounted-for
+    (spec-033 Decision 5).
     """
     arguments = getattr(sel, "arguments", None) or {}
     # ``first`` / ``last`` from an inline GraphQL Int LITERAL arrive as the raw
@@ -1168,18 +1209,11 @@ def _plan_connection_relation(
     target_type = _resolve_relation_target(definition, relation_field_name, django_field)
     has_custom_get_queryset = _target_has_custom_get_queryset(target_type)
 
-    selection_runtime_prefixes = (
-        tuple(sel._optimizer_runtime_prefixes)
-        if getattr(sel, "_optimizer_runtime_prefixes", None) is not None
-        else runtime_prefixes
-    )
-    runtime_paths = tuple(
-        (*runtime_prefix, response_key)
-        for runtime_prefix in selection_runtime_prefixes
-        for response_key in _response_keys(sel)
-    )
-    resolver_identities = tuple(
-        resolver_key(type_cls, relation_field_name, runtime_path) for runtime_path in runtime_paths
+    runtime_paths, resolver_identities = _resolver_identities_for(
+        sel,
+        relation_field_name,
+        type_cls,
+        runtime_prefixes,
     )
 
     if django_field.related_model is None:
@@ -1188,7 +1222,18 @@ def _plan_connection_relation(
     # (e/f) Slice window from the selection's resolved pagination arguments. Pure
     # (mutates nothing), so resolve it BEFORE the child build - a malformed slice
     # must not leave child resolver keys / cacheable flips on the parent plan.
-    window = _connection_window_slice(sel, info)
+    try:
+        window = _connection_window_slice(sel, info)
+    except UnwindowableConnection:
+        # (b) Offset-bearing backward window (after + last): the reversed window's
+        # whole-partition row numbering cannot honor the after offset, so it falls
+        # back per-parent like the other Decision-6 fallback shapes (sidecar,
+        # divergent alias, distinct). Stay FULLY unplanned - record NO resolver
+        # identities - so the per-parent access stays visible to the Slice-4
+        # strictness contract (spec-033 Decision 5; unlike the malformed-pagination
+        # `window is None` path below, this query resolves correctly per-parent
+        # and never raises its own error, so it is a real per-parent access).
+        return
     if window is None:
         # Malformed pagination (Decision 4 step f): emit NO window prefetch so the
         # connection pipeline runs per-parent and raises its OWN cursor/pagination

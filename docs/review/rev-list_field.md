@@ -4,8 +4,8 @@ Status: verified
 
 ## DRY analysis
 
-- **Sync/async post-processor pair `_post_process_consumer_sync` / `_post_process_consumer_async` (`django_strawberry_framework/list_field.py:31-44`).** Both functions are structurally identical — `Manager → .all()` coercion, then `isinstance(QuerySet)` dispatch into the matching `_apply_get_queryset_{sync,async}` helper, else pass-through. The only differences are the `await` keyword and the helper-color suffix. Python's sync-vs-async function coloring makes a single shared body non-trivial (you cannot meaningfully parameterize over `await`), so the duplication is intentional sibling design. **Defer until a third consumer-return color (e.g. an iterator-coercion path) lands or a generalized `_coerce_and_apply(target_type, result, info, apply_fn, is_async)` shape becomes warranted by a second consumer of these helpers outside `list_field.py`.** Trigger to grep: a second module importing `_post_process_consumer_sync` / `_post_process_consumer_async`, OR a third coercion case (beyond `Manager` and `QuerySet`) landing inside either body.
-- **Four-guard validation block in `DjangoListField` (`django_strawberry_framework/list_field.py:98-121`).** Four `ConfigurationError`-raising guards with a shared `"DjangoListField "` message prefix; three of four interpolate `target_type.__name__`. A `_validate_target(target_type)` helper would localize the guard sequence, but each guard's message text is meaningfully distinct (the third guard's three-sentence remediation message is the most useful diagnostic in the file) and the comment block at `django_strawberry_framework/list_field.py:91-97` calls out that the guard ORDER is load-bearing (each guard assumes the previous passed). Splitting into a helper would hide the ordering contract behind an opaque call. **Defer until a second `DjangoType`-target factory lands (e.g. when `DjangoConnectionField` or `DjangoNodeField` adopts the same four-guard preamble); then extract `_validate_djangotype_target(target_type, *, factory_name)` and reuse across the factories.** Trigger to grep: a second call site for `isinstance(target_type, type)` + `issubclass(target_type, DjangoType)` + `definition.origin is target_type` in the same sequence anywhere under `django_strawberry_framework/`.
+- **Default-branch async dispatch shape is shared verbatim with the Relay node defaults; do NOT extract.** `list_field.py::DjangoListField._default` (lines 161-169) and `types/relay.py::_resolve_node_default` (relay.py:815-820) both run the `if in_async_context(): return <async helper>(...)` / else `apply_type_visibility_sync(...)` shape. The shared *primitives* (`initial_queryset`, `apply_type_visibility_sync/_async`) already live single-sited in `utils/querysets.py`; what remains per-site is the 3-line runtime-context fork plus each caller's distinct tail (list returns the qs as-is; relay adds an id filter + `.get()/.first()`). Wrapping the fork itself would re-hide the per-surface tail behind a maybe-await abstraction — the exact anti-pattern `utils/querysets.py` (lines 13-17, 83-86) deliberately rejected. Keep as-is; no trigger.
+- None beyond the above — the four validator guards, the Manager→QuerySet coercion, and the visibility hooks are already extracted to `_validate_djangotype_target` / `utils/querysets.py` and reused by `connection.py` + `relay.py` (the 0.0.9 DRY pass landed cleanly).
 
 ## High:
 
@@ -17,195 +17,191 @@ None.
 
 ## Low:
 
-### Stale spec citation on Decision 5 guard comment
+### Comment names `inspect.iscoroutinefunction` where the code calls `is_async_callable`
 
-The Decision-5 validation block at `django_strawberry_framework/list_field.py:91-92` cites `spec-016`:
+The async-detection comment in the `DjangoListField` body states the consumer-wrapper branch "commits per-construction via `inspect.iscoroutinefunction(user_resolver)`", but the branch actually calls `is_async_callable(user_resolver)`:
 
-```django_strawberry_framework/list_field.py:91-93
-    # Decision 5 validation guards
-    # (spec-016 #"DjangoListField requires a DjangoType class"): four
-    # constructor-site checks that fail at the line that wrote ``DjangoListField(...)`` rather
+```django_strawberry_framework/list_field.py:155:158
+            # and ``await schema.execute``. The consumer-wrapper branch below commits
+            # per-construction via ``inspect.iscoroutinefunction(user_resolver)``
+            # because Strawberry inspects the resolver signature once at schema
+            # construction and freezes the sync-vs-async handling.
 ```
 
-A `grep -l` across `docs/SPECS/*.md` and `docs/*.md` for the string `"DjangoListField requires a DjangoType class"` returns only `docs/SPECS/spec-020-list_field-0_0_7.md` — `spec-016` (`docs/SPECS/spec-016-fieldmeta_consolidation-0_0_6.md`) does not carry the cited substring. The citation should be `spec-020 #"DjangoListField requires a DjangoType class"`. Comment-pass fix.
-
-### Stale spec docstring path
-
-The module docstring at `django_strawberry_framework/list_field.py:3` cites `docs/spec-020-list_field-0_0_7.md` and the `DjangoListField` docstring at `django_strawberry_framework/list_field.py:88` cites the same path:
-
-```django_strawberry_framework/list_field.py:1-5
-"""``DjangoListField`` — non-Relay ``list[T]`` field for root Query fields.
-
-Spec: ``docs/spec-020-list_field-0_0_7.md``.
-Target release: ``0.0.7``.
-"""
+```django_strawberry_framework/list_field.py:173:174
+        user_resolver = resolver
+        if is_async_callable(user_resolver):
 ```
 
-`ls docs/spec*.md` shows only `docs/spec-028-orders-0_0_8.md` lives at the active-spec slot; the list_field spec was archived to `docs/SPECS/spec-020-list_field-0_0_7.md` per the AGENTS.md docstring-archival convention ("completed design docs stay at their working location at docs/spec-NNN-…md until a NEW spec is being authored, at which point the docs/SPECS/NEXT.md Step 8 batched archive pass run by the new spec's author moves every prior spec from docs/ to docs/SPECS/"). The active path is now `docs/SPECS/spec-020-list_field-0_0_7.md`. Update both citations (module docstring and `DjangoListField` docstring) in the same comment-pass edit. Comment-pass fix.
+`is_async_callable` (`utils/typing.py::is_async_callable`) is deliberately a *superset* of bare `inspect.iscoroutinefunction`: it also inspects `__call__` (callable-instance resolvers with `async def __call__`) and unwraps `functools.partial`. Those exact cases are pinned by tests `tests/test_list_field.py::test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied` (line 531), `::test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_applied` (line 580), and `::test_djangolistfield_partial_wrapped_async_callable_object_resolver_gets_get_queryset_applied` (line 636) — all of which bare `inspect.iscoroutinefunction(user_resolver)` would fail to route. The comment therefore names a detection mechanism that contradicts both the code and its own tests. The GLOSSARY entry already describes the real behavior correctly ("checked on the resolver itself AND on its `__call__`"); only this source comment is stale. No behavior impact — comment-pass fix only.
 
-### Stale `docs/feedback.md` citation
+Recommended change: replace the comment's `` ``inspect.iscoroutinefunction(user_resolver)`` `` with `` ``is_async_callable(user_resolver)`` `` (optionally noting it is the `__call__`/partial-aware predicate), so the comment matches line 174 and the module's actual contract.
 
-`_is_async_callable`'s docstring at `django_strawberry_framework/list_field.py:65` cites `docs/feedback.md High #2`:
+### `_validate_relay_djangotype_target` placement is a project-pass responsibility question, not a local defect
 
-```django_strawberry_framework/list_field.py:62-65
-      Without this branch an async-callable-object resolver would land in the
-      sync wrapper, its coroutine return would bypass
-      ``_post_process_consumer_sync``, and the awaited QuerySet would silently
-      skip ``target_type.get_queryset(...)`` (``docs/feedback.md`` High #2).
-```
-
-`docs/feedback.md` currently carries spec-028-orders feedback (verified via `head -3 docs/feedback.md`); the historical High #2 content the docstring points readers at no longer lives at that path. The reasoning the docstring captures is still correct — only the citation is dangling. Options at comment-pass time: (a) drop the parenthetical, leaving the standalone reasoning; (b) re-cite to an archived feedback artifact under `docs/SPECS/` if one exists; or (c) re-anchor to the test at `tests/test_list_field.py::test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied`, which encodes the same High #2 contract in a way the cycle's grep can verify. Comment-pass fix.
-
-### GLOSSARY narrows `DjangoListField` async-detection mechanism
-
-`docs/GLOSSARY.md` `## ``DjangoListField`` entry at `docs/GLOSSARY.md:315` says:
-
-> Async consumer resolvers are detected at construction time via `inspect.iscoroutinefunction` and routed through an `async def` wrapper that awaits the coroutine before applying the isinstance check.
-
-The actual check at `django_strawberry_framework/list_field.py:72-75` is `_is_async_callable`, which calls `inspect.iscoroutinefunction(fn)` **OR** `inspect.iscoroutinefunction(fn.__call__)`. The second branch is the High #2 fix that catches callable-instance resolvers whose `__call__` is `async def`. The current GLOSSARY phrasing implies only the first branch exists; a consumer reading it would not know they can pass a class instance whose `__call__` is `async def`. Suggested verbatim replacement for the relevant clause:
-
-> Async consumer resolvers are detected at construction time via `inspect.iscoroutinefunction` (checked on the resolver itself AND on its `__call__` so callable-instance resolvers with `async def __call__` are also covered) and routed through an `async def` wrapper that awaits the coroutine before applying the isinstance check.
-
-This is a documented-public-contract widening, not a behavior change. Treat as Low rather than Medium because the surface still exists and is correct on the first branch — the GLOSSARY just understates coverage. Comment-pass fix (GLOSSARY-only — route through shape #4 per worker-1.md, not shape #5).
+The Relay-shaped validator `_validate_relay_djangotype_target` lives in the *non-Relay* `list_field.py` and is imported by both `connection.py:59` and `relay.py:63` (neither used by `list_field` itself). Co-locating it with its base `_validate_djangotype_target` is defensible (the base genuinely belongs here and the relay variant delegates to it), but "the relay validator imported out of the list-field module" is a cross-file ownership smell better judged at the folder/project pass with the connection/relay artifacts in view. Forward-looking: defer to `docs/review/rev-django_strawberry_framework.md` (project pass), which can decide whether both validators should migrate to a shared field-guards module once the third consumer (card 032's `DjangoNodeField`) lands as the docstring at lines 58-59 anticipates. No action in this cycle.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** The module already delegates the four-step queryset assembly to `django_strawberry_framework/types/relay.py::_initial_queryset` (model lookup + `_default_manager.all()`) and `_apply_get_queryset_{sync,async}` (sync/async hook invocation including coroutine-rejection in the sync branch) at `django_strawberry_framework/list_field.py:133, 139-140` and `django_strawberry_framework/list_field.py:35, 43`, so the Decision-3 four-step shape lives in exactly one place across the package. The `noqa: N802` comment at `django_strawberry_framework/list_field.py:78` documents the load-bearing PascalCase choice (graphene-django parity).
-- **New helpers considered.** A `_validate_target(target_type)` extraction was considered for the four guards and rejected today because the guard message text is meaningfully distinct per guard and the comment-block at `django_strawberry_framework/list_field.py:91-97` calls out that the guard ORDER is load-bearing — a helper-based abstraction would hide that ordering contract. Trigger-deferred under DRY analysis.
-- **Duplication risk in the current file.** `_post_process_consumer_sync` / `_post_process_consumer_async` (`django_strawberry_framework/list_field.py:31-44`) are intentional sync/async sibling design — Python's function-coloring rules make collapsing them require a non-trivial higher-order shape. Trigger-deferred under DRY analysis. The two inner `_wrap` functions at `django_strawberry_framework/list_field.py:147-156` (async) and `django_strawberry_framework/list_field.py:159-164` (sync) are the same sibling pattern; the same trigger condition would consolidate them too.
+- **Existing patterns reused.** `_default` (lines 161-169) reuses `initial_queryset` + `apply_type_visibility_sync/_async` from `utils/querysets.py:58-138`; the consumer-wrapper helpers `_post_process_consumer_sync/_async` (lines 42-47) are thin named entry points over `post_process_queryset_result_sync/_async` (`utils/querysets.py:141-165`); `is_async_callable` (line 174) is the shared `utils/typing.py` predicate also used by `connection.py:997` and `types/base.py:360`. The 0.0.9 DRY pass single-sited the Manager→QuerySet coercion and the visibility-hook routing exactly as the module headers claim.
+- **New helpers considered.** Extracting the `_default` runtime-context fork into a shared helper was evaluated and rejected (see DRY analysis bullet 1): it would re-hide each caller's distinct tail behind a maybe-await abstraction that `utils/querysets.py` intentionally avoids.
+- **Duplication risk in the current file.** The repeated literal `"DjangoListField"` (factory name at the line-125 `def` + the `field="DjangoListField"` guard arg at line 150) is intentional — the `field=` parameter exists precisely so each factory interpolates its own public name into `ConfigurationError` messages; collapsing it to a constant would couple the message text to the symbol name and defeat the per-factory wording seam (`_validate_djangotype_target` docstring, lines 60-63).
 
 ### Other positives
 
-- **Async-detection asymmetry is documented at the decision point.** The comment block at `django_strawberry_framework/list_field.py:122-129` explains exactly why `_default` uses runtime `in_async_context()` per-call while the consumer-resolver branch commits per-construction via `inspect.iscoroutinefunction(user_resolver)` — Strawberry inspects the resolver signature once at schema construction. This is the kind of "documented intentional asymmetry, NOT a harmonization candidate" annotation that survives a DRY cycle review.
-- **`_is_async_callable` docstring carries its empirical justification.** `django_strawberry_framework/list_field.py:48-71` explains the two branches and explicitly addresses what would seem like dead code (the manual `partial.func` unwrap is dead on Python 3.10+ because `inspect.iscoroutinefunction` unwraps `functools.partial.func` natively since 3.8). The docstring names the contract pin test `tests/test_list_field.py::test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_applied` as the empirical verification — this is exactly the audit shape AGENTS.md calls for.
-- **Guard order is load-bearing and documented.** The validation block at `django_strawberry_framework/list_field.py:91-119` orders the four checks (`isclass` → `issubclass(DjangoType)` → `definition.origin is target_type` → `callable(resolver)`) so each downstream check can assume the previous passed; the comment block at `django_strawberry_framework/list_field.py:106-112` explains the own-class invariant (`__django_strawberry_definition__` is inherited via MRO so `hasattr` would silently accept a subclass that omits its own `Meta`) — the strict invariant catches the subclass-without-own-Meta case (rev6 High #1).
-- **Default-resolver path avoids the consumer post-processor for a reason.** The module-scope comment at `django_strawberry_framework/list_field.py:25-28` explains that the default-resolver path bypasses `_post_process_consumer_{sync,async}` because `qs` is already a `QuerySet` from `Manager.all()` — no Manager-to-QuerySet coercion or isinstance branching is needed. Removing the dead-looking helpers would over-collapse the consumer-resolver branch.
-- **`rev6 H1` no-redundant-coroutine optimization is documented inline.** `django_strawberry_framework/list_field.py:135-138` notes that `_default` returns the coroutine from `_apply_get_queryset_async` directly rather than wrapping it in an inner `async def` (Strawberry's `AwaitableOrValue` dispatch awaits it). The "an inner `async def` wrapper would add a redundant coroutine layer with no semantic gain" line is exactly the kind of explanation a future reviewer needs to NOT add a defensive wrapper.
-- **Test coverage is end-to-end.** `tests/test_list_field.py` ships 22 tests covering validation guards (5), default-resolver sync/async branches (3), sync consumer-resolver paths (2), async consumer-resolver paths (4), root-position optimizer cooperation, FK-id elision, outer-nullability annotation pair, and `Meta.primary` interaction (2). The live-HTTP arm for `Manager → QuerySet` coercion lives in `examples/fakeshop/test_query/test_library_api.py::test_library_branches_via_djangolistfield_consumer_manager_resolver_over_http` per the live-HTTP-first rule at `examples/fakeshop/test_query/README.md`. The `_isolate_global_registry` autouse fixture mirrors the registry-isolation pattern in `tests/test_registry.py`.
-- **Static helper sanity check.** `docs/shadow/django_strawberry_framework__list_field.overview.md` reports 1 control-flow hotspot (the `DjangoListField` body at 96 lines / 8 branch nodes); 0 repeated string literals; 0 TODO comments; 12 calls of interest (4 `isinstance`, 3 `getattr`, 2+2 helper applications, 1 `issubclass`). Each reflective-access call (`getattr` on `__call__`, `getattr` on `__django_strawberry_definition__`, `getattr` on `origin`) has its rationale captured in the surrounding comment block.
+- **Async/sync split is correct and test-pinned.** The default branch uses runtime `in_async_context()` (per-call dispatch, so one factory output serves both `execute_sync` and `await execute` — pinned by `test_djangolistfield_default_resolver_works_under_sync_and_async_schema_execution`, line 251), while the consumer branch commits per-construction via `is_async_callable` (Strawberry freezes resolver sync/async handling at schema-build). The asymmetry is intentional and documented; it mirrors `connection.py` (default `def` lazy-queryset vs `is_async_callable` consumer branch) and the `relay.py` node defaults.
+- **rev6 H1 micro-optimization is sound.** The async default arm returns the `apply_type_visibility_async(...)` coroutine directly rather than wrapping it in a redundant `async def` (lines 164-168); Strawberry's `AwaitableOrValue` dispatch awaits it. No extra coroutine layer.
+- **rev4 H2 await-ordering is correct.** The async `_wrap` awaits the consumer coroutine *before* handing the value to `_post_process_consumer_async` (lines 181-185), so the `normalize_query_source` isinstance check in `utils/querysets.py:150,162` sees the awaited value, not the coroutine. Pinned by the async-consumer-resolver tests (lines 439-523).
+- **Validator ordering is load-bearing and documented.** The own-class registration check (`definition.origin is target_type`, line 89) correctly rejects an MRO-inherited definition that bare `hasattr` would accept — the docstring (lines 66-74) explains the data-isolation rationale precisely.
+- **Outer-nullability is correctly delegated to the consumer annotation.** The factory returns `strawberry.field(...)` with no return-type assertion (lines 197-202); `list[T]` → `[T!]!` vs `list[T] | None` → `[T!]` is driven entirely by the class-attribute annotation. Pinned by `examples/fakeshop/test_query/test_library_api.py:622` (the `list[BranchType] | None` nullable-outer case).
+- **Metadata pass-through is complete.** `description`, `deprecation_reason`, `directives` forward verbatim into the inner `strawberry.field(...)` (lines 199-201).
+- **Optimizer cooperation needs nothing here.** The default resolver returns a lazy queryset; root-position optimization rides the existing `info.path.prev is None` gate in `DjangoOptimizerExtension` — no list-field-specific optimizer wiring, consistent with the GLOSSARY's "rides the existing root-gated hook" claim. `optimizer/walker.py:213` independently reuses `apply_type_visibility_sync` for nested targets.
+
+### GLOSSARY drift quick-check
+
+`#djangolistfield` (`docs/GLOSSARY.md:333-337` plus the index rows at lines 29, 69, 152) is accurate and current. It correctly describes: factory-not-class, outer-nullability from the consumer annotation, the `_default_manager.all()` + `get_queryset` default body in both sync/async (sync rejects an async hook with `ConfigurationError`), the Manager/QuerySet coercion on consumer returns, **construction-time async detection via `inspect.iscoroutinefunction` checked on the resolver AND its `__call__`** (this is the behavior the *source comment* at line 156 gets wrong — the GLOSSARY is right), Python-list pass-through, optimizer root-gating, and metadata pass-through. No replacement text needed.
 
 ### Summary
 
-`list_field.py` is a tight 173-line factory module with one control-flow hotspot (`DjangoListField` at 96 lines / 8 branches) that earns its size through a load-bearing four-guard validation preamble and a documented sync/async-asymmetry dispatch. Every Django/ORM marker, every reflective `getattr`, and every "this looks like dead code" branch has a comment block explaining why it stays. No High or Medium findings. Four Lows are all comment-pass items: a stale `spec-016` citation that should be `spec-020`, a stale `docs/spec-020-...md` path that should be `docs/SPECS/spec-020-...md` (two sites), a dangling `docs/feedback.md High #2` citation now that feedback.md has been repurposed for spec-028-orders, and a GLOSSARY entry that narrows the async-detection contract by omitting the `__call__`-branch coverage. The DRY analysis defers two real consolidation candidates — the sync/async post-processor pair and the four-guard validation block — with explicit grep-able trigger conditions for the next DRY cycle.
+`list_field.py` is in strong shape after the 0.0.9 DRY pass: the Manager→QuerySet coercion, visibility-hook routing, and validator guards are all single-sited and reused by `connection.py`/`relay.py`, and the sync/async dispatch split (runtime `in_async_context` for the default, construction-time `is_async_callable` for consumers) is correct and thoroughly test-pinned. No High or Medium findings. The only actionable defect is a single stale comment (line 156) that names `inspect.iscoroutinefunction` where the code calls the superset predicate `is_async_callable` — a comment that actively contradicts three of the module's own tests. One forward-looking Low defers the `_validate_relay_djangotype_target` placement question to the project pass. Because the comment correction is a real source edit, this routes through a standard cycle (not no-source-edit shape #5).
 
 ---
 
 ## Fix report (Worker 2)
 
-Consolidated single-spawn pass per worker-2.md guidance — all four Lows are comment/docstring/GLOSSARY edits, no logic change.
+Consolidated single-spawn (per worker-2 role file): the only in-cycle edit is a single
+trivially-localised comment correction with no logic change, so logic + comment + changelog
+collapse into one pass. Low 2 is forward-looking (deferred to the project pass) and requires no
+edit. Logic+comment+changelog filled together; `Status: fix-implemented` set once.
 
 ### Files touched
-
-- `django_strawberry_framework/list_field.py:3` — module docstring spec path `docs/spec-020-...` → `docs/SPECS/spec-020-...` (Low 2 site #1).
-- `django_strawberry_framework/list_field.py:62-65` — `_is_async_callable` docstring; replaced the dangling `docs/feedback.md High #2` parenthetical with a citation to the contract-pin test `tests/test_list_field.py::test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied` (Low 3, artifact-suggested option (c)).
-- `django_strawberry_framework/list_field.py:86-89` — `DjangoListField` docstring spec path `docs/spec-020-...` → `docs/SPECS/spec-020-...` (Low 2 site #2).
-- `django_strawberry_framework/list_field.py:92` — Decision-5 guard comment citation `spec-016` → `spec-020` (Low 1).
-- `docs/GLOSSARY.md:315` — `DjangoListField` entry; widened the async-detection clause to mention the `__call__` branch (Low 4; verbatim artifact-suggested replacement).
+- `django_strawberry_framework/list_field.py:155-158` — comment correction only (Low 1). No logic
+  edit; the comment now names the predicate the code actually calls.
 
 ### Tests added or updated
-
-None. All four edits are documentation/comment text with no logic change; existing tests already pin the underlying behavior (e.g. `tests/test_list_field.py::test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied` for the `__call__`-branch coverage now described in the GLOSSARY).
+- None. Pure comment correction, zero executable lines changed. The three tests the artifact cites
+  (`tests/test_list_field.py::test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied`,
+  `::test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_applied`,
+  `::test_djangolistfield_partial_wrapped_async_callable_object_resolver_gets_get_queryset_applied`)
+  already pin the `is_async_callable` superset behavior; no new pinning is warranted for a comment.
 
 ### Validation run
-
-- `uv run ruff format .` — pass / no-changes (183 files left unchanged).
-- `uv run ruff check --fix .` — pass / all checks passed.
-- `git status --short uv.lock` — clean.
+- `uv run ruff format .` — pass / no-changes (265 files left unchanged).
+- `uv run ruff check --fix .` — pass / All checks passed (standing COM812-vs-formatter config
+  warning only; not an error).
 
 ### Notes for Worker 3
-
-- Verified spec path on disk: `docs/SPECS/spec-020-list_field-0_0_7.md` exists; `docs/spec-020-...md` does not. Only `docs/spec-028-orders-0_0_8.md` lives at the active-spec slot (consistent with the artifact's `ls docs/spec*.md` finding).
-- Spot-checked tests for assertions against changed comment/docstring strings — none. The matches `grep`-found in `tests/test_list_field.py` are themselves docstring text, not assertions on `list_field.py`'s strings.
-- Out-of-artifact-scope sibling drift noted but not edited: `tests/test_list_field.py:3` carries the old `docs/spec-020-list_field-0_0_7.md` path and `tests/test_list_field.py:578` carries the `docs/feedback.md High #2` citation. The artifact's Low #2 and Low #3 scope both name only `list_field.py` sites; touching the test file would expand cycle scope. Worth a separate sweep next cycle if the cohort wants to chase test-file citation drift, but rejecting it from this cycle is the right call under "no unrelated cleanup".
-- No shadow file was used during fix implementation (no logic changes; the static-helper overview Worker 1 cited is sufficient context for the four comment-pass edits).
+- Shadow file used: `docs/shadow/django_strawberry_framework__list_field.overview.md` (overview
+  only; line numbers there are non-canonical — source line numbers cited throughout).
+- Predicate confirmed in source before editing: `list_field.py:174` calls
+  `is_async_callable(user_resolver)` (import at `list_field.py:27` from `.utils.typing`). The stale
+  comment was at `list_field.py:156`.
+- Low 2 (`_validate_relay_djangotype_target` placement) left forward-looking: no edit, deferred to
+  `docs/review/rev-django_strawberry_framework.md` (project pass) exactly as Worker 1's prose
+  directs.
+- No false-premise rejections; the artifact premise matched source verbatim.
+- `git diff` vs baseline `0872a20` for this file: +4/-2. `uv.lock` untouched. Other dirty files in
+  `git status` are concurrent maintainer/other-worker work, out of scope (AGENTS.md #33).
 
 ---
 
 ## Verification (Worker 3)
 
 ### Logic verification outcome
-
-Consolidated single-spawn pass (comment/docstring/GLOSSARY only — no logic change). All four Lows verified addressed in source:
-
-- **Low 1 (stale `spec-016` → `spec-020`).** `list_field.py:93` now reads `(spec-020 #"DjangoListField requires a DjangoType class")`. `grep` confirms the cited substring lives only in `docs/SPECS/spec-020-list_field-0_0_7.md`.
-- **Low 2 (stale `docs/spec-020-…` → `docs/SPECS/spec-020-…`, two sites).** `list_field.py:3` (module docstring) and `list_field.py:89` (factory docstring) both updated. Spec path confirmed on disk: `docs/SPECS/spec-020-list_field-0_0_7.md` exists (150133 bytes); `docs/spec-020-…md` does not — only `docs/spec-028-orders-0_0_8.md` lives at the active-spec slot.
-- **Low 3 (dangling `docs/feedback.md High #2`).** `list_field.py:62-66` re-anchors to `tests/test_list_field.py::test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied` (artifact-suggested option (c)). Test name grep-confirmed at `tests/test_list_field.py:565`.
-- **Low 4 (GLOSSARY async-detection clause widening).** `docs/GLOSSARY.md:315` carries the artifact's verbatim suggested replacement. Cross-verified against source: `list_field.py:73-76` is `inspect.iscoroutinefunction(fn)` OR `inspect.iscoroutinefunction(call)` where `call = getattr(fn, "__call__", None)` — the widened GLOSSARY text matches the actual two-branch implementation.
-
-Diff scope matches the artifact precisely: `django_strawberry_framework/list_field.py` (4 edits at lines 3, 62-66, 89, 93) and `docs/GLOSSARY.md` (1 entry widened at line 315). No test file edits, no other source edits. The other dirty paths in `git status` (`exceptions.py`, `docs/feedback.md`) belong to a different in-flight cycle and are out-of-scope per `AGENTS.md` "Unexpected file modifications" rule.
+- High / Medium: none in artifact; none introduced. Confirmed.
+- Low 1 (stale comment): ADDRESSED. Source calls `is_async_callable(user_resolver)` —
+  grep-confirmed at `list_field.py:176` (the call) and `:156` (the corrected comment), imported at
+  `:27` from `.utils.typing`. (Artifact prose cited line 174; actual call is line 176 — immaterial
+  drift, line numbers are non-canonical scratchpad refs and the predicate is unambiguously present.)
+  `is_async_callable` is defined at `utils/typing.py:20` and its docstring documents exactly the
+  `__call__`-and-`functools.partial`-aware superset behaviour the corrected comment now names — so
+  the comment no longer contradicts the code or the three pinning tests. Diff is **comment-only**
+  (+4/-2): every changed line sits inside the comment block at lines 155-160; no executable, no logic
+  line touched.
+- Low 2 (`_validate_relay_djangotype_target` placement): correctly LEFT forward-looking, no edit.
+  Artifact preserves the deferral and forwards it to the project pass
+  (`docs/review/rev-django_strawberry_framework.md`); recorded here and confirmed.
 
 ### DRY findings disposition
-
-Both DRY items are explicit trigger-deferrals: the sync/async post-processor pair waits on a second module importing the helpers OR a third coercion case beyond `Manager`/`QuerySet`; the four-guard validation block waits on a second `DjangoType`-target factory (`DjangoConnectionField` / `DjangoNodeField`) adopting the same preamble. No DRY action this cycle.
+DRY analysis carried no trigger (the `_default` runtime-context fork is intentionally not extracted;
+the shared primitives already live single-sited in `utils/querysets.py`). Nothing to action.
 
 ### Temp test verification
+- None used. The fix is a pure comment correction with zero executable change; the three cited tests
+  (`tests/test_list_field.py::test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied`
+  and the two `partial_wrapped_*` variants) already pin the `is_async_callable` superset behaviour.
+  No temp test warranted; pytest not run (AGENTS.md / role: no executable change introduced).
 
-No temp tests created. The fix is comment/docstring/GLOSSARY-only with zero behavior change; existing permanent tests already pin every underlying contract the edited text describes (e.g. `test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied` for the `__call__`-branch coverage now reflected in both the docstring re-anchor and the GLOSSARY widening).
-
-### Worker 2 notes-for-Worker-3 disposition
-
-Worker 2 flagged out-of-artifact-scope sibling citation drift at `tests/test_list_field.py:3` (stale `docs/spec-020-list_field-0_0_7.md` path) and `tests/test_list_field.py:578` (stale `docs/feedback.md High #2` citation). Spot-confirmed both exist verbatim at the cited lines. Deferring is the correct call for this cycle — the artifact's Low #2 and Low #3 both explicitly scope to `list_field.py` sites, and touching the test file would expand cycle scope in violation of "no unrelated cleanup." The drift is real, Low-grade, and grep-discoverable; it belongs to a future review pass or a dedicated citation-drift sweep, not a re-spawn of this cycle.
-
-### Changelog disposition verification
-
-`git diff -- CHANGELOG.md` is empty (0 lines). Disposition cites both `AGENTS.md` ("Do not update CHANGELOG.md unless explicitly instructed") AND the active plan's silence on changelog authorization for this cycle. The "internal-only" framing is honest: all four edits are documentation tightening with no consumer-visible behavior change (the `__call__`-branch coverage the GLOSSARY now mentions shipped in `0.0.7` already and is pinned by an existing test). `Not warranted` is the correct state.
-
-### Validation spot-verification
-
-- `uv run ruff format --check .` — `183 files already formatted`. Matches Worker 2's recorded outcome.
-- `uv run ruff check .` — `All checks passed!`. Matches Worker 2's recorded outcome.
+### Validation
+- `git diff 0872a20 -- list_field.py`: +4/-2, comment-only (verified line-by-line).
+- `uv run ruff format --check django_strawberry_framework/list_field.py`: "1 file already formatted".
+- `uv run ruff check django_strawberry_framework/list_field.py`: "All checks passed!" (standing
+  COM812-vs-formatter warning only).
+- `git diff -- CHANGELOG.md`: empty. `git diff --stat 0872a20 -- CHANGELOG.md docs/GLOSSARY.md`:
+  empty. Changelog `Not warranted` cites both AGENTS.md #21 and the active plan's silence — correct,
+  and the internal-only framing matches the comment-only diff scope.
 
 ### Verification outcome
-
-cycle accepted; verified.
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `list_field.py`
+checklist box in `docs/review/review-0_0_9.md`.
 
 ---
 
 ## Comment/docstring pass
 
-Folded into the consolidated single-spawn above — see `## Fix report (Worker 2)`.
+(Consolidated into the single spawn above — performed in the same pass as Low 1 is comment-only.)
 
 ### Files touched
+- `django_strawberry_framework/list_field.py:155-158` — replaced the comment's backticked
+  `` ``inspect.iscoroutinefunction(user_resolver)`` `` with `` ``is_async_callable(user_resolver)`` ``
+  and annotated it as the `` ``__call__``/``functools.partial``-aware `` superset of
+  `inspect.iscoroutinefunction`, so the comment matches the predicate the code calls at line 174.
 
-- `django_strawberry_framework/list_field.py:3, 62-65, 86-89, 92` — see Fix report.
-- `docs/GLOSSARY.md:315` — see Fix report.
+  Old:
+  > The consumer-wrapper branch below commits per-construction via
+  > `` ``inspect.iscoroutinefunction(user_resolver)`` `` because Strawberry inspects the resolver
+  > signature once at schema construction and freezes the sync-vs-async handling.
+
+  New:
+  > The consumer-wrapper branch below commits per-construction via
+  > `` ``is_async_callable(user_resolver)`` `` (the `` ``__call__``/``functools.partial``-aware ``
+  > superset of `` ``inspect.iscoroutinefunction`` ``) because Strawberry inspects the resolver
+  > signature once at schema construction and freezes the sync-vs-async handling.
 
 ### Per-finding dispositions
-
-- Low 1 (stale `spec-016` → `spec-020` on Decision-5 guard comment): fixed at `list_field.py:92`.
-- Low 2 (stale `docs/spec-020-…` → `docs/SPECS/spec-020-…`, two sites): fixed at `list_field.py:3` (module docstring) and `list_field.py:88` (factory docstring). Verified target path exists on disk.
-- Low 3 (dangling `docs/feedback.md High #2` citation): fixed at `list_field.py:62-65` by re-anchoring to the contract-pin test (artifact-suggested option (c)).
-- Low 4 (GLOSSARY `DjangoListField` async-detection clause narrows the contract): fixed at `docs/GLOSSARY.md:315` using the artifact's verbatim suggested replacement.
+- Low 1: fixed — comment now names `is_async_callable`, matching `list_field.py:174` and the module
+  contract; the optional `__call__`/`functools.partial` note suggested by the artifact was included.
+- Low 2: left forward-looking, no edit — deferred to the project pass
+  (`docs/review/rev-django_strawberry_framework.md`) per Worker 1's deferral.
 
 ### Validation run
-
 - `uv run ruff format .` — pass / no-changes.
 - `uv run ruff check --fix .` — pass.
 
 ### Notes for Worker 3
-
-See `## Fix report (Worker 2)` notes above; nothing additional for the comment pass.
+GLOSSARY (`#djangolistfield`) already described the real behavior; no GLOSSARY edit needed (the
+artifact's quick-check confirms this). Only the source comment was stale.
 
 ---
 
 ## Changelog disposition
 
 ### State
-
 `Not warranted`.
 
 ### Reason
-
-Per `AGENTS.md` ("Do not update CHANGELOG.md unless explicitly instructed"), AND the active plan does not authorize a `CHANGELOG.md` edit for this cycle. The four Lows are documentation tightening: a stale spec-citation correction, two stale-archive-path corrections, a dangling-citation re-anchor to a contract-pin test, and a GLOSSARY clause widening that documents the existing `__call__`-branch coverage (no behavior change — the High #2 fix that added the `__call__` branch shipped in `0.0.7` and is already pinned by `tests/test_list_field.py::test_djangolistfield_async_callable_object_resolver_gets_get_queryset_applied`). No consumer-facing surface changes; no `CHANGELOG.md` edit warranted.
+The cycle's only edit is a source-comment correction with zero behaviour change and no
+consumer-visible surface change. Per `AGENTS.md` #21 ("Do not update CHANGELOG.md unless explicitly
+instructed") AND the active review plan's silence on changelog authorization for this per-file cycle
+(per-file cycles are never the authorising scope — any CHANGELOG drift forwards to the project pass
+`docs/review/rev-django_strawberry_framework.md`), no changelog entry is warranted.
 
 ### What was done
-
 No `CHANGELOG.md` edit.
 
 ### Validation run
-
 - `uv run ruff format .` — pass / no-changes.
 - `uv run ruff check --fix .` — pass.
 

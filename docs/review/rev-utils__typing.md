@@ -2,9 +2,15 @@
 
 Status: verified
 
+Supersedes the prior on-disk 0.0.7 artifact (`Status: verified`, refs `review-0_0_7.md`) wholesale. That artifact predated the 0.0.9 additions: it knew nothing of `is_async_callable` (added in the 0.0.9 DRY pass per the module docstring, `docs/feedback.md` Major 4) and described `unwrap_graphql_type` as an **unbounded** `while hasattr(...)` loop. Live source (`utils/typing.py::unwrap_graphql_type`) now runs a **bounded** `for _ in range(_MAX_TYPE_WRAPPER_DEPTH)` peel that raises `RuntimeError` on overrun — so the prior artifact's L3 ("lacks cycle-safety note", recommending a `seen: set[int]` guard) is ALREADY RESOLVED in live source and is NOT re-raised here (the recurring resolved-Low trap). Prior L1/L2/L4/L5 re-triaged against live source below.
+
 ## DRY analysis
 
-- None — the module IS the canonical extraction. `unwrap_graphql_type` is the single home of the multi-layer `of_type` peel used by the optimizer (`optimizer/extension.py:45` import; call sites at `:342` and `:429`), and `unwrap_return_type` is the single home of the one-layer Strawberry/`typing.list[T]` peel staged for the upcoming schema factory (re-exported through `utils/__init__.py:22` per the "exported for the upcoming schema-factory consumer" framing at `utils/__init__.py:11-14`). No duplicate `of_type`-peel loops exist anywhere else in `django_strawberry_framework/` — verified by `grep -n "of_type" django_strawberry_framework/**/*.py`: every match is either inside this module, inside the helper's own docstring at the import-site, or an unrelated `getattr(field_obj, "type", None)` recursion feeder at `optimizer/extension.py:361`. There is no second call site of the one-layer `list[T]` peel today (the helper exists ahead of its consumer), so the act-now / defer-with-trigger axis is moot.
+- None — the module IS the canonical extraction for all three helpers, and each has a distinct termination contract that resists folding.
+  - `is_async_callable` is the single partial-aware coroutine-callable predicate; its three production consumers (`connection.py::_resolve` window — import at `connection.py #"from .utils.typing import is_async_callable"`, call at `connection.py #"elif is_async_callable(resolver)"`; `list_field.py::_default` — call at `list_field.py #"if is_async_callable(user_resolver)"`; `types/base.py::_validate_globalid_callable_is_sync` — call at `types/base.py #"if is_async_callable(value)"`) all import the one home; no parallel `iscoroutinefunction`-plus-`__call__` predicate exists elsewhere (full-tree grep of `iscoroutinefunction` returns only this module's body + docstring mentions in tests). Correct single-siting; nothing to consolidate.
+  - `unwrap_graphql_type` (deep `of_type` peel) is consumed only by `optimizer/extension.py` (import + two call sites: `extension.py #"gql_type = unwrap_graphql_type(gql_type)"` and `extension.py #"rt = unwrap_graphql_type(info.return_type)"`). No second deep-peel loop in the package.
+  - `unwrap_return_type` (one-layer `of_type`-or-`list[T]` peel) has **zero non-test production consumers** today (see L1) — re-exported through `utils/__init__.py` ahead of the schema factory. The act-now/defer axis for any cross-call consolidation is moot until a real consumer lands.
+  - A combined `unwrap(x, *, deep=False)` dispatcher folding `unwrap_graphql_type` and `unwrap_return_type` behind a kwarg was considered and rejected: different termination conditions (full peel vs single layer) and different return contracts (`of_type`-only leaf vs `of_type`-or-`list[T]`-or-`Any`-sentinel). Folding loses per-helper docstring contract clarity and forces every caller to thread `deep=`. Not a DRY win.
 
 ## High:
 
@@ -16,99 +22,63 @@ None.
 
 ## Low:
 
-### L1 — `unwrap_return_type` second branch (`get_origin(rt) is list`) and third branch (`rt is list`) are docstring-silent on the `Any` sentinel rationale
+### L1 — `unwrap_return_type` has zero non-test production call sites; only the re-export and the regression suite exercise it
 
-The implementation returns `Any` as a "unknown element type" sentinel in two distinct branches:
+`grep -rn "unwrap_return_type" django_strawberry_framework/` returns the definition (`utils/typing.py::unwrap_return_type`) and the re-export pair in `utils/__init__.py` (import + `__all__`). No optimizer or schema-factory module calls it. The function exists ahead of its consumer; `utils/__init__.py` docstring (`#"upcoming"` framing is in the wider re-export prose) stages it for the schema factory.
 
-- `get_origin(rt) is list` and `get_args(rt) == ()` (bare `typing.List` per the regression test at `tests/utils/test_typing.py:19-27` documenting the prior `IndexError` shape)
-- `rt is list` (bare builtin `list`, per `tests/utils/test_typing.py:30-38` documenting that `get_origin(list)` is `None` so the second branch does not catch the bare builtin)
+This is intentional pre-landing and documented at the export site, not a contract drift today. Recorded so a future cycle has a paper trail if the schema factory slips multiple releases.
 
-The docstring (`utils/typing.py:34-56`) names the wrappers it peels but never names the `Any` sentinel or *why* both bare-list branches collapse to the same return. A future direct consumer reading only the docstring would not learn that the helper deliberately collapses both untyped-list shapes onto `Any` rather than (a) raising or (b) returning `list` itself.
+Defer until either (a) the schema-factory consumer lands and the framing is satisfied, or (b) two release boundaries pass without a non-test call site of `unwrap_return_type` landing in `django_strawberry_framework/` — at which point the "exported for the upcoming consumer" framing crystallises from "upcoming" to "speculative API surface" and the export warrants a YAGNI re-evaluation.
 
-```django_strawberry_framework/utils/typing.py:33-65
-def unwrap_return_type(rt: Any) -> Any:
-    """Unwrap **one layer** of list / Strawberry-list-wrapper around the inner type.
-    ...
-    """
-    inner = getattr(rt, "of_type", None)
-    if inner is not None:
-        return inner
-    if get_origin(rt) is list:
-        args = get_args(rt)
-        return args[0] if args else Any
-    if rt is list:
-        return Any
-    return rt
-```
+### L2 — `unwrap_return_type` docstring is silent on the `Any` element-type sentinel and why both bare-list branches collapse to it
 
-Defer until a non-test consumer of `unwrap_return_type` lands (the schema factory cited in `utils/__init__.py:11-14`); the docstring update naturally co-lands with the first real call site so consumer-visible language can name the actual production shape.
+The body returns `Any` as an "unknown element type" sentinel in two distinct branches — `get_origin(rt) is list` with empty `get_args` (bare `typing.List`), and `rt is list` (bare builtin `list`, whose `get_origin` is `None`). Both are pinned with prior-shape rationale at `tests/utils/test_typing.py::test_unwrap_return_type_handles_bare_typing_list` and `::test_unwrap_return_type_handles_bare_builtin_list`. The docstring names the wrappers it peels and the one-layer-only contract but never names the `Any` sentinel or why both untyped-list shapes collapse onto it. A future direct consumer reading only the docstring would not learn the helper deliberately collapses both untyped-list shapes onto `Any` rather than raising or returning `list` itself.
 
-### L2 — `unwrap_return_type` "wrapper-first" ordering treats explicit `of_type=None` as "no wrapper" rather than "untyped wrapper"
+Defer until a non-test consumer of `unwrap_return_type` lands (the staged schema factory); the docstring sentinel note naturally co-lands with the first real call site so the consumer-visible language can name the actual production shape rather than the test-only shape.
 
-`getattr(rt, "of_type", None)` plus `if inner is not None` collapses two distinct cases:
+### L3 — `unwrap_return_type` "wrapper-first" check treats explicit `of_type = None` as "no wrapper" rather than "untyped wrapper"
 
-- the attribute is absent (genuinely "no wrapper to peel")
-- the attribute is present and explicitly set to `None` (a wrapper that declares "I wrap nothing yet")
+`inner = getattr(rt, "of_type", None)` plus `if inner is not None` collapses two cases: the attribute is absent (genuinely no wrapper) versus present-and-`None` (a wrapper declaring it wraps nothing yet). Harmless today — no real Strawberry-list-style wrapper sets `of_type = None` (the prior-art `StrawberryList(of_type=...)` always carries a real inner type); both shapes correctly mean "cannot extract an inner type from a wrapper." The docstring motivates the wrapper-first ordering for the `StrawberryList[list[T]]` precedence case but is silent on this `None`-vs-absent collapse.
 
-The fall-through is currently harmless because no real Strawberry-list-style wrapper sets `of_type = None` (the prior-art `StrawberryList(of_type=...)` always carries a real inner type). The docstring at `utils/typing.py:45-49` motivates the ordering for the `StrawberryList[list[T]]` precedence case but is silent on this `None`-versus-absent collapse.
+Defer until a wrapper that uses sentinel `of_type = None` enters scope (none today); inverting to a `_MISSING`-sentinel `getattr` is premature. Note: `unwrap_graphql_type` uses `hasattr(gql_type, "of_type")` instead, which already distinguishes absent from present-`None` — so the two helpers diverge on this point. This divergence is correct-by-contract (the deep peeler must keep peeling a present-`None`-then-something chain it cannot encounter, the one-layer peeler returns the wrapper) but is undocumented; the same docstring co-land covers it.
 
-Defer until a third-party wrapper that uses sentinel `of_type = None` enters scope (none today); the disambiguation co-lands with the consumer that surfaces the case. Until then the collapse is correct — both shapes mean "we cannot extract an inner type from a wrapper" — and inverting to `if "of_type" in dir(rt)` or `getattr(rt, "of_type", _MISSING)` would be premature.
+### L4 — submodule `__all__` gap (folder-pass-coordinated forward)
 
-### L3 — `unwrap_graphql_type` lacks an explicit cycle-safety note for self-referential `of_type`
+`utils/typing.py` exposes three public symbols (`is_async_callable`, `unwrap_graphql_type`, `unwrap_return_type`) and carries no module-level `__all__`. Consumers reach the symbols either through `utils/__init__.py`'s canonical `__all__` re-export tuple (for the two unwrap helpers) or through the direct submodule path `from ...utils.typing import is_async_callable` (the three `is_async_callable` consumers + the test suite). `from django_strawberry_framework.utils.typing import *` is the only path depending on a submodule `__all__`, and is not a documented entrypoint.
 
-`while hasattr(gql_type, "of_type"): gql_type = gql_type.of_type` will infinite-loop on a self-referential wrapper (a hypothetical `wrapper.of_type is wrapper` shape). Unreachable through real graphql-core or Strawberry wrapper stacks (every wrapper terminates at a leaf type without `of_type`), and unreachable through the recursion feeder at `optimizer/extension.py:361` (graphql-core's `GraphQLNonNull` / `GraphQLList` always wrap a distinct inner type), so the gap is theoretical.
+Defer with the trigger "sibling `utils/` submodules grow an `__all__`" — the folder pass `rev-utils.md` is the natural site to either land an `__all__` across all `utils/` submodules at once or continue the trio-of-defers. Coordinated, not act-now per-file.
 
-```django_strawberry_framework/utils/typing.py:28-30
-while hasattr(gql_type, "of_type"):
-    gql_type = gql_type.of_type
-return gql_type
-```
+### L5 — `utils/__init__.py` docstring lists `is_async_callable` alongside the two re-exported symbols but `__all__` omits it (forward to folder pass `rev-utils.md`)
 
-Defer until a fuzz/property-based test surface for the optimizer lands; the cycle-safety story is best authored alongside its first regression test. A `seen: set[int]` guard would cost a per-call set allocation that today buys nothing, so an act-now fix would be net-negative.
+`utils/__init__.py` docstring line — `#"plus ``is_async_callable``"` — names `is_async_callable` next to `unwrap_graphql_type`/`unwrap_return_type`, but the `__init__.py` `__all__` tuple and `from .typing import …` line export only the two unwrap helpers (`is_async_callable` is reached via the submodule path by all three consumers). The asymmetry is deliberate (the predicate is an internal-mechanics helper consumed by submodule path, not a re-exported public surface) but the docstring reads as if all three are equally surfaced. `utils/__init__.py` is folder-pass scope, not this file's scope.
 
-### L4 — Submodule `__all__` gap
-
-`utils/typing.py` exposes two public symbols (`unwrap_graphql_type`, `unwrap_return_type`) and has no `__all__`. The two sibling submodules under `utils/` are in the same state per the per-file forwards: `rev-utils__relations.md::L3` ("missing submodule `__all__`") and `rev-utils__strings.md::L3` ("submodule `__all__` gap mirroring `rev-utils__relations.md::L3`"). The package-level `utils/__init__.py:24-32` carries the canonical `__all__` re-export tuple, so consumers using `from django_strawberry_framework.utils import unwrap_graphql_type` get a stable surface; `from django_strawberry_framework.utils.typing import *` is the only path that depends on the submodule `__all__` and is not a documented entrypoint.
-
-Defer with the same trigger as the two sibling forwards: "sibling `utils/` submodules grow an `__all__`." Per the carry-forward calibration in `worker-memory/worker-1.md` ("`utils/typing.py` next … if neither has one, L3 here is correctly forward-looking with the trigger") — all three submodules now confirmed in the same `__all__`-absent state, the folder pass `rev-utils.md` is the natural site to either land all three at once or continue the trio-of-defers.
-
-### L5 — `unwrap_return_type` has zero current production call sites — only the regression test suite and the `__init__.py` "upcoming schema-factory consumer" framing exercise it
-
-A `grep -rn "unwrap_return_type" django_strawberry_framework/` returns three sites: the definition (`utils/typing.py:33`), the re-export (`utils/__init__.py:22, 31`), and the import in `utils/__init__.py:22`. No optimizer or schema-factory module calls it yet — the consumer is staged per `utils/__init__.py:11-14` "exported for the upcoming schema-factory consumer (mirrors the `queryset` future-extension framing below)" but has not landed.
-
-This is intentional pre-landing per the docstring and is documented at the export site (not a contract drift). Listed as Low so a future cycle has a paper trail if the schema factory specification slips multiple releases; if no real consumer lands by the next release boundary, the export's "upcoming" framing itself becomes the drift to flag.
-
-Defer until either (a) the schema-factory consumer lands and the framing is satisfied, or (b) two releases pass without a consumer (the framing crystallises from "upcoming" to "speculative API surface" and the export warrants a YAGNI re-evaluation). Per `worker-1.md` deferral-idiom rules, the trigger is "version bumps to 0.0.9 without a non-test call site of `unwrap_return_type` landing in `django_strawberry_framework/`."
+Defer to the folder pass `rev-utils.md`: either add `is_async_callable` to the `__init__` re-export `__all__` (making the docstring honest) or reword the docstring line to mark it as submodule-only. Low; non-contract (GLOSSARY carries neither symbol). Recorded here only because the discrepancy is visible from this file's import-graph audit.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** The module IS the canonical extraction for both helpers; every production caller imports through it (`optimizer/extension.py:45` for `unwrap_graphql_type`; the staged schema-factory consumer per `utils/__init__.py:11-14` for `unwrap_return_type`). No parallel `of_type`-peel loops elsewhere in the package — confirmed by full-tree `grep -n "of_type"`.
-- **New helpers considered.** A combined `unwrap(rt, *, deep=False)` dispatcher that folded both helpers behind a kwarg was considered and rejected: the two helpers have *different* termination conditions (deep `of_type`-peel vs single-layer `list[T]`-or-wrapper peel) and different docstring contracts. Folding them would force every caller to thread a `deep=` kwarg and lose the per-helper docstring's contract-naming clarity. Mirrors the sibling pairs calibration from `worker-memory/worker-1.md` (mirrored sync/async pairs are load-bearing distinctions; do not fold through a single dispatcher).
-- **Duplication risk in the current file.** None — the helpers are byte-different in body and contract; the shared `Any` import and shared `of_type` literal are exactly one source-site each.
+- **Existing patterns reused.** The module is the canonical home for all three helpers; every production caller imports through it — `is_async_callable` from `connection.py`/`list_field.py`/`types/base.py`, `unwrap_graphql_type` from `optimizer/extension.py`. No parallel `of_type`-peel loop and no parallel `iscoroutinefunction`+`__call__` predicate anywhere else (full-tree grep of `of_type` and `iscoroutinefunction`).
+- **New helpers considered.** A combined `unwrap(x, *, deep=False)` dispatcher folding the two unwrap helpers was rejected — different termination conditions and return contracts; folding regresses per-helper docstring contract clarity (mirrors the sibling-pair calibration: load-bearing distinctions are not folded behind a kwarg).
+- **Duplication risk in the current file.** None — the three helpers are byte-different in body and contract. The shared `Any` import and the `of_type` literal are one source-site each.
 
 ### Other positives
 
-- **Module docstring frames the dual-contract motivation.** `utils/typing.py:1-9` names *why* both helpers coexist (graphql-core's `GraphQLNonNull` / `GraphQLList` `of_type` stack vs Strawberry's modern `typing.list[T]` plus legacy `of_type` wrapper) and explicitly closes with "Both contracts live here so optimizer and schema factories do not grow parallel unwrap loops." — the canonical-home statement that justifies the per-helper docstring brevity.
-- **Each helper's docstring carries a worked example block.** `utils/typing.py:23-26` for `unwrap_graphql_type` (`NonNull(List(NonNull(Inner)))` → `Inner`); `utils/typing.py:50-55` for `unwrap_return_type` (four examples including the load-bearing `list[list[int]]` → `list[int]` one-layer-only note with "chain calls if you need full unwrapping" guidance). Same per-helper docstring discipline as `utils/strings.py` per the sibling forward `rev-utils__strings.md`.
-- **Test coverage exercises every branch.** `tests/utils/test_typing.py:10-102` pins:
-  - the typed-list `list[Inner]` happy path (`:10-16`)
-  - the bare `typing.List` regression branch with explicit prior-shape docstring (`:19-27`)
-  - the bare builtin `list` branch with explicit `get_origin(list) is None` docstring (`:30-38`)
-  - the Strawberry-style `of_type` happy path (`:41-50`)
-  - the wrapper-precedence rule (`Outer.of_type = list[Inner]` returns `list[Inner]`, not `Inner`) at `:53-62`
-  - the recursive `of_type`-peel happy path with a `NonNull(List(NonNull(Inner)))` stack (`:65-81`)
-  - the bare-class passthrough (`:84-90`)
-  - the `None` passthrough with an explicit docstring citing the `optimizer/extension.py::_walk_gql_type` recursion's load-bearing dependency on the passthrough (`:93-102`)
-- **Imports are minimal and standard-library only.** Single import line `from typing import Any, get_args, get_origin` (`utils/typing.py:11`) — no Strawberry, no graphql-core, no Django runtime dependency. Both helpers are duck-typed against `of_type` at the attribute level, so they work across Strawberry versions and across graphql-core's `GraphQLNonNull` / `GraphQLList` shapes without locking either dependency.
-- **Wrapper-precedence ordering is explicit, motivated, AND test-pinned.** `utils/typing.py:45-49` names the rationale ("a wrapper that *also* presents a list-like origin (a hypothetical `StrawberryList[list[T]]`) yields its declared inner type rather than the generic-args inner type"); the regression at `tests/utils/test_typing.py:53-62` pins exactly this case.
-- **GLOSSARY drift quick-check.** `grep -n "unwrap_return_type\|unwrap_graphql_type" docs/GLOSSARY.md` returns zero matches. Both symbols are internal mechanics — per the "Internal-mechanics GLOSSARY absence is correct convention" calibration in `worker-memory/worker-1.md`, the consumer contract surface for type-unwrapping is not exposed (the optimizer surfaces it through `DjangoOptimizerExtension` and the upcoming schema factory will surface its piece through whichever consumer-facing class it produces). No GLOSSARY forward.
-- **Static-helper run was below the mandatory threshold but executed for folder-pass continuity.** `utils/typing.py` is 66 lines, well under the 150-line mandatory bar, and is not under `optimizer/` or `types/`. Per `REVIEW.md` "Trust the plan-time `--all` sweep" — the overview was missing at cycle start (cleared from `docs/shadow/` at plan time and not regenerated by the `--all` sweep), so this Worker 1 spawn ran `python scripts/review_inspect.py django_strawberry_framework/utils/typing.py --output-dir docs/shadow` once to materialise the overview ahead of the folder pass. Overview confirms zero control-flow hotspots, zero Django/ORM markers, zero repeated literals, zero TODO comments — consistent with a leaf utility module.
+- **`is_async_callable` is a correct superset of `inspect.iscoroutinefunction`.** The two missed shapes are both handled and both test-pinned: an instance whose `__call__` is `async def` (`iscoroutinefunction(instance)` is False; the `getattr(target, "__call__", None)` disjunct catches it — `tests/utils/test_typing.py::test_is_async_callable_sees_through_instances_and_partials` rows `_AsyncCallable()` and `partial(_AsyncCallable())`), and a `functools.partial` around an async instance (`iscoroutinefunction(partial)` unwraps only to `.func`, which for an instance is not a coroutine function — the `target = value.func` hop + `__call__` check catches it). The depth-1 `.func` hop is justified in the docstring by `partial` flattening nested partials at construction (`partial(partial(f)).func is f`), so `.func` is never itself a partial — no loop needed, no unbounded traversal. Verified: `is_async_callable(None)` and any non-callable degrade to `False` without raising (`isinstance(None, partial)` False → `getattr(None, "__call__", None)` is `None` → `iscoroutinefunction(None)` False).
+- **Construction-time vs runtime async detection boundary is honest.** `is_async_callable` is the *construction/validation-time* predicate for consumer-supplied resolvers and the GlobalID callable (a different concern from `strawberry.utils.inspect.in_async_context`, the *per-call runtime* probe `list_field.py`/`relay.py`/`types/relay.py` use on their default branches). The task's mention of `in_async_context` as living in this file is a red herring: `grep -rn "in_async_context" django_strawberry_framework` shows it is imported from `strawberry.utils.inspect` at four sites and is **not defined in this module** — stated as a positive rather than manufactured into a finding.
+- **`unwrap_graphql_type` is bounded and fails loud.** The `for _ in range(_MAX_TYPE_WRAPPER_DEPTH)` peel (ceiling 64, far above any real wrapper stack) raises `RuntimeError("… likely cyclic or corrupt")` on overrun rather than spinning — the NASA Power-of-Ten Rule 2 fixed-bound rationale is in the inline comment, and the bound is test-pinned three ways: deep-but-finite peel just under the ceiling (`test_unwrap_graphql_type_peels_a_deep_but_finite_stack`), cyclic-property `of_type` raising `RuntimeError` (`test_unwrap_graphql_type_raises_on_cyclic_of_type_stack`), and the leaf-stack happy path (`test_unwrap_graphql_type_peels_all_of_type_layers`). This is the live fix for the prior 0.0.7 artifact's L3 — resolved, not re-raised.
+- **`None` passthrough is load-bearing and pinned.** `unwrap_graphql_type(None) is None` (`hasattr(None, "of_type")` is False → immediate return) is pinned by `test_unwrap_graphql_type_passes_through_none`, whose docstring cites the `optimizer/extension.py` recursion feeding `getattr(field_obj, "type", None)` and relying on the passthrough so the downstream `type_name is None` gate terminates cleanly.
+- **`unwrap_return_type` wrapper-precedence ordering is explicit, motivated, and pinned.** The `of_type` check runs before the `list[T]` check so a wrapper that also presents a list-like origin yields its declared inner type; the docstring names this and `test_unwrap_return_type_peels_only_one_layer` (`Outer.of_type = list[Inner]` returns `list[Inner]`, not `Inner`) pins it. One-layer-only contract documented with "chain calls if you need full unwrapping."
+- **Imports are minimal and standard-library only.** `functools`, `inspect`, and `from typing import Any, get_args, get_origin` — no Strawberry, graphql-core, or Django runtime dependency. All wrapper handling is duck-typed against `of_type`, so the helpers work across Strawberry versions and graphql-core `GraphQLNonNull`/`GraphQLList` shapes without locking either dependency.
+- **`noqa: B004` is load-bearing and justified inline.** The `getattr(target, "__call__", None)` plus `iscoroutinefunction` is intentionally not `callable()` (what B004 suggests) — the comment at `is_async_callable` explains B004's suggestion is the wrong tool because the check inspects `__call__`'s async-ness, not callability.
+
+### GLOSSARY drift quick-check
+
+`grep -n "is_async_callable\|unwrap_return_type\|unwrap_graphql_type\|in_async_context\|utils/typing" docs/GLOSSARY.md` returns zero matches. All three symbols are internal mechanics — the consumer contract surface for type-unwrapping and async-callable detection is not exposed in the GLOSSARY (the optimizer surfaces its piece through `DjangoOptimizerExtension`; the field factories surface async-resolver behaviour through their public field surfaces; the schema factory will surface `unwrap_return_type`'s piece through whichever consumer-facing class it produces). Internal-mechanics absence is the correct convention; no GLOSSARY forward.
 
 ### Summary
 
-`utils/typing.py` is a 66-line two-helper canonical-home utility module exposing `unwrap_graphql_type` (deep `of_type`-peel for graphql-core / Strawberry wrapper stacks) and `unwrap_return_type` (one-layer `of_type`-or-`list[T]`-peel for the upcoming schema factory). Every branch is test-pinned at `tests/utils/test_typing.py`; the module docstring names *why* both contracts coexist; the wrapper-precedence ordering is explicit, motivated, and regression-tested. Zero High, zero Medium, five forward-looking Lows: docstring-silence on the `Any` sentinel rationale (L1), `getattr(of_type, None)` `None`-vs-absent collapse (L2), self-referential `of_type` cycle gap (L3), submodule `__all__` gap mirroring both sibling utils submodules (L4), and a paper-trail Low for `unwrap_return_type`'s zero-current-production-consumer state pending the upcoming schema factory (L5). DRY analysis lists zero opportunities — the module IS the canonical extraction. GLOSSARY drift quick-check is clean (internal-mechanics absence is correct convention). Qualifies for shape #5 (no-source-edit cycle, skip Worker 2): zero High, no behaviour-changing Medium, every Low is forward-looking-with-explicit-trigger, no GLOSSARY-only fix in scope, zero source/test/docstring edits.
+`utils/typing.py` is a three-helper canonical-home utility: `is_async_callable` (the 0.0.9 partial-/`__call__`-aware coroutine-callable predicate shared by `connection`/`list_field`/`types.base`), `unwrap_graphql_type` (bounded deep `of_type` peel for the optimizer), and `unwrap_return_type` (one-layer `of_type`-or-`list[T]` peel staged for the schema factory). The prior 0.0.7 artifact is superseded wholesale: it predated `is_async_callable` and its lone substantive Low (unbounded-loop cycle-safety) is already resolved in live source — the loop is now `range`-bounded with a loud `RuntimeError`, triple-test-pinned — and is NOT re-raised. `is_async_callable` is verified a correct superset of `inspect.iscoroutinefunction` for both missed shapes (async `__call__` instance, partial-around-instance), with depth-1 `.func` traversal justified by partial flattening and full parametrized test coverage. The task's `in_async_context` reference is a red herring (imported from Strawberry, not defined here) — stated as a positive. Zero High, zero Medium, five forward-looking Lows (L1 zero-consumer paper trail; L2 `Any`-sentinel docstring silence; L3 `None`-vs-absent collapse; L4 submodule `__all__` gap; L5 `__init__` docstring/`__all__` asymmetry — L4/L5 forwarded to the `rev-utils.md` folder pass). DRY analysis: none — the module is the canonical extraction. GLOSSARY drift clean. Qualifies as shape #5 (no-source-edit cycle): no High, no behaviour-changing Medium, every Low forward-looking-with-explicit-trigger, no GLOSSARY-only fix; setting bare `fix-implemented` below.
 
 ---
 
@@ -123,61 +93,59 @@ Filled by Worker 1 per no-source-edit cycle pattern.
 - None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — `213 files left unchanged`.
-- `uv run ruff check --fix .` — `All checks passed!` (one pre-existing COM812-vs-formatter warning, unrelated to this artifact).
+- `uv run ruff format .` — see Notes below.
+- `uv run ruff check --fix .` — see Notes below.
 
 ### Notes for Worker 3
-- Shadow file regenerated this cycle: `docs/shadow/django_strawberry_framework__utils__typing.overview.md` (the cycle-start `docs/shadow/` clear left no overview for this file; the `--all` sweep did not include it; Worker 1 ran `python scripts/review_inspect.py django_strawberry_framework/utils/typing.py --output-dir docs/shadow` once). Shadow is gitignored; only this artifact is tracked.
-- Per-Low dispositions: L1, L2, L3, L4, L5 all forward-looking-without-edit, each gated on an explicit trigger condition quoted verbatim per `worker-1.md` deferral-idiom rules.
-- L4's `__all__` gap is coordinated with `rev-utils__relations.md::L3` and `rev-utils__strings.md::L3` — all three submodules confirmed in the same `__all__`-absent state; the folder pass `rev-utils.md` is the natural site to either land all three together or continue the trio-of-defers. Per `worker-1.md` "GLOSSARY-only fixes do NOT qualify" — but this is not a GLOSSARY-only fix; the trio-deferral is purely procedural and stays in shape #5 scope at the per-file level.
-- No GLOSSARY-only fix in scope — both `unwrap_return_type` and `unwrap_graphql_type` are correctly absent from `docs/GLOSSARY.md` per the internal-mechanics-absence calibration; no drift to flag.
-- Concurrent maintainer work attribution: working-tree has 35 modified/untracked entries (spec-028 Slice 3 `orderset_class` landing per `worker-memory/worker-1.md` calibration "Concurrent maintainer work attribution"). `utils/typing.py` and `tests/utils/test_typing.py` are NOT among them — this artifact's baseline is clean. Per `AGENTS.md` #33, the concurrent work is presumptively maintainer/dev work; left untouched.
+- Per-Low dispositions: L1, L2, L3, L4, L5 all forward-looking-without-edit, each gated on an explicit trigger condition quoted verbatim per `worker-1.md` deferral-idiom rules. L4 and L5 are forwarded to the `rev-utils.md` folder pass (submodule `__all__` and `__init__` re-export asymmetry are folder-scope concerns).
+- The prior 0.0.7 artifact's unbounded-loop Low is ALREADY RESOLVED in live source (`unwrap_graphql_type` is now `range`-bounded with a loud `RuntimeError`, triple-test-pinned) — NOT re-raised, per the recurring resolved-Low trap.
+- No GLOSSARY-only fix in scope — `is_async_callable`, `unwrap_graphql_type`, `unwrap_return_type`, and `in_async_context` are all correctly absent from `docs/GLOSSARY.md` (internal-mechanics-absence calibration); no drift to flag.
+- `in_async_context` is NOT defined in this file (imported from `strawberry.utils.inspect` at four sites) — the task's framing was a red herring; confirmed absent and recorded as a positive.
+
+### Validation run results
+- `uv run ruff format --check django_strawberry_framework/utils/typing.py tests/utils/test_typing.py` — `2 files already formatted`.
+- `uv run ruff check django_strawberry_framework/utils/typing.py tests/utils/test_typing.py` — `All checks passed!`.
 
 ---
 
 ## Verification (Worker 3)
 
 ### Logic verification outcome
-Shape #5 terminal-verify (no-source-edit cycle, bare `fix-implemented`). All five gates pass:
+Shape #5 no-source-edit cycle, terminal-verify. All three behavioral claims independently re-verified LIVE (`docs/review/temp-tests/utils_typing/probe.py`, config.settings):
+- `unwrap_graphql_type` bounded: `_MAX_TYPE_WRAPPER_DEPTH == 64`; 63 wrappers peel to leaf, 64 wrappers raise `RuntimeError` (`"cyclic or corrupt"`), self-referential `of_type` raises, `None`/leaf passthrough. Prior 0.0.7 unbounded-loop Low is RESOLVED in live source (`for _ in range(...)` + loud `RuntimeError`); correctly NOT re-raised.
+- Type-unwrapping correctness: `list[int]->int`, `list[list[int]]->list[int]` (one layer), `of_type` precedence over list-origin, bare `typing.List`/builtin `list` -> `Any`, `int`/`Optional[int]` passthrough.
+- `is_async_callable` is a correct partial-/`__call__`-aware superset of `inspect.iscoroutinefunction`: both missed shapes (async `__call__` instance, `partial` around async instance) return True where baseline `iscoroutinefunction` returns False; sync forms False; `None`/`int` degrade to False without raising; `partial(partial(af)).func is af` flattening confirmed (depth-1 hop justified).
+- `in_async_context` red herring confirmed: `grep -rn` shows it imported from `strawberry.utils.inspect` at list_field/relay/types.relay, ZERO defs in this module. Stated as positive, not a finding — correct.
 
-1. **Scoped diff stat is empty for the cycle's own paths** — `git diff --stat HEAD -- django_strawberry_framework/utils/typing.py tests/utils/test_typing.py CHANGELOG.md` is empty. The `docs/GLOSSARY.md` hunk in the scoped diff (+14/-1) is fully attributable to closed sibling cycles: the wider `git diff --stat HEAD -- django_strawberry_framework/ tests/ docs/GLOSSARY.md` shows the standard dirty-tree-from-verified-siblings pattern (`types/base.py`, `types/finalizer.py`, `types/relations.py`, `types/relay.py`, `types/resolvers.py`, `optimizer/field_meta.py`, `utils/relations.py`, plus the GLOSSARY hunks themselves) — every one of these is `Status: verified` per `worker-memory/worker-3.md` entries above. Same attribution shape as the `management/commands/`, `management/`, `optimizer/`, `testing/`, `utils/strings.py` cycles. The cycle's own `## Notes for Worker 3` block explicitly attributes 35 concurrent-maintainer working-tree entries to the spec-028 Slice 3 `orderset_class` landing per AGENTS.md #33, and explicitly confirms `utils/typing.py` and `tests/utils/test_typing.py` are NOT among them — this artifact's baseline is clean.
-2. **Each Worker 2 section opens with the boilerplate verbatim** — `## Fix report (Worker 2)`: "Filled by Worker 1 per no-source-edit cycle pattern." ✓; `## Comment/docstring pass`: "Filled by Worker 1 per no-source-edit cycle pattern. No comment or docstring edits in scope…" ✓; `## Changelog disposition`: "Filled by Worker 1 per no-source-edit cycle pattern. **Not warranted**…" ✓.
-3. **Every Low has verbatim trigger phrasing OR is forwarded; no GLOSSARY-only fix in scope** —
-   - L1: "Defer until a non-test consumer of `unwrap_return_type` lands…" ✓
-   - L2: "Defer until a third-party wrapper that uses sentinel `of_type = None` enters scope…" ✓
-   - L3: "Defer until a fuzz/property-based test surface for the optimizer lands…" ✓
-   - L4: "Defer with the same trigger as the two sibling forwards: 'sibling `utils/` submodules grow an `__all__`.'" ✓ (forwarded to `rev-utils.md` folder pass; same coordination pattern as the `utils/strings.py` cycle per the `worker-memory/worker-3.md` ## utils/strings.py entry confirming the sibling pair is also `__all__`-absent).
-   - L5: "Defer until either (a) the schema-factory consumer lands…, or (b) two releases pass without a consumer…" ✓
-   No GLOSSARY-only fix anywhere in the artifact (GLOSSARY drift quick-check at `## What looks solid` confirmed both symbols correctly absent — internal-mechanics calibration).
-4. **Changelog `Not warranted` cites BOTH AGENTS.md #21 AND active-plan silence** — disposition block cites `AGENTS.md` #21 ("Do not update CHANGELOG.md unless explicitly instructed") AND `docs/review/review-0_0_7.md` silence on changelog updates for per-file review artifacts. `git diff -- CHANGELOG.md` is empty ✓. Internal-only framing is honest: no source/test/public-API change, zero scoped edits.
-5. **Ruff format-check + check pass on the cycle's paths** — `uv run ruff format --check django_strawberry_framework/utils/typing.py tests/utils/test_typing.py` → `2 files already formatted` (one pre-existing COM812-vs-formatter warning, package-wide and unrelated). `uv run ruff check django_strawberry_framework/utils/typing.py tests/utils/test_typing.py` → `All checks passed!`.
+All 8 cited test names exist at `tests/utils/test_typing.py`. The 3 `is_async_callable` production consumers (connection.py:1005, list_field.py:176, types/base.py:363) all import from `.utils.typing`; `unwrap_graphql_type` consumed by optimizer/extension.py (2 sites); `unwrap_return_type` has zero non-test production consumers (L1 confirmed).
 
-Positive-claim spot-checks on `## What looks solid` (the load-bearing signal that Worker 1's analysis was real, not boilerplate):
-- Module size: `wc -l django_strawberry_framework/utils/typing.py` → 65 lines (artifact says 66; within blank-line-counting tolerance, claim substantively holds).
-- `unwrap_return_type` consumer claim: `grep -rn "unwrap_return_type" django_strawberry_framework/` returns three sites total (definition at `typing.py:33`; import at `__init__.py:22`; `__all__` re-export at `__init__.py:31`) — zero non-test consumer call sites, exactly as the L5 "upcoming schema factory" framing claims.
-- GLOSSARY absence: `grep -n "unwrap_return_type\|unwrap_graphql_type" docs/GLOSSARY.md` returns zero hits — internal-mechanics-absence calibration confirmed.
-- L4 sibling-mirroring: per the `worker-memory/worker-3.md` ## utils/strings.py entry, the sibling submodule's L3 is the same `__all__`-absent forward; the trio-deferral coordination is on track for `rev-utils.md` to either land all three together or continue the trio.
+### Shape #5 checks
+1. `git diff --stat 0872a20…` for `utils/typing.py` + `tests/utils/test_typing.py` is BYTE-EMPTY. CHANGELOG diff empty. GLOSSARY dirty but every hunk attributes to a CLOSED sibling cycle: `global_id_for`/`decode_global_id` (testing/relay), `DjangoConnection` (connection), `Meta.orderset_class`/`OrderSet` (orders), `RelatedFilter` (filters), `RelatedOrder` (orders/filters), `inspect_django_type` (management). `grep` of this cycle's four symbols (`is_async_callable`/`unwrap_*`/`in_async_context`/`utils/typing`) over GLOSSARY = ZERO. "Files touched: None" holds.
+2. Every Worker 2 section opens `Filled by Worker 1 per no-source-edit cycle pattern.` — confirmed.
+3. Every Low (L1–L5) forward-looking with explicit verbatim trigger; no GLOSSARY-only fix. L4/L5 forwarded to folder pass `rev-utils.md`.
+4. Changelog `Not warranted` cites both `AGENTS.md` #21 and the active plan's silence. Diff empty. Internal-mechanics framing matches (no public-API surface change).
+5. Ruff format-check `1 file already formatted`; check `All checks passed!` (COM812 warning standing/expected).
 
 ### DRY findings disposition
-Single DRY bullet ("None — the module IS the canonical extraction"), justified by the exhaustive `grep -n "of_type" django_strawberry_framework/**/*.py` claim. Spot-confirmed: the import site at `optimizer/extension.py:45` plus call sites at `:342` and `:429` are the only production callers of `unwrap_graphql_type`; no parallel `of_type`-peel loop elsewhere. The "act-now / defer-with-trigger axis is moot" framing is correct because `unwrap_return_type` has zero current production consumers (L5's premise).
+None to carry — module is the canonical extraction for all three helpers; combined `unwrap(deep=)` dispatcher correctly rejected (distinct termination + return contracts). Re-confirmed via grep: no parallel `of_type`-peel loop, no parallel `iscoroutinefunction`+`__call__` predicate.
 
 ### Temp test verification
-None — no temp tests created or needed for a shape #5 no-source-edit cycle.
+- `docs/review/temp-tests/utils_typing/probe.py` — all checks PASS (FAILURES: NONE). Gitignored; deleted at cycle closeout by Worker 0. Shipped behavior already pinned by the 8 permanent tests in `tests/utils/test_typing.py`; temp test is corroboration only, not the sole proof.
 
 ### Verification outcome
-`cycle accepted; verified` — Status flipped to `verified` and the corresponding checkbox in `docs/review/review-0_0_7.md` will be marked `[x]`.
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `utils/typing.py` checklist box.
 
 ---
 
 ## Comment/docstring pass
 
-Filled by Worker 1 per no-source-edit cycle pattern. No comment or docstring edits in scope — every L1/L2/L3/L5 docstring-silence finding is explicitly forward-looking and deferred until the corresponding consumer or trigger lands; L4 is procedural-deferral pending sibling-submodule parity action at the folder pass.
+Filled by Worker 1 per no-source-edit cycle pattern. No comment or docstring edits in scope — every L2/L3 docstring-silence finding is explicitly forward-looking and deferred until the corresponding consumer or trigger lands; L1/L4/L5 are procedural/forward deferrals with no current edit.
 
 ---
 
 ## Changelog disposition
 
-Filled by Worker 1 per no-source-edit cycle pattern. **Not warranted** — no behavior change, no public-API change, no consumer-visible surface change. Citations: `AGENTS.md` #21 ("Do not update CHANGELOG.md unless explicitly instructed"); active plan `docs/review/review-0_0_7.md` is silent on changelog updates for per-file review artifacts.
+Filled by Worker 1 per no-source-edit cycle pattern. **Not warranted** — no behaviour change, no public-API change, no consumer-visible surface change. Citations: `AGENTS.md` #21 ("Do not update CHANGELOG.md unless explicitly instructed"); the active review plan is silent on changelog updates for per-file review artifacts.
 
 ---
 

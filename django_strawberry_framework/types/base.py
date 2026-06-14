@@ -9,7 +9,10 @@ Consumer surface::
 
 A nested ``Meta`` class declares the model and (optionally) ``fields``,
 ``exclude``, ``name``, ``description``, ``optimizer_hints``,
-``interfaces``, ``nullable_overrides``, and ``required_overrides``.
+``interfaces``, ``nullable_overrides``, ``required_overrides``,
+``connection``, ``filterset_class``, ``orderset_class``,
+``globalid_strategy``, ``relation_shapes``, and ``primary`` - see
+``ALLOWED_META_KEYS`` for the authoritative set.
 
 Selection lives in ``Meta.fields`` / ``Meta.exclude``. A field may also be
 written as a class annotation ``name: auto`` ("declare-but-infer"): the name
@@ -1021,8 +1024,12 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     Returns:
         A ``_ValidatedMeta`` snapshot bundling the validated interfaces
         tuple, the ``primary`` bool, the normalized ``optimizer_hints``
-        dict, and the normalized ``fields``/``exclude`` specs. The caller
-        threads these through to ``DjangoTypeDefinition`` and
+        dict, the normalized ``fields``/``exclude`` specs, the validated
+        ``filterset_class``/``orderset_class``/``connection``/
+        ``globalid_strategy``/``relation_shapes`` sidecars, and the
+        ``nullable_overrides``/``required_overrides`` frozensets - see the
+        ``_ValidatedMeta`` definition for the authoritative field list. The
+        caller threads these through to ``DjangoTypeDefinition`` and
         ``_validate_optimizer_hints`` so the shape gates run exactly once
         per class definition.
 

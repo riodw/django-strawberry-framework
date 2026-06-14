@@ -2387,6 +2387,214 @@ def test_genre_connection_total_count_omitted_no_count():
 
 
 @pytest.mark.django_db
+def test_genre_connection_total_count_skip_include_no_count():
+    """A directive-excluded ``totalCount`` fires no COUNT (selection-gating + directives).
+
+    Selection-gating (Decision 4) must honor live ``@skip`` / ``@include`` on the
+    direct ``totalCount`` child, not just its absence. ``info.selected_fields``
+    (Strawberry ``convert_selections``) carries the field with its already-resolved
+    directive args (``{"skip": {"if": True}}`` / variable-resolved ``include``) -
+    it does NOT pre-drop the node - so ``direct_child_selected`` must apply the same
+    ``should_include`` gate its sibling converted-selection walks do. Three excluded
+    shapes (direct ``@skip(if: true)``, variable-driven ``@include(if: $show=false)``,
+    named-fragment-wrapped ``@skip(if: true)``) must each issue zero ``COUNT(`` SQL
+    and omit the field; the ``@skip(if: false)`` control proves the count still
+    fires when the directive resolves to "keep". Mirrors
+    ``test_genre_connection_total_count_omitted_no_count`` for the directive case.
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+
+    def _count_queries(captured: CaptureQueriesContext) -> int:
+        return sum("COUNT(" in query["sql"].upper() for query in captured.captured_queries)
+
+    # (1) direct ``@skip(if: true)`` -> field excluded, no COUNT.
+    with CaptureQueriesContext(connection) as captured_skip:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryGenresConnection(first: 2) {
+                edges { node { name } }
+                totalCount @skip(if: true)
+              }
+            }
+            """,
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert "totalCount" not in payload["data"]["allLibraryGenresConnection"]
+    assert _count_queries(captured_skip) == 0
+
+    # (2) variable-driven ``@include(if: $show)`` with ``$show = false`` -> excluded, no COUNT.
+    with CaptureQueriesContext(connection) as captured_include:
+        response = _post_graphql(
+            """
+            query Q($show: Boolean!) {
+              allLibraryGenresConnection(first: 2) {
+                edges { node { name } }
+                totalCount @include(if: $show)
+              }
+            }
+            """,
+            variables={"show": False},
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert "totalCount" not in payload["data"]["allLibraryGenresConnection"]
+    assert _count_queries(captured_include) == 0
+
+    # (3) named-fragment-wrapped ``totalCount`` under ``@skip(if: true)`` -> excluded, no COUNT.
+    with CaptureQueriesContext(connection) as captured_fragment:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryGenresConnection(first: 2) {
+                edges { node { name } }
+                ...CountFields @skip(if: true)
+              }
+            }
+            fragment CountFields on GenreTypeConnection { totalCount }
+            """,
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert "totalCount" not in payload["data"]["allLibraryGenresConnection"]
+    assert _count_queries(captured_fragment) == 0
+
+    # Control: ``@skip(if: false)`` resolves to "keep" -> field present, COUNT fires.
+    with CaptureQueriesContext(connection) as captured_kept:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryGenresConnection(first: 2) {
+                edges { node { name } }
+                totalCount @skip(if: false)
+              }
+            }
+            """,
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["allLibraryGenresConnection"]["totalCount"] == 3
+    assert _count_queries(captured_kept) == 1
+
+
+@pytest.mark.django_db
+def test_anonymous_inline_fragment_under_connection_field_resolves():
+    """An anonymous inline fragment under a connection field resolves cleanly.
+
+    Regression for the optimizer-folder High. Pre-fix, a query placing an
+    anonymous inline fragment (``... { f }``, ``type_condition=None``) anywhere
+    under a ``DjangoConnectionField`` crashed with ``AttributeError: 'NoneType'
+    object has no attribute 'name'`` - Strawberry's ``convert_selections``
+    (reached via the optimizer's ``apply_to`` AND via ``info.selected_fields``
+    inside Strawberry's own ``ListConnection.resolve_connection`` ->
+    ``should_resolve_list_connection_edges``) reads ``type_condition.name.value``
+    on the missing condition. The package now routes its own conversion through
+    the anonymous-safe ``ast_to_converted_selections`` adapter and primes
+    ``info.selected_fields`` with it before the connection resolver runs, so both
+    shapes - the anonymous fragment directly under the connection field and one
+    nested down at the ``node`` level - resolve and return the seeded genre names.
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+    expected = ["Alpha", "Beta", "Gamma"]
+
+    # (a) anonymous inline fragment at the node level.
+    payload = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection {
+            edges { node { ... { name } } }
+          }
+        }
+        """,
+    ).json()
+    assert "errors" not in payload, payload
+    node_names = [
+        edge["node"]["name"] for edge in payload["data"]["allLibraryGenresConnection"]["edges"]
+    ]
+    assert sorted(node_names) == expected
+
+    # (b) anonymous inline fragment directly under the connection field.
+    payload = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection {
+            ... { edges { node { name } } }
+          }
+        }
+        """,
+    ).json()
+    assert "errors" not in payload, payload
+    under_conn_names = [
+        edge["node"]["name"] for edge in payload["data"]["allLibraryGenresConnection"]["edges"]
+    ]
+    assert sorted(under_conn_names) == expected
+
+
+@pytest.mark.django_db
+def test_anonymous_inline_fragment_with_total_count_resolves():
+    """``totalCount`` alongside an anonymous inline fragment resolves and counts.
+
+    Pins the second crash site flagged in the optimizer-folder review Low: the
+    ``totalCount`` fast path reads ``info.selected_fields`` (Strawberry's crashing
+    ``convert_selections``) via ``_total_count_requested``, and Strawberry's own
+    ``should_resolve_list_connection_edges`` reads it too. The single prime of
+    ``info.selected_fields`` in ``_resolve_connection_fast_path`` routes BOTH
+    reads through the anonymous-safe conversion, so a connection query carrying an
+    anonymous inline fragment AND ``totalCount`` resolves: the count still fires
+    (== 3) and the edges still resolve.
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+
+    payload = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection {
+            totalCount
+            edges { node { ... { name } } }
+          }
+        }
+        """,
+    ).json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenresConnection"]
+    assert conn["totalCount"] == 3
+    assert sorted(edge["node"]["name"] for edge in conn["edges"]) == ["Alpha", "Beta", "Gamma"]
+
+
+@pytest.mark.django_db
+def test_typed_inline_fragment_under_connection_field_still_resolves():
+    """A typed inline fragment (``... on T {}``) under a connection field stays working.
+
+    Regression guard paired with the anonymous-fragment fix: the typed form
+    carries a ``type_condition`` AST node, so Strawberry's converter never
+    crashed on it. The package-owned ``ast_to_converted_selections`` adapter must
+    keep the typed path resolving identically (``type_condition`` set to the
+    condition's name), not just the anonymous path.
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+
+    payload = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection {
+            edges { node { ... on GenreType { name } } }
+          }
+        }
+        """,
+    ).json()
+    assert "errors" not in payload, payload
+    names = [
+        edge["node"]["name"] for edge in payload["data"]["allLibraryGenresConnection"]["edges"]
+    ]
+    assert sorted(names) == ["Alpha", "Beta", "Gamma"]
+
+
+@pytest.mark.django_db
 def test_genre_connection_two_aliases_independent_total_counts():
     """(e) two aliases with different filters yield independent totalCounts.
 
@@ -2837,6 +3045,83 @@ def test_genre_books_connection_behavior():
     assert titles_two == ["Circe"]
     assert page_two["pageInfo"]["hasNextPage"] is False
     assert "Withdrawn" not in titles_one + titles_two
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_after_last_page_info_matches_per_parent():
+    """``booksConnection(after: c, last: N)`` reports the per-parent ``hasPreviousPage``.
+
+    The offset-bearing backward window regression (spec-033 Decision 5): an
+    ``after`` + ``last`` nested connection used to slip into the reversed
+    row-number window with a NON-ZERO offset, returning the right rows but a
+    ``hasPreviousPage`` that diverged from the per-parent pipeline whenever the
+    after-remainder was ``<= last`` rows. The reversed window numbers rows from
+    the partition END but ``_dst_row_number`` (and thus the page flags) stays
+    FORWARD over the whole partition, so for an ``after``-trimmed tail of two
+    rows numbered 4, 5 the fast path read ``hasPreviousPage = (4 > 1) = True``,
+    while the per-parent pipeline slices the last ``N`` of the two-row after-set
+    and reports ``hasPreviousPage = False`` (nothing was trimmed off the front).
+
+    The fix makes ``after`` + ``last`` an unwindowable fallback: the walker leaves
+    the selection unplanned and the shipped per-parent pipeline serves it, so the
+    optimizer-on ``/graphql/`` answer matches the optimizer-off truth. NO sidecar
+    is supplied so the shape itself - not the sidecar gate - is what routes to the
+    fallback (the connection orders by pk via the deterministic-order rule).
+    """
+    genre = models.Genre.objects.create(name="Speculative")
+    shelf = _seed_shelf()
+    # Five books in pk order; cursors are positional (arrayconnection:0..4).
+    for title in (
+        "Aurora",
+        "Binti",
+        "Circe",
+        "Dune",
+        "Elantris",
+    ):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genre)
+
+    def _books_page(args: str) -> dict:
+        response = _post_graphql(
+            f"""
+            query {{
+              allLibraryGenres {{
+                booksConnection({args}) {{
+                  edges {{ cursor node {{ title }} }}
+                  pageInfo {{ hasNextPage hasPreviousPage startCursor endCursor }}
+                }}
+              }}
+            }}
+            """,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        return payload["data"]["allLibraryGenres"][0]["booksConnection"]
+
+    # Page forward to the third book ("Circe") to obtain a real ``after`` cursor;
+    # the after-set is then {Dune, Elantris} - exactly two rows, ``<= last: 3``.
+    forward = _books_page("first: 3")
+    after_cursor = forward["pageInfo"]["endCursor"]
+
+    page = _books_page(f'after: "{after_cursor}", last: 3')
+    titles = [edge["node"]["title"] for edge in page["edges"]]
+    # Right rows: the whole two-row after-tail (last: 3 of 2 rows = both).
+    assert titles == ["Dune", "Elantris"]
+    # The regression assertion: the after-remainder (2) is ``<= last`` (3), so the
+    # pipeline trims nothing off the front and ``hasPreviousPage`` is False - the
+    # buggy reversed-window fast path reported True here.
+    assert page["pageInfo"]["hasPreviousPage"] is False
+    assert page["pageInfo"]["hasNextPage"] is False
+    # Cursors stay positional and byte-match the forward window's (Dune/Elantris
+    # are positions 3/4), proving the per-parent pipeline served the page.
+    forward_two = _books_page("first: 5")
+    forward_cursors = {edge["node"]["title"]: edge["cursor"] for edge in forward_two["edges"]}
+    page_cursors = {edge["node"]["title"]: edge["cursor"] for edge in page["edges"]}
+    assert page_cursors == {
+        "Dune": forward_cursors["Dune"],
+        "Elantris": forward_cursors["Elantris"],
+    }
 
 
 @pytest.mark.django_db

@@ -26,7 +26,10 @@ policies so the contracts cannot drift"):
   ``named_children`` / ``with_runtime_prefix`` /
   ``node_children_with_runtime_prefix`` / ``direct_child_selected``) - operates
   on Strawberry converted selections (and the ``SimpleNamespace`` shapes the
-  walker synthesizes) for ``optimizer/walker.py`` and the connection seam.
+  walker synthesizes) for three consumers: ``optimizer/walker.py`` (nested
+  connection windows), ``optimizer/extension.py``'s root-connection seam (the
+  ``edges { node }`` unwrap), and ``connection.py``'s ``totalCount`` detection
+  (``direct_child_selected`` only).
 
 Cycle-safe: ``walker.py`` and ``extension.py`` both import from here; this
 module imports neither (it previously lived split between them, with
@@ -40,7 +43,149 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
-from graphql.language.ast import DirectiveNode, FragmentSpreadNode, VariableNode
+from graphql.language.ast import (
+    DirectiveNode,
+    FragmentSpreadNode,
+    InlineFragmentNode,
+    VariableNode,
+)
+
+# ---------------------------------------------------------------------------
+# AST -> converted-selection adapter - the package-owned ``convert_selections``
+# ---------------------------------------------------------------------------
+
+
+def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
+    """Convert graphql-core ``field_nodes`` to converted selections, anonymous-safe.
+
+    Mirrors Strawberry's ``strawberry.types.nodes.convert_selections`` but builds
+    every inline-fragment shell with ``type_condition = None`` when the node has no
+    ``on TypeName`` condition, instead of unguardedly reading
+    ``node.type_condition.name.value`` (Strawberry's ``InlineFragment.from_node``
+    raises ``AttributeError: 'NoneType' object has no attribute 'name'`` on a valid
+    anonymous inline fragment ``... { f }``). The optimizer routes
+    ``info.field_nodes`` through here so its own fragment-aware substrate
+    (``is_fragment`` duck-types on ``type_condition``, which a ``None`` shell still
+    satisfies, so the shell flows through ``included_field_selections`` /
+    ``named_children`` / ``with_runtime_prefix``) handles the shape Strawberry
+    cannot represent - rather than depending on a Strawberry internal that
+    mishandles a spec-valid query.
+
+    The whole recursion is reimplemented (not just the top-level inline branch)
+    because an anonymous inline fragment can sit at any depth - e.g.
+    ``{ items { edges { node { ... { name } } } } }`` - and Strawberry's
+    ``SelectedField.from_node`` / ``FragmentSpread.from_node`` recurse back into
+    its own crashing ``convert_selections``. ``FragmentSpread`` definitions still
+    come from ``info.fragments`` (a named spread always carries a type condition);
+    only its body selections are re-converted here.
+
+    The result is built from Strawberry's own ``SelectedField`` / ``FragmentSpread``
+    / ``InlineFragment`` dataclasses (not ad-hoc shells) so the converted list is
+    drop-in compatible with BOTH the package's duck-typed substrate AND Strawberry's
+    own consumers that ``isinstance``-check against those classes (e.g.
+    ``strawberry.relay.utils.should_resolve_list_connection_edges`` reached via
+    ``ListConnection.resolve_connection`` when the package primes
+    ``info.selected_fields`` with this list). The only deviation from Strawberry is
+    that the anonymous inline-fragment branch passes ``type_condition=None`` instead
+    of dereferencing the missing condition.
+
+    This is a FAITHFUL MIRROR and must stay one: for every non-anonymous query
+    shape the output is byte-identical to ``convert_selections`` (verified
+    field-by-field, including nested argument and directive values, against the
+    stock converter). That identity is load-bearing because ``prime_selected_fields``
+    seeds this list into ``info.selected_fields``; any divergence here would corrupt
+    ``info.selected_fields`` for normal (non-anonymous) queries the moment a
+    connection primes it. Keep it a mirror - if Strawberry's ``convert_selections``
+    gains a field or changes a shape, mirror the change here rather than diverging.
+    """
+    from strawberry.types.nodes import (
+        FragmentSpread,
+        InlineFragment,
+        SelectedField,
+        convert_arguments,
+        convert_directives,
+    )
+
+    def _convert(nodes: Any) -> list[Any]:
+        out: list[Any] = []
+        for node in nodes:
+            if isinstance(node, InlineFragmentNode):
+                condition = node.type_condition
+                out.append(
+                    InlineFragment(
+                        type_condition=(condition.name.value if condition is not None else None),
+                        directives=convert_directives(info, node.directives),
+                        selections=_convert(getattr(node.selection_set, "selections", [])),
+                    ),
+                )
+            elif isinstance(node, FragmentSpreadNode):
+                fragment = info.fragments[node.name.value]
+                out.append(
+                    FragmentSpread(
+                        name=node.name.value,
+                        type_condition=fragment.type_condition.name.value,
+                        directives=convert_directives(info, node.directives),
+                        selections=_convert(
+                            getattr(fragment.selection_set, "selections", []),
+                        ),
+                    ),
+                )
+            else:
+                out.append(
+                    SelectedField(
+                        name=node.name.value,
+                        alias=getattr(node.alias, "value", None),
+                        directives=convert_directives(info, node.directives),
+                        arguments=convert_arguments(info, node.arguments),
+                        selections=_convert(getattr(node.selection_set, "selections", [])),
+                    ),
+                )
+        return out
+
+    return _convert(field_nodes)
+
+
+def prime_selected_fields(info: Any) -> None:
+    """Pre-seed Strawberry ``Info.selected_fields`` with the anonymous-safe conversion.
+
+    ``Info.selected_fields`` is a ``functools.cached_property`` that lazily calls
+    Strawberry's crashing ``convert_selections`` on first read. Several consumers
+    on the connection resolve path read it - the package's own
+    ``connection.py::_total_count_requested`` AND Strawberry's own
+    ``relay.utils.should_resolve_list_connection_edges`` (reached via
+    ``ListConnection.resolve_connection``) - so an anonymous inline fragment on a
+    connection query crashes inside Strawberry's resolver before the package can
+    intervene. Computing the conversion through ``ast_to_converted_selections`` and
+    storing it in the cached-property slot makes every later read return the
+    package's anonymous-safe list (built from Strawberry's own ``SelectedField`` /
+    ``FragmentSpread`` / ``InlineFragment`` dataclasses, so Strawberry's
+    ``isinstance``-based consumers keep working). Idempotent and a no-op when the
+    info has no field nodes or the cache is already populated (so a consumer that
+    legitimately read ``selected_fields`` first is never overwritten).
+
+    Must run BEFORE any ``info.selected_fields`` read on the connection path - the
+    cached property computes once on first read, so priming only wins if it lands
+    first. ``connection.py::_resolve_connection_fast_path`` calls this immediately
+    after the ``first`` + ``last`` guard, ahead of both the ``_total_count_requested``
+    inspection and ``super().resolve_connection``.
+
+    NOTE - this COUPLES to two Strawberry internals: the raw info living at
+    ``Info._raw_info`` and ``Info.selected_fields`` being a ``functools.cached_property``
+    backed by the ``info.__dict__["selected_fields"]`` slot. Both hold at the pinned
+    Strawberry version. If a future Strawberry renames ``_raw_info`` (or stops using
+    the dict-slot cache), this SILENTLY no-ops - ``getattr(info, "_raw_info", None)``
+    returns ``None``, nothing is seeded, and the connection-path crash returns rather
+    than failing loudly. The live anonymous-inline-fragment tests
+    (``test_anonymous_inline_fragment_*`` in the fakeshop ``test_query`` suite) are
+    the regression net that would catch such a Strawberry-internals rename on a
+    version bump.
+    """
+    raw_info = getattr(info, "_raw_info", None)
+    field_nodes = getattr(raw_info, "field_nodes", None)
+    if not field_nodes or "selected_fields" in info.__dict__:
+        return
+    info.__dict__["selected_fields"] = ast_to_converted_selections(raw_info, field_nodes)
+
 
 # ---------------------------------------------------------------------------
 # AST adapter - graphql-core nodes (``optimizer/extension.py``)
@@ -205,7 +350,13 @@ def named_children(selection: Any, name: str) -> list[Any]:
 
 
 def with_runtime_prefix(selection: Any, runtime_prefixes: tuple[tuple[str, ...], ...]) -> Any:
-    """Clone a node-level selection carrying runtime prefixes for the walker."""
+    """Clone a node-level selection carrying runtime prefixes for the walker.
+
+    Fragments are descended, never marked; the ``_optimizer_runtime_prefixes``
+    marker lands on field leaves only. A fragment shell carrying the prefix
+    would be meaningless - prefixes belong on the field selections the walker
+    eventually plans.
+    """
     if is_fragment(selection):
         return SimpleNamespace(
             name=getattr(selection, "name", None),
@@ -253,9 +404,18 @@ def direct_child_selected(selection_roots: Any, name: str) -> bool:
     discriminator with the walker / edge-node unwrap keeps the "recurse through
     fragments only" rule from drifting between the count detection and the
     selection planning.
+
+    Gated on ``should_include`` like ``included_field_selections`` and
+    ``named_children``: converted selections carry live, already-evaluated
+    ``@skip`` / ``@include`` args, so a ``totalCount @skip(if: true)`` (or a
+    ``@skip``-ped fragment wrapping it) must NOT fire the connection ``COUNT``.
+    A directive-excluded field returns ``False`` even on a name match, and an
+    excluded fragment shell prunes its whole subtree.
     """
 
     def _check(selection: Any) -> bool:
+        if not should_include(selection):
+            return False
         if is_fragment(selection):
             return any(_check(child) for child in getattr(selection, "selections", None) or [])
         return getattr(selection, "name", None) == name

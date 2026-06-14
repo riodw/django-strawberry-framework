@@ -242,3 +242,30 @@ def test_order_glossary_terms_by_title_desc():
     assert _graphql_data(
         "query { allGlossaryTerms(orderBy: [{ title: DESC }]) { title } }",
     ) == {"allGlossaryTerms": expected}
+
+
+@pytest.mark.django_db
+def test_anonymous_inline_fragment_under_list_field_resolves():
+    """An anonymous inline fragment (``... { f }``) under a plain list field resolves cleanly.
+
+    Regression for the optimizer-folder High: ``allGlossaryTerms`` is a plain
+    ``DjangoListField`` (not a connection), so it exercises the middleware list
+    path (``DjangoOptimizerExtension.resolve`` -> ``_optimize`` -> ``apply_to``).
+    Pre-fix, ``apply_to`` routed ``info.field_nodes`` through Strawberry's
+    ``convert_selections``, whose ``InlineFragment.from_node`` reads
+    ``type_condition.name.value`` and raised ``AttributeError: 'NoneType' object
+    has no attribute 'name'`` on the anonymous (``type_condition=None``) shape.
+    The package-owned ``ast_to_converted_selections`` adapter builds a
+    ``type_condition=None`` shell instead, so the query resolves and returns the
+    seeded term titles. Mirrors the connection-path pins in
+    ``test_library_api.py``; the list path is a distinct entry point so it carries
+    its own live pin.
+    """
+    _seed_glossary()
+    expected_titles = sorted(
+        models.GlossaryTerm.objects.values_list("title", flat=True),
+    )
+    data = _graphql_data(
+        "query { allGlossaryTerms { ... { title } } }",
+    )
+    assert sorted(term["title"] for term in data["allGlossaryTerms"]) == expected_titles

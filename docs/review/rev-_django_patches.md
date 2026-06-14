@@ -4,7 +4,7 @@ Status: verified
 
 ## DRY analysis
 
-- None — the file is intentionally a near-verbatim mirror of Django's upstream `SimpleTestCase._remove_databases_failures` (with one added guard) plus a small `apply()` install/idempotency wrapper; the only repeated literal `"_remove_databases_failures"` is the upstream class-attribute name, which only appears twice (`_django_patches.py:186` and `_django_patches.py:227`) and is the load-bearing identity of the patch site, so a local constant would obscure rather than help.
+- None — the one shared predicate (`_is_database_failure`) is already extracted and imported by the sibling wrap-time half (`django_strawberry_framework/testing/_wrap.py:27`, used at `_wrap.py:144`), so both lifecycle sites resolve `_DatabaseFailure` through a single function and degrade together if the private symbol moves. The patched loop body in `_patched_remove_databases_failures` (`_django_patches.py:167-174`) is an intentional minus-one-guard near-copy of Django's upstream `SimpleTestCase._remove_databases_failures` — it must track upstream verbatim except for the `isinstance` guard, so collapsing it into a shared helper would defeat the "mirror of upstream" auditability the patch depends on.
 
 ## High:
 
@@ -16,106 +16,217 @@ None.
 
 ## Low:
 
-### `apply()` mutates `_missing_symbol_logged` via `global` instead of a small helper
-
-`_django_patches.py:215-224` reaches for `global _missing_symbol_logged` to gate the once-per-process INFO log. The current shape works and the test suite pins it (`tests/test_django_patches.py::test_apply_logs_missing_symbol_notice_only_once`), but `global` mutation inside `apply()` is the only function-level state mutation in the module, which makes the otherwise pure-function file harder to scan. A `_log_missing_symbol_once()` helper that owns the sentinel and the `logger.info(...)` call would localise the mutation and keep `apply()` itself a flat install/guard sequence.
-
-Defer until a second once-per-process notice lands (e.g. for a future second defensive patch in this module). At that point the helper signature collapses both call sites; today it would be a one-call refactor with no DRY win.
-
-```django_strawberry_framework/_django_patches.py:215:224
-    global _missing_symbol_logged
-    if _DatabaseFailure is None:
-        if not _missing_symbol_logged:
-            logger.info(
-                "django-strawberry-framework: skipping _remove_databases_failures patch — "
-                "Django's private _DatabaseFailure symbol is unavailable at this Django "
-                "version. The Trac #37064 backstop will not be installed.",
-            )
-            _missing_symbol_logged = True
-        return
-```
-
-### `_patch_is_installed()` and `apply()`'s install call share knowledge of the `classmethod` descriptor shape
-
-`_django_patches.py:186-189` encapsulates the `__dict__.get → __func__` unwrap; `_django_patches.py:227-229` builds the matching `classmethod(_patched_remove_databases_failures)` install side. The pair is symmetric by design and the docstrings on both functions explain the asymmetry (one inspects the descriptor, one builds it), so the duplication is intentional, but a future third site that needs the same install or inspect step would tilt this toward a shared `_INSTALLED_ATTR = "_remove_databases_failures"` named constant.
-
-Defer until a third site touches `SimpleTestCase._remove_databases_failures`; today the two-site symmetry reads more clearly inline than through a constant.
+None.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** `_is_database_failure()` (`_django_patches.py:129-131`) is consumed by both the loop body inside `_patched_remove_databases_failures` (`_django_patches.py:173`) and is the documented mirror of debug-toolbar's wrap-time check; the module docstring (`_django_patches.py:36-91`) explicitly frames the wrap-time/unwrap-time symmetry and references `safe_wrap_connection_method` as the wrap-time twin so consumers see one helper at each lifecycle site.
-- **New helpers considered.** Considered factoring the `if _is_database_failure(method): setattr(...)` line into a `_safe_unwrap(connection, name)` helper, but rejected — the file's "verbatim copy of Django's upstream method, with one added guard" property is load-bearing for the docstring's correctness argument (`_django_patches.py:135-156`) and the regression test `tests/test_django_patches.py::test_unpatched_remove_databases_failures_crashes_on_non_wrapper` reads the upstream body inline at `tests/test_django_patches.py:263-271`; both would have to be rewritten to chase a one-line helper.
-- **Duplication risk in the current file.** The class-attribute name `"_remove_databases_failures"` appears at `_django_patches.py:186` and again at `_django_patches.py:227` (read vs install sides of the same descriptor). This is intentional sibling design — extracting a module-level constant would force every reader to follow an indirection to confirm the patch targets the exact attribute Django's class defines, which is the load-bearing identity of the file.
+- **Existing patterns reused.** The wrap-time/unwrap-time defense-in-depth shares exactly one predicate: `_is_database_failure` (`_django_patches.py:129-131`) is imported and reused by `testing/_wrap.py:27` rather than re-deriving the `_DatabaseFailure` isinstance check at the wrap site. The package logger is reused via `from . import logger` (`_django_patches.py:107`), matching the package-wide single-logger convention declared in `django_strawberry_framework/__init__.py:13`.
+- **New helpers considered.** Considered factoring the patched loop body (`_django_patches.py:167-174`) against Django's upstream method — rejected: the patch's value is being a line-for-line mirror of upstream with a single inserted guard (confirmed byte-identical to Django 6.0.5's `SimpleTestCase._remove_databases_failures` modulo the guard), so abstracting it would obscure the diff a future maintainer must re-check on each Django bump. Considered extracting the `classmethod(...)` install + `__func__` identity check into one helper — rejected: `_patch_is_installed` (`_django_patches.py:177-189`) already encapsulates the descriptor-unwrap, and the single install site in `apply` (`_django_patches.py:227-229`) does not justify another indirection.
+- **Duplication risk in the current file.** The teardown-loop shape (`for alias in connections` / `if alias in cls.databases: continue` / inner `for name, _ in cls._disallowed_connection_methods`) duplicates upstream Django; this is required parallelism, not divergence-prone duplication, and the companion test `test_unpatched_remove_databases_failures_crashes_on_non_wrapper` pins that upstream still has the bug shape so the patch can be retired when it no longer does.
 
 ### Other positives
 
-- The docstring (`_django_patches.py:1-102`) lays out the upstream Trac ticket, the wrap-time/unwrap-time defense-in-depth framing with debug-toolbar's precedent, and the explicit reason this module cannot adopt debug-toolbar's cache-panel sentinel strategy. It is the single longest non-source-code unit in the file and it earns its length — every later reviewer can answer "why does this patch exist and why this shape" without leaving the module.
-- The `try: from django.test.testcases import _DatabaseFailure / except ImportError` block (`_django_patches.py:109-117`) plus the `_DatabaseFailure is None` early-return in `apply()` (`_django_patches.py:216-224`) make the patch self-disabling on a future Django version that renames or removes the private symbol. The `_missing_symbol_logged` sentinel (`_django_patches.py:126`) caps the noise at exactly one INFO record per process even when `AppConfig.ready()` fires repeatedly, and `tests/test_django_patches.py::test_apply_logs_missing_symbol_notice_only_once` pins the behavior with three back-to-back `apply()` calls.
-- `apply()` is idempotent and self-healing — re-entrant calls when the patch is already installed are no-ops (`_django_patches.py:225-226`), and the `_patch_is_installed()` check re-installs the patch if a third party reverted the class attribute since the prior call. Pinned by `tests/test_django_patches.py::test_apply_is_idempotent` and `tests/test_django_patches.py::test_apply_reinstalls_when_class_attribute_reverted`.
-- The patch site is `SimpleTestCase` (where Django defines the method) rather than `TransactionTestCase`, so a single install covers `TransactionTestCase` and `TestCase` plus direct `SimpleTestCase` subclasses (which `TransactionTestCase` is NOT in the MRO of). Pinned by `tests/test_django_patches.py::test_patch_is_inherited_by_transaction_test_case`, `tests/test_django_patches.py::test_patch_is_inherited_by_test_case`, and the dedicated `tests/test_django_patches.py::test_patched_remove_databases_failures_covers_direct_simple_test_case_subclass`.
-- The crash-without-the-patch behavior is pinned by `tests/test_django_patches.py::test_unpatched_remove_databases_failures_crashes_on_non_wrapper`, which inlines a verbatim copy of Django 5.2.13's upstream method body and asserts `AttributeError: ... wrapped`. A future Django release that silently fixes the bug will flip this test from passing to failing with a different error, which is the planned retirement trigger for the patch.
-- The module is gated behind a leading-underscore name (`_django_patches.py`) and the only consumer-visible entry point (`apply()`) is invoked from `apps.py::DjangoStrawberryFrameworkConfig.ready` — consumers do not import from the module, which keeps the patch a side-effect of `INSTALLED_APPS` membership exactly as the module docstring promises.
-- GLOSSARY drift quick-check: the documented public-contract symbols `safe_wrap_connection_method` (`docs/GLOSSARY.md:907-920`) and the `Django Trac #37064 hardening` entry (`docs/GLOSSARY.md:1075-1083`) are consistent with the module — both correctly identify `SimpleTestCase._remove_databases_failures` as the patch site, the `isinstance(method, _DatabaseFailure)` guard as the change, and the wrap-time/unwrap-time pairing with `safe_wrap_connection_method`. No drift; nothing to forward to Worker 2.
+- **Defensive import is correct and tested.** The `try/except ImportError` fallback to `_DatabaseFailure = None` (`_django_patches.py:109-117`) keeps the whole package loadable on a future Django that moves/removes the private symbol; `apply()` no-ops with a single INFO notice rather than crashing the app loader. Both the no-op branch and the once-per-process log gating are pinned (`tests/test_django_patches.py::test_apply_no_ops_when_database_failure_symbol_missing`, `::test_apply_logs_missing_symbol_notice_only_once`). The `# pragma: no cover` on the except line (`_django_patches.py:111`) is legitimate per AGENTS.md — the import succeeds under the test runner; the branch is exercised via `mock.patch.object(_django_patches, "_DatabaseFailure", None)` instead.
+- **Idempotent and self-healing `apply()`.** `_patch_is_installed` (`_django_patches.py:177-189`) reads the raw `classmethod` descriptor off `SimpleTestCase.__dict__` and compares `__func__` identity, correctly handling both the re-entrant `ready()` case and a third-party revert; the `installed is None` branch guards a future Django that relocates the method off `SimpleTestCase`. All three states (idempotent re-call, re-install-after-revert, attribute-absent) are pinned (`::test_apply_is_idempotent`, `::test_apply_reinstalls_when_class_attribute_reverted`, `::test_patch_is_installed_returns_false_when_attribute_absent_from_class_dict`).
+- **Patch placement is minimal and inheritance-aware.** Patching `SimpleTestCase` (the class where Django *defines* the method) covers `TransactionTestCase` and `TestCase` and direct `SimpleTestCase` subclasses through normal inheritance — one patch, whole hierarchy. The MRO premise is itself asserted (`::test_patched_remove_databases_failures_covers_direct_simple_test_case_subclass` checks `TransactionTestCase not in __mro__`).
+- **Module/docstring quality.** The module docstring accurately documents the upstream Trac #37064 reference, the debug-toolbar precedent at both lifecycle sites, why this package owns no wrap-time site of its own, and the private-module rationale (only `apply` is unprefixed, for the regression tests). The `apply` and `_patch_is_installed` docstrings match their implementations exactly. No stale TODOs; no spec anchors.
+- **GLOSSARY consistency.** The "Django Trac #37064 hardening" and `safe_wrap_connection_method` entries in `docs/GLOSSARY.md` (lines 1289-1299, 1096-1115) describe the guard (`isinstance(method, _DatabaseFailure)` before `setattr(..., method.wrapped)`), the `SimpleTestCase` install site, the inheritance coverage, and the `AppConfig.ready` application path accurately. No drift.
 
 ### Summary
 
-`_django_patches.py` is a tight defensive-patch module with a long, load-bearing docstring, one verbatim-with-guard copy of Django's upstream classmethod, and a small idempotent installer. Tests at `tests/test_django_patches.py` cover every branch (idempotency, reinstall-after-revert, both arms of the unwrap loop, direct `SimpleTestCase` subclass coverage, missing-symbol no-op, once-per-process log gating, and the un-patched crash shape). No High or Medium findings. The two Lows are both forward-looking deferrals that only become actionable if a second once-per-process notice or a third reference to the patched attribute name lands, so this cycle qualifies as a no-source-edit pass.
+A small, sharply-scoped defensive-patch module that is correct, idempotent, self-healing, and exhaustively tested across every branch (happy unwrap, the Trac-#37064 skip-non-wrapper assertion, the upstream-still-broken companion, the missing-symbol no-op, and the once-per-process log gate). The one cross-module DRY opportunity — a shared `_DatabaseFailure` predicate — is already realized via the `_is_database_failure` import in `testing/_wrap.py`. The patched-loop near-copy of Django upstream is intentional and audit-friendly, not a DRY defect. No High/Medium/Low findings; GLOSSARY prose is accurate. Nothing to fix.
 
 ---
 
 ## Fix report (Worker 2)
 
-Filled by Worker 1 per no-source-edit cycle pattern.
+Consolidated single-spawn (no-findings file pass, REVIEW shape #1). Worker 1
+recorded High 0 / Medium 0 / Low 0 and a single `- None` DRY bullet. Source
+verified against the artifact's premises before recording the pass:
+
+- `_is_database_failure` at `_django_patches.py:129-131` and its cross-module
+  reuse premise (the shared predicate imported by `testing/_wrap.py`) confirmed.
+- The patched loop body at `_django_patches.py:167-174` confirmed as the
+  intentional minus-one-guard near-copy of upstream Django.
+- `_patch_is_installed` at `_django_patches.py:177-189` and the single install
+  site in `apply` at `_django_patches.py:227-229` confirmed.
+
+No finding requires an edit; the DRY opportunity is already realized. No-op
+logic pass.
 
 ### Files touched
-- None — no-source-edit cycle.
+
+None — no source or test file changed.
 
 ### Tests added or updated
-- None — no-source-edit cycle.
+
+None — no behaviour change to pin.
 
 ### Validation run
-- `uv run ruff format .` — `183 files left unchanged` (no edits made this cycle).
-- `uv run ruff check --fix .` — `All checks passed!` (no edits made this cycle).
+
+- `uv run ruff format .` — pass / no-changes (265 files left unchanged)
+- `uv run ruff check --fix .` — pass / no-changes (All checks passed!)
+- pytest not run (AGENTS.md). No focused validation applicable to a no-op pass.
 
 ### Notes for Worker 3
-- Both Lows are forward-looking deferrals with explicit triggers (second once-per-process notice landing; third reference to `"_remove_databases_failures"`). Neither is actionable today.
-- GLOSSARY drift quick-check returned clean — no GLOSSARY-only fix in scope.
-- Shadow overview is current (timestamp newer than source); helper not re-run this cycle.
 
----
-
-## Comment/docstring pass
-
-Filled by Worker 1 per no-source-edit cycle pattern. No comment or docstring edits required — the module docstring, the two function docstrings on `_patched_remove_databases_failures` and `apply()`, and the inline comments on the `try/except ImportError` block and the `_missing_symbol_logged` sentinel all match current behavior and current test coverage.
-
----
-
-## Changelog disposition
-
-Filled by Worker 1 per no-source-edit cycle pattern. **Not warranted** — no source, test, GLOSSARY, or behavior edits this cycle, so there is nothing for `CHANGELOG.md` to record. Citations: `AGENTS.md` #"Do not update CHANGELOG.md unless explicitly instructed" and `docs/review/review-0_0_7.md` (active plan is silent on changelog action for this cycle item).
+- Shadow overview consulted: `docs/shadow/django_strawberry_framework___django_patches.overview.md` (read-only; line numbers there are non-canonical, source line numbers cited above).
+- No intentionally-rejected findings (artifact had none to reject); the source matches every artifact premise verbatim.
+- No deferred findings.
+- `uv.lock` untouched after both ruff runs.
+- Out-of-scope tree noise present at dispatch (deleted `feedback2.md`/`feedback3.md`, untracked `docs/review/review-0_0_9.md`) left untouched per AGENTS.md #33.
 
 ---
 
 ## Verification (Worker 3)
 
 ### Logic verification outcome
-Shape #5 (no-source-edit) cycle. All five terminal checks pass:
-1. `git diff --stat HEAD -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` is empty (only `docs/feedback.md` is dirty plus the two untracked review artifacts, all out of scope).
-2. Each of the three Worker 2 sections (`## Fix report (Worker 2)`, `## Comment/docstring pass`, `## Changelog disposition`) opens with `Filled by Worker 1 per no-source-edit cycle pattern.`
-3. Both Lows carry verbatim trigger phrasing: L1 "Defer until a second once-per-process notice lands" and L2 "Defer until a third site touches `SimpleTestCase._remove_databases_failures`". No GLOSSARY-only fixes are present.
-4. Changelog disposition is `Not warranted` with both required citations: `AGENTS.md` ("Do not update CHANGELOG.md unless explicitly instructed") AND `docs/review/review-0_0_7.md` (active plan silence on changelog action for this item).
-5. Ruff format-check (`183 files already formatted`) and `ruff check` (`All checks passed!`) both pass on spot-verification, matching the artifact's recorded outcomes.
 
-Spot-checked the "What looks solid" claims against source: the `global _missing_symbol_logged` mutation at `_django_patches.py:215`, the `_patch_is_installed()` descriptor unwrap at `_django_patches.py:186-189`, and the `classmethod(_patched_remove_databases_failures)` install at `_django_patches.py:227-229` all match the artifact's references. All seven cited tests (`test_apply_is_idempotent`, `test_apply_reinstalls_when_class_attribute_reverted`, `test_patch_is_inherited_by_transaction_test_case`, `test_patch_is_inherited_by_test_case`, `test_patched_remove_databases_failures_covers_direct_simple_test_case_subclass`, `test_unpatched_remove_databases_failures_crashes_on_non_wrapper`, `test_apply_logs_missing_symbol_notice_only_once`) exist in `tests/test_django_patches.py` at the expected names.
+Shape #1 no-findings consolidated cycle (High 0 / Med 0 / Low 0). No High/Medium/Low
+finding to disposition; independently re-inspected the file for correctness,
+edge-case, and DRY issues a clean pass might have missed:
+
+- **Cross-module DRY premise confirmed.** `_is_database_failure`
+  (`_django_patches.py:129-131`) is imported by the wrap-time half at
+  `testing/_wrap.py:27` and used at `_wrap.py:144`, so both lifecycle sites
+  resolve `_DatabaseFailure` through one predicate. Premise holds; the lone DRY
+  opportunity is already realized.
+- **Upstream-mirror claim verified against the live dependency.**
+  `uv run python -c "inspect.getsource(SimpleTestCase._remove_databases_failures)"`
+  on Django 6.0.5 returns a loop byte-identical to `_django_patches.py:167-174`
+  (same `for alias in connections` / `if alias in cls.databases: continue` /
+  inner `for name, _ in cls._disallowed_connection_methods` / `getattr` /
+  `setattr(..., method.wrapped)`), differing only by the inserted
+  `if _is_database_failure(method):` guard. The "minus-one-guard near-copy" /
+  "intentional upstream mirror, not a DRY defect" framing is exactly correct;
+  collapsing it would defeat audit-on-bump.
+- **Helper correctness re-checked.** `_patch_is_installed` reads the raw
+  `classmethod` descriptor off `SimpleTestCase.__dict__` (not via attribute
+  access, so an inherited entry cannot false-match), guards `installed is None`,
+  and compares `__func__` identity. `apply` declares `global`, gates the
+  missing-symbol INFO notice behind the `_missing_symbol_logged` sentinel
+  (written only in that branch), is idempotent, and re-installs after revert.
+  `_is_database_failure` short-circuits safely when `_DatabaseFailure is None`.
+  No mutable-default, resource-leak, or concurrency concern (module-load +
+  single-threaded `AppConfig.ready`).
+- **`# pragma: no cover` on the ImportError branch** (`_django_patches.py:111`)
+  is legitimate per AGENTS.md — the import succeeds under the test runner; the
+  branch is exercised via `mock.patch.object(..., "_DatabaseFailure", None)`.
+- **Test-coverage premises grep-confirmed.** All seven test names the artifact
+  cites exist in `tests/test_django_patches.py` (`test_apply_is_idempotent`,
+  `test_apply_reinstalls_when_class_attribute_reverted`,
+  `test_patch_is_installed_returns_false_when_attribute_absent_from_class_dict`,
+  `test_patched_remove_databases_failures_covers_direct_simple_test_case_subclass`,
+  `test_unpatched_remove_databases_failures_crashes_on_non_wrapper`,
+  `test_apply_no_ops_when_database_failure_symbol_missing`,
+  `test_apply_logs_missing_symbol_notice_only_once`).
+
+No defect found. Worker 1's "no findings" conclusion is sound.
 
 ### DRY findings disposition
-Worker 1's DRY analysis declares None — the file is a near-verbatim mirror of Django's upstream method plus a small idempotent installer. The duplicated `"_remove_databases_failures"` literal (`_django_patches.py:186` and `_django_patches.py:227`) is intentional sibling design at the read/install descriptor sites and is load-bearing for the patch's identity argument. Carried forward as-is; no DRY action.
+
+The single `- None` DRY bullet is accepted. The one cross-module predicate
+(`_is_database_failure`) is already extracted and shared with `testing/_wrap.py`;
+the patched-loop near-copy of upstream is required parallelism, not
+divergence-prone duplication. Nothing to carry forward.
 
 ### Temp test verification
-- Temp test files used: none.
-- Disposition: not applicable; no source or test edits this cycle.
+
+No temp tests created — the no-op pass introduced no behaviour to pin, and the
+existing permanent suite (`tests/test_django_patches.py`) already covers every
+branch. Cross-module reuse, the upstream-mirror claim, ruff cleanliness, and the
+empty cycle diff were verified by direct grep / source inspection / `git diff`,
+which require no temp scaffold.
+
+### No-source-edit (shape #1) checks
+
+- Cycle diff empty: `git diff 0872a20fcbecf870b3669742f108364202709e26 -- django_strawberry_framework/_django_patches.py` → empty.
+- `git diff -- CHANGELOG.md` → empty (consistent with "Not warranted").
+- `uv run ruff format --check django_strawberry_framework/_django_patches.py` → "1 file already formatted".
+- `uv run ruff check django_strawberry_framework/_django_patches.py` → "All checks passed!".
+- Tree noise at dispatch (deleted `feedback2.md`/`feedback3.md`, untracked
+  `docs/review/review-0_0_9.md`) left untouched per AGENTS.md #33 — not owned by
+  any source path this cycle reviews.
+
+### Changelog disposition verification
+
+`Not warranted` accepted. `git diff -- CHANGELOG.md` is empty (consistent). The
+disposition cites BOTH AGENTS.md ("Do not update CHANGELOG.md unless explicitly
+instructed") AND the active plan's silence on changelog authorization for this
+per-file cycle. The internal-only framing is honest: the cycle landed zero
+source/test/comment changes, so there is no consumer-visible surface to record —
+"Not warranted" is the correct state (not the deferred-to-maintainer state).
+
+### Comment/docstring verification
+
+No comment or docstring change landed. Re-read the module docstring and the
+`_is_database_failure`, `_patched_remove_databases_failures`, `_patch_is_installed`,
+and `apply` docstrings: each accurately describes the final (unchanged) behaviour,
+the Trac #37064 reference, the debug-toolbar precedent, and the private-module
+rationale. No stale TODOs, no spec anchors, no forward-looking slice labels.
 
 ### Verification outcome
-`cycle accepted; verified` — top-level `Status: verified`; checklist box marked in `docs/review/review-0_0_7.md`.
+
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the
+checklist box in `docs/review/review-0_0_9.md`.
+
+---
+
+## Comment/docstring pass
+
+No comment or docstring change. The module docstring, the `_is_database_failure`,
+`_patched_remove_databases_failures`, `_patch_is_installed`, and `apply`
+docstrings all describe the final (unchanged) behaviour accurately — Worker 1's
+"Module/docstring quality" positive confirms the `apply` and `_patch_is_installed`
+docstrings match their implementations exactly, and source re-read confirms the
+same for the module docstring and the two helpers. No stale TODOs, no spec
+anchors, no forward-looking phase/slice labels to drop.
+
+### Files touched
+
+None.
+
+### Per-finding dispositions
+
+No High/Medium/Low findings to disposition.
+
+### Validation run
+
+- `uv run ruff format .` — pass / no-changes
+- `uv run ruff check --fix .` — pass / no-changes
+
+### Notes for Worker 3
+
+No comment edits; nothing to verify beyond the no-op.
+
+---
+
+## Changelog disposition
+
+### State
+
+`Not warranted`.
+
+### Reason
+
+No source, test, or comment change landed this cycle — there is no
+consumer-visible change to record. Per `AGENTS.md` ("Do not update CHANGELOG.md
+unless explicitly instructed"), and the active review plan is silent on any
+changelog authorization for this per-file cycle (per-file cycles are never the
+authorising scope and forward any drift to the project pass). Both citations
+apply.
+
+### What was done
+
+No `CHANGELOG.md` edit.
+
+### Validation run
+
+- `uv run ruff format .` — pass / no-changes
+- `uv run ruff check --fix .` — pass / no-changes
+
+---
+
+## Iteration log

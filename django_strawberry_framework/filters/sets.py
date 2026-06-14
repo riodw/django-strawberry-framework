@@ -733,12 +733,16 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                     if is_inactive_value(lookup_value, unset_sentinel=UNSET):
                         continue
                     django_lookup = cls._form_key_for_python_attr(lookup_attr)
-                    form_key = (
-                        base_path if django_lookup == "exact" else f"{base_path}__{django_lookup}"
-                    )
-                    filter_instance = all_filters.get(form_key) or all_filters.get(
-                        f"{base_path}__{django_lookup}",
-                    )
+                    suffixed_key = f"{base_path}__{django_lookup}"
+                    # ``exact`` registers under the bare ``base_path`` form key but
+                    # may also be declared explicitly as ``base_path__exact``, so it
+                    # probes both; every other lookup only ever lives under its
+                    # suffixed key, so ``form_key`` and ``suffixed_key`` coincide and
+                    # a single lookup suffices.
+                    form_key = base_path if django_lookup == "exact" else suffixed_key
+                    filter_instance = all_filters.get(form_key)
+                    if filter_instance is None and form_key != suffixed_key:
+                        filter_instance = all_filters.get(suffixed_key)
                     if filter_instance is None:
                         data[form_key] = lookup_value
                         continue

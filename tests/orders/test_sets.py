@@ -440,47 +440,6 @@ def test_orderset_normalize_input_delegates_to_module_helper():
 
 
 # ---------------------------------------------------------------------------
-# Slice 2 - check_permissions instance method (cookbook compatibility)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_orderset_check_permissions_instance_method_delegates():
-    """Bound-method ``check_permissions`` routes through ``_run_permission_checks``."""
-    fired = []
-
-    class CookbookOrder(OrderSet):
-        class Meta:
-            model = Book
-            fields = ["title"]
-
-        def check_title_permission(self, request):
-            fired.append(request)
-
-    factory = OrderArgumentsFactory(CookbookOrder)
-    BookInput = factory.arguments
-    input_value = [BookInput(title=Ordering.ASC)]
-    instance = object.__new__(CookbookOrder)
-    instance._input_value = input_value
-    request = HttpRequest()
-    instance.check_permissions(request)
-    assert fired == [request]
-
-
-def test_orderset_check_permissions_instance_tolerates_no_input_value():
-    """A bare instance with no ``_input_value`` parked -> no raise (graceful no-op)."""
-
-    class NoInputOrder(OrderSet):
-        class Meta:
-            model = Book
-            fields = ["title"]
-
-    instance = object.__new__(NoInputOrder)
-    request = HttpRequest()
-    instance.check_permissions(request)  # no input value -> early return
-
-
-# ---------------------------------------------------------------------------
 # Pass-2 B1 coverage closure -- sets.py uncovered lines
 # ---------------------------------------------------------------------------
 

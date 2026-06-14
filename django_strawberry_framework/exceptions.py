@@ -23,9 +23,9 @@ class ConfigurationError(DjangoStrawberryFrameworkError):
     Examples:
         - Missing ``Meta.model``.
         - ``fields`` and ``exclude`` declared together.
-        - A deferred-surface key (``filterset_class``, ``orderset_class``,
-          ``aggregate_class``, ``fields_class``, ``search_fields``)
-          declared before the spec that owns it has shipped.
+        - A deferred-surface key (``aggregate_class``, ``fields_class``,
+          ``search_fields``) declared before the spec that owns it has
+          shipped.
         - Two ``DjangoType`` subclasses registering against the same model.
     """
 
@@ -33,12 +33,16 @@ class ConfigurationError(DjangoStrawberryFrameworkError):
 class OptimizerError(DjangoStrawberryFrameworkError):
     """Raised when ``DjangoOptimizerExtension`` cannot plan a relation traversal.
 
-    Current raise sites in 0.0.7:
-        - ``FieldMeta.from_django_field`` rejects an input that is not a
-          Django field descriptor (missing ``name`` / ``is_relation``),
-          converting an otherwise late ``AttributeError`` into a typed,
-          call-site failure naming the bad input.
-        - The relation resolver's N+1 guard fires when optimizer
+    Raise sites:
+        - Typed input-guard at construction: ``FieldMeta.from_django_field``
+          rejects an input that is not a Django field descriptor (missing
+          ``name`` / ``is_relation``), converting an otherwise late
+          ``AttributeError`` into a typed, call-site failure naming the bad
+          input.
+        - Strictness-``"raise"`` N+1 guard: fires when optimizer
           ``strictness`` is ``"raise"`` and a request reaches an unplanned
-          relation that would lazy-load.
+          relation that would lazy-load. Covers both the list-relation
+          resolver and the nested-connection window-partition path (a
+          single-valued forward relation or any kind without a windowable
+          parent partition).
     """

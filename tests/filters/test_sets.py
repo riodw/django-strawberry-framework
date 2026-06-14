@@ -1752,6 +1752,46 @@ def test_normalize_input_operator_bag_dict_value_merges_into_form_data():
 
 
 @pytest.mark.django_db
+def test_normalize_input_operator_bag_exact_resolves_explicit_suffixed_key():
+    """An ``exact`` operator-bag lookup resolves a filter declared under ``<field>__exact``.
+
+    ``exact`` is the only lookup whose form key (the bare ``base_path``) can
+    differ from its ``<base_path>__exact`` suffixed key, so it is the one case
+    where ``_normalize_input`` probes a second key. ``django-filter`` strips the
+    ``__exact`` suffix from *generated* exact filters (they register under the
+    bare field name), but a filter declared explicitly under the
+    ``<field>__exact`` attribute name is merged into ``get_filters()`` under that
+    literal key (``BaseFilterSet.get_filters``'s trailing
+    ``filters.update(cls.declared_filters)``). With no bare-``name`` autogen
+    filter (``Meta.fields = []``), ``all_filters`` carries only ``name__exact``,
+    so the bare-key probe misses and the suffixed-key fallback must resolve the
+    declared ``CharFilter`` -- the genuine two-key-differ path.
+    """
+    import dataclasses
+
+    import django_filters
+
+    @dataclasses.dataclass
+    class _NameBag:
+        exact: Any = None
+
+    class WeirdCategoryFilter(FilterSet):
+        name__exact = django_filters.CharFilter(field_name="name", lookup_expr="exact")
+
+        class Meta:
+            model = Category
+            fields = []
+
+    assert list(WeirdCategoryFilter.get_filters()) == ["name__exact"]
+    # ``base_path`` resolves to the bare ``name`` (from the field python attr),
+    # ``form_key`` is the bare ``name`` (exact), ``suffixed_key`` is
+    # ``name__exact``; the bare probe misses, the suffixed probe resolves the
+    # declared filter and normalizes to the bare ``name`` form-data key.
+    data = WeirdCategoryFilter._normalize_input({"name": _NameBag(exact="foo")})
+    assert data == {"name": "foo"}
+
+
+@pytest.mark.django_db
 def test_normalize_input_top_level_range_filter_merges_positional_keys():
     """A top-level ``RangeFilter`` attribute expands to positional keys."""
     from django_strawberry_framework.filters import RangeFilter

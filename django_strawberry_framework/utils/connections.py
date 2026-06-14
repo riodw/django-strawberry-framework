@@ -43,6 +43,31 @@ CONNECTION_ORDER_KWARG = "order_by"
 CONNECTION_SIDECAR_KWARGS = (CONNECTION_FILTER_KWARG, CONNECTION_ORDER_KWARG)
 
 
+class UnwindowableConnection(Exception):  # noqa: N818 - control-flow signal, not a surfaced error
+    """Internal signal: this pagination shape cannot be served by a windowed prefetch.
+
+    Raised by ``derive_connection_window_bounds`` for an offset-bearing backward
+    window (``after`` + ``last``, no ``first``, no ``before``). The reversed
+    row-number window numbers rows from the partition END, so the forward
+    ``_dst_row_number`` the resolver reads its page flags from spans the WHOLE
+    partition, not the ``after``-filtered subset; pairing that with a non-zero
+    ``after`` offset makes ``hasPreviousPage`` (and the offset cursor) diverge
+    from the per-parent pipeline whenever the after-remainder is ``<= last`` rows
+    (spec-033 Decision 5 scopes the reversed window to ``last``-only and defers
+    the offset-bearing shapes to the per-parent fallback - "combinations the
+    offset arithmetic cannot push down fall back per-parent rather than
+    approximating").
+
+    A control-flow sentinel, deliberately NOT a ``DjangoStrawberryFrameworkError``
+    and NOT a ``ValueError`` / ``TypeError``: the walker catches the pagination
+    *errors* (``ValueError`` / ``TypeError``) to leave a selection unplanned while
+    still recording the field as accounted-for (it will raise its OWN error), but
+    must treat THIS shape as a fully-unplanned Decision-6 fallback (no
+    ``planned_resolver_keys`` entry) so the per-parent access stays visible to the
+    Slice-4 strictness contract. A distinct type keeps the two paths separable.
+    """
+
+
 def connection_sidecar_inputs_from_kwargs(kwargs: dict[str, Any]) -> tuple[Any, Any]:
     """Extract ``(filter_input, order_by_input)`` from a resolver ``**kwargs`` dict.
 
@@ -112,6 +137,17 @@ def derive_connection_window_bounds(
     None``, and the row-count bound is the literal ``last`` (the reversed
     ``__lte`` row filter) - passing ``expected`` would never apply the bound and
     the window would over-fetch every child row.
+
+    An ``after``-bearing backward window (``after`` + ``last``, no ``first`` / no
+    ``before``) is NOT reversed: ``SliceMetadata`` resolves a non-zero offset
+    (``start = int(after) + 1``), but the reversed row number partitions over the
+    WHOLE parent partition, not the ``after``-filtered subset, so the forward
+    ``_dst_row_number`` the resolver derives ``hasPreviousPage`` / cursors from
+    would diverge from the per-parent pipeline whenever the after-remainder is
+    ``<= last`` rows. ``SliceMetadata`` cannot express this shape as a clean
+    forward window either (``end == sys.maxsize`` so ``expected is None``, an
+    uncapped tail). Per spec-033 Decision 5 this falls back per-parent rather than
+    approximating, so raise ``UnwindowableConnection`` to leave it unplanned.
     """
     slice_meta = SliceMetadata.from_arguments(
         info,
@@ -122,5 +158,9 @@ def derive_connection_window_bounds(
         max_results=max_results,
     )
     reverse = isinstance(last, int) and not isinstance(first, int) and before is None
+    if reverse and after is not None:
+        # Offset-bearing backward window: the reversed window's whole-partition
+        # row numbering cannot honor the ``after`` offset (spec-033 Decision 5).
+        raise UnwindowableConnection
     limit = last if reverse else slice_meta.expected
     return ConnectionWindowBounds(slice_meta.start, limit, reverse)

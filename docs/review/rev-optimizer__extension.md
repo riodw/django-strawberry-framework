@@ -2,11 +2,20 @@
 
 Status: verified
 
+> Supersedes the stale 0.0.7 `Status: verified` artifact that pre-existed on disk
+> (its line cites — `_walk_directives` 92-128, `_strawberry_schema_from_schema`
+> 299-306, FIFO eviction 650-658 — do not match current source). Active plan box
+> `review-0_0_9.md:92` was unchecked. Replaced wholesale per the recurring
+> stale-artifact pattern; live source diffed before reuse — the prior artifact's
+> `_walk_directives`/`_walk_pagination_vars` split is GONE (unified into
+> `_walk_cache_relevant_vars` by the 0.0.9 DRY pass), so its DRY bullet #1 is
+> already merged and is NOT re-raised.
+
 ## DRY analysis
 
-- **Defer-until-third-walker:** `_walk_directives` (lines 92-128) and `_walk_reachable_fragment_definitions` (lines 199-227) already share `_child_selections` (lines 131-145) and `_unvisited_fragment_definition` (lines 148-175); the only divergent step is "collect this node's directives" vs. "append this fragment-def to the reachable list". A `_walk_ast(node, fragments, visited, on_node, on_fragment_def)` higher-order helper would collapse both. Defer until a third selection-tree walker lands (the walker module is currently the next candidate via a future "schema audit selection-aware mode") so the joint shape can be designed once across three call sites rather than twice. Trigger: any third place in `optimizer/` that needs cycle-guarded recursive selection-set + fragment-spread descent.
-- **Defer-until-second-caller:** `_strawberry_schema_from_schema` (lines 299-306) and `_strawberry_schema_from_info` (lines 309-316) read the same `_strawberry_schema` attribute through two access shapes (`schema._strawberry_schema` vs. `info.schema._strawberry_schema`); the two helpers correctly avoid sharing because the schema fallback differs (`return schema` vs. `return None`). Defer until a third entry point needs to reach the Strawberry schema, at which point a single `_strawberry_schema_of(obj, default=None)` would carry both contracts via the `default` arg. Trigger: a third Strawberry-schema reach site under `optimizer/` or any new consumer of the `_strawberry_schema` private attribute.
-- **Defer-until-second-FIFO-cache:** the inline FIFO eviction at lines 650-658 (`pop(next(iter(...)))` with `_MAX_PLAN_CACHE_SIZE // 4` batch) is a self-contained eviction policy. A second bounded cache in `optimizer/` (e.g. a future field-meta cache or directive-var cache) would justify a `_evict_oldest_quarter(cache, max_size)` helper. Trigger: a second `dict`-backed bounded cache with the same eviction shape under `django_strawberry_framework/`.
+- **Defer-until-third-selection-walker:** `_walk_cache_relevant_vars` (`extension.py::_walk_cache_relevant_vars`) and `_walk_reachable_fragment_definitions` (`extension.py::_walk_reachable_fragment_definitions`) are two cycle-guarded recursive selection-set + fragment-spread descents that already share `_child_selections` (= `selections.ast_child_selections`) and `_unvisited_fragment_definition` (= `selections.resolve_unvisited_fragment`). The only divergence is the per-node side effect (collect directive/pagination names + a depth axis vs. append fragment-def to a list, no depth). A `_walk_selection_tree(node, fragments, visited, on_node)` higher-order primitive in `selections.py` could carry both, with the depth bookkeeping passed through `on_node`. Defer: collapsing now would force the depth axis into the fragment-collector's callback for no benefit and the two side effects do not currently rhyme. Trigger: a **third** cycle-guarded recursive selection-set walker lands under `optimizer/` (e.g. a future schema-audit selection-aware mode), at which point design the shared visitor once across three sites.
+- **Defer-until-third-Strawberry-schema-reach:** `_strawberry_schema_from_schema` (`extension.py::_strawberry_schema_from_schema`, fallback = the input itself) and `_strawberry_schema_from_info` (`extension.py::_strawberry_schema_from_info`, fallback = `None`) both read the private `_strawberry_schema` attribute but on different access shapes and with different miss-fallbacks. A single `_strawberry_schema_of(obj, *, default)` would carry both via the `default` arg. Defer until a third reach site needs the private attribute. Trigger: a third consumer of `schema._strawberry_schema` under `optimizer/`.
+- **Defer-until-fragment-walk-needs-depth:** `_collect_reachable_fragment_definitions` / `_walk_reachable_fragment_definitions` and the `_collect_cache_var_families` / `_walk_cache_relevant_vars` pair are near-parallel "thin collector + recursive workhorse" twin shapes (same `set()`-seed-then-recurse, same visited-fragment guard threading). They are NOT collapsed because the var-walk carries a `depth` axis and a two-set accumulator while the fragment-walk carries a single list and no depth. Subsumed by the first bullet's trigger; listed separately only to note the second twin pair exists. Trigger: same as bullet 1.
 
 ## High:
 
@@ -14,202 +23,110 @@ None.
 
 ## Medium:
 
-### GLOSSARY drift: `DjangoOptimizerExtension` shipped-behavior list omits four `0.0.4`–`0.0.7` consumer-visible additions
-
-`docs/GLOSSARY.md::DjangoOptimizerExtension` (`docs/GLOSSARY.md:345-370`) is the published consumer contract for the entry point. Its `Shipped behavior` bullet list lags four consumer-visible additions that ship in `0.0.7` HEAD:
-
-1. **Manager → `.all()` coercion (Resolver-shape contract).** `extension.py:579-580` coerces `Manager` returns via `.all()` before the `isinstance(QuerySet)` gate; the class docstring at `extension.py:474-478` documents this as a load-bearing contract. The Behavioral half is pinned by `tests/optimizer/test_extension.py:90-129` (`test_optimize_coerces_manager_through_all_records_cache_miss`) and the HTTP path it forwards to (`examples/fakeshop/test_query/test_scalars_api.py::test_scalars_optimizer_coerces_manager_to_queryset_in_http_query`). Consumers writing `return Model.objects` (the Django shorthand) get optimization; the GLOSSARY currently only names "Django `QuerySet`s" so a reader assumes the Manager shorthand is silently passed through.
-2. **FK-id elision (B2).** Already has its own dedicated entry at `docs/GLOSSARY.md::FK-id elision` (`docs/GLOSSARY.md:495-503`), but the cross-reference in the `DjangoOptimizerExtension` shipped-behavior list does not mention it as a shipped capability. The `**See also:**` line does link it. The drift is in the in-paragraph capability roll-up, which is the first place a consumer scans when evaluating the extension.
-3. **Cache key splits on origin Strawberry type.** Per `spec-018-meta_primary-0_0_6.md` H2 (Slice 4), `_build_cache_key` includes `origin` as the 5th key component (`extension.py:791-797`) so a primary-return and a secondary-return resolver on the same Django model do not share a cached plan. Pinned by `tests/optimizer/test_extension.py:3015-3059` (`test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_model`). The `Plan cache` entry mentions multi-type plan separation tangentially via `docs/GLOSSARY.md:719-720`, but the `DjangoOptimizerExtension` and `Plan cache` entries do not record origin-as-key-component. Multi-type is a `0.0.6` `Meta.primary` shipped feature; the cache-key behavior is its load-bearing optimizer-side consequence.
-4. **Schema audit descends through union and interface types and dedupes multi-type warnings.** `_collect_schema_reachable_types` walks union `.types` (`extension.py:364-367`) and interface implementations via `schema.get_implementations` (`extension.py:376-384`). `check_schema` dedupes warnings by `(source_model, field_name)` (`extension.py:707-727`). All three are pinned: union descent by `tests/optimizer/test_extension.py:1869-1911` (`test_check_schema_descends_into_union_types`), interface implementations by `tests/optimizer/test_extension.py:1914-1964` (`test_check_schema_descends_into_interface_implementations`), multi-type dedupe by `tests/optimizer/test_extension.py:3106-3149` (`test_schema_audit_dedupes_when_same_relation_field_visited_via_multiple_types`). `docs/GLOSSARY.md::Schema audit` (`docs/GLOSSARY.md:999-1005`) is a one-paragraph entry that doesn't capture either the union-and-interface walk or the multi-type dedupe.
-
-The drift is Medium not Low because (a) the GLOSSARY entry is the published consumer contract for the optimizer entry point, (b) at least three of the four drift items are behavior-shape contracts a consumer would key against (Manager shorthand, primary vs. secondary plan separation, interface-typed root field audit), and (c) the per-file `DjangoOptimizerExtension` GLOSSARY entry is the one a consumer reads first when evaluating the package. Same Medium calibration as `rev-management__commands__export_schema.md`'s `Schema export management command` GLOSSARY drift — a public-contract entry that cumulatively lags multiple shipped polish/fix entries.
-
-Preserve verbatim replacement prose for Worker 2 to lift:
-
-```docs/GLOSSARY.md:355-367
-Shipped behavior:
-
-- root-gated optimization for root resolvers returning Django `QuerySet`s
-- `Manager` shorthand coercion (`return Model.objects` is coerced via `.all()` and optimized as if the consumer had written `Model.objects.all()`)
-- passthrough for non-root resolvers and non-`QuerySet` results
-- `select_related` for safe single-valued relation chains
-- `prefetch_related` for many-side relations
-- generated `Prefetch` objects for child querysets
-- nested prefetch chains for nested GraphQL selections
-- [`only`](#only-projection) projection for selected scalar columns
-- connector-column inclusion so Django can attach joined and prefetched rows without lazy loads
-- [FK-id elision](#fk-id-elision) for forward-FK selections that touch only the target's `id`
-- custom [`get_queryset`](#get_queryset-visibility-hook) downgrade from join to `Prefetch`
-- async resolver support
-- multi-type plan-cache separation: primary-return and secondary-return resolvers on the same Django model receive distinct cache entries via the resolver's origin Strawberry type
-```
-
-And for `Plan cache`'s `Selection-shape keys` bullet:
-
-```docs/GLOSSARY.md:815
-- **Selection-shape keys.** Cache keys include the selected operation AST, relevant `@skip` / `@include` variables, target model, root runtime path, and the resolver's origin Strawberry type.
-```
-
-And for `Schema audit`:
-
-```docs/GLOSSARY.md:1003
-`DjangoOptimizerExtension.check_schema(schema)` walks every schema-reachable `DjangoType` (descending through object fields, union members, and the concrete implementations of any interface type encountered, so a `DjangoType` reachable only via an interface-typed root field still participates) and reports relation targets without registered `DjangoType`s as warnings. Identical `(source_model, field_name)` warnings produced by multi-type overlap are deduped to one warning per pair so multi-type models do not double-report. Hidden fields and [`OptimizerHint.SKIP`](#optimizerhint) fields are ignored. Intended for use as a unit-test assertion or a CI gate.
-```
+None.
 
 ## Low:
 
-### Stale spec citation: `spec-014 Slice 1` → `spec-018 Slice 1`
+### Stale-prone version-pin in the pagination-arg comment
 
-`extension.py:700-706` contains a comment block whose first sentence claims:
+`extension.py #"a future ``search:`` extension (``0.1.2``)"` (the `_PAGINATION_ARG_NAMES` comment, src ~95-96) hard-codes a future release number against a hypothetical `search:` extension. Per the carried calibration (worker-memory: "version-pinned docstring labels rot every release"; cf. `exceptions.py::OptimizerError` "raise sites in 0.0.7"), an inline future-version pin in a comment is a maintainability snag — it will read as stale the moment `0.1.2` ships without the `search:` family, or if the family lands earlier/later. Forward-looking Low: the comment is correct **today** and the named release has not shipped. Recommend, when next touched, version-agnostic wording ("a future `search:` extension would extend the family here") rather than re-pinning. Trigger: any edit to the `_PAGINATION_ARG_NAMES` block, OR the `search:` extension landing — re-word then rather than re-pin.
 
-```django_strawberry_framework/optimizer/extension.py:700-706
-        # Dedupe (source_model, field_name) so multi-type models do not
-        # double-warn: registry.iter_types() yields one entry per registered
-        # type after spec-014 Slice 1, so a model with multiple types whose
-        # field maps overlap on the same unregistered-target relation would
-        # otherwise produce one identical warning per registered type. The
-        # dedupe is a multi-type artifact, not generic defensiveness — every
-        # reachable type is still audited (we cannot skip secondaries, since
-        # a secondary may expose a relation the primary hides).
-```
+### `_root_child_selections` `# noqa: ARG001` documents the uniform-signature contract only by suppression
 
-`spec-014` is `docs/SPECS/spec-014-testing_shift-0_0_4.md` (`testing_shift`, the pre-`0.0.5` test-tree restructure); it does not introduce the multi-type registry semantics. The actual spec is `docs/SPECS/spec-018-meta_primary-0_0_6.md` — the `Meta.primary` multi-type registry card. Slice 1 of spec-018 is "Registry multi-type storage + primary tracking" (see `spec-018-meta_primary-0_0_6.md` "Slice 1 — Registry multi-type storage + primary tracking" and the inline `iter_types()` shape note at the same spec) and the H3 dedupe contract in this comment block is the exact `check_schema` rationale recorded in spec-018's H3 fix.
-
-Same Low calibration as the `spec-016 → spec-020` citation drift in `rev-list_field.md` and the `spec-020 → spec-025` drift in `rev-scalars.md` — citation hygiene (the dedupe reasoning the comment captures is correct against the actual spec; only the pointer rotted). The fix is the one-token rewrite `spec-014 Slice 1` → `spec-018 Slice 1`.
-
-### `_walk_reachable_fragment_definitions` recurse-into-child duplication note is stale-leaning
-
-`extension.py:217-227` recurses unconditionally into the child after the spread-handling branch:
-
-```django_strawberry_framework/optimizer/extension.py:217-227
-    for child in _child_selections(node):
-        frag_def = _unvisited_fragment_definition(child, fragments, visited_fragments)
-        if frag_def is not None:
-            reachable.append(frag_def)
-            _walk_reachable_fragment_definitions(
-                frag_def,
-                fragments,
-                visited_fragments,
-                reachable,
-            )
-        _walk_reachable_fragment_definitions(child, fragments, visited_fragments, reachable)
-```
-
-The docstring's tail correctly explains that the always-recurse-into-child step is a no-op for `FragmentSpreadNode` (because `_child_selections` returns `()`), but the explanation lands one branch downstream of where the unconditional recurse executes. A future reader scanning the loop body sees the unconditional recurse and has to read the docstring to confirm the no-op contract; an inline one-liner (`# No-op for FragmentSpreadNode children; harmless duplicate is cheaper than a branch.`) at the recurse line would shorten the audit pass. Defer until any change to `_child_selections`'s "return `()` for fragment spreads" contract; the docstring is currently load-bearing in lieu of an inline comment.
-
-### `cache_info()` concurrent-access documentation lands twice with overlapping caveats
-
-The class docstring (`extension.py:459-463`) and the `cache_info` method docstring (`extension.py:501-511`) each cover the "best-effort under concurrent access" caveat. The class-level summary references the method-level docstring ("see `cache_info` for the full caveat"), so the divergence is intentional — but the method-level paragraph is itself the second-most-detailed paragraph in the file and a one-line summary on the class docstring + verbatim deep dive on the method would let the next maintainer change one rather than two sites when the locking policy evolves. Defer until any change to `_plan_cache` synchronization shape (today: lockless `dict.pop(next(iter(...)))` exploiting CPython GIL atomicity).
-
-### `_collect_schema_reachable_types` repeated `getattr(gql_type, "<x>", None)` pattern
-
-The inner `_walk_gql_type` (`extension.py:340-384`) accesses `name`, `fields`, `types`, `type`, and `objects` via `getattr(..., None)` followed by an `is not None` guard at four separate sites (lines 343, 358, 364, 381). The pattern is correct (graphql-core 3.x has varied between attribute shapes across minor versions, hence the defensive sweep), but a tiny `_get(obj, attr)` helper or even a `for attr, recurse in (...)` table-driven shape would collapse the four mirror branches into one walk. Defer until graphql-core's type API stabilises further or a fifth attribute access lands; today the four explicit blocks read more clearly than a table-driven indirection.
+`extension.py::_root_child_selections` ignores its `info` arg (`# noqa: ARG001`, src 332) to satisfy the `SelectionExtractor = Callable[[list[Any], Any], list[Any]]` protocol that `_connection_node_child_selections` *does* use `info` for (it threads `runtime_path_from_info(info)` into the edge/node prefixes). The `noqa` is correct and minimal, but the WHY (uniform extractor signature so `apply_to` can dispatch either via the `selection_extractor=` kwarg) lives only implicitly. Forward-looking Low, comment-tier: a one-line "info unused here; present to match the `SelectionExtractor` protocol the connection extractor consumes" would stop a future maintainer from "simplifying" the signature and breaking the `apply_to(..., selection_extractor=)` seam. Trigger: a third `SelectionExtractor` implementation lands, OR any edit to the `_root_child_selections` signature.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** `_collect_directive_var_names` and `_collect_reachable_fragment_definitions` already share `_child_selections` (`extension.py:131-145`) and `_unvisited_fragment_definition` (`extension.py:148-175`) — the cycle-guard set is passed by reference across both walkers so a single fragment-spread visit shared between the directive walk and the reachable-definition walk costs O(1) once. The `DST_OPTIMIZER_*` key strings live in `optimizer/_context.py` and are imported at `extension.py:47-53` rather than retyped (the single-source-of-truth invariant `rev-optimizer___context.md` flagged as a Medium-if-violated holds: zero raw `"dst_optimizer*"` literals in this file).
-- **New helpers considered.** A `_walk_ast(on_node, on_fragment_def)` higher-order helper consolidating the two walkers was evaluated and deferred-with-explicit-trigger above; a `_strawberry_schema_of(obj, default)` consolidating the two `_strawberry_schema_from_*` accessors was evaluated and deferred-with-explicit-trigger above; an `_evict_oldest_quarter(cache, max_size)` helper was evaluated and deferred-with-explicit-trigger above. None act-now because each currently has exactly two distinct call sites with intentionally divergent fallback semantics.
-- **Duplication risk in the current file.** The four `getattr(gql_type, "<attr>", None)` branches inside `_walk_gql_type` (lines 343, 358, 364, 381) are the most copy-shaped block in the file; the Low above captures the deferral rationale (graphql-core API variance across versions, four-attribute count below a table-driven simplification threshold).
+- **Existing patterns reused.** The selection-traversal primitives are sourced from `optimizer/selections.py` via the underscore aliases (`_child_selections`, `_unvisited_fragment_definition`, `_named_children`, `_node_children_with_runtime_prefix`, `_response_key`, src 83-87) — the 0.0.9 DRY pass (`docs/feedback.md` Major 2) removed the reverse `extension <- walker` dependency; both modules now source from `selections`. `directive_variable_names` is the single shared `@skip`/`@include` extractor (`selections.py::directive_variable_names`). The Manager-coercion + is-queryset decision is the shared `utils/querysets.py::normalize_query_source` contract (Major 1), so the middleware path (`_optimize`, src 730) never re-decides it. `runtime_path_from_info`, `lookup_paths`, `diff_plan_for_queryset` are imported from `plans.py`, not re-spelled. `_stash_on_context` / `_get_context_value` are re-exported from `_context.py` for cross-subpackage reuse with the read-side consumed by `types/resolvers.py`.
+- **New helpers considered.** The unified `_walk_cache_relevant_vars` (replacing the prior `_walk_directives` / `_walk_pagination_vars` split) is the correct act-now consolidation the 0.0.9 pass already landed — two collection RULES on different axes (directive-on-every-node vs. pagination-on-field-at-depth>=1) sharing one child-traversal + fragment-spread + cycle-guard descent, so a future fragment-depth or cycle fix lands on one path. `_collect_cache_var_families` is the single AST-walk-once entry the thin family wrappers (`_collect_directive_var_names`, `_collect_nested_pagination_var_names`) and the union collector (`_collect_cache_relevant_var_names`) share. The remaining selection-walker / Strawberry-schema-reach collapses are correctly deferred (see DRY analysis) — extracting now is net-negative.
+- **Duplication risk in the current file.** `_PAGINATION_ARG_NAMES` is the single source of truth for the four Relay pagination arg names — no inline re-spelling (the `directive_variable_names`-style `("skip", "include")` literal lives once in `selections.py`). The only repeated literal flagged by the static helper is `_strawberry_schema` (2x), which is the deliberate two-access-shape pair (`_strawberry_schema_from_schema` / `_from_info`) with divergent fallbacks — intentional sibling design, captured as a deferred DRY bullet.
 
 ### Other positives
 
-- **`_OriginAndModel` `NamedTuple` carries a documented pair-or-`None` contract** (`extension.py:396-411`): callers branch on `resolved is None` rather than dereferencing individual legs, and the contract is reinforced by the call site at `_optimize` (`extension.py:583-591`) using single-assignment destructuring after the `None` check. The `NamedTuple` carries the field-level types (`origin: type`, `model: type[models.Model]`) so static checkers preserve the round-trip into the walker.
-- **`on_execute`'s `ContextVar` lifecycle is exception-safe** (`extension.py:518-526`): both tokens reset in `finally`, in reverse-set order (`ast_token` reset before `active_token`) so a panic in the body never strands either ContextVar in a partially-set state. The single test `test_on_execute_sets_and_resets_context_var` (`tests/optimizer/test_extension.py:694-703`) pins the entry/exit transition for the active flag; the AST cache reset is pinned indirectly by every `cache_info`-asserting test that calls `schema.execute_sync` twice (the per-execution memo must be fresh on the second call).
-- **The `_print_operation_with_reachable_fragments` cache key construction stores the printed string rather than a hash** (`extension.py:750-753`'s docstring records the rationale): hash-collision risk eliminated at the cost of memory growth bounded by `_MAX_PLAN_CACHE_SIZE`. The same docstring records why the raw `loc.source.body` would be wrong (whole-document body collides across multi-operation documents). Both reasonings are load-bearing — a future "shrink the cache key" PR would have to reckon with the documented trade-offs first.
-- **`_publish_plan_to_context` is called before the `is_empty` short-circuit** (`extension.py:609-611`) so strictness consumers receive the empty planned set on scalar-only queries rather than seeing a missing sentinel. The behavior is pinned by `tests/optimizer/test_extension.py:1287-1330` (`test_strictness_with_empty_plan_does_not_raise_or_warn` parametrized over `warn` and `raise`). Calling order matters here — if `is_empty` short-circuited before publish, a downstream consumer's `dst_optimizer_strictness` read would `AttributeError` on context.
-- **The `frozenset[tuple[str, Any]]` hash contract for `relevant_vars`** (`extension.py:788-790`) trusts that GraphQL `variable_values` hold only JSON-shaped scalars by the time the optimizer sees them. graphql-core's variable coercion happens before resolvers run, so the `Any` is `int | float | str | bool | None | list | dict` (none of which is unhashable after the `frozenset` step except `list` and `dict` — but `relevant_vars` only enrolls variables referenced inside `@skip` / `@include`'s `if` argument, which is statically typed as `Boolean!`). The narrowing is a load-bearing invariant; loosening the directive set to permit non-Boolean `if` arguments would force a hashing rethink.
-- **Test discipline:** the file pins every documented branch — Manager coercion (`test_optimize_coerces_manager_through_all_records_cache_miss`), non-QuerySet pass-through (`test_optimizer_passes_through_non_queryset`), empty-field-nodes early-return (`test_optimize_handles_empty_field_nodes`), empty plan via monkeypatch (`test_optimize_returns_original_queryset_for_empty_plan`), cache hit/miss/eviction (`test_cache_hit_on_repeated_query`, `test_cache_differentiates_queries`, `test_cache_eviction_removes_old_entries`), fragment-spread directive (`test_cache_key_includes_fragment_spread_directive_variable_value`), source-location-missing (`test_build_cache_key_is_stable_when_source_location_missing`), multi-type cache split (`test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_model`), and schema-audit dedupe + secondary-only audit (`test_schema_audit_*`). Coverage shape matches every documented `_optimize` step and every documented cache-key component.
-- **The lazy `from strawberry.types.nodes import convert_selections`** at `extension.py:600` is intentional and the rationale is captured at `extension.py:594-599` ("Strawberry marks `strawberry.types.nodes` as an internal surface and we do not want a hard import-time dependency on it from any caller that imports the extension only to instantiate it"). Same calibration as `apps.py`'s deferred-import-in-`ready()` from `rev-apps.md`: keep the deferred shape, do not "promote to module scope" as a Low.
+- **Root-gating is correct and minimal.** `resolve` gates on `info.path.prev is not None -> return result` (src 694) before any optimization work, so only the operation's root resolver triggers a plan; nested relations ride the root prefetch chain via Django `__`-chains. Sync/async fork is the package-standard intentional twin (`_async_optimize` awaits then `_optimize`) — do NOT extract.
+- **Pagination-aware cache key (NEW 0.0.9) is correct.** Depth semantics verified by hand: `_collect_cache_var_families` seeds the walk at `depth=0` on `info.operation` (an `OperationDefinitionNode`, not a `FieldNode`, so `child_depth` stays 0); the operation's root fields are therefore visited at depth 0 and their `first`/`last` are NOT collected (root slicing is post-plan in `ConnectionExtension`), while a root field *is* a `FieldNode` so its children deepen to depth 1 and a nested connection's `first`/`last` IS collected. This matches every docstring claim ("root pagination stays out", "nested pagination keys the cache"). The collection is a deliberate syntactic superset (over-collection = cheap duplicate entries; under-collection = wrong data) — pinned by `test_pagination_var_collection_is_syntactic_superset`, `test_nested_pagination_variable_keys_cache`, `test_root_pagination_variable_shares_cache`, `test_root_fragment_pagination_variable_shares_cache`, `test_fragment_carried_nested_pagination_variable_collected`, `test_collect_nested_pagination_var_names_all_arg_names`, and the two-window correctness test `test_nested_pagination_variable_two_plans_two_windows`. Wrong-key = stale/wrong plan served was the headline data-correctness risk here; the gating is sound.
+- **`edges { node }` root-seam extractor (NEW 0.0.9) is correct.** `_connection_node_child_selections` recomputes `root_path = runtime_path_from_info(info)` from the *connection's* raw info, then threads `(*root_path, edges_key, node_key)` runtime prefixes into the node children via `selections.node_children_with_runtime_prefix`, so the walker sees the same child list a list-field-over-the-node-type would, but with selection-specific prefixes for strictness and FK-id-elision resolver keys. Uses `_named_children` (fragment-recursing) for `edges` and `node`, so fragment-wrapped `edges`/`node` still unwrap. The `is_fragment` discriminator is shared with the walker and `direct_child_selected` so the three cannot drift. Pinned by `test_node_children_with_runtime_prefix_skips_excluded_and_clones_fragments` and exercised end-to-end via the fakeshop live connection tests (`test_genre_connection_full_round_trip`, `test_genre_connection_order_by_to_many_no_node_multiplication`, backward/forward pagination).
+- **Queryset cooperation does not clobber consumer entries.** `apply_to` runs `diff_plan_for_queryset(plan, queryset)` (src 802) before `plan.apply` — drops exact-match entries, avoids "lookup already seen", and losslessly upgrades a consumer's plain string to a richer `Prefetch`; returns a fresh plan so the cached plan (B1) is never mutated. Cache-immutability is the stated Plan-cache contract.
+- **Nested-fallback sentinel coexistence (spec-033 Decision 8).** `_publish_plan_to_context` UNIONs the FK-id-elision / planned / lookup-path frozensets via `_stash_union` rather than overwriting, so a nested fallback connection pipeline's per-parent publish does not destroy the parent plan's sentinel sets (critical under `"warn"`, where execution continues). `DST_OPTIMIZER_PLAN` is correctly kept last-wins introspection (NOT unioned). `_stash_union`'s `isinstance(existing, (frozenset, set))` guard is defensive-coerce consistent with the file's stance. Pinned by `test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets` and `test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end`.
+- **Per-execution memo lifecycle is async-safe.** `_printed_ast_cache` and `_pagination_var_names_cache` are per-execution `ContextVar` dicts set to `{}` in `on_execute` and `reset` in the `finally` (LIFO reset order mirrors set order), so async executions sharing one extension instance stay isolated. Both memos key off `id(operation)` and fall back to recomputation when `None` (direct test-only callers outside an `on_execute` lifecycle) — the memoization is a hit-rate optimization, never a correctness gate. Memoization-for-nested-fallbacks pinned by `test_cache_key_variable_name_collection_memoized_for_nested_fallbacks`.
+- **LRU plan cache is correctness-safe under concurrency.** `_get_or_build_plan` is the sole insertion site (root-only). `move_to_end` promotion is wrapped in `suppress(KeyError)` for the concurrent-eviction race (a lost promotion is harmless), batched quarter-eviction amortizes cost, and only `plan.cacheable` plans are inserted (request-scoped `get_queryset` results stay out). `cache_info` honestly documents the best-effort counter caveat. Cache key folds `(doc_key, relevant_vars, target_model, root_runtime_path, origin)` — the `origin` leg gives primary/secondary-return separation (`test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_model`); the printed-string `doc_key` (not its hash) eliminates the 64-bit-collision wrong-plan risk; multi-operation documents never collide (`test_cache_key_differs_for_named_operations_in_same_document`); reachable fragment bodies are appended so same-body-different-fragment operations key apart (`test_cache_differentiates_reachable_named_fragment_bodies`).
+- **`apply_connection_optimization` follows the opt-in contract.** Returns the queryset unoptimized when `target_type` has no registered model OR when `_active_optimizer` is `None` (no installed extension / outside `on_execute`) — it does NOT fabricate a throwaway optimizer, keeping connection fields consistent with the middleware's opt-in. The `getattr(info, "_raw_info", info)` unwrap correctly feeds the plan machinery the raw graphql-core info while remaining usable from a direct test passing raw info. Pinned by `test_apply_connection_optimization_uses_active_optimizer_cache`. Caller is `connection.py::_finalize_queryset` (step 6 of the Decision 7 pipeline), invoked after deterministic ordering and before `ConnectionExtension` slicing.
+- **`check_schema` audit scoping is sound.** Walks only root-reachable `DjangoType`s (orphan `types=[]` excluded to avoid false-positive warnings), descends through object fields, union members, and interface implementations (so an interface-only-reachable type still participates), dedupes `(source_model, field_name)` to avoid multi-type double-warning, and honors `OptimizerHint.SKIP` + hidden-field exclusion. Always returns warnings, never raises — the caller owns the raise decision. Matches GLOSSARY `#schema-audit` prose exactly.
+- **GLOSSARY accurate.** `#djangooptimizerextension` (373-404), `#plan-cache` (947-964), and `#schema-audit` (1165-1167) all match live source. The `#plan-cache` "Variable filtering" bullet (956) was already updated for the 0.0.9 nested-vs-root pagination refinement ("variables feeding a **nested** connection's `first`/`last`/`before`/`after` ARE hashed ... while variables feeding **root** pagination arguments stay out ... including through root-level fragments") — verbatim-consistent with `_build_cache_key` and `_collect_nested_pagination_var_names`. No drift; no GLOSSARY edit in scope.
 
 ### Summary
 
-Logic is correct end-to-end against the documented O2 / O3 / O4 / O5 / O6 / B1 / B2 / B3 / B5 / B6 / B8 contracts; no High, no behaviour-changing Medium. The single Medium is GLOSSARY drift on the consumer-facing `DjangoOptimizerExtension` + `Plan cache` + `Schema audit` entries, all four items pinned by existing tests. The Lows are split between one stale spec citation (`spec-014 Slice 1` → `spec-018 Slice 1`) and three forward-looking deferrals tied to triggers the next maintainer can grep for. DRY shape evaluated and three opportunities deferred with explicit trigger conditions; no act-now consolidation candidate inside this file.
+Core N+1 + plan-cache-correctness review of the optimizer schema extension. The two flagged 0.0.9 surfaces — the pagination-aware plan-cache keys and the `edges { node }` root-seam extractor — are both correct: the cache-key depth gating cleanly separates root (depth 0, slicing post-plan) from nested (depth >= 1, values baked into windowed prefetch) pagination args, eliminating the stale-plan data-correctness risk; the connection extractor threads the right runtime prefixes so the walker sees a list-field-shaped node selection while preserving strictness / FK-id-elision resolver keys. Queryset cooperation never clobbers consumer entries (`diff_plan_for_queryset` + cached-plan immutability), nested-fallback sentinel publishes union rather than overwrite (spec-033 Decision 8), and the per-execution memos plus LRU cache are async/concurrency-safe (correctness-neutral by design). No High, no Medium. Two forward-looking Lows (a `0.1.2` version-pin in the pagination-arg comment that will rot; a `noqa`-only documentation of the uniform `SelectionExtractor` signature) — both comment-tier, both trigger-gated, neither warrants a source edit this cycle. GLOSSARY clean. Shape #5 no-source-edit cycle.
 
 ---
 
 ## Fix report (Worker 2)
 
-### Files touched
-- `docs/GLOSSARY.md` `DjangoOptimizerExtension` entry — lifted Worker 1's verbatim replacement `Shipped behavior:` block; added Manager-shorthand-coercion, FK-id-elision, and multi-type-plan-cache-separation bullets.
-- `docs/GLOSSARY.md` `Plan cache` entry — extended the `Selection-shape keys` bullet with `, and the resolver's origin Strawberry type` per Worker 1's verbatim replacement.
-- `docs/GLOSSARY.md` `Schema audit` entry — replaced single-paragraph body with Worker 1's verbatim replacement that names the union/interface descent and the `(source_model, field_name)` multi-type dedupe.
-- `django_strawberry_framework/optimizer/extension.py` `check_schema` comment block — rotated stale `spec-014 Slice 1` → `spec-018 Slice 1` (Low (a)).
+Filled by Worker 1 per no-source-edit cycle pattern.
 
-Source verification before edit: Manager coercion at `extension.py:579-580`; union-types descent at `extension.py:364-367`; interface implementations descent at `extension.py:376-384`; `origin` as the 5th cache-key leg at `extension.py:791-797`. All four match the artifact's citations.
+### Files touched
+- None — no-source-edit cycle.
 
 ### Tests added or updated
-- None. Medium is GLOSSARY-only prose lift (no behavior change), already pinned by the artifact's enumerated tests (`test_optimize_coerces_manager_through_all_records_cache_miss`, `test_check_schema_descends_into_union_types`, `test_check_schema_descends_into_interface_implementations`, `test_plan_cache_keys_distinguish_primary_and_secondary_returns_for_same_model`, `test_schema_audit_dedupes_when_same_relation_field_visited_via_multiple_types`). Low (a) is comment text only.
+- None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — pass / 211 files left unchanged
-- `uv run ruff check --fix .` — pass / all checks passed
-- `uv.lock` — unchanged
+- `uv run ruff format .` — pass, `265 files left unchanged` (no edits this cycle).
+- `uv run ruff check --fix .` — pass, `All checks passed!`.
 
 ### Notes for Worker 3
-- Shadow file: not used this pass; pre-existing overviews under `docs/shadow/` were sufficient via the artifact citations.
-- Deferred Lows preserved per the artifact's own trigger phrasing:
-  - Low (b) `_walk_reachable_fragment_definitions` inline no-op comment — trigger: any change to `_child_selections`'s "return `()` for fragment spreads" contract.
-  - Low (c) `cache_info()` two-site caveat dedupe — trigger: any change to `_plan_cache` synchronization shape (today: lockless `dict.pop(next(iter(...)))` exploiting CPython GIL atomicity).
-  - Low (d) `_collect_schema_reachable_types` `getattr(gql_type, ..., None)` table-driven shape — trigger: graphql-core's type API stabilises further or a fifth attribute access lands.
-- Consolidated single-spawn shape #4: Medium is GLOSSARY-only, Low (a) is one-token comment fix, Lows (b)/(c)/(d) defer explicitly.
+- Low 1 (`0.1.2` version-pin in `_PAGINATION_ARG_NAMES` comment): forward-looking, comment-tier, trigger-gated (edit to block OR `search:` extension lands). No edit this cycle.
+- Low 2 (`_root_child_selections` `# noqa: ARG001` uniform-signature documentation): forward-looking, comment-tier, trigger-gated (third `SelectionExtractor` OR signature edit). No edit this cycle.
+- No GLOSSARY-only fix in scope — `#djangooptimizerextension`, `#plan-cache`, `#schema-audit` all verified accurate vs live source (including the 0.0.9 pagination-refinement bullet at GLOSSARY:956).
+- Stale 0.0.7 `Status: verified` artifact was replaced wholesale; prior DRY bullet #1 (`_walk_directives`/`_walk_reachable_fragment_definitions` collapse) is ALREADY MERGED (unified `_walk_cache_relevant_vars`) — not re-raised.
 
 ---
 
 ## Comment/docstring pass
 
-Discharged inside the consolidated single-spawn. The Medium is a docstring-shaped contract update (GLOSSARY entry text) and the Low (a) rotation is a source comment edit — both applied above. No further comment/docstring sweep over `optimizer/extension.py` indicated by the artifact.
-
-### Files touched
-- Same set as `## Fix report (Worker 2)` above; no additional comment/docstring edits in this sub-pass.
-
-### Per-finding dispositions
-- Medium 1 (GLOSSARY drift): applied — verbatim replacement prose lifted into the three GLOSSARY entries.
-- Low (a) (stale `spec-014` citation): applied — rotated to `spec-018 Slice 1` at `extension.py:701` (post-edit line; was 702 in the artifact pre-edit).
-- Low (b) (`_walk_reachable_fragment_definitions` inline no-op comment): deferred per artifact trigger.
-- Low (c) (`cache_info()` two-site caveat dedupe): deferred per artifact trigger.
-- Low (d) (`_collect_schema_reachable_types` `getattr` table-driven shape): deferred per artifact trigger.
-
-### Validation run
-- `uv run ruff format .` — pass
-- `uv run ruff check --fix .` — pass
-
-### Notes for Worker 3
-Nothing additional beyond the Fix-report Notes.
+Filled by Worker 1 per no-source-edit cycle pattern. No comment/docstring edits in scope — the two Lows are forward-looking and trigger-gated; docstrings on the NEW 0.0.9 surfaces (pagination depth gating, edges-node extractor) are accurate vs verified behavior.
 
 ---
 
 ## Changelog disposition
 
-### State
-Not warranted.
-
-### Reason
-Cycle's edits are documentation-only: GLOSSARY entry text lifts (three entries) plus a one-token comment-citation rotation inside `optimizer/extension.py`. No consumer-visible behavior changes; every cited behavior is already shipped and pinned. Per `AGENTS.md` rule "Do not update CHANGELOG.md unless explicitly instructed" and the active review plan's silence on changelog authorization for this cycle, no `CHANGELOG.md` edit is warranted.
-
-### What was done
-No `CHANGELOG.md` edit.
-
-### Validation run
-- `uv run ruff format .` — pass
-- `uv run ruff check --fix .` — pass
+Filled by Worker 1 per no-source-edit cycle pattern. **Not warranted** — zero edits to any tracked file. Per AGENTS.md ("Do not update CHANGELOG.md unless explicitly instructed") and active-plan silence (`review-0_0_9.md` carries no changelog directive for this item).
 
 ---
 
 ## Verification (Worker 3)
 
 ### Logic verification outcome
-- Medium (GLOSSARY drift, three entries): accepted. `docs/GLOSSARY.md` `DjangoOptimizerExtension` Shipped-behavior block (lines 355-369) matches the artifact's verbatim replacement prose char-for-char; `Plan cache` Selection-shape-keys bullet (line 818) matches verbatim; `Schema audit` paragraph (line 1006) matches verbatim. Behavior spot-checks at the artifact's cited source line numbers all hold: Manager → `.all()` coercion at `extension.py:579-580` (`isinstance(result, models.Manager)` → `result.all()` then the `QuerySet` gate); union `.types` descent at `extension.py:364-367`; interface `get_implementations` descent at `extension.py:376-384` (`GraphQLInterfaceType` guard + `hasattr(gql_schema, "get_implementations")` + `.objects` tuple walk); `origin` as the 5th cache-key tuple leg at `extension.py:791-797`. The behavioral additions named in the GLOSSARY prose are pinned by the artifact's enumerated tests, all real callsites in source.
-- Low (a) (`spec-014 Slice 1` → `spec-018 Slice 1`): accepted. Single-token rotation at `extension.py:701` confirmed by `grep -n "spec-018 Slice 1" extension.py` (one hit, line 701) and `grep -n "spec-014 Slice 1" extension.py` (zero hits). New anchor resolves on disk: `docs/SPECS/spec-018-meta_primary-0_0_6.md:69` carries "Slice 1: Registry multi-type storage + primary tracking", which is the multi-type registry contract the dedupe comment references.
-- Lows (b), (c), (d): deferred per the artifact's own trigger phrasings — Low (b) trigger "any change to `_child_selections`'s 'return `()` for fragment spreads' contract", Low (c) trigger "any change to `_plan_cache` synchronization shape", Low (d) trigger "graphql-core's type API stabilises further or a fifth attribute access lands". All three trigger phrases reproduced verbatim in the Fix-report `Notes for Worker 3` block.
+No High/Medium. Both Lows are forward-looking comment-tier, trigger-gated, correctly deferred (no source edit): Low 1 (`0.1.2` version-pin in `_PAGINATION_ARG_NAMES` comment, src ~95-96 — confirmed present, correct today, named release unshipped); Low 2 (`_root_child_selections` `# noqa: ARG001`, src 332 — confirmed present, uniform `SelectionExtractor` protocol contract real, `_connection_node_child_selections` does consume `info` for `runtime_path_from_info`). Neither warrants an edit this cycle.
+
+**Riskiest claim independently verified (no-DB repro):** pagination-aware plan-cache key cannot serve a stale/wrong plan. Drove `_collect_cache_var_families` + `DjangoOptimizerExtension._build_cache_key` on hand-parsed AST (graphql-core `parse`, FakeInfo shim, memos `None` → recompute path):
+- ROOT `first:$n` at depth 0 → `pagination_names == set()` (root slicing post-plan; no page-fragmentation). Root pagination with two distinct `$n` (5 vs 99) → SAME key (page-invariant).
+- NESTED `first:$n` at depth >=1 → `{'n'}` collected. Two distinct nested page values ($n=5 vs $n=20) → two distinct keys (`relevant_vars` `{('n',5)}` vs `{('n',20)}`) → two windows. Same value → same key (cache hits, no over-fragmentation).
+- Fragment-carried nested pagination inherits spread-site depth → collected; root pagination inside a root-level fragment stays out (spread-site depth 0). Confirms Decision-7 "depth at the spread site" claim.
+Depth gating (`child_depth = depth+1 if isinstance(node, FieldNode) else depth`, src 167; operation seeds depth 0 as a non-FieldNode) cleanly separates root depth-0 post-plan slicing from nested depth>=1 values baked into the windowed prefetch. Verified at source against `selections.py` primitives.
+
+Other claims confirmed at source: root-gating (`info.path.prev is not None -> return result`, src 694) is minimal/correct; `edges{node}` extractor (src 353-375) recomputes `root_path` and threads `(*root_path, edges_key, node_key)` via `node_children_with_runtime_prefix`, fragment-recursing via `_named_children` (selections.py:191/229 confirmed); queryset cooperation (`diff_plan_for_queryset`, src 802) returns a fresh plan so the cached plan is never clobbered/mutated; `_stash_union` (src 891-905) unions frozensets and keeps `DST_OPTIMIZER_PLAN` last-wins; request-scope memos set `{}` in `on_execute` / reset LIFO in `finally` (src 656-670), `None` fallback recomputes (async-safe).
 
 ### DRY findings disposition
-All three DRY items remain deferred with the artifact's verbatim trigger phrasings (third selection-tree walker, third Strawberry-schema reach site, second `dict`-backed bounded cache). No act-now consolidation; Worker 2 did not widen scope.
+3 DRY bullets all correctly deferred-until-third (selection-tree visitor; `_strawberry_schema_of`; fragment-walk-needs-depth twin). Triggers unfired — no edits.
 
 ### Temp test verification
-- No temp tests created. Medium is GLOSSARY-only prose lift (no behavior change); Low (a) is a one-token comment-citation rotation. Spot-verification at the artifact's cited line numbers + ruff gates sufficed.
+- `docs/review/temp-tests/optimizer_extension/repro_cache_key.py` — 6-case depth-gating + two-window repro, ALL ASSERTIONS PASSED.
+- Disposition: deleted at cycle closeout (gitignored scratch); behavior already pinned by the permanent suite the artifact cites (`test_nested_pagination_variable_two_plans_two_windows`, `test_root_pagination_variable_shares_cache`, `test_root_fragment_pagination_variable_shares_cache`, `test_fragment_carried_nested_pagination_variable_collected`). Not the sole proof of shipped behavior — no promotion needed.
+
+### Shape #5 no-source-edit checks
+- `git diff --stat <baseline> -- optimizer/extension.py` empty (byte-unchanged). Baseline `0872a20...`; HEAD `692ef0b...`.
+- Full owned-scope diff (`django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md`) dirty only at conf.py, exceptions.py, filters/factories.py, filters/sets.py, list_field.py, management/commands/inspect_django_type.py, tests/management/test_inspect_django_type.py, docs/GLOSSARY.md — each attributes to a CLOSED sibling cycle (all `[x]` at review-0_0_9.md:70/72/73/80/82/87; GLOSSARY hunks = rev-connection / rev-filters / inspect siblings per prior verified cycles). NOT a rejection trigger; "Files touched: None" holds for this cycle.
+- Each Worker 2 section starts with `Filled by Worker 1 per no-source-edit cycle pattern.`
+- Both Lows carry verbatim trigger phrasing; no GLOSSARY-only fix in scope.
+- Changelog `Not warranted`, both citations (AGENTS.md + active-plan silence); `git diff -- CHANGELOG.md` empty. Internal-only framing honest (zero edits).
+- Ruff: `check` clean, `format --check` clean on extension.py (COM812 warning is the standing config note, not a failure).
 
 ### Verification outcome
-cycle accepted; verified.
+cycle accepted; verified
+
+---
+
+## Iteration log

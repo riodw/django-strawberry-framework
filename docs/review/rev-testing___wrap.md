@@ -2,9 +2,11 @@
 
 Status: verified
 
+Supersedes the on-disk `0.0.7`-era artifact (`Status: verified`); the active plan box (`review-0_0_9.md:106`) was unchecked. The prior artifact's second Low (CHANGELOG `django_strawberry_framework.test` path drift) is **already resolved in live source** and is NOT re-raised — see `### DRY recap` / Summary.
+
 ## DRY analysis
 
-- Defer until a second consumer-facing helper in `django_strawberry_framework/testing/` exposes the `_DatabaseFailure` predicate. Today, `_wrap.py:27` imports `_is_database_failure` from `_django_patches.py` directly (which itself is the canonical predicate per `_django_patches.py::_is_database_failure` at lines 129-131); the symmetry of "wrap site uses `_is_database_failure(current)`" (`_wrap.py:146`) and "unwrap site uses `_is_database_failure(method)`" (`_django_patches.py:173`) is the entire DRY consolidation point and is already correctly single-sourced. Trigger: if a future `testing/` helper grows a third `_is_database_failure` call site (e.g., a `safe_unwrap_connection_method` companion, or a `GraphQLTestCase` fixture), evaluate whether a `testing/_database_failure.py` module hosting the predicate (with `_django_patches.py` re-importing it) cleans up the cross-folder import direction — today the import-from-`_django_patches.py` direction is correct because `_django_patches.py` ships first (autoloaded at `AppConfig.ready`).
+- **Defer — `_is_database_failure` single-sourcing is already correct.** The wrap site reads the shared predicate via `_wrap.py::safe_wrap_connection_method #"if _is_database_failure(current)"` (source line 144), importing it from `_django_patches.py::_is_database_failure` (source 129-131), which the unwrap site also calls (`_django_patches.py::_patched_remove_databases_failures #"if _is_database_failure(method)"`, source 173). The predicate is the entire shared contract between the wrap-time and unwrap-time halves and is single-sourced today; the import direction (`testing/_wrap.py` -> `_django_patches.py`) is correct because the patch module autoloads at `AppConfig.ready` and ships first. Defer until a third `_is_database_failure` call site lands in `testing/` (e.g. a `safe_unwrap_connection_method` companion or a `GraphQLTestCase` fixture); at that point evaluate hoisting the predicate into a neutral `testing/_database_failure.py` with `_django_patches.py` re-importing it. Trigger: a second `testing/`-package consumer of `_is_database_failure`.
 
 ## High:
 
@@ -16,18 +18,19 @@ None.
 
 ## Low:
 
-### Docstring example `class _MyTest(TransactionTestCase):` references `TransactionTestCase` without showing the import
+### Docstring example block omits the `TransactionTestCase` import it relies on
 
-The runnable `.. code-block:: python` snippet at `_wrap.py:88-110` opens with `class _MyTest(TransactionTestCase):` (`_wrap.py:94`) but the surrounding example only imports `connections` and `safe_wrap_connection_method` (`_wrap.py:90-91`). A consumer copy-pasting the block verbatim hits `NameError: name 'TransactionTestCase' is not defined` at the class statement. Same calibration applies to the implicit `self.assertEqual` / Django TestCase machinery the example doesn't show.
+The runnable `.. code-block:: python` example (source 85-114) opens with `class _MyTest(TransactionTestCase):` (source 92) but its import block imports only `connections` and `safe_wrap_connection_method` (source 87-89). A consumer copy-pasting the block verbatim hits `NameError: name 'TransactionTestCase' is not defined` at the class statement. This helper is consumer-facing (`from django_strawberry_framework.testing import safe_wrap_connection_method`, `testing/__init__.py #"from django_strawberry_framework.testing._wrap import"`), so the docstring example is part of the published contract.
 
-Why it matters: this helper is consumer-facing (`from django_strawberry_framework.testing import safe_wrap_connection_method` per `testing/__init__.py:30`), and the docstring is the published consumer contract — the example block is part of that contract. Same severity as the `list_field.py` / `scalars.py` citation-hygiene Lows: the surrounding prose is correct, only the executable example is incomplete.
+Why it matters: same citation/example-hygiene tier as prior `list_field.py` / `scalars.py` example Lows — the surrounding prose is correct; only the runnable snippet is incomplete. A consumer's first interaction with the helper is most likely this paste-and-run block.
 
-Recommended change: add `from django.test import TransactionTestCase` to the example's import block (alongside the existing `from django.db import connections` and `from django_strawberry_framework.testing import safe_wrap_connection_method` lines).
+Recommended change: add `from django.test import TransactionTestCase` to the example's import block, alongside the existing `from django.db import connections` and `from django_strawberry_framework.testing import safe_wrap_connection_method` lines. Keep `super().setUp()` / `super().tearDown()` as-is (they're shown).
 
-```django_strawberry_framework/testing/_wrap.py:88:110
+```django_strawberry_framework/testing/_wrap.py:85:103
     .. code-block:: python
 
         from django.db import connections
+        from django.test import TransactionTestCase
         from django_strawberry_framework.testing import safe_wrap_connection_method
 
 
@@ -36,131 +39,139 @@ Recommended change: add `from django.test import TransactionTestCase` to the exa
                 super().setUp()
                 self._connection = connections["default"]
                 self._original_cursor = self._connection.cursor
-
-                def my_wrapped_cursor(*args, **kwargs):
-                    return self._original_cursor(*args, **kwargs)
-
-                self._wrapped = safe_wrap_connection_method(
-                    self._connection, "cursor", my_wrapped_cursor,
-                )
 ```
 
-### `CHANGELOG.md:33` references the stale `django_strawberry_framework.test` import path (now `django_strawberry_framework.testing`) — forwarded to project pass
+### `getattr(connection, method_name)` can raise an undocumented `AttributeError`; the `Raises:` block only lists `TypeError`
 
-The `CHANGELOG.md` `### Added` entry for `safe_wrap_connection_method` at `CHANGELOG.md:33` reads "Public export from `django_strawberry_framework.test`", but the maintainer-named rename moved the subpackage from `test/` to `testing/` (per the dispatch). The current public import path is `django_strawberry_framework.testing` (`testing/__init__.py:30`, `_wrap.py:91` example, `tests/testing/test_wrap.py:19`). The GLOSSARY entries (`docs/GLOSSARY.md:957`, `:961`) and the source docstrings (`testing/__init__.py:26`, `_wrap.py:91`) all show the corrected `testing` path; only the CHANGELOG `Added` line lags.
+`safe_wrap_connection_method #"current = getattr(connection, method_name)"` (source 143) reads the named attribute with no default, so a bogus `method_name` (typo, or a method that doesn't exist on the backend) raises `AttributeError` before the wrap. The docstring `Raises:` section (source 131-137) documents only the `TypeError` non-callable-wrapper case.
 
-Why it matters: CHANGELOG is consumer-facing release notes; a stale import path on a `### Added` line is the first place a consumer reads to confirm the export. Same Low severity as the `spec-016 → spec-020` drift (`list_field.py`) and `TODO-ALPHA-028 → TODO-ALPHA-035` drift (`scalars.py`) — citation hygiene, not logic.
+Why it matters: forward-looking, comment-tier. The current behavior is *correct* — a non-existent method name is a programmer error and failing loud at the wrap site is the right outcome (mirrors the `TypeError` rationale: "surfaces here rather than ... deep inside Django's ORM machinery"). The gap is only that the contract under-documents a second loud-failure mode a consumer can hit. Defer with trigger: when this docstring is next touched for any reason, add an `AttributeError: If method_name is not an attribute of connection.` bullet to the `Raises:` block so both wrap-site loud-failures are documented symmetrically. No logic change.
 
-Worker 1 cannot modify `CHANGELOG.md` per `worker-1.md` scope. Forwarded to the project pass (`rev-django_strawberry_framework.md`) for the cross-folder rename sweep — `CHANGELOG.md:33` plus any other surfaces grep finds for the old `django_strawberry_framework.test` path. Recommended replacement: rewrite the parenthetical to "Public export from [`django_strawberry_framework.testing`][test-init]" and update the `[test-init]` link def to `django_strawberry_framework/testing/__init__.py` if it still resolves to the old `test/__init__.py` path.
+### `Restoration semantics` uses a `**bold**` lead-in while the surrounding sections use Google-style `Args:`/`Returns:`/`Raises:` headers — minor in-docstring style mix
 
-### Docstring "Restoration semantics" heading uses RST `---` underline but the rest of the docstring is bare paragraph prose — minor RST-rendering inconsistency
+The `**Restoration semantics.**` paragraph lead-in (source 81) is bold-prefixed prose, while the lower half of the docstring uses Google-style section headers (`Args:`/`Returns:`/`Raises:`, source 116-137) and the upper half uses `*`-bulleted RST-ish lists (source 66-74). The docstring mixes three light conventions.
 
-`_wrap.py:81-83` introduces a `Restoration semantics` heading with RST-style `---` underline (`_wrap.py:82`), but the rest of the 105-line docstring uses bare paragraph prose with `*` italics / `**` bolds (`_wrap.py:67-71`) and Google-style `Args:` / `Returns:` / `Raises:` sections (`_wrap.py:118-140`). Sphinx will render the `Restoration semantics` block as an H2 heading while the rest of the docstring renders as flowing prose — a tonal mismatch within a single docstring.
-
-Why it matters: same severity as the `filters/base.py` backtick-convention drift Low — pick one convention per docstring; the mixed render is the smell. Today the docstring is read via `help(safe_wrap_connection_method)` more than via Sphinx, so the render mismatch is latent.
-
-Recommended change: replace the `---` underline at `_wrap.py:82` with bare paragraph emphasis (`**Restoration semantics.**`) or move the entire section's prose under a Google-style `Notes:` block to match the existing `Args:` / `Returns:` / `Raises:` shape. Defer until the package's first Sphinx-published docs build surfaces the inconsistency.
+Why it matters: cosmetic, latent. `help(safe_wrap_connection_method)` renders all three as flowing text, so the mismatch is invisible today; a future Sphinx/napoleon pass would render the Google headers as definition lists but the bold lead-in as inline-bold prose. Forward-looking: if this docstring is ever brought under a Sphinx build, normalize to one convention (Google-style throughout, since the `Args:`/`Returns:`/`Raises:` triad is load-bearing). No action now; trigger = a docs build lands for the `testing` subpackage.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** The `_is_database_failure` predicate (`_django_patches.py:129-131`) is the single source of truth for the `isinstance(method, _DatabaseFailure)` check; both the wrap-site (`_wrap.py:146`) and the unwrap-site (`_django_patches.py:173`) consume it. The two-halves-of-defense-in-depth framing (wrap-time `_wrap.py` + unwrap-time `_django_patches.py`) is documented identically in both modules' docstrings and the GLOSSARY's `safe_wrap_connection_method` (`docs/GLOSSARY.md:949-968`) and `Django Trac #37064 hardening` (`docs/GLOSSARY.md:1115-1125`) entries cross-reference each other correctly.
-- **New helpers considered.** A `_DatabaseFailure`-predicate-hosting `testing/_database_failure.py` module was evaluated and deferred — see `## DRY analysis` for the trigger condition. The current import direction (`_wrap.py` consumes from `_django_patches.py`) is correct because `_django_patches.py` ships first at `AppConfig.ready` time.
-- **Duplication risk in the current file.** None — the file is 149 lines with a single public function (`safe_wrap_connection_method`), one runtime guard (`callable(wrapper)`), one predicate call (`_is_database_failure(current)`), and one mutation (`setattr(connection, method_name, wrapper)`). Zero repeated literals per shadow overview at `docs/shadow/django_strawberry_framework__testing___wrap.overview.md:17`.
+- **Existing patterns reused.** The module reuses the canonical `_django_patches.py::_is_database_failure` predicate (source 27 import, source 144 call) — the single shared contract between the wrap-time and unwrap-time halves of the Trac #37064 defense; it does not re-spell the `isinstance(..., _DatabaseFailure)` check or the `_DatabaseFailure is not None` import-resilience guard. Type imports (`Callable`, `Any`, `BaseDatabaseWrapper`) are the conventional stdlib/Django annotations.
+- **New helpers considered.** A `testing/_database_failure.py` host module for the predicate was evaluated and deferred (single `testing/` consumer today; the import-from-`_django_patches` direction is correct given the patch module ships first at `AppConfig.ready`).
+- **Duplication risk in the current file.** None — one function, zero repeated literals (shadow overview: 0 repeated string literals), no near-copy branches.
 
 ### Other positives
 
-- **Test coverage.** Six tests at `tests/testing/test_wrap.py` pin every branch: happy-path install (`:28-43`), declines-when-`_DatabaseFailure` (`:46-66`), private-symbol-missing graceful path (`:69-89`), arbitrary method name (`:92-112`), end-to-end composition with the unwrap-time patch (`:115-161`), and the `TypeError` early-validate guard (`:164-187`). The composition test (`:115-161`) is the load-bearing pin — it proves the two halves of the defense-in-depth actually compose and that the `safe_wrap_connection_method`-declines / `_remove_databases_failures`-unwraps sequence restores the sentinel original cleanly.
-- **TypeError-at-wrap-site early validation.** The `if not callable(wrapper): raise TypeError(...)` guard at `_wrap.py:141-144` surfaces a non-callable typo at the wrap site rather than as a delayed `TypeError` deep inside Django's ORM at the next `connection.<method>()` call — the docstring's `Raises:` section (`_wrap.py:134-139`) makes the failure-mode promise consumer-facing and `tests/testing/test_wrap.py:164-187` pins it. Same defensive shape as the `_django_patches.py::apply` symbol-missing branch.
-- **No mutation before validation.** The two-step "validate wrapper is callable → check current `_DatabaseFailure` state → setattr" sequence at `_wrap.py:141-149` is the correct atomic ordering: the `TypeError` raise (line 142) and the `_is_database_failure` early-return (line 146-147) both happen before the `setattr` mutation (line 148). `tests/testing/test_wrap.py:185` pins the "connection method untouched on TypeError" property.
-- **GLOSSARY drift quick-check is clean.** Both `safe_wrap_connection_method` (`docs/GLOSSARY.md:949-968`) and `Django Trac #37064 hardening` (`docs/GLOSSARY.md:1115-1125`) entries are aligned with the source: cooperative wrap-time check, `False` return on `_DatabaseFailure` already in place, `True` return otherwise, mirror to `django-debug-toolbar`'s `wrap_cursor`, defense-in-depth framing, status `shipped (0.0.7)`. The `### Cross-cutting infrastructure` index (`docs/GLOSSARY.md:38`) and the testing category index (`docs/GLOSSARY.md:140`) both link to the entry correctly. No in-cycle GLOSSARY edit warranted.
-- **Subpackage rename audit-trail.** The `testing/__init__.py:25-27` "subpackage exists now so consumers have a stable import path" framing is the load-bearing audit trail for the `test/` → `testing/` rename — the docstring deliberately commits the package to a stable consumer-facing path even though only one utility ships today. The `_wrap.py:91` example, `tests/testing/test_wrap.py:19` import, and GLOSSARY snippet (`docs/GLOSSARY.md:957`, `:961`) all use the corrected `testing` path consistently.
+- **Guard ordering is correct and mutation-safe.** The `not callable(wrapper)` check (source 139-142) precedes the only `setattr` (source 146), so a non-callable wrapper can never leave the connection in a half-mutated state; the `TypeError` message echoes the offending value (`{wrapper!r}`) and the docstring's `Raises:` block explains the cursor-object-vs-callable footgun it catches. Pinned by `tests/testing/test_wrap.py::test_safe_wrap_connection_method_raises_on_non_callable_wrapper`.
+- **Decline path is side-effect-free.** When `_is_database_failure(current)` is true the helper returns `False` with no `setattr` (source 144-145) — Django's wrapper is left untouched, which is the whole cooperative contract. Pinned by `::test_safe_wrap_connection_method_declines_when_database_failure_in_place`.
+- **Multi-database safe by construction.** The helper operates only on the `BaseDatabaseWrapper` instance handed to it (`connections[alias]`); no global state, no default-alias assumption — any alias works. Pinned by `::test_safe_wrap_connection_method_works_on_arbitrary_method_names`.
+- **Thread/process safety adequate for the documented surface.** The `getattr`-then-`setattr` is a non-atomic read-check-write, but Django `connections` is a thread-local registry and the helper is documented for `setUp`/`tearDown` (single-threaded test phase) with zero process-global mutable state — the TOCTOU window is benign in the intended usage. Not a finding.
+- **Restoration semantics correctly delegated.** The helper deliberately does only the wrap step; the docstring's "Restoration semantics" block makes the caller responsible for saving/restoring the original, and the `_django_patches` unwrap-time backstop covers the non-cooperative path. This separation matches the `_django_patches.py` module docstring's two-halves framing and is consistent with the GLOSSARY contract.
+- **Symbol-missing resilience inherited.** `_is_database_failure` returns `False` when `_DatabaseFailure` is `None` (Django moved/removed the private symbol), so the helper *installs* the wrapper rather than crashing the public `django_strawberry_framework.testing` import. Pinned by `::test_safe_wrap_connection_method_installs_when_database_failure_symbol_missing`.
+- **GLOSSARY accurate, no drift.** The `safe_wrap_connection_method` entry (`docs/GLOSSARY.md:1096-1115`) correctly states the return semantics (`False` = declined/untouched, `True` = installed), the `django-debug-toolbar` mirror precedent, the wrap/unwrap defense-in-depth pairing, and the auto-applied unwrap half. The availability table (`:121`) and Trac #37064 entry (`:1289-1299`) also match live source. No replacement text needed.
+- **Prior-artifact CHANGELOG Low resolved.** The superseded artifact flagged `CHANGELOG.md:33` carrying the stale `django_strawberry_framework.test` import path. Live `CHANGELOG.md` now documents the rename explicitly (`CHANGELOG.md:66`, "The old `django_strawberry_framework.test` package path has been renamed") and the `### Added` entry reads "Public export from [`django_strawberry_framework.testing`][test-init]" (`CHANGELOG.md:100`). Already merged — not re-raised.
 
 ### Summary
 
-149-line single-function module hosting `safe_wrap_connection_method`, the wrap-time half of the package's Django Trac #37064 defense-in-depth (the unwrap-time half lives in `_django_patches.py`). Zero High / Medium; three Lows all comment/docstring-pass: (a) the `.. code-block:: python` example references `TransactionTestCase` without showing its import — consumers copy-pasting hit `NameError`; (b) `CHANGELOG.md:33`'s `### Added` line still cites the old `django_strawberry_framework.test` import path post-rename to `django_strawberry_framework.testing` — forwarded to project pass since Worker 1 cannot edit CHANGELOG; (c) one RST `---`-underlined heading inside an otherwise bare-paragraph docstring is a minor render-mismatch latent until Sphinx publishes. The `_is_database_failure` predicate single-sourcing across `_wrap.py:146` and `_django_patches.py:173` is the correct DRY shape; the `## DRY analysis` records the defer-with-trigger gate for a future third call site. Test coverage at `tests/testing/test_wrap.py:1-187` is comprehensive — the end-to-end composition test (`:115-161`) is the load-bearing proof that the two halves of defense-in-depth compose. Standard three-spawn cycle: Lows require source edits at comment-pass time. `Status: under-review`.
+`safe_wrap_connection_method` is a single, tightly-scoped consumer-facing helper: callable-guard, read-current, decline-if-Django-owns-it, else install-and-report. Logic is correct and side-effect-safe (guard before the only mutation; decline path mutates nothing); multi-database and thread/process behavior are sound for the documented `setUp`/`tearDown` surface; restoration is correctly delegated with the `_django_patches` unwrap backstop as the net. The shared `_is_database_failure` predicate is single-sourced (do not flag as drift per the cross-file confirmation). No High, no Medium. Three Lows are all comment/docstring tier — one act-now (the example's missing `TransactionTestCase` import is a real consumer-facing contract gap warranting a source docstring edit), two forward-looking (undocumented `AttributeError` mode; in-docstring style mix). Because the act-now Low recommends a real source edit, this is a standard cycle (`under-review`), not a no-source-edit (shape #5) cycle.
 
 ---
 
 ## Fix report (Worker 2)
 
+Consolidated single-spawn (act-now Low already satisfied in source; the other two Lows are forward-looking). No source edit required this cycle.
+
 ### Files touched
-- `django_strawberry_framework/testing/_wrap.py` — applied both in-cycle Lows in the single `safe_wrap_connection_method` docstring. Low #1: added `from django.test import TransactionTestCase` to the `.. code-block:: python` example's import block (between `from django.db import connections` and `from django_strawberry_framework.testing import safe_wrap_connection_method`) so a verbatim copy-paste no longer hits `NameError: name 'TransactionTestCase' is not defined` at the `class _MyTest(TransactionTestCase):` line. Low #3: collapsed the `Restoration semantics` RST-underlined heading (`---` underline) into a bare-paragraph `**Restoration semantics.**` bold lead-in inline with the prose, matching the rest of the docstring's bare-paragraph + `**bold**`/`*italic*` + Google-style `Args:`/`Returns:`/`Raises:` convention (per the artifact's first recommended alternative). Both edits are docstring-only — no logic change to the public `safe_wrap_connection_method` symbol.
+
+- None. The act-now Low's recommended change is **already present in live source at the baseline SHA** (`0872a20`). `django_strawberry_framework/testing/_wrap.py:88` already reads `from django.test import TransactionTestCase`, inside the docstring example's import block (source 87-89), exactly as the artifact's recommended-change block (artifact lines 30-42) prescribes. `git show 0872a20:.../testing/_wrap.py` confirms the import was present at baseline — the example is already self-contained and a verbatim copy-paste resolves `TransactionTestCase`, `connections`, and `safe_wrap_connection_method`. No `NameError`. The premise of the act-now Low no longer holds; nothing to edit.
 
 ### Tests added or updated
-- None. Both Lows are docstring polish; no behavior changes. Existing pinning tests at `tests/testing/test_wrap.py` (six tests, lines 28-187 per the artifact's `## What looks solid` enumeration) already pin every branch of the wrap-time logic; nothing in the docstring touch changes the surface they cover.
+
+- None. No behavior change; the example-block fix was a no-op (already merged). The existing pinning tests cited in the artifact's "What looks solid" (`tests/testing/test_wrap.py::test_safe_wrap_connection_method_raises_on_non_callable_wrapper`, `::test_safe_wrap_connection_method_declines_when_database_failure_in_place`, `::test_safe_wrap_connection_method_works_on_arbitrary_method_names`, `::test_safe_wrap_connection_method_installs_when_database_failure_symbol_missing`) remain valid and untouched.
 
 ### Validation run
-- `uv run ruff format .` — pass (213 files left unchanged)
-- `uv run ruff check --fix .` — pass (All checks passed!)
+
+- `uv run ruff format .` — pass / no-changes (265 files left unchanged)
+- `uv run ruff check --fix .` — pass / no-changes (All checks passed)
+- No pytest (per AGENTS.md/START.md). `_wrap.py` is byte-identical to baseline.
 
 ### Notes for Worker 3
-- Consolidated single-spawn shape per dispatch (all three Lows fit the shape: two trivially-localised docstring edits in the same `safe_wrap_connection_method` docstring + one forwarded). Logic + comment + changelog disposition recorded in one pass.
-- Low #2 (`CHANGELOG.md:33` stale `django_strawberry_framework.test` import path) **forwarded to project pass** per artifact instruction (Worker 1 cannot modify `CHANGELOG.md` per `worker-1.md` scope; Worker 2 dispatch prompt also explicitly excludes CHANGELOG edits this cycle). Project pass artifact (`rev-django_strawberry_framework.md`) should sweep the cross-folder `test/` → `testing/` rename: at minimum `CHANGELOG.md:33` per the artifact; recommend grep for the full string `django_strawberry_framework.test` (no trailing dot or `ing`) to catch any other lagging surfaces.
-- Low #3 convention choice: I picked the **inline `**Restoration semantics.**` bold-paragraph** alternative over the `Notes:` Google-style block because (a) the code-block-with-prose-around-it shape doesn't fit cleanly under a single `Notes:` heading (the prose continues after the code-block with the "package's unwrap-time backstop" paragraph), (b) the inline bold matches the existing `**Wrap time**` / `**Unwrap time**` bullets at `_wrap.py:66-71` so the docstring now has one consistent emphasis convention, and (c) it preserves the prose-flow ordering (semantics paragraph → code-block → consequence paragraph → Args/Returns/Raises) without forcing a section break.
-- No shadow file used; the source is 149 lines and reads straight.
-- `uv.lock` unchanged. Other repo-dirty paths (`TODAY.md`, multiple `optimizer/*.py`, `orders/*.py`, `docs/GLOSSARY.md`, sibling `rev-*.md` artifacts) are out-of-scope concurrent maintainer/sibling-cycle work per AGENTS.md #33 and were not touched.
+
+- Shadow file used: `docs/shadow/django_strawberry_framework__testing___wrap.overview.md` (read-only). Its line numbers do not match source; all citations above use original source line numbers.
+- **Act-now Low rejected as already-satisfied (not a false premise about correctness, a stale-source premise).** Contradicting evidence: `git show 0872a20fcbecf870b3669742f108364202709e26:django_strawberry_framework/testing/_wrap.py` shows `from django.test import TransactionTestCase` at the example import block (line 88). Worker 3 can re-run that `git show` to confirm the import predates this cycle. The artifact's own recommended-change snippet (artifact lines 30-42) is identical to current source — the fix is in place.
+- **Deferred Lows (both forward-looking, no edit):** (1) undocumented `AttributeError` from `getattr(connection, method_name)` with no default — trigger: next time the docstring's `Raises:` block is touched, add an `AttributeError` bullet for symmetry with the existing `TypeError` loud-failure mode. (2) in-docstring style mix (`**bold**` lead-in vs Google-style `Args:`/`Returns:`/`Raises:`) — trigger: a Sphinx/napoleon docs build lands for the `testing` subpackage; normalize to Google-style then.
+- DRY `_is_database_failure` single-sourcing: confirmed correct per artifact, NOT re-flagged.
 
 ---
 
 ## Verification (Worker 3)
 
 ### Logic verification outcome
-Consolidated single-spawn (shape #4) cycle on a 149-line single-public-function testing helper. Two in-cycle Lows applied as docstring-only edits in `safe_wrap_connection_method`:
 
-- **Low #1 (TransactionTestCase import).** Diff adds `from django.test import TransactionTestCase` between the two existing import lines in the `.. code-block:: python` example (`_wrap.py:88`). A consumer copy-pasting the block verbatim no longer hits `NameError: name 'TransactionTestCase' is not defined` at `class _MyTest(TransactionTestCase):` (`_wrap.py:92`). The import was inserted at the position the artifact's recommended replacement names (alongside the existing `from django.db import connections` and `from django_strawberry_framework.testing import safe_wrap_connection_method`).
-- **Low #3 (RST convention normalization).** Diff collapses the two-line `Restoration semantics` heading with `---` underline (formerly `_wrap.py:81-82`) into an inline `**Restoration semantics.** This helper handles only the wrap step.` bold lead-in (`_wrap.py:81-83`). The new convention now matches the existing `**Wrap time**` / `**Unwrap time**` inline-bold bullets at `_wrap.py:66-71` and leaves the docstring with one consistent emphasis convention plus the pre-existing Google-style `Args:` / `Returns:` / `Raises:` blocks at `_wrap.py:116-138`. Worker 2's "inline bold over `Notes:` block" rationale (Notes-for-Worker-3) is correct — the `Notes:` form would have forced a section break between the prose and the code-block-with-trailing-paragraph shape.
-- **Low #2 (CHANGELOG.md:33 stale path).** Forwarded to project pass (`rev-django_strawberry_framework.md`) per the artifact's own instruction and `worker-1.md` scope. Worker 2 explicitly defers this Low and does not edit `CHANGELOG.md`. `git diff -- CHANGELOG.md` is empty, confirming the forward.
-
-Spot-verified positive claims in `## What looks solid`: `_is_database_failure(current)` predicate consumed at `_wrap.py:144` (Worker 1 cited :146 pre-edit; the docstring net contracted by 2 lines under the Low #3 collapse), `TypeError` early-validate guard at `_wrap.py:139-142` (Worker 1 cited :141-144), `setattr` mutation at `_wrap.py:146` (Worker 1 cited :148). All three sequence-ordering claims hold post-edit modulo the same -2 line shift introduced by the docstring collapse. The `_DatabaseFailure` single-source-of-truth import at `_wrap.py:27` (consuming the canonical predicate from `_django_patches.py::_is_database_failure`) is untouched.
+- **Act-now Low rejection verified with falsifiable contradicting evidence (all 3 false-premise gates hold).** W2 rejected Low 1 (example missing `TransactionTestCase` import) as an already-satisfied/stale-source premise, citing `git show 0872a20fcbecf870b3669742f108364202709e26:django_strawberry_framework/testing/_wrap.py`. Independently re-ran that `git show`: line 88 reads `from django.test import TransactionTestCase`, sitting in the example import block (87-89) directly above `class _MyTest(TransactionTestCase):` (92). The example is self-contained — a verbatim copy-paste resolves `connections`, `TransactionTestCase`, and `safe_wrap_connection_method` with no `NameError`. The cited line exists in source, the evidence disproves the artifact's premise, and the import predates this cycle. Rejection accepted.
+- **Logic independently sanity-checked (W1 "looks solid" claims hold).** Guard-before-setattr: the `not callable(wrapper)` guard (`_wrap.py:139-142`) precedes the only `setattr` (`:146`) → a non-callable wrapper can never half-mutate the connection. Decline path side-effect-free: `_is_database_failure(current)` true → `return False` (`:144-145`) with no `setattr`, Django's wrapper untouched. Multi-DB safe: operates only on the passed `BaseDatabaseWrapper`, zero global/default-alias state. Cooperative restore: helper does only the wrap step; restoration delegated to the caller, with the `_django_patches` unwrap-time backstop as the net.
+- **`_is_database_failure` single-sourcing confirmed, NOT re-flagged.** Defined once at `_django_patches.py::_is_database_failure` (`:129-131`), imported by the wrap site (`_wrap.py:27`/call `:144`) and called by the unwrap site (`_django_patches.py:173`) — one shared predicate, correct import direction (patch module ships first at `AppConfig.ready`). Matches the DRY defer.
+- **4 pinning tests grep-match** in `tests/testing/test_wrap.py` (`_raises_on_non_callable_wrapper`:164, `_declines_when_database_failure_in_place`:46, `_works_on_arbitrary_method_names`:92, `_installs_when_database_failure_symbol_missing`:69).
 
 ### DRY findings disposition
-`## DRY analysis` records a defer-with-trigger gate: a future third `_is_database_failure` call site in `testing/` (e.g., a `safe_unwrap_connection_method` companion or a `GraphQLTestCase` fixture) would re-open the question of whether a `testing/_database_failure.py` host module would clean up the cross-folder import direction. Today the import-from-`_django_patches.py` direction is correct because `_django_patches.py` autoloads first at `AppConfig.ready` time. The trigger is grep-resolvable (`grep -rn "_is_database_failure" django_strawberry_framework/testing/` → exactly one consumer site at `_wrap.py:27`) and the deferral premise holds.
+
+- `_is_database_failure` single-sourcing: deferred-with-trigger (second `testing/`-package consumer) — confirmed correct, not re-flagged. Other 2 Lows forward-looking with triggers (AttributeError `Raises:` bullet on next docstring touch; style-mix normalize on a Sphinx build).
 
 ### Temp test verification
-None used. The artifact's enumerated existing pinning tests at `tests/testing/test_wrap.py:28-187` (six tests covering happy-path install, `_DatabaseFailure` decline, private-symbol-missing graceful path, arbitrary method name, end-to-end composition with the unwrap-time patch, and the `TypeError` early-validate guard) are sufficient — the docstring-only edits change zero observable behavior at the public surface so no new test is warranted.
+
+- None created. The decisive evidence was a `git show` at baseline + source reads; no behavior probe required (zero source change).
 
 ### Verification outcome
-`cycle accepted; verified`. Top-level `Status:` flipped to `verified`. Checklist box at `docs/review/review-0_0_7.md:81` marked `[x]`.
 
-Changelog disposition (`Not warranted`) verified clean: cites BOTH (a) `AGENTS.md` #21 ("Do not update `CHANGELOG.md` unless explicitly instructed") and (b) active plan silence at `docs/review/review-0_0_7.md` (dispatch prompt itself pre-named the disposition as "`Not warranted` (internal docstring polish) citing AGENTS.md + active plan silence" — matches). `git diff -- CHANGELOG.md` empty. Internal-only framing is honest — the `safe_wrap_connection_method(connection, method_name, wrapper) -> bool` public contract is bit-for-bit identical pre- and post-edit (same parameters, same return type, same `_DatabaseFailure` decline branch, same `TypeError` early-validate guard, same `setattr` mutation).
-
-Ruff outcomes spot-verified on the touched file: `uv run ruff format --check django_strawberry_framework/testing/_wrap.py` → `1 file already formatted`; `uv run ruff check django_strawberry_framework/testing/_wrap.py` → `All checks passed!`.
+`cycle accepted; verified`. Shape: no-source-edit (cycle diff `git diff --stat 0872a20 -- _wrap.py` empty; `_wrap.py` byte-identical to baseline). The act-now Low's rejection holds on independent re-check of the cited `git show` (import present at baseline line 88). CHANGELOG diff empty, Not-warranted with both citations. Ruff format-check + check pass. Sets top-level `Status: verified` and marks the `testing/_wrap.py` box in `review-0_0_9.md`.
 
 ---
 
 ## Comment/docstring pass
 
-Folded into the consolidated single-spawn above (see `## Fix report (Worker 2)`). Per-finding dispositions:
+Folded into the consolidated single-spawn. No comment/docstring edit made this cycle.
 
-- Low #1 (docstring example missing `TransactionTestCase` import): **applied** — added `from django.test import TransactionTestCase` to the example's import block.
-- Low #2 (`CHANGELOG.md:33` stale `django_strawberry_framework.test` path): **forwarded to project pass** — Worker 2 dispatch prompt explicitly defers this Low to the cross-folder rename sweep handled by `rev-django_strawberry_framework.md`.
-- Low #3 (mixed RST-underline vs bare-paragraph convention): **applied** — replaced `Restoration semantics\n---------------------` underlined heading with inline `**Restoration semantics.**` bold lead-in to match the docstring's pre-existing bare-paragraph + `**bold**` + Google-style `Args:`/`Returns:`/`Raises:` convention.
+### Files touched
+
+- None.
+
+### Per-finding dispositions
+
+- Low 1 (example missing `TransactionTestCase` import): **No edit — already satisfied in source.** `_wrap.py:88` carries `from django.test import TransactionTestCase` at baseline `0872a20`; the example is self-contained and runnable as-is.
+- Low 2 (undocumented `AttributeError` in `Raises:`): **Deferred (forward-looking).** Per Worker 1's framing — current loud-fail behavior is correct; add the bullet when the docstring is next touched. No action now.
+- Low 3 (in-docstring style mix): **Deferred (forward-looking).** Cosmetic/latent; normalize to Google-style when a Sphinx build lands for `testing`. No action now.
 
 ### Validation run
-- `uv run ruff format .` — pass (213 files left unchanged)
-- `uv run ruff check --fix .` — pass
+
+- `uv run ruff format .` — pass / no-changes (265 files left unchanged)
+- `uv run ruff check --fix .` — pass / no-changes (All checks passed)
+
+### Notes for Worker 3
+
+The act-now Low was already resolved in live source; the only two remaining findings are explicitly forward-looking. No source or docstring lines changed in this cycle.
 
 ---
 
 ## Changelog disposition
 
 ### State
-`Not warranted`
+
+`Not warranted`.
 
 ### Reason
-Cycle's edits are docstring-only polish on a single public symbol (`safe_wrap_connection_method`): adding a missing import line inside a `.. code-block:: python` example so verbatim copy-paste runs, and normalizing one RST-underlined sub-heading into the docstring's pre-existing bare-paragraph + inline-bold convention. No behavior change at the public surface; the `safe_wrap_connection_method(connection, method_name, wrapper) -> bool` contract, the `_DatabaseFailure` decline branch, the `TypeError` early-validate guard, and the `setattr` mutation are all bit-for-bit identical pre- and post-edit. Falls squarely under `worker-2.md`'s "Not warranted" calibration — "docstring polish… semantically equivalent simplifications". Cites both halves: (a) `AGENTS.md` #21 ("Do not update `CHANGELOG.md` unless explicitly instructed"), and (b) the active plan (`docs/review/review-0_0_7.md`) is silent on changelog authorization for this cycle (the dispatch prompt itself names changelog as "`Not warranted` (internal docstring polish) citing AGENTS.md + active plan silence" — matches). Comparable severity to prior cycles' `Not warranted` calibrations: `list_field.py` four citation/docstring Lows, `scalars.py` TODO-anchor rotation + symmetry-claim tighten, `optimizer/walker.py` private-helper validator hoist with preserved public contract.
+
+Zero source change this cycle (the act-now Low was already merged at baseline; the other two Lows are forward-looking with no edit). Nothing consumer-visible changed. Per `AGENTS.md` ("Do not update CHANGELOG.md unless explicitly instructed") and the active review plan's silence on changelog authorization for this per-file cycle (per-file cycles are never the authorising scope and forward any CHANGELOG drift to the project pass), no edit is warranted.
 
 ### What was done
-No `CHANGELOG.md` edit. Low #2's CHANGELOG.md:33 stale-path drift is forwarded to the project pass (`rev-django_strawberry_framework.md`) per the artifact and the dispatch prompt; that future cross-folder sweep will record its own changelog disposition.
+
+No `CHANGELOG.md` edit.
 
 ### Validation run
-- `uv run ruff format .` — pass (213 files left unchanged)
-- `uv run ruff check --fix .` — pass
+
+- `uv run ruff format .` — pass / no-changes (265 files left unchanged)
+- `uv run ruff check --fix .` — pass / no-changes (All checks passed)
 
 ---
 
 ## Iteration log
-
-_

@@ -6,6 +6,8 @@ optimizer walker (plan time) and the Relay resolver (resolve time) must spell
 identically.
 """
 
+import pytest
+from strawberry.relay.types import to_base64
 from strawberry.relay.utils import SliceMetadata
 
 from django_strawberry_framework.utils.connections import (
@@ -13,6 +15,7 @@ from django_strawberry_framework.utils.connections import (
     CONNECTION_ORDER_KWARG,
     CONNECTION_SIDECAR_KWARGS,
     ConnectionWindowBounds,
+    UnwindowableConnection,
     connection_sidecar_inputs_from_kwargs,
     derive_connection_window_bounds,
     has_connection_sidecar_input,
@@ -78,6 +81,61 @@ def test_before_with_last_is_a_forward_window_not_reverse():
         max_results=_MAX,
     )
     assert bounds.reverse is False
+
+
+def test_after_with_last_is_unwindowable_not_reverse_with_offset():
+    """``after`` + ``last`` raises ``UnwindowableConnection`` instead of a reverse window.
+
+    The offset-bearing backward shape (no ``first`` / no ``before``) resolves a
+    NON-ZERO offset through ``SliceMetadata`` (``start = int(after) + 1``), but
+    the reversed row-number window partitions over the WHOLE parent partition, so
+    the forward ``_dst_row_number`` the resolver reads its page flags from would
+    diverge from the per-parent pipeline whenever the after-remainder is
+    ``<= last`` rows. Pre-fix the helper returned ``reverse=True`` with that
+    non-zero offset (the High); the fix makes it an unwindowable fallback so the
+    walker leaves the selection unplanned and the per-parent pipeline serves it
+    (spec-033 Decision 5).
+    """
+    after_cursor = to_base64("arrayconnection", "3")
+    slice_meta = SliceMetadata.from_arguments(
+        None,
+        before=None,
+        after=after_cursor,
+        first=None,
+        last=3,
+        max_results=_MAX,
+    )
+    # The trap: a non-zero offset paired with the reversed-window shape.
+    assert slice_meta.start == 4
+
+    with pytest.raises(UnwindowableConnection):
+        derive_connection_window_bounds(
+            None,
+            before=None,
+            after=after_cursor,
+            first=None,
+            last=3,
+            max_results=_MAX,
+        )
+
+
+def test_after_with_first_stays_a_windowed_forward_offset():
+    """``after`` + ``first`` keeps a windowed forward offset window (not unwindowable).
+
+    The companion to the ``after`` + ``last`` rejection: a forward offset window
+    is fully expressible by ``SliceMetadata`` (``limit = expected``), so the fix
+    must NOT reject it - only the backward (``last``) offset shape is unwindowable.
+    """
+    after_cursor = to_base64("arrayconnection", "2")
+    bounds = derive_connection_window_bounds(
+        None,
+        before=None,
+        after=after_cursor,
+        first=2,
+        last=None,
+        max_results=_MAX,
+    )
+    assert bounds == ConnectionWindowBounds(offset=3, limit=2, reverse=False)
 
 
 def test_sidecar_kwarg_family_constants():

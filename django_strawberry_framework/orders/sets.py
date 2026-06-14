@@ -13,8 +13,8 @@ expands the file to:
   ``_get_concrete_field_names_for_order`` walk per spec-028 Revision 4 B4.
 - Add the resolver-facing classmethod pair ``apply_sync`` /
   ``apply_async`` (no ``apply(...)`` dispatcher per Spec DoD 4(c)).
-- Add the ``check_permissions`` instance method + the classmethod
-  pipeline (``_run_permission_checks`` / ``_active_permission_field_paths``
+- Add the classmethod permission pipeline
+  (``_run_permission_checks`` / ``_active_permission_field_paths``
   / ``_iter_active_related_branches`` / ``_invoke_permission_method`` /
   ``_request_from_info``) that drives active-input-only per-field
   ``check_<field>_permission`` dispatch per Spec Decision 8 step 6.
@@ -444,20 +444,6 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
             bare=bare,
             target_attr="orderset",
         )
-
-    def check_permissions(self, request: Any) -> None:
-        """Backward-compatible thin delegate to ``_run_permission_checks``.
-
-        Cookbook callers reach for the bound-method form (cookbook
-        ``orderset.py::AdvancedOrderSet.check_permissions``). The
-        active-input normalization happens inside
-        ``_run_permission_checks`` so both entry points share one source
-        of truth. Routes through ``type(self)._run_permission_checks``
-        against the input value parked on the instance
-        (``self._input_value``); falls back to the empty list when no
-        input has been parked.
-        """
-        type(self)._run_permission_checks(getattr(self, "_input_value", None), request)
 
     @classmethod
     def get_flat_orders(

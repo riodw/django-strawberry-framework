@@ -214,18 +214,77 @@ class Command(BaseCommand):
             return False
         return field.name == definition.model._meta.pk.name
 
-    @staticmethod
+    @classmethod
     def _relation_row(
+        cls,
         definition: object,
         field: models.Field,
         field_meta: object,
     ) -> tuple[str, str, str]:
-        """Build the row for a relation field from its resolved annotation + cardinality."""
+        """Build the row for a relation field from its resolved annotation + cardinality.
+
+        Most relations keep their generated ``list[T]`` annotation, so the row
+        reads the resolved GraphQL type from ``origin.__annotations__``. The one
+        exception is the ``relation_shapes = {<rel>: "connection"}`` shape: the
+        Phase-2.5 synthesizer pops the list annotation
+        (``types/finalizer.py::_suppress_relation_list_form``) while leaving the
+        Django field in ``selected_fields``, so the list form is gone from
+        ``origin.__annotations__`` yet the field still reaches this method. That
+        case is detected via ``definition.relation_connections`` (the synthesizer's
+        own ``<rel>_connection -> <rel>`` record) and rendered from the synthesized
+        connection sibling instead - never indexing the deleted annotation.
+        """
+        generated = cls._suppressed_connection_name(definition, field)
+        if generated is not None:
+            return cls._connection_only_relation_row(definition, field_meta, generated)
         graphql_type = _render_annotation(definition.origin.__annotations__[field.name])
         kind = field_meta.relation_kind
         converter = f"relation: {_RELATION_KIND_LABELS.get(kind, kind)}"
         nullable = "no (list)" if field_meta.is_many_side else _yes_no(field_meta.nullable)
         return graphql_type, nullable, converter
+
+    @staticmethod
+    def _suppressed_connection_name(definition: object, field: models.Field) -> str | None:
+        """Return the synthesized ``<rel>_connection`` name when ``field``'s list form was dropped.
+
+        A ``relation_shapes = {<rel>: "connection"}`` field has its generated
+        ``list[T]`` annotation popped by the Phase-2.5 synthesizer
+        (``_suppress_relation_list_form``), so ``field.name`` is absent from
+        ``origin.__annotations__`` even though the Django field stays in
+        ``selected_fields``. ``definition.relation_connections`` maps the
+        synthesized sibling's Python name to the underlying relation field name,
+        so an inverted lookup names the sibling whose type the row renders.
+        Returns ``None`` for the ``"both"`` / ``"list"`` shapes (annotation
+        present) and for any relation with no synthesized connection.
+        """
+        if field.name in definition.origin.__annotations__:
+            return None
+        connections = definition.relation_connections or {}
+        return next((gen for gen, rel in connections.items() if rel == field.name), None)
+
+    @staticmethod
+    def _connection_only_relation_row(
+        definition: object,
+        field_meta: object,
+        generated: str,
+    ) -> tuple[str, str, str]:
+        """Render a ``"connection"``-shaped relation from its synthesized sibling.
+
+        The list annotation was suppressed, so the resolved GraphQL type is read
+        from the finalized Strawberry field metadata for the synthesized
+        ``<rel>_connection`` sibling (the authoritative post-finalize record, the
+        same source ``_consumer_authored_row`` reads) rather than the deleted
+        ``origin.__annotations__`` entry. The connection field is non-null
+        (``<Target>Connection!``); the converter column names both the relation
+        cardinality and the connection-only shape so the operator sees that the
+        list form was deliberately dropped.
+        """
+        strawberry_fields = definition.origin.__strawberry_definition__.fields
+        field_type = next(sf.type for sf in strawberry_fields if sf.python_name == generated)
+        graphql_type = _render_strawberry_type(field_type)
+        kind = field_meta.relation_kind
+        converter = f"relation: {_RELATION_KIND_LABELS.get(kind, kind)} (connection-only)"
+        return graphql_type, _consumer_nullable(field_type), converter
 
     @staticmethod
     def _scalar_row(definition: object, field: models.Field) -> tuple[str, str, str]:

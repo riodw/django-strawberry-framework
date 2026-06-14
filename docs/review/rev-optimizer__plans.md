@@ -2,11 +2,12 @@
 
 Status: verified
 
+(Supersedes the stale 0.0.7-era artifact that carried `Status: verified`; the active plan box `review-0_0_9.md:95` was unchecked. Replaced wholesale per the recurring stale-artifact pattern. Live source diffed; no findings re-raised from the prior cycle.)
+
 ## DRY analysis
 
-- **Defer-with-trigger.** Extract a shared `_extract_lookup_paths(entries)` helper that subsumes `lookup_paths` (`plans.py:467-471`) and the recursive `_prefetch_lookup_paths` (`plans.py:474-491`) into one entry point taking `select_related` + `prefetch_related` together. Defer until a third call site needs the same union (e.g., the deferred B8 introspection surface or a future strictness reporter). Today the two helpers are correctly factored (`lookup_paths` for the public B8/debugging surface union; `_prefetch_lookup_paths` for the recursive prefetch-only walk consumed by `_optimizer_can_absorb` at `plans.py:322`).
-- **Defer-with-trigger.** Collapse the three brittle-Django-private accessors (`_lookup_path` at `plans.py:244-251`, `_consumer_prefetch_lookups` at `plans.py:254-262`, `_consumer_only_fields` at `plans.py:265-293`) into a dedicated `_django_private_accessors` namespace OR a small `consumer_query` dataclass once a fourth Django-private attribute joins them. Today all three live next to each other with consistent "Centralizes the brittle Django-private contract for ..." docstrings — premature factoring would obscure the per-attribute defensive rationale.
-- **Defer-with-trigger.** Extract a shared `_consumer_owns_field(queryset, *, kind)` predicate that subsumes `_consumer_only_fields(queryset) is not None` (`plans.py:385`) and the parallel `_flatten_select_related(getattr(query, "select_related", False))` shape (`plans.py:418`) into one "did the consumer already do this work?" entry point. Defer until a third reconciliation axis lands (a likely candidate is `query.annotations` / `Subquery` cooperation for aggregate planning — see [`BACKLOG.md`][backlog] item 41 / aggregates spec). The two current axes are correctly per-attribute today because the return shapes are genuinely different (frozenset of fields vs. list of remaining names).
+- **Defer — `_IndexedList.append_unique`/`.append` `with contextlib.suppress(TypeError)` index maintenance vs the module-level `append_unique`/`append_prefetch_unique` `isinstance(values, _IndexedList)` fast-path branch.** The two free functions (`plans.py::append_unique` 353-365, `plans.py::append_prefetch_unique` 373-389) each open with the same `isinstance(values, _IndexedList): values.append_unique(...); return` short-circuit, then fall through to a list-membership scan for the non-indexed `MutableSequence` case. This is correct dual-path design (the walker uses `_IndexedList`; manual/defensive plans may hand a bare list), not act-now duplication. Defer until a third `append_*_unique` free function lands on the plan shape; then extract a single `_dispatch_unique(values, value, *, path_key=None)` that routes indexed vs membership-scan once. Trigger: a third module-level `append_*_unique` mutator.
+- **Defer — `_lookup_paths_from_parts` recomputation in `lookup_paths`.** `plans.py::lookup_paths` (832-836) returns `set(plan.finalized_lookup_paths)` when finalized, else recomputes via `_lookup_paths_from_parts`; `finalize()` (233-235) already calls `_lookup_paths_from_parts` to populate `finalized_lookup_paths`. One construction-time computation, one finalized read — correctly single-sited through `_lookup_paths_from_parts`, no duplication today. Defer until a second consumer needs construction-time lookup paths without going through `finalize()`; no trigger fires at 0.0.9.
 
 ## High:
 
@@ -14,180 +15,110 @@ None.
 
 ## Medium:
 
-### GLOSSARY drift on `Queryset diffing`: consumer-`.only()` drop rule is undocumented
-
-`docs/GLOSSARY.md:840-853`'s `Queryset diffing` entry enumerates four cooperation rules — Queryset cooperation, Prefetch cooperation, Subtree-aware reconciliation, Plain-string absorption — but omits the consumer-`.only()`-wins drop rule that ships at `plans.py:344-355` + `plans.py:385-386` (the `drop_only_fields = bool(plan.only_fields) and _consumer_only_fields(queryset) is not None` branch and the verbatim consumer-permission-boundary rationale the docstring carries). The drop is a real consumer-visible behaviour-shape contract — a column-restricted consumer `.only(...)` survives optimizer planning instead of being silently overwritten by Django's `.only().only()` replacement semantics. The 0.0.7 CHANGELOG (`CHANGELOG.md:68`) records `_consumer_only_fields` gaining direct unit coverage, but the consumer-facing contract surface (the GLOSSARY entry) does not name the drop rule.
-
-Same calibration as `rev-optimizer__extension.md`'s `DjangoOptimizerExtension` / `Plan cache` / `Schema audit` Medium and `rev-management__commands__export_schema.md`'s `Schema export management command` Medium — a published GLOSSARY entry that lags shipped behaviour the consumer can key against is Medium not Low because the entry IS the consumer contract surface, not internal mechanics.
-
-Preserve verbatim replacement prose for Worker 2 to lift directly into the `Queryset diffing` entry's bulleted cooperation rules (append after the existing "Plain-string absorption" bullet):
-
-> - **`only()` cooperation.** If your resolver already calls `.only(...)` to enforce a column-level projection (e.g., a permission boundary that restricts which columns leave the database), the optimizer drops its own `only_fields` rather than chaining a second `.only(...)` that would replace yours — Django's `QuerySet.only(...).only(...)` replaces (not merges) the deferred-field set. `.defer(...)` is not treated as a consumer projection because `.defer()` and `.only()` compose cleanly in Django.
-
-```django_strawberry_framework/optimizer/plans.py:343:355
-``only_fields`` — dropped entirely when the consumer already
-applied ``.only(...)`` to the queryset (detected via
-``query.deferred_loading`` with ``defer_flag is False`` and a
-non-empty field set). Django's ``QuerySet.only(...).only(...)``
-chaining *replaces* the previous deferred-field set rather than
-merging, so applying the optimizer's ``only_fields`` on top of a
-consumer ``.only()`` would silently drop the consumer's projection
-— including columns the consumer may have restricted to enforce a
-permission boundary. The conservative consumer-wins choice is to
-drop the optimizer's ``only_fields`` whenever the consumer has
-already restricted columns; ``.defer(...)`` is not treated as a
-consumer projection because ``.defer()`` and ``.only()`` compose
-cleanly in Django.
-```
+None.
 
 ## Low:
 
-### Cache invariant on `cacheable` is documented but not enforced post-`finalize()`
+### `apply_window_pagination` forward-branch `limit >= 0` clause is unreachable-but-harmless (recorded intent)
 
-`plans.py:45-52`'s `OptimizationPlan` docstring frames the cache invariant uniformly ("once a plan has been handed off ... it must not be mutated in place. Use `dataclasses.replace` to derive a modified plan."), and `finalize()` (`plans.py:97-120`) swaps list fields to tuples so post-handoff `plan.prefetch_related.append(...)` raises `AttributeError`. But `cacheable` is a plain `bool` attribute (not a sequence) and remains settable after finalisation — `walker.py:342` and `walker.py:442` already mutate `plan.cacheable = False` on the *pre-finalize* plan, which is intentional, but the post-finalize cache invariant is enforced ONLY on the list fields. A regression that flips `cached_plan.cacheable = False` post-handoff would silently poison subsequent cache reads for that key (the cache returns the same finalized object across requests; the next read sees the mutated flag).
+`plans.py::apply_window_pagination #"limit is not None and limit >= 0 and limit != sys.maxsize"` (656) guards the forward upper-bound `__lte` filter with three conditions. The `limit >= 0` clause cannot be false in practice: `limit` is sourced from `utils/connections.py::derive_connection_window_bounds` (`slice_meta.expected` for the forward branch), which `SliceMetadata.from_arguments` never produces negative (it gates `first`/`last` against `0` and `max_results`). The clause is a defensive belt-and-suspenders against a hand-constructed negative `limit` — harmless (a negative `limit` would otherwise produce `__lte offset+limit < offset`, an always-empty window, which is a benign over-filter not a crash). Recorded intent, not a defect; no source edit. Trigger to revisit: a second caller of `apply_window_pagination` that does not route through `derive_connection_window_bounds` and could legitimately pass a negative `limit` — at that point the clause needs either a docstring note or removal as genuinely dead.
 
-Two reasonable shapes for the fix:
+### `_consumer_prefetch_lookups` trailing `or ()` is documented dead-under-real-QuerySet (forward-looking, already annotated in source)
 
-- Tighten the docstring at `plans.py:45-52` to call out that finalisation enforces immutability on the *list* fields specifically and the `cacheable` flag still relies on convention. Cite `walker.py::plan_optimizations` as the only writer.
-- Or move to `@dataclass(frozen=True)` on `OptimizationPlan` (Worker 2 cost: walker-side construction switches from in-place mutation to `replace(plan, ...)` at every helper call). This is real surface tightening, not cosmetic. Defer the frozen-dataclass option until a second cacheable-flag-flip writer lands or a real cache-poisoning incident surfaces; today the docstring tightening alone is the right shape.
-
-Low severity because no current writer mutates `cacheable` post-finalize and tests don't pin the invariant for the bool field.
-
-### `is_empty` exclusion of `cacheable` is correct but the docstring under-promises
-
-`plans.py:82-95`'s `is_empty` docstring says "`cacheable` is metadata about cache reuse and is excluded from the emptiness check" — accurate, but it doesn't name the consequence: an `OptimizationPlan(cacheable=False)` with no other directives reports `is_empty=True` (test pin: `test_cacheable_flag_does_not_affect_empty_state` at `tests/optimizer/test_plans.py:51-53`). Resolvers that key off `is_empty` for a "skip optimizer" early-out won't know the plan also carries an uncacheable-flag signal. Defer-with-trigger: address when a resolver-side callsite reads `is_empty` AND `cacheable` together for a logic decision. Today only `apply()` is empty-tolerant and the extension's `plan_relation` / `_optimize` paths don't branch on `is_empty`.
-
-### `_consumer_prefetch_lookups`'s `or ()` defensive coda is dead code under stock Django
-
-`plans.py:262` reads `list(getattr(queryset, "_prefetch_related_lookups", ()) or ())`. The `or ()` handles a falsy value other than the missing-attribute branch (e.g., the attribute is present but `None`). Stock Django's `QuerySet._prefetch_related_lookups` is always a tuple — `prefetch_related(None)` resets to `()`, not `None`. The `or ()` survives as a paranoid guard for non-`QuerySet` inputs whose `_prefetch_related_lookups` attribute exists but is `None` (e.g., a test double or a non-`QuerySet` manager). Same severity calibration as the per-Django-version defensive guards in `_consumer_only_fields`; defer-with-trigger until a real consumer surfaces a `None` lookups attribute. Worth a one-line comment naming the non-`QuerySet` test-double case so the next reviewer doesn't propose dropping it.
-
-### Audit-trail anchors (`P1`/`P2`/`M1`) survive without a docs target
-
-`plans.py:418` (`P2:` via comment in `_diff_select_related` is at `tests/optimizer/test_plans.py:218` + `:311`, not the source), `plans.py:445-451` (`# else: consumer wins on this subtree; optimizer dropped.`), and the source/test comment pairs `P1 case 1`, `P1 case 2`, `P1 follow-up`, `P2`, `M1` (`tests/optimizer/test_plans.py:218`, `:311`, `:356`, `:372`, `:387`, `:429`, `:458`) are paired audit-trail anchors between source and tests but resolve to no live spec heading — `grep -rn "^### P1\|^### P2\|^### M1" docs/SPECS/` returns nothing matching the prefetch-reconciliation rules these anchors tag. Same calibration as the `rev-registry.md` rev-anchor citation hygiene Low: an internal anchor that is paired between source and tests but lacks a docs target is audit-trail not link-rot, because the anchors function as inter-file labels for the reviewer. Defer-with-trigger: when a Q-series or P-series spec is authored for the queryset-diffing subsystem (e.g., a "Queryset cooperation contract" spec authored for `0.0.9+`), promote the anchors into a heading there OR drop them from the source comments entirely; today the anchors are correct audit-trail and Worker 2 should NOT propose a rename or removal without that spec landing.
+`plans.py::_consumer_prefetch_lookups #"or ()"` (407) is a paranoid guard for a non-`QuerySet` input whose `_prefetch_related_lookups` attribute is present but `None`. The source comment (393-406) already names this as dead code under a real `QuerySet` (stock Django always stores a tuple; `prefetch_related(None)` resets to `()`) and records its own removal trigger verbatim: *"a real consumer surfaces a `None` lookups attribute or the test-double case is otherwise retired."* No action — the deferral is already encoded in source. Listed here only so the next reviewer does not re-discover it as untriaged.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** `OptimizationPlan`'s mutable-to-tuple `finalize()` shape mirrors registry's snapshot pattern (`registry.py::clear` and `register_with_definition` rollback per `rev-registry.md`'s carry-forward note about intentional divergence — same calibration applies here for the walker-side mutation vs. handoff-side immutability split). `_lookup_path` (`plans.py:244-251`) centralizes the `prefetch_to` accessor in one site so the four call sites (`plans.py:239`, `:432`, `:438`, `:455`) share one Django-private contract — same shape as `_context.py::DST_OPTIMIZER_*` key consolidation per `rev-optimizer___context.md`'s "single home for X dispatch" calibration.
-- **New helpers considered.** Considered extracting `_drop_only_fields(plan, queryset)` to mirror `_diff_select_related` / `_diff_prefetch_related` — rejected because the only-fields reconciliation is a one-line boolean (`plans.py:385-386`), shorter than the helper signature it would carry, and the parallel structure would obscure that the only-fields rule is genuinely simpler than the per-entry prefetch walk. Same calibration as the `hints.py` "already at the consolidation point" Low recorded in `rev-optimizer__hints.md`.
-- **Duplication risk in the current file.** `_flatten_select_related._walk` at `plans.py:200-205` and `_prefetch_lookup_paths` at `plans.py:474-491` are both recursive lookup-path flatteners over Django relation trees, but the input shapes (dict-of-dicts for select_related vs. iterable-of-(str|Prefetch) for prefetch_related) and output shapes (dotted strings via `__`) are deliberately separated. Folding through a shared `_flatten_relation_tree` would force a discriminated-union input type and obscure the per-walker structural rationale (select_related's `True`/`False`/`dict` ternary vs. prefetch_related's iterable-of-objects).
+- **Existing patterns reused.** Window-math helpers are correctly hoisted to ONE home shared by plan-time and resolve-time: `ends_in_unique_column` / `deterministic_order` live here (481-539) and `connection.py` imports them back (`connection.py:64-65`, `_ends_in_unique_column = ends_in_unique_column` at 90) — the spec-033 Decision 11 cursor-parity invariant has a single implementation. `apply_window_pagination` / `window_partition_for_prefetch` (582-657, 542-579) are the sole window-prefetch mechanism, consumed by `walker.py::_plan_connection_relation` (1209, 1261-1268). The `_dst_*` annotation-name constants (`WINDOW_ROW_NUMBER` / `WINDOW_TOTAL_COUNT` / `WINDOW_ROW_NUMBER_REVERSED`, 476-478) are imported by both `walker.py` and `connection.py` rather than re-spelled — the namespace contract cannot drift.
+- **New helpers considered.** `_lookup_path` (53-60) and `_consumer_prefetch_lookups` (392-407) already centralize the two brittle Django-private contracts (`Prefetch.prefetch_to`, `QuerySet._prefetch_related_lookups`) so a future Django rename has one fix-site each — the correct factoring; no further extraction warranted. The `append_*_unique` family's dual indexed/membership path was evaluated and left as intentional dual-path design (see DRY analysis defer bullet).
+- **Duplication risk in the current file.** The two repeated string literals the shadow flags (`"prefetch_to"` 2x, `"queryset"` 2x) are reflective-access keys on distinct Django objects (`Prefetch.prefetch_to`, `Prefetch.queryset` / `query` attrs) read via `getattr` in different helpers — not a dispatch-key or constant candidate; hoisting them would obscure the Django attribute names they mirror. Correct as-is.
 
 ### Other positives
 
-- `OptimizationPlan` carries per-field docstrings (`plans.py:55`, `:58-64`, `:67`, `:69`, `:71`, `:73-80`) — every field has a one-line or paragraph explanation including the `O6` spec anchor on `cacheable`, the `B3` spec anchor on `planned_resolver_keys`, and the verbatim Django API surface (`QuerySet.select_related` / `.prefetch_related` / `.only`) the field maps to. Field-level dataclass docstrings are not auto-rendered by stock Python but survive in source and are picked up by AST-based doc tooling.
-- `finalize()` is idempotent and uses `dataclasses.replace` rather than in-place mutation, so even the construction-time path produces a new instance — the test `test_finalize_is_idempotent` at `tests/optimizer/test_plans.py:166-170` and `test_finalize_preserves_values_and_cacheable_flag` at `:150-154` pin both contracts. The walker's `plan_optimizations` return at `walker.py:58` (`return plan.finalize()`) and `diff_plan_for_queryset`'s `replace(plan, ...).finalize()` at `plans.py:395-401` both rely on this idempotency.
-- `_optimizer_can_absorb` (`plans.py:296-323`) carries a three-rule contract docstring that names the failure mode being prevented ("optimizer `Prefetch("items", queryset=Item.objects.only("name"))` cannot absorb consumer `"items__entries"`") and the silently-drop-data risk it averts. Same shape-of-contract clarity as `rev-optimizer__extension.md`'s `check_schema` audit.
-- `_diff_prefetch_related` at `plans.py:422-464` carries a load-bearing comment block at `:456-459` explaining the `prefetch_related(None)` reset idiom — the exact "Django reset idiom for prefetch lookups" reference that protects future readers from "why are we passing None?" confusion.
-- Defensive private-attribute access: every Django-private contract (`_prefetch_related_lookups`, `query.deferred_loading`, `query.select_related`, `Prefetch.prefetch_to`, `Prefetch.queryset`) is reached via `getattr(..., default)` with a documented brittle-contract rationale. The `_consumer_only_fields` `try/except (TypeError, ValueError)` defensive shape at `plans.py:285-288` survives a future Django that changes the 2-tuple shape.
-- Test surface: `tests/optimizer/test_plans.py` carries 30+ tests across 7 test classes (`TestOptimizationPlanIsEmpty`, `TestLookupPaths`, `TestOptimizationPlanApply`, `TestOptimizationPlanFinalize`, `TestPlanHelperRelocations`, `TestFlattenSelectRelated`, `TestConsumerOnlyFields`, `TestDiffPlanForQueryset`) covering every public surface and every defensive branch. The `TestConsumerOnlyFields` class explicitly pins the three defensive branches the 0.0.7 release added direct coverage for.
-- GLOSSARY alignment: `OptimizationPlan` is correctly absent as a dedicated entry per `optimizer/__init__.py:14-17`'s explicit "internal implementation details consumed by `extension.py` and tests, not consumer-facing API" framing. The only cross-reference (`docs/GLOSSARY.md:742` in `Multi-database cooperation`) is current — `.using(alias)` `_db` preservation through `OptimizationPlan.apply` for root querysets is the shipped 0.0.7 behaviour and the entry was authored at version-bump time.
-- Spec anchor citations: `B1` (cache integrity, `plans.py:330`), `B3` (strictness mode, `plans.py:71`), `B8` (queryset diffing, `plans.py:468`), `O6` (Prefetch downgrade for `get_queryset`, `plans.py:75`) all resolve to live spec headings under `docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md` and `docs/SPECS/spec-002-optimizer-0_0_2.md` and `docs/SPECS/spec-004-optimizer_beyond-0_0_3.md` — they are file-path-agnostic rev-anchors that survive the docs/SPECS/NEXT.md Step 8 archive sweep. Same shape as the citation-hygiene calibration recorded in `rev-registry.md`.
-- Static helper output cross-check: `docs/shadow/django_strawberry_framework__optimizer__plans.overview.md` reports 2 control-flow hotspots (`diff_plan_for_queryset` 78 lines / 4 branches; `_diff_prefetch_related` 43 lines / 6 branches) both UNDER the 8-branch Medium-tier threshold. The `getattr` density (12 calls) is correct shape — every call resolves a documented Django-private attribute with a known-brittle contract.
+- **Window SQL math verified correct in both directions.** Forward branch (582-657): offset filter `_dst_row_number__gt offset` drops rows `1..offset`; upper bound `__lte offset+limit` keeps exactly `limit` rows `offset+1..offset+limit`. Reverse (last-only) branch keeps `_dst_row_number` FORWARD and adds a separate `_dst_row_number_reversed` window (reversed order) filtered `__lte limit` to keep the trailing `limit` rows — so `connection.py::_resolve_from_window` (171-255) reads forward row numbers for cursors (`_dst_row_number - 1`, 230) and forward page flags (`first_rn > 1`, `last_rn < total`, 249-250) identically in both branches. The forward order is `.order_by(*order_by)`-applied to the queryset itself in BOTH branches (627), so prefetched-instance return order matches the window order — the fast path cannot diverge from the fallback pipeline. Pinned by `tests/optimizer/test_plans.py::TestApplyWindowPagination` (forward offset+upper-bound `704`, reversed `__lte 2` over-fetch guard `721`, `None`/`sys.maxsize` no-upper-bound `735`/`746`/`752`, `.only()` composition `757`).
+- **`offset`/`limit`/`reverse` contract matches the bounds source by construction.** `apply_window_pagination`'s parameters map exactly onto `ConnectionWindowBounds` (`utils/connections.py:70-126`): `offset = SliceMetadata.start`, forward `limit = SliceMetadata.expected`, reverse `limit = literal last` (because `SliceMetadata` sets `end = sys.maxsize` / `expected is None` for last-only). The `limit is None` / `sys.maxsize` "no upper bound" handling (650-651, 655-656) and the comment at 653-654 are consistent with the bounds doc. In the reverse branch `limit` is provably non-`None` (the bounds `reverse` predicate is `isinstance(last, int)`), so the `limit is not None` guard at 650 is correctly defensive, not load-bearing.
+- **`window_partition_for_prefetch` raises `OptimizerError` for exactly the non-windowable kinds.** Guards both a single-valued forward relation (kind not in the windowable set, 566-571) and a windowable kind whose `remote_field` resolves neither `attname` nor `name` (574-578). The PARENT-side partition correctly diverges from the instance accessor for forward-M2M without `related_name` (reverse query name off `remote_field`, per docstring 555-563). `walker.py::_plan_connection_relation` catches the raise (1212-1213) to leave the selection unplanned and fall back per-parent — the documented fail-soft contract. Both raise paths pinned (`test_forward_single_relation_raises` 812, `test_windowable_kind_without_remote_field_keys_raises` 818).
+- **`_reverse_order_by` does not mutate the caller's order tuple.** Verified live: `OrderBy.copy()` returns an independent clone (`clone = entry.copy() if hasattr(entry, "copy")`, 681), so flipping `clone.descending` and swapping `nulls_first`/`nulls_last` (682-686) cannot corrupt the `order_by` tuple the walker reuses for `deterministic_order` and the forward window. A bare `F` (no `descending` attr) hits the `descending is None` branch (678-679) and is appended unchanged — correct, a directionless ref has nothing to flip. The NULLS-positioning swap mirrors Django's `.reverse()` so a consumer ordering with explicit NULLS placement reverses the same way the resolve-time pipeline does.
+- **`finalize()` immutability + cache isolation is sound.** Swaps the five directive lists to tuples and the three `finalized_*` fields to frozensets (222-236) so post-handoff `.append()` raises `AttributeError` (pinned `test_finalize_blocks_post_handoff_append_on_cache_isolation` 204); idempotent on re-finalize (`test_finalize_is_idempotent` 214); `dataclasses.replace` is the documented derive path. The `cacheable` bool's post-handoff immutability is correctly documented as a single-writer convention (the class docstring records the explicit `@dataclass(frozen=True)` migration trigger, 143-145) — recorded intent, not a gap.
+- **`deterministic_order` / `ends_in_unique_column` total-order logic is correct.** pk / `pk.attname` / `unique=True` / `primary_key` terminal columns are recognised as already-total (509-523); a relation traversal (`"__"` in ref, 511-516) and an annotation alias / unknown field (`FieldDoesNotExist`, 517-522) are conservatively treated as non-unique so the pk is appended as a terminal tiebreaker — guaranteeing the positional offset cursors are stable across requests. String `-`-prefix stripping and `OrderBy`/`F` `.expression.name` extraction both handled (503-506). Parity pinned `TestDeterministicOrderHoistParity` (834).
+- **`diff_plan_for_queryset` reconciliation is conservative and copy-only.** The plan is only ever `replace`d, never mutated (B1 cache stays intact); the consumer-wins rules for `select_related` (exact-path drop, wildcard-`True`-is-no-overlap), `only_fields` (dropped wholesale when the consumer applied `.only()`, because Django's `.only().only()` replaces rather than merges and could drop a permission-boundary projection, 712-720), and `prefetch_related` (lossless-absorb only when the optimizer `Prefetch` carries a queryset, every consumer match is a bare string, and every consumer path is covered, 441-468) all correctly favour preserving consumer data over optimizing. The `prefetch_related(None)` reset-then-rebuild idiom (821-827) is the documented Django reset. Extensive table-driven coverage (`tests/optimizer/test_plans.py` 397-622).
+- **`runtime_path_from_path` cycle cap is well-reasoned.** The `_MAX_PATH_DEPTH = 1024` bound (288) turns a corrupt/cyclic `prev` chain into a loud `RuntimeError` (314-317) rather than an infinite hang, with a thorough comment (277-287) justifying why the ceiling sits far above any real query (graphql-core recurses one Python frame per level). Pinned `test_raises_on_cyclic_path` (660).
+- **GLOSSARY accurate.** No dedicated backticked entry for any of `apply_window_pagination` / `window_partition_for_prefetch` / `deterministic_order` / `ends_in_unique_column` / `OptimizationPlan`; the "Connection-aware optimizer planning" prose (GLOSSARY:235) describes the `_dst_row_number`/`_dst_total_count` window mechanism, pk-terminal deterministic order, and `.distinct()` fallback — all matching live source. The one `OptimizationPlan.apply` reference (GLOSSARY:864, multi-DB `.using(alias)` `_db` preservation) is accurate: `apply()` (238-253) chains `.only()`/`.select_related()`/`.prefetch_related()` which all preserve `_db`, with no `using()` re-pin. No drift, no replacement text needed.
 
 ### Summary
 
-`optimizer/plans.py` is a well-shaped 491-line plan-and-reconciliation module: `OptimizationPlan` carries per-field docstrings and an idempotent `finalize()` that enforces tuple-immutability on list fields; `diff_plan_for_queryset` and its two private helpers (`_diff_select_related`, `_diff_prefetch_related`) reconcile plan vs. queryset across four cooperation axes (select_related overlap, prefetch_related subtree absorption, consumer-`.only()` drop, plain-string-vs-Prefetch absorption) with the original plan never mutated. Zero High; one Medium — the `Queryset diffing` GLOSSARY entry at `docs/GLOSSARY.md:840-853` does not document the consumer-`.only()`-wins drop rule shipped via `_consumer_only_fields` in `0.0.7`, even though the per-`plans.py:343-355` docstring frames the rule as a permission-boundary contract a consumer can key against. Four Lows are all comment / convention items (cache-invariant docstring scope; `is_empty` consequence; `_consumer_prefetch_lookups` `or ()` defensive coda; paired-but-unanchored `P1`/`P2`/`M1` audit-trail tags). Shape #4 qualifier — GLOSSARY Medium requires a real edit per `worker-1.md` "GLOSSARY-only fixes do NOT qualify [for shape #5] — they need a real edit; route through shape #4". Standard three-spawn cycle collapses to consolidated single-spawn at Worker 2 per shape #4.
+`plans.py` is the optimizer's plan dataclass plus the window-pagination + deterministic-order helpers the walker applies. Logic is clean — no High, no Medium. The window SQL math (forward `__gt offset` + `__lte offset+limit`; reverse forward-row-number-kept + separate reversed `__lte limit`), the `offset`/`limit`/`reverse` contract against `derive_connection_window_bounds`, the `OptimizerError` raise conditions in `window_partition_for_prefetch`, the deterministic pk-terminal total order, queryset/order-tuple immutability (`OrderBy.copy()` clone verified live), and `finalize()` cache isolation all verified correct and well-pinned by `tests/optimizer/test_plans.py`. Two Lows are both recorded-intent / already-annotated-in-source, no edit. Two DRY items are both defer-with-trigger. No GLOSSARY drift. No-source-edit cycle (shape #5).
 
 ---
 
 ## Fix report (Worker 2)
 
-Consolidated single-spawn pass per shape #4 (GLOSSARY Medium + 4 defer-with-trigger comment-tightening Lows; no source logic change; no test added).
+Filled by Worker 1 per no-source-edit cycle pattern.
 
 ### Files touched
-- `docs/GLOSSARY.md` `Queryset diffing` section — appended fifth cooperation bullet (`only()` cooperation) verbatim from the artifact's recommended prose between the existing "Plain-string absorption" bullet and the "See also:" line. Documents the consumer-`.only()`-wins drop rule shipped at `plans.py::diff_plan_for_queryset #"drop_only_fields = bool(plan.only_fields)"` and `plans.py::_consumer_only_fields`.
-- `django_strawberry_framework/optimizer/plans.py::OptimizationPlan` (class docstring) — appended trigger paragraph naming the post-`finalize()` immutability scope (list-fields-only via tuple swap; `cacheable` bool remains a settable attribute) and the trigger for moving to `@dataclass(frozen=True)` (second `cacheable` writer or cache-poisoning incident). Cites `walker.py::plan_optimizations` as the only pre-finalize writer. Low #1.
-- `django_strawberry_framework/optimizer/plans.py::OptimizationPlan.is_empty` (docstring) — named the consequence (`OptimizationPlan(cacheable=False)` with no other directives reports `is_empty=True`), cited the existing pinning test by `path::test_name`, and recorded the trigger (a resolver-side call site reads `is_empty` and `cacheable` together for a logic decision). Low #2.
-- `django_strawberry_framework/optimizer/plans.py::_consumer_prefetch_lookups` (docstring) — added the one-line paranoid-guard rationale for the trailing `or ()` naming the non-`QuerySet` test-double / custom-manager case the artifact called out (stock Django stores tuples; `prefetch_related(None)` resets to `()`), with the trigger for revisiting removal (a real consumer surfaces `None` lookups or the test-double case is retired). Low #3.
+- None — no-source-edit cycle.
 
 ### Tests added or updated
-- None. All edits are docstring tightening that captures defer-with-trigger conditions; no behaviour change, no contract change.
+- None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — pass (211 files unchanged)
-- `uv run ruff check --fix .` — pass (All checks passed)
+- `uv run ruff format --check django_strawberry_framework/optimizer/plans.py` — `1 file already formatted`.
+- `uv run ruff check django_strawberry_framework/optimizer/plans.py` — `All checks passed!`.
 
 ### Notes for Worker 3
-- Shadow file: `docs/shadow/django_strawberry_framework__optimizer__plans.overview.md` referenced by the artifact (used for the control-flow / `getattr` density cross-check); no shadow lines cited in edits.
-- Low #4 (`P1`/`P2`/`M1` audit-trail anchors) — **defer-with-trigger; no source edit this cycle**. Source scan: `grep -n "P1\|P2\|M1" plans.py` returned no matches, so the anchors live in test comments (`tests/optimizer/test_plans.py:218`, `:311`, `:356`, `:372`, `:387`, `:429`, `:458`) and as the paired `# else: consumer wins on this subtree; optimizer dropped.` at `plans.py::_diff_prefetch_related #"# else: consumer wins on this subtree"`. The artifact's explicit instruction is "Worker 2 should NOT propose a rename or removal without that spec landing"; trigger condition is a Q-series or P-series spec authored for the queryset-diffing subsystem (e.g., a "Queryset cooperation contract" spec for `0.0.9+`). Captured here so the trigger isn't lost on the next pass.
-- DRY analysis (three `Defer-with-trigger` items: shared `_extract_lookup_paths`, `_django_private_accessors` namespace, shared `_consumer_owns_field` predicate) — no in-cycle edit; all three are correctly factored today per Worker 1's framing.
-- Consolidated single-spawn pass: logic + comment + changelog disposition collapsed into one spawn per shape #4 qualifier (GLOSSARY Medium with verbatim replacement prose pre-derived by Worker 1; remaining items all defer-with-trigger per Worker 1's own prose).
-- `uv.lock` not touched.
+- Low (forward-branch `limit >= 0` clause): recorded intent, defensive-but-unreachable under the sole caller; explicit revisit trigger stated (a second caller bypassing `derive_connection_window_bounds`). No edit.
+- Low (`_consumer_prefetch_lookups` trailing `or ()`): forward-looking, removal trigger already encoded in the source comment. No edit.
+- No GLOSSARY-only fix in scope — the connection-optimizer prose (GLOSSARY:235) and the `OptimizationPlan.apply` multi-DB reference (GLOSSARY:864) both match live source.
+- Cross-file contract verified read-only against `connection.py` (cursor/page-flag consumption of forward `_dst_row_number`), `walker.py::_plan_connection_relation` (window construction call site), and `utils/connections.py::derive_connection_window_bounds` (offset/limit/reverse source) — all consistent. No cross-file follow-up beyond the deferred DRY items, which belong to a future DRY cycle, not the folder/project pass.
+
+---
+
+## Comment/docstring pass
+
+Filled by Worker 1 per no-source-edit cycle pattern.
+
+No stale or misleading comments/docstrings found. The version/spec references (spec-033 Decision 4/11) are design-doc anchors, not version-pinned label rot. The `_consumer_prefetch_lookups` dead-code comment and the `OptimizationPlan`/`is_empty`/`apply` docstrings accurately describe live behavior (verified against source). No edit.
+
+---
+
+## Changelog disposition
+
+Filled by Worker 1 per no-source-edit cycle pattern.
+
+Not warranted — no source/test/GLOSSARY/CHANGELOG edits in this cycle (AGENTS.md "Do not update CHANGELOG.md unless explicitly instructed"; the active `review-0_0_9.md` plan records no changelog directive for this item).
 
 ---
 
 ## Verification (Worker 3)
 
 ### Logic verification outcome
-Consolidated single-spawn (shape #4) terminal-verify. All Medium + Lows addressed or deferred-with-trigger per artifact authorization:
-- Medium (`Queryset diffing` GLOSSARY drift): verified — fifth bullet at `docs/GLOSSARY.md:852` matches Worker 1's verbatim "Recommended replacement prose" block char-for-char, inserted after the "Plain-string absorption" bullet and before the existing "See also:" line. No other GLOSSARY hunk in this cycle's scope.
-- Low #1 (`cacheable` cache invariant scope): verified — `OptimizationPlan` class docstring at `plans.py:52-63` adds the post-`finalize()` scope paragraph naming the five list fields, the `cacheable` bool convention exception, cites `walker.py::plan_optimizations` as the only pre-finalize writer, and records the `@dataclass(frozen=True)` trigger (second `cacheable` writer or cache-poisoning incident).
-- Low #2 (`is_empty` consequence under-promised): verified — `is_empty` docstring at `plans.py:99-108` names the consequence (`OptimizationPlan(cacheable=False)` reports `is_empty=True`), cites `tests/optimizer/test_plans.py::test_cacheable_flag_does_not_affect_empty_state` (grep-confirmed at line 51), and records the trigger (resolver-side call site reads `is_empty` and `cacheable` together).
-- Low #3 (`_consumer_prefetch_lookups`'s `or ()` defensive coda): verified — docstring at `plans.py:281-289` names the non-`QuerySet` test-double / custom-manager case, notes stock Django always stores tuples (`prefetch_related(None)` resets to `()`), and records the removal trigger.
-- Low #4 (`P1`/`P2`/`M1` audit-trail anchors): correctly deferred per artifact's explicit "Worker 2 should NOT propose a rename or removal without that spec landing" instruction; trigger captured in Notes for Worker 3.
+No-source-edit cycle (shape #5) on a DATA-CORRECTNESS file; owned diff confirmed empty (`git diff --stat 0872a20 -- django_strawberry_framework/optimizer/plans.py` empty; `git diff -- CHANGELOG.md` empty). Independently re-verified the window-pagination SQL math LIVE (`docs/review/temp-tests/optimizer_plans/`, fakeshop `config.settings`, keyed filters by annotation-expr identity to the `_dst_*` alias):
 
-No source-logic changes — `git diff -- django_strawberry_framework/optimizer/plans.py` is exclusively docstring lines inside the three named symbols (no function-body, no `return`, no condition change).
+- **Forward** offset=2 limit=3 → `_dst_row_number__gt 2` AND `_dst_row_number__lte 5` (offset+limit), no reversed annotation/filter. offset=4 limit=None → only `__gt 4`, no upper bound. offset=0 limit=`sys.maxsize` → no `__gt`, no `__lte` (both gates suppressed).
+- **Reverse** last=2 → keeps the FORWARD `_dst_row_number` annotation, adds `_dst_row_number_reversed` window, filters `_dst_row_number_reversed__lte 2`, and applies NO forward `__lte` (early `return` before the forward upper-bound). offset=3 last=2 → forward `__gt 3` still applies + reversed `__lte 2`. Both `_dst_row_number` and `_dst_row_number_reversed` present in annotations on the reverse branch.
+- **offset/limit/reverse mapping** onto `derive_connection_window_bounds` confirmed at source (`utils/connections.py:124-126`): `reverse = isinstance(last,int) and not isinstance(first,int) and before is None`; `limit = last if reverse else slice_meta.expected`; offset = `slice_meta.start`. The reverse branch's `limit` is provably non-`None` (int `last`), so the `limit is not None` guard at line 650 is defensive, not load-bearing.
+- **Cursor/page-flag parity** confirmed at source consumer `connection.py::_resolve_from_window`: reads forward `WINDOW_ROW_NUMBER` for cursors (`getattr(node, WINDOW_ROW_NUMBER) - 1`, :230) and page flags (`first_rn > 1` :249, `getattr(last_row, WINDOW_ROW_NUMBER) < total` :250), identically in both branches — because `apply_window_pagination` keeps `_dst_row_number` forward in both. `.order_by(*order_by)` applied to the queryset itself in both branches (:627) so prefetched-instance return order matches the window order.
+- **`_reverse_order_by` non-mutating**: drove `OrderBy(F("name"), descending=False, nulls_first=True)` through it — the original's `(descending, nulls_first, nulls_last)` snapshot is byte-identical before/after; `rev[0] is orig` is False (`OrderBy.copy()` clones); clone has `descending=True, nulls_first=None, nulls_last=True` (direction flipped + NULLS positioning swapped, mirroring Django `.reverse()`). String entries `("name","-pk")` → `["-name","pk"]`; bare `F` (no `descending`) appended unchanged by identity. (Note: Django stores the unset NULLS side as `None`, not `False` — does not affect correctness.)
+- **Both `OptimizerError` raise conditions** in `window_partition_for_prefetch`: (1) single-valued forward relation (`Item.category`, kind `forward_single`) raises; (2) a windowable kind (`many`) whose `remote_field` resolves neither `attname` nor `name` raises (crafted stand-in). A genuine windowable reverse-FK (`Category.items`) returns partition `'category_id'`, proving the guard set is exactly the three windowable kinds. `walker.py::_plan_connection_relation` (:1212-1213) catches the raise to fall back per-parent — the documented fail-soft contract.
+
+High/Medium: none, confirmed. Two Lows both forward-looking:
+- `apply_window_pagination` forward-branch `limit >= 0` clause (plans.py:655): defensive-unreachable under the sole caller `derive_connection_window_bounds` (never yields negative `limit`); explicit revisit trigger stated (a second caller bypassing the bounds source). Verified `sys.maxsize` path correctly suppresses the upper bound regardless. No edit.
+- `_consumer_prefetch_lookups` trailing `or ()` (plans.py:407): dead-under-real-QuerySet, removal trigger already encoded verbatim in the source comment (393-406). No edit.
 
 ### DRY findings disposition
-Three `Defer-with-trigger` items (shared `_extract_lookup_paths`, `_django_private_accessors` namespace, shared `_consumer_owns_field` predicate) correctly carried forward — all three are correctly factored today per Worker 1's framing and no edit was warranted this cycle.
+Both DRY items are defer-with-trigger and correctly carried forward, not actioned: (1) `append_*_unique` indexed/membership dual-path — trigger is a third module-level `append_*_unique` mutator; (2) `_lookup_paths_from_parts` single-sited through `finalize()`/`lookup_paths` — trigger is a second construction-time consumer. Neither fires at 0.0.9.
 
 ### Temp test verification
-None used. Verification was source-spot-check + grep-confirm of the cited test name; no behavior change to pin.
+- Temp files: `docs/review/temp-tests/optimizer_plans/repro.py` (window math), `repro3.py` (non-mutation inspection), `repro4.py` (raise conditions). All gitignored.
+- Disposition: deleted at cycle closeout (Worker 0). The shipped window-math is already pinned by `tests/optimizer/test_plans.py::TestApplyWindowPagination` (forward offset+upper-bound, reversed over-fetch guard, None/maxsize no-upper-bound, `.only()` composition) and the raise paths by `test_forward_single_relation_raises` / `test_windowable_kind_without_remote_field_keys_raises` — temp tests are not the sole proof.
 
 ### Verification outcome
-cycle accepted; verified
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the checklist box. Owned-path diff empty (byte-unchanged baseline 0872a20); no GLOSSARY-only fix in scope; changelog Not-warranted with both citations and matching empty diff; ruff format-check + check pass (COM812 standing notice).
 
 ---
 
 ## Iteration log
 
----
-
-## Comment/docstring pass
-
-Folded into the consolidated single-spawn `## Fix report (Worker 2)` above per shape #4. All edits this cycle are docstring/GLOSSARY prose.
-
-### Files touched
-- `docs/GLOSSARY.md` — `Queryset diffing` fifth bullet (Medium).
-- `django_strawberry_framework/optimizer/plans.py` — `OptimizationPlan` class docstring (Low #1), `is_empty` docstring (Low #2), `_consumer_prefetch_lookups` docstring (Low #3).
-
-### Per-finding dispositions
-- Medium (`Queryset diffing` GLOSSARY drift): applied — verbatim replacement prose lifted into `docs/GLOSSARY.md` after the existing "Plain-string absorption" bullet.
-- Low #1 (`cacheable` cache invariant scope): applied as docstring tightening per the artifact's recommended shape (option (a) — docstring tightening; option (b) frozen-dataclass deferred per artifact's own trigger).
-- Low #2 (`is_empty` consequence under-promised): applied as docstring tightening that names the consequence and the trigger; no logic change.
-- Low #3 (`_consumer_prefetch_lookups`'s `or ()` defensive coda): applied as a one-line comment naming the non-`QuerySet` test-double case per the artifact's recommendation; the guard remains in the source.
-- Low #4 (`P1`/`P2`/`M1` audit-trail anchors): deferred-with-trigger; no source edit per the artifact's explicit "Worker 2 should NOT propose a rename or removal without that spec landing" instruction. Trigger captured in Notes for Worker 3.
-
-### Validation run
-- `uv run ruff format .` — pass (211 files unchanged)
-- `uv run ruff check --fix .` — pass
-
-### Notes for Worker 3
-Same notes as the Fix report above; no additional comment-pass material.
-
----
-
-## Changelog disposition
-
-### State
-`Not warranted`.
-
-### Reason
-Cited per `worker-2.md`'s three-state-disposition gate, BOTH halves required:
-
-- `AGENTS.md` #21 — "Do not update CHANGELOG.md unless explicitly instructed."
-- The active plan `docs/review/review-0_0_7.md` is silent on changelog authorisation for the `optimizer/plans.py` cycle item; the dispatch prompt explicitly directs `Not warranted` (internal documentation polish).
-
-This cycle's edits are exclusively internal documentation polish — one GLOSSARY entry append, three docstring tightening passes capturing defer-with-trigger conditions, zero source logic change, zero test added, zero consumer-visible behaviour change. The shipped behaviour the GLOSSARY bullet now documents (consumer-`.only()`-wins drop rule) was already released in `0.0.7` (per the existing `CHANGELOG.md:68` entry referenced in the artifact's Medium body), so the catch-up GLOSSARY work does not warrant a separate CHANGELOG bullet.
-
-### What was done
-No `CHANGELOG.md` edit.
-
-### Validation run
-- `uv run ruff format .` — pass (211 files unchanged)
-- `uv run ruff check --fix .` — pass
-
----
-
-## Iteration log
+(none)

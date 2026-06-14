@@ -2,19 +2,50 @@
 
 Status: verified
 
+Scope: single-file logic review of `FilterSet` + `FilterSetMetaclass` — declaration,
+Meta validation, and the sync/async apply pipeline. Shipped 0.0.8; this artifact
+supersedes the stale 0.0.7 `rev-filters__sets.md` that pre-existed on disk (active
+plan box was unchecked). Source last reviewed/verified at 0.0.7; re-reviewed fresh
+against the live 0.0.9 source. Cross-file concerns (shared mixins in `sets_mixins.py`,
+shared permission/input-value cores in `utils/`) are flagged as folder/project-pass
+follow-ups, not local defects.
+
 ## DRY analysis
 
-- **Collapse `apply_sync` / `apply_async` through a shared `_apply_pipeline` factored on the visibility derivation step.** `sets.py::FilterSet.apply_sync` (lines 1378-1401) and `sets.py::FilterSet.apply_async` (lines 1403-1430) are line-for-line identical except (a) `_derive_related_visibility_querysets_sync` vs `await _derive_related_visibility_querysets_async` at line 1394 / 1423 and (b) the outer `async def` + return-await on the sibling. Every other line — `_normalize_input`, `_request_from_info`, `_apply_related_constraints`, ctor, `_apply_info` stash, `_run_permission_checks`, `_validate_form_or_raise`, `.qs` read — is duplicated. Act-now opportunity: extract `_apply_common_prelude(cls, input_value, queryset, info, child_qs_by_branch)` returning `(filterset_instance, request)` and a `_apply_common_finalize(cls, filterset_instance, input_value, request)` returning `filterset_instance.qs`; each apply path then becomes the two-line `derive ... -> prelude -> finalize` sandwich. The async sibling stays trivially async because only the derive step is awaited. Cost is one helper; payoff is removing the parallel-code drift surface every future apply-pipeline change must touch twice today.
+- **`_normalize_input` operator-bag filter lookup is a redundant double `.get`.** In
+  the per-field operator-bag branch, `sets.py::_normalize_input #"all_filters.get(form_key) or all_filters.get("`
+  (source ~739-741) computes `form_key` as `base_path` when `django_lookup == "exact"`
+  else `f"{base_path}__{django_lookup}"`, then falls back to
+  `all_filters.get(f"{base_path}__{django_lookup}")`. For every non-`exact` lookup the
+  two `.get` keys are byte-identical (the `or` second arm can never differ); only the
+  `exact` case actually probes a second key (`base_path` then `base_path__exact`).
+  Collapse to a single lookup that tries `base_path` first then the suffixed key only
+  for `exact` (or build the candidate key list once). Act-now: it is a localized
+  simplification with no behavior change (the redundant arm returns the same object).
+  Single call site, so no shared-helper extraction — an inline tidy.
 
-- **Collapse `_derive_related_visibility_querysets_sync` / `_derive_related_visibility_querysets_async` through a shared iteration helper.** `sets.py::_derive_related_visibility_querysets_sync` (lines 802-835) and `sets.py::_derive_related_visibility_querysets_async` (lines 837-856) iterate the same `_iter_active_related_branches` result, guard `target_type is None or child_filterset is None` identically, build `child_base = child_model._default_manager.all()` identically, and differ only in the two awaits (line 833 vs 854, line 834 vs 855). Act-now opportunity: extract `_iter_visibility_steps(cls, input_value)` yielding `(field_name, target_type, child_filterset, child_input, child_base)` tuples (all the pre-await state); each derive method then becomes a tight 5-line loop carrying ONLY the two awaits. Same drift-surface argument as the apply-pipeline DRY above; the two parallel methods are a single-engine sync/async split, not two algorithms.
+- **Defer: the three logical-branch walkers (`and`/`or`/`not`) are spelled three times
+  across `_run_permission_checks`, `_evaluate_logic_tree`, and
+  `_collect_nested_visibility_querysets_async`.** Source 1211-1239 (perm),
+  1418-1452 (Q-build), 1064-1091 (async pre-walk). Each independently does
+  "`and`-list loop, `or`-list loop, `not`-single" with a different per-branch action
+  (recurse perm-check / `&=` `|=` `~&` a `Q` / await a visibility derive). A shared
+  `_for_each_logic_branch(tree, on_and, on_or, on_not)` driver could host the iteration
+  shape. Defer until a fourth logical-branch consumer lands OR the branch set changes
+  (e.g. a `xor`/`nand` arm): today the per-branch actions differ enough (sync vs async,
+  `Q` algebra vs side-effecting recursion) that a callback-threaded extraction is
+  net-negative readability. The `_LOGIC_KEYS` source-of-truth and the wire-key strings
+  (`"and"`/`"or"`/`"not"`) are already single-sited in `inputs.py`; only the iteration
+  skeleton repeats.
 
-- **Promote the `_MAX_LOGIC_DEPTH` raise to a shared `_raise_logic_depth_exceeded(cls)` helper.** `sets.py::FilterSet._run_permission_checks` (lines 948-953) and `sets.py::FilterSet._evaluate_logic_tree` (lines 1205-1210) carry verbatim copies of the same five-line `raise ConfigurationError(f"FilterSet {cls.__qualname__}: logical-branch nesting exceeded _MAX_LOGIC_DEPTH={cls._MAX_LOGIC_DEPTH}. Flatten the filter input or split into multiple queries.")` block. The repeated-literals output (8x) confirms `: logical-branch nesting exceeded _MAX_LOGIC_DEPTH=` and `. Flatten the filter input or split into multiple queries.` each appear twice. Act-now opportunity: extract a one-line `_raise_logic_depth_exceeded(cls)` classmethod; both call sites become `if _depth > cls._MAX_LOGIC_DEPTH: cls._raise_logic_depth_exceeded()`. Single source of truth for the consumer-visible error string.
-
-- **Hoist the `_iter_active_related_branches`-equivalent walk in `_run_permission_checks` so the parent-per-branch gate and child-filterset recursion share one pass.** `sets.py::FilterSet._run_permission_checks` (lines 974-990) iterates active related branches AND fires the parent-per-branch gate in the same loop, but the child recursion at line 983 already calls `_iter_active_related_branches` again indirectly via `_run_permission_checks(child_input, ...)`. Today the dedup map `_fired` carries the de-duplication burden; the two passes are correct. Defer-with-trigger: defer until a third caller of `_iter_active_related_branches`'s `(field_name, related_filter, child_input)` tuple lands (e.g. an aggregate / search-fields walker per `TODO(spec-027-filters-0_0_8 Meta.search_fields card 0.1.2)`); then move the parent-per-branch gate fire into a small `_invoke_branch_gate(cls, bare, fired, field_name, request)` helper so the trio of derive / constrain / permission-walk all consume the same iterator shape without a parallel inlined "fire gate + recurse" block.
-
-- **Promote the `getattr(input_value, "__dataclass_fields__", None)` + `(name, getattr(input_value, name))` dataclass-walk to a shared `_iter_input_items(input_value)` helper.** `sets.py::FilterSet._normalize_input` (lines 591-597), `sets.py::FilterSet._operator_bag_items` (lines 712-715), and `sets.py::FilterSet._active_permission_field_paths` (lines 1073-1079) each independently re-implement the same "is it a dict? if not, sniff `__dataclass_fields__` and unpack via `getattr`" pattern. The repeated-literals output flags `__dataclass_fields__` at 3 sites. Act-now opportunity: extract `_iter_input_items(input_value) -> list[tuple[str, Any]] | None` (None = not a walkable input shape, [] = walkable but empty); each call site becomes `items = cls._iter_input_items(input_value); if items is None: return ...`. Three reads collapse to one; the "neither dict nor dataclass" disposition becomes a single explicit None instead of three near-duplicate fall-through paths.
-
-- **Centralise the `_LOGIC_KEYS`-to-lookup `logic_lookup = dict(_LOGIC_KEYS)` materialisation.** `sets.py::FilterSet._normalize_input` (line 610) and `sets.py::FilterSet._active_permission_field_paths` (line 1081) each rebuild a fresh `dict(_LOGIC_KEYS)` on every call. Defer-with-trigger: defer until a third site materialises the same dict (e.g. a search-fields walker per `TODO(spec-027-filters-0_0_8 Meta.search_fields card 0.1.2)` or an order-set parser hand-off); then promote to a module-level `_LOGIC_KEY_LOOKUP: dict[str, str] = dict(_LOGIC_KEYS)` built once at import (the same shape `_FORM_KEY_BY_PYTHON_ATTR` already follows at sets.py:59-62). Today two sites are correct sibling design and a module-level constant would mildly obscure the local intent.
+- **Defer: the sync/async visibility-derive twin
+  (`_derive_related_visibility_querysets_sync` / `_async`, source 954-1003) is the same
+  deliberate sibling pattern this package treats as intentional.** Both share
+  `_iter_visibility_steps` for the pre-await state; only the `apply_type_visibility_*`
+  call and the child `apply_sync`/`apply_async` await differ. Do NOT extract — the
+  await-unwrap makes a single-body collapse net-negative (same calibration as
+  `relay.py`/`list_field.py` sync/async twins). No trigger; recorded so a future DRY
+  cycle does not re-flag it.
 
 ## High:
 
@@ -22,288 +53,513 @@ None.
 
 ## Medium:
 
-### `apply_async` blocks the event loop on `_run_permission_checks` and form validation
-
-`sets.py::FilterSet.apply_async` (lines 1428-1429) calls `_run_permission_checks` and `_validate_form_or_raise` directly — neither wrapped in `sync_to_async`. The docstring at sets.py:1412-1420 calls this out as a "contract caveat" with the rationale "the built-in pipeline does no synchronous I/O on that path, but a consumer hook that issues a blocking ORM call would block the event loop without raising". The cookbook contract for `check_*_permission` is explicitly a "regular `def check_X_permission(self, request)`" method (sets.py:909-911); these are precisely the consumer hooks most likely to issue a blocking ORM call (e.g. `if not Membership.objects.filter(user=request.user, role="admin").exists(): raise PermissionDenied`). The caveat is documented but the contract is also currently undermined by the apply-pipeline: `apply_async` is what consumers reach for from an async resolver, and the documented escape hatch ("do the I/O in the awaited `get_queryset` visibility step") moves authorization into a different framework hook. Medium because (a) the caveat IS documented, so consumers are warned, but (b) the most natural permission-gate placement collides with the most natural async resolver placement, and the failure mode is silent event-loop blocking, not a typed error.
-
-Recommended change: wrap the two synchronous calls in `asgiref.sync.sync_to_async(thread_sensitive=True)` (mirrors how strawberry-django wraps consumer-supplied sync hooks under async paths). Add a regression test under `tests/filters/test_sets.py` exercising `apply_async` with a `check_*_permission` that performs an ORM read (`Category.objects.filter(name="x").exists()`); under bare `apply_async` the call works because the ORM call's `sync_to_async` wrapper inside Django catches the case, but a custom hook issuing `requests.get(...)` would block — the assertion is that authorization runs in a thread pool, observable via `threading.get_ident()` differing from the event loop thread. Note that wrapping `_validate_form_or_raise` is defensive — Django form validation is pure-Python — but the same wrapper keeps the pipeline consistent. Alternative: keep the sync calls and HARDEN the docstring + raise `RuntimeError` if `_run_permission_checks` detects a coroutine return from a consumer's `check_*_permission` (sets.py::_invoke_permission_method at line 1044-1046 calls `method(request)` without checking the return; an `async def check_X_permission` silently no-ops because no one awaits the coroutine — that's the LOUDER failure mode worth surfacing).
-
-```django_strawberry_framework/filters/sets.py:1422-1430
-data = cls._normalize_input(input_value)
-child_qs_by_branch = await cls._derive_related_visibility_querysets_async(input_value, info)
-request = cls._request_from_info(info)
-constrained = cls._apply_related_constraints(input_value, queryset, child_qs_by_branch)
-filterset_instance = cls(data=data, queryset=constrained, request=request)
-filterset_instance._apply_info = info
-cls._run_permission_checks(input_value, request)         # sync — see Medium
-cls._validate_form_or_raise(filterset_instance)          # sync — see Medium
-return filterset_instance.qs                              # also sync (.qs)
-```
-
-### Async `apply_async` reads `.qs` synchronously, and `_q_for_branch` recursion is sync-only
-
-`sets.py::FilterSet.apply_async` (line 1430) returns `filterset_instance.qs`. Reading `.qs` triggers `BaseFilterSet`'s `filter_queryset` synchronously, which on this subclass dispatches to `sets.py::FilterSet.filter_queryset` (line 1142) and from there into `_evaluate_logic_tree` and `_q_for_branch`. `_q_for_branch` at sets.py:1296 calls `_derive_related_visibility_querysets_sync` unconditionally — so any nested `or: [{shelves: {...}}]` branch under `apply_async` triggers the SYNC derivation, which in turn invokes `_apply_get_queryset_sync(target_type, child_base, info)`. If the consumer wired the child target type with an `async def get_queryset`, this raises `SyncMisuseError` mid-`.qs` read. The docstring at sets.py:1273-1276 calls this out: "Derivation is sync because `.qs` is read synchronously even under `apply_async`; a nested related target whose `get_queryset` is async-only raises the usual `SyncMisuseError` rather than leaking rows." Medium because (a) the contract IS documented, but (b) the failure surface is "nested-branch async target works at top-level under `apply_async` but blows up under a logical-clause nesting" — the inconsistency is exactly the kind of brittle edge-case behavior the severity rubric names.
-
-Recommended change: either (a) hoist the per-branch derive out of the synchronous `_q_for_branch` recursion into a pre-pass that `apply_async` awaits BEFORE constructing the top-level filterset (eagerly walking every `and` / `or` / `not` arm to enumerate the related branches, awaiting each, stashing results in a per-instance map that `_q_for_branch` consumes via lookup instead of derive), OR (b) accept the sync-only nested behavior and surface a clearer error: catch `SyncMisuseError` inside `_q_for_branch` and re-raise as a `ConfigurationError` naming the field path + the nested-branch context ("...inside a logical `or` / `and` / `not` clause; nested branches cannot await async `get_queryset` because django-filter's `.qs` is synchronous"). Option (a) is the root-cause fix and is what AGENTS.md's "always recommend the root-cause fix over the surface patch" rule asks for; cost is one pre-pass walker, payoff is async resolvers gain full nesting support; the surface-patch (b) is documented behavior preserved with a clearer error. Regression test: a `BookFilter` whose `Genre.get_queryset` is async-only, called via `apply_async` with `{or_: [{genres: {name: "x"}}]}` — today raises `SyncMisuseError` mid-`.qs`; after fix (a) returns the filtered queryset.
-
-```django_strawberry_framework/filters/sets.py:1296
-child_qs_by_branch = cls._derive_related_visibility_querysets_sync(child_input, info)
-constrained = cls._apply_related_constraints(child_input, queryset, child_qs_by_branch)
-child_data = cls._normalize_input(child_input)
-child_set = cls(data=child_data, queryset=constrained, request=request)
-```
+None.
 
 ## Low:
 
-### `spec-021` source-comment citations are the working name for `spec-027`
+### `_normalize_input` operator-bag double `.get` (also in DRY analysis)
 
-`sets.py` cites `spec-021` at 11 sites: lines 3, 8, 176, 340, 393, 407, 443, 462, 486, 626, 821. Per worker-1 memory carry-forward (`filters/base.py` review): the entire `filters/` subpackage's `spec-021` citations actually point at `docs/SPECS/spec-027-filters-0_0_8.md` on disk (`spec-021-apps-0_0_7.md` is the apps spec, zero filter mentions). Per dispatch: NOT re-filed here — consolidated under `rev-filters__base.md` Low #2's subpackage-wide forward to `rev-filters.md` folder pass.
+`sets.py::_normalize_input #"all_filters.get(form_key) or all_filters.get("` (source
+~739-741). The `or`-fallback `.get` is dead for every non-`exact` lookup because
+`form_key` already equals the fallback key; only `exact` benefits from the second probe.
+Harmless (the second arm returns the identical filter instance or `None`), but it reads
+as if two distinct keys are meaningfully tried. Recommended: probe `base_path` then the
+suffixed key explicitly, or build a 1-or-2-element candidate list. Localized
+simplification; no test change required (behavior is identical), so it is a maintainability
+Low rather than a correctness fix.
 
-### `RangeFilter` is referenced in the `_normalize_input` docstring but not imported
+### `get_filters` single-threaded reentrancy flag — documented, forward-looking
 
-`sets.py::FilterSet._normalize_input` (lines 573-574) references `RangeFilter` in the docstring ("``RangeFilter`` -> positional ``{name}_0`` / ``{name}_1``"). The class is not imported by `sets.py` (the file's filter-class imports are `GlobalIDFilter, GlobalIDMultipleChoiceFilter, RelatedFilter` at line 38). The docstring claim is correct against `inputs.py::_normalize_range_value`'s shape, and the tests at `tests/filters/test_sets.py:1671-1707` and `:1710-1723` pin the behavior, but the docstring would read more cleanly with a backtick-qualified `filters.base.RangeFilter` so a reader doesn't grep the module for an undefined symbol. Comment-pass Low.
+`sets.py::get_filters` uses a class-level `_is_expanding_filters` flag (via
+`expanded_once`) rather than a `threading.local`. The docstring (source 313-326) already
+spells out the contract: expansion runs single-threaded during `finalize_django_types()`
+and once per class for the registry lifetime, and parallel test threads that hit the same
+FilterSet may race to the unexpanded `super().get_filters()`. This is correct today and
+explicitly documented with a "do not introduce `threading.local` without a real consumer
+path" guard. Defer until a real multi-threaded `get_filters()` consumer path appears;
+then re-triage thread-locality. No edit now.
 
-### `_normalize_input`'s "via `__dataclass_fields__`" sniff is repeated three times — same calibration as the operator-bag dispatch
+### `GlobalIDMultipleChoiceFilter` `**default.extra` forward — verified safe, documented
 
-`sets.py::FilterSet._normalize_input` (lines 591-597), `sets.py::FilterSet._operator_bag_items` (lines 712-715), and `sets.py::FilterSet._active_permission_field_paths` (lines 1073-1079) each independently sniff `__dataclass_fields__` and unpack via `getattr`. The recap is covered by the `## DRY analysis` opportunity above; flagging here as a Low purely because the three identical code blocks deserve a comment at one of the sites (the first) explaining "we sniff `__dataclass_fields__` because Strawberry's `@strawberry.input` decorator stamps real `dataclass` machinery on the class; isinstance against `dataclasses.dataclass`-detection is too narrow for Strawberry inputs". Today none of the three sites carry that explanation, and a future maintainer reading any one of them in isolation has to discover the rationale from the test names. Comment-pass Low; bundle with the `## DRY analysis` helper extraction.
-
-### `_iter_active_related_branches` is robust against UNSET inputs but not documented
-
-`sets.py::FilterSet._iter_active_related_branches` (lines 757-781) is called from `_derive_related_visibility_querysets_sync` (line 824), `_derive_related_visibility_querysets_async` (line 845), `_apply_related_constraints` (line 1321), and `_run_permission_checks` (line 974). Of these, only `_run_permission_checks` is guarded against `input_value is None or input_value is UNSET` (sets.py:946) before reaching the helper; `_derive_*` and `_apply_related_constraints` pass `input_value` through verbatim from `apply_sync` / `apply_async` / `_q_for_branch`. The helper happens to handle UNSET correctly via `_extract_branch_value`'s line 798-799 (`if value is UNSET: return None`), but the docstring at sets.py:761-769 does not call out the UNSET tolerance. A future refactor that removes the `_extract_branch_value` UNSET collapse — e.g. inlining the `getattr` — would silently corrupt the active-branch derivation. Comment-pass Low: extend the `_iter_active_related_branches` docstring to name `UNSET` and `None` as both being collapsed to "branch not supplied".
-
-### `_lookups_for_field_class_cache` and `_FORM_KEY_BY_PYTHON_ATTR` are module-private but undecorated as such
-
-`sets.py` declares two module-level caches: `_lookups_for_field_class_cache` (line 52) with a 7-line rationale comment, and `_FORM_KEY_BY_PYTHON_ATTR` (line 59) with a 5-line rationale comment. Both names lead with a single underscore, which is the standard module-private convention, and both are exercised end-to-end by `tests/filters/test_sets.py` (the `test_lookups_for_field_returns_concrete_lookups_and_excludes_transforms` test at line 1815 and the operator-bag tests). The two caches are NEVER referenced outside `sets.py`. No-edit Low: confirm citation hygiene only. If a future inline-helper extraction inside `inputs.py` reaches for `_FORM_KEY_BY_PYTHON_ATTR`, promote to either `sets.py::_form_key_for_python_attr` (already exists as `FilterSet._form_key_for_python_attr` at line 717) or hoist to `inputs.py` alongside `LOOKUP_NAME_MAP`. Defer-with-trigger: defer until a second importer of either cache lands.
-
-### `apply` (line 1432-1452) hands `SyncMisuseError` -> `RuntimeError` translation back to the consumer with a parenthetical exception string
-
-`sets.py::FilterSet.apply` (line 1450-1452) raises `RuntimeError(f"FilterSet.apply called against async get_queryset; use apply_async instead. ({exc})")`. The `({exc})` parenthetical is the str() of `SyncMisuseError`, which itself is a `ConfigurationError` and `RuntimeError` subclass per the `from ..types.relay import SyncMisuseError` (line 33). The `from exc` clause (line 1452) already chains the original via Python's `__cause__`, so the message at line 1451 carries the same content twice when a consumer's `repr(exc)`-style error reporter walks the chain. Comment-pass Low: drop the `({exc})` parenthetical since `from exc` already records the cause; the consumer message becomes `"FilterSet.apply called against async get_queryset; use apply_async instead."` and the chain still surfaces the original `SyncMisuseError` text through standard traceback machinery. Defer-with-trigger: defer until a second `from exc` rethrow lands in the package so the convention has a third reference for the maintainer to standardize on.
-
-### `TODO(spec-027-filters-0_0_8 Meta.search_fields card 0.1.2)` anchor format is verbose but consistent
-
-`sets.py::FilterSet.get_filters` (line 280-282) carries the only TODO anchor in the file: `TODO(spec-027-filters-0_0_8 Meta.search_fields card 0.1.2)`. Format diverges slightly from the canonical `TODO-ALPHA-NNN-0.0.X` shape used elsewhere (e.g. `scalars.py`'s `TODO-ALPHA-029-0.0.11`); the inline format here is more descriptive but harder to grep across the codebase. The spec citation IS correct against `docs/SPECS/spec-027-filters-0_0_8.md` (Meta.search_fields IS a deferred decision in that spec; "card 0.1.2" lines up with KANBAN.md's `0.1.2` versioning convention). No-edit Low; record for consistency: when the search-fields card lands, standardize on the active TODO-anchor format the rest of the package uses so a future cycle's "sweep all TODO-ANCHOR-NNN-0.0.X tokens" doesn't miss this one. Defer-with-trigger: defer until the search-fields card actually opens.
-
-### `_validate_form_or_raise` (line 1119-1136) is a classmethod taking the filterset instance as an arg — uncommon shape
-
-`sets.py::FilterSet._validate_form_or_raise` (lines 1119-1136) is declared as a `@classmethod` taking `filterset_instance: FilterSet` as the only non-`cls` argument. The choice is deliberate (so `apply_sync` / `apply_async` / `_q_for_branch` can route through one entry point even when `cls` is a subclass of the instance's class), but the unusual shape — pass the same class's instance to a classmethod of the same class — has no docstring rationale. Comment-pass Low: add a one-sentence note to the docstring explaining the classmethod-with-self-instance shape ("classmethod so subclasses can override the validation policy without rebinding the instance method on every sibling filterset"). No-edit beyond doc tweak; the shape is correct.
+`filter_for_field` (source 498-502) forwards `**default.extra` from the upstream SCALAR
+PK filter into `GlobalIDMultipleChoiceFilter`. The inline comment (485-497) justifies why
+this is safe: the multi-choice filter backs onto `_GlobalIDMultipleChoiceField` (a plain
+`MultipleChoiceField`, not model-backed), so it needs no `queryset=` and the scalar
+default's `.extra` carries no incompatible `ModelChoiceField` kwargs. Confirmed against
+`filters/base.py::_GlobalIDMultipleChoiceField` (source 324-358: subclasses
+`MultipleChoiceField`, no queryset requirement). No finding — recorded so a future reviewer
+who narrows `_GlobalIDMultipleChoiceField`'s field contract knows this forward depends on
+it staying queryset-free.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** `sets.py::_FORM_KEY_BY_PYTHON_ATTR` (lines 59-62) is computed once at import from `LOOKUP_NAME_MAP` (imported from `inputs.py` at line 39) — same one-shot module-level precompute pattern `inputs.py::LOOKUP_PREFIXES` follows. `sets.py::FilterSet._form_key_for_python_attr` (line 717-729) is a 3-line O(1) wrapper around the precomputed dict — `_normalize_input` and `_active_permission_field_paths` both reach for it instead of re-walking `LOOKUP_NAME_MAP`. `sets.py::_lookups_for_field` (line 65) is memoized by `type(model_field)` against `_lookups_for_field_class_cache` (line 52) — same per-class memo shape `inputs.py` uses for `_field_specs`. `sets.py::_expand_related_filter` (line 148-169) is a clean module-level helper (not a metaclass method) for the cookbook's `expand_related_filter` port — comment at lines 154-157 explains the lift rationale.
-- **New helpers considered.** Pulling a shared `_normalize_input_walk` helper out of `_normalize_input` was considered and deferred — `_normalize_input` has two distinct top-level branches (logic-key dispatch + scalar-field dispatch + operator-bag dispatch) that share the items-iteration but diverge in branch handling; folding through one helper would obscure the per-branch policy. The DRY analysis already names the items-iteration extraction; the rest of `_normalize_input` is policy that belongs at one site.
-- **Duplication risk in the current file.** The verbatim copies of the `_MAX_LOGIC_DEPTH` raise (sets.py:948-953 and sets.py:1205-1210) and the `apply_sync` / `apply_async` near-twins (sets.py:1378-1430) are intentional sibling design TODAY because the raise's f-string is the consumer-visible error and the async sibling is documented as a contract caveat — both are pulled forward as the DRY analysis's first three bullets so the next DRY cycle can pick them up with the full context.
+- **Existing patterns reused.** The 0.0.9 DRY consolidation is fully realized here:
+  metaclass declaration collection via `sets_mixins.collect_related_declarations`
+  (source 177-184); the expansion cache + reentry guard via `sets_mixins.expanded_once`
+  (source 368-374) with the lifecycle attr names single-sourced through
+  `_lifecycle: SetLifecycleAttrs` (246-250); the active-input traversal via
+  `utils/input_values.iter_active_fields` + `SetInputTraversal` (700-706); the per-field /
+  per-branch permission core via `utils/permissions.run_active_input_permission_checks`
+  (1199-1206), with `_iter_input_items` / `_request_from_info` /
+  `_iter_active_related_branches` / `_extract_branch_value` / `_invoke_permission_method` /
+  `_active_permission_field_paths` all thin family-named delegates to `utils/permissions.py`.
+  `_form_key_for_python_attr` is backed by the import-time-built `_FORM_KEY_BY_PYTHON_ATTR`
+  reverse map (O(1) vs O(n) scan, 85-88). `_apply_common_prelude` / `_apply_common_finalize`
+  (1628-1669) factor the shared apply sequence out of `apply_sync` / `apply_async`.
+- **New helpers considered.** A logic-branch iteration driver and a single-body
+  sync/async visibility derive — both evaluated and DEFERRED in `## DRY analysis` with
+  triggers / intentional-twin reasoning. No new helper warranted at this granularity now.
+- **Duplication risk in the current file.** `_raise_logic_depth_exceeded` (1006-1018)
+  already single-sources the depth-cap `ConfigurationError` across its three callers
+  (`_collect_nested_visibility_querysets_async`, `_run_permission_checks`,
+  `_evaluate_logic_tree`). The `and`/`or`/`not` wire strings are local literals but their
+  canonical source is `_LOGIC_KEYS` in `inputs.py`; the repeated `"related_filters"`
+  literal (6x per the shadow overview) is the `collection_attr` / `related_attr` argument
+  threaded to the shared collectors and is intentional (it names a Django-filter-managed
+  attribute, not a package constant). The sync/async visibility twin is deliberate sibling
+  design (calibration carried from prior cycles).
 
 ### Other positives
 
-- **Single source of truth for the Relay-vs-scalar conditional.** The Decision-4 owner-aware conditional lives only in `filter_for_field` (sets.py:374-435) and `filter_for_lookup` (sets.py:437-480); Slice 2's factory derives shape from the resolved filter instances rather than from a parallel map. Module docstring at sets.py:10-13 documents the contract; tests at `tests/filters/test_sets.py:246-349` pin every Relay/non-Relay combination including own-PK, M2M, forward FK, non-relay-target, unregistered-target.
-- **Tree-form logic recursion-depth guard with `ClassVar` override.** `_MAX_LOGIC_DEPTH: ClassVar[int] = 8` (line 207) with a 6-line comment explaining the override contract; tests pin both the cap (line 755-775) and the subclass override (line 778-808). Surface-level error includes the qualname and the cap value — actionable.
-- **The `B1`-of-pre-merge nested-branch fix is pinned by an end-to-end test.** `tests/filters/test_sets.py:1031-1072` (`test_apply_sync_nested_or_branch_applies_related_constraint`) drives `apply_sync` with `{or_: [{shelves: {code: "match"}}]}` and asserts only the matching parent leaks through — the regression that motivated `_q_for_branch`'s per-branch re-derivation (`sets.py:1296-1297`) has a real end-to-end test, not just a unit test.
-- **Permission-gate dedup is a proper per-class set inside a shared map.** `_run_permission_checks`'s `_fired` map (sets.py:917-929) keys on `FilterSet` class identity so both same-class logical-branch recursion AND different-class child-filterset recursion share dedup state, and `_invoke_permission_method` (sets.py:1025-1048) records into the per-class set after a successful fire. Tests at `tests/filters/test_sets.py:712-752` pin the cross-arm dedup. The double-dispatch contract (parent's `check_shelves_permission` AND child's `check_*_permission` both fire) is documented at sets.py:931-939.
-- **Model-mismatch precheck on `RelatedFilter(queryset=...)` surfaces the Django assertion as a typed `ConfigurationError`.** `_apply_related_constraints` (sets.py:1330-1361) replaces Django's opaque "Cannot combine queries on two different base models" assertion with a `ConfigurationError` naming the filter, the explicit queryset's model, and the target filterset's model. Comment at sets.py:1342-1348 explains the `is`-identity comparison and the proxy / MTI carve-out. Tests at `tests/filters/test_sets.py:1076-1163` cover both the model-mismatch case and the proxy-model case (which Django rejects identically).
-- **`_resolve_relation_target_type`'s `.origin` read is documented with a regression-grade comment.** sets.py:540-547 explicitly names the bug ("the H3 bug read `.type` / `.type_cls` and dropped every owner-aware resolution to the registry fallback") and cross-references the two sibling sites that already follow the convention (`_is_own_pk_under_relay_owner` and `_target_type_for_related_filter`). The H3 fix has both a unit test (`tests/filters/test_sets.py:1537-1559`) and a self-documenting comment chain.
-- **`_iter_active_related_branches` collapses both `UNSET` and `None` to "branch not supplied".** `_extract_branch_value` (sets.py:783-800) is the single source of truth for the active-branch detection; both the dataclass `getattr` path and the dict `.get` path route through it. The test at `tests/filters/test_sets.py:598-630` (`test_run_permission_checks_skips_unset_related_branch`) pins the UNSET-collapse via the dataclass path; `test_extract_branch_value_returns_none_for_none_input` pins the None path.
-- **`get_filters` cycle-safe expansion guard reads `cls.__dict__` directly to avoid inheritance pollution.** sets.py:266-272 with a 6-bullet docstring at sets.py:240-264 explaining both invariants (no MRO inheritance of `_expanded_filters`, no half-built cache during `super().__new__()`). The "single-threaded contract" subsection at sets.py:251-264 explicitly addresses parallel test runs — the kind of edge case usually discovered as a bug, here documented as a known behavior with the right "don't introduce threading.local without confirming a real consumer path" guidance.
-- **`_target_type_for_related_filter` prefers the bound owner over a registry-by-model lookup.** sets.py:858-886 explains the silent-row-leak scenario when a child model has multiple registered `DjangoType`s and the child filterset is bound to a non-primary one. Without the owner-aware preference, the registry fallback would scope by the wrong visibility hook. The reasoning is regression-grade comment material.
-
-### DRY recap test discipline
-
-- The shape #5 disqualifier on this cycle is the two Mediums (async permission/form-validation event-loop blocking; nested-branch async derive). Both require a real source edit + regression test. Standard three-spawn cycle. `Status: under-review`.
+- **Metaclass collection correctness.** `FilterSetMetaclass.__new__` (153-186) calls
+  `super().__new__` BEFORE collecting related filters, and `collect_related_declarations`
+  runs with `inherit_from_bases=False` because `django_filters`'s metaclass already
+  MRO-merges `declared_filters` — only the `isinstance(RelatedFilter)` filter runs, so no
+  double-merge. The `filter_fields` -> `fields` Meta alias (162-168) is gated on
+  `not hasattr(meta_class, "fields")` so an explicit `fields` is never clobbered.
+- **`get_filters` cycle safety.** The `cls.__dict__`-direct guard read (not `getattr`)
+  is load-bearing for two reasons the docstring enumerates: a subclass must not inherit a
+  parent's completed cache via MRO, and the in-flight class (created mid-metaclass before
+  `related_filters` is stamped) must not cache a half-built result. The cache-write guard
+  (355-359) correctly requires BOTH `related_filters in cls.__dict__` AND every
+  `_filterset` resolved to a real class (no leftover string forward refs), so a circular
+  same-module `RelatedFilter` neither caches prematurely nor blows the stack.
+- **Meta validation / `get_fields` narrowing.** Per-field `"__all__"` expansion
+  (405-418) runs before the mutually-exclusive top-level `"__all__"` branch (`meta_fields`
+  is either the string or a dict, never both). The own-PK-under-Relay narrowing drops
+  ordering/pattern lookups to `exact`/`in`/`isnull` so a GlobalID PK never emits a corrupt
+  `String` input (spec-027 H1). The `model is None` guard (423-429) is honestly marked
+  `# pragma: no cover` as a forward-defensive no-op because `super().get_fields()` already
+  raises `AttributeError` first for that shape — consistent with AGENTS.md's pragma rule
+  (genuinely unreachable under the runner, not a workaround).
+- **Decision-4 Relay-vs-scalar conditional.** `filter_for_field` / `filter_for_lookup`
+  are the single source of shape derivation (the factory derives from resolved filter
+  instances, not a parallel map). `_is_own_pk_under_relay_owner` (559-582) is correctly
+  inert pre-binding (`_owner_definition is None` -> `False`) so package-internal pre-finalize
+  tests keep the upstream shape, and authoritative post-phase-2.5. `filter_for_lookup`
+  RAISES `ConfigurationError` (546-550) for an unsupported own-PK GlobalID lookup named in
+  an explicit `Meta.fields` list rather than silently emitting a corrupt input.
+  `_resolve_relation_target_type` reads `.origin` (not `.type`/`.type_cls`) off the
+  definition, with an inline comment recording that a stale `.origin` read previously
+  dropped every owner-aware resolution to the registry fallback — the right contract is
+  pinned.
+- **Sync vs async apply pipeline.** Both paths share `_apply_common_prelude` /
+  `_apply_common_finalize`; `apply_async` adds exactly two async-only steps —
+  `_derive_related_visibility_querysets_async` (top-level await) and
+  `_collect_nested_visibility_querysets_async` (the nested pre-walk keyed by
+  `id(child_input)`). The pre-walk solves a real ordering hazard: `_q_for_branch`'s sync
+  derive would raise `SyncMisuseError` mid-`.qs` for an async-only target `get_queryset`,
+  so the async path pre-derives every reachable branch's visibility map and threads it
+  through `_nested_qs_by_branch_id`; `_q_for_branch` consults it by object identity and
+  falls back to the sync derive only when a consumer short-circuits the walker. The
+  `id()`-identity key is sound because `_normalize_input` copies the child sub-trees
+  verbatim into `self.data` (the LOGIC branch at 707-709), preserving object identity
+  across the `.qs` boundary. `_apply_common_finalize` (perm check + form validate + `.qs`
+  read) is wrapped once in `sync_to_async(thread_sensitive=True)` so a consumer's blocking
+  `check_*_permission` / `method=` body / leaf ORM does not block the event loop.
+- **Per-field permission gates, active-input-only scope.** Confirmed against the shared
+  core: `run_active_input_permission_checks` (`utils/permissions.py:220-259`) fires
+  `check_<field>_permission` once per SOURCE field (lookup-free, via
+  `_active_permission_field_paths`), recurses into each active `RelatedFilter` branch's
+  child filterset via `target_attr="filterset"` (own class, own bare, own per-class dedup
+  set inside the shared `_fired` map), and fires the parent per-branch gate once — the
+  intentional parent-vs-child double dispatch. The filter-only logical `and`/`or`/`not`
+  recursion (1208-1239) reuses the same `bare` and `_fired` so a gate fires at most once
+  per class regardless of how many sibling arms reference it (the `or:[{shelves:...},
+  {shelves:...}]` dedup case). Depth-capped at `_MAX_LOGIC_DEPTH`. Inactive branches
+  (`UNSET`/`None`) are skipped end-to-end so an empty filter never pre-constrains the
+  parent.
+- **Tree overrides + `get_queryset`/optimizer composition.** `filter_queryset` (1341-1388)
+  reads logical keys off `self.data` (not `cleaned_data`, which drops the non-form
+  `and`/`or`/`not` slots — correctly documented) and composes the tree `Q` on top of the
+  inherited leaf-clause `super().filter_queryset`. The depth / `info` / nested-map hand-off
+  channels (`_logic_depth` / `_apply_info` / `_nested_qs_by_branch_id`) are threaded on
+  sibling instances precisely because django-filter's `.qs` machinery cannot carry kwargs
+  through — a real constraint, honestly worked around. `_apply_related_constraints`
+  (1536-1626) keys the parent restriction off `related_filter.field_name` (the ORM path)
+  not the declared attr name (the divergence case is documented), wraps as
+  `pk__in=<parent-pk subquery>` to collapse many-side duplicates WITHOUT `.distinct()`
+  (which would mutate consumer-visible queryset state), and surfaces a typed
+  `ConfigurationError` for the mixed-base-model `&` case instead of Django's opaque
+  `TypeError`. The `is`-identity model comparison correctly mirrors Django's own
+  `Query.combine`.
+- **`apply` dispatcher.** Catches the typed `SyncMisuseError` (a `ConfigurationError`/
+  `RuntimeError` subclass) and rethrows `RuntimeError` with the actionable "use apply_async
+  instead" message via `from exc` — class-based dispatch, no substring-matching against a
+  string constant, and no duplicate cause-`str()` in the message (chain prints it once).
+- **GLOSSARY drift quick-check — clean.** `#filterset` (GLOSSARY 464-474), `#relatedfilter`
+  (994-998), the `check_*_permission` active-input-only scope and `RelatedFilter(queryset=)`
+  filter-scope-not-security-boundary prose, `#metafilterset_class` (670-683), and the
+  `apply_sync`/`apply_async` resolver-API description all read accurately against the live
+  source. The `SyncMisuseError` entry's "[`FilterSet.apply`]'s sync dispatcher rewraps"
+  prose (1276) matches `apply` at source 1747-1771. No drift; no GLOSSARY edit in scope.
 
 ### Summary
 
-Worker 1's reading: `sets.py` is a 1,453-line apply-pipeline spine that ports `django_graphene_filters/filterset.py::FilterSetMetaclass` verbatim, ports the cookbook's `AdvancedFilterSet.get_filters` cycle-safe expansion verbatim, and layers the package-specific Decision-4 Relay-vs-scalar conditional and Decision-8 `apply_sync` / `apply_async` / `apply` named decomposition on top. The control-flow hotspots (11) and 65 calls-of-interest reflect a substrate file that ROUTES through itself heavily — every apply path threads `_normalize_input`, the visibility derivation, the constraint apply, the permission walk, the form validation, and the tree-form composition together. Zero High; two Mediums focused on async/sync boundary contract — both documented as caveats today, both worth promoting to either typed errors or sync-to-async wrappers; ten Lows split across DRY-companion comment-pass items (six), the subpackage-wide `spec-021 -> spec-027` citation forward (one, consolidated under the folder pass), and citation/format hygiene (three). The `## DRY analysis` carries five act-now opportunities — the apply-pipeline near-twins, the visibility-derivation near-twins, the `_MAX_LOGIC_DEPTH` raise, the dataclass-walk pattern, and the items-iteration unification — plus two defer-with-trigger items. GLOSSARY drift quick-check: `FilterSet` / `apply_sync` / `apply_async` are accurately covered in `docs/GLOSSARY.md:424-433`; `FilterSetMetaclass` and `filter_queryset` are internal mechanics not on the consumer surface and correctly absent. No in-cycle GLOSSARY edit warranted.
+Logic-clean, declaration-and-pipeline-complete file at 0.0.9. The metaclass collection,
+cycle-safe `get_filters` cache/guard, Meta `"__all__"` narrowings, Decision-4
+Relay-vs-scalar conditional, active-input-only permission gating with parent/child double
+dispatch, the sync/async apply twin with the `id()`-keyed nested-visibility pre-walk, and
+the duplicate-collapsing related-constraint subquery are all correct and well-documented;
+the heavy comment load is load-bearing (it pins non-obvious django-filter `.qs`-boundary
+and ORM-JOIN-duplication contracts). No High, no Medium. One actionable Low (a redundant
+double `.get` in the operator-bag branch — a localized no-behavior-change tidy) plus two
+recorded-intent / forward-looking Lows (single-threaded `get_filters` flag; the verified-safe
+`**extra` forward). Because the one act-now Low recommends a real (if trivial) source edit,
+this does NOT collapse to shape #5 — routed standard `under-review` for Worker 2.
 
 ---
 
 ## Fix report (Worker 2)
 
-### Files touched
+Consolidated single-spawn: one act-now Low (a trivial, semantics-preserving simplification
+of the operator-bag filter lookup) plus two forward-looking Lows that need no edit. The lone
+edit is logic-adjacent (touches executable lines) but byte-for-byte behavior-preserving, the
+existing docstrings/comments already match the post-edit behavior, and no disposition depends
+on Worker 3 blessing the logic first — so it qualifies for the consolidated shape.
 
-- `django_strawberry_framework/filters/sets.py`
-  - Added `from asgiref.sync import sync_to_async` import (line 22).
-  - Added module-level helper `_read_qs(filterset_instance)` — wraps `.qs` attribute access so `apply_async` can route the `.qs` read through `sync_to_async` (the new helper sits just above `_lookups_for_field`, sets.py::_read_qs).
-  - Added `FilterSet._nested_qs_by_branch_id: dict[int, dict[str, models.QuerySet]] | None = None` class-level default alongside `_apply_info` / `_logic_depth`, with a comment explaining the apply-async stash contract.
-  - Added classmethod `FilterSet._collect_nested_visibility_querysets_async` — recursively walks every `and_` / `or_` / `not_` arm (and the normalized `and` / `or` / `not` keys) and pre-derives each `child_input`'s visibility map via the existing async path, keyed by `id(child_input)`. Enforces the same `_MAX_LOGIC_DEPTH` cap `_evaluate_logic_tree` does.
-  - Updated `FilterSet.filter_queryset` — reads `self._nested_qs_by_branch_id` and threads through to `_evaluate_logic_tree` via the new keyword `_nested_qs_by_branch_id`.
-  - Updated `FilterSet._evaluate_logic_tree` — accepts and forwards `_nested_qs_by_branch_id` to every `_q_for_branch` call (and / or / not arms).
-  - Updated `FilterSet._q_for_branch` — accepts `_nested_qs_by_branch_id`; when the stash carries an entry for `id(child_input)`, consume it instead of calling `_derive_related_visibility_querysets_sync`; defensive fallback to sync derive remains for the no-stash case (direct `_q_for_branch` callers, the `apply_sync` path). Stashes the map on the sibling instance so deeper nesting continues to consult it across the `.qs` boundary. Updated docstring to describe the async-stash contract.
-  - Updated `FilterSet.apply_async` — calls `_collect_nested_visibility_querysets_async` (Medium #2 fix), stashes the result on the filterset instance, and routes `_run_permission_checks`, `_validate_form_or_raise`, and the final `.qs` read through `sync_to_async(..., thread_sensitive=True)` (Medium #1 fix). Docstring rewritten to enumerate the six steps in order.
+### Files touched
+- `django_strawberry_framework/filters/sets.py:735-744` (`_normalize_input`, operator-bag
+  branch) — collapsed the redundant double `.get`. Old: `form_key` was computed, then
+  `filter_instance = all_filters.get(form_key) or all_filters.get(f"{base_path}__{django_lookup}")`.
+  New: bind `suffixed_key = f"{base_path}__{django_lookup}"` once, keep `form_key` unchanged
+  (`base_path` for `exact`, else `suffixed_key`), then `filter_instance = all_filters.get(form_key)`
+  with a guarded second probe `if filter_instance is None and form_key != suffixed_key:`.
+
+### Why the semantics are identical
+- **Non-`exact` lookups:** `form_key == suffixed_key`, so the original `get(form_key) or get(suffixed_key)`
+  is `get(suffixed_key) or get(suffixed_key)` — the second arm can only return the same object
+  (or `None`) the first already produced; net result `get(suffixed_key)`. New code: the
+  `form_key != suffixed_key` guard is False, so the second probe never runs; net result
+  `get(form_key) == get(suffixed_key)`. Identical.
+- **`exact` lookup (the one case the two keys genuinely differ):** `form_key == base_path`,
+  `suffixed_key == f"{base_path}__exact"`. Original: `get(base_path) or get(base_path__exact)` —
+  probes the bare key first, then the explicit `__exact` key. New: `get(base_path)`; if `None`
+  and (always-true) `base_path != base_path__exact`, then `get(base_path__exact)`. Same two
+  keys, same probe order. Preserved.
+- **`or` → `is None` is safe:** `all_filters` values are `django_filters` `Filter` instances
+  (always truthy — no `__bool__`/`__len__` override) or absent. The only falsy outcome of either
+  `.get` is `None` from a missing key, so `X or Y` and `X if X is not None else Y` coincide. The
+  `is None` form additionally matches the immediately-following `if filter_instance is None:` guard
+  (sets.py:742) and the LEAF-branch lookup at sets.py:757.
+- `form_key` is unchanged, so every downstream use (`data[form_key]`, `field_name=form_key`,
+  the `data.update`/`data[form_key]` writes) is untouched.
 
 ### Tests added or updated
-
-- `tests/filters/test_sets.py::test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_sync_misuse` — pins that an `async def get_queryset` on the nested branch's target type no longer raises `SyncMisuseError` mid-`.qs` under `apply_async` with an `or_` nesting. Also asserts the visibility-scoped row set is correct (only the branch whose shelf matches).
-- `tests/filters/test_sets.py::test_apply_async_runs_permission_checks_off_event_loop_thread` — pins that `_run_permission_checks` is invoked on a thread different from the event-loop thread under `apply_async` (the `sync_to_async(thread_sensitive=True)` contract). Asserts `threading.get_ident()` captured inside the permission method differs from the event-loop thread ident.
-- `tests/filters/test_sets.py::test_apply_async_collect_nested_visibility_querysets_pre_derives_or_branch` — unit-level pin on the new helper; given `{or_: [{shelves: ...}]}`, the returned map is keyed by `id(inner_child_input)` and carries the awaited `shelves` queryset.
+- None. The artifact's Low explicitly states behavior is identical so no test change is required.
+  Existing live coverage already exercises both arms through real GraphQL queries against the
+  operator-bag path (`examples/fakeshop/test_query/test_scalars_filter_api.py`, exact + suffixed
+  lookups), plus package-internal `tests/filters/test_sets.py` / `tests/filters/test_inputs.py`.
+  A pure semantics-preserving simplification on an already-covered line warrants no new pin.
 
 ### Validation run
-
-- `uv run ruff format .` — pass (formatter touched the edited files but no diagnostics left).
-- `uv run ruff check --fix .` — pass (`All checks passed!`).
-- Focused pytest run (the three new regression tests plus existing `apply_async` / `_q_for_branch` / `nested_or_branch` coverage): 6 passed, 0 failed. Coverage gate is N/A on a focused subset; the gate runs at full-suite time.
-- `uv.lock` unchanged.
+- `uv run ruff format .` — pass, no changes (265 files unchanged).
+- `uv run ruff check --fix .` — pass, all checks passed (standing COM812-conflict warning only).
+- No pytest (AGENTS.md / role rule). `uv.lock` not touched by `git status`.
 
 ### Notes for Worker 3
-
-- No shadow file used during implementation.
-- Medium #2 implements the artifact's option (a) (root-cause pre-walker) per AGENTS.md "always recommend the root-cause fix over the surface patch" rule. Option (b) (catch-and-re-raise with a clearer error) is rejected in favor of (a). The stash key is `id(child_input)` — `_evaluate_logic_tree` reads `tree_data.get("and") or []` from `self.data` (preserved verbatim by `_normalize_input` at line 618), so the same Python objects the consumer handed to `apply_async` arrive at `_q_for_branch` unmodified. `_collect_nested_visibility_querysets_async` walks both the Strawberry-side keys (`and_` / `or_` / `not_`) and the normalized wire keys (`and` / `or` / `not`) via the existing `_extract_branch_value` shape so a consumer who hands a pre-normalized dict still gets pre-derived maps.
-- Medium #1 wraps `_run_permission_checks`, `_validate_form_or_raise`, AND the terminal `.qs` read in `sync_to_async(thread_sensitive=True)`. The artifact's recommended-change text named only the first two; the `.qs` read was added for hygiene because the same blocking-ORM concern applies (`.qs` → `filter_queryset` → leaf-clause ORM, plus the now-sync derived custom `method=` filter body callable). The regression test only asserts the permission-check thread split (the artifact's "assertion may be looser" allowance).
-- Defensive fallback in `_q_for_branch`: when the stash carries no entry for `id(child_input)` (e.g. a consumer calls `_q_for_branch` directly outside the apply pipeline, or constructs a synthetic logic-tree shape the pre-walker can't reach), it still falls back to the sync derive. This preserves the documented `SyncMisuseError` surface for pure-sync paths and avoids a silent contract change for direct-call consumers. The `apply_sync` path continues to thread `_nested_qs_by_branch_id=None` end-to-end so its behavior is unchanged.
-- `_collect_nested_visibility_querysets_async` enforces `_MAX_LOGIC_DEPTH` matching `_evaluate_logic_tree`. Without the cap, a pathologically-deep nested input could cause unbounded recursion in the pre-walk; this matches the existing depth-cap discipline elsewhere in the file (`_run_permission_checks` line 948-953, `_evaluate_logic_tree` line 1205-1210).
-- No DRY-pass extractions were made in this logic pass — the artifact's `## DRY analysis` items are recorded for the comment-pass / next-cycle harvest. The two Mediums required surgical edits inside `apply_async`, `_evaluate_logic_tree`, `_q_for_branch`, and `filter_queryset`; combining a DRY extraction in the same pass would obscure the behaviour-change review surface.
-- Files in `git status` outside this cycle's scope (KANBAN.md, README.md, TODAY.md, docs/*, filters/inputs.py, tests/base/test_init.py) were already modified at task start — treated as maintainer in-progress work per AGENTS.md rule 33; not touched.
+- Shadow file used: `docs/shadow/django_strawberry_framework__filters__sets.overview.md` (overview
+  only; no `.stripped.py` line cites). Source line numbers above are canonical (live source).
+- Diff is **logic-bearing** (touches executable lines) but semantics-preserving — re-check should
+  confirm the `exact` two-key probe order and the non-`exact` single-key collapse per the
+  equivalence argument above.
+- Other dirty files in `git status` (`conf.py`, `exceptions.py`, `filters/factories.py`,
+  `list_field.py`, `docs/GLOSSARY.md`, other `rev-*.md`, etc.) are concurrent other-worker /
+  maintainer work, out of scope (AGENTS.md #33); not reverted, not mine.
+- The two forward-looking Lows (`get_filters` single-threaded reentrancy flag; the verified-safe
+  `GlobalIDMultipleChoiceFilter **default.extra` forward) and the two deferred DRY items
+  (3x logic-branch walker skeleton; sync/async visibility twin) stay forward-looking — no edit.
 
 ---
 
 ## Verification (Worker 3)
 
 ### Logic verification outcome
+The lone edit (`_normalize_input` operator-bag branch, source 735-745) is provably
+semantics-preserving — verified independently, not trusted:
 
-Both Mediums landed at the right abstraction level.
+- **`or` → `is None` equivalence.** Confirmed `all_filters = cls.get_filters()` (source
+  686) returns `django_filters` `Filter` instances or absent keys. Live scan
+  (`config.settings` django setup): ZERO `__bool__`/`__len__` overrides across the entire
+  upstream `Filter` hierarchy AND the package's own `filters/base.py` + `filters/inputs.py`
+  `Filter` subclasses; `bool(Filter())` is `True`. So the only falsy `.get` outcome is
+  `None` from a missing key, and `X or Y` ≡ `X if X is not None else Y` exactly.
+- **Probe order + count, all cases.** Exhaustive temp harness (768 combinations =
+  6 lookups × full power set of the 7 candidate keys, including `exact`/`title`/`title__exact`
+  populated with DISTINCT filter objects): old `get(form_key) or get(suffixed_key)` vs new
+  `get(form_key)` + guarded `get(suffixed_key)` produced IDENTICAL `(form_key, resolved
+  filter)` in every case — 0 mismatches. Non-`exact`: `form_key == suffixed_key`, guard
+  `form_key != suffixed_key` is False → single lookup (old `or` second arm was dead, returned
+  the same object). `exact`: `form_key = base_path`, `suffixed_key = base_path__exact`, differ
+  → both probed in the same bare-then-suffixed order as the old `or`. Confirmed.
+- **`form_key` unchanged downstream.** Source 742 binds `form_key` to the same value as before
+  (`base_path` for `exact`, else `suffixed_key`); the `data[form_key]` (747), `field_name=form_key`
+  (752), `data.update`/`data[form_key]` (757) writes are byte-identical. No other executable line
+  touched.
 
-**Medium #1** — `sets.py::FilterSet.apply_async` (lines 1572-1579) wraps `_run_permission_checks`, `_validate_form_or_raise`, AND the terminal `.qs` read in `sync_to_async(..., thread_sensitive=True)`. The `.qs` wrapping uses a tiny module-level `_read_qs(filterset_instance)` callable (`sets.py::_read_qs`) because `sync_to_async` wants a callable, not an attribute access. Including `.qs` is a hygiene widening past the artifact's text ("the recommended-change text named only the first two") and is the correct call — `.qs` recurses through `_q_for_branch` (sync) and may evaluate a custom `method=` filter body, which is precisely the same blocking-ORM concern the permission-check wrap addresses. The new docstring at `apply_async` enumerates the six steps in order and the `thread_sensitive=True` shape is named with its Django-parity rationale.
-
-**Medium #2** — `sets.py::FilterSet._collect_nested_visibility_querysets_async` (lines 881-944) is the option (a) root-cause pre-walker. Worker 2 chose (a) over (b) per the artifact's recommendation and the AGENTS.md root-cause-over-surface-patch rule. The walker (1) bounds the recursion by the same `_MAX_LOGIC_DEPTH` cap `_evaluate_logic_tree` enforces with the same consumer-visible error message (lines 908-913), (2) walks both Strawberry-side keys (`and_`/`or_`/`not_`) and normalized wire-side keys (`and`/`or`/`not`) via `_extract_branch_value`'s already-shipped UNSET-and-None collapse, (3) keys the map on `id(child_input)` — the same Python object identity `_q_for_branch` later receives from `_evaluate_logic_tree`, since `_normalize_input` preserves the consumer's child dicts verbatim per `sets.py:618`, and (4) recurses so a `or: [{or: [{...}]}]` nesting also lands in the stash. `_q_for_branch` (lines 1406-1419) consults the stash via `_nested_qs_by_branch_id.get(id(child_input))` when the stash is non-None, and falls back to the documented sync derive (which preserves the `SyncMisuseError` surface for direct callers) when the stash is None or carries no entry. The stash is propagated to sibling instances (line 1425) so deeper `_q_for_branch` calls crossing the `.qs`/`filter_queryset` boundary keep finding the pre-derived map.
-
-The `_evaluate_logic_tree` and `filter_queryset` plumbing changes thread `_nested_qs_by_branch_id` through every `_q_for_branch` call site (and/or/not arms) without touching the recursion-depth or info propagation contract.
-
-All ten Lows correctly remain unaddressed per the artifact's `fix-implemented (awaiting comment pass)` status — the comment-pass dispatch is the next sub-pass.
+No input divergence found → semantics provably identical, not merely plausible. High 0 / Med 0.
+The two forward-looking Lows (`get_filters` single-threaded reentrancy flag; verified-safe
+`GlobalIDMultipleChoiceFilter **default.extra` forward) correctly stayed forward-looking.
 
 ### DRY findings disposition
-
-All five act-now and two defer-with-trigger DRY items are recorded for the next-cycle harvest per Worker 2's explicit Notes-for-Worker-3: "combining a DRY extraction in the same pass would obscure the behaviour-change review surface." Correct discipline — the two Mediums required surgical edits inside `apply_async`, `_evaluate_logic_tree`, `_q_for_branch`, and `filter_queryset`; bundling the apply-pipeline/derive twin-collapse with the behaviour change would have created an un-bisectable diff.
+Act-now Low (operator-bag double `.get`) FIXED + commented inline. The two deferred DRY items
+(3x logic-branch walker skeleton; sync/async visibility twin) stayed forward-looking with
+triggers / intentional-twin reasoning intact — no edit. Correct.
 
 ### Temp test verification
+- Temp test: `docs/review/temp-tests/filters_sets/probe_equiv.py` — exhaustive old-vs-new
+  key-probe equivalence (768 combinations, 0 mismatches).
+- Disposition: deleted. A pure semantics-preserving simplification on an already-covered line
+  (existing live `examples/fakeshop/test_query/test_scalars_filter_api.py` exercises exact +
+  suffixed lookups) warrants no permanent pin; agree with Worker 2's no-test-change call.
 
-None used. The three new regression tests in `tests/filters/test_sets.py` (Worker 2's Fix report names them; all three grep-collect under `pytest -k "async" --collect-only`) are sufficient logic proof; no behavior was so opaque it required a private temp scaffold.
+### Comment verification
+The new 5-line inline comment (source 737-741) accurately describes the final behavior — the
+`exact`-probes-both vs every-other-lookup-coincides asymmetry — and replaces the silent dead
+`or` arm with an explicit guard. Not a restatement of obvious code; pins a non-obvious
+django-filter form-key registration fact. Surrounding operator-bag commentary unchanged and
+still accurate. In scope.
+
+### Changelog verification
+`git diff -- CHANGELOG.md` empty. State "Not warranted" cites BOTH AGENTS.md #21 and the active
+plan's silence on changelog authorization for this per-file cycle. Diff scope is internal-only
+(a semantics-preserving lookup collapse, no public-API surface change), so "Not warranted" is the
+correct state. Accepted.
+
+### Sibling-cycle attribution
+Owned-path `--stat` (vs `0872a20f`): `sets.py | 16` is this cycle. The other source hunks attribute
+to CLOSED sibling cycles — `conf.py` (verified, [x] review-0_0_9.md:70), `exceptions.py` ([x] :72),
+`list_field.py` ([x] :73), `filters/factories.py` ([x] :80) — and the 1-line `docs/GLOSSARY.md`
+hunk to a closed sibling cycle. CHANGELOG.md diff empty. None are a rejection trigger.
 
 ### Verification outcome
+- `cycle accepted; verified` — sets top-level `Status: verified` AND marks the checklist box.
 
-logic accepted; awaiting comment pass
-
-Focused pytest: `uv run pytest tests/filters/test_sets.py -x -k "async"` → 6 passed, 0 failed (coverage gate flagged as expected on a focused subset; gate is N/A pre-full-suite). The three new regression tests collect and pass:
-- `test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_sync_misuse`
-- `test_apply_async_runs_permission_checks_off_event_loop_thread`
-- `test_apply_async_collect_nested_visibility_querysets_pre_derives_or_branch`
+The diff is provably semantics-preserving (768-case exhaustive equivalence + zero-truthiness-override
+proof), so the cycle-closing re-check can be light.
 
 ---
 
 ## Comment/docstring pass
 
-### Files touched
+(Folded into the consolidated single-spawn.)
 
-- `django_strawberry_framework/filters/sets.py`
-  - Module docstring (line 1): dropped the `(Slice 1)` parenthetical from the headline; rest left intact (spec-021 citation preserved per dispatch's "skip spec-021 → spec-027 drift" routing).
-  - `FilterSet` class docstring + `_owner_definition` comment (around lines 197-205): rewrote the "Slice 3 binds at finalizer phase 2.5" / "Slice 1 ships the slot" framing into past-tense behavioral prose ("the binding seam populated by `finalize_django_types` phase 2.5") and dropped the `# Slice-3 binding seam` comment prefix.
-  - `_is_own_pk_under_relay_owner` docstring (lines 514-515): "Slice 3 phase-2.5 binding" → "finalizer phase-2.5 binding".
-  - `_resolve_relation_target_type` docstring + inline comment (lines 554, 562): "Slice-3 binding has landed" → "finalizer phase-2.5 binding has landed", same in the inline owner-aware path comment.
-  - `_normalize_input` docstring (lines 591-610): dropped the "Slice 2 completes the per-primitive value normalization" framing and added the explicit "`filters.base.RangeFilter` is not imported here -- the symbol lives in `filters.base` and is referenced for shape-documentation" carve-out per Low #2.
-  - Inline `# Per spec-021 L518-605 (Slice 2's per-field operator bag)` comment (line 649): dropped "(Slice 2's per-field operator bag)" parenthetical; the line citation stays for the per-field operator-bag motivation.
-  - `_operator_bag_items` docstring (lines 707-721): dropped the "Slice 2's `_build_input_fields`" framing AND added the bundled-with-DRY comment Low #3 explanation of the `__dataclass_fields__` sniff rationale (covers the three call sites at `_normalize_input`, `_operator_bag_items`, `_active_permission_field_paths`).
-  - `_iter_active_related_branches` docstring (lines 784-800): extended per Low #4 to name `UNSET` and `None` as both being collapsed to "branch not supplied", with a forward-defensive note that future refactors bypassing `_extract_branch_value` must replicate the UNSET-collapse explicitly.
-  - `_collect_nested_visibility_querysets_async` docstring (lines 902-928): widened per dispatch to call out (a) the `id(child_input)` identity preservation via `_normalize_input`'s verbatim child-dict copy, (b) the dual Strawberry-side / wire-side key walk, and (c) the typed `ConfigurationError` shape on cap exceedance.
-  - `_validate_form_or_raise` docstring (lines 1207-1227): added the classmethod-with-self-instance rationale paragraph per Low #8 (subclass override hook that lets the policy-owning class see both `cls` and the actual filterset whose form to validate).
-  - `apply` (lines 1582-1607): dropped the `({exc})` parenthetical per Low #6 (the `from exc` clause already chains the cause via standard traceback machinery; duplicating the cause's `str()` was redundant). Added a 4-line inline comment explaining the change so a future maintainer does not re-inline the parenthetical out of habit. Existing test `test_apply_dispatcher_rethrows_sync_misuse_with_clearer_message` only asserts `"apply_async" in str(excinfo.value)` and continues to pass.
-  - Section divider `# Slice 4a — tree-form logic substrate` (around line 1228): rewrote to `# Tree-form logic substrate`.
+### Files touched
+- `django_strawberry_framework/filters/sets.py:736-740` — added a 5-line inline comment on the
+  new `suffixed_key`/`form_key` block explaining the `exact`-probes-both vs. every-other-lookup-
+  coincides asymmetry that the old dead `or` arm had silently obscured. No other comment in scope
+  needed changing — the surrounding operator-bag commentary (715-732) still describes the final
+  behavior accurately.
 
 ### Per-finding dispositions
-
-- Medium #1 (sync_to_async routing under apply_async): logic-pass shipped the wrapping at lines 1572-1579; comment-pass widened the `apply_async` docstring (already enumerated the six steps in order) by passing — no additional edit needed.
-- Medium #2 (nested-branch async derive pre-walk): logic-pass shipped `_collect_nested_visibility_querysets_async`; comment-pass widened the helper's docstring per dispatch ("post-Medium-#2 contract: pre-walk stash + id-keyed lookup").
-- Low #1 (spec-021 → spec-027 source-comment drift, 11 sites): SKIPPED in-file per dispatch — forwarded to `rev-filters.md` folder pass per the artifact's explicit consolidation under `rev-filters__base.md` Low #2.
-- Low #2 (`RangeFilter` referenced but not imported): edited in `_normalize_input` docstring — qualified to `filters.base.RangeFilter` and added the "not imported here" carve-out.
-- Low #3 (`__dataclass_fields__` sniff repeated three times): bundled into `_operator_bag_items` docstring with the Strawberry-input rationale per artifact ("bundle with the `## DRY analysis` helper extraction"); the DRY extraction itself remains forwarded to the next-cycle harvest.
-- Low #4 (`_iter_active_related_branches` UNSET/None collapse undocumented): edited as described above.
-- Low #5 (`_lookups_for_field_class_cache` / `_FORM_KEY_BY_PYTHON_ATTR` module-private confirmation): no-edit per artifact ("confirm citation hygiene only"); both names are leading-underscore module-private as required.
-- Low #6 (`apply` `({exc})` parenthetical redundant with `from exc`): edited — parenthetical dropped, inline comment added explaining the chain-vs-text distinction.
-- Low #7 (`TODO(spec-027-filters-0_0_8 Meta.search_fields card 0.1.2)` format): no-edit per artifact ("defer until the search-fields card actually opens").
-- Low #8 (`_validate_form_or_raise` classmethod-with-self-instance shape): edited — added the 4-sentence rationale paragraph per artifact's "no-edit beyond doc tweak" allowance.
-- Slice tense-rot per dispatch: dropped `Slice 1` from module docstring headline, `Slice 3` / `Slice 1` from `FilterSet` class docstring, `Slice 2` from `_normalize_input` and `_operator_bag_items` docstrings + the inline spec-021 L518-605 motivation comment, `Slice-3 binding` from `_is_own_pk_under_relay_owner` and `_resolve_relation_target_type` docstrings + inline comment, and `Slice 4a` from the tree-form-logic-substrate section divider. The KANBAN-check pattern from worker-2.md confirms: the filters card shipped as `DONE-027-0.0.8` (KANBAN.md line 100), so the slice labels are historical build artifacts, not active spec anchors — dropping them is the correct call per the comment dicta ("prefer dropping a forward-looking phase/slice label").
+- Low 1 (operator-bag double `.get`): FIXED + commented (above).
+- Low 2 (`get_filters` single-threaded reentrancy flag): forward-looking per Worker 1; the
+  existing docstring (sets.py:313-326) already documents the contract and the
+  "no `threading.local` without a real consumer" guard. No comment edit.
+- Low 3 (`GlobalIDMultipleChoiceFilter **default.extra` forward): no-finding / verified-safe per
+  Worker 1; the existing inline comment (sets.py:485-497) already justifies it. No comment edit.
+- DRY (3x logic-branch walker skeleton; sync/async visibility twin): deferred / intentional-twin
+  per Worker 1. No edit.
 
 ### Validation run
-
-- `uv run ruff format .` — pass (198 files left unchanged; no diagnostics).
-- `uv run ruff check --fix .` — pass (`All checks passed!`).
+- `uv run ruff format .` — pass, no changes.
+- `uv run ruff check --fix .` — pass.
 
 ### Notes for Worker 3
-
-- No shadow file used during the comment pass.
-- spec-021 → spec-027 source-comment drift NOT touched in-file per dispatch ("Skip spec-021 → spec-027 drift (forwarded to folder pass)"). The 11 sites (lines 3, 8, 176, 340, 393, 407, 443, 462, 486, 626, 821 per the artifact's Low #1) carry through to `rev-filters.md` folder pass.
-- GLOSSARY edits skipped per dispatch and per the artifact's Summary ("GLOSSARY drift quick-check: `FilterSet` / `apply_sync` / `apply_async` are accurately covered in `docs/GLOSSARY.md:424-433`; ... No in-cycle GLOSSARY edit warranted.").
-- `apply`'s consumer-visible message changed from `"FilterSet.apply called against async get_queryset; use apply_async instead. (<cause text>)"` to `"FilterSet.apply called against async get_queryset; use apply_async instead."` (parenthetical dropped). The `from exc` chain still surfaces the original `SyncMisuseError` text through standard traceback machinery; no test substring match relies on the parenthetical (only `"apply_async" in str(excinfo.value)` is asserted, per `tests/filters/test_sets.py:952`). This is a docstring/wording change with a minor consumer-visible message tweak — flagging for Worker 3's changelog-pass consideration whether the tightened error message warrants a CHANGELOG entry (the original parenthetical was a duplicate-of-chain bug, not a documented contract).
-- Files in `git status` outside this cycle's scope (KANBAN.md, README.md, TODAY.md, docs/*, filters/inputs.py, tests/base/test_init.py, tests/filters/test_sets.py) were already modified at task start — treated as maintainer in-progress work per AGENTS.md rule 33; not touched.
+Comment is co-located with the logic edit; describes the final approved behavior. The two
+forward-looking Lows and both DRY items stayed forward-looking.
 
 ---
 
 ## Changelog disposition
 
 ### State
-
-Warranted but deferred to maintainer.
+Not warranted.
 
 ### Reason
-
-The cycle landed two consumer-visible behavior changes at the public `FilterSet.apply_async` classmethod (a documented public-facing surface per `docs/GLOSSARY.md:424-433`):
-
-- **Medium #1**: `FilterSet.apply_async` no longer blocks the event loop on `_run_permission_checks`, `_validate_form_or_raise`, and the terminal `.qs` read. All three are now routed through `asgiref.sync.sync_to_async(thread_sensitive=True)` so a consumer `check_*_permission` hook that issues a blocking ORM call (the most natural placement per the cookbook docstring at `sets.py:909-911`) executes off the event-loop thread instead of silently blocking it. Behavior change observable to any async-resolver consumer who routes through `apply_async`.
-- **Medium #2**: `FilterSet.apply_async` no longer raises `SyncMisuseError` mid-`.qs` when a nested `or_` / `and_` / `not_` branch's `RelatedFilter` target type has an async `get_queryset`. The new `_collect_nested_visibility_querysets_async` pre-walker eagerly enumerates every nested branch, awaits each `get_queryset`, and stashes the results in an `id(child_input)`-keyed map that `_q_for_branch` consults before falling back to the sync derive. Bug-fix at a public API surface — previously a `BookFilter` whose `Genre.get_queryset` is async-only raised `SyncMisuseError` mid-`.qs` under `apply_async` with `{or_: [{genres: {name: "x"}}]}`; post-fix the same call returns the filtered queryset.
-
-Per `worker-2.md` three-state guidance, the cycle qualifies as `Warranted but deferred to maintainer` because (a) the active plan does not authorize a `CHANGELOG.md` edit for this cycle item, AND (b) the package is pre-alpha so the maintainer owns CHANGELOG cadence. The dispatch prompt explicitly forbids editing `CHANGELOG.md`. Per the worker-2 dicta, the suggested entry text is preserved verbatim below so the maintainer can lift it at the 0.0.8 release cut without re-derivation.
+The cycle's only edit is a semantically-equivalent internal simplification (a redundant double
+`.get` collapsed to a single guarded lookup, behavior byte-identical) — no consumer-visible
+change. Per AGENTS.md #21 ("Do not update CHANGELOG.md unless explicitly instructed"), and the
+active plan does not authorise a CHANGELOG edit for this per-file cycle (a per-file pass is never
+the authorising scope; any drift forwards to the project pass). Both citations apply.
 
 ### What was done
-
-No `CHANGELOG.md` edit. Suggested entry preserved verbatim below for maintainer lift at release time. Placement target: `[Unreleased] ### Changed` (joins the existing `0.0.8` cohort already carrying `Meta.filterset_class` promotion, `_q_for_branch` request-threading, and the `_pascal_case` `ConfigurationError` entries; both behavior changes are scoped to the same `FilterSet` apply pipeline shipped under [`021-filtering_subsystem-0.0.8`][card-filtering-subsystem]).
-
-### Suggested CHANGELOG entry
-
-```
-- `FilterSet.apply_async` now wraps `_run_permission_checks`, `_validate_form_or_raise`, and the terminal `.qs` read in [`asgiref.sync.sync_to_async`][asgiref-sync-to-async] with `thread_sensitive=True`, so a consumer-supplied `check_*_permission` hook (or a custom `Filter(method=...)` body) that issues a blocking ORM call no longer silently blocks the event loop. The cookbook contract for `check_*_permission` remains a regular `def`; the wrap addresses the documented "contract caveat" by moving execution onto a thread instead of asking consumers to hand-roll the sync-to-async themselves. Observable to any async-resolver consumer who routes through `apply_async`; `apply_sync` and the synchronous `.qs` read are unchanged.
-- `FilterSet.apply_async` now pre-derives every nested `and_` / `or_` / `not_` branch's `RelatedFilter`-driven visibility queryset before constructing the top-level filterset, stashing the results on the instance for `_q_for_branch` to consume during the synchronous `.qs` evaluation. Previously, a nested branch whose `RelatedFilter` target type declared an async `get_queryset` raised [`SyncMisuseError`][glossary-syncmisuseerror] mid-`.qs` because `_q_for_branch`'s per-branch derive ran synchronously even under `apply_async`. The new pre-walker enforces the same `_MAX_LOGIC_DEPTH` cap `_evaluate_logic_tree` uses, walks both Strawberry-side (`and_` / `or_` / `not_`) and normalized wire-side (`and` / `or` / `not`) keys, and keys the stash on `id(child_input)` for verbatim identity match. Pure-sync paths (`apply_sync`, direct `_q_for_branch` calls) continue to surface `SyncMisuseError` when an async `get_queryset` is reached through them — only `apply_async` gains the nested-branch async support.
-```
+No `CHANGELOG.md` edit.
 
 ### Validation run
-
-- `uv run ruff format .` — pass (198 files left unchanged; standing COM812-formatter conflict warning is the project-wide notice, not a regression).
-- `uv run ruff check --fix .` — pass (`All checks passed!`).
-- `uv.lock` unchanged.
+- `uv run ruff format .` — pass, no changes.
+- `uv run ruff check --fix .` — pass.
 
 ---
 
 ## Iteration log
 
-### Verification (Worker 3, pass 2 — comment-verify)
+### Fix report (Worker 2, pass 2)
 
-**Slice tense-rot fully dropped.** `grep -n "Slice " django_strawberry_framework/filters/sets.py` returns zero matches — the module docstring headline, the `FilterSet` class docstring + `# Slice-3 binding seam` comment, the `_is_own_pk_under_relay_owner` and `_resolve_relation_target_type` docstrings + owner-aware inline comment, the `_normalize_input` and `_operator_bag_items` docstrings, the inline `# Per spec-021 L518-605 (Slice 2's per-field operator bag)` parenthetical, and the `# Slice 4a — tree-form logic substrate` section divider all rewrote into past-tense / phase-named prose. The spec-021 → spec-027 source-comment drift (Low #1) correctly remains in-source per dispatch's explicit "Skip spec-021 → spec-027 drift (forwarded to folder pass)" routing; `grep -n "spec-021" django_strawberry_framework/filters/sets.py` returns 11 lines (3, 8, 189, 364, 417, 431, 467, 486, 510, 654, 865), matching the artifact's Low #1 enumeration modulo a couple of off-by-one shifts due to the comment-pass insertions (still 11 sites).
+Follow-up fix surfaced by the final test-run gate: the earlier cycle's
+operator-bag simplification (`sets.py:742-745`) dropped full-suite coverage to
+**99.98%** with the single missed line **`filters/sets.py:745`** (the
+`if filter_instance is None and form_key != suffixed_key:` suffixed-key fallback
+probe). `fail_under=100` gates, so this is a regression. Pre-review the
+equivalent `or`-fallback arm was hit; the explicit-guard rewrite is clearer but
+left line 745 unexercised by the existing suite.
 
-**Lows #2 / #3 / #4 / #6 / #8 applied per artifact.** Low #2: `_normalize_input` docstring (sets.py:597-601) qualifies the reference as `filters.base.RangeFilter` and carries the "not imported here -- the symbol lives in `filters.base`" carve-out, naming `inputs.py::_normalize_range_value` as the actual patch site. Low #3: `_operator_bag_items` docstring (sets.py:712-722) bundles the `__dataclass_fields__` sniff rationale across all three call sites (`_normalize_input`, `_operator_bag_items`, `_active_permission_field_paths`) with the Strawberry `@strawberry.input` machinery + `dataclasses.is_dataclass` comparison framing the artifact recommended. Low #4: `_iter_active_related_branches` docstring (sets.py:805-812) names both `strawberry.UNSET` and `None` as collapsing to "branch not supplied" via `_extract_branch_value`, with the forward-defensive note that future refactors bypassing `_extract_branch_value` must replicate the UNSET collapse explicitly. Low #6: `apply` (sets.py:1636-1642) drops the `({exc})` parenthetical from the consumer-visible message and adds a 4-line inline comment naming the chain-vs-text distinction so a future maintainer does not re-inline it; the existing assertion `"apply_async" in str(excinfo.value)` continues to match. Low #8: `_validate_form_or_raise` docstring (sets.py:1245-1253) adds the 4-sentence rationale paragraph for the classmethod-with-self-instance shape, naming the subclass-override-without-rebinding contract.
+#### REACHABLE-vs-UNREACHABLE determination: **REACHABLE** (proven)
 
-**Post-Medium docstring contracts described.** `_collect_nested_visibility_querysets_async` (sets.py:902-928) documents the post-Medium-#2 contract end to end: (a) the `id(child_input)` identity preservation via `_normalize_input`'s verbatim child-dict copy, (b) the dual Strawberry-side (`and_`/`or_`/`not_`) and wire-side (`and`/`or`/`not`) key walk via `_extract_branch_value`, (c) the recursive walk so deeper `or: [{or: [...]}]` nesting also lands in the stash, and (d) the typed `ConfigurationError` shape on `_MAX_LOGIC_DEPTH` exceedance matching `_evaluate_logic_tree`. `apply_async` (sets.py:1572-1606) replaced the "Contract caveat" paragraph with an enumerated six-step contract block naming the `sync_to_async(thread_sensitive=True)` Django-parity rationale at each wrap site. `_q_for_branch` docstring (sets.py:1416-1435) describes the new stash-consult / sync-fallback dual path, names the sibling-instance `_nested_qs_by_branch_id` propagation, and preserves the documented sync-misuse error for the pure-sync path. `filter_queryset` (sets.py:1297-1307) and `_evaluate_logic_tree` (sets.py:1334-1338) both document the threaded `_nested_qs_by_branch_id` keyword.
+Line 745 fires only when `django_lookup == "exact"` (so `form_key` = bare
+`base_path`, `suffixed_key` = `base_path__exact`, the two differ) AND
+`all_filters.get(base_path)` is `None`. I proved this is reachable via a valid
+FilterSet config:
 
-**No scope creep.** Diff is scoped to `django_strawberry_framework/filters/sets.py` only (`git diff --stat HEAD -- django_strawberry_framework/filters/sets.py` confirms 283 +/- lines, single file). Dispatch-flagged out-of-scope dirty paths (KANBAN.md, README.md, TODAY.md, docs/GLOSSARY.md, docs/README.md, docs/TREE.md, docs/spec-028-orders-0_0_8.md, docs/review/rev-filters__inputs.md, docs/review/review-0_0_7.md, django_strawberry_framework/filters/inputs.py, tests/base/test_init.py, tests/filters/test_sets.py) were left untouched per AGENTS.md rule 33. All ten Lows accounted for: Low #1 forwarded per dispatch; Lows #2/#3/#4/#6/#8 edited as described; Lows #5/#7 no-edit per artifact's own trigger phrasing.
+- **django-filter's exact-key registration** has TWO paths.
+  `BaseFilterSet.get_filter_name` (`.venv/.../django_filters/filterset.py:313-326`)
+  strips the trailing `__exact` from *generated* exact filters, so an autogen
+  exact filter always registers under the **bare** `field_name` — for that path,
+  `all_filters.get(base_path)` is never `None`, and 745 would be dead.
+- **BUT** `BaseFilterSet.get_filters` ends with
+  `filters.update(cls.declared_filters)` (`filterset.py:378`), which merges a
+  declaratively-attached filter under its **literal class-attribute name**. A
+  consumer who writes `name__exact = CharFilter(field_name="name", lookup_expr="exact")`
+  on the FilterSet (instead of using `Meta.fields`) gets `all_filters` keyed
+  **`name__exact`** with **no bare `name`** entry.
+- The package's operator-bag builder groups that filter under
+  `top_name="name"` (`inputs.py::_build_input_fields`, rpartition at lines
+  644-652), and since `"name"` is NOT a `declared_filters` key (the declared key
+  is `"name__exact"`), `django_source_path = sample_filter.field_name = "name"`
+  (lines 737-740). So at runtime `base_path="name"`, `form_key="name"` (exact),
+  `suffixed_key="name__exact"`: line 743 `all_filters.get("name")` → `None`,
+  the line-744 guard is True, and **line 745** `all_filters.get("name__exact")`
+  resolves the declared `CharFilter`.
 
-**Ruff outcomes.** `uv run ruff format --check django_strawberry_framework/filters/sets.py` → `1 file already formatted`. `uv run ruff check django_strawberry_framework/filters/sets.py` → `All checks passed!` (the COM812-formatter conflict warning is the standing project-wide warning, not a comment-pass regression).
+Proof: an instrumented `trace.Trace` probe over a `name__exact`-declaring
+`FilterSet` (model `Category`, `Meta.fields = []`) driving `_normalize_input`
+showed line 745 executed **once** and produced the correct
+`{"name": "foo"}`. The line is genuinely reachable through a real (if
+unusual) declarative config — NOT dead code — so the explicit-guard form is
+kept and the coverage is earned with a real test. Removing 744-745 would have
+broken this config (the declared `__exact` filter would never normalize, falling
+through to the raw-passthrough at 746-747 under the wrong assumption).
 
-### Verification outcome (pass 2)
+#### Test placement
 
-comments accepted; awaiting changelog disposition
+Package-internal `tests/filters/test_sets.py` (not a live fakeshop query): no
+existing example FilterSet declares an explicit `<field>__exact`, so a live
+route would require NEW example model + DjangoType + schema wiring + a live
+query, OR mutating an existing example FilterSet's GraphQL input surface
+(broadly perturbing other live tests) — disproportionate for a package-internal
+normalizer resolution line. The behavior under test is the operator-bag
+normalizer's declared-key-vs-`field_name` resolution, which is exactly the
+contract the sibling `_normalize_input` operator-bag unit tests already pin in
+this same file (`test_normalize_input_operator_bag_dict_value_merges_into_form_data`
+declares `lifetime_fines_cents__range = RangeFilter(...)` with `Meta.fields = []`
+in the identical shape).
 
-Sets top-level `Status: comments-accepted`. Worker 2 next-pass dispatch is the changelog disposition; the `## Changelog disposition` section above is currently blank pending that pass.
+### Files touched
+- `tests/filters/test_sets.py` — added
+  `test_normalize_input_operator_bag_exact_resolves_explicit_suffixed_key`
+  (placed before `test_normalize_input_top_level_range_filter_merges_positional_keys`).
+  Declares `name__exact = CharFilter(field_name="name", lookup_expr="exact")`
+  with `Meta.fields = []` so `get_filters()` carries only `name__exact`, asserts
+  that, then drives `_normalize_input({"name": _NameBag(exact="foo")})` and
+  asserts `{"name": "foo"}` — exercising the line-745 suffixed-key fallback.
+- `django_strawberry_framework/filters/sets.py` — **no change** (the explicit
+  guard at 742-745 is correct and now covered; the comment at 737-741 already
+  describes the exact-probes-both asymmetry accurately).
 
-### Verification (Worker 3, pass 3 — terminal-verify)
+### Validation run
+- `uv run ruff format .` — pass, no changes (265 files unchanged).
+- `uv run ruff check --fix .` — pass, all checks passed (standing COM812
+  formatter-conflict warning only).
+- Focused coverage: `uv run pytest tests/filters/test_sets.py
+  --cov=django_strawberry_framework.filters.sets --cov-report=term-missing` —
+  new test passes; `filters/sets.py` Missing list is `408-418, 484-498, 580,
+  1122, 1449` (covered by other suite files in the full run) and **`745` is NOT
+  in the missing list** — the regression line is now covered. `trace.Trace`
+  probe independently confirmed line 745 executes once on the new test's path.
+- No full `uv run pytest` (focused-only per dispatch). `uv.lock` clean (not
+  touched by `git status`).
 
-**Changelog state matches diff.** `git diff -- CHANGELOG.md` is empty as required for `Warranted but deferred to maintainer`. No edit to `CHANGELOG.md` shipped this cycle.
+### Notes for Worker 3
+- Diff is **logic/test-bearing**: a new test plus a determination that the
+  explicit-guard lines 742-745 are REACHABLE (not dead) — re-verify by reading
+  django-filter `BaseFilterSet.get_filters` `filters.update(cls.declared_filters)`
+  (`.venv/.../django_filters/filterset.py:378`) and `get_filter_name`'s
+  `__exact`-strip (313-326), and confirm the new test's
+  `get_filters()` returns `["name__exact"]` (no bare `name`).
+- No source edit: the earlier cycle's explicit-guard rewrite is preserved as-is;
+  this pass only earns the coverage with a real test proving the genuine
+  two-key-differ path.
+- Changelog: Not warranted — test-only addition, zero consumer-visible change;
+  AGENTS.md #21 ("Do not update CHANGELOG.md unless explicitly instructed") plus
+  the active plan's silence on changelog authorization for this per-file
+  follow-up. No `CHANGELOG.md` edit.
 
-**Verbatim maintainer-ready entry present and covers both Mediums distinctly.** The `### Suggested CHANGELOG entry` section carries a fenced block with two bullets: bullet 1 covers Medium #1 (`sync_to_async(thread_sensitive=True)` wrap of `_run_permission_checks`, `_validate_form_or_raise`, and the terminal `.qs` read under `apply_async`); bullet 2 covers Medium #2 (`_collect_nested_visibility_querysets_async` pre-walker for nested branches whose `RelatedFilter` target type declares an async `get_queryset`, including the `_MAX_LOGIC_DEPTH` cap, dual Strawberry-side / wire-side key walk, and `id(child_input)` stash key). Both bullets name the consumer-observable behavior change and the unchanged sibling paths (`apply_sync`, synchronous `.qs`, direct `_q_for_branch`). Placement target named (`[Unreleased] ### Changed`, joining the `0.0.8` `RelatedFilter` `TypeError` / `_pascal_case` `ConfigurationError` cohort under `[`021-filtering_subsystem-0.0.8`]`).
+### Verification (Worker 3, pass 2)
 
-**Real-consumer-visible framing honest.** `apply_async` is named as the resolver-facing API at `docs/GLOSSARY.md:432` (`The resolver-facing API is the classmethod pair FilterSet.apply_sync(input_value, queryset, info) and FilterSet.apply_async(input_value, queryset, info) — sync resolvers call the former, async resolvers await the latter`). Both Mediums change observable behavior on that documented public-surface classmethod, so `Warranted but deferred to maintainer` is the correct state (not `Not warranted`); the maintainer-action requirement is real.
+`cycle accepted; verified` — coverage-regression follow-up holds. Box review-0_0_9.md:82
+stays `[x]`; top-level `Status: verified`.
 
-**Logic + comment passes accepted in iteration log.** Pass 1 (logic) → `logic accepted; awaiting comment pass` with all three new regression tests collecting and passing. Pass 2 (comment) → `comments accepted; awaiting changelog disposition` with the Slice tense-rot scrub grep-confirmed (`grep -c "Slice " sets.py` → 0 spot-reconfirmed at terminal), Lows #2/#3/#4/#6/#8 edited and Lows #5/#7 no-edit per artifact's trigger phrasing, and Low #1 (spec-021 → spec-027 drift) explicitly forwarded to `rev-filters.md` folder pass per dispatch.
+**Source unchanged this pass (test-only fix confirmed).** `git diff <baseline> --
+django_strawberry_framework/filters/sets.py` is exactly the pass-1 logic-accepted edit
+(the +16/-6 form_key collapse + 5-line comment, lines 736-745); NO new source hunk this
+pass. No commit since baseline (`git log <baseline>..HEAD` empty for both owned paths);
+both are working-tree mods. The explicit guard at 742-745 is byte-identical to the
+pass-1 verified state. Only new change vs baseline = the new test in
+`tests/filters/test_sets.py` (+40).
 
-**Ruff outcomes recorded and spot-reconfirmed.** Disposition records both passes' `uv run ruff format .` and `uv run ruff check --fix .` results as `All checks passed!`. Terminal-verify spot-check: `uv run ruff format --check django_strawberry_framework/filters/sets.py` → `1 file already formatted` (with the standing COM812-formatter conflict warning that is the project-wide notice, not a regression); `uv run ruff check django_strawberry_framework/filters/sets.py` → `All checks passed!`.
+**REACHABILITY independently re-confirmed (W2 judged correctly — 745 is live, not dead).**
+Read django-filter directly: `BaseFilterSet.get_filter_name` (`.venv/.../django_filters/
+filterset.py:313-326`) strips the trailing `__exact` from *generated* exact filters (they
+register under the bare field name), and `get_filters` (`:378`) ends with
+`filters.update(cls.declared_filters)`, merging a declaratively-attached filter under its
+literal class-attribute name. So a FilterSet that writes
+`name__exact = CharFilter(field_name="name", lookup_expr="exact")` with `Meta.fields = []`
+yields `all_filters` keyed `name__exact` with NO bare `name` entry. At runtime the
+operator-bag branch computes `base_path="name"`, `form_key="name"` (exact),
+`suffixed_key="name__exact"` → line 743 `get("name")` is `None` → line-744 guard
+(`is None and form_key != suffixed_key`) is True → **line 745** `get("name__exact")`
+resolves the declared filter. Genuinely reachable through a valid (if unusual) config; NOT
+the removal case.
 
-**Scope discipline held.** `git diff --stat HEAD -- django_strawberry_framework/filters/sets.py` confirms 283 +/- lines, single file (238 insertions / 45 deletions). Out-of-scope dirty paths flagged in `git status` (KANBAN.md, README.md, TODAY.md, docs/GLOSSARY.md, docs/README.md, docs/TREE.md, docs/spec-028-orders-0_0_8.md, docs/review/rev-filters__inputs.md, docs/review/review-0_0_7.md, django_strawberry_framework/filters/inputs.py, tests/base/test_init.py, tests/filters/test_sets.py) are presumptively maintainer or sibling-cycle in-progress work per AGENTS.md rule 33 and were untouched across all three Worker 2 passes.
+**Independent probe (own `uv run python`, config.settings, model `Category`):** built the
+`name__exact`-declaring `WeirdCategoryFilter`, confirmed `get_filters()` returns exactly
+`['name__exact']` (no bare `name`), drove the REAL `_normalize_input({"name":
+_NameBag(exact="foo")})` → `{"name": "foo"}`. Then confirmed the bare-key probe misses
+(`all_filters.get("name") is None`), so 745 is the resolving line — without it
+`filter_instance` stays `None` and the bag object falls through to raw passthrough
+(`data["name"] = _NameBag(...)`), which the test's `assert data == {"name": "foo"}` would
+catch. Test is genuine, not a contrived no-op; it fails if 745's logic were wrong.
 
-### Verification outcome (pass 3)
+**Test placement / style:** `tests/filters/test_sets.py`, immediately before
+`test_normalize_input_top_level_range_filter_merges_positional_keys`, mirroring the sibling
+`test_normalize_input_operator_bag_dict_value_merges_into_form_data` (declarative filter +
+`Meta.fields = []`, same `_normalize_input` driving shape). Package-internal placement is
+AGENTS.md-justified: no live fakeshop FilterSet declares an explicit `<field>__exact`, so a
+live `/graphql` route would need new example model + DjangoType + schema wiring or a
+broadly-perturbing mutation of an existing input surface — disproportionate for a
+package-internal normalizer-resolution line; the contract under test is package-internal
+declared-key-vs-`field_name` resolution.
 
-cycle accepted; verified
+**Focused coverage:** `uv run pytest tests/filters/test_sets.py -k "...operator_bag..."
+--cov=django_strawberry_framework.filters.sets --cov-report=term-missing` — 7 passed;
+`filters/sets.py` Missing list does NOT include **745** (other Missing lines are covered by
+the full suite; the focused-subset coverage FAIL is the expected `-k` artifact, not a
+regression).
+
+**Changelog / ruff / sibling attribution:** `git diff -- CHANGELOG.md` empty → Not-warranted
+correct (test-only, zero consumer-visible change, both AGENTS.md #21 + active-plan-silence
+cited). `uv run ruff format --check` + `ruff check` clean on both touched files (standing
+COM812 formatter-conflict notice only). Owned `sets.py` hunk = pass-1 verified form_key
+collapse (already closed sibling); only new = the test. No rejection trigger.

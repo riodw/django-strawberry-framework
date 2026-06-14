@@ -65,6 +65,7 @@ from .hints import hint_is_skip
 from .plans import diff_plan_for_queryset, lookup_paths, runtime_path_from_info
 from .selections import (
     ast_child_selections,
+    ast_to_converted_selections,
     directive_variable_names,
     named_children,
     node_children_with_runtime_prefix,
@@ -772,15 +773,16 @@ class DjangoOptimizerExtension(SchemaExtension):
         """
         if not info.field_nodes:
             return queryset
-        # The O2 walker expects the children of the root field, so we
-        # build the Strawberry-shaped selection list from field_nodes
-        # via ``convert_selections``.  Imported lazily because Strawberry
-        # marks ``strawberry.types.nodes`` as an internal surface and we
-        # do not want a hard import-time dependency on it from any
-        # caller that imports the extension only to instantiate it.
-        from strawberry.types.nodes import convert_selections
-
-        selections = convert_selections(info, info.field_nodes)
+        # The O2 walker expects the children of the root field, so we build
+        # the Strawberry-shaped selection list from ``field_nodes`` via the
+        # package-owned ``ast_to_converted_selections`` adapter rather than
+        # Strawberry's ``convert_selections``: the latter's
+        # ``InlineFragment.from_node`` reads ``type_condition.name.value`` and
+        # crashes on a valid anonymous inline fragment (``... { f }``,
+        # ``type_condition=None``). The adapter mirrors the conversion but
+        # builds a ``type_condition=None`` shell the fragment-aware substrate
+        # in ``selections.py`` flows through unchanged.
+        selections = ast_to_converted_selections(info, info.field_nodes)
         node_selections = selection_extractor(selections, info)
         plan = self._get_or_build_plan(
             node_selections,

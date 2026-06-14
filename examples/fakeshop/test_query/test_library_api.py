@@ -2567,6 +2567,73 @@ def test_anonymous_inline_fragment_with_total_count_resolves():
 
 
 @pytest.mark.django_db
+def test_anonymous_inline_fragment_sibling_of_edges_resolves():
+    """An anonymous inline fragment SIBLING of ``edges`` (wrapping ``totalCount``) resolves.
+
+    Distinct from ``test_anonymous_inline_fragment_with_total_count_resolves`` (which
+    keeps ``totalCount`` a bare connection child and puts the anonymous fragment at the
+    NODE level): here the anonymous fragment (``... { totalCount }``, ``type_condition=
+    None``) is a direct connection child sitting BESIDE a plain ``edges { node { name } }``
+    selection, with ``first: 2`` paginating. This is the exact shape the optimizer-folder
+    report flagged: pre-fix the converted-selection plan walk read ``sel.name`` /
+    ``snake_case(sel.name)`` on the anonymous ``InlineFragment`` shell (``name=None``) and
+    crashed with ``AttributeError: 'NoneType' object has no attribute 'name'``.
+
+    The package routes its conversion through the anonymous-safe
+    ``ast_to_converted_selections`` adapter (``type_condition=None`` instead of
+    dereferencing the missing condition) and the walker descends fragment shells via
+    ``is_fragment`` before reading any name, so the COUNT still fires through the
+    fragment (``totalCount == 3``) while the page stays bounded to ``first: 2``.
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+
+    payload = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection(first: 2) {
+            edges { node { name } }
+            ... { totalCount }
+          }
+        }
+        """,
+    ).json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenresConnection"]
+    assert conn["totalCount"] == 3
+    names = [edge["node"]["name"] for edge in conn["edges"]]
+    assert names == ["Alpha", "Beta"]
+
+
+@pytest.mark.django_db
+def test_anonymous_inline_fragment_with_directive_around_node_field_resolves():
+    """A directive-bearing anonymous inline fragment around a node-level field resolves.
+
+    Second report shape: ``edges { node { name ... @skip(if: true) { id } } }`` - the
+    anonymous inline fragment (``name=None``) wraps a node-level ``id`` under
+    ``@skip(if: true)``. Pre-fix the plan walk crashed reading ``sel.name`` on the
+    anonymous shell; the directive only made the same unguarded name read fire on a
+    skipped subtree. The walker now evaluates ``should_include`` and descends fragments
+    via ``is_fragment`` before any name read, so the skipped ``id`` is pruned and the
+    page resolves to the genre names alone (bounded to ``first: 2``).
+    """
+    _seed_genres("Alpha", "Beta", "Gamma")
+
+    payload = _post_graphql(
+        """
+        query {
+          allLibraryGenresConnection(first: 2) {
+            edges { node { name ... @skip(if: true) { id } } }
+          }
+        }
+        """,
+    ).json()
+    assert "errors" not in payload, payload
+    edges = payload["data"]["allLibraryGenresConnection"]["edges"]
+    assert [edge["node"]["name"] for edge in edges] == ["Alpha", "Beta"]
+    assert all("id" not in edge["node"] for edge in edges)
+
+
+@pytest.mark.django_db
 def test_typed_inline_fragment_under_connection_field_still_resolves():
     """A typed inline fragment (``... on T {}``) under a connection field stays working.
 

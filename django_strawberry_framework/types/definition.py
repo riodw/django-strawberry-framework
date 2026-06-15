@@ -61,6 +61,11 @@ class DjangoTypeDefinition:
           ``DjangoTypeDefinition`` on the OrderSet and to materialize
           the generated Strawberry input class as a module global of
           ``django_strawberry_framework.orders.inputs``.
+        - ``fields_class`` is the forward-reserved ``FieldSet`` sidecar
+          slot for ``TODO-BETA-046-0.1.1``. It intentionally stays
+          ``None`` while ``Meta.fields_class`` remains in
+          ``DEFERRED_META_KEYS``; the FieldSet card promotes the key and
+          populates this slot when resolver binding applies end-to-end.
         - ``connection`` is the normalized ``Meta.connection`` value
           (``{"total_count": bool} | None``) populated by
           ``DjangoType.__init_subclass__`` from the validated ``Meta``
@@ -153,6 +158,7 @@ class DjangoTypeDefinition:
     # base injection.
     filterset_class: type | None = None
     orderset_class: type | None = None
+    fields_class: type | None = None
     connection: dict | None = None
     # Per-relation shape declaration; values pre-normalized to
     # {"list", "connection", "both"} (spec-032 Decision 7). See the

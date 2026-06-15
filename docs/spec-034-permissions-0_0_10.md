@@ -131,7 +131,7 @@ Per the [`START.md`][start] "do both libraries provide it? → foundational" tes
 | Upstream | `django-strawberry-framework` | Status |
 | --- | --- | --- |
 | graphene_django: `types.py::DjangoObjectType.get_queryset` applied to FK/O2O resolution by `converter.py::CustomField.wrap_resolve` (escape hatch: `utils/utils.py::bypass_get_queryset`) — per-relation visibility | shipped since `0.0.1`/`0.0.3`: the [`get_queryset` visibility hook][glossary-get_queryset-visibility-hook] + the optimizer's `Prefetch` downgrade keep target hooks effective under joins | shipped — pre-existing parity |
-| django_graphene_filters: `permissions.py::apply_cascade_permissions` — graph-level cascade (ContextVar cycle guard, single-column scope, nullable preservation, alias pinning) | `permissions.py::apply_cascade_permissions` ([Decision 5](#decision-5--the-cascade-walk-call-time-model-graph-walk-registry-primary-lookup-has_custom_get_queryset-gate-subquery-intersection)) | **this card (`0.0.10`) — required parity** |
+| django_graphene_filters: `permissions.py::apply_cascade_permissions` — graph-level cascade (ContextVar cycle guard, single-column scope, nullable preservation, alias pinning) | `permissions.py::apply_cascade_permissions` ([Decision 5](#decision-5--the-cascade-walk-call-time-model-graph-walk-registry-primary-lookup-has_custom_get_queryset-gate-subquery-intersection)) | **this card (`0.0.10`) — required parity (helper-level; the consumer `view_<model>` branch intentionally diverges — see Decision 6)** |
 | (no async variant upstream — graphene runs sync) | `aapply_cascade_permissions` via `sync_to_async` ([Decision 10](#decision-10--syncasync-contract-syncmisuseerror-on-async-hooks-from-the-sync-walk-the-async-variant-wraps-the-walk-in-sync_to_async)) | this card — beyond parity, required by the package's dual-context resolver story |
 | strawberry_django: `permissions.py` field extensions + `integrations/guardian.py` | — | 🍓 parity-adjacent (decorator-shaped; explicitly not borrowed) |
 | django_graphene_filters: `FieldSet` per-field `check_<field>_permission` read gates | contract defined here ([Decision 2](#decision-2--card-scope-boundary-the-cascade-ships-end-to-end-the-per-field-read-gate-is-defined-here-and-implemented-with-fieldset-011)); implementation `0.1.1` | deferred to the [`FieldSet`][glossary-fieldset] card |
@@ -286,6 +286,25 @@ Justification:
 - **The layers stay independent**: a consumer who declines to cascade keeps today's per-relation behavior (hidden forward-FK target under the `Prefetch` downgrade surfaces as an unloadable relation at the field level, per the shipped [Relation handling][glossary-relation-handling] contract). The cascade is the tool that makes the *parent queryset* consistent up front.
 
 Alternatives considered (and rejected): **null-the-FK** and **sentinel** — above. **Making the behavior configurable (`mode="exclude" | "null"`)** — rejected: two security semantics behind a flag doubles the test matrix and invites mode-mismatch bugs between types in one graph; one honest behavior, documented, is the alpha-correct call.
+
+**Consumer-recipe divergence (cookbook `view_<model>`).** Parity is at the *helper*
+level. The cookbook's consumer hooks (`recipes/schema.py::ObjectNode.get_queryset`
+and siblings) keep the middle `has_perm("recipes.view_<model>")` branch as a bare
+`queryset.filter(is_private=False)` and lean on the resolver-level sentinel
+(`django_graphene_filters/object_type.py::AdvancedDjangoObjectType.get_node` /
+`django_graphene_filters/object_type.py::AdvancedDjangoObjectType._make_sentinel`,
+`is_redacted=True`) to mask a hidden non-null FK target without dropping the row.
+This package deliberately did not port that sentinel tier:
+`django_strawberry_framework/types/resolvers.py::_make_relation_resolver #"return getattr(root, field_name)"`
+reads the forward FK by bare accessor with no `DoesNotExist` / sentinel fallback.
+The fakeshop hooks therefore cascade in every non-staff branch, including
+`view_<model>` (`examples/fakeshop/apps/products/schema.py::ItemType.get_queryset`
+and siblings, Revision 8). Consequence: a `products.view_item` grant does not let
+a user see an item whose `category` is hidden; the row drops, where upstream
+`view_object` would keep the row and sentinel the FK. This is a taxonomy-consistent
+choice, not a parity break: relation visibility is handled by row-narrowing, while
+`TODO-BETA-046-0.1.1` codifies `FieldSet` as the field-level tier. There is no
+node-sentinel tier; the sentinel is a deliberate non-goal, not a deferral.
 
 ### Decision 7 — Cascade performance: lazy subquery composition — zero added round-trips
 

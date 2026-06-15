@@ -97,7 +97,7 @@ To complete the Alpha (pre-0.1.0) milestone: **75.0%**.
 
 | Card | Spec file |
 | --- | --- |
-| `DONE-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/spec-033-connection_optimizer-0_0_9.md) |
+| `DONE-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/SPECS/spec-033-connection_optimizer-0_0_9.md) |
 | `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md) |
 | `DONE-031-0.0.9` - Django-model-based GlobalID encoding | [spec-031-globalid_encoding-0_0_9.md](docs/SPECS/spec-031-globalid_encoding-0_0_9.md) |
 | `DONE-030-0.0.9` - `DjangoConnectionField` | [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md) |
@@ -1565,7 +1565,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Status: Planned
 - Relative size: M
 - Labels: `connections`, `optimizer`, `query-planning`, `relay`
-- Spec: [spec-033-connection_optimizer-0_0_9.md](docs/spec-033-connection_optimizer-0_0_9.md)
+- Spec: [spec-033-connection_optimizer-0_0_9.md](docs/SPECS/spec-033-connection_optimizer-0_0_9.md)
 
 #### Glossary terms
 

@@ -1,6 +1,6 @@
 term,anchor,notes
 apply_cascade_permissions,apply_cascade_permissions,the card's deliverable; Slice 5 flips the entry to shipped (0.0.10) and rewrites the body
-aapply_cascade_permissions,apply_cascade_permissions,async twin documented inside the same entry (one concept two execution contexts); no own heading by design
+aapply_cascade_permissions,apply_cascade_permissions,async twin; shares the apply_cascade_permissions entry once Slice 5 rewrites the body (one concept two execution contexts) - no own heading by design
 get_queryset,get_queryset-visibility-hook,the seam the cascade composes — called from inside it; per-edge target visibility is each target's hook
 Per-field permission hooks,per-field-permission-hooks,Decision 2 re-statuses the entry to planned for 0.1.1 (currently says 0.0.10 while hosting hooks on the 0.1.1 FieldSet)
 FieldSet,fieldset,0.1.1 host of the read-side field gates; contract defined here only

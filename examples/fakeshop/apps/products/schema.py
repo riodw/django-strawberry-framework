@@ -27,6 +27,9 @@ present `filters.py` / `orders.py` modules; `aggregate_class` /
 
 # Future imports (uncomment as Layer-3 subsystems ship):
 #
+# TODO(spec-034 Slice 4): activate the cascade — uncomment the import below AND the
+# four `get_queryset` cascade hooks on Category/Item/Property/EntryType (their
+# `TODO-ALPHA-034-0.0.10` markers are already correct; only the uncomment remains).
 # from django_strawberry_framework import apply_cascade_permissions  # TODO-ALPHA-034-0.0.10
 # from apps.products import aggregates                               # TODO-BETA-040-0.1.3 (aggregates)
 # from apps.products import fields as fieldsets                      # TODO-BETA-038-0.1.1

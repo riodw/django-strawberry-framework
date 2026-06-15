@@ -32,6 +32,11 @@ def test_public_api_surface_is_pinned():
     # re-export of an internal name) shows up at test time. New public
     # names only land when a future spec adds them; version changes are
     # maintainer-commanded and do not imply public-surface widening.
+    # TODO(spec-034 Slice 1): when permissions.py exports land, add
+    # "aapply_cascade_permissions" and "apply_cascade_permissions" to this
+    # expected tuple (alphabetical) in the same change that uncomments the
+    # __init__.py export + __all__ members (Decision 4 / DoD item 5). The
+    # version pin (test_version above) is NOT touched here — Decision 13.
     assert django_strawberry_framework.__all__ == (
         "BigInt",
         "DjangoConnection",

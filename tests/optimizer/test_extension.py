@@ -3963,3 +3963,31 @@ def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end
     # The sidecar fallback connection was left unplanned (Decision 6): no planned
     # key for the ``items`` relation keyed under the connection's runtime path.
     assert not any("@objs.itemsConnection" in key for key in planned), planned
+
+
+# =============================================================================
+# STAGED SEAM (spec-034 Slice 2): cascade ↔ optimizer cooperation pins.
+# NO optimizer source change — these pin that a type whose get_queryset CASCADES
+# is, to the optimizer, just a type with a custom hook, so the shipped rules fire
+# unchanged (Decision 7 / Goal 3). Fill in + drop the skips in Slice 2.
+# =============================================================================
+
+
+@pytest.mark.skip(reason="TODO(spec-034 Slice 2): cascading target downgrades join to Prefetch")
+def test_cascading_target_downgrades_join_to_prefetch():
+    """A relation whose target hook cascades plans a ``Prefetch`` (not ``select_related``).
+
+    The target reports ``has_custom_get_queryset() is True``, so the shipped
+    ``optimizer/walker.py::_target_has_custom_get_queryset`` rule fires the
+    downgrade and bakes the cascade into the child queryset — no optimizer change.
+    """
+
+
+@pytest.mark.skip(reason="TODO(spec-034 Slice 2): plan baking a cascading hook is uncacheable")
+def test_plan_with_cascading_hook_uncacheable():
+    """A plan baking a cascading hook is ``cacheable = False``; B1 counters unaffected otherwise.
+
+    The shipped rule marks ANY plan baking a custom ``get_queryset`` uncacheable
+    (it keys on the *presence* of a custom hook, not on whether the hook reads the
+    request — the coarser walker.py rule); the cascade adds no new cache dimension.
+    """

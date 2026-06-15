@@ -1375,3 +1375,23 @@ def test_registry_clear_also_clears_connection_type_cache():
 # helper consolidation (Decision 9) and the fast-path addition (Decision 5) --
 # this card touches only the NESTED half. No new tests required here; this marker
 # records the fence (DoD item 12 / "No B1-B8 regression").
+
+
+# =============================================================================
+# STAGED SEAM (spec-034 Slice 3): connection ↔ cascade composition pin.
+# NO connection.py source change — the pipeline already applies get_queryset
+# (where the cascade lives) before filter / order / slice (Decision 12). Fill in
+# + drop the skip in Slice 3.
+# =============================================================================
+
+
+@pytest.mark.skip(
+    reason="TODO(spec-034 Slice 3): connection over cascading type narrows edges + totalCount",
+)
+def test_connection_over_cascading_type_narrows_edges_and_total_count():
+    """A ``DjangoConnectionField`` over a cascading type narrows ``edges`` AND ``totalCount``.
+
+    Wrap a type whose ``get_queryset`` calls ``apply_cascade_permissions``; assert
+    edges drop the cascade-hidden rows and ``totalCount`` (counted post-visibility)
+    matches the narrowed count, with cursors consistent. Decision 12 / DoD item 9.
+    """

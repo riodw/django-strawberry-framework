@@ -1006,3 +1006,20 @@ def test_djangolistfield_with_secondary_target_uses_secondary_get_queryset() -> 
         "expected an 'a'-prefixed row to survive - the primary's get_queryset "
         "must NOT have been applied when the field targets the secondary"
     )
+
+
+# =============================================================================
+# STAGED SEAM (spec-034 Slice 3): list field ↔ cascade composition pin.
+# NO list_field.py source change — the default resolver (and the consumer-resolver
+# wrap) already apply the type's get_queryset (Decision 12). Fill in + drop the
+# skip in Slice 3.
+# =============================================================================
+
+
+@pytest.mark.skip(reason="TODO(spec-034 Slice 3): list field default resolver applies cascade")
+def test_list_field_default_resolver_applies_cascade():
+    """``DjangoListField`` over a cascading type drops rows pointing at hidden targets.
+
+    The default resolver applies the type's ``get_queryset`` (where the cascade
+    lives), so the list narrows with no list-field-specific code (Decision 12).
+    """

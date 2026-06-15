@@ -27,9 +27,11 @@ class Command(BaseCommand):
 
         Routes through three branches: ``--path`` omitted prints SDL to
         stdout; ``--path ""`` (empty-string value) raises ``CommandError``
-        per the ``CHANGELOG.md`` ``[0.0.7] Changed`` "manage.py
-        export_schema --path now requires a value when the flag is given"
-        contract; ``--path <file>`` writes UTF-8 SDL to the named path.
+        with "--path requires a non-empty value"; ``--path <file>`` writes
+        UTF-8 SDL to the named path. A bare ``--path`` with no following
+        value is rejected earlier by argparse, before ``handle`` runs (the
+        ``[0.0.7] Changed`` "--path now requires a value when the flag is
+        given" contract).
         """
         try:
             schema_symbol = import_module_symbol(

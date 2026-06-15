@@ -26,7 +26,7 @@ from .relay import DjangoNodeField, DjangoNodesField  # noqa: E402
 from .scalars import BigInt, strawberry_config  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 
-__version__ = "0.0.9"
+__version__ = "0.0.10"
 
 __all__ = (
     "BigInt",

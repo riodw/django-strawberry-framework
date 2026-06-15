@@ -723,3 +723,60 @@ def test_products_categories_items_connection_fixed_query_count():
 # Slice 6 (spec-033) deliberately adds NO Meta.connection opt-in on the four
 # products types (no totalCount; minimal cookbook-mirror conversion) and NO root
 # node(id:) / nodes(ids:) entry points (those stay TODO-BETA-051-0.1.5).
+
+
+# =============================================================================
+# STAGED SEAM (spec-034 Slice 4): live cascade-permission HTTP coverage.
+# Lands AFTER the four products get_queryset hooks are uncommented in
+# apps/products/schema.py. Real permission users only — every test's FIRST line is
+# `create_users(1)` (per AGENTS.md / card DoD: never mock info.context.user).
+# Exercises the 2-deep Entry → Item → Category / Entry → Property → Category chain.
+# Fill in + drop the skips in Slice 4.
+# =============================================================================
+
+
+@pytest.mark.django_db
+@pytest.mark.skip(
+    reason="TODO(spec-034 Slice 4): anonymous sees no entries under private categories",
+)
+def test_cascade_anonymous_sees_no_entries_under_private_categories():
+    """The 2-deep live pin: a private Category hides its Items' Entries from anonymous.
+
+    `create_users(1)`; seed a private Category with a public Item carrying a public
+    Entry; assert an anonymous `allEntries { ... }` request returns no entry whose
+    item's category is private — the cascade reaches Entry → Item → Category.
+    """
+
+
+@pytest.mark.django_db
+@pytest.mark.skip(reason="TODO(spec-034 Slice 4): view_item user matrix across the cascade")
+def test_cascade_view_item_user_matrix():
+    """The `view_item` user sees non-private items but still loses entries under hidden categories.
+
+    Per-edge composition: ItemType's own rule lets the `view_item` user see
+    non-private items, yet EntryType's cascade still drops entries whose item's
+    category is hidden (the cascade composes per edge, not all-or-nothing).
+    """
+
+
+@pytest.mark.django_db
+@pytest.mark.skip(reason="TODO(spec-034 Slice 4): staff sees everything")
+def test_cascade_staff_sees_everything():
+    """A staff user (create_users makes `staff_<n>` is_staff, NOT is_superuser) bypasses the cascade."""
+
+
+@pytest.mark.django_db
+@pytest.mark.skip(reason="TODO(spec-034 Slice 4): cascaded traversal has a fixed query count")
+def test_cascade_query_count_fixed():
+    """`allEntries { value item { name category { name } } }` runs in a fixed query count.
+
+    The cascade adds zero queries (the `__in` subqueries compile in-line, Decision 7);
+    the optimizer plans the traversal. Pin with `CaptureQueriesContext`.
+    """
+
+
+@pytest.mark.django_db
+@pytest.mark.skip(reason="TODO(spec-034 Slice 4): cascade composes with filter + order live")
+def test_cascade_composes_with_filter_and_order_live():
+    """`filter:` + `orderBy:` + cascade in one request; the shipped `check_name_permission`
+    gates keep firing per their live pins (Decision 11 composition order)."""

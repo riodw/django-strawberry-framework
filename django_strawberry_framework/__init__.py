@@ -22,9 +22,22 @@ from .relay import DjangoNodeField, DjangoNodesField  # noqa: E402
 from .scalars import BigInt, strawberry_config  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 
+# TODO(spec-034 Slice 1): export the cascade-permission pair from the package root
+# (the card DoD's import line `from django_strawberry_framework import
+# apply_cascade_permissions`). Uncomment WITH the matching `__all__` members and
+# the `tests/base/test_init.py` exports pin in the same change (Decision 4):
+#
+#     from .permissions import (
+#         aapply_cascade_permissions,
+#         apply_cascade_permissions,
+#     )
+
 __version__ = "0.0.9"
 
 __all__ = (
+    # TODO(spec-034 Slice 1): add "aapply_cascade_permissions" and
+    # "apply_cascade_permissions" here (alphabetically) when the import above is
+    # uncommented; update tests/base/test_init.py's exports pin to match.
     "BigInt",
     "DjangoConnection",
     "DjangoConnectionField",

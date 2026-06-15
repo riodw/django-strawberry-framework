@@ -1014,3 +1014,21 @@ def test_public_exports():
     assert django_strawberry_framework.DjangoNodesField is DjangoNodesField
     assert "DjangoNodeField" in django_strawberry_framework.__all__
     assert "DjangoNodesField" in django_strawberry_framework.__all__
+
+
+# =============================================================================
+# STAGED SEAM (spec-034 Slice 3): node refetch ↔ cascade composition pins.
+# NO relay.py source change — node/nodes defaults already route through
+# get_queryset (Decision 12), so a cascade-hidden row refetches as null with no
+# existence leak. Fill in + drop the skips in Slice 3.
+# =============================================================================
+
+
+@pytest.mark.skip(reason="TODO(spec-034 Slice 3): node refetch of cascade-hidden row returns null")
+def test_node_refetch_of_cascade_hidden_row_returns_null():
+    """``node(id:)`` of a cascade-hidden row returns ``null`` — no existence leak (Decision 12)."""
+
+
+@pytest.mark.skip(reason="TODO(spec-034 Slice 3): nodes batch holes for cascade-hidden rows")
+def test_nodes_batch_holes_for_cascade_hidden_rows():
+    """``nodes(ids:)`` returns positional ``null`` holes for cascade-hidden rows (Decision 12)."""

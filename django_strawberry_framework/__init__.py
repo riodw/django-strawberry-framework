@@ -1,5 +1,12 @@
 """Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL."""
 
+# ruff: noqa: ERA001 -- the package-root export of the cascade-permission pair below
+# is a TODO(spec-034 Slice 1) staged seam (commented pseudo-code). ERA001 is
+# suppressed file-wide while it is staged -- eradicate's multi-line block detection
+# cannot be reliably suppressed per-line -- per AGENTS.md's "TODO-anchored pseudo
+# blocks are exempt; do not refactor pseudo code to satisfy the lint". Delete this
+# directive in the change that ships Slice 1 and uncomments the import.
+
 # `auto` is re-exported so consumers can write `from django_strawberry_framework import auto`
 # without importing strawberry directly; this is part of the DRF-shaped public surface.
 import logging

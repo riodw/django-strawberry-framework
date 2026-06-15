@@ -59,6 +59,7 @@ from django_strawberry_framework.orders import Ordering, OrderSet
 from django_strawberry_framework.permissions import (
     SyncMisuseError,
     _cascadable_edge_names,
+    _cascadable_edges,
     _cascade_seen,
     _is_cascadable_edge,
     aapply_cascade_permissions,
@@ -352,6 +353,22 @@ def test_mti_parent_link_edge_excluded():
     # ...yet the ``parent_link`` guard excludes it.
     assert _is_cascadable_edge(ptr) is False
     assert "mtiparent_ptr" not in _cascadable_edge_names(MtiChild)
+
+
+def test_cascadable_edge_metadata_scan_is_cached():
+    """``fields=`` validation and the walk share one cached metadata edge scan."""
+    _cascadable_edges.cache_clear()
+    try:
+        entry_type = _make_type("CachedEdgeEntryType", Entry, primary=False)
+
+        result = apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO, fields=[])
+
+        assert str(result.query) == str(Entry.objects.all().query)
+        cache_info = _cascadable_edges.cache_info()
+        assert cache_info.misses == 1
+        assert cache_info.hits == 1
+    finally:
+        _cascadable_edges.cache_clear()
 
 
 @pytest.mark.skipif(

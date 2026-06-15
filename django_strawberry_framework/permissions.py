@@ -39,6 +39,7 @@ thread there is still no awaiting context.
 from __future__ import annotations
 
 from contextvars import ContextVar
+from functools import lru_cache
 from typing import Any
 
 from asgiref.sync import sync_to_async
@@ -111,9 +112,24 @@ def _is_cascadable_edge(field: Any) -> bool:
     )
 
 
-def _cascadable_edge_names(model: type[models.Model]) -> set[str]:
+@lru_cache(maxsize=1024)
+def _cascadable_edges(model: type[models.Model]) -> tuple[Any, ...]:
+    """Return ``model``'s cascadable edge fields, cached by model class.
+
+    Django model metadata is immutable after app loading, while cascade hooks run
+    per request. Cache the filtered edge tuple once per model so both
+    ``fields=`` validation and the walk reuse the same metadata slice instead of
+    re-scanning ``model._meta.get_fields()`` on every helper call. The bounded
+    cache keeps synthetic/dynamic test models from growing this process-wide
+    helper without limit; eviction is correctness-neutral because the tuple can
+    always be recomputed.
+    """
+    return tuple(field for field in model._meta.get_fields() if _is_cascadable_edge(field))
+
+
+def _cascadable_edge_names(model: type[models.Model]) -> frozenset[str]:
     """Return the names of ``model``'s cascadable edges (Decision 5 step 1)."""
-    return {field.name for field in model._meta.get_fields() if _is_cascadable_edge(field)}
+    return frozenset(field.name for field in _cascadable_edges(model))
 
 
 def _validate_fields(model: type[models.Model], fields: Any) -> set[str] | None:
@@ -239,9 +255,7 @@ def _walk(
     ``names_to_walk`` is ``None`` for the full walk or a validated edge-name set
     for the ``fields=`` scoped walk.
     """
-    for field in model._meta.get_fields():
-        if not _is_cascadable_edge(field):
-            continue
+    for field in _cascadable_edges(model):
         if names_to_walk is not None and field.name not in names_to_walk:
             continue
         target_type = registry.get(field.related_model)

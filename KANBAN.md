@@ -81,15 +81,15 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**56.9% complete** toward `1.0.0` - 33 of 58 cards done (57.6% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**58.6% complete** toward `1.0.0` - 34 of 58 cards done (59.9% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 33/44 (75.0%) | 73.3% |
+| Alpha (pre-0.1.0) | 34/44 (77.3%) | 76.3% |
 | Beta (pre-1.0.0) | 0/13 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
-To complete the Alpha (pre-0.1.0) milestone: **75.0%**.
+To complete the Alpha (pre-0.1.0) milestone: **77.3%**.
 
 ## Board columns
 
@@ -97,8 +97,8 @@ To complete the Alpha (pre-0.1.0) milestone: **75.0%**.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-034-0.0.10` - Permissions subsystem | [spec-034-permissions-0_0_10.md](docs/spec-034-permissions-0_0_10.md) |
 | `WIP-ALPHA-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | No dedicated spec |
+| `DONE-034-0.0.10` - Permissions subsystem | [spec-034-permissions-0_0_10.md](docs/spec-034-permissions-0_0_10.md) |
 | `DONE-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/SPECS/spec-033-connection_optimizer-0_0_9.md) |
 | `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md) |
 | `DONE-031-0.0.9` - Django-model-based GlobalID encoding | [spec-031-globalid_encoding-0_0_9.md](docs/SPECS/spec-031-globalid_encoding-0_0_9.md) |
@@ -136,87 +136,6 @@ To complete the Alpha (pre-0.1.0) milestone: **75.0%**.
 ## In progress
 
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
-
-<a id="permissions_subsystem"></a>
-### [WIP-ALPHA-034-0.0.10 - Permissions subsystem](KANBAN.html#permissions_subsystem)
-
-- Priority: High
-- Parity: ⚛️ graphene-django (Required)
-- Severity: Major
-- Status: In progress
-- Relative size: L
-- Labels: `optimizer`, `permissions`, `public-api`, `security`
-- Spec: [spec-034-permissions-0_0_10.md](docs/spec-034-permissions-0_0_10.md)
-
-#### Predicted files
-
-- `django_strawberry_framework/permissions.py` (planned)
-
-#### Planning note
-
-Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, info)` from `django_graphene_filters.permissions`. The cookbook line `return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` is the canonical consumer surface — a single composable helper that walks the model graph at call time, runs each owner type's `get_queryset(qs, info)` against the related queryset, and returns a queryset that respects per-type row-level visibility across every traversed FK / OneToOne edge. Ships alongside per-field permission hooks declared via `Meta` (resolved by the field-level gate's owning `FieldSet`) and integrates with the optimizer's `Prefetch` downgrade so cascaded relations stay N+1-safe.
-
-#### Dependencies
-
-- `DONE-030-0.0.9` - `DjangoConnectionField`
-
-#### Scope
-
-- `apply_cascade_permissions`
-- per-field permission hooks declared via `Meta`
-- Optimizer cooperation: cascaded relations downgrade to `Prefetch(queryset=...)` so visibility filters survive the join (carries the existing `get_queryset` → `Prefetch` downgrade contract across the cascade walk).
-- composable permission rules that remain visible from the owning type/query surface
-- Public callable surface: `apply_cascade_permissions(cls, queryset, info, fields=None)` returns a queryset; optional `fields=` argument scopes the cascade to specific FK names. Both sync and async variants ship; async variant uses `sync_to_async` around the cascade walker to stay event-loop-safe.
-- Walks the model graph via `registry.iter_definitions()` (shipped 0.0.4) — for each FK / OneToOne whose target type has a `get_queryset`, build a subquery from that type's visibility and intersect into the caller's queryset.
-- Cycle detection via a `ContextVar` "seen" set so self-referential or mutually-referential type graphs do not recurse infinitely; cycle break returns the partially-narrowed queryset without raising.
-- Single-column FK / O2O scope only: relations without a single-column `column` attribute (composite FKs, generic relations) are skipped explicitly. M2M and reverse-FK visibility are out of scope for this card and tracked as deferred follow-ups.
-- Nullable FK rows preserved — a `NULL` FK does not reference a hidden target so the parent row is not dropped from the result.
-- Multi-DB / sharding safety: the per-edge target visibility subquery is pinned to the caller's database alias via `.using(qs._db)` so shard-aware querysets do not accidentally cross databases.
-
-#### Definition of done
-
-- [ ] Add `docs/spec-permissions.md`.
-- [ ] Implement `django_strawberry_framework/permissions.py` or a `permissions/` package if the surface grows.
-- [ ] Add `tests/test_permissions.py`.
-- [ ] Define the `Meta` surface for per-field permissions and promote keys only when applied end-to-end.
-- [ ] Use real fakeshop permission users through `services.create_users(1)` in example tests where the system-under-test is the example project.
-- [ ] Check all permission-related ORM paths for N+1 behavior.
-- [ ] `apply_cascade_permissions` exported from the public surface (`from django_strawberry_framework import apply_cascade_permissions`). Both sync and async-aware variants ship together.
-- [ ] The four upstream invariants are each pinned by a dedicated test: ContextVar cycle guard; single-column FK/O2O scope; multi-DB pinning to the caller's alias; nullable-FK rows preserved.
-- [ ] Reconcile open question: how the existing per-field FILTER-denial gate (`check_<field>_permission` on `FilterSet` / `OrderSet`) composes with the new cascade visibility. Decision recorded in `docs/spec-permissions.md` before the implementation pass starts; tests pin both shapes.
-- [ ] Cascade composes with `DjangoConnectionField` (`TODO-ALPHA-030-0.0.9`): a connection field whose wrapped type's `get_queryset` calls `apply_cascade_permissions` produces a Relay connection where every edge's nested relations respect the same cascade rule.
-- [ ] Live HTTP coverage in `examples/fakeshop/test_query/` exercises real fakeshop permission users (via `services.create_users(1)`) across a 2-deep FK cascade. Real users, not mocked `info.context.user`.
-
-#### Foundation-slice seam
-
-- `apply_cascade_permissions(cls, queryset, info)` walks the model graph at call time; `registry.iter_definitions()` (shipped in 0.0.4) is the public iterator that walk uses to find each owner type's `get_queryset`.
-- `_attach_relation_resolvers` already accepts a `skip_field_names` set so consumer-authored fields are not clobbered; field-level permission hooks (`fields_class`) extend the same skip-set semantics.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.get_queryset` is graphene_django's per-type visibility hook, applied to related fields by `converter.py`'s `CustomField.wrap_resolve` (which routes FK/O2O resolution through `_type.get_queryset` unless `bypass_get_queryset` is set) — the same per-type visibility contract this card's `apply_cascade_permissions` automates by walking FK/O2O edges into each target type's `get_queryset`, so the graphene_django parity is required.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/utils/utils.py::bypass_get_queryset` is graphene_django's explicit per-resolver escape hatch from that visibility hook, confirming graphene_django scopes permission filtering per-relation rather than cascading it; this card's cascade walk is the required-parity superset that propagates the same `get_queryset` visibility across the model graph.
-
-#### Dependencies
-
-- `DjangoType.get_queryset`
-- optimizer `Prefetch` downgrade
-- future `DjangoConnectionField`
-
-#### Other
-
-- for the fakeshop example and real usage.
-- django-graphene-filters ships rich cascade + per-field permissions; strawberry-graphql-django's per-field story is weaker (🍓 parity-adjacent).
-- permissions/visibility is security-relevant and blocks the fakeshop real-usage story.
-- full subsystem: `apply_cascade_permissions`, per-field `Meta` permission hooks, and optimizer `Prefetch`-downgrade integration. New `permissions.py` (or package) + `docs/spec-permissions.md` + tests.
-- Open question — hidden-FK semantics: when a parent row references a hidden target, choose between excluding the parent row, nulling the FK field, or returning a sentinel. The upstream uses sentinels; the Strawberry side has to pick before the cascade lands. Pinned in `docs/spec-permissions.md`.
-- Open question — cascade performance: subquery-per-FK (one extra round-trip per FK in the cascade) vs a single annotated pass (one query that joins every cascaded relation). The upstream is subquery-per-FK; benchmark both before committing.
-- Open question — M2M / reverse-relation visibility: the upstream cascade explicitly skips M2M and reverse FK. Decide whether to extend coverage here or defer to a sibling card; if deferring, name the follow-up card in the spec.
-- Open question — `check_permissions` API surface: does the existing per-field filter-denial `check_<field>_permission(self, request)` survive in its current form, get renamed to disambiguate from the new field-level read gate (`FieldSet.check_<field>_permission(info)` per `TODO-BETA-044-0.1.1`), or get deprecated in favor of a unified shape? Spec must answer before implementation.
-
-#### Card references
-
-- Dependency: future `DjangoConnectionField` -> `DONE-030-0.0.9` - `DjangoConnectionField`
 
 <a id="optimizer_robustness_hardening_upstream_comparison_guards"></a>
 ### [WIP-ALPHA-035-0.0.10 - Optimizer robustness hardening (upstream-comparison guards)](KANBAN.html#optimizer_robustness_hardening_upstream_comparison_guards)
@@ -333,7 +252,7 @@ needs spec
 #### Dependencies
 
 - `DONE-018-0.0.6` - Multiple DjangoTypes per model with `Meta.primary`
-- `WIP-ALPHA-034-0.0.10` - Permissions subsystem
+- `DONE-034-0.0.10` - Permissions subsystem
 
 #### Definition of done
 
@@ -363,7 +282,7 @@ needs spec
 #### Dependencies
 
 - `DONE-018-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution.
-- `WIP-ALPHA-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`.
+- `DONE-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`.
 
 #### Other
 
@@ -375,7 +294,7 @@ needs spec
 
 - Dependency: `DONE-018-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution. -> `DONE-018-0.0.6` - Multiple DjangoTypes per model with `Meta.primary`
 - Related: Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`. -> `DONE-010-0.0.4` - 0.0.4 foundation slice (definition-order independence)
-- Dependency: `WIP-ALPHA-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`. -> `WIP-ALPHA-034-0.0.10` - Permissions subsystem
+- Dependency: `DONE-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`. -> `DONE-034-0.0.10` - Permissions subsystem
 - Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-039-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-039-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-037-0.0.11` - Upload scalar and file / image field mapping
 - Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-039-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-039-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-038-0.0.11` - Form-based mutations (Django Forms / ModelForms)
 - Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-039-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-039-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-039-0.0.11` - DRF serializer mutations (`SerializerMutation`)
@@ -1559,6 +1478,134 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
+<a id="permissions_subsystem"></a>
+### [DONE-034-0.0.10 - Permissions subsystem](KANBAN.html#permissions_subsystem)
+
+- Priority: High
+- Parity: ⚛️ graphene-django (Required)
+- Severity: Major
+- Status: In progress
+- Relative size: L
+- Labels: `optimizer`, `permissions`, `public-api`, `security`
+- Spec: [spec-034-permissions-0_0_10.md](docs/spec-034-permissions-0_0_10.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
+| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
+| [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [`RelatedFilter`](docs/GLOSSARY.md#relatedfilter) | shipped (`0.0.8`) |
+| [`RelatedOrder`](docs/GLOSSARY.md#relatedorder) | shipped (`0.0.8`) |
+| [`Meta.filterset_class`](docs/GLOSSARY.md#metafilterset_class) | shipped (`0.0.8`) |
+| [`Meta.orderset_class`](docs/GLOSSARY.md#metaorderset_class) | shipped (`0.0.8`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
+| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
+| [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
+| [`Meta.connection`](docs/GLOSSARY.md#metaconnection) | shipped (`0.0.9`) |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
+| [`DjangoNodesField`](docs/GLOSSARY.md#djangonodesfield) | shipped (`0.0.9`) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [`Meta.relation_shapes`](docs/GLOSSARY.md#metarelation_shapes) | shipped (`0.0.9`) |
+| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | planned for `0.0.11` |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.11` |
+| [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
+| [`get_child_queryset`](docs/GLOSSARY.md#get_child_queryset) | planned for `0.1.3` |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
+| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
+
+#### Package files
+
+- `django_strawberry_framework/permissions.py` (historical)
+
+#### Planning note
+
+Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, info)` from `django_graphene_filters.permissions`. The cookbook line `return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` is the canonical consumer surface — a single composable helper that walks the model graph at call time, runs each owner type's `get_queryset(qs, info)` against the related queryset, and returns a queryset that respects per-type row-level visibility across every traversed FK / OneToOne edge. Ships alongside per-field permission hooks declared via `Meta` (resolved by the field-level gate's owning `FieldSet`) and integrates with the optimizer's `Prefetch` downgrade so cascaded relations stay N+1-safe.
+
+#### Dependencies
+
+- `DONE-030-0.0.9` - `DjangoConnectionField`
+
+#### Scope
+
+- `apply_cascade_permissions`
+- per-field permission hooks declared via `Meta`
+- Optimizer cooperation: cascaded relations downgrade to `Prefetch(queryset=...)` so visibility filters survive the join (carries the existing `get_queryset` → `Prefetch` downgrade contract across the cascade walk).
+- composable permission rules that remain visible from the owning type/query surface
+- Public callable surface: `apply_cascade_permissions(cls, queryset, info, fields=None)` returns a queryset; optional `fields=` argument scopes the cascade to specific FK names. Both sync and async variants ship; async variant uses `sync_to_async` around the cascade walker to stay event-loop-safe.
+- Walks the model graph via `registry.iter_definitions()` (shipped 0.0.4) — for each FK / OneToOne whose target type has a `get_queryset`, build a subquery from that type's visibility and intersect into the caller's queryset.
+- Cycle detection via a `ContextVar` "seen" set so self-referential or mutually-referential type graphs do not recurse infinitely; cycle break returns the partially-narrowed queryset without raising.
+- Single-column FK / O2O scope only: relations without a single-column `column` attribute (composite FKs, generic relations) are skipped explicitly. M2M and reverse-FK visibility are out of scope for this card and tracked as deferred follow-ups.
+- Nullable FK rows preserved — a `NULL` FK does not reference a hidden target so the parent row is not dropped from the result.
+- Multi-DB / sharding safety: the per-edge target visibility subquery is pinned to the caller's database alias via `.using(qs._db)` so shard-aware querysets do not accidentally cross databases.
+
+#### Definition of done
+
+- [x] Add `docs/spec-034-permissions-0_0_10.md`.
+- [x] Implement `django_strawberry_framework/permissions.py` or a `permissions/` package if the surface grows.
+- [x] Add `tests/test_permissions.py`.
+- [x] Define the `Meta` surface for per-field permissions and promote keys only when applied end-to-end.
+- [x] Use real fakeshop permission users through `services.create_users(1)` in example tests where the system-under-test is the example project.
+- [x] Check all permission-related ORM paths for N+1 behavior.
+- [x] `apply_cascade_permissions` exported from the public surface (`from django_strawberry_framework import apply_cascade_permissions`). Both sync and async-aware variants ship together.
+- [x] The four upstream invariants are each pinned by a dedicated test: ContextVar cycle guard; single-column FK/O2O scope; multi-DB pinning to the caller's alias; nullable-FK rows preserved.
+- [x] Reconcile open question: how the existing per-field FILTER-denial gate (`check_<field>_permission` on `FilterSet` / `OrderSet`) composes with the new cascade visibility. Decision recorded in `docs/spec-permissions.md` before the implementation pass starts; tests pin both shapes.
+- [x] Cascade composes with `DjangoConnectionField` (`TODO-ALPHA-030-0.0.9`): a connection field whose wrapped type's `get_queryset` calls `apply_cascade_permissions` produces a Relay connection where every edge's nested relations respect the same cascade rule.
+- [x] Live HTTP coverage in `examples/fakeshop/test_query/` exercises real fakeshop permission users (via `services.create_users(1)`) across a 2-deep FK cascade. Real users, not mocked `info.context.user`.
+
+#### Foundation-slice seam
+
+- `apply_cascade_permissions(cls, queryset, info)` walks the model graph at call time; `registry.iter_definitions()` (shipped in 0.0.4) is the public iterator that walk uses to find each owner type's `get_queryset`.
+- `_attach_relation_resolvers` already accepts a `skip_field_names` set so consumer-authored fields are not clobbered; field-level permission hooks (`fields_class`) extend the same skip-set semantics.
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/types.py::DjangoObjectType.get_queryset` is graphene_django's per-type visibility hook, applied to related fields by `converter.py`'s `CustomField.wrap_resolve` (which routes FK/O2O resolution through `_type.get_queryset` unless `bypass_get_queryset` is set) — the same per-type visibility contract this card's `apply_cascade_permissions` automates by walking FK/O2O edges into each target type's `get_queryset`, so the graphene_django parity is required.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/utils/utils.py::bypass_get_queryset` is graphene_django's explicit per-resolver escape hatch from that visibility hook, confirming graphene_django scopes permission filtering per-relation rather than cascading it; this card's cascade walk is the required-parity superset that propagates the same `get_queryset` visibility across the model graph.
+
+#### Dependencies
+
+- `DjangoType.get_queryset`
+- optimizer `Prefetch` downgrade
+- future `DjangoConnectionField`
+
+#### Other
+
+- for the fakeshop example and real usage.
+- django-graphene-filters ships rich cascade + per-field permissions; strawberry-graphql-django's per-field story is weaker (🍓 parity-adjacent).
+- permissions/visibility is security-relevant and blocks the fakeshop real-usage story.
+- full subsystem: `apply_cascade_permissions`, per-field `Meta` permission hooks, and optimizer `Prefetch`-downgrade integration. New `permissions.py` (or package) + `docs/spec-permissions.md` + tests.
+- Open question — hidden-FK semantics: when a parent row references a hidden target, choose between excluding the parent row, nulling the FK field, or returning a sentinel. The upstream uses sentinels; the Strawberry side has to pick before the cascade lands. Pinned in `docs/spec-permissions.md`.
+- Open question — cascade performance: subquery-per-FK (one extra round-trip per FK in the cascade) vs a single annotated pass (one query that joins every cascaded relation). The upstream is subquery-per-FK; benchmark both before committing.
+- Open question — M2M / reverse-relation visibility: the upstream cascade explicitly skips M2M and reverse FK. Decide whether to extend coverage here or defer to a sibling card; if deferring, name the follow-up card in the spec.
+- Open question — `check_permissions` API surface: does the existing per-field filter-denial `check_<field>_permission(self, request)` survive in its current form, get renamed to disambiguate from the new field-level read gate (`FieldSet.check_<field>_permission(info)` per `TODO-BETA-044-0.1.1`), or get deprecated in favor of a unified shape? Spec must answer before implementation.
+
+#### Card references
+
+- Dependency: future `DjangoConnectionField` -> `DONE-030-0.0.9` - `DjangoConnectionField`
+
 <a id="connection_aware_optimizer_planning"></a>
 ### [DONE-033-0.0.9 - Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
 
@@ -1610,8 +1657,8 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
 | [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 
 #### Package files
 
@@ -1711,8 +1758,8 @@ planned
 | [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
 | [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
 | [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.12` |
 | [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.12` |
@@ -1799,7 +1846,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections.
 - `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
 - `DONE-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
-- `WIP-ALPHA-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands.
+- `DONE-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands.
 - `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`)
 - `django_strawberry_framework/relay.py` (new) — `DjangoNodeField`, `DjangoNodesField`, GlobalID decode dispatch
 - `django_strawberry_framework/types/base.py` — `Meta.connection` / `Meta.relation_shapes` validation
@@ -1826,7 +1873,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - Related: `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections. -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `DONE-028-0.0.8` - Ordering subsystem
 - Related: `DONE-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
-- Related: `WIP-ALPHA-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `WIP-ALPHA-034-0.0.10` - Permissions subsystem
+- Related: `DONE-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `DONE-034-0.0.10` - Permissions subsystem
 - Related: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-052-0.1.5`. -> `TODO-BETA-052-0.1.5` - Fakeshop GraphQL schema activation
 - Related: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`) -> `DONE-030-0.0.9` - `DjangoConnectionField`
 
@@ -1870,7 +1917,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 | [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
 | [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
 | [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [Schema introspection management command](docs/GLOSSARY.md#schema-introspection-management-command) | shipped (`0.0.9`) |
 | [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
@@ -2005,7 +2052,7 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 | [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
 | [`Meta.aggregate_class`](docs/GLOSSARY.md#metaaggregate_class) | planned for `0.1.3` |
 | [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
 | [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
 | [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
@@ -2145,7 +2192,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 | [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
 | [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
 | [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
 | [`Meta.nullable_overrides`](docs/GLOSSARY.md#metanullable_overrides) | shipped (`0.0.9`) |
@@ -2243,8 +2290,8 @@ planned; three independent slices that ship in any order. Card body counts as co
 | [`RelatedAggregate`](docs/GLOSSARY.md#relatedaggregate) | planned for `0.1.3` |
 | [`Meta.aggregate_class`](docs/GLOSSARY.md#metaaggregate_class) | planned for `0.1.3` |
 | [`get_child_queryset`](docs/GLOSSARY.md#get_child_queryset) | planned for `0.1.3` |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 | [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
 | [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
 | [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
@@ -2340,14 +2387,14 @@ shipped
 | [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
 | [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
 | [`get_child_queryset`](docs/GLOSSARY.md#get_child_queryset) | planned for `0.1.3` |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`Meta.search_fields`](docs/GLOSSARY.md#metasearch_fields) | planned for `0.1.2` |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
 | [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
 | [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
 | [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 | [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
 | [`Meta.fields_class`](docs/GLOSSARY.md#metafields_class) | planned for `0.1.1` |
 | [`Meta.aggregate_class`](docs/GLOSSARY.md#metaaggregate_class) | planned for `0.1.3` |
@@ -2675,7 +2722,7 @@ shipped
 
 | Term | Status |
 | --- | --- |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
@@ -3004,7 +3051,7 @@ shipped
 
 | Term | Status |
 | --- | --- |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
@@ -3353,7 +3400,7 @@ shipped
 | Term | Status |
 | --- | --- |
 | [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
 | [`DjangoConnection`](docs/GLOSSARY.md#djangoconnection) | shipped (`0.0.9`) |
@@ -3781,7 +3828,7 @@ shipped
 | Term | Status |
 | --- | --- |
 | [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
-| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
@@ -3798,7 +3845,7 @@ shipped
 | [`Meta.name`](docs/GLOSSARY.md#metaname) | shipped |
 | [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
 | [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
-| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.0.10` |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 | [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 | [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
 

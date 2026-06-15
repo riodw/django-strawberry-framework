@@ -1,12 +1,5 @@
 """Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL."""
 
-# ruff: noqa: ERA001 -- the package-root export of the cascade-permission pair below
-# is a TODO(spec-034 Slice 1) staged seam (commented pseudo-code). ERA001 is
-# suppressed file-wide while it is staged -- eradicate's multi-line block detection
-# cannot be reliably suppressed per-line -- per AGENTS.md's "TODO-anchored pseudo
-# blocks are exempt; do not refactor pseudo code to satisfy the lint". Delete this
-# directive in the change that ships Slice 1 and uncomments the import.
-
 # `auto` is re-exported so consumers can write `from django_strawberry_framework import auto`
 # without importing strawberry directly; this is part of the DRF-shaped public surface.
 import logging
@@ -25,26 +18,17 @@ from .connection import DjangoConnection, DjangoConnectionField  # noqa: E402
 from .list_field import DjangoListField  # noqa: E402
 from .optimizer import DjangoOptimizerExtension  # noqa: E402
 from .optimizer.hints import OptimizerHint  # noqa: E402
+from .permissions import (  # noqa: E402
+    aapply_cascade_permissions,
+    apply_cascade_permissions,
+)
 from .relay import DjangoNodeField, DjangoNodesField  # noqa: E402
 from .scalars import BigInt, strawberry_config  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 
-# TODO(spec-034 Slice 1): export the cascade-permission pair from the package root
-# (the card DoD's import line `from django_strawberry_framework import
-# apply_cascade_permissions`). Uncomment WITH the matching `__all__` members and
-# the `tests/base/test_init.py` exports pin in the same change (Decision 4):
-#
-#     from .permissions import (
-#         aapply_cascade_permissions,
-#         apply_cascade_permissions,
-#     )
-
 __version__ = "0.0.9"
 
 __all__ = (
-    # TODO(spec-034 Slice 1): add "aapply_cascade_permissions" and
-    # "apply_cascade_permissions" here (alphabetically) when the import above is
-    # uncommented; update tests/base/test_init.py's exports pin to match.
     "BigInt",
     "DjangoConnection",
     "DjangoConnectionField",
@@ -56,6 +40,8 @@ __all__ = (
     "OptimizerHint",
     "SyncMisuseError",
     "__version__",
+    "aapply_cascade_permissions",
+    "apply_cascade_permissions",
     "auto",
     "finalize_django_types",
     "strawberry_config",

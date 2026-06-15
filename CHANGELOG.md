@@ -16,6 +16,12 @@ This project follows a milestone-style cadence during pre-`1.0.0`:
 
 See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of each patch.
 
+## [Unreleased]
+
+### Added
+- **`apply_cascade_permissions` / `aapply_cascade_permissions` (cascade visibility helper pair).** One call inside a [`DjangoType`][glossary-djangotype]'s [`get_queryset`][glossary-get_queryset-visibility-hook] cascades that type's visibility across its **single-column forward FK / OneToOne edges** — for each such edge it resolves the target type through the registry primary lookup, runs that target type's own `get_queryset`, and intersects `Q(<fk>__in=<visible>) | Q(<fk>__isnull=True)` into the caller's queryset, so a parent row whose target a target hook hides drops out. Four invariants: a module-level `ContextVar` seen-set cycle guard (partial-narrow on cycle break, never a raise, `finally`-reset for WSGI/ASGI request isolation), single-column forward scope (M2M / reverse relations / `GenericForeignKey` / `GenericRelation` / the MTI `<parent>_ptr` parent link all excluded), nullable-FK preservation, and per-edge subquery pinning to the caller's resolved DB alias (`queryset.db`). `fields=` validates loudly — a bare string and any unknown / non-cascadable name raise [`ConfigurationError`][glossary-configurationerror]. The sync helper raises [`SyncMisuseError`][glossary-syncmisuseerror] (coroutine closed) for an async target hook; `aapply_cascade_permissions` runs the same walk through `sync_to_async(thread_sensitive=True)`. Composes with the shipped [`FilterSet`][glossary-filterset] / [`OrderSet`][glossary-orderset] `check_<field>_permission` gates (cascade narrows rows first, gates judge input second — no existence leak), connections, node refetch, list fields, and nested filter branches via the optimizer `Prefetch` downgrade, at zero added query round-trips (the `__in` subqueries compile into the caller's single `SELECT`). Both symbols ship under [`django_strawberry_framework/permissions.py`][permissions] and are exported from the package root.
+- **Products cascade activation.** The four [`products`][products-schema] schema `get_queryset` hooks (`Category` / `Item` / `Property` / `Entry`) now call `apply_cascade_permissions`, so visibility cascades across the `Entry → Item → Category` / `Entry → Property → Category` FK chain — exercised live by `services.create_users(1)` permission users over `/graphql/`: staff sees everything, a `view_<model>` user sees non-private rows but loses entries under hidden targets, and anonymous requests lose any entry whose item or property points at a private category.
+
 ## [0.0.9] - 2026-06-13
 
 The Relay release: cursor connections, root refetch fields, and model-anchored GlobalIDs.
@@ -307,6 +313,7 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [django-patches]: django_strawberry_framework/_django_patches.py
 [filters]: django_strawberry_framework/filters/
 [orders]: django_strawberry_framework/orders/
+[permissions]: django_strawberry_framework/permissions.py
 [resolvers]: django_strawberry_framework/types/resolvers.py
 [sets-mixins]: django_strawberry_framework/sets_mixins.py
 [test-init]: django_strawberry_framework/testing/__init__.py

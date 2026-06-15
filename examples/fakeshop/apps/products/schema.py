@@ -27,10 +27,6 @@ present `filters.py` / `orders.py` modules; `aggregate_class` /
 
 # Future imports (uncomment as Layer-3 subsystems ship):
 #
-# TODO(spec-034 Slice 4): activate the cascade — uncomment the import below AND the
-# four `get_queryset` cascade hooks on Category/Item/Property/EntryType (their
-# `TODO-ALPHA-034-0.0.10` markers are already correct; only the uncomment remains).
-# from django_strawberry_framework import apply_cascade_permissions  # TODO-ALPHA-034-0.0.10
 # from apps.products import aggregates                               # TODO-BETA-040-0.1.3 (aggregates)
 # from apps.products import fields as fieldsets                      # TODO-BETA-038-0.1.1
 
@@ -41,6 +37,7 @@ from django_strawberry_framework import (
     DjangoConnection,
     DjangoConnectionField,
     DjangoType,
+    apply_cascade_permissions,
 )
 
 from . import filters, models, orders
@@ -67,17 +64,15 @@ class CategoryType(DjangoType):
         # aggregate_class = aggregates.CategoryAggregate    # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.CategoryFieldSet         # needs TODO-BETA-038-0.1.1 + fields.py
 
-    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-034-0.0.10 ships:
-    #
-    # @classmethod
-    # def get_queryset(cls, queryset, info):
-    #     """Staff or users with view_category permission see everything; others see public only."""
-    #     user = getattr(info.context, "user", None)
-    #     if user and user.is_staff:
-    #         return queryset
-    #     elif user and user.has_perm("products.view_category"):
-    #         return queryset.filter(is_private=False)
-    #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
+    @classmethod
+    def get_queryset(cls, queryset, info):
+        """Staff or users with view_category permission see everything; others see public only."""
+        user = getattr(getattr(info.context, "request", None), "user", None)
+        if user and user.is_staff:
+            return queryset
+        elif user and user.has_perm("products.view_category"):
+            return queryset.filter(is_private=False)
+        return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
 class ItemType(DjangoType):
@@ -101,17 +96,15 @@ class ItemType(DjangoType):
         # aggregate_class = aggregates.ItemAggregate     # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.ItemFieldSet          # needs TODO-BETA-038-0.1.1 + fields.py
 
-    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-034-0.0.10 ships:
-    #
-    # @classmethod
-    # def get_queryset(cls, queryset, info):
-    #     """Staff or users with view_item permission see everything; others see public only."""
-    #     user = getattr(info.context, "user", None)
-    #     if user and user.is_staff:
-    #         return queryset
-    #     elif user and user.has_perm("products.view_item"):
-    #         return queryset.filter(is_private=False)
-    #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
+    @classmethod
+    def get_queryset(cls, queryset, info):
+        """Staff or users with view_item permission see everything; others see public only."""
+        user = getattr(getattr(info.context, "request", None), "user", None)
+        if user and user.is_staff:
+            return queryset
+        elif user and user.has_perm("products.view_item"):
+            return queryset.filter(is_private=False)
+        return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
 class PropertyType(DjangoType):
@@ -135,17 +128,15 @@ class PropertyType(DjangoType):
         # aggregate_class = aggregates.PropertyAggregate  # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.PropertyFieldSet       # needs TODO-BETA-038-0.1.1 + fields.py
 
-    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-034-0.0.10 ships:
-    #
-    # @classmethod
-    # def get_queryset(cls, queryset, info):
-    #     """Staff or users with view_property permission see everything; others see public only."""
-    #     user = getattr(info.context, "user", None)
-    #     if user and user.is_staff:
-    #         return queryset
-    #     elif user and user.has_perm("products.view_property"):
-    #         return queryset.filter(is_private=False)
-    #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
+    @classmethod
+    def get_queryset(cls, queryset, info):
+        """Staff or users with view_property permission see everything; others see public only."""
+        user = getattr(getattr(info.context, "request", None), "user", None)
+        if user and user.is_staff:
+            return queryset
+        elif user and user.has_perm("products.view_property"):
+            return queryset.filter(is_private=False)
+        return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
 class EntryType(DjangoType):
@@ -169,17 +160,15 @@ class EntryType(DjangoType):
         # aggregate_class = aggregates.EntryAggregate  # needs TODO-BETA-040-0.1.3 + aggregates.py
         # fields_class = fieldsets.EntryFieldSet       # needs TODO-BETA-038-0.1.1 + fields.py
 
-    # Future cascade-permission visibility hook - uncomment when TODO-ALPHA-034-0.0.10 ships:
-    #
-    # @classmethod
-    # def get_queryset(cls, queryset, info):
-    #     """Staff or users with view_entry permission see everything; others see public only."""
-    #     user = getattr(info.context, "user", None)
-    #     if user and user.is_staff:
-    #         return queryset
-    #     elif user and user.has_perm("products.view_entry"):
-    #         return queryset.filter(is_private=False)
-    #     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
+    @classmethod
+    def get_queryset(cls, queryset, info):
+        """Staff or users with view_entry permission see everything; others see public only."""
+        user = getattr(getattr(info.context, "request", None), "user", None)
+        if user and user.is_staff:
+            return queryset
+        elif user and user.has_perm("products.view_entry"):
+            return queryset.filter(is_private=False)
+        return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
 @strawberry.type

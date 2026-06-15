@@ -3973,21 +3973,180 @@ def test_nested_connection_fallback_publish_unions_parent_planned_set_end_to_end
 # =============================================================================
 
 
-@pytest.mark.skip(reason="TODO(spec-034 Slice 2): cascading target downgrades join to Prefetch")
+@pytest.mark.django_db
 def test_cascading_target_downgrades_join_to_prefetch():
     """A relation whose target hook cascades plans a ``Prefetch`` (not ``select_related``).
 
     The target reports ``has_custom_get_queryset() is True``, so the shipped
     ``optimizer/walker.py::_target_has_custom_get_queryset`` rule fires the
     downgrade and bakes the cascade into the child queryset - no optimizer change.
+    ``select_related`` is empty, the relation plans one ``Prefetch``, and the plan
+    is ``cacheable is False``.
+
+    LOAD-BEARING (spec-034 Decision 12 dependency to protect): the assertion that
+    the prefetch CHILD queryset narrows by the LIVE request user, not merely that
+    a ``Prefetch`` is planned. ``walker.py::_build_child_queryset`` threads the
+    SAME ``info`` from the root walk into the target hook; a future refactor that
+    dropped ``info`` would still plan a ``Prefetch`` while silently breaking
+    cascade transitivity (the nested hook would lose ``info.context.user``). The
+    cascading hook here both (a) cascades via ``apply_cascade_permissions`` AND
+    (b) narrows by a user-derived predicate, so the child SQL carries the live
+    user's value - a non-distinguishing ``Prefetch``-only assertion cannot pass.
     """
+    from django.db.models import Prefetch
+
+    from django_strawberry_framework.permissions import apply_cascade_permissions
+
+    seen_users = []
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            user = getattr(info.context, "user", None)
+            seen_users.append(user)
+            # Cascade AND narrow by a user-derived predicate so the live request
+            # user reaches the prefetch child queryset's compiled SQL.
+            queryset = queryset.filter(name=user.name)
+            return apply_cascade_permissions(cls, queryset, info)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    finalize_django_types()
+    # One public category whose name matches the request user, one item under it.
+    request_cat = Category.objects.create(name="request_user", is_private=False)
+    Item.objects.create(name="i0", category=request_cat)
+
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
+    request_user = SimpleNamespace(name="request_user")
+    ctx = SimpleNamespace(user=request_user)
+
+    result = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=ctx,
+    )
+    assert result.errors is None
+
+    plan = ctx.dst_optimizer_plan
+    assert plan.select_related == ()
+    assert plan.cacheable is False
+    assert ext.cache_info().size == 0
+    assert len(plan.prefetch_related) == 1
+    assert isinstance(plan.prefetch_related[0], Prefetch)
+    assert plan.prefetch_related[0].prefetch_to == "category"
+
+    # Load-bearing: the cascading hook saw the LIVE request user...
+    assert seen_users
+    assert seen_users[0] is request_user
+    # ...and that user's narrowing is baked into the prefetch child queryset's SQL
+    # (proving ``_build_child_queryset`` threaded the live ``info``, not a default).
+    child_sql = str(plan.prefetch_related[0].queryset.query)
+    assert "request_user" in child_sql
 
 
-@pytest.mark.skip(reason="TODO(spec-034 Slice 2): plan baking a cascading hook is uncacheable")
+@pytest.mark.django_db
 def test_plan_with_cascading_hook_uncacheable():
     """A plan baking a cascading hook is ``cacheable = False``; B1 counters unaffected otherwise.
 
     The shipped rule marks ANY plan baking a custom ``get_queryset`` uncacheable
     (it keys on the *presence* of a custom hook, not on whether the hook reads the
     request - the coarser walker.py rule); the cascade adds no new cache dimension.
+    So executing a cascading query twice records ``misses == 2 / hits == 0 /
+    size == 0`` - the plan is rebuilt each request (spec-034 Edge case
+    "Plan-cache interaction").
+
+    The non-cascading half pins that this uncacheability does NOT contaminate
+    ordinary plan caching: a SIBLING non-cascading schema run twice on its own
+    extension produces the normal ``miss-then-hit`` (``size == 1``, B1 counters
+    unaffected for non-cascading types). Separate extension instances keep the two
+    counter streams independently observable.
     """
+    from django_strawberry_framework.permissions import apply_cascade_permissions
+
+    public_cat = Category.objects.create(name="public_cat", is_private=False)
+    Item.objects.create(name="pub_item", category=public_cat)
+
+    # --- Cascading schema: plan is uncacheable, rebuilt each request. ---
+    class CascadingCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
+
+    class CascadingItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    cascading_ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class CascadingQuery:
+        @strawberry.field
+        def all_items(self) -> list[CascadingItemType]:
+            return Item.objects.all()
+
+    finalize_django_types()
+    cascading_schema = strawberry.Schema(
+        query=CascadingQuery,
+        extensions=[lambda: cascading_ext],
+    )
+    query = "{ allItems { name category { name } } }"
+    ctx_a = SimpleNamespace(user=None)
+    ctx_b = SimpleNamespace(user=None)
+    assert cascading_schema.execute_sync(query, context_value=ctx_a).errors is None
+    assert cascading_schema.execute_sync(query, context_value=ctx_b).errors is None
+
+    assert ctx_a.dst_optimizer_plan.cacheable is False
+    assert cascading_ext.cache_info().hits == 0
+    assert cascading_ext.cache_info().misses == 2
+    assert cascading_ext.cache_info().size == 0
+
+    # --- Non-cascading sibling: ordinary caching is unaffected (miss then hit). ---
+    registry.clear()
+
+    class PlainCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class PlainItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    plain_ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class PlainQuery:
+        @strawberry.field
+        def all_items(self) -> list[PlainItemType]:
+            return Item.objects.all()
+
+    finalize_django_types()
+    plain_schema = strawberry.Schema(query=PlainQuery, extensions=[lambda: plain_ext])
+    assert plain_schema.execute_sync(query).errors is None
+    assert plain_ext.cache_info().misses == 1
+    assert plain_ext.cache_info().hits == 0
+
+    assert plain_schema.execute_sync(query).errors is None
+    assert plain_ext.cache_info().hits == 1
+    assert plain_ext.cache_info().misses == 1
+    assert plain_ext.cache_info().size == 1

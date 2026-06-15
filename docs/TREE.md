@@ -197,6 +197,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface (incl. the optimizer windowed-row fast path and the nested-connection strictness consultation).
 ├── exceptions.py                 # Exceptions raised by django-strawberry-framework.
 ├── list_field.py                 # ``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
+├── permissions.py                # ``apply_cascade_permissions`` / ``aapply_cascade_permissions`` - cascade a type's ``get_queryset`` visibility through its single-column forward FK / OneToOne edges.
 ├── py.typed
 ├── registry.py                   # Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
@@ -259,7 +260,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface (incl. the optimizer windowed-row fast path and the nested-connection strictness consultation).
 ├── exceptions.py                 # Exceptions raised by django-strawberry-framework.
 ├── list_field.py                 # ``DjangoListField`` - non-Relay ``list[T]`` field for root Query fields.
-├── permissions.py                # planned by TODO-ALPHA-034-0.0.10 - Permissions subsystem
+├── permissions.py                # ``apply_cascade_permissions`` / ``aapply_cascade_permissions`` - cascade a type's ``get_queryset`` visibility through its single-column forward FK / OneToOne edges.
 ├── py.typed
 ├── registry.py                   # Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
@@ -337,6 +338,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 ├── test_connection.py            # DjangoConnection and DjangoConnectionField tests for Relay pagination behavior.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_list_field.py            # DjangoListField tests for root list fields, queryset visibility, and sidecars.
+├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions`` and the four upstream invariants.
 ├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
 ├── test_relay_connection.py      # Relation-as-Connection tests for cursor conformance and Relay field upgrades.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
@@ -464,6 +466,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 ├── test_connection.py            # DjangoConnection and DjangoConnectionField tests for Relay pagination behavior.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_list_field.py            # DjangoListField tests for root list fields, queryset visibility, and sidecars.
+├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions`` and the four upstream invariants.
 ├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
 ├── test_relay_connection.py      # Relation-as-Connection tests for cursor conformance and Relay field upgrades.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.

@@ -1,210 +1,254 @@
-"""Cascade permission visibility - ``apply_cascade_permissions`` (sync + async).
+"""Call-time cascade visibility: ``apply_cascade_permissions`` (sync + async).
 
-STAGED SEAM (spec-034 Slice 1). This module is the cascade foundation described
-by ``docs/spec-034-permissions-0_0_10.md``. The public surface and the private
-walk are laid out here as pseudo-code; every call path raises
-``NotImplementedError`` until Slice 1 fills it in (the AGENTS.md design-doc anchor
-discipline: a ``TODO(spec-034 Slice N)`` comment + pseudo-code paired with a
-loud ``NotImplementedError``, removed in the change that ships the slice).
+A consumer calls ``apply_cascade_permissions(cls, queryset, info)`` inside its
+``DjangoType.get_queryset`` to make every single-column forward relation of
+``cls``'s model respect its target type's own visibility hook. The walk is
+depth-1; transitive cascade (``Entry -> Item -> Category``) emerges because each
+target's ``get_queryset`` may itself call the helper. A module-level
+``ContextVar`` seen-set breaks cycles (mutual / self-referential cascade), and
+the root call resets it in a ``finally`` so request isolation holds under both
+WSGI and ASGI.
 
-What this ships (Decision 4 / Decision 5):
+Four upstream invariants are ported verbatim from
+``django_graphene_filters/permissions.py`` (the working reference): the
+``ContextVar`` cycle guard (re-entry partial-narrows, never raises), the
+single-column forward-relation scope (the ``related_model``-plus-non-``None``-
+``column`` test), nullable-FK preservation (the ``__isnull=True`` disjunct), and
+caller-alias pinning (``queryset.db``). Two package adaptations tighten
+semantics without changing the contract: each edge's target type is resolved
+through the registry primary lookup (``Meta.primary`` semantics, which graphene
+has no equivalent of), and a target whose ``has_custom_get_queryset()`` is
+``False`` is skipped (the identity default would emit a dead ``__in (SELECT ...)``
+clause). One package tightening beyond upstream excludes the multi-table-
+inheritance ``<parent>_ptr`` edge, which otherwise passes the two-predicate
+scope test.
 
-    ``apply_cascade_permissions(cls, queryset, info, fields=None)`` - a call-time
-    walk of ``cls``'s single-column forward FK / OneToOne edges that intersects
-    each target type's ``get_queryset`` visibility into ``queryset``, so a parent
-    row whose FK points at a row the target type hides is dropped. Called from
-    inside a consumer's ``get_queryset``; transitive cascade emerges because each
-    target's hook may itself call the helper (the walk is depth-1, the
-    ``ContextVar`` seen-set breaks cycles).
-
-    ``aapply_cascade_permissions(...)`` - the async twin: the same walk wrapped in
-    ``sync_to_async(thread_sensitive=True)`` so blocking consumer-hook work (e.g.
-    ``user.has_perm(...)`` permission-table reads) stays off the event loop
-    (Decision 10).
-
-The four upstream invariants: ``ContextVar`` cycle guard (partial-narrow on
-re-entry, never a raise), single-column forward scope, nullable-FK preservation
-(``Q(fk__in=...) | Q(fk__isnull=True)``), and caller-alias pinning
-(``.using(queryset.db)``). The cycle guard, nullable-FK preservation, and
-caller-alias pinning are ported verbatim from ``django-graphene-filters``'s
-``permissions.py::apply_cascade_permissions``; the single-column forward scope is
-**two predicates ported from upstream plus one package tightening** (the MTI
-parent-link exclusion - see ``_cascade_edges``). Three deliberate deviations from
-upstream: the registry *primary* lookup (Meta.primary semantics), the
-``has_custom_get_queryset()`` gate (skip identity hooks so no dead ``__in`` SQL is
-emitted), and the MTI parent-link exclusion in the scope test (skip an MTI child's
-auto-generated ``<parent>_ptr`` edge, which passes the two-predicate test but
-would otherwise silently narrow a child row by its MTI-parent type's hook).
+The per-edge target-hook invocation is delegated to
+``utils/querysets.py::apply_type_visibility_sync`` so the package has ONE place
+that runs a sync ``get_queryset`` and rejects an async hook with
+``SyncMisuseError`` (the coroutine is closed first) -- a visibility-hook-routing
+mistake is a data-leak bug, so the routing is not re-decided here. The async
+twin wraps the single sync walk in ``sync_to_async(thread_sensitive=True)`` (the
+``filters/sets.py`` precedent) so blocking consumer-hook work (e.g.
+``user.has_perm(...)`` permission-table reads) stays off the event loop; there
+is no second async walk implementation. An ``async def`` target hook therefore
+raises ``SyncMisuseError`` from both variants -- inside the wrapped worker
+thread there is still no awaiting context.
 """
-
-# ruff: noqa: ERA001 -- This module is a TODO(spec-034 Slice 1) staged seam: its
-# runtime body is intentionally pseudo-code in comments (the AGENTS.md design-doc
-# anchor discipline -- "do not refactor pseudo code to satisfy the lint"). ERA001
-# is suppressed file-wide while the seam is staged; delete this directive in the
-# change that ships Slice 1 and replaces the pseudo-code with the real walk.
 
 from __future__ import annotations
 
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from asgiref.sync import sync_to_async
+from django.db import models
+from django.db.models import Q
 
-# The sync-misuse probe + its error live in utils/querysets.py since the 0.0.9
-# DRY pass (spec-034 feedback H1). ``apply_type_visibility_sync(target_type, qs,
-# info)`` runs the target's ``get_queryset`` and raises ``SyncMisuseError`` if it
-# returns a coroutine (closing it first) - exactly the per-edge probe Decision 10
-# / Decision 5 step 4 need, so the cascade reuses it rather than re-spelling it.
-from .utils.querysets import (  # noqa: F401  (apply_type_visibility_sync used once Slice 1 lands)
-    SyncMisuseError,
-    apply_type_visibility_sync,
-)
+from .exceptions import ConfigurationError
+from .registry import registry
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
-    from django.db.models import QuerySet
-    from strawberry.types import Info
+# ``SyncMisuseError`` is re-exported (redundant-alias form, the established
+# ``types/relay.py`` convention) so the cascade's own error surface is importable
+# from this module (``from django_strawberry_framework.permissions import
+# SyncMisuseError``) without reaching into the private ``utils`` package. It is
+# already in the package-root ``__all__`` via ``types``, so this re-export adds no
+# new public name.
+from .utils.querysets import SyncMisuseError as SyncMisuseError
+
+# ``apply_type_visibility_sync`` runs a target's ``get_queryset`` and rejects an
+# async hook with ``SyncMisuseError`` (the coroutine closed first); the cascade
+# reuses it as the per-edge probe so the package keeps ONE sync-misuse site
+# (Decision 10).
+from .utils.querysets import apply_type_visibility_sync
+
+# Module-level cycle-guard seen-set (the upstream ``_cascade_seen`` shape
+# verbatim). ``None`` means "no walk in flight" -- the next call is the root and
+# installs a fresh set; a ``set`` of in-flight ``DjangoType`` classes means "walk
+# in flight" so a re-entrant call on a class already present partial-narrows
+# instead of recursing. The root call resets the var in a ``finally`` so a
+# request-handler exception cannot leak a stale seen-set into the next request
+# sharing the context. A ``ContextVar`` (not a plain global) so isolation holds
+# under both WSGI and ASGI, and so the async variant's ``sync_to_async`` worker
+# thread sees a *copied* context (asgiref runs ``contextvars.copy_context()``
+# into the thread): its install/reset is scoped to that copy and never leaks back
+# into the event-loop task.
+_cascade_seen: ContextVar[set | None] = ContextVar("_cascade_seen", default=None)
 
 
-# Module-level cycle-guard seen-set (Decision 5 step 5; upstream ``_cascade_seen``
-# shape verbatim). ``None`` outside any cascade; a ``set`` of in-flight
-# ``DjangoType`` classes while a root call is on the stack. A ``ContextVar`` (not a
-# plain global) so request isolation holds under both WSGI and ASGI - and so the
-# async variant's ``sync_to_async`` thread sees a *copied* context (asgiref runs
-# ``contextvars.copy_context()`` into the worker thread), containing its mutations
-# to that copy and never leaking back into the event-loop task (Decision 10).
-_cascade_seen: ContextVar[set[type] | None] = ContextVar("_cascade_seen", default=None)
+def _is_cascadable_edge(field: Any) -> bool:
+    """Return whether ``field`` is a single-column forward FK / OneToOne edge.
+
+    The single definition of "cascadable edge" -- both the ``fields=None`` full
+    walk and the ``fields=`` validator key off this predicate, so scope cannot
+    drift between them. Two predicates ported from upstream (``related_model``
+    present AND a non-``None`` single-column ``column``) plus one package
+    tightening (NOT the MTI ``<parent>_ptr`` parent link). The ``column`` test is
+    ``getattr(field, "column", None) is not None`` rather than a bare
+    ``hasattr``: under Django 6.0 both ``ManyToManyField`` and ``GenericRelation``
+    expose a ``column`` *attribute* whose value is ``None``, so a presence-only
+    ``hasattr`` test would over-include them and compose wrong-shape ``__in``
+    constraints on join-table / virtual relations (a scope-leak bug on a row-
+    visibility surface). M2M (join-table-backed, ``column`` is ``None``), reverse
+    FK / reverse OneToOne (``ForeignObjectRel``, no ``column``),
+    ``GenericForeignKey`` (``related_model`` absent), ``GenericRelation``
+    (virtual, ``column`` is ``None``), and composite-PK / composite-FK targets
+    (no single ``column``) are excluded; the MTI ``<parent>_ptr``
+    ``OneToOneField(parent_link=True)`` carries both a ``related_model`` and a
+    real ``column`` so it passes the two-predicate test and must be excluded by
+    the explicit ``parent_link`` guard (otherwise a child row would be silently
+    narrowed by its MTI-parent type's hook).
+    """
+    return (
+        getattr(field, "related_model", None) is not None
+        and getattr(field, "column", None) is not None
+        and not getattr(field.remote_field, "parent_link", False)
+    )
+
+
+def _cascadable_edge_names(model: type[models.Model]) -> set[str]:
+    """Return the names of ``model``'s cascadable edges (Decision 5 step 1)."""
+    return {field.name for field in model._meta.get_fields() if _is_cascadable_edge(field)}
+
+
+def _validate_fields(model: type[models.Model], fields: Any) -> set[str] | None:
+    """Resolve ``fields`` to the set of edge names to walk, validating loudly.
+
+    ``None`` returns ``None`` (a sentinel meaning "walk every cascadable edge",
+    distinct from ``fields=[]`` which returns an empty set -- a defined no-op). A
+    bare string is rejected up front: a string iterates as its characters, so
+    ``fields="item"`` would otherwise validate ``'i'``, ``'t'``, ``'e'``,
+    ``'m'`` and surface a misleading per-character error that hides the missing
+    brackets. Otherwise every supplied name must be a cascadable edge; unknown or
+    known-but-non-cascadable names raise ``ConfigurationError`` naming the
+    offending entry, the model, and the cascadable set. A cascadable name whose
+    target lacks a registered type or custom hook validates clean here and is
+    skipped by the walk's per-edge gate (Decision 9).
+    """
+    if fields is None:
+        return None
+    if isinstance(fields, str):
+        raise ConfigurationError(
+            f"apply_cascade_permissions fields= must be a non-string iterable of "
+            f"field names, not the bare string {fields!r}; wrap it in a list "
+            f"(fields=[{fields!r}]).",
+        )
+    requested = set(fields)
+    cascadable = _cascadable_edge_names(model)
+    unknown = requested - cascadable
+    if unknown:
+        raise ConfigurationError(
+            f"apply_cascade_permissions fields={sorted(unknown)!r} on "
+            f"{model.__name__} are not cascadable; the cascadable edges are "
+            f"{sorted(cascadable)!r}.",
+        )
+    return requested
 
 
 def apply_cascade_permissions(
     cls: type,
-    queryset: QuerySet,
-    info: Info,
-    fields: list[str] | tuple[str, ...] | None = None,
-) -> QuerySet:
-    """Intersect each forward-FK target type's visibility into ``queryset``.
+    queryset: models.QuerySet,
+    info: Any,
+    fields: Any = None,
+) -> models.QuerySet:
+    """Narrow ``queryset`` so each forward relation respects its target visibility.
 
-    Call from inside a ``DjangoType.get_queryset`` (Decision 5). Returns a
-    narrowed queryset; never evaluates, reorders, or projects - pure
-    ``.filter(...)`` composition, so it composes with ``only()`` / ordering
-    downstream and adds zero query round-trips (the ``__in`` subqueries compile
-    into the caller's single ``SELECT`` - Decision 7).
+    Call from inside a ``DjangoType.get_queryset`` (Decision 5). Walks ``cls``'s
+    model single-column forward FK / OneToOne edges, resolves each edge's target
+    type through the registry primary lookup, runs that type's ``get_queryset``
+    against the target model's rows (pinned to the caller's resolved DB alias),
+    and intersects ``Q(<edge>__in=<visible>) | Q(<edge>__isnull=True)`` into
+    ``queryset``. Edges whose target has no registered type or no custom hook are
+    skipped (nothing to narrow, no dead SQL). Returns a narrowed queryset; never
+    evaluates, reorders, or projects -- pure ``.filter(...)`` composition, so the
+    ``__in`` subqueries compile into the caller's single ``SELECT`` and add zero
+    query round-trips (Decision 7).
 
     Args:
         cls: the owning ``DjangoType`` (its ``.model`` is the walk root).
         queryset: the caller's already-visibility-filtered queryset.
         info: the Strawberry resolver ``info`` (threaded into each target hook).
         fields: optional iterable of model field names scoping the walk to those
-            edges; ``None`` walks every cascadable edge. A bare string raises
-            (Decision 9).
+            edges; ``None`` walks every cascadable edge, ``[]`` cascades nothing.
+            A bare string raises (Decision 9).
 
     Raises:
         ConfigurationError: a bare-string ``fields=`` or a ``fields=`` name that
             is unknown / non-cascadable (Decision 9).
         SyncMisuseError: a target type's ``get_queryset`` is ``async def`` (use
-            ``aapply_cascade_permissions`` or rewrite the hook sync - Decision 10).
+            ``aapply_cascade_permissions`` or rewrite the hook sync -- Decision 10).
     """
-    # TODO(spec-034 Slice 1): implement the walk below and delete the raise.
-    #
-    # 1. fields= validation (Decision 9) - bare-string guard FIRST, then names:
-    #        if isinstance(fields, str):
-    #            raise ConfigurationError(
-    #                "apply_cascade_permissions: fields= must be a non-string "
-    #                f"iterable of field names, got the string {fields!r} (did you "
-    #                "mean [{fields!r}]?)."
-    #            )
-    #        cascadable = {f.name for f in _cascade_edges(cls.model)}
-    #        if fields is not None:
-    #            unknown = set(fields) - cascadable
-    #            if unknown:
-    #                raise ConfigurationError(
-    #                    f"apply_cascade_permissions: {sorted(unknown)} on "
-    #                    f"{cls.model.__name__} are not cascadable. Cascadable "
-    #                    f"fields: {sorted(cascadable)}."
-    #                )
-    #
-    # 2. Cycle guard (Decision 5 step 5) - install at root, break on re-entry,
-    #    discard own class on exit, reset the var at the root in ``finally``:
-    #        seen = _cascade_seen.get()
-    #        is_root = seen is None
-    #        if is_root:
-    #            seen = set()
-    #            _cascade_seen.set(seen)
-    #        if cls in seen:
-    #            return queryset                     # partial narrow, never raise
-    #        seen.add(cls)
-    #        try:
-    #            ... walk (steps 3-4) ...
-    #            return queryset
-    #        finally:
-    #            seen.discard(cls)                   # siblings may re-visit
-    #            if is_root:
-    #                _cascade_seen.set(None)         # request isolation
-    #
-    # 3. Edge scope (Decision 5 step 1) - single-column forward FK / O2O only:
-    #        for field in _cascade_edges(cls.model):
-    #            if fields is not None and field.name not in fields:
-    #                continue
-    #
-    # 4. Per edge: resolve target via the registry PRIMARY lookup, gate on a
-    #    custom hook, build the visible-target subquery pinned to the caller's
-    #    alias, intersect with the nullable-FK-preserving Q-shape:
-    #        target_type = registry.get(field.related_model)
-    #        if target_type is None:
-    #            continue                            # unexposed model, no contract
-    #        if not target_type.has_custom_get_queryset():
-    #            continue                            # identity hook -> no dead SQL
-    #        base = field.related_model._default_manager.using(queryset.db).all()
-    #        target_qs = apply_type_visibility_sync(target_type, base, info)  # SyncMisuse-probed
-    #        queryset = queryset.filter(
-    #            Q(**{f"{field.name}__in": target_qs})
-    #            | Q(**{f"{field.name}__isnull": True})
-    #        )
-    raise NotImplementedError(
-        "TODO(spec-034 Slice 1): apply_cascade_permissions cascade walk "
-        "(Decision 5) is not implemented yet.",
-    )
+    model = cls.__django_strawberry_definition__.model
+    names_to_walk = _validate_fields(model, fields)
+
+    seen = _cascade_seen.get()
+    if seen is None:
+        seen = {cls}
+        token = _cascade_seen.set(seen)
+        try:
+            return _walk(model, queryset, info, names_to_walk)
+        finally:
+            _cascade_seen.reset(token)
+    if cls in seen:
+        return queryset
+    seen.add(cls)
+    try:
+        return _walk(model, queryset, info, names_to_walk)
+    finally:
+        seen.discard(cls)
 
 
-# Async twin (Decision 10): the SAME sync walk run in a thread-sensitive worker so
-# blocking hook I/O stays off the event loop. One implementation, no sync/async
-# fork to drift. Inside the thread the walk still uses the sync probe, so an async
-# target hook raises ``SyncMisuseError`` from this variant too (documented; the
-# recourse is a sync hook or ``fields=`` to skip the async-hooked edge). Until
-# Slice 1 fills ``apply_cascade_permissions``, awaiting this raises its
-# ``NotImplementedError`` through the wrapper.
-#   TODO(spec-034 Slice 1): keep this wrap; confirm the ContextVar seen-set is
-#   clean inside the worker thread (asgiref copy_context) - pinned by
-#   ``test_aapply_runs_walk_off_event_loop``.
-aapply_cascade_permissions = sync_to_async(thread_sensitive=True)(apply_cascade_permissions)
+def _walk(
+    model: type[models.Model],
+    queryset: models.QuerySet,
+    info: Any,
+    names_to_walk: set[str] | None,
+) -> models.QuerySet:
+    """Intersect one visibility constraint per qualifying edge of ``model``.
 
-
-def _cascade_edges(model: type) -> list[Any]:
-    """Return ``model``'s single-column forward FK / OneToOne fields (Decision 5 step 1).
-
-    Two predicates ported from upstream plus one package tightening (the MTI
-    parent-link exclusion): ``model._meta.get_fields()`` entries with
-    ``related_model`` present AND ``hasattr(field, "column")`` AND NOT
-    ``getattr(field.remote_field, "parent_link", False)``. The first two predicates
-    exclude, *by construction*, M2M (join-table-backed, no ``column``), reverse FK /
-    reverse OneToOne (``ForeignObjectRel``, no ``column``), ``GenericForeignKey``
-    (``related_model`` absent), ``GenericRelation`` (virtual, no ``column``), and
-    composite-PK / composite-FK targets (no single ``column``). The third predicate
-    is the package tightening, excluded *by an explicit guard* (not by
-    construction): an MTI child's auto-generated ``<parent>_ptr``
-    ``OneToOneField(parent_link=True)`` carries both a ``related_model`` and a
-    ``column``, so it passes the two-predicate test - without the ``parent_link``
-    guard a child row would be silently narrowed by its MTI-parent type's hook
-    (Decision 5 step 1; Edge cases).
+    The caller owns the cycle-guard lifecycle (seen-set install / re-entry break /
+    frame-exit discard); this function only composes the per-edge subqueries.
+    ``names_to_walk`` is ``None`` for the full walk or a validated edge-name set
+    for the ``fields=`` scoped walk.
     """
-    # TODO(spec-034 Slice 1): implement and delete the raise.
-    #   return [
-    #       f
-    #       for f in model._meta.get_fields()
-    #       if getattr(f, "related_model", None) is not None
-    #       and hasattr(f, "column")
-    #       and not getattr(f.remote_field, "parent_link", False)  # skip MTI <parent>_ptr
-    #   ]
-    raise NotImplementedError(
-        "TODO(spec-034 Slice 1): _cascade_edges single-column-forward-relation "
-        "scope (Decision 5 step 1) is not implemented yet.",
+    for field in model._meta.get_fields():
+        if not _is_cascadable_edge(field):
+            continue
+        if names_to_walk is not None and field.name not in names_to_walk:
+            continue
+        target_type = registry.get(field.related_model)
+        if target_type is None:
+            continue
+        if not target_type.has_custom_get_queryset():
+            continue
+        base = field.related_model._default_manager.using(queryset.db).all()
+        target_qs = apply_type_visibility_sync(target_type, base, info)
+        queryset = queryset.filter(
+            Q(**{f"{field.name}__in": target_qs}) | Q(**{f"{field.name}__isnull": True}),
+        )
+    return queryset
+
+
+async def aapply_cascade_permissions(
+    cls: type,
+    queryset: models.QuerySet,
+    info: Any,
+    fields: Any = None,
+) -> models.QuerySet:
+    """Async twin of ``apply_cascade_permissions`` -- the same walk, off the event loop.
+
+    Wraps the single sync walk in ``sync_to_async(thread_sensitive=True)`` (the
+    ``filters/sets.py`` precedent) so blocking consumer-hook work (permission-
+    table reads inside a target type's ``get_queryset``) never runs on the event
+    loop. The ``ContextVar`` install/reset happens inside the worker thread on
+    the asgiref-copied context, so it never leaks back into the calling async
+    task. An ``async def`` target hook still raises ``SyncMisuseError`` (no
+    awaiting context inside the thread); narrow with ``fields=`` to skip an
+    async-hooked edge (Decision 10).
+    """
+    return await sync_to_async(apply_cascade_permissions, thread_sensitive=True)(
+        cls,
+        queryset,
+        info,
+        fields,
     )

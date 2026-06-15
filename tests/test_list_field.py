@@ -1009,8 +1009,8 @@ def test_djangolistfield_with_secondary_target_uses_secondary_get_queryset() -> 
 
 
 # =============================================================================
-# STAGED SEAM (spec-034 Slice 3): list field ↔ cascade composition pin.
-# NO list_field.py source change — the default resolver (and the consumer-resolver
+# STAGED SEAM (spec-034 Slice 3): list field <-> cascade composition pin.
+# NO list_field.py source change - the default resolver (and the consumer-resolver
 # wrap) already apply the type's get_queryset (Decision 12). Fill in + drop the
 # skip in Slice 3.
 # =============================================================================

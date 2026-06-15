@@ -1378,8 +1378,8 @@ def test_registry_clear_also_clears_connection_type_cache():
 
 
 # =============================================================================
-# STAGED SEAM (spec-034 Slice 3): connection ↔ cascade composition pin.
-# NO connection.py source change — the pipeline already applies get_queryset
+# STAGED SEAM (spec-034 Slice 3): connection <-> cascade composition pin.
+# NO connection.py source change - the pipeline already applies get_queryset
 # (where the cascade lives) before filter / order / slice (Decision 12). Fill in
 # + drop the skip in Slice 3.
 # =============================================================================

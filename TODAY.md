@@ -118,11 +118,13 @@ Two rules the package enforces: `finalize_django_types()` must run **after** eve
 ## Package relation conversions
 
 - forward `ForeignKey` → related `DjangoType`  *(products: `Item.category` / `Property.category` / `Entry.item` / `Entry.property`)*
-- reverse `ForeignKey` → `list[RelatedType]`  *(products: `Category.items` / `Category.properties` / `Item.entries` / `Property.entries`)*
+- reverse `ForeignKey` → `list[RelatedType]` **+ a `<field>Connection` Relay sibling**  *(products: `Category.items` / `Category.properties` / `Item.entries` / `Property.entries`, each also live as `itemsConnection` / `propertiesConnection` / `entriesConnection`)*
 - forward `OneToOneField` → related `DjangoType` or `None`
 - reverse `OneToOneField` → related `DjangoType` or `None`
-- forward `ManyToManyField` → `list[RelatedType]`
-- reverse `ManyToManyField` → `list[RelatedType]`
+- forward `ManyToManyField` → `list[RelatedType]` **+ a `<field>Connection` Relay sibling**
+- reverse `ManyToManyField` → `list[RelatedType]` **+ a `<field>Connection` Relay sibling**
+
+As of `0.0.9`, every to-many relation between two Relay-Node-shaped types gains a paginated `<field>Connection` sibling alongside the plain `list[T]` field — the relation-as-connection upgrade that carries the package's **Relay-node-shaped output** north star (see [`GOAL.md`][goal]) down into nested relations rather than weakening rich relations into generic lists. Products exercises it directly: `CategoryType`'s `itemsConnection` / `propertiesConnection` and the `Item` / `Property` `entriesConnection`s are all live, each accepting the target type's synthesized `filter:` / `orderBy:` arguments and `first` / `last` pagination. Products keeps both shapes (the default); the per-relation list-only / connection-only selector is a non-GOAL knob documented in [`docs/GLOSSARY.md#metarelation_shapes`][glossary-metarelation_shapes].
 
 Products' graph is FK-only; `OneToOneField` and `ManyToManyField` conversions are package capabilities covered by the package test suite.
 
@@ -172,6 +174,31 @@ Expected: `select_related("category")`.
 ```
 
 Expected: nested `select_related` paths and `only()` projections. (A connection with no `first` / `last` caps the default page at `relay_max_results` and appends a deterministic `ORDER BY pk`.)
+
+A nested relation `<field>Connection` plans the same way — one windowed `Prefetch` per relation, no per-parent query:
+
+```graphql
+{
+  allCategories {
+    edges {
+      node {
+        name
+        itemsConnection(
+          first: 2
+        ) {
+          edges {
+            node {
+              name
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Expected: one root-slice query plus one windowed `itemsConnection` prefetch covering every category's first two items (a `RowNumber()` window bounds each parent's page; `totalCount`, when opted in, rides a `Count(1) OVER`) — the N+1-safe nested planning of [`GOAL.md`][goal] success-criterion 5, now reaching connection-shaped relations.
 
 ## Filtering and ordering on products today
 
@@ -245,7 +272,7 @@ Relation traversal into a type with a custom `get_queryset` is handled by the op
 
 ## What products is still waiting for
 
-Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (tracked in [`KANBAN.md`][kanban]). Filtering and ordering are **not** on this list — they shipped in `0.0.8` and are wired today. `DjangoConnectionField` (Relay connections) is **not** on this list either — it shipped in `0.0.9` and products' four root fields are now connections (the cookbook-mirror conversion). Still deferred to the fakeshop-activation card (`TODO-BETA-051-0.1.5`): the root `node(id:)` / `nodes(ids:)` Relay entry points and any `Meta.connection` (`totalCount`) opt-ins.
+Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (tracked in [`KANBAN.md`][kanban]). Filtering and ordering are **not** on this list — they shipped in `0.0.8` and are wired today. `DjangoConnectionField` (Relay connections) is **not** on this list either — it shipped in `0.0.9` and products' four root fields are now connections (the cookbook-mirror conversion). The root `node(id:)` / `nodes(ids:)` Relay entry points and any `Meta.connection` (`totalCount`) opt-ins are **not** on this list either: both **shipped as package capabilities in `0.0.9`** (`DONE-032`) — see "Shipped package capabilities not exercised by products" below — and products simply hasn't wired them into its connections-only `Query` yet (deferred to the fakeshop-activation card, `TODO-BETA-051-0.1.5`).
 
 - permissions / `apply_cascade_permissions` (`0.0.10`: `TODO-ALPHA-033-0.0.10`) — activates the commented cascade `get_queryset` hooks in `products/schema.py`
 - `Meta.fields_class` — `FieldSet` (`0.1.1`)
@@ -260,16 +287,23 @@ These ship today but products' model shapes don't reach them; they're covered by
 - **Consumer override semantics for scalar fields** (shipped `0.0.6`) — annotation-only and `strawberry.field` scalar overrides bypass `convert_scalar`; `relay.Node` `id` collisions raise `ConfigurationError` at type-creation time. Products exercises no scalar override. See [`docs/GLOSSARY.md#scalar-field-override-semantics`][glossary-scalar-field-override-semantics].
 - **OneToOne / M2M relation conversion, choice-enum generation, and the specialized scalar conversions** (`BigInt`, `JSON`, `UUID`, `Decimal`, `Array`, `HStore`) — products has no OneToOne, M2M, `choices`, or those field types.
 - **`Meta.nullable_overrides` / `Meta.required_overrides`** (shipped `0.0.9`) — force a scalar field's GraphQL nullability independent of its Django column (`T!`→`T` or `T`→`T!`), scalar-only, validated at type creation. Products declares no override; the library app's `NullabilityOverrideBookType` exercises both directions. See [`docs/GLOSSARY.md#metanullable_overrides`][glossary-metanullable_overrides].
+- **Root `node(id:)` / `nodes(ids:)` refetch fields** (`DjangoNodeField` / `DjangoNodesField`, shipped `0.0.9`) — the single-object and batch Relay refetch entry points that [`GOAL.md`][goal]'s astronomy `Query` declares (`galaxy: GalaxyNode | None = DjangoNodeField(GalaxyNode)`). Each decodes a model-anchored `GlobalID` to its type and reruns that type's `get_queryset`; resolution is nullable by contract (a decodable id identifying no row resolves to `null` / a positional `null` hole with no existence-probing query), while an undecodable payload surfaces a `GLOBALID_INVALID` error. `nodes` batches one query per decoded type and returns results in input order, preserving duplicates and null holes. Products' `Query` is connections-only, so it declares neither yet (`TODO-BETA-051-0.1.5`). See [`docs/GLOSSARY.md#djangonodefield`][glossary-djangonodefield] / [`#djangonodesfield`][glossary-djangonodesfield].
+- **`Meta.connection` (`totalCount`)** (shipped `0.0.9`) — opts a connection into the Relay `totalCount` field, served from a `Count(1) OVER` window on the optimizer fast path. Products' connections omit it; the library app's `BookType` declares `connection = {"total_count": True}`. See [`docs/GLOSSARY.md#metaconnection`][glossary-metaconnection].
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [kanban]: KANBAN.md
+[goal]: GOAL.md
 
 <!-- docs/ -->
 [glossary]: docs/GLOSSARY.md
+[glossary-djangonodefield]: docs/GLOSSARY.md#djangonodefield
+[glossary-djangonodesfield]: docs/GLOSSARY.md#djangonodesfield
+[glossary-metaconnection]: docs/GLOSSARY.md#metaconnection
 [glossary-metanullable_overrides]: docs/GLOSSARY.md#metanullable_overrides
 [glossary-metaprimary]: docs/GLOSSARY.md#metaprimary
+[glossary-metarelation_shapes]: docs/GLOSSARY.md#metarelation_shapes
 [glossary-scalar-field-override-semantics]: docs/GLOSSARY.md#scalar-field-override-semantics
 
 <!-- docs/SPECS/ -->

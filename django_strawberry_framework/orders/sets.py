@@ -25,6 +25,7 @@ expands the file to:
 from __future__ import annotations
 
 from collections import OrderedDict
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.core.exceptions import FieldDoesNotExist
@@ -53,6 +54,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
 
 
+@lru_cache(maxsize=2048)
 def _path_traverses_to_many(model: type, field_path: str) -> bool:
     """Return whether an ORM ``field_path`` traverses a to-many relation from ``model``.
 
@@ -64,6 +66,11 @@ def _path_traverses_to_many(model: type, field_path: str) -> bool:
     or an unresolvable segment (a transform / lookup), neither of which can
     multiply. Used by ``OrderSet._resolve_order_expressions`` to decide between
     a direct ``order_by`` and the row-preserving aggregate form.
+
+    The answer is pure model metadata for a ``(model, field_path)`` pair, so it
+    is cached across requests. The bounded size keeps dynamic test models and
+    generated path variants from growing the process without limit; eviction only
+    recomputes the same metadata walk.
     """
     current = model
     for segment in field_path.split("__"):

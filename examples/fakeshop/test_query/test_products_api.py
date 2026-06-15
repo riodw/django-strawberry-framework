@@ -728,9 +728,9 @@ def test_products_categories_items_connection_fixed_query_count():
 # =============================================================================
 # STAGED SEAM (spec-034 Slice 4): live cascade-permission HTTP coverage.
 # Lands AFTER the four products get_queryset hooks are uncommented in
-# apps/products/schema.py. Real permission users only — every test's FIRST line is
+# apps/products/schema.py. Real permission users only - every test's FIRST line is
 # `create_users(1)` (per AGENTS.md / card DoD: never mock info.context.user).
-# Exercises the 2-deep Entry → Item → Category / Entry → Property → Category chain.
+# Exercises the 2-deep Entry -> Item -> Category / Entry -> Property -> Category chain.
 # Fill in + drop the skips in Slice 4.
 # =============================================================================
 
@@ -744,7 +744,7 @@ def test_cascade_anonymous_sees_no_entries_under_private_categories():
 
     `create_users(1)`; seed a private Category with a public Item carrying a public
     Entry; assert an anonymous `allEntries { ... }` request returns no entry whose
-    item's category is private — the cascade reaches Entry → Item → Category.
+    item's category is private - the cascade reaches Entry -> Item -> Category.
     """
 
 

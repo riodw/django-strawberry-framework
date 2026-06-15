@@ -1017,8 +1017,8 @@ def test_public_exports():
 
 
 # =============================================================================
-# STAGED SEAM (spec-034 Slice 3): node refetch ↔ cascade composition pins.
-# NO relay.py source change — node/nodes defaults already route through
+# STAGED SEAM (spec-034 Slice 3): node refetch <-> cascade composition pins.
+# NO relay.py source change - node/nodes defaults already route through
 # get_queryset (Decision 12), so a cascade-hidden row refetches as null with no
 # existence leak. Fill in + drop the skips in Slice 3.
 # =============================================================================
@@ -1026,7 +1026,7 @@ def test_public_exports():
 
 @pytest.mark.skip(reason="TODO(spec-034 Slice 3): node refetch of cascade-hidden row returns null")
 def test_node_refetch_of_cascade_hidden_row_returns_null():
-    """``node(id:)`` of a cascade-hidden row returns ``null`` — no existence leak (Decision 12)."""
+    """``node(id:)`` of a cascade-hidden row returns ``null`` - no existence leak (Decision 12)."""
 
 
 @pytest.mark.skip(reason="TODO(spec-034 Slice 3): nodes batch holes for cascade-hidden rows")

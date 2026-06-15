@@ -83,14 +83,18 @@ def _is_cascadable_edge(field: Any) -> bool:
     walk and the ``fields=`` validator key off this predicate, so scope cannot
     drift between them. Two predicates ported from upstream (``related_model``
     present AND a non-``None`` single-column ``column``) plus one package
-    tightening (NOT the MTI ``<parent>_ptr`` parent link). The ``column`` test is
+    tightening (NOT a join-table-backed many-to-many edge and NOT the MTI
+    ``<parent>_ptr`` parent link). The ``column`` test is
     ``getattr(field, "column", None) is not None`` rather than a bare
     ``hasattr``: under Django 6.0 both ``ManyToManyField`` and ``GenericRelation``
     expose a ``column`` *attribute* whose value is ``None``, so a presence-only
-    ``hasattr`` test would over-include them and compose wrong-shape ``__in``
-    constraints on join-table / virtual relations (a scope-leak bug on a row-
-    visibility surface). M2M (join-table-backed, ``column`` is ``None``), reverse
-    FK / reverse OneToOne (``ForeignObjectRel``, no ``column``),
+    ``hasattr`` test would over-include them. Under Django 5.2, however,
+    ``ManyToManyField.column`` can be non-``None`` despite the relation still being
+    join-table-backed, so the explicit ``not many_to_many`` guard is part of the
+    contract too. Without these guards, the cascade would compose wrong-shape
+    ``__in`` constraints on join-table / virtual relations (a scope-leak bug on a
+    row-visibility surface). M2M (join-table-backed), reverse FK / reverse OneToOne
+    (``ForeignObjectRel``, no ``column``),
     ``GenericForeignKey`` (``related_model`` absent), ``GenericRelation``
     (virtual, ``column`` is ``None``), and composite-PK / composite-FK targets
     (no single ``column``) are excluded; the MTI ``<parent>_ptr``
@@ -102,6 +106,7 @@ def _is_cascadable_edge(field: Any) -> bool:
     return (
         getattr(field, "related_model", None) is not None
         and getattr(field, "column", None) is not None
+        and not getattr(field, "many_to_many", False)
         and not getattr(field.remote_field, "parent_link", False)
     )
 

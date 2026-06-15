@@ -234,10 +234,11 @@ def test_single_column_scope_skips_m2m_reverse_and_generic():
     A model carrying an M2M, a reverse FK, a reverse O2O, a ``GenericForeignKey``,
     a ``GenericRelation``, and a forward FK + forward O2O: assert
     ``_cascadable_edge_names`` returns exactly the two forward single-column
-    relations (these others lack a ``column`` / ``related_model`` and are excluded
-    *by construction*). The one edge that passes the two-predicate test yet must
-    still be excluded - the MTI ``<parent>_ptr`` parent-link, dropped by the
-    explicit ``parent_link`` guard, *not* by construction - is pinned separately by
+    relations (these others lack a ``column`` / ``related_model`` or are marked
+    many-to-many and excluded *by construction*). The one edge that passes the
+    relation / single-column predicates yet must still be excluded - the MTI
+    ``<parent>_ptr`` parent-link, dropped by the explicit ``parent_link`` guard,
+    *not* by construction - is pinned separately by
     ``test_mti_parent_link_edge_excluded``.
     """
 
@@ -266,7 +267,7 @@ def test_single_column_scope_skips_m2m_reverse_and_generic():
         # forward FK + forward O2O = the two cascadable edges
         fk = models.ForeignKey(ScopeTarget, on_delete=models.CASCADE, related_name="via_fk")
         o2o = models.OneToOneField(ScopeOther, on_delete=models.CASCADE, related_name="via_o2o")
-        # M2M (join-table-backed, no single-column ``column``)
+        # M2M (join-table-backed, never a single-column cascade edge)
         m2m = models.ManyToManyField(ScopeTag, related_name="scope_models")
         # GenericForeignKey (``related_model`` absent) + its GenericRelation
         # (virtual, no ``column``) both live on this model so the walk's edge scan
@@ -310,7 +311,8 @@ def test_single_column_scope_skips_m2m_reverse_and_generic():
     assert _is_cascadable_edge(by_name["fk"]) is True
     assert _is_cascadable_edge(by_name["o2o"]) is True
     assert _is_cascadable_edge(by_name["content_type"]) is True  # backing FK, single column
-    assert _is_cascadable_edge(by_name["m2m"]) is False  # M2M, no single-column ``column``
+    assert getattr(by_name["m2m"], "many_to_many", False) is True
+    assert _is_cascadable_edge(by_name["m2m"]) is False  # M2M, join table
     assert _is_cascadable_edge(by_name["content_object"]) is False  # GFK, ``related_model`` absent
     assert _is_cascadable_edge(by_name["generics"]) is False  # GenericRelation, virtual
     assert _is_cascadable_edge(by_name["children"]) is False  # reverse FK, no ``column``

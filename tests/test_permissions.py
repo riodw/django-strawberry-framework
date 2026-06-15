@@ -1,19 +1,19 @@
-"""Cascade-permission tests — ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
+"""Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
 
 STAGED SEAM (spec-034). Mirrors the flat ``django_strawberry_framework/permissions.py``
 module per the one-to-one test rule (Decision 3). Every test below is a
-``@pytest.mark.skip`` stub naming the slice and the contract it will pin — the
+``@pytest.mark.skip`` stub naming the slice and the contract it will pin - the
 file collects cleanly and shows the whole permissions test plan as pending. Fill
 each in and drop its skip in the owning slice.
 
 Test-plan homes (spec-034 Test plan):
-  * Slice 1 — the cascade foundation + its four upstream-invariant pins (THIS file).
-  * Slice 2 — N+1 / cacheability pins owned here; optimizer-plan pins extend
+  * Slice 1 - the cascade foundation + its four upstream-invariant pins (THIS file).
+  * Slice 2 - N+1 / cacheability pins owned here; optimizer-plan pins extend
     ``tests/optimizer/test_extension.py``.
-  * Slice 3 — gate-composition pins owned here; connection / node / list pins
+  * Slice 3 - gate-composition pins owned here; connection / node / list pins
     extend ``tests/test_connection.py`` / ``test_relay_node_field.py`` /
     ``test_list_field.py``.
-  * Slice 4 — live HTTP coverage extends ``examples/fakeshop/test_query/test_products_api.py``.
+  * Slice 4 - live HTTP coverage extends ``examples/fakeshop/test_query/test_products_api.py``.
 """
 
 import pytest
@@ -28,18 +28,18 @@ from django_strawberry_framework.permissions import (  # noqa: F401
 )
 
 # =============================================================================
-# Slice 1 — cascade foundation (per Decision 5 / 9 / 10)
+# Slice 1 - cascade foundation (per Decision 5 / 9 / 10)
 # The four dedicated upstream-invariant pins first (card DoD item 3).
 # =============================================================================
 
 
 @pytest.mark.skip(reason="TODO(spec-034 Slice 1): cycle-guard invariant pin")
 def test_cycle_guard_contextvar_breaks_mutual_cascade():
-    """A↔B mutual cascade terminates; both directions apply direct narrowing.
+    """A<->B mutual cascade terminates; both directions apply direct narrowing.
 
     Build ``AType``/``BType`` whose hooks each cascade into the other. Assert the
     result is finite (no recursion error), each applies the other's *direct*
-    narrowing, and ``_cascade_seen.get() is None`` after the root call returns —
+    narrowing, and ``_cascade_seen.get() is None`` after the root call returns -
     AND after a root call that raises (the ``finally`` reset). (Decision 5 step 5.)
     """
 
@@ -50,8 +50,24 @@ def test_single_column_scope_skips_m2m_reverse_and_generic():
 
     A model carrying an M2M, a reverse FK, a reverse O2O, a ``GenericForeignKey``,
     a ``GenericRelation``, and a forward FK + forward O2O: assert ``_cascade_edges``
-    returns exactly the two forward single-column relations (the others lack a
-    ``column`` / ``related_model`` and are excluded by construction).
+    returns exactly the two forward single-column relations (these others lack a
+    ``column`` / ``related_model`` and are excluded *by construction*). The one edge
+    that passes the two-predicate test yet must still be excluded - the MTI
+    ``<parent>_ptr`` parent-link, dropped by the explicit ``parent_link`` guard,
+    *not* by construction - is pinned separately by ``test_mti_parent_link_edge_excluded``.
+    """
+
+
+@pytest.mark.skip(reason="TODO(spec-034 Slice 1): MTI parent-link edge excluded")
+def test_mti_parent_link_edge_excluded():
+    """An MTI child's ``<parent>_ptr`` parent-link is not walked (Decision 5 step 1).
+
+    A multi-table-inheritance child's auto-generated ``<parent>_ptr``
+    ``OneToOneField(parent_link=True)`` carries both a ``related_model`` and a
+    ``column``, so it passes the two-predicate scope test - but the
+    ``not getattr(field.remote_field, "parent_link", False)`` guard drops it, so a
+    child row is *not* silently narrowed by its MTI-parent type's hook. Synthetic
+    MTI graph (no fakeshop model uses MTI); pins H1 against the scope pseudo-code.
     """
 
 
@@ -89,14 +105,14 @@ def test_hidden_and_missing_targets_indistinguishable():
 
 @pytest.mark.skip(reason="TODO(spec-034 Slice 1): transitive cascade")
 def test_transitive_cascade_two_deep():
-    """``Entry → Item → Category`` narrows transitively when each hook cascades."""
+    """``Entry -> Item -> Category`` narrows transitively when each hook cascades."""
 
 
 @pytest.mark.skip(reason="TODO(spec-034 Slice 1): identity-hook gate emits no SQL")
 def test_identity_hook_targets_skipped_no_sql():
     """A target with no custom hook contributes no ``__in`` subquery (SQL assertion).
 
-    The ``has_custom_get_queryset() is False`` gate (Decision 5 step 3) — the
+    The ``has_custom_get_queryset() is False`` gate (Decision 5 step 3) - the
     deviation from upstream's unconditional call that avoids dead ``__in`` SQL.
     """
 
@@ -109,6 +125,31 @@ def test_unregistered_target_model_skipped():
 @pytest.mark.skip(reason="TODO(spec-034 Slice 1): secondary types never cascade targets")
 def test_secondary_type_never_cascade_target():
     """``registry.get`` returns the primary; a stricter secondary hook never cascades."""
+
+
+@pytest.mark.skip(reason="TODO(spec-034 Slice 1): secondary-as-root re-reaches primary")
+def test_secondary_type_as_root_reaches_primary_on_transitive_revisit():
+    """A cascade rooted on a *secondary* type re-reaches its model via the primary.
+
+    Declare ``get_queryset`` (and the cascade) on a *secondary* type so it is the
+    walk root; when the transitive walk re-reaches that same model through another
+    edge it resolves via ``registry.get`` -> the **primary**, so the re-reach narrows
+    by the primary's hook, not the rooting secondary's. The seen-set keys on the
+    class object (``secondary != primary``), so the walk still terminates (Edge cases).
+    """
+
+
+@pytest.mark.skip(reason="TODO(spec-034 Slice 1): cascade-target return contract is consumer's")
+def test_cascade_target_sliced_or_values_queryset_is_consumer_bug():
+    """A cascade target must return an unsliced, non-``.values()`` model-row queryset.
+
+    The helper composes each target hook's return as the RHS of ``Q(<fk>__in=...)``,
+    so a ``.values("col")`` return mis-narrows (compares the FK against the wrong
+    column, no error) and a multi-column ``.values()`` raises ``ValueError`` ("the
+    'in' lookup must have 1 selected field"); a sliced return is a MySQL-only hard
+    error and a silent mis-narrowing elsewhere. The cascade does not defensively
+    rewrite the hook's return - a non-row queryset is a consumer bug (Edge cases).
+    """
 
 
 @pytest.mark.skip(reason="TODO(spec-034 Slice 1): fields= scopes the walk")
@@ -137,7 +178,18 @@ def test_fields_bare_string_raises():
 
     Without the ``isinstance(fields, str)`` guard the walk would validate ``'i'``,
     ``'t'``, ``'e'``, ``'m'`` as field names and surface a misleading "'i' is not
-    cascadable" — the guard names the non-string-iterable requirement instead.
+    cascadable" - the guard names the non-string-iterable requirement instead.
+    """
+
+
+@pytest.mark.skip(reason="TODO(spec-034 Slice 1): fields=[] is a defined no-op")
+def test_fields_empty_list_cascades_nothing():
+    """``fields=[]`` validates clean and cascades zero edges (a defined no-op).
+
+    An empty iterable is well-formed (``set() - cascadable == set()``) and unambiguous
+    (zero edges), so - unlike the bare-string case - it does *not* raise; the walk
+    cascades nothing. Distinct from ``fields=None``, which cascades every qualifying
+    edge (Edge cases). Supports programmatically-built edge sets that resolve empty.
     """
 
 
@@ -176,7 +228,7 @@ def test_self_referential_fk_cascades_once():
 
 
 # =============================================================================
-# Slice 2 — N+1 audit (permissions-owned pins; optimizer-plan pins live in
+# Slice 2 - N+1 audit (permissions-owned pins; optimizer-plan pins live in
 # tests/optimizer/test_extension.py). Per Decision 7.
 # =============================================================================
 
@@ -192,7 +244,7 @@ def test_cascaded_traversal_adds_zero_queries():
 
 @pytest.mark.skip(reason="TODO(spec-034 Slice 2): FK-id elision falls back for cascading target")
 def test_fk_id_elision_falls_back_for_cascading_target():
-    """A cascading target never FK-id-elides — re-affirms the shipped safety rule."""
+    """A cascading target never FK-id-elides - re-affirms the shipped safety rule."""
 
 
 @pytest.mark.skip(reason="TODO(spec-034 Slice 2): strictness raise stays silent across cascade")
@@ -201,7 +253,7 @@ def test_strictness_raise_silent_across_cascaded_shape():
 
 
 # =============================================================================
-# Slice 3 — gate-composition pins (connection / node / list pins live in their
+# Slice 3 - gate-composition pins (connection / node / list pins live in their
 # own files). Per Decision 11 / 12.
 # =============================================================================
 
@@ -222,7 +274,7 @@ def test_cascade_then_order_gate_composition():
 
 @pytest.mark.skip(reason="TODO(spec-034 Slice 3): gate denial leaks no existence")
 def test_gate_denial_no_existence_leak():
-    """A gate denial fires on input shape alone — identical error with/without hidden rows."""
+    """A gate denial fires on input shape alone - identical error with/without hidden rows."""
 
 
 @pytest.mark.skip(

@@ -1,4 +1,4 @@
-"""Cascade permission visibility — ``apply_cascade_permissions`` (sync + async).
+"""Cascade permission visibility - ``apply_cascade_permissions`` (sync + async).
 
 STAGED SEAM (spec-034 Slice 1). This module is the cascade foundation described
 by ``docs/spec-034-permissions-0_0_10.md``. The public surface and the private
@@ -9,7 +9,7 @@ loud ``NotImplementedError``, removed in the change that ships the slice).
 
 What this ships (Decision 4 / Decision 5):
 
-    ``apply_cascade_permissions(cls, queryset, info, fields=None)`` — a call-time
+    ``apply_cascade_permissions(cls, queryset, info, fields=None)`` - a call-time
     walk of ``cls``'s single-column forward FK / OneToOne edges that intersects
     each target type's ``get_queryset`` visibility into ``queryset``, so a parent
     row whose FK points at a row the target type hides is dropped. Called from
@@ -17,20 +17,31 @@ What this ships (Decision 4 / Decision 5):
     target's hook may itself call the helper (the walk is depth-1, the
     ``ContextVar`` seen-set breaks cycles).
 
-    ``aapply_cascade_permissions(...)`` — the async twin: the same walk wrapped in
+    ``aapply_cascade_permissions(...)`` - the async twin: the same walk wrapped in
     ``sync_to_async(thread_sensitive=True)`` so blocking consumer-hook work (e.g.
     ``user.has_perm(...)`` permission-table reads) stays off the event loop
     (Decision 10).
 
-The four upstream invariants (ported verbatim from
-``django-graphene-filters``'s ``permissions.py::apply_cascade_permissions``):
-``ContextVar`` cycle guard (partial-narrow on re-entry, never a raise),
-single-column forward scope, nullable-FK preservation
+The four upstream invariants: ``ContextVar`` cycle guard (partial-narrow on
+re-entry, never a raise), single-column forward scope, nullable-FK preservation
 (``Q(fk__in=...) | Q(fk__isnull=True)``), and caller-alias pinning
-(``.using(queryset.db)``). Two deliberate deviations from upstream: the registry
-*primary* lookup (Meta.primary semantics) and the ``has_custom_get_queryset()``
-gate (skip identity hooks so no dead ``__in`` SQL is emitted).
+(``.using(queryset.db)``). The cycle guard, nullable-FK preservation, and
+caller-alias pinning are ported verbatim from ``django-graphene-filters``'s
+``permissions.py::apply_cascade_permissions``; the single-column forward scope is
+**two predicates ported from upstream plus one package tightening** (the MTI
+parent-link exclusion - see ``_cascade_edges``). Three deliberate deviations from
+upstream: the registry *primary* lookup (Meta.primary semantics), the
+``has_custom_get_queryset()`` gate (skip identity hooks so no dead ``__in`` SQL is
+emitted), and the MTI parent-link exclusion in the scope test (skip an MTI child's
+auto-generated ``<parent>_ptr`` edge, which passes the two-predicate test but
+would otherwise silently narrow a child row by its MTI-parent type's hook).
 """
+
+# ruff: noqa: ERA001 -- This module is a TODO(spec-034 Slice 1) staged seam: its
+# runtime body is intentionally pseudo-code in comments (the AGENTS.md design-doc
+# anchor discipline -- "do not refactor pseudo code to satisfy the lint"). ERA001
+# is suppressed file-wide while the seam is staged; delete this directive in the
+# change that ships Slice 1 and replaces the pseudo-code with the real walk.
 
 from __future__ import annotations
 
@@ -42,14 +53,14 @@ from asgiref.sync import sync_to_async
 # The sync-misuse probe + its error live in utils/querysets.py since the 0.0.9
 # DRY pass (spec-034 feedback H1). ``apply_type_visibility_sync(target_type, qs,
 # info)`` runs the target's ``get_queryset`` and raises ``SyncMisuseError`` if it
-# returns a coroutine (closing it first) — exactly the per-edge probe Decision 10
+# returns a coroutine (closing it first) - exactly the per-edge probe Decision 10
 # / Decision 5 step 4 need, so the cascade reuses it rather than re-spelling it.
 from .utils.querysets import (  # noqa: F401  (apply_type_visibility_sync used once Slice 1 lands)
     SyncMisuseError,
     apply_type_visibility_sync,
 )
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from django.db.models import QuerySet
     from strawberry.types import Info
 
@@ -57,7 +68,7 @@ if TYPE_CHECKING:
 # Module-level cycle-guard seen-set (Decision 5 step 5; upstream ``_cascade_seen``
 # shape verbatim). ``None`` outside any cascade; a ``set`` of in-flight
 # ``DjangoType`` classes while a root call is on the stack. A ``ContextVar`` (not a
-# plain global) so request isolation holds under both WSGI and ASGI — and so the
+# plain global) so request isolation holds under both WSGI and ASGI - and so the
 # async variant's ``sync_to_async`` thread sees a *copied* context (asgiref runs
 # ``contextvars.copy_context()`` into the worker thread), containing its mutations
 # to that copy and never leaking back into the event-loop task (Decision 10).
@@ -73,10 +84,10 @@ def apply_cascade_permissions(
     """Intersect each forward-FK target type's visibility into ``queryset``.
 
     Call from inside a ``DjangoType.get_queryset`` (Decision 5). Returns a
-    narrowed queryset; never evaluates, reorders, or projects — pure
+    narrowed queryset; never evaluates, reorders, or projects - pure
     ``.filter(...)`` composition, so it composes with ``only()`` / ordering
     downstream and adds zero query round-trips (the ``__in`` subqueries compile
-    into the caller's single ``SELECT`` — Decision 7).
+    into the caller's single ``SELECT`` - Decision 7).
 
     Args:
         cls: the owning ``DjangoType`` (its ``.model`` is the walk root).
@@ -90,11 +101,11 @@ def apply_cascade_permissions(
         ConfigurationError: a bare-string ``fields=`` or a ``fields=`` name that
             is unknown / non-cascadable (Decision 9).
         SyncMisuseError: a target type's ``get_queryset`` is ``async def`` (use
-            ``aapply_cascade_permissions`` or rewrite the hook sync — Decision 10).
+            ``aapply_cascade_permissions`` or rewrite the hook sync - Decision 10).
     """
     # TODO(spec-034 Slice 1): implement the walk below and delete the raise.
     #
-    # 1. fields= validation (Decision 9) — bare-string guard FIRST, then names:
+    # 1. fields= validation (Decision 9) - bare-string guard FIRST, then names:
     #        if isinstance(fields, str):
     #            raise ConfigurationError(
     #                "apply_cascade_permissions: fields= must be a non-string "
@@ -111,7 +122,7 @@ def apply_cascade_permissions(
     #                    f"fields: {sorted(cascadable)}."
     #                )
     #
-    # 2. Cycle guard (Decision 5 step 5) — install at root, break on re-entry,
+    # 2. Cycle guard (Decision 5 step 5) - install at root, break on re-entry,
     #    discard own class on exit, reset the var at the root in ``finally``:
     #        seen = _cascade_seen.get()
     #        is_root = seen is None
@@ -129,7 +140,7 @@ def apply_cascade_permissions(
     #            if is_root:
     #                _cascade_seen.set(None)         # request isolation
     #
-    # 3. Edge scope (Decision 5 step 1) — single-column forward FK / O2O only:
+    # 3. Edge scope (Decision 5 step 1) - single-column forward FK / O2O only:
     #        for field in _cascade_edges(cls.model):
     #            if fields is not None and field.name not in fields:
     #                continue
@@ -141,7 +152,7 @@ def apply_cascade_permissions(
     #        if target_type is None:
     #            continue                            # unexposed model, no contract
     #        if not target_type.has_custom_get_queryset():
-    #            continue                            # identity hook → no dead SQL
+    #            continue                            # identity hook -> no dead SQL
     #        base = field.related_model._default_manager.using(queryset.db).all()
     #        target_qs = apply_type_visibility_sync(target_type, base, info)  # SyncMisuse-probed
     #        queryset = queryset.filter(
@@ -162,7 +173,7 @@ def apply_cascade_permissions(
 # Slice 1 fills ``apply_cascade_permissions``, awaiting this raises its
 # ``NotImplementedError`` through the wrapper.
 #   TODO(spec-034 Slice 1): keep this wrap; confirm the ContextVar seen-set is
-#   clean inside the worker thread (asgiref copy_context) — pinned by
+#   clean inside the worker thread (asgiref copy_context) - pinned by
 #   ``test_aapply_runs_walk_off_event_loop``.
 aapply_cascade_permissions = sync_to_async(thread_sensitive=True)(apply_cascade_permissions)
 
@@ -170,18 +181,28 @@ aapply_cascade_permissions = sync_to_async(thread_sensitive=True)(apply_cascade_
 def _cascade_edges(model: type) -> list[Any]:
     """Return ``model``'s single-column forward FK / OneToOne fields (Decision 5 step 1).
 
-    The upstream scope test, ported verbatim: ``model._meta.get_fields()`` entries
-    with ``related_model`` present AND ``hasattr(field, "column")``. This excludes,
-    *by construction*, M2M (join-table-backed, no ``column``), reverse FK / reverse
-    OneToOne (``ForeignObjectRel``, no ``column``), ``GenericForeignKey``
+    Two predicates ported from upstream plus one package tightening (the MTI
+    parent-link exclusion): ``model._meta.get_fields()`` entries with
+    ``related_model`` present AND ``hasattr(field, "column")`` AND NOT
+    ``getattr(field.remote_field, "parent_link", False)``. The first two predicates
+    exclude, *by construction*, M2M (join-table-backed, no ``column``), reverse FK /
+    reverse OneToOne (``ForeignObjectRel``, no ``column``), ``GenericForeignKey``
     (``related_model`` absent), ``GenericRelation`` (virtual, no ``column``), and
-    composite-PK / composite-FK targets (no single ``column``).
+    composite-PK / composite-FK targets (no single ``column``). The third predicate
+    is the package tightening, excluded *by an explicit guard* (not by
+    construction): an MTI child's auto-generated ``<parent>_ptr``
+    ``OneToOneField(parent_link=True)`` carries both a ``related_model`` and a
+    ``column``, so it passes the two-predicate test - without the ``parent_link``
+    guard a child row would be silently narrowed by its MTI-parent type's hook
+    (Decision 5 step 1; Edge cases).
     """
     # TODO(spec-034 Slice 1): implement and delete the raise.
     #   return [
     #       f
     #       for f in model._meta.get_fields()
-    #       if getattr(f, "related_model", None) is not None and hasattr(f, "column")
+    #       if getattr(f, "related_model", None) is not None
+    #       and hasattr(f, "column")
+    #       and not getattr(f.remote_field, "parent_link", False)  # skip MTI <parent>_ptr
     #   ]
     raise NotImplementedError(
         "TODO(spec-034 Slice 1): _cascade_edges single-column-forward-relation "

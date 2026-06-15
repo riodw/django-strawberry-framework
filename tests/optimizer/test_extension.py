@@ -1210,11 +1210,13 @@ def test_walk_cache_relevant_vars_visits_each_fragment_once_across_sibling_sprea
     fragments = {d.name.value: d for d in doc.definitions[1:]}
     directive_names: set[str] = set()
     pagination_names: set[str] = set()
-    visited: set[str] = set()
+    visited: set[tuple[str, int]] = set()
     _walk_cache_relevant_vars(operation, fragments, visited, 0, directive_names, pagination_names)
     assert directive_names == {"v"}
-    # Fragment F was descended exactly once even though it was spread twice.
-    assert visited == {"F"}
+    # Fragment F was descended exactly once even though it was spread twice: both
+    # spread sites sit at the same response-path depth (inside an ``items`` field),
+    # so the depth-aware ``(name, depth)`` guard dedupes them to a single entry.
+    assert visited == {("F", 1)}
 
 
 def test_walk_cache_relevant_vars_handles_unresolved_fragment_name():
@@ -1410,6 +1412,37 @@ def test_fragment_carried_nested_pagination_variable_collected():
         info_two,
         Category,
     ) != DjangoOptimizerExtension._build_cache_key(info_five, Category)
+
+
+def test_fragment_spread_at_two_depths_collects_nested_pagination_variable():
+    """A fragment spread at BOTH root and nested depth still keys on its nested ``$n``.
+
+    Regression pin for the depth-aware fragment cycle guard. The same fragment is
+    spread once at root depth (pagination excluded) and once inside ``node``
+    (response-path depth >= 1, pagination collected). A name-only visited guard let
+    the first-visited (root) spread suppress the nested spread, dropping ``$n`` from
+    the cache key so two requests differing only in ``$n`` shared one cached plan --
+    serving the wrong windowed prefetch (Decision 7: "under-collection would serve
+    wrong data"). Both spread orders must collect ``$n``.
+    """
+    from graphql import parse
+
+    from django_strawberry_framework.optimizer.extension import (
+        _collect_nested_pagination_var_names,
+    )
+
+    frag = "fragment F on Thing { booksConnection(first: $n) { edges { node { title } } } }"
+    root_first = parse(
+        "query Q($n: Int!) { ...F parents { edges { node { ...F } } } } " + frag,
+    )
+    nested_first = parse(
+        "query Q($n: Int!) { parents { edges { node { ...F } } } ...F } " + frag,
+    )
+    for doc in (root_first, nested_first):
+        operation = doc.definitions[0]
+        fragments = {d.name.value: d for d in doc.definitions[1:]}
+        names = _collect_nested_pagination_var_names(operation, fragments)
+        assert names == frozenset({"n"})
 
 
 def test_pagination_var_collection_is_syntactic_superset():
@@ -3314,83 +3347,15 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
     assert lookups == (consumer_pf,)
 
 
-@pytest.mark.django_db
-def test_b8_consumer_descendant_prefetch_does_not_raise(django_assert_num_queries):
-    """B8 P1: consumer ``prefetch_related("items__entries")`` must not collide with the optimizer."""
-    services.seed_data(1)
-
-    class PropertyType(DjangoType):
-        class Meta:
-            model = Property
-            fields = ("id", "name")
-
-    class EntryType(DjangoType):
-        class Meta:
-            model = Entry
-            fields = ("id", "value")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "entries")
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            return Category.objects.prefetch_related("items__entries")
-
-    finalize_django_types()
-    ext = DjangoOptimizerExtension()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    # Query must succeed instead of raising ``'items' lookup was already
-    # seen with a different queryset``.
-    result = schema.execute_sync(
-        "{ allCategories { name items { name entries { value } } } }",
-    )
-    assert result.errors is None
-    assert result.data["allCategories"]
-
-
-@pytest.mark.django_db
-def test_b8_consumer_exact_plus_descendant_prefetch_does_not_raise():
-    """B8 P1 follow-up: ``prefetch_related("items", "items__entries")`` must not collide."""
-    services.seed_data(1)
-
-    class EntryType(DjangoType):
-        class Meta:
-            model = Entry
-            fields = ("id", "value")
-
-    class ItemType(DjangoType):
-        class Meta:
-            model = Item
-            fields = ("id", "name", "entries")
-
-    class CategoryType(DjangoType):
-        class Meta:
-            model = Category
-            fields = ("id", "name", "items")
-
-    @strawberry.type
-    class Query:
-        @strawberry.field
-        def all_categories(self) -> list[CategoryType]:
-            return Category.objects.prefetch_related("items", "items__entries")
-
-    finalize_django_types()
-    ext = DjangoOptimizerExtension()
-    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
-    result = schema.execute_sync(
-        "{ allCategories { name items { name entries { value } } } }",
-    )
-    assert result.errors is None
-    assert result.data["allCategories"]
+# The two B8 behavior-only collision tests (descendant prefetch and
+# exact-plus-descendant) moved to the live fakeshop suite per feedback2.md:
+# examples/fakeshop/test_query/test_library_api.py::
+#   test_b8_consumer_descendant_prefetch_stays_flat_over_http and
+#   test_b8_consumer_exact_plus_descendant_prefetch_stays_flat_over_http.
+# Those run the real Genre -> books -> loans consumer prefetch through /graphql/
+# and add HTTP + flat-query-count pressure the synthetic in-process schema could
+# not. The plan/diff-asserting B8 tests below stay package-internal (they inspect
+# the optimized queryset's _prefetch_related_lookups, which HTTP cannot expose).
 
 
 @pytest.mark.django_db

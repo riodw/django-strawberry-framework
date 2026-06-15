@@ -38,6 +38,7 @@ from typing import Any, NamedTuple
 from django.db import models
 from graphql.language.ast import (
     FieldNode,
+    FragmentSpreadNode,
     VariableNode,
 )
 from graphql.language.printer import print_ast
@@ -120,7 +121,7 @@ __all__ = (
 def _walk_cache_relevant_vars(
     node: Any,
     fragments: dict[str, Any],
-    visited_fragments: set[str],
+    visited_fragments: set[tuple[str, int]],
     depth: int,
     directive_names: set[str],
     pagination_names: set[str],
@@ -143,10 +144,17 @@ def _walk_cache_relevant_vars(
     fragment is a transparent wrapper at its spread site -- Decision 7's "depth at
     the spread SITE, not raw fragment-definition nesting"), so a spread at the
     root contributes root-depth fields and a spread inside a nested node
-    contributes nested-depth fields. The visited-fragment cycle guard
-    (``_unvisited_fragment_definition``) is shared across the descent, so a
-    fragment spread twice is walked once and contributes both families from that
-    single descent.
+    contributes nested-depth fields. The cycle guard keys ``visited_fragments``
+    on ``(fragment_name, spread-site depth)`` so a fragment spread twice at the
+    SAME depth is walked once, while the SAME fragment spread at two DIFFERENT
+    depths is walked once per depth: pagination collection is depth-sensitive, so
+    a name-only guard would let the first-visited spread site (e.g. a root spread,
+    where pagination is excluded) suppress a later nested spread of the same
+    fragment and silently drop its nested pagination variable from the cache key
+    -- a correctness bug (Decision 7: "under-collection would serve wrong data").
+    Termination still holds: graphql-core rejects fragment cycles before the
+    optimizer runs, and a defensive cycle that does not cross a field node keeps
+    depth constant, so ``(name, depth)`` repeats and the descent stops.
 
     Replaces the previously separate ``_walk_directives`` / ``_walk_pagination_vars``
     walkers: the two collection RULES differ but the child-traversal,
@@ -178,7 +186,18 @@ def _walk_cache_relevant_vars(
             directive_names,
             pagination_names,
         )
-        frag_def = _unvisited_fragment_definition(child, fragments, visited_fragments)
+        # Resolve the fragment spread depth-aware: the generic name-only
+        # ``resolve_unvisited_fragment`` guard would suppress a second spread of
+        # the same fragment regardless of depth, dropping nested pagination
+        # variables when an earlier root-depth spread visited the fragment first.
+        # Key the visited set on ``(name, child_depth)`` so the same fragment is
+        # walked once per distinct spread-site depth.
+        frag_def = _unvisited_fragment_at_depth(
+            child,
+            fragments,
+            visited_fragments,
+            child_depth,
+        )
         if frag_def is not None:
             _walk_cache_relevant_vars(
                 frag_def,
@@ -188,6 +207,34 @@ def _walk_cache_relevant_vars(
                 directive_names,
                 pagination_names,
             )
+
+
+def _unvisited_fragment_at_depth(
+    node: Any,
+    fragments: dict[str, Any],
+    visited_fragments: set[tuple[str, int]],
+    depth: int,
+) -> Any | None:
+    """Resolve a ``FragmentSpreadNode`` to its definition, once per ``(name, depth)``.
+
+    The depth-aware sibling of ``selections.resolve_unvisited_fragment``: it dedupes
+    on ``(fragment_name, spread-site depth)`` instead of name alone so the
+    depth-sensitive pagination-variable walk can revisit a fragment spread at a
+    different response-path depth. Returns ``None`` when ``node`` is not a fragment
+    spread, has no name, names an undefined fragment, or has already been visited at
+    this depth; mutates ``visited_fragments`` on success.
+    """
+    if not isinstance(node, FragmentSpreadNode):
+        return None
+    frag_name = node.name.value if node.name else None
+    key = (frag_name, depth)
+    if frag_name is None or key in visited_fragments:
+        return None
+    frag_def = fragments.get(frag_name)
+    if frag_def is None:
+        return None
+    visited_fragments.add(key)
+    return frag_def
 
 
 def _collect_cache_var_families(node: Any, fragments: dict[str, Any]) -> tuple[set[str], set[str]]:

@@ -334,6 +334,21 @@ class Query:
         )
 
     @strawberry.field
+    def all_library_genres_consumer_descendant_prefetch(self) -> list[GenreType]:
+        # B8 collision surface: a consumer descendant prefetch
+        # (``books__loans``) overlaps the optimizer's own Genre -> books ->
+        # loans prefetch plan. The optimizer must reconcile the two rather than
+        # raise "'books' lookup was already seen with a different queryset".
+        return models.Genre.objects.prefetch_related("books__loans").order_by("id")
+
+    @strawberry.field
+    def all_library_genres_consumer_exact_plus_descendant_prefetch(self) -> list[GenreType]:
+        # B8 follow-up: the consumer declares BOTH the exact relation
+        # (``books``) and a descendant (``books__loans``); both must reconcile
+        # with the optimizer plan without colliding.
+        return models.Genre.objects.prefetch_related("books", "books__loans").order_by("id")
+
+    @strawberry.field
     def all_library_nullability_override_books(self) -> list[NullabilityOverrideBookType]:
         # ``required_overrides = ("subtitle",)`` declares ``subtitle`` as
         # ``String!`` on this type, but the column is ``null=True`` and fakeshop

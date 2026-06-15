@@ -4288,3 +4288,121 @@ def test_malformed_nested_branch_form_raises_filter_invalid_live():
     field_errors = extensions["errors"]["email_must_have_at_sign"]
     assert any("missing @" in entry["message"] for entry in field_errors)
     assert any(entry["code"] == "missing_at_sign" for entry in field_errors)
+
+
+# ---------------------------------------------------------------------------
+# B8 consumer-prefetch collision over live /graphql/ (feedback2.md high-confidence
+# moves from tests/optimizer/test_extension.py). A consumer resolver returning a
+# queryset whose prefetch_related overlaps the optimizer's own Genre -> books ->
+# loans plan must reconcile, not raise, and must stay flat (no per-row prefetch)
+# through the configured project schema, the view/request stack, and real
+# query-count assertions -- stronger than the synthetic in-process schema tests.
+# ---------------------------------------------------------------------------
+
+
+def _seed_genre_book_loan_graph() -> None:
+    """Seed two genres -> books -> loans for the B8 consumer-prefetch tests.
+
+    G1 owns two books (one with a loan, one without); G2 owns one book with two
+    loans. The variety makes an N+1 regression explode the query count while the
+    correct flat plan stays constant.
+    """
+    branch = models.Branch.objects.create(name="Main", city="Boston")
+    shelf = models.Shelf.objects.create(code="S-1", topic="permanent collection", branch=branch)
+    reader = models.Patron.objects.create(name="Reader")
+    reader_two = models.Patron.objects.create(name="Reader Two")
+
+    g1 = models.Genre.objects.create(name="G1")
+    b1a = models.Book.objects.create(title="B1a", shelf=shelf)
+    b1a.genres.add(g1)
+    b1b = models.Book.objects.create(title="B1b", shelf=shelf)
+    b1b.genres.add(g1)
+    models.Loan.objects.create(book=b1a, patron=reader, note="L1")
+
+    g2 = models.Genre.objects.create(name="G2")
+    b2a = models.Book.objects.create(title="B2a", shelf=shelf)
+    b2a.genres.add(g2)
+    models.Loan.objects.create(book=b2a, patron=reader, note="L2")
+    models.Loan.objects.create(book=b2a, patron=reader_two, note="L3")
+
+
+def _assert_genre_book_loan_shape(rows: list) -> None:
+    """Assert the seeded Genre -> books -> loans graph renders intact."""
+    by_name = {genre["name"]: genre for genre in rows}
+    assert set(by_name) == {"G1", "G2"}
+    g1_books = {
+        book["title"]: sorted(loan["note"] for loan in book["loans"])
+        for book in by_name["G1"]["books"]
+    }
+    assert g1_books == {"B1a": ["L1"], "B1b": []}
+    g2_books = {
+        book["title"]: sorted(loan["note"] for loan in book["loans"])
+        for book in by_name["G2"]["books"]
+    }
+    assert g2_books == {"B2a": ["L2", "L3"]}
+
+
+@pytest.mark.django_db
+def test_b8_consumer_descendant_prefetch_stays_flat_over_http():
+    """A consumer ``prefetch_related("books__loans")`` cooperates with the optimizer.
+
+    The live twin of ``test_b8_consumer_descendant_prefetch_does_not_raise``: the
+    consumer descendant prefetch overlaps the optimizer's Genre -> books -> loans
+    plan, which historically raised "'books' lookup was already seen with a
+    different queryset". Over HTTP the operation must return the full nested graph
+    AND stay flat -- one query each for genres, the books M2M, and the loans FK
+    reverse -- never a per-book loans query.
+    """
+    _seed_genre_book_loan_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryGenresConsumerDescendantPrefetch {
+                name
+                books { title loans { note } }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    _assert_genre_book_loan_shape(payload["data"]["allLibraryGenresConsumerDescendantPrefetch"])
+    # Flat: genres + books prefetch + loans prefetch. An N+1 collision would
+    # have raised or issued one loans query per book.
+    assert len(captured) == 3
+
+
+@pytest.mark.django_db
+def test_b8_consumer_exact_plus_descendant_prefetch_stays_flat_over_http():
+    """A consumer ``prefetch_related("books", "books__loans")`` cooperates too.
+
+    The live twin of ``test_b8_consumer_exact_plus_descendant_prefetch_does_not_raise``:
+    declaring both the exact relation and a descendant of it must reconcile with
+    the optimizer plan without colliding, returning the same intact graph at the
+    same flat query count.
+    """
+    _seed_genre_book_loan_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryGenresConsumerExactPlusDescendantPrefetch {
+                name
+                books { title loans { note } }
+              }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    _assert_genre_book_loan_shape(
+        payload["data"]["allLibraryGenresConsumerExactPlusDescendantPrefetch"],
+    )
+    assert len(captured) == 3

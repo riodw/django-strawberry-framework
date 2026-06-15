@@ -119,9 +119,10 @@ A quick summary:
 - `testing.relay` helpers (new in `0.0.9`) — `django_strawberry_framework.testing.relay.global_id_for(type_cls, id)` (the strategy-aware encoded `GlobalID` a finalized Relay-Node-shaped type emits) and `decode_global_id(gid)` (public re-export of the decode dispatch). See the [`GLOSSARY.md#djangonodefield`][glossary-djangonodefield] cross-refs (the helpers have no own entry; the spec does not create one).
 - `Meta.nullable_overrides` / `Meta.required_overrides` (new in `0.0.9`) — two tuple-set `Meta` keys that decouple a scalar field's GraphQL nullability from its Django column (`T!`→`T` or `T`→`T!`) without an `AlterField` migration or a consumer-authored annotation. Validated at type-creation (unknown / excluded / consumer-authored / relation / Relay-suppressed-pk targets and the both-sets collision raise `ConfigurationError`); scalar-only, and the override flips a choice field's generated enum nullability for free. See [`GLOSSARY.md#metanullable_overrides`][glossary-metanullable_overrides].
 - `manage.py inspect_django_type` (new in `0.0.9`) — diagnostic command printing a finalized `DjangoType`'s per-field GraphQL resolution table (Django field → resolved GraphQL type → nullability → converter row). Dispatches the positional arg by shape (dotted path vs unique bare-name registry lookup) and accepts `--schema <selector>` to register + finalize on a cold CLI process. See [`GLOSSARY.md#schema-introspection-management-command`][glossary-inspect-django-type].
+- `apply_cascade_permissions` / `aapply_cascade_permissions` (new in `0.0.10`) — cascade-permissions subsystem: one call inside a type's `get_queryset` cascades that type's visibility across its single-column forward FK / OneToOne edges, dropping parent rows whose targets a target type's own `get_queryset` hides. Four invariants (`ContextVar` cycle guard, single-column forward scope, nullable-FK preservation, caller-alias pinning), loud `fields=` validation, a sync + `sync_to_async` async pair, and zero added query round-trips (the `__in` subqueries compile into the caller's single `SELECT`); composes with the shipped `check_<field>_permission` gates, connections, node refetch, and list fields through their existing seams. Exported from the package root. See [`GLOSSARY.md#apply_cascade_permissions`][glossary-apply-cascade-permissions].
 
 **Coming next — remaining alpha (`0.0.10` → `0.0.12`):**
-- `0.0.10` — permissions / cascade-permissions subsystem
+- `0.0.10` — optimizer robustness hardening (upstream-comparison guards; the `035` joint-cut sibling)
 - `0.0.11` — mutations + auto-generated `Input` types (form-based and DRF-`SerializerMutation` flavors), the `Upload` scalar + file/image field mapping, and auth mutations (`login` / `logout` / `register`)
 - `0.0.12` — Channels ASGI router, debug-toolbar middleware, test-client helper, response-extensions debug middleware
 
@@ -267,6 +268,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 
 <!-- docs/ -->
 [glossary]: GLOSSARY.md
+[glossary-apply-cascade-permissions]: GLOSSARY.md#apply_cascade_permissions
 [glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
 [glossary-djangolistfield]: GLOSSARY.md#djangolistfield
 [glossary-djangonodefield]: GLOSSARY.md#djangonodefield

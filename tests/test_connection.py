@@ -56,6 +56,7 @@ from django_strawberry_framework.connection import (
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import FilterSet, _helper_referenced_filtersets
 from django_strawberry_framework.orders import OrderSet, _helper_referenced_ordersets
+from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import SyncMisuseError
 
@@ -1385,13 +1386,92 @@ def test_registry_clear_also_clears_connection_type_cache():
 # =============================================================================
 
 
-@pytest.mark.skip(
-    reason="TODO(spec-034 Slice 3): connection over cascading type narrows edges + totalCount",
-)
+def _make_cascading_item_node(name: str) -> type:
+    """Relay-Node ``DjangoType`` over ``Item`` (forward FK ``category``) that cascades.
+
+    ``_make_sidecar_node_type`` is hardcoded to ``Category`` (the chain TOP, no
+    forward FK to cascade), so the connection cascade pin needs a minimal local
+    variant over ``Item`` (plan discretion item (a)): same Relay-Node /
+    ``total_count`` shape, sidecars omitted (the pin exercises visibility, not
+    filter/order), and a ``get_queryset`` that calls ``apply_cascade_permissions``
+    so items whose ``category`` is hidden drop out of the connection.
+    """
+
+    def get_queryset(cls, queryset, info):
+        return apply_cascade_permissions(cls, queryset, info)
+
+    return type(
+        name,
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {
+                    "model": Item,
+                    "fields": ("id", "name"),
+                    "interfaces": (relay.Node,),
+                    "name": name,
+                    "connection": {"total_count": True},
+                },
+            ),
+            "get_queryset": classmethod(get_queryset),
+        },
+    )
+
+
+@pytest.mark.django_db
 def test_connection_over_cascading_type_narrows_edges_and_total_count():
     """A ``DjangoConnectionField`` over a cascading type narrows ``edges`` AND ``totalCount``.
 
     Wrap a type whose ``get_queryset`` calls ``apply_cascade_permissions``; assert
     edges drop the cascade-hidden rows and ``totalCount`` (counted post-visibility)
     matches the narrowed count, with cursors consistent. Decision 12 / DoD item 9.
+
+    Load-bearing (BUILD.md "Query-shape tests"): the seeding makes ``narrowed != raw``
+    (3 items, 2 visible) so the ``totalCount == 2`` assertion is NOT vacuous - a
+    non-cascade path would report the raw count of 3. The connection is over ``Item``
+    (forward FK ``category``), not ``Category`` (chain top, no forward FK).
     """
+
+    # A ``CategoryType`` whose hook hides private categories, plus the cascading
+    # ``Item`` node. The Item cascade composes ``category__in (SELECT ... )`` so
+    # items under a private category drop from the connection's row set.
+    class CcCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            return queryset.filter(is_private=False)
+
+    item_node = _make_cascading_item_node("CcItemNode")
+    schema = _field_schema(item_node)
+
+    public_cat = Category.objects.create(name="public_cat", is_private=False)
+    private_cat = Category.objects.create(name="private_cat", is_private=True)
+    visible_a = Item.objects.create(name="visible_a", category=public_cat)
+    visible_b = Item.objects.create(name="visible_b", category=public_cat)
+    Item.objects.create(name="hidden", category=private_cat)  # under a hidden category
+
+    result = schema.execute_sync(
+        "{ items { edges { cursor node { id name } } "
+        "pageInfo { hasNextPage hasPreviousPage } totalCount } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is None
+    conn = result.data["items"]
+    # edges: only the two items under the visible category; the hidden-target item
+    # is dropped by the cascade.
+    edge_names = [edge["node"]["name"] for edge in conn["edges"]]
+    assert edge_names == [visible_a.name, visible_b.name]
+    # totalCount counts the post-visibility set (2), NOT the raw 3 rows.
+    assert conn["totalCount"] == 2
+    # Cursors are consistent: present, distinct, one per edge.
+    cursors = [edge["cursor"] for edge in conn["edges"]]
+    assert all(cursors)
+    assert len(set(cursors)) == len(cursors)
+    # No further pages over the narrowed set.
+    assert conn["pageInfo"]["hasNextPage"] is False
+    assert conn["pageInfo"]["hasPreviousPage"] is False

@@ -268,13 +268,12 @@ class ItemType(DjangoType):
         return queryset.filter(is_private=False)
 ```
 
-Relation traversal into a type with a custom `get_queryset` is handled by the optimizer with a `Prefetch` downgrade, so target visibility filters are not bypassed by raw joins. (The `products/schema.py` types carry commented cascade-permission `get_queryset` hooks that activate once the permissions card ships — see below.)
+Relation traversal into a type with a custom `get_queryset` is handled by the optimizer with a `Prefetch` downgrade, so target visibility filters are not bypassed by raw joins. As of `0.0.10` the four `products/schema.py` types' `get_queryset` hooks are live and call `apply_cascade_permissions(cls, ..., info)`, so visibility cascades across the `Entry → Item → Category` / `Entry → Property → Category` FK chain: an anonymous request loses any entry whose item or property points at a private category, staff sees everything, and a `view_<model>` user sees non-private rows but still loses entries under hidden targets (the cascade composes per edge). See [`docs/GLOSSARY.md#apply_cascade_permissions`][glossary-apply-cascade-permissions].
 
 ## What products is still waiting for
 
 Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (tracked in [`KANBAN.md`][kanban]). Filtering and ordering are **not** on this list — they shipped in `0.0.8` and are wired today. `DjangoConnectionField` (Relay connections) is **not** on this list either — it shipped in `0.0.9` and products' four root fields are now connections (the cookbook-mirror conversion). The root `node(id:)` / `nodes(ids:)` Relay entry points and any `Meta.connection` (`totalCount`) opt-ins are **not** on this list either: both **shipped as package capabilities in `0.0.9`** (`DONE-032`) — see "Shipped package capabilities not exercised by products" below — and products simply hasn't wired them into its connections-only `Query` yet (deferred to the fakeshop-activation card, `TODO-BETA-051-0.1.5`).
 
-- permissions / `apply_cascade_permissions` (`0.0.10`: `TODO-ALPHA-033-0.0.10`) — activates the commented cascade `get_queryset` hooks in `products/schema.py`
 - `Meta.fields_class` — `FieldSet` (`0.1.1`)
 - `Meta.search_fields` (`0.1.2`)
 - `Meta.aggregate_class` — aggregation (`0.1.3`)
@@ -298,6 +297,7 @@ These ship today but products' model shapes don't reach them; they're covered by
 
 <!-- docs/ -->
 [glossary]: docs/GLOSSARY.md
+[glossary-apply-cascade-permissions]: docs/GLOSSARY.md#apply_cascade_permissions
 [glossary-djangonodefield]: docs/GLOSSARY.md#djangonodefield
 [glossary-djangonodesfield]: docs/GLOSSARY.md#djangonodesfield
 [glossary-metaconnection]: docs/GLOSSARY.md#metaconnection

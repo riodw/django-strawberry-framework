@@ -113,7 +113,7 @@ class GalaxyNode(DjangoType):
     @classmethod
     def get_queryset(cls, queryset, info):
         """Staff or users with view_galaxy permission see everything; others see public only."""
-        user = getattr(info.context, "user", None)
+        user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
         if user and user.has_perm("astronomy.view_galaxy"):
@@ -135,7 +135,7 @@ class CelestialBodyNode(DjangoType):
     @classmethod
     def get_queryset(cls, queryset, info):
         """Staff or users with view_celestialbody permission see everything; others see public only."""
-        user = getattr(info.context, "user", None)
+        user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
         if user and user.has_perm("astronomy.view_celestialbody"):
@@ -325,7 +325,7 @@ from . import models
 
 
 def _user(info):
-    return getattr(info.context, "user", None)
+    return getattr(getattr(info.context, "request", None), "user", None)
 
 
 def _resolve_date(dt, info, perm):

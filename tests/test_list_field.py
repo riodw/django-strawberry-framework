@@ -56,6 +56,7 @@ from django_strawberry_framework import (
     finalize_django_types,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.relay import SyncMisuseError
 
@@ -1016,10 +1017,52 @@ def test_djangolistfield_with_secondary_target_uses_secondary_get_queryset() -> 
 # =============================================================================
 
 
-@pytest.mark.skip(reason="TODO(spec-034 Slice 3): list field default resolver applies cascade")
-def test_list_field_default_resolver_applies_cascade():
+@pytest.mark.django_db
+def test_list_field_default_resolver_applies_cascade() -> None:
     """``DjangoListField`` over a cascading type drops rows pointing at hidden targets.
 
     The default resolver applies the type's ``get_queryset`` (where the cascade
     lives), so the list narrows with no list-field-specific code (Decision 12).
+
+    The list field is over ``Item`` (forward FK ``category``); the ``Item`` hook
+    calls ``apply_cascade_permissions`` so an item under a private (hidden) category
+    drops out. Scoped to the DEFAULT resolver per the stub docstring (the
+    consumer-``resolver=`` wrap also applies the hook, but the spec Test plan does
+    not widen this pin past the default path).
     """
+
+    class _HidingCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.filter(is_private=False)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return apply_cascade_permissions(cls, queryset, info)
+
+    @strawberry.type
+    class Query:
+        all_items: list[ItemType] = DjangoListField(ItemType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    public_cat = Category.objects.create(name="public_cat", is_private=False)
+    private_cat = Category.objects.create(name="private_cat", is_private=True)
+    Item.objects.create(name="visible_item", category=public_cat)
+    Item.objects.create(name="hidden_item", category=private_cat)
+
+    result = schema.execute_sync("{ allItems { id name } }")
+    assert result.errors is None
+    names = sorted(row["name"] for row in result.data["allItems"])
+    # The item under a private category drops; only the visible item remains.
+    assert names == ["visible_item"]

@@ -114,10 +114,19 @@ def test_emitted_globalid_is_model_anchored():
     carries ``products.item:<pk>`` (``models.Item._meta.label_lower``), not the
     GraphQL type name ``ItemType``. Decode the API-emitted ``id`` via
     ``relay.GlobalID.from_id`` and assert the model-label payload.
+
+    Runs as ``staff_1`` so the first item is visible regardless of its
+    (``seed_data``-randomized) ``is_private`` / category privacy under the
+    activated cascade hooks (spec-034 Slice 4); the GlobalID emit/decode subject
+    is orthogonal to visibility.
     """
     seed_data(1)
+    client = _staff_client()
     item = models.Item.objects.order_by("id").first()
-    response = _post_graphql("query { allItems { edges { node { id name } } } }")
+    response = _post_graphql(
+        "query { allItems { edges { node { id name } } } }",
+        client=client,
+    )
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
@@ -137,10 +146,18 @@ def test_globalid_filter_round_trip():
     strategy-aware filter ([Decision 13]) accepts the model-label payload it now
     emits and returns exactly that one row. Uses the API-emitted id (not a
     reconstructed one) so the test proves true emit -> filter symmetry.
+
+    Runs as ``staff_1`` so the target item is visible for both the emit and the
+    filter-round-trip under the activated cascade hooks (spec-034 Slice 4); the
+    emit -> filter symmetry subject is orthogonal to visibility.
     """
     seed_data(1)
+    client = _staff_client()
     target = models.Item.objects.order_by("id").first()
-    emit_response = _post_graphql("query { allItems { edges { node { id name } } } }")
+    emit_response = _post_graphql(
+        "query { allItems { edges { node { id name } } } }",
+        client=client,
+    )
     assert emit_response.status_code == 200
     emit_payload = emit_response.json()
     assert "errors" not in emit_payload, emit_payload
@@ -152,6 +169,7 @@ def test_globalid_filter_round_trip():
         f'query {{ allItems(filter: {{ id: {{ exact: "{emitted_id}" }} }}) '
         "{ edges { node { id name } } } }",
         {"allItems": {"edges": [{"node": {"id": emitted_id, "name": target.name}}]}},
+        client=client,
     )
 
 
@@ -166,14 +184,22 @@ def test_type_strategy_opt_out_reproduces_type_name():
     strategy ``ItemType``'s ``id`` reproduces the GraphQL type name ``ItemType``
     (== ``ItemType.__name__``, no ``Meta.name``), NOT the model label. The
     per-test autouse fixture re-reloads the default-strategy schema for siblings.
+
+    Runs as ``staff_1`` so the first item is visible regardless of its
+    (``seed_data``-randomized) privacy under the activated cascade hooks
+    (spec-034 Slice 4); the strategy opt-out subject is orthogonal to visibility.
     """
     seed_data(1)
+    client = _staff_client()
     item = models.Item.objects.order_by("id").first()
     with override_settings(
         DJANGO_STRAWBERRY_FRAMEWORK={"RELAY_GLOBALID_STRATEGY": "type"},
     ):
         _reload_products_project_schema()
-        response = _post_graphql("query { allItems { edges { node { id name } } } }")
+        response = _post_graphql(
+            "query { allItems { edges { node { id name } } } }",
+            client=client,
+        )
         assert response.status_code == 200
         payload = response.json()
         assert "errors" not in payload, payload
@@ -188,19 +214,28 @@ def test_type_strategy_opt_out_reproduces_type_name():
 def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
     """Re-pinned through the connection wrapper: duplicate-root-field merge holds.
 
-    The two `allItems` connection selections still merge into one node set
-    (each `node` carries both `name` and `category { name }`), the root
-    connection issues exactly ONE planned slice query carrying the
-    `select_related("category")` JOIN, and NO COUNT runs (products declare no
-    `Meta.connection`, so no `totalCount` field gates one). The appended
-    deterministic `ORDER BY pk` is a no-op vs the old `.order_by("id")`
-    (`id` IS the pk). Items = 25 at `seed_data(1)`, well under the default
-    `relay_max_results` cap of 100.
+    The two `allItems` connection selections still merge into one node set (each
+    `node` carries both `name` and `category { name }`) issuing exactly ONE
+    `allItems` slice query, and NO COUNT runs (products declare no
+    `Meta.connection`). Under the activated cascade hooks (spec-034 Slice 4) the
+    forward FK `item.category` no longer plans `select_related` - `CategoryType`
+    now defines a custom `get_queryset`, so the optimizer downgrades it to a
+    windowed `Prefetch` (the shipped `get_queryset` -> `Prefetch` rule). The
+    merged shape is therefore a deterministic 2 products queries - one `allItems`
+    slice + one `category` prefetch, no inter-products JOIN - and an unmerged
+    shape would issue two item slices instead of one. Run anonymously (no auth
+    queries pollute the count); the cascade narrows rows to the anonymously
+    visible set (public items under public categories), so the expected rows are
+    derived from the equivalent post-cascade ORM query (API == ORM), keeping the
+    pin robust across `seed_data`'s random Item privacy. The appended
+    deterministic `ORDER BY pk` matches `.order_by("id")` (`id` IS the pk).
     """
     seed_data(1)
     expected = [
         {"node": {"name": item.name, "category": {"name": item.category.name}}}
-        for item in models.Item.objects.select_related("category").order_by("id")
+        for item in models.Item.objects.select_related("category")
+        .filter(is_private=False, category__is_private=False)
+        .order_by("id")
     ]
 
     with CaptureQueriesContext(connection) as captured:
@@ -217,27 +252,52 @@ def test_products_optimizer_merges_duplicate_root_field_nodes_over_http():
     payload = response.json()
     assert "errors" not in payload, payload
     assert payload["data"] == {"allItems": {"edges": expected}}
-    assert len(captured) == 1, [query["sql"] for query in captured]
-    sql = captured[0]["sql"].lower()
-    assert "products_item" in sql
-    assert "join" in sql
-    assert "products_category" in sql
+    # One allItems slice (the merge) + one category Prefetch (the hook downgrade),
+    # no COUNT, no inter-products JOIN.
+    assert len(captured) == 2, [query["sql"] for query in captured]
+    item_slices = [q for q in captured if "products_item" in q["sql"].lower()]
+    assert len(item_slices) == 1, [q["sql"] for q in captured]
+    assert any("products_category" in q["sql"].lower() for q in captured)
+    assert not any(
+        "products_item" in q["sql"].lower()
+        and "products_category" in q["sql"].lower()
+        and "join" in q["sql"].lower()
+        for q in captured
+    )
 
 
 @pytest.mark.django_db
 def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
     """Re-pinned through the connection wrapper: depth-2 reverse-FK prefetch holds.
 
-    `allCategories` is now a connection (one planned categories slice query),
-    but `items` and `entries` stay LIST relations (`{ name }`, not
-    `itemsConnection`) - the depth-2 reverse-FK prefetch chain the test pins
-    is unchanged: 1 categories slice + 1 `items` prefetch + 1 `entries`
-    prefetch = 3 queries, no COUNT. List relations are not capped, so the
-    full 25 categories / 25 items / 177 entries still come back; categories
-    (25) is under the default `relay_max_results` cap of 100.
+    `allCategories` is a connection (one planned categories slice query), and
+    `items` / `entries` stay LIST relations (`{ name }`, not `itemsConnection`)
+    - the depth-2 reverse-FK prefetch chain the test pins is structurally
+    unchanged: 1 categories slice + 1 `items` prefetch + 1 `entries` prefetch =
+    3 queries, no COUNT. The activated cascade hooks (spec-034 Slice 4) do NOT
+    add per-row queries - their `__in` subqueries compile inline (Decision 7) -
+    so the count stays a fixed 3.
+
+    What the cascade DOES change is row VISIBILITY: run anonymously, the three
+    levels narrow to the cascade-visible set (public categories; non-private
+    items under them; entries passing the full Entry -> Item -> Category /
+    Entry -> Property -> Category chain). Counts are therefore derived from the
+    equivalent post-cascade ORM queries (API == ORM), keeping the pin robust
+    across `seed_data`'s random Item/Entry privacy. The deterministic Category
+    `% 2` split keeps the public-category count well under the
+    `relay_max_results` cap.
     """
     seed_data(1)
-    assert models.Category.objects.count() < _RELAY_MAX_RESULTS, (
+    visible_categories = models.Category.objects.filter(is_private=False)
+    visible_items = models.Item.objects.filter(is_private=False, category__is_private=False)
+    visible_entries = models.Entry.objects.filter(
+        is_private=False,
+        item__is_private=False,
+        item__category__is_private=False,
+        property__is_private=False,
+        property__category__is_private=False,
+    )
+    assert visible_categories.count() < _RELAY_MAX_RESULTS, (
         "fixture must stay under the cap so the full-set assertion is not silently truncated"
     )
 
@@ -266,9 +326,9 @@ def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
     categories = [edge["node"] for edge in payload["data"]["allCategories"]["edges"]]
     items = [item for category in categories for item in category["items"]]
     entries = [entry for item in items for entry in item["entries"]]
-    assert len(categories) == models.Category.objects.count()
-    assert len(items) == models.Item.objects.count()
-    assert len(entries) == models.Entry.objects.count()
+    assert len(categories) == visible_categories.count()
+    assert len(items) == visible_items.count()
+    assert len(entries) == visible_entries.count()
     assert len(captured) == 3, [query["sql"] for query in captured]
     assert "products_category" in captured[0]["sql"]
     assert "products_item" in captured[1]["sql"]
@@ -277,31 +337,49 @@ def test_products_optimizer_prefetches_nested_reverse_fk_depth_2_over_http():
 
 # The connection caps an un-paginated default page (and any explicit ``first:``)
 # at ``relay_max_results``; Strawberry rejects a ``first:`` above it outright.
-# ``seed_data(1)`` produces 177 entries, OVER this cap, so the forward-FK
-# depth-2 pin asserts the capped default page (the first ``RELAY_MAX_RESULTS``
-# rows in deterministic pk order) rather than the full set (Decision 10's cap
-# boundary). 100 is Strawberry's default ``StrawberryConfig.relay_max_results``;
-# the fakeshop schema sets no override.
+# 100 is Strawberry's default ``StrawberryConfig.relay_max_results``; the fakeshop
+# schema sets no override. Used by the staff full-set cascade pin (staff sees all
+# rows, capped at 100) and the reverse-FK depth-2 pin's under-cap precondition.
+# The forward-FK depth-2 pin below runs anonymously under the activated cascade
+# (spec-034 Slice 4): the cascade narrows the visible entry set well under the
+# cap, so that pin no longer exercises the cap boundary.
 _RELAY_MAX_RESULTS = 100
 
 
 @pytest.mark.django_db
 def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
-    """Re-pinned through the connection wrapper: depth-2 forward-FK select_related holds.
+    """Re-pinned for the activated cascade: depth-2 forward-FK plans a Prefetch chain.
 
-    `allEntries` is now a connection: one planned slice query carrying
-    `select_related("item__category")`, no COUNT. `seed_data(1)` produces 177
-    entries - OVER the `relay_max_results` cap of 100 - and Strawberry rejects
-    a `first:` above the cap, so the connection cannot return the full set.
-    The pin therefore asserts the capped default page: the first
-    `_RELAY_MAX_RESULTS` entries in deterministic pk order. The appended
-    `ORDER BY pk` matches the ORM `.order_by("id")` (`id` IS the pk), so the
-    emitted node order equals the expected ORM order; the SQL-shape contract
-    (the depth-2 `select_related` JOIN in one query) is what this test fences.
+    Before spec-034 Slice 4 this query planned a single `select_related(
+    "item__category")` JOIN. With the cascade hooks active, `ItemType` and
+    `CategoryType` both define a custom `get_queryset`, so the optimizer
+    downgrades each forward FK in the `item -> category` chain to a windowed
+    `Prefetch` (the shipped `get_queryset` -> `Prefetch` rule). The traversal is
+    therefore a deterministic 3 products queries - one `allEntries` slice + one
+    `item` prefetch + one `category` prefetch - with NO inter-products JOIN, and
+    the cascade adds zero round-trips (its `__in` subqueries compile inline,
+    Decision 7). Run anonymously (no auth queries pollute the count); the cascade
+    narrows the visible entries to those passing the full
+    Entry -> Item -> Category / Entry -> Property -> Category chain, well under the
+    `relay_max_results` cap, so the expected page is the entire visible set in pk
+    order, derived from the equivalent post-cascade ORM query (API == ORM, robust
+    across `seed_data`'s random Item/Entry/Property privacy). The appended
+    `ORDER BY pk` matches `.order_by("id")` (`id` IS the pk).
     """
     seed_data(1)
-    assert models.Entry.objects.count() > _RELAY_MAX_RESULTS, (
-        "fixture must exceed the cap to exercise the capped-default-page boundary"
+    visible_entries = (
+        models.Entry.objects.select_related("item__category")
+        .filter(
+            is_private=False,
+            item__is_private=False,
+            item__category__is_private=False,
+            property__is_private=False,
+            property__category__is_private=False,
+        )
+        .order_by("id")
+    )
+    assert visible_entries.count() <= _RELAY_MAX_RESULTS, (
+        "cascade-narrowed visible set must stay under the cap for the full-set assertion"
     )
     expected = [
         {
@@ -321,9 +399,7 @@ def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
                 },
             },
         }
-        for entry in models.Entry.objects.select_related("item__category").order_by("id")[
-            :_RELAY_MAX_RESULTS
-        ]
+        for entry in visible_entries
     ]
 
     with CaptureQueriesContext(connection) as captured:
@@ -351,12 +427,21 @@ def test_products_optimizer_selects_nested_forward_fk_depth_2_over_http():
     payload = response.json()
     assert "errors" not in payload, payload
     assert payload["data"] == {"allEntries": {"edges": expected}}
-    assert len(captured) == 1, [query["sql"] for query in captured]
-    sql = captured[0]["sql"].lower()
-    assert "products_entry" in sql
-    assert "products_item" in sql
-    assert "products_category" in sql
-    assert "join" in sql
+    # Prefetch chain: entry slice + item prefetch + category prefetch, no COUNT.
+    assert len(captured) == 3, [query["sql"] for query in captured]
+    assert "products_entry" in captured[0]["sql"]
+    assert "products_item" in captured[1]["sql"]
+    assert "products_category" in captured[2]["sql"]
+    # The cascade composed inline (zero added round-trips) and the forward FK
+    # downgraded to a Prefetch chain rather than a select_related JOIN.
+    all_sql = " ".join(query["sql"] for query in captured)
+    assert "IN (SELECT" in all_sql
+    assert not any(
+        "products_entry" in q["sql"].lower()
+        and "products_item" in q["sql"].lower()
+        and "join" in q["sql"].lower()
+        for q in captured
+    )
 
 
 @pytest.mark.django_db
@@ -429,9 +514,14 @@ def test_products_categories_filter_by_relay_own_pk_global_id_in():
     lookup resolves to ``GlobalIDMultipleChoiceFilter`` and each element is
     decoded + type-validated before the ``id__in`` clause runs. No
     permission gate guards ``id``, so this works anonymously.
+
+    Picks two PUBLIC categories so they are visible under the activated cascade
+    (spec-034 Slice 4) - anonymous sees only `is_private=False` categories (the
+    deterministic `% 2` split makes ~half private), and the GlobalID `in`-decode
+    subject is orthogonal to which specific rows are chosen.
     """
     seed_data(1)
-    categories = list(models.Category.objects.order_by("id")[:2])
+    categories = list(models.Category.objects.filter(is_private=False).order_by("id")[:2])
     gids = ", ".join(
         f'"{relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk))}"'
         for category in categories
@@ -475,15 +565,22 @@ def test_products_categories_filter_by_starts_with_via_all_lookups():
 
 @pytest.mark.django_db
 def test_products_items_filter_by_related_category_global_id():
-    """``Item.category`` ``RelatedFilter`` traversal via the nested GlobalID input."""
+    """``Item.category`` ``RelatedFilter`` traversal via the nested GlobalID input.
+
+    Filters to a PUBLIC category (visible anonymously under the activated cascade,
+    spec-034 Slice 4). The cascade narrows the anonymous result to that category's
+    ``is_private=False`` items, so the expected rows are derived from the
+    equivalent post-cascade ORM query (API == ORM) - the ``RelatedFilter`` content
+    subject composed with the cascade's row narrowing.
+    """
     seed_data(1)
-    category = models.Category.objects.order_by("id").first()
+    category = models.Category.objects.filter(is_private=False).order_by("id").first()
     gid = str(
         relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk)),
     )
     expected = [
         {"node": {"name": name}}
-        for name in models.Item.objects.filter(category=category)
+        for name in models.Item.objects.filter(category=category, is_private=False)
         .order_by("id")
         .values_list("name", flat=True)
     ]
@@ -505,11 +602,19 @@ def test_products_items_filter_by_related_category_global_id():
 
 @pytest.mark.django_db
 def test_products_items_order_by_name_asc():
-    """``orderBy: [{ name: ASC }]`` sorts items by name ascending (Item has no order gate)."""
+    """``orderBy: [{ name: ASC }]`` sorts items by name ascending (Item has no order gate).
+
+    Runs anonymously, so the activated cascade (spec-034 Slice 4) narrows to
+    non-private items under non-private categories before ordering; the expected
+    rows are derived from the equivalent post-cascade ORM query (API == ORM), the
+    ordering subject composed with the cascade's row narrowing.
+    """
     seed_data(1)
     expected = [
         {"node": {"name": name}}
-        for name in models.Item.objects.order_by("name").values_list("name", flat=True)
+        for name in models.Item.objects.filter(is_private=False, category__is_private=False)
+        .order_by("name")
+        .values_list("name", flat=True)
     ]
     _assert_graphql_data(
         "query { allItems(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
@@ -519,11 +624,18 @@ def test_products_items_order_by_name_asc():
 
 @pytest.mark.django_db
 def test_products_items_order_by_name_desc():
-    """``orderBy: [{ name: DESC }]`` sorts items by name descending."""
+    """``orderBy: [{ name: DESC }]`` sorts items by name descending.
+
+    Anonymous, so the cascade-narrowed visible set (non-private items under
+    non-private categories) is ordered; expected rows come from the equivalent
+    post-cascade ORM query (spec-034 Slice 4).
+    """
     seed_data(1)
     expected = [
         {"node": {"name": name}}
-        for name in models.Item.objects.order_by("-name").values_list("name", flat=True)
+        for name in models.Item.objects.filter(is_private=False, category__is_private=False)
+        .order_by("-name")
+        .values_list("name", flat=True)
     ]
     _assert_graphql_data(
         "query { allItems(orderBy: [{ name: DESC }]) { edges { node { name } } } }",
@@ -616,15 +728,20 @@ def test_products_items_filter_and_order_compose():
     Filters items to one category via the own-PK GlobalID ``RelatedFilter``
     (no gate on ``id``) and orders the survivors by ``name`` (no gate on
     ``Item.name``), so the whole query runs anonymously.
+
+    Uses a PUBLIC category (visible anonymously) and derives the expected rows
+    from the equivalent post-cascade ORM query - the activated cascade (spec-034
+    Slice 4) narrows the anonymous result to that category's ``is_private=False``
+    items, on top of which the filter -> order chain runs.
     """
     seed_data(1)
-    category = models.Category.objects.order_by("id").first()
+    category = models.Category.objects.filter(is_private=False).order_by("id").first()
     gid = str(
         relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk)),
     )
     expected = [
         {"node": {"name": name}}
-        for name in models.Item.objects.filter(category=category)
+        for name in models.Item.objects.filter(category=category, is_private=False)
         .order_by("name")
         .values_list("name", flat=True)
     ]
@@ -675,17 +792,24 @@ def test_products_categories_items_connection_fixed_query_count():
     N+1 disproof. The windowed path is a FIXED 2 queries (one ``allCategories``
     slice + one windowed ``itemsConnection`` prefetch covering every category's
     page). A per-parent fallback issues at least one query per parent and scales
-    with the number of ITEMS under ``first: 2`` (measured ~52 queries at
-    ``seed_data(1)`` and ~102 at ``seed_data(3)``), so it neither stays equal
-    across the two seedings nor lands at 2. Both seedings hold 25 parent
-    categories fixed and grow items-per-category, so the equality rules out a
-    per-child N+1 and the absolute ``== 2`` rules out the item-scaling fallback.
+    with the number of ITEMS under ``first: 2``, so it neither stays equal across
+    the two seedings nor lands at 2. Both seedings hold the parent-category count
+    fixed and grow items-per-category, so the equality rules out a per-child N+1
+    and the absolute ``== 2`` rules out the item-scaling fallback.
+
+    Under the activated cascade (spec-034 Slice 4) this query runs anonymously,
+    so the cascade narrows the result to the public categories (the deterministic
+    ``% 2`` split, ~half of the seeded providers) and the windowed
+    ``itemsConnection`` prefetch child carries ``ItemType``'s cascade too (only
+    non-private items). That is exactly the interaction this pin must prove
+    query-stable: the cascade's ``__in`` subqueries compile inline (Decision 7),
+    so the count stays a FIXED 2 even with the hooks active. The membership check
+    confirms each returned ``itemsConnection`` page is its own parent's window
+    (every returned item belongs to that category, ``first: 2`` honoured).
 
     ``itemsConnection`` carries only ``first:`` (no sidecars) so it window-plans
-    rather than falling back (Decision 6). At ``seed_data(3)`` each category has
-    3 items and ``first: 2`` returns a true 2-item sub-page, proving the window
-    is per-parent-correct rather than one shared slice. Both seedings stay well
-    under the ``relay_max_results`` cap (25 categories).
+    rather than falling back (Decision 6). Both seedings stay well under the
+    ``relay_max_results`` cap.
     """
 
     def _run(seed_count: int) -> int:
@@ -726,57 +850,278 @@ def test_products_categories_items_connection_fixed_query_count():
 
 
 # =============================================================================
-# STAGED SEAM (spec-034 Slice 4): live cascade-permission HTTP coverage.
-# Lands AFTER the four products get_queryset hooks are uncommented in
-# apps/products/schema.py. Real permission users only - every test's FIRST line is
-# `create_users(1)` (per AGENTS.md / card DoD: never mock info.context.user).
-# Exercises the 2-deep Entry -> Item -> Category / Entry -> Property -> Category chain.
-# Fill in + drop the skips in Slice 4.
+# Live cascade-permission HTTP coverage (spec-034 Slice 4). The four products
+# get_queryset hooks are now active in apps/products/schema.py. Real permission
+# users only - every test's FIRST line is `create_users(1)` (per AGENTS.md / card
+# DoD: never mock info.context.user). Exercises the 2-deep
+# Entry -> Item -> Category / Entry -> Property -> Category chain.
+#
+# Each test seeds the private/public split it needs as a dedicated ORM chain
+# AFTER `create_users(1)` / `seed_data(N)`, so the assertions are deterministic
+# regardless of `seed_data`'s random Item/Entry `is_private` assignment (the
+# Category/Property split is the deterministic `% 2` alternation; Item/Entry are
+# `random.choice`). The hooks resolve the user from `info.context.request.user`
+# (the Strawberry-Django context shape; see schema.py), so these run real logins.
 # =============================================================================
 
 
+def _login(username: str) -> Client:
+    """Log in a seeded ``create_users(1)`` user by username."""
+    client = Client()
+    client.force_login(get_user_model().objects.get(username=username))
+    return client
+
+
+def _seed_cascade_split():
+    """Build a deterministic private/public 2-deep chain and return the key rows.
+
+    Two parallel chains so the cascade's per-edge narrowing is observable:
+
+    * a PRIVATE category holding a PUBLIC item carrying a PUBLIC entry (via a
+      PUBLIC property under the same private category) - everything below the
+      category is public, so only the category's privacy can hide the entry;
+    * a PUBLIC category holding a PUBLIC item carrying a PUBLIC entry (a fully
+      visible control chain).
+
+    Hand-created (not ``seed_data``) so Item/Entry privacy is fixed, not random.
+    """
+    private_cat = models.Category.objects.create(name="zzz_private_cat", is_private=True)
+    public_cat = models.Category.objects.create(name="zzz_public_cat", is_private=False)
+
+    priv_prop = models.Property.objects.create(
+        name="priv_prop",
+        category=private_cat,
+        is_private=False,
+    )
+    pub_prop = models.Property.objects.create(
+        name="pub_prop",
+        category=public_cat,
+        is_private=False,
+    )
+
+    item_under_private = models.Item.objects.create(
+        name="zzz_item_under_private",
+        category=private_cat,
+        is_private=False,
+    )
+    item_under_public = models.Item.objects.create(
+        name="zzz_item_under_public",
+        category=public_cat,
+        is_private=False,
+    )
+
+    entry_under_private = models.Entry.objects.create(
+        value="zzz_entry_under_private",
+        property=priv_prop,
+        item=item_under_private,
+        is_private=False,
+    )
+    entry_under_public = models.Entry.objects.create(
+        value="zzz_entry_under_public",
+        property=pub_prop,
+        item=item_under_public,
+        is_private=False,
+    )
+    return {
+        "private_cat": private_cat,
+        "public_cat": public_cat,
+        "item_under_private": item_under_private,
+        "item_under_public": item_under_public,
+        "entry_under_private": entry_under_private,
+        "entry_under_public": entry_under_public,
+    }
+
+
 @pytest.mark.django_db
-@pytest.mark.skip(
-    reason="TODO(spec-034 Slice 4): anonymous sees no entries under private categories",
-)
 def test_cascade_anonymous_sees_no_entries_under_private_categories():
     """The 2-deep live pin: a private Category hides its Items' Entries from anonymous.
 
-    `create_users(1)`; seed a private Category with a public Item carrying a public
-    Entry; assert an anonymous `allEntries { ... }` request returns no entry whose
-    item's category is private - the cascade reaches Entry -> Item -> Category.
+    Seeds a private Category with a public Item carrying a public Entry (via a
+    public Property under that same private Category); an anonymous
+    ``allEntries`` request returns no entry whose item's category is private -
+    the cascade reaches Entry -> Item -> Category. The fully-public control entry
+    IS returned, proving narrowing (not a blanket empty result).
     """
+    create_users(1)
+    chain = _seed_cascade_split()
+
+    response = _post_graphql(
+        """
+        query {
+          allEntries {
+            edges { node { value item { name category { name } } } }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    nodes = [edge["node"] for edge in payload["data"]["allEntries"]["edges"]]
+    category_names = {node["item"]["category"]["name"] for node in nodes}
+    values = {node["value"] for node in nodes}
+    # The cascade hides the entry whose item's category is private...
+    assert chain["private_cat"].name not in category_names
+    assert chain["entry_under_private"].value not in values
+    # ...but the fully-public control entry is still visible (narrowing, not empty).
+    assert chain["entry_under_public"].value in values
 
 
 @pytest.mark.django_db
-@pytest.mark.skip(reason="TODO(spec-034 Slice 4): view_item user matrix across the cascade")
 def test_cascade_view_item_user_matrix():
-    """The `view_item` user sees non-private items but still loses entries under hidden categories.
+    """The ``view_item`` user sees non-private items but still loses entries under hidden categories.
 
-    Per-edge composition: ItemType's own rule lets the `view_item` user see
-    non-private items, yet EntryType's cascade still drops entries whose item's
-    category is hidden (the cascade composes per edge, not all-or-nothing).
+    Per-edge composition: ``ItemType``'s own ``view_item`` rule lets the user see
+    non-private items regardless of category privacy, yet ``EntryType``'s cascade
+    still drops entries whose item's category is hidden (that user holds no
+    ``view_entry`` perm, so the entry-level cascade reaches the hidden Category
+    through ``item``). The two root fields disagree by design.
     """
+    create_users(1)
+    chain = _seed_cascade_split()
+    client = _login("view_item_1")
+
+    # allItems: the view_item rule shows the (public) item even under a private cat.
+    items_response = _post_graphql(
+        "query { allItems { edges { node { name } } } }",
+        client=client,
+    )
+    assert items_response.status_code == 200
+    items_payload = items_response.json()
+    assert "errors" not in items_payload, items_payload
+    item_names = {edge["node"]["name"] for edge in items_payload["data"]["allItems"]["edges"]}
+    assert chain["item_under_private"].name in item_names
+    assert chain["item_under_public"].name in item_names
+
+    # allEntries: the entry-level cascade still drops the entry under the hidden cat.
+    entries_response = _post_graphql(
+        "query { allEntries { edges { node { value item { category { name } } } } } }",
+        client=client,
+    )
+    assert entries_response.status_code == 200
+    entries_payload = entries_response.json()
+    assert "errors" not in entries_payload, entries_payload
+    entry_nodes = [edge["node"] for edge in entries_payload["data"]["allEntries"]["edges"]]
+    entry_values = {node["value"] for node in entry_nodes}
+    assert chain["entry_under_private"].value not in entry_values
+    assert chain["entry_under_public"].value in entry_values
 
 
 @pytest.mark.django_db
-@pytest.mark.skip(reason="TODO(spec-034 Slice 4): staff sees everything")
 def test_cascade_staff_sees_everything():
-    """A staff user (create_users makes `staff_<n>` is_staff, NOT is_superuser) bypasses the cascade."""
+    """A staff user (``create_users`` makes ``staff_<n>`` is_staff, NOT is_superuser) bypasses the cascade.
 
-
-@pytest.mark.django_db
-@pytest.mark.skip(reason="TODO(spec-034 Slice 4): cascaded traversal has a fixed query count")
-def test_cascade_query_count_fixed():
-    """`allEntries { value item { name category { name } } }` runs in a fixed query count.
-
-    The cascade adds zero queries (the `__in` subqueries compile in-line, Decision 7);
-    the optimizer plans the traversal. Pin with `CaptureQueriesContext`.
+    Staff hits the ``user.is_staff`` short-circuit in every hook, so the visible
+    counts equal the full ORM counts (capped at ``_RELAY_MAX_RESULTS`` for the
+    connection page). Asserts against the seeded full set, including the private
+    rows the cascade would hide for anyone else.
     """
+    create_users(1)
+    seed_data(1)
+    _seed_cascade_split()
+    client = _login("staff_1")
+
+    for field, model in (("allCategories", models.Category), ("allItems", models.Item)):
+        response = _post_graphql(
+            f"query {{ {field} {{ edges {{ node {{ id }} }} }} }}",
+            client=client,
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        returned = len(payload["data"][field]["edges"])
+        expected = min(model.objects.count(), _RELAY_MAX_RESULTS)
+        assert returned == expected, (field, returned, expected)
+
+    # Sanity: staff sees the private-chain rows that the cascade hides for others.
+    assert models.Category.objects.filter(is_private=True).exists()
+    assert models.Category.objects.count() <= _RELAY_MAX_RESULTS
 
 
 @pytest.mark.django_db
-@pytest.mark.skip(reason="TODO(spec-034 Slice 4): cascade composes with filter + order live")
+def test_cascade_query_count_fixed():
+    """``allEntries { value item { name category { name } } }`` runs in a FIXED query count.
+
+    The cascade adds zero round-trips - the ``__in`` subqueries compile inline as
+    nested ``SELECT``s (Decision 7). Because ``EntryType`` cascades through
+    ``item`` to the custom-hooked ``ItemType`` / ``CategoryType``, the optimizer
+    downgrades the forward-FK ``select_related`` to a windowed ``Prefetch`` chain
+    (the shipped ``get_queryset`` -> ``Prefetch`` rule; spec-034 Slice 2). The
+    anonymous request issues no auth queries, so the products query count is a
+    deterministic 3 (one entry slice + one ``item`` prefetch + one ``category``
+    prefetch), independent of how ``seed_data`` randomized row privacy. The
+    cascade's nested ``IN (SELECT`` subqueries appear in the SQL, so the test
+    cannot pass on a fall-through that skipped the cascade.
+    """
+    create_users(1)
+    seed_data(1)
+    _seed_cascade_split()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            "query { allEntries { edges { node { value item { name category { name } } } } } }",
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    # Fixed, structurally deterministic: entry slice + item prefetch + category
+    # prefetch (forward-FK select_related downgraded to Prefetch by the hooks).
+    assert len(captured) == 3, [query["sql"] for query in captured]
+    all_sql = " ".join(query["sql"] for query in captured)
+    # Cascade composed its subqueries inline (zero added round-trips), not a
+    # fall-through that skipped the cascade.
+    assert "IN (SELECT" in all_sql
+    # The forward chain plans as a Prefetch chain, NOT a select_related JOIN
+    # across products tables (the hook-presence downgrade).
+    assert not any(
+        "products_entry" in query["sql"]
+        and "products_item" in query["sql"]
+        and "JOIN" in query["sql"].upper()
+        for query in captured
+    )
+
+
+@pytest.mark.django_db
 def test_cascade_composes_with_filter_and_order_live():
-    """`filter:` + `orderBy:` + cascade in one request; the shipped `check_name_permission`
-    gates keep firing per their live pins (Decision 11 composition order)."""
+    """``filter:`` + ``orderBy:`` + cascade in one request; ``check_name_permission`` keeps firing.
+
+    Two shapes per Decision 11 (cascade narrows rows, gates judge input):
+
+    (a) a gated-field input (anonymous ``allCategories(orderBy: [{ name: ASC }])``)
+        still raises the ``check_name_permission`` "staff user" error - the gate
+        fires on input shape, independent of the cascade;
+    (b) a non-gated anonymous composing request
+        (``allItems(filter: { category: { id: { exact: <public-cat> } } }, orderBy: [{ name: ASC }])``)
+        narrows first to the cascade-visible set (anonymous sees only non-private
+        items under non-private categories) then filters + orders the survivors,
+        matching the equivalent post-cascade ORM query.
+    """
+    create_users(1)
+    seed_data(1)
+
+    # (a) the gate fires on the gated order input, regardless of cascade.
+    gated = _post_graphql(
+        "query { allCategories(orderBy: [{ name: ASC }]) { edges { node { name } } } }",
+    )
+    gated_payload = gated.json()
+    assert "errors" in gated_payload, gated_payload
+    assert "staff user" in gated_payload["errors"][0]["message"]
+
+    # (b) anonymous filter (no gate on `id`) + order (no gate on Item.name) on top
+    # of the cascade-narrowed set: the public category's non-private items, ordered
+    # by name. Derived from the equivalent post-cascade ORM query (API == ORM).
+    category = models.Category.objects.filter(is_private=False).order_by("id").first()
+    gid = str(
+        relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk)),
+    )
+    expected = [
+        {"node": {"name": name}}
+        for name in models.Item.objects.filter(category=category, is_private=False)
+        .order_by("name")
+        .values_list("name", flat=True)
+    ]
+    _assert_graphql_data(
+        f'query {{ allItems(filter: {{ category: {{ id: {{ exact: "{gid}" }} }} }}, '
+        "orderBy: [{ name: ASC }]) { edges { node { name } } } }",
+        {"allItems": {"edges": expected}},
+    )

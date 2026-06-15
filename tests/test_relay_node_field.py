@@ -32,6 +32,7 @@ from django_strawberry_framework import (
     strawberry_config,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.relay import _coerce_pk_or_none, _stamp_node_type
 from django_strawberry_framework.types.relay import SyncMisuseError
@@ -1024,11 +1025,87 @@ def test_public_exports():
 # =============================================================================
 
 
-@pytest.mark.skip(reason="TODO(spec-034 Slice 3): node refetch of cascade-hidden row returns null")
+def _make_cascading_item_node() -> type:
+    """Relay-Node ``Item`` type whose ``get_queryset`` cascades + a hiding ``Category``.
+
+    The cascade analogue of ``_make_hidden_category_node``: an item is hidden not by
+    its own column but by its FK target (``category``) being cascade-hidden. The
+    ``Item`` hook calls ``apply_cascade_permissions`` (composing
+    ``category__in (SELECT visible)``); the registered ``Category`` type hides
+    private rows. Returns the ``Item`` node (the refetch target).
+    """
+
+    class _HidingCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.filter(is_private=False)
+
+    class HiddenViaCascadeItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return apply_cascade_permissions(cls, queryset, info)
+
+    return HiddenViaCascadeItemNode
+
+
+_ITEM_QUERY = "query ($id: ID!) { item(id: $id) { name } }"
+_ITEMS_QUERY = "query ($ids: [ID!]!) { items(ids: $ids) { name } }"
+
+
+@pytest.mark.django_db
 def test_node_refetch_of_cascade_hidden_row_returns_null():
-    """``node(id:)`` of a cascade-hidden row returns ``null`` - no existence leak (Decision 12)."""
+    """``node(id:)`` of a cascade-hidden row returns ``null`` - no existence leak (Decision 12).
+
+    The refetch routes through ``Item.get_queryset`` -> ``apply_cascade_permissions``,
+    so an item whose ``category`` is private is invisible and refetches as ``null``
+    with no error - the no-existence-leak contract extended across the FK edge.
+    """
+    item_node = _make_cascading_item_node()
+    schema = _schema_with("item", item_node | None, DjangoNodeField(item_node))
+
+    public_cat = Category.objects.create(name="public_cat", is_private=False)
+    private_cat = Category.objects.create(name="private_cat", is_private=True)
+    Item.objects.create(name="visible_item", category=public_cat)
+    hidden_item = Item.objects.create(name="hidden_item", category=private_cat)
+
+    result = schema.execute_sync(
+        _ITEM_QUERY,
+        variable_values={"id": _gid("products.item", hidden_item.pk)},
+    )
+    assert result.errors is None
+    assert result.data == {"item": None}
 
 
-@pytest.mark.skip(reason="TODO(spec-034 Slice 3): nodes batch holes for cascade-hidden rows")
+@pytest.mark.django_db
 def test_nodes_batch_holes_for_cascade_hidden_rows():
-    """``nodes(ids:)`` returns positional ``null`` holes for cascade-hidden rows (Decision 12)."""
+    """``nodes(ids:)`` returns positional ``null`` holes for cascade-hidden rows (Decision 12).
+
+    A batch interleaving a visible item and a cascade-hidden item resolves the
+    visible id and leaves a positional ``null`` hole for the hidden one - the batch
+    refetch honors the cascade per id, leaking no existence.
+    """
+    item_node = _make_cascading_item_node()
+    schema = _schema_with("items", list[item_node | None], DjangoNodesField(item_node))
+
+    public_cat = Category.objects.create(name="public_cat", is_private=False)
+    private_cat = Category.objects.create(name="private_cat", is_private=True)
+    visible_item = Item.objects.create(name="visible_item", category=public_cat)
+    hidden_item = Item.objects.create(name="hidden_item", category=private_cat)
+
+    result = schema.execute_sync(
+        _ITEMS_QUERY,
+        variable_values={
+            "ids": [_gid("products.item", hidden_item.pk), _gid("products.item", visible_item.pk)],
+        },
+    )
+    assert result.errors is None
+    assert result.data["items"] == [None, {"name": visible_item.name}]

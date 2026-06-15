@@ -33,6 +33,8 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`DjangoOptimizerExtension`](#djangooptimizerextension) — Strawberry schema extension that does ORM optimization.
 - [`OptimizerHint`](#optimizerhint) — typed wrapper for per-relation optimizer overrides.
 - [`SyncMisuseError`](#syncmisuseerror) — typed marker for sync resolver paths that receive an async `get_queryset` coroutine.
+- [`apply_cascade_permissions`](#apply_cascade_permissions) — cascade a type's `get_queryset` visibility through its single-column forward FK / OneToOne edges (sync).
+- [`aapply_cascade_permissions`](#apply_cascade_permissions) — async twin of `apply_cascade_permissions` (`sync_to_async` wrap); shares the entry.
 - [`finalize_django_types`](#finalize_django_types) — synchronization point that resolves pending relations and applies `strawberry.type` decoration.
 - [`strawberry_config`](#strawberry_config) — factory returning a `StrawberryConfig` pre-populated with the package's `scalar_map`.
 - [`auto`](#auto-typed-annotations) — re-export from Strawberry for `auto`-typed field annotations (the declare-but-infer marker).
@@ -52,7 +54,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | Entry | Status |
 |---|---|
 | [`AggregateSet`](#aggregateset) | planned for `0.1.3` |
-| [`apply_cascade_permissions`](#apply_cascade_permissions) | planned for `0.0.10` |
+| [`apply_cascade_permissions`](#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [Auth mutations](#auth-mutations) | planned for `0.0.11` |
 | [`BigInt` scalar](#bigint-scalar) | shipped (`0.0.6`) |
 | [Choice enum generation](#choice-enum-generation) | shipped (`0.0.1`) |
@@ -109,7 +111,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`Ordering`](#ordering) | shipped (`0.0.8`) |
 | [`OrderSet`](#orderset) | shipped (`0.0.8`) |
 | [`order_input_type`](#order_input_type) | shipped (`0.0.8`) |
-| [Per-field permission hooks](#per-field-permission-hooks) | planned for `0.0.10` |
+| [Per-field permission hooks](#per-field-permission-hooks) | planned for `0.1.1` |
 | [Plan cache](#plan-cache) | shipped (`0.0.3`) |
 | [Queryset diffing](#queryset-diffing) | shipped (`0.0.3`) |
 | [`RelatedAggregate`](#relatedaggregate) | planned for `0.1.3` |
@@ -168,17 +170,32 @@ Declarative aggregate class with `Sum` / `Count` / `Avg` / `Min` / `Max` / `Mode
 
 ## `apply_cascade_permissions`
 
-**Status:** planned for `0.0.10`.
+**Status:** shipped (`0.0.10`).
 
-Cascades each `DjangoType`'s [`get_queryset`](#get_queryset-visibility-hook) filter to its related types when reaching through FK / M2M. Used inside a type's `get_queryset` override:
+Cascades each [`DjangoType`](#djangotype)'s [`get_queryset`](#get_queryset-visibility-hook) visibility to its related types across **single-column forward FK / OneToOne edges** (M2M, reverse relations, `GenericForeignKey` / `GenericRelation`, and the multi-table-inheritance `<parent>_ptr` parent link are out of scope). Called inside a type's `get_queryset` override:
 
 ```python
 @classmethod
 def get_queryset(cls, queryset, info):
+    user = getattr(getattr(info.context, "request", None), "user", None)
+    if user and user.is_staff:
+        return queryset
     return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 ```
 
-Composes with filter / order / aggregate permission gates and with the post-write return value of mutations.
+**The walk.** Per call the helper walks `cls`'s model `_meta` edges and, for each single-column forward relation, resolves the target type through the registry primary lookup, skips any target without a custom `get_queryset` (the identity default adds nothing), and intersects `Q(<fk>__in=<target visible pks>) | Q(<fk>__isnull=True)` into the caller's queryset. The target visibility subquery is the target type's own `get_queryset` run against the target model's rows, pinned to the caller's resolved DB alias (`queryset.db`). The walk is depth-1; transitive cascade emerges because each target's hook may itself call the helper.
+
+**Four invariants.** (1) A module-level `ContextVar` seen-set guards cycles — re-entry on a type already walking returns the partially-narrowed queryset (never raises), and the root call resets the var in a `finally` so request isolation holds under WSGI and ASGI. (2) Single-column forward scope only. (3) Nullable-FK rows are preserved by the `__isnull=True` disjunct. (4) Every target subquery is pinned to the caller's resolved alias so sharded callers never compose a cross-database `__in`.
+
+**`fields=` validation is loud.** Passing `fields=` scopes the walk to the named edges; a bare string is rejected up front (so `fields="item"` fails loudly instead of iterating its characters), and an unknown or non-cascadable name raises [`ConfigurationError`](#configurationerror) naming the field, the model, and the model's cascadable set.
+
+**Sync / async pair.** The sync helper closes the coroutine and raises [`SyncMisuseError`](#syncmisuseerror) if a target hook returns one (an `async def` hook met from the sync walk); `aapply_cascade_permissions(cls, queryset, info, fields=None)` is the async twin — it runs the same walk through `sync_to_async(thread_sensitive=True)` so blocking consumer-hook work (e.g. `user.has_perm(...)` permission-table reads) stays off the event loop:
+
+```python
+qs = await aapply_cascade_permissions(cls, qs, info)
+```
+
+**Composition.** The cascade narrows rows first; the shipped [`FilterSet`](#filterset) / [`OrderSet`](#orderset) `check_<field>_permission` input gates then judge input on the surviving rows (a denial never leaks a cascade-hidden row's existence). It composes with [connections](#djangoconnectionfield) (edges and `totalCount` narrow together), [node refetch](#djangonodefield) (a hidden row refetches as `null`), [list fields](#djangolistfield), and nested filter branches through their existing `get_queryset` seams — under the optimizer's `Prefetch` downgrade, with **zero** added query round-trips (the `__in` subqueries compile into the caller's single `SELECT`).
 
 **See also:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [Per-field permission hooks](#per-field-permission-hooks).
 
@@ -570,7 +587,7 @@ class ItemType(DjangoType):
         return queryset.filter(is_private=False)
 ```
 
-The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` reports whether a type or inherited intermediate base overrides the hook, and the optimizer downgrades a JOIN to a `Prefetch` when a target type defines one. Your visibility filter survives relation traversal instead of being bypassed by a raw `select_related` join. Inheritance through an abstract base that overrides `get_queryset` without declaring `Meta` is supported — the sentinel flip runs before the `meta is None` early-return so the abstract-shared-base pattern reports correctly on concrete subclasses.
+The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` reports whether a type or inherited intermediate base overrides the hook, and the optimizer downgrades a JOIN to a `Prefetch` when a target type defines one. Your visibility filter survives relation traversal instead of being bypassed by a raw `select_related` join. A type's `get_queryset` is also the seam [`apply_cascade_permissions`](#apply_cascade_permissions) composes: the cascade is called *from inside* this hook to reach the type's single-column forward FK / OneToOne targets, running each target type's own `get_queryset` to narrow which parent rows stay visible. Inheritance through an abstract base that overrides `get_queryset` without declaring `Meta` is supported — the sentinel flip runs before the `meta is None` early-return so the abstract-shared-base pattern reports correctly on concrete subclasses.
 
 **See also:** [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Per-field permission hooks](#per-field-permission-hooks).
 
@@ -934,12 +951,14 @@ The helper validates its [`OrderSet`](#orderset) argument eagerly so a typo at t
 
 ## Per-field permission hooks
 
-**Status:** planned for `0.0.10`.
+**Status:** planned for `0.1.1`.
 
 Methods named `check_<field>_permission` on the type's [`FieldSet`](#fieldset) gate access to that field. Two failure modes:
 
 - **Redaction** — silent safe-value fallback (`None`, empty string, sentinel) so the response shape stays stable.
 - **Denial** — raise `GraphQLError` so the response carries an `errors` entry for that path.
+
+The read gate's surface is pinned now (Decision 2 of the `0.0.10` permissions spec) and the implementation lands with the `0.1.1` [`FieldSet`](#fieldset) card: the **host** is `FieldSet` (wired via [`Meta.fields_class`](#metafields_class), which stays in `DEFERRED_META_KEYS` until then); the **signature** is `check_<field>_permission(self, info)` (an `info`-shaped read gate that runs per resolved field — distinct from the `(self, request)`-shaped input gates that judge filter / order *input*). **Composition with the cascade:** a field gate does **not** short-circuit cascade visibility — [`apply_cascade_permissions`](#apply_cascade_permissions) narrows the queryset first and field gates run only on surviving rows, so a field denial never leaks the existence of a cascade-hidden row.
 
 Composes with filter / order / aggregate permission gates and with the post-write return value of mutations.
 

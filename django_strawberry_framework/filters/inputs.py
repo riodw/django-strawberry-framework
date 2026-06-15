@@ -40,6 +40,7 @@ from ..utils.inputs import (
     iter_set_subclasses,
     materialize_generated_input_class,
 )
+from ..utils.strings import pascal_case
 from .base import (
     ArrayFilter,
     GlobalIDFilter,
@@ -155,17 +156,21 @@ _materialized_names: dict[str, type] = {}
 # ---------------------------------------------------------------------------
 
 
-# Pascal-case helper for input-class names. The cookbook uses
-# ``stringcase.pascalcase``; the package has no ``stringcase`` dependency
-# so a local one-liner suffices: ``galaxy__name`` -> ``GalaxyName``.
+# Pascal-case helper for input-class names. Delegates the case conversion to
+# the shared ``utils.strings.pascal_case`` (single source of truth) and only
+# adds the load-bearing no-word-character guard documented below. Mirrors
+# ``sets_mixins.py::ClassBasedTypeNameMixin.type_name_for``, which pairs the
+# same shared helper with its own sibling guard for the indirect callers; this
+# wrapper is the ``RangeFilter``-specific counterpart for the direct caller.
 def _pascal_case(name: str) -> str:
-    """Return ``name`` converted to ``PascalCase`` (treats ``_`` as a separator).
+    """Return ``name`` converted to ``PascalCase`` via ``utils.strings.pascal_case``.
 
     Raises ``ConfigurationError`` for inputs that contain no
-    word-character tokens (e.g. ``"_"``, ``""``, ``"__"``); the result
-    would otherwise be an empty string and silently collide on the
-    downstream ``RangeInputType`` naming. Raising here surfaces the
-    real cause at the call site.
+    word-character tokens (e.g. ``"_"``, ``""``, ``"__"``); the shared
+    helper returns ``""`` for such input, which would silently collide on
+    the downstream ``RangeInputType`` naming. Raising here surfaces the
+    real cause at the call site -- the one behaviour this thin wrapper adds
+    on top of ``utils.strings.pascal_case``.
 
     Direct caller today: ``_build_range_input_class`` only. Indirect
     callers (``_input_type_name_for``, ``_build_input_fields``'s
@@ -174,14 +179,14 @@ def _pascal_case(name: str) -> str:
     its sibling no-word-character guard rather than this one - so the
     error message below names the ``RangeFilter`` consumer specifically.
     """
-    parts = [part.capitalize() for part in name.replace("__", "_").split("_") if part]
-    if not parts:
+    pascal = pascal_case(name)
+    if not pascal:
         raise ConfigurationError(
             f"_pascal_case received {name!r} which contains no word "
             "characters; rename the RangeFilter's `field_name=` so its "
             "name has at least one alphanumeric token.",
         )
-    return "".join(parts)
+    return pascal
 
 
 def _input_type_name_for(filterset_class: type[FilterSet]) -> str:

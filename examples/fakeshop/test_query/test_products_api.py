@@ -925,6 +925,8 @@ def _seed_cascade_split():
     return {
         "private_cat": private_cat,
         "public_cat": public_cat,
+        "priv_prop": priv_prop,
+        "pub_prop": pub_prop,
         "item_under_private": item_under_private,
         "item_under_public": item_under_public,
         "entry_under_private": entry_under_private,
@@ -969,17 +971,39 @@ def test_cascade_anonymous_sees_no_entries_under_private_categories():
 
 @pytest.mark.django_db
 def test_cascade_view_item_user_matrix():
-    """The ``view_item`` user sees non-private items but still loses entries under hidden categories.
+    """The ``view_item`` user keeps non-private items; the entry drop is via ``property``, not ``item``.
 
-    Per-edge composition: ``ItemType``'s own ``view_item`` rule lets the user see
-    non-private items regardless of category privacy, yet ``EntryType``'s cascade
-    still drops entries whose item's category is hidden (that user holds no
-    ``view_entry`` perm, so the entry-level cascade reaches the hidden Category
-    through ``item``). The two root fields disagree by design.
+    Per-edge composition. ``ItemType``'s ``view_item`` branch returns all
+    non-private items with NO cascade, so the ``Entry -> item -> Category`` path
+    is short-circuited for this user: an entry is never dropped by its ``item``
+    edge, even when that item sits under a private category. The drop the user
+    still sees comes from the ``property`` edge - holding no ``view_property``
+    perm, ``PropertyType``'s cascade hides the property under the private
+    category, so ``Q(property__in=visible) | Q(property__isnull=True)`` excludes
+    ``entry_under_private`` (whose property is the private-category ``priv_prop``).
+    The isolating ``entry_item_private`` below - a public item under the private
+    category, paired with the fully public ``pub_prop`` - SURVIVES, pinning that
+    the live drop is through ``property`` and the ``item`` edge does not cascade
+    for this user (the two root fields disagree by design). Both edges of
+    ``entry_under_private`` point at the private category, so it alone cannot
+    distinguish the two paths - the isolating entry is what makes the claim testable.
     """
     create_users(1)
     chain = _seed_cascade_split()
     client = _login("view_item_1")
+
+    # Isolating fixture for the per-edge claim: an entry whose ONLY private
+    # linkage is its item's category (the item itself is public, just under the
+    # private category), paired with a fully public property. For a view_item
+    # user the item edge does not cascade into Category and the property edge
+    # keeps it, so this entry must SURVIVE - which entry_under_private (private on
+    # both edges) cannot prove.
+    entry_item_private = models.Entry.objects.create(
+        value="zzz_entry_item_private_prop_public",
+        item=chain["item_under_private"],
+        property=chain["pub_prop"],
+        is_private=False,
+    )
 
     # allItems: the view_item rule shows the (public) item even under a private cat.
     items_response = _post_graphql(
@@ -1005,6 +1029,11 @@ def test_cascade_view_item_user_matrix():
     entry_values = {node["value"] for node in entry_nodes}
     assert chain["entry_under_private"].value not in entry_values
     assert chain["entry_under_public"].value in entry_values
+    # The isolating entry survives: its item is public (the view_item branch does
+    # not cascade the item edge into Category) and its property is public, so no
+    # edge can drop it. This is the per-edge contract the "through item" docstring
+    # could not actually pin.
+    assert entry_item_private.value in entry_values
 
 
 @pytest.mark.django_db

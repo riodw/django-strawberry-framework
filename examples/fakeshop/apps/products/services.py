@@ -418,3 +418,69 @@ def delete_data(target: int | str) -> dict[str, int]:
             Item.objects.filter(pk__in=pks).delete()
 
     return result
+
+
+def seed_cascade_split(db_alias: str = "default") -> dict[str, object]:
+    """Seed a deterministic private/public 2-deep chain for cascade-visibility tests.
+
+    The named seed helper for the cascade live tests (the "seed-helper tests are the
+    only exception" carve-out in ``AGENTS.md`` -- catalog rows for live tests are
+    created here, not hand-rolled in the test module). Unlike ``seed_data`` (whose
+    ``is_private`` flags are randomized / index-parity), this builds a FIXED split so
+    per-edge cascade narrowing is observable:
+
+    * a PRIVATE category holding a PUBLIC item and a PUBLIC property, carrying a
+      PUBLIC entry -- everything below the category is public, so only the category's
+      privacy can hide the entry through the cascade;
+    * a PUBLIC category holding the mirror public item / property / entry (a fully
+      visible control chain).
+
+    Returns the key rows so a test can assert against them by identity.
+    """
+    private_cat = Category.objects.using(db_alias).create(name="zzz_private_cat", is_private=True)
+    public_cat = Category.objects.using(db_alias).create(name="zzz_public_cat", is_private=False)
+
+    priv_prop = Property.objects.using(db_alias).create(
+        name="priv_prop",
+        category=private_cat,
+        is_private=False,
+    )
+    pub_prop = Property.objects.using(db_alias).create(
+        name="pub_prop",
+        category=public_cat,
+        is_private=False,
+    )
+
+    item_under_private = Item.objects.using(db_alias).create(
+        name="zzz_item_under_private",
+        category=private_cat,
+        is_private=False,
+    )
+    item_under_public = Item.objects.using(db_alias).create(
+        name="zzz_item_under_public",
+        category=public_cat,
+        is_private=False,
+    )
+
+    entry_under_private = Entry.objects.using(db_alias).create(
+        value="zzz_entry_under_private",
+        property=priv_prop,
+        item=item_under_private,
+        is_private=False,
+    )
+    entry_under_public = Entry.objects.using(db_alias).create(
+        value="zzz_entry_under_public",
+        property=pub_prop,
+        item=item_under_public,
+        is_private=False,
+    )
+    return {
+        "private_cat": private_cat,
+        "public_cat": public_cat,
+        "priv_prop": priv_prop,
+        "pub_prop": pub_prop,
+        "item_under_private": item_under_private,
+        "item_under_public": item_under_public,
+        "entry_under_private": entry_under_private,
+        "entry_under_public": entry_under_public,
+    }

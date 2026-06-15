@@ -119,7 +119,11 @@ def _validate_fields(model: type[models.Model], fields: Any) -> set[str] | None:
     bare string is rejected up front: a string iterates as its characters, so
     ``fields="item"`` would otherwise validate ``'i'``, ``'t'``, ``'e'``,
     ``'m'`` and surface a misleading per-character error that hides the missing
-    brackets. Otherwise every supplied name must be a cascadable edge; unknown or
+    brackets. A non-iterable value (``fields=1``) or a non-string entry
+    (``fields=[1]`` / ``fields=[["item"]]``) likewise raises ``ConfigurationError``
+    naming the field-name-iterable contract rather than escaping as a raw
+    ``TypeError`` from ``set(...)`` (feedback M2).
+    Otherwise every supplied name must be a cascadable edge; unknown or
     known-but-non-cascadable names raise ``ConfigurationError`` naming the
     offending entry, the model, and the cascadable set. A cascadable name whose
     target lacks a registered type or custom hook validates clean here and is
@@ -133,7 +137,24 @@ def _validate_fields(model: type[models.Model], fields: Any) -> set[str] | None:
             f"field names, not the bare string {fields!r}; wrap it in a list "
             f"(fields=[{fields!r}]).",
         )
-    requested = set(fields)
+    try:
+        # ``list`` (not ``set``) first: a non-iterable (``fields=1``) raises here,
+        # while an iterable with unhashable entries (``fields=[["item"]]``) iterates
+        # fine and is caught by the string check below -- so a malformed shape never
+        # escapes as a raw ``TypeError`` from ``set(...)`` (feedback M2).
+        requested = list(fields)
+    except TypeError as exc:
+        raise ConfigurationError(
+            f"apply_cascade_permissions fields= must be a non-string iterable of "
+            f"field names; got {fields!r}.",
+        ) from exc
+    non_strings = [entry for entry in requested if not isinstance(entry, str)]
+    if non_strings:
+        raise ConfigurationError(
+            f"apply_cascade_permissions fields= entries must be field-name strings; "
+            f"got non-string entries {non_strings!r}.",
+        )
+    requested = set(requested)
     cascadable = _cascadable_edge_names(model)
     unknown = requested - cascadable
     if unknown:
@@ -175,8 +196,10 @@ def apply_cascade_permissions(
     Raises:
         ConfigurationError: a bare-string ``fields=`` or a ``fields=`` name that
             is unknown / non-cascadable (Decision 9).
-        SyncMisuseError: a target type's ``get_queryset`` is ``async def`` (use
-            ``aapply_cascade_permissions`` or rewrite the hook sync -- Decision 10).
+        SyncMisuseError: a target type's ``get_queryset`` is ``async def``. The
+            async twin ``aapply_cascade_permissions`` wraps this same sync walk, so
+            it raises identically -- the recourse is to make the target hook sync,
+            or pass ``fields=`` to skip the async-hooked edge (Decision 10).
     """
     model = cls.__django_strawberry_definition__.model
     names_to_walk = _validate_fields(model, fields)
@@ -222,7 +245,17 @@ def _walk(
         if not target_type.has_custom_get_queryset():
             continue
         base = field.related_model._default_manager.using(queryset.db).all()
-        target_qs = apply_type_visibility_sync(target_type, base, info)
+        target_qs = apply_type_visibility_sync(
+            target_type,
+            base,
+            info,
+            async_recourse=(
+                "apply_cascade_permissions walks target hooks synchronously and "
+                "aapply_cascade_permissions wraps that same sync walk, so neither "
+                "can await an async target hook in 0.0.10; make this target type's "
+                "get_queryset sync, or pass fields= to skip the async-hooked edge."
+            ),
+        )
         queryset = queryset.filter(
             Q(**{f"{field.name}__in": target_qs}) | Q(**{f"{field.name}__isnull": True}),
         )

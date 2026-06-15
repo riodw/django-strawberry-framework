@@ -90,10 +90,18 @@ def normalize_query_source(source: Any) -> tuple[Any, bool]:
     return source, isinstance(source, models.QuerySet)
 
 
+_RELAY_ASYNC_RECOURSE = (
+    "The Relay node defaults only await async get_queryset hooks on the async "
+    "branch; either invoke the Relay node default from an async resolver, or "
+    "redefine get_queryset as a sync method."
+)
+
+
 def apply_type_visibility_sync(
     type_cls: type,
     queryset: models.QuerySet,
     info: Any,
+    async_recourse: str = _RELAY_ASYNC_RECOURSE,
 ) -> models.QuerySet:
     """Run ``type_cls.get_queryset`` in a sync context; reject async hooks loudly.
 
@@ -103,18 +111,22 @@ def apply_type_visibility_sync(
     path we therefore close the unawaited coroutine to silence the
     "coroutine was never awaited" warning and raise a named
     ``SyncMisuseError`` (a ``ConfigurationError`` subclass that also
-    inherits ``RuntimeError``) that points the consumer at the async
-    resolver path or a sync ``get_queryset`` rewrite.
+    inherits ``RuntimeError``) that points the consumer at the correct
+    recourse for the surface that called in.
+
+    ``async_recourse`` is the surface-specific guidance appended to the
+    error. It defaults to the Relay node-defaults wording; callers whose
+    recourse differs pass their own (the cascade, for instance, has no
+    async-native walk -- its twin wraps this same sync walk -- so it tells
+    the consumer to make the target hook sync or scope ``fields=`` rather
+    than reach for an async resolver that cannot help, feedback M1).
     """
     result = type_cls.get_queryset(queryset, info)
     if inspect.iscoroutine(result):
         result.close()
         raise SyncMisuseError(
             f"{type_cls.__name__}.get_queryset returned a coroutine in a sync "
-            "resolver context. The Relay node defaults only await async "
-            "get_queryset hooks on the async branch; either invoke the "
-            "Relay node default from an async resolver, or redefine "
-            "get_queryset as a sync method.",
+            f"resolver context. {async_recourse}",
         )
     return result
 

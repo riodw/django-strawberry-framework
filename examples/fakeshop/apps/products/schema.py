@@ -13,9 +13,9 @@ filter / order / aggregate / fields / search / permissions surface, a
 1-to-1 port of the `django-graphene-filters` cookbook recipe - is
 tracked in `KANBAN.md` under the Layer-3 cards (`DONE-027-0.0.8`
 filters, `DONE-028-0.0.8` orders, `DONE-030-0.0.9` `DjangoConnectionField`,
-`TODO-ALPHA-034-0.0.10` permissions, `TODO-BETA-038-0.1.1` fieldsets,
+`DONE-034-0.0.10` permissions, `TODO-BETA-038-0.1.1` fieldsets,
 `TODO-BETA-039-0.1.2` search, `TODO-BETA-040-0.1.3` aggregates). The
-shipped `filterset_class` + `orderset_class` surface is wired below;
+shipped `filterset_class` + `orderset_class` + permissions surface is wired below;
 each `*Type` class still carries commented-out future-shape Meta keys
 and methods - uncomment each line as the corresponding card ships.
 Sidecar keys `filterset_class` / `orderset_class` are backed by the
@@ -66,12 +66,17 @@ class CategoryType(DjangoType):
 
     @classmethod
     def get_queryset(cls, queryset, info):
-        """Staff or users with view_category permission see everything; others see public only."""
+        """Staff see everything; everyone else (incl. view_category holders) sees public rows.
+
+        Category has no cascadable forward edge, so the cascade is a no-op here - it
+        keeps the four-hook policy uniform (every non-staff branch narrows so a nested
+        non-null FK selection can never reach a target the viewer cannot see).
+        """
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
         elif user and user.has_perm("products.view_category"):
-            return queryset.filter(is_private=False)
+            return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
@@ -98,12 +103,18 @@ class ItemType(DjangoType):
 
     @classmethod
     def get_queryset(cls, queryset, info):
-        """Staff or users with view_item permission see everything; others see public only."""
+        """Staff see everything; everyone else (incl. view_item holders) sees public Items under a visible Category.
+
+        The view_item branch cascades just like the anonymous fallback: a non-staff
+        viewer only sees Items whose ``category`` target is itself visible to them, so
+        selecting the non-null ``category { ... }`` can never hit a hidden target and
+        raise ``RelatedObjectDoesNotExist`` (feedback H1). Only staff bypass the cascade.
+        """
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
         elif user and user.has_perm("products.view_item"):
-            return queryset.filter(is_private=False)
+            return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
@@ -130,12 +141,17 @@ class PropertyType(DjangoType):
 
     @classmethod
     def get_queryset(cls, queryset, info):
-        """Staff or users with view_property permission see everything; others see public only."""
+        """Staff see everything; everyone else (incl. view_property holders) sees public Properties under a visible Category.
+
+        Like ItemType, the view_property branch cascades through the non-null
+        ``category`` edge so a nested ``category { ... }`` selection can never reach a
+        hidden target. Only staff bypass the cascade (feedback H1).
+        """
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
         elif user and user.has_perm("products.view_property"):
-            return queryset.filter(is_private=False)
+            return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
@@ -145,7 +161,7 @@ class EntryType(DjangoType):
         fields = (
             "id",
             "value",
-            "description",  # Future: drop this entry to exercise field-level permission gating (TODO-ALPHA-034-0.0.10)
+            "description",  # Future: drop this entry to exercise field-level permission gating (TODO-BETA-038-0.1.1 FieldSet read gates)
             "property",
             "item",
             "is_private",
@@ -162,12 +178,18 @@ class EntryType(DjangoType):
 
     @classmethod
     def get_queryset(cls, queryset, info):
-        """Staff or users with view_entry permission see everything; others see public only."""
+        """Staff see everything; everyone else (incl. view_entry holders) sees public Entries whose item and property are visible.
+
+        The view_entry branch cascades through both non-null FK edges (``item`` and
+        ``property``), so a non-staff viewer only sees Entries whose targets are visible
+        to them - selecting ``item { ... }`` / ``property { ... }`` can never hit a hidden
+        target and raise ``RelatedObjectDoesNotExist`` (feedback H1). Only staff bypass.
+        """
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
         elif user and user.has_perm("products.view_entry"):
-            return queryset.filter(is_private=False)
+            return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 

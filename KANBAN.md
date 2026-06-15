@@ -97,8 +97,8 @@ To complete the Alpha (pre-0.1.0) milestone: **77.3%**.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | No dedicated spec |
-| `DONE-034-0.0.10` - Permissions subsystem | [spec-034-permissions-0_0_10.md](docs/spec-034-permissions-0_0_10.md) |
+| `WIP-ALPHA-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | [spec-035-optimizer_hardening-0_0_10.md](docs/spec-035-optimizer_hardening-0_0_10.md) |
+| `DONE-034-0.0.10` - Permissions subsystem | [spec-034-permissions-0_0_10.md](docs/SPECS/spec-034-permissions-0_0_10.md) |
 | `DONE-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/SPECS/spec-033-connection_optimizer-0_0_9.md) |
 | `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md) |
 | `DONE-031-0.0.9` - Django-model-based GlobalID encoding | [spec-031-globalid_encoding-0_0_9.md](docs/SPECS/spec-031-globalid_encoding-0_0_9.md) |
@@ -146,6 +146,7 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 - Status: Needs spec
 - Relative size: M
 - Labels: `hardening`, `optimizer`, `performance`, `query-planning`
+- Spec: [spec-035-optimizer_hardening-0_0_10.md](docs/spec-035-optimizer_hardening-0_0_10.md)
 
 #### Predicted files
 
@@ -847,7 +848,7 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 - Wiring: `DjangoType.Meta.fields_class = FooFieldSet` binds the fieldset at finalizer phase 2.5 (the same seam `filterset_class` / `orderset_class` use). At type-creation time the framework wires each `resolve_<field>` / `check_<field>_permission` into the owning `DjangoType`'s resolver chain so consumers do not have to subclass the type or hand-attach decorators.
 - Composes with `DjangoType.Meta.fields`: declaring `Meta.fields = ("id", "name", ...)` on the owning type stays the source of truth for which model fields surface; `FieldSet` only customizes resolution / permission for fields already in `Meta.fields` AND declares any computed fields via class-level annotations.
 - Optimizer cooperation: a `resolve_<field>` that touches ORM data (e.g. tiered date redaction reads `root.created_date`) must NOT defeat the optimizer's `only_fields` projection. The fieldset declares which model columns its resolvers depend on via `Meta.depends_on = {"resolve_created_date": ("created_date",), ...}` (or auto-introspection if reliably available); the optimizer adds those columns to the `only()` projection so the resolver does not trigger a deferred-field fetch.
-- Composability with `apply_cascade_permissions` (`TODO-ALPHA-033-0.0.10`): a `check_<field>_permission` gate that raises does NOT short-circuit cascade visibility; the cascade narrows the queryset first, then field-level gates run on whatever survives. A field denial does not leak existence — null fields and denials look identical to the client.
+- Composability with `apply_cascade_permissions` (`DONE-034-0.0.10`): a `check_<field>_permission` gate that raises does NOT short-circuit cascade visibility; the cascade narrows the queryset first, then field-level gates run on whatever survives. A field denial does not leak existence — null fields and denials look identical to the client.
 
 #### Definition of done
 
@@ -866,6 +867,11 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 - Phase-2.5 finalizer wiring follows the shipped `_bind_filtersets` / `_bind_ordersets` pattern. New helper `_bind_fieldsets` (or the equivalent dispatched form when `TODO-BETA-047-0.1.3` lands) binds each `Meta.fields_class` to its owning `DjangoTypeDefinition` so resolvers and gates are wired before schema construction.
 - Per-field resolver attachment: the existing `_attach_relation_resolvers` already accepts a `skip_field_names` set so consumer-authored fields are not clobbered; FieldSet-bound `resolve_<field>` extends that skip-set so the FieldSet's resolver wins over the auto-generated scalar resolver.
 - Custom Strawberry field class — graphene's `AdvancedFieldSet` works with a custom field type that carries the `check_<field>_permission` gate at resolve time. Strawberry's `strawberry.field(...)` already supports a `permission_classes` argument; the spec must decide between mapping `check_<field>_permission` onto that machinery or carrying a parallel gate. See [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` direction.
+- Slot realized in `DONE-034-0.0.10`: `DjangoTypeDefinition.fields_class` is now declared as an inert `type | None = None` sidecar (spec-034 Decision 2 — the structural mirror of the shipped `filterset_class` / `orderset_class` slots). It has no populator yet and stays `None`; `Meta.fields_class` remains in `DEFERRED_META_KEYS` (still rejected at validation). This card's `_bind_fieldsets` is what populates the slot and promotes the key end-to-end.
+
+#### Architectural posture
+
+- Non-goal — node-level sentinel redaction. The upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType.get_node` / `_make_sentinel` (`is_redacted=True`) masks a hidden non-null FK target in place instead of dropping the row. The package deliberately did **not** adopt this tier (spec-034 Decision 6 chose row-exclusion), and `FieldSet` does **not** revive it. The redaction taxonomy is two-tier: relation/row visibility = queryset narrowing (`apply_cascade_permissions`, which is why the fakeshop `view_<model>` hooks cascade rather than keep a row with a sentinel FK), field visibility = `FieldSet` (redact value / deny). There is no third node-sentinel tier — `FieldSet` redaction runs only on fields of rows that already survived the cascade; it never masks a relation target to keep an otherwise-hidden row visible. Revisit only if strict django-graphene-filters node-sentinel parity is explicitly wanted, and note it conflicts with the row-narrowing model.
 
 #### Why it matters
 
@@ -1487,7 +1493,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Status: In progress
 - Relative size: L
 - Labels: `optimizer`, `permissions`, `public-api`, `security`
-- Spec: [spec-034-permissions-0_0_10.md](docs/spec-034-permissions-0_0_10.md)
+- Spec: [spec-034-permissions-0_0_10.md](docs/SPECS/spec-034-permissions-0_0_10.md)
 
 #### Glossary terms
 

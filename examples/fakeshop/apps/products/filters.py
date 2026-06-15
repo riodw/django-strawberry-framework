@@ -26,9 +26,11 @@ each model's own ``id`` is a Relay GlobalID over the wire -- so the ``id``
 ``GlobalIDMultipleChoiceFilter`` conversion across the PK's lookups.
 
 ``check_<field>_permission(self, request)`` is the filter subsystem's
-(``DONE-021-0.0.8``) per-field permission gate; the queryset-scoping
-``check_<field>_permission(self, queryset, request)`` variant is owned by
-the permissions slice (``TODO-ALPHA-027-0.0.10``) and stays commented.
+(``DONE-021-0.0.8``) per-field permission gate; the permissions subsystem
+(``DONE-034-0.0.10``) composes with it unchanged (its Decision 11 keeps the
+filter/order gates as-is). The queryset-scoping
+``check_<field>_permission(self, queryset, request)`` variant below is a
+separate, currently-unscheduled extension (no owning card) and stays commented.
 """
 
 from __future__ import annotations
@@ -65,11 +67,12 @@ class ItemFilter(FilterSet):
             "category__name": "__all__",
         }
 
-    # TODO(TODO-ALPHA-027-0.0.10 permissions; see KANBAN.md):
-    #   The queryset-scoping permission variant below is owned by the
-    #   permissions slice and composes with this filterset (``DONE-021-0.0.8``).
-    #   Uncomment in the same change that lands the hook contract and exempt
-    #   this pseudo-code block from ERA001 per AGENTS.md's TODO-pseudo-code rule.
+    # TODO(unscheduled - queryset-scoping filter permission; see KANBAN.md):
+    #   The queryset-scoping permission variant below is NOT part of the shipped
+    #   permissions subsystem - ``DONE-034-0.0.10`` ships cascade row-visibility and
+    #   keeps the filter gates unchanged (its Decision 11), so this variant has no
+    #   owning card yet. Uncomment in the change that lands the hook contract and
+    #   exempt this pseudo-code block from ERA001 per AGENTS.md's TODO-pseudo-code rule.
     # def check_entries_permission(self, queryset, request):
     #     """Only staff users may filter by Item.entries."""
     #     user = getattr(request, "user", None)

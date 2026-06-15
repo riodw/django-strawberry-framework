@@ -381,11 +381,19 @@ def test_multi_db_subquery_pinned_to_caller_alias():
             app_label = "products"
             managed = False
 
-    target_type = _make_type(
-        "AliasTargetType",
-        AliasTarget,
-        get_queryset=lambda cls, qs, info: qs.exclude(name="hidden"),
-    )
+    # Capture the alias the cascade actually hands the target hook. The walk builds
+    # the RHS base as ``related_model._default_manager.using(queryset.db).all()``, so
+    # the queryset the hook receives carries the load-bearing alias. Observing that
+    # REAL RHS - rather than reconstructing a fresh ``.using(result.db)`` queryset in
+    # the assertion, which would still pass against a broken default-alias build - is
+    # what actually pins Decision 8 (feedback2 M1).
+    received_dbs = []
+
+    def _record_alias_hook(cls, qs, info):
+        received_dbs.append(qs.db)
+        return qs.exclude(name="hidden")
+
+    target_type = _make_type("AliasTargetType", AliasTarget, get_queryset=_record_alias_hook)
     _make_type("AliasParentType", AliasParent, primary=False)
     finalize_django_types()
 
@@ -397,15 +405,11 @@ def test_multi_db_subquery_pinned_to_caller_alias():
     )
     assert result.db == "shard_b"
     assert target_type is registry.get(AliasTarget)
-
-    # The cascade composed a constraint (an ``__in`` subquery), and the subquery's
-    # RHS queryset is pinned to the caller's resolved alias - not a router-
-    # independent route. The walk builds the base as
-    # ``related_model._default_manager.using(queryset.db).all()``, so ``queryset.db``
-    # ("shard_b" here) is the load-bearing pin; assert it propagates to the base.
-    assert "IN (SELECT" in str(result.query)  # a subquery was composed
-    base = AliasTarget._default_manager.using(result.db).all()
-    assert base.db == "shard_b"
+    # The cascade composed a constraint (an ``__in`` subquery)...
+    assert "IN (SELECT" in str(result.query)
+    # ...and the queryset it ran the target hook against was pinned to the caller's
+    # resolved alias - the genuine RHS the walk built, observed inside the hook itself.
+    assert received_dbs == ["shard_b"]
 
 
 @pytest.mark.django_db(transaction=True)
@@ -863,6 +867,58 @@ def test_fields_bare_string_raises():
     assert "'i'" not in message
 
 
+def test_fields_non_iterable_raises_configuration_error():
+    """``fields=1`` (a non-iterable) raises ConfigurationError, not a raw TypeError (feedback M2).
+
+    ``set(1)`` would escape as ``TypeError: 'int' object is not iterable`` - harder
+    for a consumer to catch consistently and silent about the field-name-iterable
+    contract. The validator rethrows it as the package's typed configuration error.
+    """
+    entry_type = _make_type("NonIterFieldsEntryType", Entry, primary=False)
+    finalize_django_types()
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO, fields=1)
+    message = str(excinfo.value)
+    assert "non-string iterable" in message
+    assert "1" in message
+
+
+def test_fields_unhashable_entry_raises_configuration_error():
+    """``fields=[["item"]]`` (unhashable entry) raises ConfigurationError, not a raw TypeError (feedback M2).
+
+    A nested list iterates fine but is not a field-name string; the ``list``-first
+    validation catches it on the string check before any ``set(...)`` hashing, so
+    ``TypeError: unhashable type: 'list'`` never escapes.
+    """
+    entry_type = _make_type("UnhashableFieldsEntryType", Entry, primary=False)
+    finalize_django_types()
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO, fields=[["item"]])
+    message = str(excinfo.value)
+    assert "field-name strings" in message
+    assert "['item']" in message or '["item"]' in message
+
+
+def test_fields_non_string_entry_raises_configuration_error():
+    """``fields=[1]`` raises a clear "must be field-name strings" error, not a confusing name diff (feedback M2).
+
+    Before the string check, ``set([1]) - cascadable`` surfaced "[1] ... are not
+    cascadable" - implying ``1`` is a (misspelled) field name. The dedicated string
+    check names the real contract instead.
+    """
+    entry_type = _make_type("NonStrFieldsEntryType", Entry, primary=False)
+    finalize_django_types()
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO, fields=[1])
+    message = str(excinfo.value)
+    assert "field-name strings" in message
+    # Not the misleading "not cascadable" name-diff wording.
+    assert "not cascadable" not in message
+
+
 def test_fields_empty_list_cascades_nothing():
     """``fields=[]`` validates clean and cascades zero edges (a defined no-op).
 
@@ -897,9 +953,12 @@ def test_sync_helper_raises_syncmisuseerror_on_async_target_hook():
     before the raise, so no "coroutine was never awaited" ``RuntimeWarning`` fires -
     the suite's ``filterwarnings = error`` policy (pytest.ini) would turn any such
     warning into a hard error, so a leaked coroutine fails this test by construction.
-    (The reused helper's message names the target type and a sync-rewrite recourse;
-    the cascade-specific wording tension is in the artifact's Notes for Worker 1 -
-    this test pins the type name + ``SyncMisuseError``, not the literal phrasing.)
+
+    The message carries the *cascade-specific* recourse (feedback M1): make the
+    target hook sync, or scope ``fields=`` to skip the async-hooked edge. It must
+    NOT reach for the Relay-surface wording, because ``aapply_cascade_permissions``
+    wraps this same sync walk and cannot await an async hook either - pointing a
+    cascade consumer at an "async resolver" would be a dead end.
     """
 
     async def _async_hook(cls, qs, info):
@@ -911,8 +970,13 @@ def test_sync_helper_raises_syncmisuseerror_on_async_target_hook():
 
     with pytest.raises(SyncMisuseError) as excinfo:
         apply_cascade_permissions(entry_type, Entry.objects.all(), _INFO)
-    # The message names the offending target type.
-    assert "AsyncTargetItemType" in str(excinfo.value)
+    message = str(excinfo.value)
+    # Names the offending target type...
+    assert "AsyncTargetItemType" in message
+    # ...and the cascade recourses (sync hook / fields= skip), not the Relay wording.
+    assert "fields=" in message
+    assert "get_queryset sync" in message
+    assert "Relay node defaults" not in message
 
 
 async def test_aapply_runs_walk_off_event_loop():
@@ -1255,6 +1319,24 @@ class _StaffOnlyCategoryOrder(OrderSet):
         return list(input_value.items())
 
 
+class _StaffOnlyItemFilter(FilterSet):
+    """Staff-only ``name`` gate on ``Item`` - the no-existence-leak pin's input gate.
+
+    Lets the gate-denial test run over an ``Item`` queryset the cascade genuinely
+    narrows (through the non-null ``category`` edge), rather than the chain-top
+    ``Category`` whose direct cascade is a no-op (feedback2 M2).
+    """
+
+    class Meta:
+        model = Item
+        fields = {"name": ["exact"]}
+
+    def check_name_permission(self, request):
+        user = getattr(request, "user", None)
+        if not user or not user.is_staff:
+            raise GraphQLError("You must be a staff user to filter by Item name.")
+
+
 @pytest.mark.django_db
 def test_cascade_then_filter_gate_composition():
     """Cascade narrows rows first, ``FilterSet.check_<field>_permission`` judges input second.
@@ -1348,27 +1430,43 @@ def test_gate_denial_no_existence_leak():
     cascade-hidden-row result are produced by independent layers, so the denial
     cannot reveal whether a hidden row exists. Two fixtures differing only in
     whether a hidden-target row exists must yield a byte-identical ``GraphQLError``.
+
+    The queryset under test is one the cascade GENUINELY narrows: ``ItemType``
+    cascades through its non-null ``category`` edge to a ``CategoryType`` that hides
+    private categories, so an ``Item`` under a private category is dropped by the
+    cascade itself. (The earlier shape cascaded over ``Category`` - the chain top,
+    whose direct cascade is a no-op - so the denial assertion passed without any
+    narrowing ever happening; feedback2 M2.)
     """
-    category_type = _make_type("LeakCategoryType", Category, get_queryset=_exclude_private)
+    _make_type("LeakCategoryType", Category, get_queryset=_exclude_private)
+    item_type = _make_type("LeakItemType", Item)
     finalize_django_types()
 
-    # Fixture 1: a hidden (private) row exists alongside a public row.
-    Category.objects.create(name="public", is_private=False)
-    Category.objects.create(name="hidden", is_private=True)
-    with_hidden = apply_cascade_permissions(category_type, Category.objects.all(), _INFO)
+    public_cat = Category.objects.create(name="public_cat", is_private=False)
+    private_cat = Category.objects.create(name="private_cat", is_private=True)
+
+    # Fixture 1: an Item under the PRIVATE category exists -> the cascade drops it.
+    Item.objects.create(name="pub", category=public_cat, is_private=False)
+    Item.objects.create(name="under_hidden", category=private_cat, is_private=False)
+    with_hidden = apply_cascade_permissions(item_type, Item.objects.all(), _INFO)
+    # Sanity: the cascade actually narrowed (the under-hidden Item is gone), so this
+    # fixture genuinely differs from fixture 2 in row content - not just in name.
+    assert sorted(with_hidden.values_list("name", flat=True)) == ["pub"]
     with pytest.raises(GraphQLError) as with_hidden_exc:
-        _StaffOnlyCategoryFilter.apply_sync(
-            {"name": "public"},
+        _StaffOnlyItemFilter.apply_sync(
+            {"name": "pub"},
             with_hidden,
             _gate_info(is_staff=False),
         )
 
-    # Fixture 2: NO hidden row - only the public row remains.
-    Category.objects.filter(is_private=True).delete()
-    without_hidden = apply_cascade_permissions(category_type, Category.objects.all(), _INFO)
+    # Fixture 2: NO Item under a hidden category - delete the private chain entirely.
+    Item.objects.filter(category=private_cat).delete()
+    private_cat.delete()
+    without_hidden = apply_cascade_permissions(item_type, Item.objects.all(), _INFO)
+    assert sorted(without_hidden.values_list("name", flat=True)) == ["pub"]
     with pytest.raises(GraphQLError) as without_hidden_exc:
-        _StaffOnlyCategoryFilter.apply_sync(
-            {"name": "public"},
+        _StaffOnlyItemFilter.apply_sync(
+            {"name": "pub"},
             without_hidden,
             _gate_info(is_staff=False),
         )

@@ -28,7 +28,7 @@ import sys
 
 import pytest
 from apps.products import models
-from apps.products.services import create_users, delete_data, seed_data
+from apps.products.services import create_users, delete_data, seed_cascade_split, seed_data
 from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test import Client, override_settings
@@ -872,68 +872,6 @@ def _login(username: str) -> Client:
     return client
 
 
-def _seed_cascade_split():
-    """Build a deterministic private/public 2-deep chain and return the key rows.
-
-    Two parallel chains so the cascade's per-edge narrowing is observable:
-
-    * a PRIVATE category holding a PUBLIC item carrying a PUBLIC entry (via a
-      PUBLIC property under the same private category) - everything below the
-      category is public, so only the category's privacy can hide the entry;
-    * a PUBLIC category holding a PUBLIC item carrying a PUBLIC entry (a fully
-      visible control chain).
-
-    Hand-created (not ``seed_data``) so Item/Entry privacy is fixed, not random.
-    """
-    private_cat = models.Category.objects.create(name="zzz_private_cat", is_private=True)
-    public_cat = models.Category.objects.create(name="zzz_public_cat", is_private=False)
-
-    priv_prop = models.Property.objects.create(
-        name="priv_prop",
-        category=private_cat,
-        is_private=False,
-    )
-    pub_prop = models.Property.objects.create(
-        name="pub_prop",
-        category=public_cat,
-        is_private=False,
-    )
-
-    item_under_private = models.Item.objects.create(
-        name="zzz_item_under_private",
-        category=private_cat,
-        is_private=False,
-    )
-    item_under_public = models.Item.objects.create(
-        name="zzz_item_under_public",
-        category=public_cat,
-        is_private=False,
-    )
-
-    entry_under_private = models.Entry.objects.create(
-        value="zzz_entry_under_private",
-        property=priv_prop,
-        item=item_under_private,
-        is_private=False,
-    )
-    entry_under_public = models.Entry.objects.create(
-        value="zzz_entry_under_public",
-        property=pub_prop,
-        item=item_under_public,
-        is_private=False,
-    )
-    return {
-        "private_cat": private_cat,
-        "public_cat": public_cat,
-        "priv_prop": priv_prop,
-        "pub_prop": pub_prop,
-        "item_under_private": item_under_private,
-        "item_under_public": item_under_public,
-        "entry_under_private": entry_under_private,
-        "entry_under_public": entry_under_public,
-    }
-
-
 @pytest.mark.django_db
 def test_cascade_anonymous_sees_no_entries_under_private_categories():
     """The 2-deep live pin: a private Category hides its Items' Entries from anonymous.
@@ -945,7 +883,7 @@ def test_cascade_anonymous_sees_no_entries_under_private_categories():
     IS returned, proving narrowing (not a blanket empty result).
     """
     create_users(1)
-    chain = _seed_cascade_split()
+    chain = seed_cascade_split()
 
     response = _post_graphql(
         """
@@ -970,74 +908,76 @@ def test_cascade_anonymous_sees_no_entries_under_private_categories():
 
 
 @pytest.mark.django_db
-def test_cascade_view_item_user_matrix():
-    """The ``view_item`` user keeps non-private items; the entry drop is via ``property``, not ``item``.
+def test_cascade_view_item_user_respects_category_visibility():
+    """A ``view_item`` user only sees Items under a visible Category; nested ``category`` never errors.
 
-    Per-edge composition. ``ItemType``'s ``view_item`` branch returns all
-    non-private items with NO cascade, so the ``Entry -> item -> Category`` path
-    is short-circuited for this user: an entry is never dropped by its ``item``
-    edge, even when that item sits under a private category. The drop the user
-    still sees comes from the ``property`` edge - holding no ``view_property``
-    perm, ``PropertyType``'s cascade hides the property under the private
-    category, so ``Q(property__in=visible) | Q(property__isnull=True)`` excludes
-    ``entry_under_private`` (whose property is the private-category ``priv_prop``).
-    The isolating ``entry_item_private`` below - a public item under the private
-    category, paired with the fully public ``pub_prop`` - SURVIVES, pinning that
-    the live drop is through ``property`` and the ``item`` edge does not cascade
-    for this user (the two root fields disagree by design). Both edges of
-    ``entry_under_private`` point at the private category, so it alone cannot
-    distinguish the two paths - the isolating entry is what makes the claim testable.
+    The ``view_item`` branch cascades after its ``is_private=False`` filter
+    (feedback H1), so it is coherent with the relation it exposes: a non-staff
+    viewer cannot see an Item whose non-null ``category`` target their own hooks
+    hide. ``item_under_private`` (public Item under the PRIVATE category) is
+    therefore DROPPED for this user, while ``item_under_public`` survives. Because
+    every surviving Item's ``category`` is itself visible, selecting the non-null
+    ``category { name }`` resolves cleanly instead of raising
+    ``RelatedObjectDoesNotExist`` ("Item has no category") the no-cascade branch
+    produced. The drop is the cascade, not a resolver error.
     """
     create_users(1)
-    chain = _seed_cascade_split()
+    chain = seed_cascade_split()
     client = _login("view_item_1")
 
-    # Isolating fixture for the per-edge claim: an entry whose ONLY private
-    # linkage is its item's category (the item itself is public, just under the
-    # private category), paired with a fully public property. For a view_item
-    # user the item edge does not cascade into Category and the property edge
-    # keeps it, so this entry must SURVIVE - which entry_under_private (private on
-    # both edges) cannot prove.
-    entry_item_private = models.Entry.objects.create(
-        value="zzz_entry_item_private_prop_public",
-        item=chain["item_under_private"],
-        property=chain["pub_prop"],
-        is_private=False,
-    )
-
-    # allItems: the view_item rule shows the (public) item even under a private cat.
-    items_response = _post_graphql(
-        "query { allItems { edges { node { name } } } }",
+    response = _post_graphql(
+        "query { allItems { edges { node { name category { name } } } } }",
         client=client,
     )
-    assert items_response.status_code == 200
-    items_payload = items_response.json()
-    assert "errors" not in items_payload, items_payload
-    item_names = {edge["node"]["name"] for edge in items_payload["data"]["allItems"]["edges"]}
-    assert chain["item_under_private"].name in item_names
+    assert response.status_code == 200
+    payload = response.json()
+    # No RelatedObjectDoesNotExist on the non-null `category` selection (feedback H1).
+    assert "errors" not in payload, payload
+    nodes = [edge["node"] for edge in payload["data"]["allItems"]["edges"]]
+    item_names = {node["name"] for node in nodes}
+    category_names = {node["category"]["name"] for node in nodes}
+    # The Item under the private category is dropped (not surfaced with a broken FK)...
+    assert chain["item_under_private"].name not in item_names
+    assert chain["private_cat"].name not in category_names
+    # ...and the Item under the public category survives with its category intact.
     assert chain["item_under_public"].name in item_names
+    assert chain["public_cat"].name in category_names
 
-    # allEntries: the root-field cascade still drops the entry under the hidden cat.
-    # Select only `value` - this test pins which entries the root field returns
-    # (the per-edge drop), not nested traversal. (A surviving entry's item can sit
-    # under a hidden category, and `item { category }` on a non-null FK to a
-    # hidden target raises - an orthogonal nested-resolution concern, not M1's.)
-    entries_response = _post_graphql(
-        "query { allEntries { edges { node { value } } } }",
+
+@pytest.mark.django_db
+def test_cascade_view_entry_user_nested_selection_drops_hidden_targets():
+    """A ``view_entry`` user selecting ``item { name category { name } }`` drops hidden-target Entries, no resolver error.
+
+    ``EntryType``'s ``view_entry`` branch cascades through both non-null FK edges
+    (``item`` and ``property``) after its own ``is_private=False`` filter, so an
+    Entry whose ``item`` (or ``property``) target is hidden from this user is
+    dropped from the root rather than surfaced with an unresolvable non-null FK.
+    ``entry_under_private`` (item + property both under the PRIVATE category) is
+    dropped; the fully-public ``entry_under_public`` survives and its nested
+    ``item { category { name } }`` resolves cleanly. Pins the feedback-H1 contract:
+    hidden-target rows are dropped, not returned as ``RelatedObjectDoesNotExist``.
+    """
+    create_users(1)
+    chain = seed_cascade_split()
+    client = _login("view_entry_1")
+
+    response = _post_graphql(
+        "query { allEntries { edges { node { value item { name category { name } } } } } }",
         client=client,
     )
-    assert entries_response.status_code == 200
-    entries_payload = entries_response.json()
-    assert "errors" not in entries_payload, entries_payload
-    entry_nodes = [edge["node"] for edge in entries_payload["data"]["allEntries"]["edges"]]
-    entry_values = {node["value"] for node in entry_nodes}
-    assert chain["entry_under_private"].value not in entry_values
-    assert chain["entry_under_public"].value in entry_values
-    # The isolating entry survives: its item is public (the view_item branch does
-    # not cascade the item edge into Category) and its property is public, so no
-    # edge can drop it. This is the per-edge contract the "through item" docstring
-    # could not actually pin.
-    assert entry_item_private.value in entry_values
+    assert response.status_code == 200
+    payload = response.json()
+    # The whole point of H1: the nested non-null FK selection does not error.
+    assert "errors" not in payload, payload
+    nodes = [edge["node"] for edge in payload["data"]["allEntries"]["edges"]]
+    values = {node["value"] for node in nodes}
+    category_names = {node["item"]["category"]["name"] for node in nodes}
+    # Entry under the private category is dropped...
+    assert chain["entry_under_private"].value not in values
+    assert chain["private_cat"].name not in category_names
+    # ...the fully-public entry survives with its nested item/category intact.
+    assert chain["entry_under_public"].value in values
+    assert chain["public_cat"].name in category_names
 
 
 @pytest.mark.django_db
@@ -1051,7 +991,7 @@ def test_cascade_staff_sees_everything():
     """
     create_users(1)
     seed_data(1)
-    _seed_cascade_split()
+    seed_cascade_split()
     client = _login("staff_1")
 
     for field, model in (("allCategories", models.Category), ("allItems", models.Item)):
@@ -1088,7 +1028,7 @@ def test_cascade_query_count_fixed():
     """
     create_users(1)
     seed_data(1)
-    _seed_cascade_split()
+    seed_cascade_split()
 
     with CaptureQueriesContext(connection) as captured:
         response = _post_graphql(

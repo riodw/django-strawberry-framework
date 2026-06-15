@@ -3829,16 +3829,6 @@ def test_apply_connection_optimization_uses_active_optimizer_cache():
     assert captured["active"] is ext
 
 
-# TODO(spec-033 Slice 3): plan-cache key hygiene coverage (Test plan).
-#   test_nested_pagination_variable_keys_cache  ($n=2 vs $n=5 -> two plans/windows)
-#   test_root_pagination_variable_shares_cache  (root first: $n varying -> one cached plan)
-#   test_mixed_root_and_nested_pagination_variables  (only the nested one keys)
-#   test_root_fragment_pagination_variable_shares_cache  (root-via-fragment-on-Query stays out)
-#   test_fragment_carried_nested_pagination_variable_collected  (nested-via-fragment still keys)
-#   test_pagination_var_collection_is_syntactic_superset  (non-connection nested first: $n also keys)
-#   test_cache_key_variable_name_collection_memoized_for_nested_fallbacks
-#   B1 no-regression: hit/miss counters, LRU promotion, immutability stay green unmodified.
-#
 def test_publish_plan_to_context_unions_parent_and_nested_sentinel_sets():
     """A nested fallback publish UNIONS the correctness sentinels, never overwrites them.
 

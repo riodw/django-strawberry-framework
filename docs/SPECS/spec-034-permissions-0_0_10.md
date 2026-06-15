@@ -217,6 +217,7 @@ This card ships `apply_cascade_permissions` / `aapply_cascade_permissions` end-t
 - **Failure modes**: denial (raise `GraphQLError`, response carries an `errors` entry for that path) and redaction (safe-value fallback) — the two modes the glossary entry already names.
 - **Composition rule with the cascade** (the card's DoD bullet, pinned now so `0.1.1` builds against it): a field-level gate does **not** short-circuit cascade visibility — the cascade narrows the queryset first, field gates run on whatever rows survive; a field denial therefore never leaks the existence of a cascade-hidden row (null fields and denials are indistinguishable from hidden rows only in that neither ever surfaces them).
 - **Promotion rule**: `Meta.fields_class` stays in `DEFERRED_META_KEYS` ([`types/base.py`][types-base] #"aggregate_class") until `0.1.1` applies it end-to-end — the [Cross-subsystem invariants][glossary-cross-subsystem-invariants] rule and the card's own DoD line ("promote keys only when applied end-to-end").
+- **Forward-reserved slot (no behavior)**: `DjangoTypeDefinition.fields_class` ([`types/definition.py`][definition]) is declared as an inert `type | None = None` sidecar slot — the structural mirror of the shipped `filterset_class` / `orderset_class` slots — so the `0.1.1` [`FieldSet`][glossary-fieldset] binding has a stable home to populate. It stays `None` and has **no populator** this card: `Meta.fields_class` remains rejected at validation (still in `DEFERRED_META_KEYS`), and `_bind_fieldsets` lands with `TODO-BETA-046-0.1.1`. Reserving the slot is the only `definition.py` change this card makes for per-field gates; it does not promote the key, ship a gate, or alter resolution.
 
 Justification:
 
@@ -572,97 +573,98 @@ The completion contract the card is built against. Items are grouped by slice; t
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[backlog]: ../BACKLOG.md
-[changelog]: ../CHANGELOG.md
-[contributing]: ../CONTRIBUTING.md
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
-[readme]: ../README.md
-[start]: ../START.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[backlog]: ../../BACKLOG.md
+[changelog]: ../../CHANGELOG.md
+[contributing]: ../../CONTRIBUTING.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
+[readme]: ../../README.md
+[start]: ../../START.md
+[today]: ../../TODAY.md
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[glossary]: GLOSSARY.md
-[glossary-aggregateset]: GLOSSARY.md#aggregateset
-[glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
-[glossary-auth-mutations]: GLOSSARY.md#auth-mutations
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-connection-aware-optimizer-planning]: GLOSSARY.md#connection-aware-optimizer-planning
-[glossary-cross-subsystem-invariants]: GLOSSARY.md#cross-subsystem-invariants
-[glossary-definition-order-independence]: GLOSSARY.md#definition-order-independence
-[glossary-djangoconnection]: GLOSSARY.md#djangoconnection
-[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
-[glossary-djangolistfield]: GLOSSARY.md#djangolistfield
-[glossary-djangomutation]: GLOSSARY.md#djangomutation
-[glossary-djangonodefield]: GLOSSARY.md#djangonodefield
-[glossary-djangonodesfield]: GLOSSARY.md#djangonodesfield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-fieldset]: GLOSSARY.md#fieldset
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-finalize_django_types]: GLOSSARY.md#finalize_django_types
-[glossary-fk-id-elision]: GLOSSARY.md#fk-id-elision
-[glossary-get_child_queryset]: GLOSSARY.md#get_child_queryset
-[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-metaconnection]: GLOSSARY.md#metaconnection
-[glossary-metafields]: GLOSSARY.md#metafields
-[glossary-metafields_class]: GLOSSARY.md#metafields_class
-[glossary-metafilterset_class]: GLOSSARY.md#metafilterset_class
-[glossary-metaoptimizer_hints]: GLOSSARY.md#metaoptimizer_hints
-[glossary-metaorderset_class]: GLOSSARY.md#metaorderset_class
-[glossary-metaprimary]: GLOSSARY.md#metaprimary
-[glossary-metarelation_shapes]: GLOSSARY.md#metarelation_shapes
-[glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
-[glossary-only-projection]: GLOSSARY.md#only-projection
-[glossary-optimizerhint]: GLOSSARY.md#optimizerhint
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-per-field-permission-hooks]: GLOSSARY.md#per-field-permission-hooks
-[glossary-plan-cache]: GLOSSARY.md#plan-cache
-[glossary-queryset-diffing]: GLOSSARY.md#queryset-diffing
-[glossary-relatedfilter]: GLOSSARY.md#relatedfilter
-[glossary-relatedorder]: GLOSSARY.md#relatedorder
-[glossary-relation-handling]: GLOSSARY.md#relation-handling
-[glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
-[glossary-strictness-mode]: GLOSSARY.md#strictness-mode
-[glossary-syncmisuseerror]: GLOSSARY.md#syncmisuseerror
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[glossary]: ../GLOSSARY.md
+[glossary-aggregateset]: ../GLOSSARY.md#aggregateset
+[glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-auth-mutations]: ../GLOSSARY.md#auth-mutations
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-connection-aware-optimizer-planning]: ../GLOSSARY.md#connection-aware-optimizer-planning
+[glossary-cross-subsystem-invariants]: ../GLOSSARY.md#cross-subsystem-invariants
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoconnection]: ../GLOSSARY.md#djangoconnection
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangolistfield]: ../GLOSSARY.md#djangolistfield
+[glossary-djangomutation]: ../GLOSSARY.md#djangomutation
+[glossary-djangonodefield]: ../GLOSSARY.md#djangonodefield
+[glossary-djangonodesfield]: ../GLOSSARY.md#djangonodesfield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fieldset]: ../GLOSSARY.md#fieldset
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-finalize_django_types]: ../GLOSSARY.md#finalize_django_types
+[glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
+[glossary-get_child_queryset]: ../GLOSSARY.md#get_child_queryset
+[glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-metaconnection]: ../GLOSSARY.md#metaconnection
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metafields_class]: ../GLOSSARY.md#metafields_class
+[glossary-metafilterset_class]: ../GLOSSARY.md#metafilterset_class
+[glossary-metaoptimizer_hints]: ../GLOSSARY.md#metaoptimizer_hints
+[glossary-metaorderset_class]: ../GLOSSARY.md#metaorderset_class
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-metarelation_shapes]: ../GLOSSARY.md#metarelation_shapes
+[glossary-multi-database-cooperation]: ../GLOSSARY.md#multi-database-cooperation
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-per-field-permission-hooks]: ../GLOSSARY.md#per-field-permission-hooks
+[glossary-plan-cache]: ../GLOSSARY.md#plan-cache
+[glossary-queryset-diffing]: ../GLOSSARY.md#queryset-diffing
+[glossary-relatedfilter]: ../GLOSSARY.md#relatedfilter
+[glossary-relatedorder]: ../GLOSSARY.md#relatedorder
+[glossary-relation-handling]: ../GLOSSARY.md#relation-handling
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
+[glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[spec-015]: SPECS/spec-015-relay_interfaces-0_0_5.md
-[spec-027]: SPECS/spec-027-filters-0_0_8.md
-[spec-028]: SPECS/spec-028-orders-0_0_8.md
-[spec-030]: SPECS/spec-030-connection_field-0_0_9.md
-[spec-033]: SPECS/spec-033-connection_optimizer-0_0_9.md
+[next]: NEXT.md
+[spec-015]: spec-015-relay_interfaces-0_0_5.md
+[spec-027]: spec-027-filters-0_0_8.md
+[spec-028]: spec-028-orders-0_0_8.md
+[spec-030]: spec-030-connection_field-0_0_9.md
+[spec-033]: spec-033-connection_optimizer-0_0_9.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[connection]: ../django_strawberry_framework/connection.py
-[filters-sets]: ../django_strawberry_framework/filters/sets.py
-[list-field]: ../django_strawberry_framework/list_field.py
-[permissions]: ../django_strawberry_framework/permissions.py
-[querysets]: ../django_strawberry_framework/utils/querysets.py
-[registry]: ../django_strawberry_framework/registry.py
-[types-base]: ../django_strawberry_framework/types/base.py
-[walker]: ../django_strawberry_framework/optimizer/walker.py
+[connection]: ../../django_strawberry_framework/connection.py
+[filters-sets]: ../../django_strawberry_framework/filters/sets.py
+[list-field]: ../../django_strawberry_framework/list_field.py
+[permissions]: ../../django_strawberry_framework/permissions.py
+[querysets]: ../../django_strawberry_framework/utils/querysets.py
+[registry]: ../../django_strawberry_framework/registry.py
+[types-base]: ../../django_strawberry_framework/types/base.py
+[definition]: ../../django_strawberry_framework/types/definition.py
+[walker]: ../../django_strawberry_framework/optimizer/walker.py
 
 <!-- tests/ -->
-[test-base-init]: ../tests/base/test_init.py
-[test-connection]: ../tests/test_connection.py
-[test-list-field]: ../tests/test_list_field.py
-[test-opt-extension]: ../tests/optimizer/test_extension.py
-[test-opt-multi-db]: ../tests/optimizer/test_multi_db.py
-[test-relay-node-field]: ../tests/test_relay_node_field.py
+[test-base-init]: ../../tests/base/test_init.py
+[test-connection]: ../../tests/test_connection.py
+[test-list-field]: ../../tests/test_list_field.py
+[test-opt-extension]: ../../tests/optimizer/test_extension.py
+[test-opt-multi-db]: ../../tests/optimizer/test_multi_db.py
+[test-relay-node-field]: ../../tests/test_relay_node_field.py
 
 <!-- examples/ -->
-[kanban-models]: ../examples/fakeshop/apps/kanban/models.py
-[products-schema]: ../examples/fakeshop/apps/products/schema.py
-[products-services]: ../examples/fakeshop/apps/products/services.py
-[test-products]: ../examples/fakeshop/test_query/test_products_api.py
-[test-query-readme]: ../examples/fakeshop/test_query/README.md
+[kanban-models]: ../../examples/fakeshop/apps/kanban/models.py
+[products-schema]: ../../examples/fakeshop/apps/products/schema.py
+[products-services]: ../../examples/fakeshop/apps/products/services.py
+[test-products]: ../../examples/fakeshop/test_query/test_products_api.py
+[test-query-readme]: ../../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->
 

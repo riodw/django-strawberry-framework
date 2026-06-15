@@ -13,8 +13,8 @@ filter / order / aggregate / fields / search / permissions surface, a
 1-to-1 port of the `django-graphene-filters` cookbook recipe - is
 tracked in `KANBAN.md` under the Layer-3 cards (`DONE-027-0.0.8`
 filters, `DONE-028-0.0.8` orders, `DONE-030-0.0.9` `DjangoConnectionField`,
-`DONE-034-0.0.10` permissions, `TODO-BETA-038-0.1.1` fieldsets,
-`TODO-BETA-039-0.1.2` search, `TODO-BETA-040-0.1.3` aggregates). The
+`DONE-034-0.0.10` permissions, `TODO-BETA-046-0.1.1` fieldsets,
+`TODO-BETA-047-0.1.2` search, `TODO-BETA-049-0.1.3` aggregates). The
 shipped `filterset_class` + `orderset_class` + permissions surface is wired below;
 each `*Type` class still carries commented-out future-shape Meta keys
 and methods - uncomment each line as the corresponding card ships.
@@ -27,8 +27,8 @@ present `filters.py` / `orders.py` modules; `aggregate_class` /
 
 # Future imports (uncomment as Layer-3 subsystems ship):
 #
-# from apps.products import aggregates                               # TODO-BETA-040-0.1.3 (aggregates)
-# from apps.products import fields as fieldsets                      # TODO-BETA-038-0.1.1
+# from apps.products import aggregates                               # TODO-BETA-049-0.1.3 (aggregates)
+# from apps.products import fields as fieldsets                      # TODO-BETA-046-0.1.1
 
 import strawberry
 from strawberry import relay
@@ -60,9 +60,9 @@ class CategoryType(DjangoType):
         filterset_class = filters.CategoryFilter
         orderset_class = orders.CategoryOrder
         # Future Layer-3 additions - uncomment each as the relevant card ships:
-        # search_fields = ("name", "description")           # needs TODO-BETA-039-0.1.2
-        # aggregate_class = aggregates.CategoryAggregate    # needs TODO-BETA-040-0.1.3 + aggregates.py
-        # fields_class = fieldsets.CategoryFieldSet         # needs TODO-BETA-038-0.1.1 + fields.py
+        # search_fields = ("name", "description")           # needs TODO-BETA-047-0.1.2
+        # aggregate_class = aggregates.CategoryAggregate    # needs TODO-BETA-049-0.1.3 + aggregates.py
+        # fields_class = fieldsets.CategoryFieldSet         # needs TODO-BETA-046-0.1.1 + fields.py
 
     @classmethod
     def get_queryset(cls, queryset, info):
@@ -97,9 +97,9 @@ class ItemType(DjangoType):
         filterset_class = filters.ItemFilter
         orderset_class = orders.ItemOrder
         # Future Layer-3 additions - uncomment each as the relevant card ships:
-        # search_fields = ("name", "description", "category__name", "category__description")  # needs TODO-BETA-039-0.1.2
-        # aggregate_class = aggregates.ItemAggregate     # needs TODO-BETA-040-0.1.3 + aggregates.py
-        # fields_class = fieldsets.ItemFieldSet          # needs TODO-BETA-038-0.1.1 + fields.py
+        # search_fields = ("name", "description", "category__name", "category__description")  # needs TODO-BETA-047-0.1.2
+        # aggregate_class = aggregates.ItemAggregate     # needs TODO-BETA-049-0.1.3 + aggregates.py
+        # fields_class = fieldsets.ItemFieldSet          # needs TODO-BETA-046-0.1.1 + fields.py
 
     @classmethod
     def get_queryset(cls, queryset, info):
@@ -135,9 +135,9 @@ class PropertyType(DjangoType):
         filterset_class = filters.PropertyFilter
         orderset_class = orders.PropertyOrder
         # Future Layer-3 additions - uncomment each as the relevant card ships:
-        # search_fields = ("name", "description", "category__name", "category__description")  # needs TODO-BETA-039-0.1.2
-        # aggregate_class = aggregates.PropertyAggregate  # needs TODO-BETA-040-0.1.3 + aggregates.py
-        # fields_class = fieldsets.PropertyFieldSet       # needs TODO-BETA-038-0.1.1 + fields.py
+        # search_fields = ("name", "description", "category__name", "category__description")  # needs TODO-BETA-047-0.1.2
+        # aggregate_class = aggregates.PropertyAggregate  # needs TODO-BETA-049-0.1.3 + aggregates.py
+        # fields_class = fieldsets.PropertyFieldSet       # needs TODO-BETA-046-0.1.1 + fields.py
 
     @classmethod
     def get_queryset(cls, queryset, info):
@@ -161,7 +161,7 @@ class EntryType(DjangoType):
         fields = (
             "id",
             "value",
-            "description",  # Future: drop this entry to exercise field-level permission gating (TODO-BETA-038-0.1.1 FieldSet read gates)
+            "description",  # Future: drop this entry to exercise field-level permission gating (TODO-BETA-046-0.1.1 FieldSet read gates)
             "property",
             "item",
             "is_private",
@@ -172,9 +172,9 @@ class EntryType(DjangoType):
         filterset_class = filters.EntryFilter
         orderset_class = orders.EntryOrder
         # Future Layer-3 additions - uncomment each as the relevant card ships:
-        # search_fields = ("value", "property__name", "item__name") # needs TODO-BETA-039-0.1.2
-        # aggregate_class = aggregates.EntryAggregate  # needs TODO-BETA-040-0.1.3 + aggregates.py
-        # fields_class = fieldsets.EntryFieldSet       # needs TODO-BETA-038-0.1.1 + fields.py
+        # search_fields = ("value", "property__name", "item__name") # needs TODO-BETA-047-0.1.2
+        # aggregate_class = aggregates.EntryAggregate  # needs TODO-BETA-049-0.1.3 + aggregates.py
+        # fields_class = fieldsets.EntryFieldSet       # needs TODO-BETA-046-0.1.1 + fields.py
 
     @classmethod
     def get_queryset(cls, queryset, info):
@@ -210,7 +210,7 @@ class Query:
     siblings (`itemsConnection`, `entriesConnection`, ...) already exist live
     and plan through windowed `Prefetch`es.
 
-    Still deferred to `TODO-BETA-051-0.1.5` (the fakeshop-activation card): the
+    Still deferred to `TODO-BETA-052-0.1.5` (the fakeshop-activation card): the
     root `node(id:)` / `nodes(ids:)` Relay entry points and any `Meta.connection`
     (`totalCount`) opt-ins. This conversion intentionally adds neither.
     """

@@ -212,6 +212,19 @@ def test_meta_rejects_each_deferred_key(deferred_key):
         type("T", (DjangoType,), {"Meta": meta_cls})
 
 
+def test_definition_fields_class_slot_is_reserved_but_unpopulated():
+    """``FieldSet`` has a metadata slot, while ``Meta.fields_class`` stays deferred."""
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+
+    definition = registry.get_definition(CategoryType)
+
+    assert definition.fields_class is None
+
+
 def test_meta_filterset_class_is_promoted_to_allowed_meta_keys():
     """``Meta.filterset_class`` ships in spec-021 Slice 3 (Decision-7 promotion gate)."""
     from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS

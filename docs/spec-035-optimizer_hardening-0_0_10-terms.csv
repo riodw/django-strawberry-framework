@@ -1,0 +1,22 @@
+term,anchor,notes
+DjangoOptimizerExtension,djangooptimizerextension,the subject; G1 lands in its _optimize middleware path
+only() projection,only-projection,the surface G2 gates by operation type
+Plan cache,plan-cache,key neither G2 nor G3 perturbs (printed-AST + (model, origin))
+Queryset diffing,queryset-diffing,B8 consumer-state precedent G1 extends to execution state
+Strictness mode,strictness-mode,G3 interaction; no false-fire for narrowed sibling fragments
+FK-id elision,fk-id-elision,the G2 elision-under-non-QUERY open decision (Decision 5)
+Schema audit,schema-audit,registry/interface descent G3 narrowing mirrors at walk time
+Relation handling,relation-handling,relation-planning contract G3 must not regress
+Connection-aware optimizer planning,connection-aware-optimizer-planning,DONE-033 owns the perf findings; the walker seam G3 lands after
+DjangoType,djangotype,the planning type whose name/interfaces G3 matches a fragment against
+Meta.primary,metaprimary,primary type name is in the G3 type-condition accept set
+Meta.interfaces,metainterfaces,interface names are in the G3 type-condition accept set
+Relay Node integration,relay-node-integration,interface-shaped planning type (relay.Node) for G3 matching
+ConfigurationError,configurationerror,named only to confirm no new validation surface this card
+Multi-database cooperation,multi-database-cooperation,guards are alias-agnostic; .using()/router behavior unchanged
+DjangoConnectionField,djangoconnectionfield,shares apply_to tail but builds own queryset; out of G1 scope
+Meta.optimizer_hints,metaoptimizer_hints,unchanged; hints shape relation planning, orthogonal to the guards
+OptimizerHint,optimizerhint,unchanged
+DjangoMutation,djangomutation,0.0.11 consumer G2 protects (mutation root querysets)
+Auth mutations,auth-mutations,0.0.11 cohort; named for the composition map
+apply_cascade_permissions,apply_cascade_permissions,joint-0.0.10-cut sibling (DONE-034); independent of these guards

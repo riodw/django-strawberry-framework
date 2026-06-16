@@ -925,3 +925,73 @@ def test_fk_id_stub_returns_unsafe_sentinel_when_attname_deferred():
     assert _build_fk_id_stub(Root(), field_meta) is _FK_ELISION_UNSAFE
     # A fully-loaded double (column in ``__dict__``) still builds the stub.
     assert _build_fk_id_stub(SimpleNamespace(category_id=42), field_meta).pk == 42
+
+
+@pytest.mark.django_db
+def test_fk_id_elision_falls_back_on_real_deferred_only_instance(caplog):
+    """Decision 5 (review P2): a REAL ``Item.objects.only("name")`` instance.
+
+    The double-based fallback test asserts the behavior; this pins the actual
+    Django deferred-field bookkeeping the guard depends on - that a real
+    ``Item.objects.only("name").get(...)`` reports ``category_id`` in
+    ``get_deferred_fields()`` and absent from ``__dict__`` - so the loaded-check
+    fires on the genuine ORM shape, not just a simulated one. With the relation
+    in BOTH the elision set and the planned set (the production shape), the
+    resolver must fall back loudly (``raise`` -> ``OptimizerError``; ``warn`` ->
+    logged + normal resolve), never a silent per-row read of the deferred FK
+    column.
+    """
+    from types import SimpleNamespace
+
+    from apps.products import services
+
+    from django_strawberry_framework.exceptions import OptimizerError
+    from django_strawberry_framework.optimizer._context import (
+        DST_OPTIMIZER_FK_ID_ELISIONS,
+        DST_OPTIMIZER_PLANNED,
+        DST_OPTIMIZER_STRICTNESS,
+    )
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    services.seed_data(1)
+
+    class ItemType:
+        pass
+
+    field = Item._meta.get_field("category")
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
+    key = resolver_key(ItemType, "category", ("allItems", "category"))
+
+    # The Django contract the guard depends on, asserted on a real instance.
+    pk = Item.objects.values_list("pk", flat=True).first()
+    root = Item.objects.only("name").get(pk=pk)
+    assert "category_id" in root.get_deferred_fields()
+    assert "category_id" not in root.__dict__
+
+    def context(strictness):
+        return {
+            DST_OPTIMIZER_FK_ID_ELISIONS: {key},
+            DST_OPTIMIZER_PLANNED: {key},
+            DST_OPTIMIZER_STRICTNESS: strictness,
+        }
+
+    # "raise": the deferred FK column is never read silently; the fallback is loud.
+    info = SimpleNamespace(
+        context=context("raise"),
+        field_name="category",
+        path=_path("allItems", 0, "category"),
+    )
+    with pytest.raises(OptimizerError, match="Unplanned N\\+1: category"):
+        resolver(root, info)
+
+    # "warn": logs the access and resolves the real related object normally.
+    root = Item.objects.only("name").get(pk=pk)
+    info = SimpleNamespace(
+        context=context("warn"),
+        field_name="category",
+        path=_path("allItems", 0, "category"),
+    )
+    caplog.set_level("WARNING", logger="django_strawberry_framework")
+    result = resolver(root, info)
+    assert any("Potential N+1 on category" in r.message for r in caplog.records)
+    assert isinstance(result, Category)

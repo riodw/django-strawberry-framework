@@ -178,6 +178,28 @@ DJANGO_STRAWBERRY_FRAMEWORK = {"OPTIMIZER_DEFAULT": "off"}
 
 **Composes with**: `query_time_optimizer_disable` and `anti_n1_ci_audit` (strictness surfaces the affected sites), the shipped Queryset diffing (B8) and Strictness mode subsystems.
 
+### `plan_cache_key_memoization`
+
+**Realistic**: 6/10 — A bounded `WeakKeyDictionary` layer over the existing key build *if* the precondition holds; but the whole win is gated on Strawberry yielding a stable operation-node identity across requests. If it re-parses per request, node-keyed memoization buys nothing and the card is dead — verify first.
+
+**Impact**: 5/10 — Real hot-path latency win that the plan cache does *not* already remove, scaling with query depth (deep operations print a large AST); but pure latency, smaller than the selection-tree walk the cache eliminates, and no new capability.
+
+**Difficulty**: 4/10 — The memoization itself is a few lines; the subtlety is proving cross-request node identity and getting weak-key lifetime / invalidation right so a reused node can never serve a stale key.
+
+**Source**: spec-035 close-out review (2026-06-16), Part 1d-1 ("the next real per-request win after the walk").
+
+**What we'd do**: kill the residual per-request `print_ast` on the cache-**hit** path. On every hit, `extension.py::_get_or_build_plan` → `_build_cache_key` → `_print_operation_with_reachable_fragments` → `print_ast(operation)` still runs once per request (memoized only *within* a request by the `_printed_ast_cache` ContextVar keyed on `id(operation)`, which is reset each request). If Strawberry's document/validation cache hands back the **same** operation-node object across requests for an identical query, memoize the printed-AST key on that node via a module-level `WeakKeyDictionary`, turning a cache hit into a near-free dict lookup instead of a fresh full-AST print + hash.
+
+**Spec**:
+
+- **Precondition is the gate (verify before building).** Confirm Strawberry reuses the same `OperationDefinitionNode` object across requests for an identical query string (its parsed/validated-document cache), not a freshly parsed node each time. graphql-core's `parse` produces fresh nodes, so the entire win rests on Strawberry's caching layer above it — if it re-parses, node identity is unstable and this approach yields zero. Spec this verification as step one; the card does not proceed if it fails.
+- **Mechanism.** A module-level `WeakKeyDictionary[OperationDefinitionNode, str]` mapping the operation node to its printed, reachable-fragment-aware key component. Weak keys so a node collected with its document drops its entry automatically — no unbounded growth, no manual eviction, no invalidation pass.
+- **Only the printed-AST component is memoized, not the whole key.** The full cache key stays `(printed-AST, frozenset vars, model, path tuple, origin)`; variables, model, path, and origin still vary per request and are combined fresh. This card removes only the `print_ast` cost, which is the request-invariant part for a given node.
+- **Correctness.** The printed key already folds in reachable fragments, and a reused node identity *is* the same document — so its printed form is invariant and the memo can never go stale for a live node. The per-execution `_printed_ast_cache` ContextVar stays as the within-request memo; this adds a cross-request layer above it.
+- **Measure it.** Extend [`scripts/bench_plan_cache.py`](scripts/bench_plan_cache.py) to isolate key-build time on the hit path (as it already isolates the walk via warm-vs-cold), so the win is quantified rather than asserted — the residual after the walk is exactly what this targets.
+
+**Composes with**: the shipped Plan cache (B1) and `cache_info()` (this is the next per-request win after the walk the cache already eliminates), and `scripts/bench_plan_cache.py` (the measurement harness).
+
 ### `computed_fields_binding`
 
 **Realistic**: 9/10 — Python property binding is straightforward; the loud-error-on-missing-annotation rule removes the inference risk.

@@ -41,9 +41,9 @@ This package closes that gap: Strawberry stays as the engine, `class Meta` becom
 
 Four optimizer wins over `strawberry-graphql-django`, all on the mainstream (concretely-typed) path:
 
-- **Cross-request plan cache** — upstream re-walks the selection tree every request; we walk once, serve from a 256-entry LRU (`cache_info()`). Benchmark ([`scripts/bench_plan_cache.py`](scripts/bench_plan_cache.py)): 2,099/2,100 hits, ~115 µs walk eliminated per nested request (~155 µs deep), scaling with query complexity.
+- **Cross-request plan cache** — upstream re-walks the selection tree every request; we walk once, serve from a 256-entry LRU (`cache_info()`). Benchmark ([`scripts/bench_plan_cache.py`](scripts/bench_plan_cache.py), default invocation): 1,049/1,050 hits per cacheable query; the per-request selection-tree walk our cache eliminates — which upstream pays on every request — is ~85 µs (nested) to ~150 µs (deep), scaling with query complexity (machine-dependent).
 - **Strictness / N+1 detection** — `strictness="raise"` → `OptimizerError` on unplanned lazy load; a CI gate. Upstream: preventive-only, no detective mode.
-- **FK-id join elision** — `{ relation { id } }` reads the FK column off the parent — no join/prefetch. Upstream loads the FK column but still joins.
+- **FK-id join elision** — `{ relation { id } }` reads the parent's existing FK column — no join/prefetch. Upstream resolves the same selection with a `select_related` JOIN.
 - **Class-creation-time metadata** — frozen at type creation, not memoized on first request.
 
 Run it: `uv run python scripts/bench_plan_cache.py`.

@@ -13,7 +13,7 @@ Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
 - `<STATUS>` — the card workflow state: `BACKLOG` (unscheduled investigation / strategic-differentiation candidate), `TODO` (committed to a milestone, not yet active), `WIP` (actively being worked), or `DONE` (shipped). Updated when the card moves between workflow states. Blocking is not part of the workflow status; blocked cards render a derived `blocked` badge from unfinished `blocked_by` references and stay in their normal planning column.
 - `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-045-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-058-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
 - `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is being tracked (everything else; scheduled cards are ordered by planned ship version, and backlog cards sort after the scheduled board). **Unlike status, milestone, and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
-- `X.Y.Z` — the package version the card shipped in (`DONE` cards), is planned to ship in (scheduled cards), or is provisionally bucketed under (`BACKLOG` cards). Alpha cards span `0.0.6` through `0.0.12` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Backlog cards may use post-`1.0.0` buckets as ordering placeholders; they stay unscheduled until promoted to `TODO`.
+- `X.Y.Z` — the package version the card shipped in (`DONE` cards), is planned to ship in (scheduled cards), or is provisionally bucketed under (`BACKLOG` cards). Alpha cards span `0.0.6` through `0.0.14` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Backlog cards may use post-`1.0.0` buckets as ordering placeholders; they stay unscheduled until promoted to `TODO`.
 
 For install, local development, testing, and the canonical documentation map, start from [`README.md`][readme].
 
@@ -171,7 +171,7 @@ needs spec
 - [ ] Add `docs/spec-mutations.md`.
 - [ ] Implement `django_strawberry_framework/mutations/` (sets, fields, resolvers, input-type generation) on the DRF-style Meta surface (`Meta.input_class`, `Meta.partial_input_class`, etc.).
 - [ ] Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`.
-- [ ] Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-039-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-039-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
+- [ ] Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-039-0.0.13`, `TODO-ALPHA-038-0.0.12`, and `TODO-ALPHA-039-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
 - [ ] Tests under `tests/mutations/`.
 - [ ] Live HTTP coverage under `examples/fakeshop/test_query/` exercising the products write surface.
 
@@ -207,9 +207,9 @@ needs spec
 - Dependency: `DONE-018-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution. -> `DONE-018-0.0.6` - Multiple DjangoTypes per model with `Meta.primary`
 - Related: Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`. -> `DONE-010-0.0.4` - 0.0.4 foundation slice (definition-order independence)
 - Dependency: `DONE-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`. -> `DONE-034-0.0.10` - Permissions subsystem
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-039-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-039-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-037-0.0.11` - Upload scalar and file / image field mapping
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-039-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-039-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-038-0.0.11` - Form-based mutations (Django Forms / ModelForms)
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-039-0.0.11`, `TODO-ALPHA-038-0.0.11`, and `TODO-ALPHA-039-0.0.11`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-039-0.0.11` - DRF serializer mutations (`SerializerMutation`)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-039-0.0.13`, `TODO-ALPHA-038-0.0.12`, and `TODO-ALPHA-039-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-037-0.0.11` - Upload scalar and file / image field mapping
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-039-0.0.13`, `TODO-ALPHA-038-0.0.12`, and `TODO-ALPHA-039-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-038-0.0.12` - Form-based mutations (Django Forms / ModelForms)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-039-0.0.13`, `TODO-ALPHA-038-0.0.12`, and `TODO-ALPHA-039-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-039-0.0.13` - DRF serializer mutations (`SerializerMutation`)
 - Related: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by 031 / 032 / 033. -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="upload_scalar_and_file_image_field_mapping"></a>
@@ -265,7 +265,7 @@ planned
 - Related: pairs with `TODO-ALPHA-036-0.0.11` for the write side. -> `TODO-ALPHA-036-0.0.11` - Mutations + auto-generated Input types
 
 <a id="form_based_mutations_django_forms_modelforms"></a>
-### [TODO-ALPHA-038-0.0.11 - Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)
+### [TODO-ALPHA-038-0.0.12 - Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -330,7 +330,7 @@ needs spec
 - Related: Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `TODO-ALPHA-036-0.0.11`. -> `TODO-ALPHA-036-0.0.11` - Mutations + auto-generated Input types
 
 <a id="drf_serializer_mutations_serializermutation"></a>
-### [TODO-ALPHA-039-0.0.11 - DRF serializer mutations (`SerializerMutation`)](KANBAN.html#drf_serializer_mutations_serializermutation)
+### [TODO-ALPHA-039-0.0.13 - DRF serializer mutations (`SerializerMutation`)](KANBAN.html#drf_serializer_mutations_serializermutation)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
@@ -395,7 +395,7 @@ needs spec
 - Related: Validation errors surface through the shared `errors: list[FieldError]` envelope from `TODO-ALPHA-036-0.0.11`, populated from `serializer.errors`. -> `TODO-ALPHA-036-0.0.11` - Mutations + auto-generated Input types
 
 <a id="auth_mutations_login_logout_register"></a>
-### [TODO-ALPHA-040-0.0.11 - Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
+### [TODO-ALPHA-040-0.0.13 - Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -433,7 +433,7 @@ planned
 - Related: depends on `TODO-ALPHA-036-0.0.11`. -> `TODO-ALPHA-036-0.0.11` - Mutations + auto-generated Input types
 
 <a id="channels_asgi_router_migration_aid"></a>
-### [TODO-ALPHA-041-0.0.12 - Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
+### [TODO-ALPHA-041-0.0.14 - Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -483,7 +483,7 @@ planned
 - Related: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-055-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-055-0.1.6` - Migration and adoption guides
 
 <a id="debug_toolbar_middleware"></a>
-### [TODO-ALPHA-042-0.0.12 - Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
+### [TODO-ALPHA-042-0.0.14 - Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -534,7 +534,7 @@ planned
 - subclass django-debug-toolbar's middleware with two injection paths (GraphiQL HTML + `/graphql/` JSON), a template asset, introspection-skip behavior, and a soft dependency. Single module + tests.
 
 <a id="test_client_helper"></a>
-### [TODO-ALPHA-043-0.0.12 - Test client helper](KANBAN.html#test_client_helper)
+### [TODO-ALPHA-043-0.0.14 - Test client helper](KANBAN.html#test_client_helper)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -602,7 +602,7 @@ planned
 - Related: **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `TODO-ALPHA-037-0.0.11` (Upload scalar) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls. -> `TODO-ALPHA-037-0.0.11` - Upload scalar and file / image field mapping
 
 <a id="response_extensions_debug_middleware"></a>
-### [TODO-ALPHA-044-0.0.12 - Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
+### [TODO-ALPHA-044-0.0.14 - Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
@@ -627,7 +627,7 @@ planned
 - [ ] Output shape mirrors graphene's `DjangoDebugSQL` / `DjangoDebugException` field names where the chosen fidelity supports them; document any shape narrowing (e.g., omitted Postgres-specific fields) explicitly.
 - [ ] Off by default; opt-in via the extensions list passed to `strawberry.Schema(...)`.
 - [ ] Tests under `tests/extensions/test_debug.py` against a fakeshop request that emits SQL.
-- [ ] Documented as the response-side counterpart to `TODO-ALPHA-042-0.0.12`.
+- [ ] Documented as the response-side counterpart to `TODO-ALPHA-042-0.0.14`.
 
 #### Files likely touched
 
@@ -658,23 +658,23 @@ planned
 
 #### Why it matters
 
-- `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `TODO-ALPHA-042-0.0.12` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive.
+- `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `TODO-ALPHA-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive.
 - A Strawberry-native equivalent is a small `SchemaExtension` that captures SQL (through `django.db.connection.queries` or via a port of graphene's cursor-wrap mechanism — see Architectural posture) and exceptions and attaches the result to the response's `extensions` map.
-- `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `TODO-ALPHA-042-0.0.12`); this card is graphene-django parity only.
+- `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `TODO-ALPHA-042-0.0.14`); this card is graphene-django parity only.
 
 #### Other
 
 - developer experience.
 - graphene-django ships an in-response `DjangoDebug` SQL/exception subsystem; strawberry-graphql-django ships none.
-- distinct from `TODO-ALPHA-042-0.0.12` (Django debug toolbar).
+- distinct from `TODO-ALPHA-042-0.0.14` (Django debug toolbar).
 - a Strawberry `SchemaExtension` that captures SQL + exceptions into `extensions['debug']`; one design choice between porting graphene's cursor-wrap and reading `connection.queries`. Single extension module + tests.
 
 #### Card references
 
-- Related: Documented as the response-side counterpart to `TODO-ALPHA-042-0.0.12`. -> `TODO-ALPHA-042-0.0.12` - Debug-toolbar middleware
-- Related: `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `TODO-ALPHA-042-0.0.12` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive. -> `TODO-ALPHA-042-0.0.12` - Debug-toolbar middleware
-- Related: `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `TODO-ALPHA-042-0.0.12`); this card is graphene-django parity only. -> `TODO-ALPHA-042-0.0.12` - Debug-toolbar middleware
-- Related: distinct from `TODO-ALPHA-042-0.0.12` (Django debug toolbar). -> `TODO-ALPHA-042-0.0.12` - Debug-toolbar middleware
+- Related: Documented as the response-side counterpart to `TODO-ALPHA-042-0.0.14`. -> `TODO-ALPHA-042-0.0.14` - Debug-toolbar middleware
+- Related: `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `TODO-ALPHA-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive. -> `TODO-ALPHA-042-0.0.14` - Debug-toolbar middleware
+- Related: `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `TODO-ALPHA-042-0.0.14`); this card is graphene-django parity only. -> `TODO-ALPHA-042-0.0.14` - Debug-toolbar middleware
+- Related: distinct from `TODO-ALPHA-042-0.0.14` (Django debug toolbar). -> `TODO-ALPHA-042-0.0.14` - Debug-toolbar middleware
 
 ## To Do - Beta (1.0.0)
 
@@ -700,11 +700,11 @@ planned
 
 #### Definition of done
 
-- [ ] Every other Alpha card (`ALPHA-013-0.0.6` through `ALPHA-035-0.0.12` plus `ALPHA-024-0.0.9`) is in `DONE`.
+- [ ] Every other Alpha card (`ALPHA-013-0.0.6` through `ALPHA-044-0.0.14` plus `ALPHA-024-0.0.9`) is in `DONE`.
 - [ ] Full test pass under each supported `(Python, Django, Strawberry)` combination.
 - [ ] Coverage stays at 100% for the package source tree.
 - [ ] Version bumped to `0.1.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
-- [ ] `CHANGELOG.md` `[Unreleased]` block promoted to `## [0.1.0] - YYYY-MM-DD` with a one-paragraph release summary plus the cumulative Added / Changed / Fixed / Removed sections covering `0.0.6` through `0.0.12`.
+- [ ] `CHANGELOG.md` `[Unreleased]` block promoted to `## [0.1.0] - YYYY-MM-DD` with a one-paragraph release summary plus the cumulative Added / Changed / Fixed / Removed sections covering `0.0.6` through `0.0.14`.
 - [ ] `README.md`, `docs/README.md`, `docs/GLOSSARY.md`, and `docs/TREE.md` cross-checked against the actual shipped surface; "shipped" / "planned" status markers updated.
 - [ ] Audit pass against the parity findings: every ⚛️ and 🍓 card from the two upstream audits is either `DONE` or explicitly deferred with a recorded reason.
 - [ ] Tag the release in git and publish to PyPI.
@@ -1431,7 +1431,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
 | [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
 | [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | planned for `0.0.11` |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.11` |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
 | [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 
 #### Package files
@@ -1564,7 +1564,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
 | [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
 | [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | planned for `0.0.11` |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.11` |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
 | [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
 | [`get_child_queryset`](docs/GLOSSARY.md#get_child_queryset) | planned for `0.1.3` |
 | [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
@@ -1795,8 +1795,8 @@ planned
 | [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.12` |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.12` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
 | [`safe_wrap_connection_method`](docs/GLOSSARY.md#safe_wrap_connection_method) | shipped (`0.0.7`) |
 | [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
 
@@ -2669,11 +2669,11 @@ shipped
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
 | [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.12` |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.12` |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.12` |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.12` |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.12` |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.14` |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.14` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
 
 #### Package files
 
@@ -2718,11 +2718,11 @@ shipped
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
 | [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
 | [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.12` |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.12` |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.12` |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.12` |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.12` |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.14` |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.14` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
 
 #### Package files
 

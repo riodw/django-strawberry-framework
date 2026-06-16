@@ -26,7 +26,7 @@ Currently exports
   that import it.
 
 Future exports (tracked in ``docs/GLOSSARY.md``; planned for
-``0.0.12``):
+``0.0.14``):
 
 - ``TestClient``, ``AsyncTestClient`` - live ``/graphql/`` HTTP clients
   for consumer test suites.

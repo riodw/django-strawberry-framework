@@ -1031,6 +1031,13 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 
 **Composes with**: `django_polymorphic_union_types` (shared dispatch machinery — that card is the non-Relay half), shipped Node foundation, `stable_cursor_field`.
 
+**Carries forward (spec-035 G3 deferral)**: this card is the scheduled home for the deferred **G3 — fragment type-condition narrowing** from [spec-035][spec-035] (Decisions 6–7). G3 is parity (`strawberry-graphql-django` narrows fragment planning to concrete types), but it has **no reachable trigger until this card's per-concrete-type optimizer cooperation exists**: today an interface / union root field never enters the walker, because `DjangoOptimizerExtension._resolve_model_from_return_type` resolves the abstract `origin` (the interface / union class, not a registered `DjangoType`) and `registry.model_for_type(origin)` returns `None`, so `_optimize` passes the queryset through before any planning runs. G3 therefore ships *with* this card, never before it. Carry-forward requirements distilled from the spec's analysis:
+
+- **R1 — abstract-return entry contract (the precondition).** Define how an interface / union return resolves its target model(s), its origin / plan-cache identity (the key is `(document, target_model, origin)` — an abstract origin needs a defined identity or a per-concrete fan-out), and its possible-concrete-type enumeration — registry-only, with **no per-request graphql-core introspection** (the B7 invariant). This is the "per-concrete-type prefetch" Spec bullet above, made concrete; it is the bulk of the work and the gate on everything else.
+- **R2 — both walker inliner consumers use the classifier.** The narrowing must thread through *both* `optimizer/walker.py::_walk_selections` **and** `optimizer/walker.py::_selected_scalar_names` (the FK-id-elision-safety analyzer is a second `included_field_selections` consumer) — otherwise elision decisions get made from sibling / unknown-composite fragments the main walk would have skipped.
+- **R3 — non-Relay name resolution + fail-closed ambiguity.** "Known sibling concrete type" needs a lookup over all `registry.iter_definitions()` by `graphql_type_name` (the existing `registry.definition_for_graphql_name` is Relay-Node-only and raises on miss / ambiguity). Duplicate GraphQL names must fail closed (treat as the recurse-only outcome, or raise loudly in tests) — never an implicit first-match. Interface names come from Strawberry definition metadata (honoring `Meta.name` / `@strawberry.interface(name=...)`), collected as the **union** of declared `definition.interfaces` and MRO-inherited bases — neither source alone is complete (a directly-inherited `relay.Node` lives only in the MRO, never in `definition.interfaces`).
+- **Classifier shape.** A tri-state classifier (`INLINE` / `SKIP` / `RECURSE_FRAGMENTS_ONLY`) plus a `fragments_only` recursion flag on `included_field_selections` — not a boolean filter — so an unknown union recurses into nested matching fragments while dropping its own direct fields. Full design, edge cases, and test plan are retained verbatim in [spec-035][spec-035] (Decision 6 / Decision 7 / the deferred Slice 3 test plan).
+
 ### `refetchable_container_support`
 
 **Realistic**: 8/10 — Schema metadata emission over the shipped `node(id:)` foundation.
@@ -1667,6 +1674,7 @@ If a card turns out to be wrong (the upstream packages ship it, real-world adopt
 [kanban]: KANBAN.md
 
 <!-- docs/ -->
+[spec-035]: docs/spec-035-optimizer_hardening-0_0_10.md
 
 <!-- docs/SPECS/ -->
 

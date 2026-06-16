@@ -74,6 +74,10 @@ Worker 3 may also set `review-accepted` with one or more Medium-or-higher findin
 
 Any claim that a defect was "pre-existing at HEAD" — yours or Worker 2's — must be verified at pristine HEAD with the exact commands and outputs (`git stash push -u`, `git checkout HEAD`, the reproducing command, the stash restore). Verify Worker 2's claim yourself before accepting it; an unverified claim is a Medium finding.
 
+### Behavioral-claim verification
+
+A claimed runtime property — "strictness-visible", "loud fallback", "fails closed", "raises on miss" — is verified by tracing the control flow to the claim, not by trusting the plan's or diff's prose. An earlier short-circuit or guard (a planned-key early return, a cached-state check, a default-arg arm) can silence a fallback that reads as loud. Confirm no prior branch swallows the path before accepting the claim; an unverified behavioral claim is a Medium finding.
+
 ### Public-surface check (every review)
 
 Run `git diff -- django_strawberry_framework/__init__.py` and confirm `__all__` and the re-export list are unchanged, OR confirm any change is authorized by the active spec (cite the spec line). The Definition of Done for most slices includes "no new public exports"; making this an explicit per-review item prevents drift from compounding silently. Record the result in the artifact under `### Public-surface check`.

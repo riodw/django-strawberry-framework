@@ -8,6 +8,7 @@ from typing import Any
 
 from django.db import models
 from django.db.models import Prefetch
+from graphql import OperationType
 from strawberry import relay
 
 from ..exceptions import ConfigurationError, OptimizerError
@@ -60,6 +61,27 @@ _node_children_with_runtime_prefix = node_children_with_runtime_prefix
 _with_runtime_prefix = with_runtime_prefix
 
 
+def _enable_only_for_operation(info: Any | None) -> bool:
+    """Return whether ``.only(...)`` projection is enabled for ``info``'s operation.
+
+    The G2 gate (spec-035 Decision 4): only a ``QUERY`` operation projects
+    ``only_fields`` / applies ``.only(...)``. ``MUTATION`` and
+    ``SUBSCRIPTION`` suppress projection across the whole plan tree so a
+    mutation-resolver-returned queryset never carries a deferred-field set
+    (the deferred-refetch / deferred-``save()`` hazard).
+
+    Defensive by design (the package's ``getattr`` posture, mirroring
+    ``runtime_path_from_info`` and ``_relay_max_results_from_info``): a
+    ``None`` ``info`` *or* a partial test-double whose ``operation`` (or
+    ``operation.operation``) is absent falls to the enabled default rather
+    than raising. During real execution ``info.operation`` is always present
+    (``extension.py::_build_cache_key`` reads it directly), so the defensive
+    arm exists only for direct / test callers of ``plan_optimizations``.
+    """
+    operation = getattr(getattr(info, "operation", None), "operation", None)
+    return operation is None or operation is OperationType.QUERY
+
+
 def plan_optimizations(
     selected_fields: list[Any],
     model: type[models.Model],
@@ -78,12 +100,12 @@ def plan_optimizations(
     nested ``_walk_selections`` calls leave ``source_type`` ``None`` so
     nested targets continue to route through the primary.
     """
-    # TODO(spec-035 Slice 2): derive the operation-wide projection gate here.
-    # Pseudocode: absent or partial ``info`` keeps projection enabled; ``QUERY``
-    # keeps it enabled; ``MUTATION`` and ``SUBSCRIPTION`` close it. Thread that
-    # single flag through every walk recursion so root plans, generated
-    # ``Prefetch`` child plans, and scalar-only connection windows share one
-    # operation decision.
+    # Derive the operation-wide projection gate ONCE here (spec-035 Decision 4)
+    # and thread the single ``enable_only`` bool through every walk recursion so
+    # the root plan, generated ``Prefetch`` child plans, and scalar-only
+    # connection windows share ONE operation decision - rather than each
+    # projection writer re-reading ``info.operation`` independently.
+    enable_only = _enable_only_for_operation(info)
     plan = OptimizationPlan()
     _walk_selections(
         selected_fields,
@@ -94,6 +116,7 @@ def plan_optimizations(
             runtime_prefixes if runtime_prefixes is not None else (runtime_path_from_info(info),)
         ),
         source_type=source_type,
+        enable_only=enable_only,
     )
     # Finalise at handoff: list fields become tuples so post-walker
     # mutation (by callers, the plan cache, or downstream resolvers)
@@ -269,6 +292,7 @@ def _walk_selections(
     runtime_prefixes: tuple[tuple[str, ...], ...] = ((),),
     *,
     source_type: type | None = None,
+    enable_only: bool = True,
 ) -> None:
     """Recursive workhorse: descend one normalized level of the selection tree.
 
@@ -284,6 +308,14 @@ def _walk_selections(
     prefix" for direct or test-only callers without ``info``;
     ``plan_optimizations`` always passes an explicit single-tuple via
     ``runtime_path_from_info(info)``.
+
+    ``enable_only`` is the operation-wide G2 projection gate (spec-035
+    Decision 4) derived once in ``plan_optimizations``. It defaults to
+    ``True`` so every existing direct / test caller keeps QUERY behavior;
+    the two nested recursions forward the same bool so root and child plans
+    share one operation decision. When closed (a non-``QUERY`` operation),
+    the scalar-leaf / Relay-pk appends below are skipped and the relation
+    writers it threads into apply no ``.only(...)`` projection.
     """
     type_cls, definition, field_map = _resolve_field_map(model, source_type=source_type)
     hints_map = _resolve_optimizer_hints(definition)
@@ -320,6 +352,7 @@ def _walk_selections(
                 runtime_prefixes=runtime_prefixes,
                 type_cls=type_cls,
                 model=model,
+                enable_only=enable_only,
             )
             continue
         django_field = field_map.get(django_name)
@@ -356,18 +389,18 @@ def _walk_selections(
                     ),
                     None,
                 )
-                if db_field is not None:
+                # ``enable_only`` is the G2 gate (spec-035 Decision 4): under a
+                # non-``QUERY`` operation the full row is loaded, so the
+                # id-column projection is skipped - resolver reads stay safe
+                # without a column mask. Combined with the ``db_field``
+                # presence check so the projection is the single guarded action.
+                if db_field is not None and enable_only:
                     # Project via ``attname`` so a consumer-declared
                     # ``NodeID`` targeting the relation's ``name`` (e.g.
                     # ``user`` on ``OneToOneField(primary_key=True)``)
                     # still lands on the FK column ``user_id`` instead of
                     # the relation name, which would drag the related row
                     # back via ``.only("user")``.
-                    # TODO(spec-035 Slice 2): guard this Relay custom-pk
-                    # projection with the operation-wide ``enable_only`` flag.
-                    # Pseudocode: when the flag is closed, do not append this
-                    # id column; the full row is loaded, so resolver reads stay
-                    # safe without a column mask.
                     column = getattr(db_field, "attname", None) or id_attr
                     append_unique(plan.only_fields, f"{prefix}{column}")
             continue
@@ -376,11 +409,12 @@ def _walk_selections(
             # type is a Relay-declared ``DjangoType``, this is the
             # default-pk path (the model's pk attname IS ``"id"``); the
             # custom-pk path is handled above.
-            # TODO(spec-035 Slice 2): guard scalar-column appends with the
-            # operation-wide ``enable_only`` flag. Pseudocode: QUERY appends as
-            # today; MUTATION/SUBSCRIPTION leave ``plan.only_fields`` untouched
-            # while relation planning and FK-id elision continue.
-            append_unique(plan.only_fields, f"{prefix}{django_name}")
+            # G2 gate (spec-035 Decision 4): QUERY appends as today;
+            # MUTATION / SUBSCRIPTION leave ``plan.only_fields`` untouched.
+            # The ``continue`` stays unconditional - the scalar field is
+            # accounted for whether or not it is projected.
+            if enable_only:
+                append_unique(plan.only_fields, f"{prefix}{django_name}")
             continue
 
         full_path = f"{prefix}{django_name}"
@@ -406,6 +440,7 @@ def _walk_selections(
             info=info,
             runtime_paths=runtime_paths,
             resolver_identities=resolver_identities,
+            enable_only=enable_only,
         ):
             continue
 
@@ -420,6 +455,7 @@ def _walk_selections(
                 info,
                 runtime_paths,
                 resolver_identities,
+                enable_only=enable_only,
             )
         else:
             _plan_select_relation(
@@ -432,6 +468,7 @@ def _walk_selections(
                 info,
                 runtime_paths,
                 resolver_identities,
+                enable_only=enable_only,
             )
 
 
@@ -445,6 +482,8 @@ def _plan_select_relation(
     info: Any | None,
     runtime_paths: tuple[tuple[str, ...], ...],
     resolver_identities: tuple[str, ...],
+    *,
+    enable_only: bool = True,
 ) -> None:
     """Plan a same-query single-valued relation traversal.
 
@@ -452,8 +491,19 @@ def _plan_select_relation(
     ``select_related`` resolves QUERY paths, and single-valued forward
     relations have no name/accessor split anyway - the accessor swap is
     a ``_plan_prefetch_relation`` concern only.
+
+    ``enable_only`` (G2 gate, spec-035 Decision 4) gates only the
+    connector-column projection in ``_record_relation_access`` and the
+    nested scalar appends; ``select_related`` and ``fk_id_elisions`` stay
+    intact under a non-``QUERY`` operation.
     """
-    _record_relation_access(plan, django_field, prefix, resolver_identities)
+    _record_relation_access(
+        plan,
+        django_field,
+        prefix,
+        resolver_identities,
+        enable_only=enable_only,
+    )
     target_pk_name = _target_pk_name(django_field)
     if (
         _can_elide_fk_id(django_field)
@@ -472,6 +522,7 @@ def _plan_select_relation(
             prefix=f"{full_path}__",
             info=info,
             runtime_prefixes=runtime_paths,
+            enable_only=enable_only,
         )
 
 
@@ -484,6 +535,8 @@ def _plan_prefetch_relation(
     info: Any | None,
     runtime_paths: tuple[tuple[str, ...], ...],
     resolver_identities: tuple[str, ...],
+    *,
+    enable_only: bool = True,
 ) -> None:
     """Plan a queryset-boundary relation traversal with optional child optimization.
 
@@ -497,8 +550,18 @@ def _plan_prefetch_relation(
     prefetch_related()`` (Round-4 S3 follow-up). Plan keys and resolver
     identities stay in field-name vocabulary; only the lookup string
     Django consumes uses the accessor.
+
+    ``enable_only`` (G2 gate, spec-035 Decision 4) gates only the connector
+    columns and the child plan's projection; the ``Prefetch`` itself is
+    always emitted so a non-``QUERY`` operation keeps ``prefetch_related``.
     """
-    _record_relation_access(plan, django_field, prefix, resolver_identities)
+    _record_relation_access(
+        plan,
+        django_field,
+        prefix,
+        resolver_identities,
+        enable_only=enable_only,
+    )
     lookup_path = f"{prefix}{instance_accessor(django_field)}"
     has_custom_get_queryset = _target_has_custom_get_queryset(target_type)
     if has_custom_get_queryset:
@@ -515,6 +578,7 @@ def _plan_prefetch_relation(
         info,
         runtime_paths,
         has_custom_get_queryset=has_custom_get_queryset,
+        enable_only=enable_only,
     )
     append_prefetch_unique(plan.prefetch_related, Prefetch(lookup_path, queryset=child_queryset))
 
@@ -524,6 +588,8 @@ def _record_relation_access(
     django_field: Any,
     prefix: str,
     resolver_identities: tuple[str, ...],
+    *,
+    enable_only: bool = True,
 ) -> None:
     """Record the shared connector and resolver metadata for a relation.
 
@@ -534,14 +600,15 @@ def _record_relation_access(
     triggering a lazy load through ``obj.<fk>.pk``). Moving this call
     after the elision check would silently drop the FK column on the
     elided path and reintroduce the N+1.
+
+    The G2 gate (spec-035 Decision 4) gates ONLY the connector-column
+    append: under a non-``QUERY`` operation the source row is fully loaded,
+    so the FK column need not be masked. The ``planned_resolver_keys``
+    append stays unconditional so strictness still sees the planned
+    relation regardless of operation (Decision 4 / edge case line 315).
     """
     attname = getattr(django_field, "attname", None)
-    # TODO(spec-035 Slice 2): make connector-column projection conditional on
-    # the operation-wide ``enable_only`` flag, while always recording resolver
-    # identities. Pseudocode: QUERY appends ``attname`` as today; non-QUERY
-    # skips the append because the source row is fully loaded, but strictness
-    # still receives the planned resolver keys.
-    if attname is not None:
+    if enable_only and attname is not None:
         append_unique(plan.only_fields, f"{prefix}{attname}")
     append_unique_many(plan.planned_resolver_keys, resolver_identities)
 
@@ -555,12 +622,15 @@ def _build_prefetch_child_queryset(
     runtime_paths: tuple[tuple[str, ...], ...],
     *,
     has_custom_get_queryset: bool,
+    enable_only: bool = True,
 ) -> Any:
-    """Build and optimize the child queryset for a generated ``Prefetch``."""
-    # TODO(spec-035 Slice 2): child plans must inherit the root operation's
-    # ``enable_only`` flag. Pseudocode: a mutation selecting a to-many relation
-    # still builds a ``Prefetch``, but the child plan and applied child queryset
-    # carry no deferred-loading mask.
+    """Build and optimize the child queryset for a generated ``Prefetch``.
+
+    ``enable_only`` (G2 gate, spec-035 Decision 4) is forwarded so a child
+    plan inherits the root operation's projection decision: under a
+    non-``QUERY`` operation the ``Prefetch`` is still built but its child
+    queryset carries no deferred-loading mask.
+    """
     child_plan = OptimizationPlan()
     _walk_selections(
         sel.selections,
@@ -569,8 +639,9 @@ def _build_prefetch_child_queryset(
         prefix="",
         info=info,
         runtime_prefixes=runtime_paths,
+        enable_only=enable_only,
     )
-    _ensure_connector_only_fields(child_plan, django_field)
+    _ensure_connector_only_fields(child_plan, django_field, enable_only=enable_only)
     _merge_child_plan_metadata(parent_plan, child_plan)
     if not child_plan.cacheable:
         parent_plan.cacheable = False
@@ -599,6 +670,7 @@ def _apply_hint(
     info: Any | None,
     runtime_paths: tuple[tuple[str, ...], ...],
     resolver_identities: tuple[str, ...],
+    enable_only: bool = True,
 ) -> bool:
     """Apply a Meta-level ``OptimizerHint`` to ``plan``; return ``True`` when handled.
 
@@ -640,7 +712,13 @@ def _apply_hint(
             full_path=f"{prefix}{instance_accessor(django_field)}",
             type_name=type_cls.__name__,
         )
-        _record_relation_access(plan, django_field, prefix, resolver_identities)
+        _record_relation_access(
+            plan,
+            django_field,
+            prefix,
+            resolver_identities,
+            enable_only=enable_only,
+        )
         # Consumer-supplied Prefetch objects commonly close over a queryset
         # built with request- or user-scoped filters; matching the
         # has_custom_get_queryset discipline in _plan_prefetch_relation, mark
@@ -667,6 +745,7 @@ def _apply_hint(
                 info,
                 runtime_paths,
                 resolver_identities,
+                enable_only=enable_only,
             )
         else:
             _plan_select_relation(
@@ -679,6 +758,7 @@ def _apply_hint(
                 info,
                 runtime_paths,
                 resolver_identities,
+                enable_only=enable_only,
             )
         return True
     if hint.force_prefetch:
@@ -691,6 +771,7 @@ def _apply_hint(
             info,
             runtime_paths,
             resolver_identities,
+            enable_only=enable_only,
         )
         return True
     return False
@@ -909,6 +990,8 @@ def _project_scalar_only_window(
     child_queryset: Any,
     django_field: Any,
     order_by: Sequence[Any],
+    *,
+    enable_only: bool = True,
 ) -> Any:
     """Restrict a scalar-only connection window to pk / connector / order columns.
 
@@ -919,7 +1002,15 @@ def _project_scalar_only_window(
     concrete ordering columns the deterministic window order references
     (spec-033 Decision 4 / Decision 6 scalar-only contract). The ``_dst_*`` window annotations
     compose with ``.only()`` (annotations, not deferred columns).
+
+    The G2 gate (spec-035 Decision 4): under a non-``QUERY`` operation this
+    direct ``.only(...)`` is the projection-writer that never touches
+    ``OptimizationPlan.only_fields``, so it must consult the gate itself -
+    when closed it returns the child queryset unchanged (no column mask) and
+    the window annotations are applied afterwards in ``_plan_connection_relation``.
     """
+    if not enable_only:
+        return child_queryset
     related_model = django_field.related_model
     fields: list[str] = []
     append_unique(fields, related_model._meta.pk.attname)
@@ -928,18 +1019,27 @@ def _project_scalar_only_window(
         append_unique(fields, connector)
     for column in _concrete_order_columns(order_by, related_model):
         append_unique(fields, column)
-    # TODO(spec-035 Slice 2): make this direct ``.only(...)`` call conditional
-    # on the inherited ``enable_only`` flag. Pseudocode: QUERY keeps the
-    # pk/connector/order projection; mutation/subscription return the child
-    # queryset unchanged before window annotations are applied.
     return child_queryset.only(*fields)
 
 
-def _ensure_connector_only_fields(plan: OptimizationPlan, parent_field: Any) -> None:
-    """Inject columns Django needs to attach prefetched rows to parents."""
-    # TODO(spec-035 Slice 2): also short-circuit when ``enable_only`` is closed.
-    # Pseudocode: under non-QUERY operations, generated Prefetch querysets stay
-    # relation-planned but have empty ``query.deferred_loading``.
+def _ensure_connector_only_fields(
+    plan: OptimizationPlan,
+    parent_field: Any,
+    *,
+    enable_only: bool = True,
+) -> None:
+    """Inject columns Django needs to attach prefetched rows to parents.
+
+    The G2 gate (spec-035 Decision 4) short-circuits before the
+    empty-``only_fields`` guard: under a non-``QUERY`` operation the child
+    plan appended nothing to ``only_fields``, so the connector append must
+    also be skipped. The early return makes that explicit rather than
+    relying on the empty-set no-op, which is insufficient because
+    ``_project_scalar_only_window`` and ``_record_relation_access`` populate
+    independently of the scalar path.
+    """
+    if not enable_only:
+        return
     if not plan.only_fields:
         return
     attname = _connector_only_field(parent_field)
@@ -1225,6 +1325,7 @@ def _plan_connection_relation(
     runtime_prefixes: tuple[tuple[str, ...], ...],
     type_cls: type | None,
     model: type[models.Model],
+    enable_only: bool = True,
 ) -> None:
     """Plan one recognized nested connection as a windowed ``Prefetch``.
 
@@ -1321,6 +1422,7 @@ def _plan_connection_relation(
         info,
         runtime_paths,
         has_custom_get_queryset=has_custom_get_queryset,
+        enable_only=enable_only,
     )
     # (c, DISTINCT guard) the window's Count(1) OVER would over-count pre-DISTINCT
     # rows (SQL evaluates windows before DISTINCT), so a distinct child queryset
@@ -1344,7 +1446,12 @@ def _plan_connection_relation(
     # pk/connector/order columns now that the deterministic order is known
     # (spec-033 Decision 4 / Decision 6 scalar-only contract) rather than fetching full child rows.
     if scalar_only:
-        child_queryset = _project_scalar_only_window(child_queryset, django_field, order_by)
+        child_queryset = _project_scalar_only_window(
+            child_queryset,
+            django_field,
+            order_by,
+            enable_only=enable_only,
+        )
 
     windowed_queryset = apply_window_pagination(
         child_queryset,

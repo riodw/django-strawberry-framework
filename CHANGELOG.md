@@ -22,6 +22,12 @@ See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of e
 - **`apply_cascade_permissions` / `aapply_cascade_permissions` (cascade visibility helper pair).** One call inside a [`DjangoType`][glossary-djangotype]'s [`get_queryset`][glossary-get_queryset-visibility-hook] cascades that type's visibility across its **single-column forward FK / OneToOne edges** — for each such edge it resolves the target type through the registry primary lookup, runs that target type's own `get_queryset`, and intersects `Q(<fk>__in=<visible>) | Q(<fk>__isnull=True)` into the caller's queryset, so a parent row whose target a target hook hides drops out. Four invariants: a module-level `ContextVar` seen-set cycle guard (partial-narrow on cycle break, never a raise, `finally`-reset for WSGI/ASGI request isolation), single-column forward scope (M2M / reverse relations / `GenericForeignKey` / `GenericRelation` / the MTI `<parent>_ptr` parent link all excluded), nullable-FK preservation, and per-edge subquery pinning to the caller's resolved DB alias (`queryset.db`). `fields=` validates loudly — a bare string and any unknown / non-cascadable name raise [`ConfigurationError`][glossary-configurationerror]. The sync helper raises [`SyncMisuseError`][glossary-syncmisuseerror] (coroutine closed) for an async target hook; `aapply_cascade_permissions` runs the same walk through `sync_to_async(thread_sensitive=True)`. Composes with the shipped [`FilterSet`][glossary-filterset] / [`OrderSet`][glossary-orderset] `check_<field>_permission` gates (cascade narrows rows first, gates judge input second — no existence leak), connections, node refetch, list fields, and nested filter branches via the optimizer `Prefetch` downgrade, at zero added query round-trips (the `__in` subqueries compile into the caller's single `SELECT`). Both symbols ship under [`django_strawberry_framework/permissions.py`][permissions] and are exported from the package root.
 - **Products cascade activation.** The four [`products`][products-schema] schema `get_queryset` hooks (`Category` / `Item` / `Property` / `Entry`) now call `apply_cascade_permissions`, so visibility cascades across the `Entry → Item → Category` / `Entry → Property → Category` FK chain — exercised live by `services.create_users(1)` permission users over `/graphql/`: staff sees everything, a `view_<model>` user sees non-private rows but loses entries under hidden targets, and anonymous requests lose any entry whose item or property points at a private category.
 
+### Changed
+- **Operation-type gating of [`.only()`][glossary-only-projection] (optimizer guard G2).** The [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] now applies column projection for `QUERY` operations only — for a mutation / subscription operation whose root resolver returns a queryset it suppresses all `.only(...)` column deferral at plan-build time while keeping `select_related` / `prefetch_related`, so a mutation-returned queryset never carries a selection-shaped deferred-field set (and never triggers a per-access deferred-field refetch or a deferred-instance partial `save()`). The plan-cache key is unchanged — the printed-AST key already separates `query` from `mutation` / `subscription` documents. [FK-id elision][glossary-fk-id-elision] stays enabled under non-`QUERY` operations, now with a consumer-`.only()` loaded-check: the elision stub verifies the FK column is loaded on the parent row and falls back loudly ([strictness][glossary-strictness-mode]-visible) when a consumer projection deferred it, rather than a silent per-row lazy load.
+
+### Fixed
+- **Evaluated-queryset guard (optimizer guard G1).** The [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] no longer silently re-executes a root queryset the consumer already evaluated. If a root resolver evaluated the queryset (`len(qs)`, `bool(qs)`, slicing) before returning it, `_optimize` now returns it unchanged rather than re-running it through an `.only()` / `select_related` clone — closing a doubled query that was invisible to the consumer. The manager-coercion path (`return Model.objects`) still optimizes, since the `.all()` coercion yields a fresh unevaluated queryset.
+
 ## [0.0.9] - 2026-06-13
 
 The Relay release: cursor connections, root refetch fields, and model-anchored GlobalIDs.
@@ -272,8 +278,10 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [glossary-django-trac-37064-hardening]: docs/GLOSSARY.md#django-trac-37064-hardening
 [glossary-djangoconnection]: docs/GLOSSARY.md#djangoconnection
 [glossary-djangoconnectionfield]: docs/GLOSSARY.md#djangoconnectionfield
+[glossary-djangooptimizerextension]: docs/GLOSSARY.md#djangooptimizerextension
 [glossary-djangotype]: docs/GLOSSARY.md#djangotype
 [glossary-filterset]: docs/GLOSSARY.md#filterset
+[glossary-fk-id-elision]: docs/GLOSSARY.md#fk-id-elision
 [glossary-get_queryset-visibility-hook]: docs/GLOSSARY.md#get_queryset-visibility-hook
 [glossary-metaconnection]: docs/GLOSSARY.md#metaconnection
 [glossary-metafields]: docs/GLOSSARY.md#metafields
@@ -283,6 +291,7 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [glossary-metaname]: docs/GLOSSARY.md#metaname
 [glossary-metaorderset_class]: docs/GLOSSARY.md#metaorderset_class
 [glossary-multi-database-cooperation]: docs/GLOSSARY.md#multi-database-cooperation
+[glossary-only-projection]: docs/GLOSSARY.md#only-projection
 [glossary-optimizerhint]: docs/GLOSSARY.md#optimizerhint
 [glossary-ordering]: docs/GLOSSARY.md#ordering
 [glossary-orderset]: docs/GLOSSARY.md#orderset

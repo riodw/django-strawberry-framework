@@ -1177,6 +1177,38 @@ def test_cache_key_differs_for_named_operations_in_same_document():
     ) != DjangoOptimizerExtension._build_cache_key(info_b, Item)
 
 
+def test_query_and_mutation_plans_coexist_distinct_keys():
+    """spec-035 Decision 4: a query and a byte-identical-selection mutation get distinct keys.
+
+    The plan-cache key's first component is the printed operation AST, and
+    ``print_ast(operation)`` includes the ``query`` / ``mutation`` keyword - so the
+    ``only``-carrying query plan and the ``only``-suppressed mutation plan can
+    never collide on one cache entry even with identical selection bodies (G2
+    cache-safety; DoD item 3). Pins the key inequality directly, not a cache stat.
+    """
+    from graphql import parse
+
+    query_op = parse("query { allItems { category { name } } }").definitions[0]
+    mutation_op = parse("mutation { allItems { category { name } } }").definitions[0]
+    info_query = SimpleNamespace(
+        operation=query_op,
+        fragments={},
+        variable_values={},
+        path=SimpleNamespace(key="allItems", prev=None),
+    )
+    info_mutation = SimpleNamespace(
+        operation=mutation_op,
+        fragments={},
+        variable_values={},
+        path=SimpleNamespace(key="allItems", prev=None),
+    )
+
+    assert DjangoOptimizerExtension._build_cache_key(
+        info_query,
+        Item,
+    ) != DjangoOptimizerExtension._build_cache_key(info_mutation, Item)
+
+
 def test_cache_eviction_removes_old_entries(monkeypatch):
     """B1: the plan cache evicts least-recently-used entries when full."""
     from graphql import parse
@@ -4310,13 +4342,6 @@ def test_plan_with_cascading_hook_uncacheable():
     assert plain_ext.cache_info().misses == 1
     assert plain_ext.cache_info().size == 1
 
-
-# TODO(spec-035 Slice 2): add extension-level G2 cache and operation pins here.
-# Pseudocode: execute textually similar query and mutation operations against
-# one extension instance; assert the printed-AST cache stores distinct plans,
-# the query plan carries ``only_fields``, and the mutation plan does not. Keep
-# this package-internal because fakeshop exposes no mutation queryset surface
-# until the 0.0.11 mutation cohort.
 
 # TODO(spec-035 Slice 3): add the strictness no-false-fire package pin here if
 # it needs real extension execution rather than pure walker inspection.

@@ -766,3 +766,162 @@ def test_strictness_check_is_connection_agnostic_under_non_default_alias():
 
     with pytest.raises(OptimizerError, match="Unplanned N\\+1: shelf"):
         _check_n1(info, root, "shelf", _ParentType, kind="forward_single")
+
+
+# ---------------------------------------------------------------------------
+# spec-035 Decision 5 - FK-id elision loaded-check + loud fallback
+# ---------------------------------------------------------------------------
+
+
+def test_fk_id_elision_enabled_under_mutation():
+    """Decision 5: a fully-loaded FK column still elides; no join, no lazy load.
+
+    The resolver never sees the operation type - the elision set is on
+    ``info.context`` regardless of operation, so this asserts elision works when
+    the FK column IS loaded (the optimizer-owned norm and the
+    consumer-``.only()``-that-includes-the-FK case), which is exactly why the
+    Decision 5 guard is operation-independent.
+    """
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.optimizer._context import DST_OPTIMIZER_FK_ID_ELISIONS
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    class ItemType:
+        pass
+
+    field = Item._meta.get_field("category")
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
+    key = resolver_key(ItemType, "category", ("allItems", "category"))
+
+    class Root:
+        category_id = 42
+
+        @property
+        def category(self):
+            raise AssertionError("loaded FK column must elide, never lazy-load the relation")
+
+    fake_info = SimpleNamespace(
+        context={DST_OPTIMIZER_FK_ID_ELISIONS: {key}},
+        field_name="category",
+        path=_path("allItems", 0, "category"),
+    )
+    result = resolver(Root(), fake_info)
+    assert isinstance(result, Category)
+    assert result.pk == 42
+
+
+@pytest.mark.parametrize("operation_arm", ["query", "mutation"])
+def test_fk_id_elision_falls_back_when_consumer_only_defers_fk(operation_arm, caplog):
+    """Decision 5: a deferred consumer-``.only()`` FK column falls back loudly.
+
+    A consumer ``Item.objects.only("name")`` survives B8 consumer-wins diffing
+    while the plan still carries the ``category`` elision AND records it planned.
+    The resolver must NOT silently read the deferred ``category_id`` (the per-row
+    lazy load Decision 5 forbids), and because the relation is planned it must
+    NOT let ``_check_n1`` mistake the planned key for a satisfied relation - the
+    fallback forces the lazy-load probe so strictness sees the access. The bug
+    bites under both ``QUERY`` and a mutation (the resolver is operation-agnostic,
+    so ``operation_arm`` only documents the two shapes - spec-035 edge case 316).
+    """
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.exceptions import OptimizerError
+    from django_strawberry_framework.optimizer._context import (
+        DST_OPTIMIZER_FK_ID_ELISIONS,
+        DST_OPTIMIZER_PLANNED,
+        DST_OPTIMIZER_STRICTNESS,
+    )
+    from django_strawberry_framework.types.resolvers import _make_relation_resolver
+
+    class ItemType:
+        pass
+
+    field = Item._meta.get_field("category")
+    resolver = _make_relation_resolver(field, parent_type=ItemType)
+    key = resolver_key(ItemType, "category", ("allItems", "category"))
+
+    def make_root():
+        class Root:
+            accessed_relation = False
+
+            def get_deferred_fields(self):
+                return {"category_id"}
+
+            @property
+            def category_id(self):
+                raise AssertionError("deferred FK column must NOT be read (silent per-row load)")
+
+            @property
+            def category(self):
+                # The honest fallback: a real lazy load, which strictness must see.
+                type(self).accessed_relation = True
+                return SimpleNamespace(pk=42)
+
+        return Root
+
+    def context(strictness):
+        # The relation is in BOTH elisions and planned (the elision branch records
+        # it planned), exactly the production shape Decision 5 must not mistake.
+        return {
+            DST_OPTIMIZER_FK_ID_ELISIONS: {key},
+            DST_OPTIMIZER_PLANNED: {key},
+            DST_OPTIMIZER_STRICTNESS: strictness,
+        }
+
+    # "raise": the fallback is loud - OptimizerError, not a silent planned-relation
+    # lazy load, and never a read of the deferred FK column.
+    Root = make_root()
+    info = SimpleNamespace(
+        context=context("raise"),
+        field_name="category",
+        path=_path("allItems", 0, "category"),
+    )
+    with pytest.raises(OptimizerError, match="Unplanned N\\+1: category"):
+        resolver(Root(), info)
+
+    # "warn": logs and returns the related object via the normal resolve.
+    Root = make_root()
+    info = SimpleNamespace(
+        context=context("warn"),
+        field_name="category",
+        path=_path("allItems", 0, "category"),
+    )
+    caplog.set_level("WARNING", logger="django_strawberry_framework")
+    result = resolver(Root(), info)
+    assert any("Potential N+1 on category" in r.message for r in caplog.records)
+    assert Root.accessed_relation is True
+    assert result.pk == 42
+
+
+def test_fk_id_stub_returns_unsafe_sentinel_when_attname_deferred():
+    """Direct unit: ``_build_fk_id_stub`` signals unsafe without reading the column.
+
+    Pins the loaded-check at the function boundary (mirrors
+    ``test_b2_fk_id_stub_returns_none_without_related_model``): a deferred FK
+    ``attname`` yields ``_FK_ELISION_UNSAFE`` and the deferred column is never read
+    (spec-035 Decision 5).
+    """
+    from types import SimpleNamespace
+
+    from django_strawberry_framework.optimizer.field_meta import FieldMeta
+    from django_strawberry_framework.types.resolvers import _FK_ELISION_UNSAFE, _build_fk_id_stub
+
+    field_meta = FieldMeta(
+        name="category",
+        is_relation=True,
+        attname="category_id",
+        related_model=Category,
+    )
+
+    class Root:
+        def get_deferred_fields(self):
+            return {"category_id"}
+
+        @property
+        def category_id(self):
+            raise AssertionError("deferred FK column must NOT be read")
+
+    assert _build_fk_id_stub(Root(), field_meta) is _FK_ELISION_UNSAFE
+    # A fully-loaded double (column in ``__dict__``) still builds the stub.
+    assert _build_fk_id_stub(SimpleNamespace(category_id=42), field_meta).pk == 42

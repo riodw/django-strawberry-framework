@@ -556,6 +556,165 @@ def test_optimizer_passes_through_unregistered_return_type(caplog):
 
 
 # ---------------------------------------------------------------------------
+# G1 (spec-035 Slice 1): evaluated-queryset guard
+#
+# A consumer root resolver that already EVALUATED its queryset (``len(qs)``,
+# ``bool(qs)``, a slice) must pass through ``_optimize`` unchanged - the
+# optimizer's ``.only()`` / ``select_related`` clone would otherwise silently
+# re-execute the SQL (a doubled query) and discard the consumer's own prefetch
+# work. No fakeshop resolver evaluates its root queryset before returning it,
+# so G1 is not reachable from a live products query (Decision 8 unreachability
+# reason) and is earned here at the package level.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_optimizer_passes_through_consumer_evaluated_queryset(django_assert_num_queries):
+    """An evaluated root queryset is returned unchanged - no re-executing clone.
+
+    The resolver applies its OWN ``select_related`` and evaluates the queryset
+    (``len(qs)`` -> ``_result_cache`` populated), then returns it. With the G1
+    guard the optimizer leaves it alone: the whole operation issues exactly ONE
+    SQL query (the consumer's evaluation) and the ``category`` relation is
+    served from the consumer's join. Without the guard the optimizer would
+    clone the evaluated queryset with its own plan and re-execute - two queries
+    total, and the consumer's prefetch work thrown away.
+    """
+    services.seed_data(2)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            qs = Item.objects.select_related("category").all()
+            len(qs)  # consumer evaluates -> _result_cache populated
+            return qs
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
+    with django_assert_num_queries(1):  # consumer's evaluation only; optimizer adds none
+        result = schema.execute_sync("{ allItems { name category { name } } }")
+    assert result.errors is None
+    # The guard short-circuited BEFORE _get_or_build_plan, so no plan was built.
+    assert ext.cache_info().misses == 0
+
+
+@pytest.mark.django_db
+def test_optimize_returns_same_instance_for_evaluated_queryset():
+    """``_optimize`` returns the SAME evaluated queryset object, never a clone.
+
+    Direct-call companion to the end-to-end test: it pins instance identity
+    (the contract the doubled-query count implies but cannot observe through
+    schema execution). ``_optimize`` never touches ``info`` for an evaluated
+    queryset - the guard returns before return-type resolution - so a bare
+    namespace suffices.
+    """
+    services.seed_data(1)
+    ext = DjangoOptimizerExtension()
+
+    qs = Category.objects.all()
+    len(qs)  # evaluate -> _result_cache is a (non-None) list
+
+    assert ext._optimize(qs, SimpleNamespace()) is qs
+    assert ext.cache_info().misses == 0
+
+
+@pytest.mark.django_db
+def test_optimizer_still_optimizes_manager_after_evaluated_queryset_guard(
+    django_assert_num_queries,
+):
+    """The guard sits AFTER the Manager coercion, so ``Model.objects`` still optimizes.
+
+    ``normalize_query_source`` coerces a returned ``Manager`` to a fresh
+    ``.all()`` whose ``_result_cache`` is ``None``; the guard must not pre-empt
+    that path. A ``Model.objects``-returning resolver therefore still builds and
+    applies a plan (cache miss recorded) and the ``category`` relation is joined
+    in a single query - the un-evaluated counterpart to the test above.
+    """
+    services.seed_data(2)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects  # type: ignore[return-value]  # Manager, unevaluated post-coercion
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
+    with django_assert_num_queries(1):  # optimizer applied select_related -> single joined query
+        result = schema.execute_sync("{ allItems { name category { name } } }")
+    assert result.errors is None
+    # The plan WAS built (guard did not fire on the un-evaluated coerced queryset).
+    assert ext.cache_info().misses == 1
+
+
+@pytest.mark.django_db
+def test_resolve_async_passes_through_evaluated_queryset(monkeypatch):
+    """Async mirror: the await -> ``_optimize`` wrapper inherits the G1 guard.
+
+    The async path (``_async_optimize`` awaits the resolver then calls
+    ``_optimize``) routes an evaluated queryset through the same guard. The
+    tripwire on ``_resolve_model_from_return_type`` proves ``_optimize``
+    short-circuits BEFORE return-type resolution / plan build - if the guard
+    failed to fire, the tripwire would raise.
+    """
+    import asyncio
+
+    from django_strawberry_framework.optimizer import extension as extension_module
+
+    services.seed_data(1)
+    ext = DjangoOptimizerExtension()
+
+    qs = Category.objects.all()
+    len(qs)  # evaluate synchronously, before the await -> no DB access in the coroutine
+
+    def _tripwire(info):
+        raise AssertionError("guard must short-circuit before return-type resolution")
+
+    monkeypatch.setattr(extension_module, "_resolve_model_from_return_type", _tripwire)
+
+    async def fake_next(root, info, *args, **kwargs):
+        return qs
+
+    info = SimpleNamespace(
+        path=SimpleNamespace(prev=None, key="allCategories", typename="Query"),
+        return_type=SimpleNamespace(),
+        schema=None,
+        field_name="allCategories",
+        field_nodes=[],
+    )
+    result = ext.resolve(fake_next, None, info)
+    assert asyncio.iscoroutine(result)
+    resolved = asyncio.run(result)
+    assert resolved is qs  # same instance, no clone
+    assert ext.cache_info().misses == 0  # guard fired before plan build
+
+
+# ---------------------------------------------------------------------------
 # O3: type-tracing through graphql-core wrappers
 # ---------------------------------------------------------------------------
 

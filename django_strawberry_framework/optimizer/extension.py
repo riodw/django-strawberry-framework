@@ -765,8 +765,17 @@ class DjangoOptimizerExtension(SchemaExtension):
            contract - the same Manager-coercion + is-queryset decision the
            list / connection field consumer paths use, so the middleware never
            decides it independently (``docs/feedback.md`` Major 1).
-        3. Trace the graphql-core return type to a Django ``(origin, model)``.
-        4. Delegate the plan-build-and-apply tail to :meth:`apply_to`, passing
+        3. An already-evaluated queryset (``_result_cache`` populated) is
+           returned unchanged (G1, ``spec-035`` Decision 3). The consumer's
+           root resolver already ran the SQL (a ``len(qs)`` guard, a
+           ``bool(qs)`` branch, a slice for a log line); past this point
+           :meth:`apply_to` clones the queryset to attach ``.only()`` /
+           ``select_related``, and a clone of an evaluated queryset silently
+           re-executes that SQL - a doubled query invisible to the consumer.
+           This extends the B8 "respect what the consumer already did" posture
+           from optimization state to execution state.
+        4. Trace the graphql-core return type to a Django ``(origin, model)``.
+        5. Delegate the plan-build-and-apply tail to :meth:`apply_to`, passing
            the resolved ``origin`` / ``model`` explicitly - the SAME helper
            the connection field's ``apply_connection_optimization`` calls, so
            the two share one plan-application implementation (Decision 11).
@@ -777,6 +786,19 @@ class DjangoOptimizerExtension(SchemaExtension):
         """
         result, is_queryset = normalize_query_source(result)
         if not is_queryset:
+            return result
+        # G1 (spec-035 Decision 3): a consumer-evaluated root queryset passes
+        # through unchanged. Placement is load-bearing in both directions - it
+        # sits AFTER the Manager coercion (a coerced ``.all()`` is always a
+        # fresh unevaluated queryset, so a ``Model.objects``-returning resolver
+        # still optimizes) and BEFORE the return-type resolution / ``apply_to``
+        # clone (which would re-execute the SQL). ``is not None`` is the exact,
+        # allocation-free signal upstream uses: ``_result_cache`` is ``None``
+        # until evaluated and a (possibly empty) list after, so truthiness would
+        # mis-handle an evaluated-but-empty queryset. ``getattr`` is defensive
+        # per the package posture - a non-queryset that slipped the gate above
+        # simply lacks the attribute and falls through.
+        if getattr(result, "_result_cache", None) is not None:
             return result
         resolved = _resolve_model_from_return_type(info)
         if resolved is None:

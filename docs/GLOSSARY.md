@@ -55,22 +55,22 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 |---|---|
 | [`AggregateSet`](#aggregateset) | planned for `0.1.3` |
 | [`apply_cascade_permissions`](#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [Auth mutations](#auth-mutations) | planned for `0.0.11` |
+| [Auth mutations](#auth-mutations) | planned for `0.0.13` |
 | [`BigInt` scalar](#bigint-scalar) | shipped (`0.0.6`) |
 | [Choice enum generation](#choice-enum-generation) | shipped (`0.0.1`) |
 | [`ConfigurationError`](#configurationerror) | shipped (`0.0.1`) |
 | [Connection-aware optimizer planning](#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
-| [Debug-toolbar middleware](#debug-toolbar-middleware) | planned for `0.0.12` |
+| [Debug-toolbar middleware](#debug-toolbar-middleware) | planned for `0.0.14` |
 | [Definition-order independence](#definition-order-independence) | shipped (`0.0.4`) |
 | [Django `AppConfig`](#django-appconfig) | shipped (`0.0.7`) |
 | [`DjangoConnection`](#djangoconnection) | shipped (`0.0.9`) |
 | [`DjangoConnectionField`](#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`DjangoFileType`](#djangofiletype) | planned for `0.0.11` |
-| [`DjangoFormMutation`](#djangoformmutation) | planned for `0.0.11` |
-| [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) | planned for `0.0.12` |
+| [`DjangoFormMutation`](#djangoformmutation) | planned for `0.0.12` |
+| [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) | planned for `0.0.14` |
 | [`DjangoImageType`](#djangoimagetype) | planned for `0.0.11` |
 | [`DjangoListField`](#djangolistfield) | shipped (`0.0.7`) |
-| [`DjangoModelFormMutation`](#djangomodelformmutation) | planned for `0.0.11` |
+| [`DjangoModelFormMutation`](#djangomodelformmutation) | planned for `0.0.12` |
 | [`DjangoMutation`](#djangomutation) | planned for `0.0.11` |
 | [`DjangoNodeField`](#djangonodefield) | shipped (`0.0.9`) |
 | [`DjangoNodesField`](#djangonodesfield) | shipped (`0.0.9`) |
@@ -84,7 +84,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [FK-id elision](#fk-id-elision) | shipped (`0.0.3`) |
 | [`get_child_queryset`](#get_child_queryset) | planned for `0.1.3` |
 | [`get_queryset` visibility hook](#get_queryset-visibility-hook) | shipped (`0.0.1`) |
-| [`GraphQLTestCase`](#graphqltestcase) | planned for `0.0.12` |
+| [`GraphQLTestCase`](#graphqltestcase) | planned for `0.0.14` |
 | [Input type generation](#input-type-generation) | planned for `0.0.11` |
 | [`Meta.aggregate_class`](#metaaggregate_class) | planned for `0.1.3` |
 | [`Meta.choice_enum_names`](#metachoice_enum_names) | planned for `0.1.4` |
@@ -120,19 +120,19 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Relation handling](#relation-handling) | shipped (`0.0.1`+) |
 | [Relay Node integration](#relay-node-integration) | shipped (`0.0.5`) |
 | [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) | shipped (`0.0.9`) |
-| [Response-extensions debug middleware](#response-extensions-debug-middleware) | planned for `0.0.12` |
+| [Response-extensions debug middleware](#response-extensions-debug-middleware) | planned for `0.0.14` |
 | [`safe_wrap_connection_method`](#safe_wrap_connection_method) | shipped (`0.0.7`) |
 | [Scalar field conversion](#scalar-field-conversion) | shipped (`0.0.1`+) |
 | [Scalar field override semantics](#scalar-field-override-semantics) | shipped (`0.0.6`) |
 | [Schema audit](#schema-audit) | shipped (`0.0.3`) |
 | [Schema export management command](#schema-export-management-command) | shipped (`0.0.7`) |
 | [Schema introspection management command](#schema-introspection-management-command) | shipped (`0.0.9`) |
-| [`SerializerMutation`](#serializermutation) | planned for `0.0.11` |
+| [`SerializerMutation`](#serializermutation) | planned for `0.0.13` |
 | [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [strawberry_config](#strawberry_config) | shipped (`0.0.7`) |
 | [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
 | [`SyncMisuseError`](#syncmisuseerror) | shipped (`0.0.5`) |
-| [`TestClient`](#testclient) | planned for `0.0.12` |
+| [`TestClient`](#testclient) | planned for `0.0.14` |
 | [Django Trac #37064 hardening](#django-trac-37064-hardening) | shipped (`0.0.7`) |
 | [`Upload` scalar](#upload-scalar) | planned for `0.0.11` |
 | [Cross-subsystem invariants](#cross-subsystem-invariants) | planned for 1.0.0 |
@@ -201,7 +201,7 @@ qs = await aapply_cascade_permissions(cls, qs, info)
 
 ## Auth mutations
 
-**Status:** planned for `0.0.11`.
+**Status:** planned for `0.0.13`.
 
 `login` / `logout` / `register` mutations plus a `current_user` query helper. Opt-in via explicit import; not bundled into the default schema. Composes with [`DjangoMutation`](#djangomutation) and `django.contrib.auth`.
 
@@ -256,7 +256,7 @@ The generated connection class then serves `edges` / cursors / `pageInfo` / `tot
 
 ## Debug-toolbar middleware
 
-**Status:** planned for `0.0.12`.
+**Status:** planned for `0.0.14`.
 
 `django-debug-toolbar` SQL-panel integration during `/graphql/` requests. Mirrors `strawberry-django`'s `middlewares/debug_toolbar.py` shape.
 
@@ -328,7 +328,7 @@ Output type for `FileField` carrying `name` / `path` / `size` / `url`. Paired wi
 
 ## `DjangoFormMutation`
 
-**Status:** planned for `0.0.11`.
+**Status:** planned for `0.0.12`.
 
 `DjangoMutation` subclass that consumes a Django `Form`. Declared via `Meta.form_class`; validation errors surface through the shared [`FieldError` envelope](#fielderror-envelope) (populated from `form.errors`); the post-save object is the mutation return value.
 
@@ -336,7 +336,7 @@ Output type for `FileField` carrying `name` / `path` / `size` / `url`. Paired wi
 
 ## `DjangoGraphQLProtocolRouter`
 
-**Status:** planned for `0.0.12`.
+**Status:** planned for `0.0.14`.
 
 A Channels `ProtocolTypeRouter`-wrapping helper for consumers using Channels. Soft dependency on `channels`; symbol name is intentionally distinct from `strawberry-django`'s `AuthGraphQLProtocolTypeRouter` to avoid migration ambiguity.
 
@@ -358,7 +358,7 @@ Non-Relay `list[T]` **root Query field**. The smallest entry point for migrants 
 
 ## `DjangoModelFormMutation`
 
-**Status:** planned for `0.0.11`.
+**Status:** planned for `0.0.12`.
 
 `DjangoMutation` subclass that consumes a Django `ModelForm` declared via `Meta.form_class`. Errors and return-shape contracts match [`DjangoFormMutation`](#djangoformmutation).
 
@@ -599,7 +599,7 @@ The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` 
 
 ## `GraphQLTestCase`
 
-**Status:** planned for `0.0.12`.
+**Status:** planned for `0.0.14`.
 
 `unittest.TestCase` subclass for live HTTP-level testing patterns. Mirrors `strawberry-django`'s `test/client.py`. Provides `query()` / `mutate()` helpers and assertion shortcuts.
 
@@ -1115,7 +1115,7 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 
 ## Response-extensions debug middleware
 
-**Status:** planned for `0.0.12`.
+**Status:** planned for `0.0.14`.
 
 Surfaces executed SQL queries and raised exceptions through the GraphQL response's `extensions` envelope so frontend clients can read them without the toolbar. Distinct from [Debug-toolbar middleware](#debug-toolbar-middleware): this is in-response surfacing, that is server-side panel.
 
@@ -1216,7 +1216,7 @@ The positional `type` argument dispatches by shape: a **dotted** object path (`a
 
 ## `SerializerMutation`
 
-**Status:** planned for `0.0.11`.
+**Status:** planned for `0.0.13`.
 
 Consumes DRF `Serializer` / `ModelSerializer` via `Meta.serializer_class`, `Meta.lookup_field`, `Meta.model_operations`, `Meta.optional_fields`. Existing serializers move to GraphQL without re-declaring validation; input-type factory derives the Strawberry input shape from the serializer's fields. Soft dependency on `rest_framework`.
 
@@ -1310,7 +1310,7 @@ Typed marker for the "async `get_queryset` hook invoked from a sync resolver con
 
 ## `TestClient`
 
-**Status:** planned for `0.0.12`.
+**Status:** planned for `0.0.14`.
 
 `TestClient` and `AsyncTestClient` helpers for live HTTP-level testing patterns. Mirrors `strawberry-django`'s `test/client.py` shape. Companion: [`GraphQLTestCase`](#graphqltestcase).
 

@@ -37,11 +37,22 @@ Django developers think in `class Meta`, querysets, DRF Serializers, and django-
 
 This package closes that gap: Strawberry stays as the engine, `class Meta` becomes the configuration surface, your existing querysets stay yours, and the shipped N+1 optimizer *cooperates* with the `select_related` / `prefetch_related` you've already written instead of replacing them. The result feels like `graphene-django` evolved onto a modern engine instead of replaced by a different one.
 
+## Why it's fast
+
+Four optimizer wins over `strawberry-graphql-django`, all on the mainstream (concretely-typed) path:
+
+- **Cross-request plan cache** — upstream re-walks the selection tree every request; we walk once, serve from a 256-entry LRU (`cache_info()`). Benchmark ([`scripts/bench_plan_cache.py`](scripts/bench_plan_cache.py)): 2,099/2,100 hits, ~115 µs walk eliminated per nested request (~155 µs deep), scaling with query complexity.
+- **Strictness / N+1 detection** — `strictness="raise"` → `OptimizerError` on unplanned lazy load; a CI gate. Upstream: preventive-only, no detective mode.
+- **FK-id join elision** — `{ relation { id } }` reads the FK column off the parent — no join/prefetch. Upstream loads the FK column but still joins.
+- **Class-creation-time metadata** — frozen at type creation, not memoized on first request.
+
+Run it: `uv run python scripts/bench_plan_cache.py`.
+
 ## Is this for you?
 
 **Coming from `graphene-django`?** Your `class Meta` shape stays — `DjangoObjectType` becomes `DjangoType`, you drop the Graphene runtime, and you gain the N+1 optimizer for free. Same mental model, modern Strawberry engine.
 
-**Coming from `strawberry-graphql-django`?** Keep Strawberry; lose the decorators. Configuration moves into `class Meta` so it's consistent with the rest of your Django app. Bonus: plan caching, FK-id elision, queryset diffing, strictness mode.
+**Coming from `strawberry-graphql-django`?** Keep Strawberry; lose the decorators. Configuration moves into `class Meta` so it's consistent with the rest of your Django app. Plus the optimizer wins above, and queryset diffing.
 
 **Coming from DRF + django-filter?** Your `Meta.model` / `fields` / `exclude` / `filterset_class` mental model travels straight over — and filtering *and* ordering ship today via `Meta.filterset_class` / `Meta.orderset_class`. Mutations are on the roadmap (`0.0.11`): planned as `DjangoMutation` classes with the same nested-`Meta` shape, including a DRF-serializer flavor via `Meta.serializer_class`.
 

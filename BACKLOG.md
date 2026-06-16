@@ -96,9 +96,9 @@ class FieldError:
 
 **Impact**: 7/10 — Real per-query perf win for the common computed-column case; nobody else does it.
 
-**Difficulty**: 4/10 — Three walker/plan/assembly sites plus the filter/order-aware trigger and fan-out detection.
+**Difficulty**: 4/10 — Three walker/plan/assembly sites plus the filter/order-aware trigger and fan-out detection; the `Info`-callable arm adds a plan-cacheability marking that reuses the existing `get_queryset` non-cacheable path.
 
-**Source**: item 2.
+**Source**: item 2; the `Info`-callable annotate arm + cache-preservation marking added from the competitive-parity review (2026-06-16).
 
 **What we'd do**: declare annotations in `Meta.annotations`; the optimizer injects `.annotate()` only when the annotation is actually needed.
 
@@ -120,8 +120,9 @@ class ItemType(DjangoType):
 - Annotation names colliding with concrete model field names raise `ConfigurationError` at finalization.
 - Fan-out detection: when an aggregate annotation crosses a many-join **and** the plan contains another multi-valued join on the same root, emit a build-time warning recommending `distinct=True` (same fan-out contract as `matrix_dimensions_and_measures`).
 - Injection happens in the existing walker/plan/queryset-assembly sites alongside `only()` and `Prefetch` injection.
+- **Static expressions are cacheable; `Info`-receiving callables are not — the differentiator.** Plain ORM expressions in `Meta.annotations` (`Count("reviews")`) bake into the cached plan at zero per-request cost. To reach parity with upstream's per-request `field(annotate=lambda info: …)`, also accept an `Info`-receiving callable form; any plan that resolves such a callable is marked **non-cacheable** (`plan.cacheable = False`), reusing the exact mechanism plans with a custom `get_queryset` already use. This wins both axes at once: upstream cannot cache plans *at all* partly **because** its annotate callables take `Info`, so isolating the dynamism to the callable arm keeps our plan-cache advantage for the common static case while still matching upstream's dynamic capability. The static and dynamic forms coexist in one `Meta.annotations` dict; only the presence of a resolved callable flips cacheability.
 
-**Composes with**: shipped filter/order subsystems, `matrix_dimensions_and_measures` (shares the fan-out contract).
+**Composes with**: shipped filter/order subsystems, `matrix_dimensions_and_measures` (shares the fan-out contract), the shipped Plan cache and `get_queryset` visibility hook (shares the non-cacheable-plan path).
 
 ### `query_time_optimizer_disable`
 
@@ -154,6 +155,28 @@ DJANGO_STRAWBERRY_FRAMEWORK = {"OPTIMIZER_DEFAULT": "off"}
 - Distinct from shipped B3 strictness mode (detects lazy loads while the optimizer is **on**); this is the orthogonal off switch.
 
 **Composes with**: the promoted [Optimizer explain mode][card-optimizer-explain-mode] card (the debugging pair), `anti_n1_ci_audit` (run the suite both ways and assert query counts diverge).
+
+### `safe_prefetch_merge`
+
+**Realistic**: 9/10 — The absorb path already exists; this extends one decision function (`plans.py::_optimizer_can_absorb`) with a trivial-queryset detector. Bounded, single-file change plus the opt-in flag.
+
+**Impact**: 6/10 — Closes the last common-case axis where `strawberry-graphql-django` out-optimizes us; real but narrow (only bites when a consumer hand-writes a filter-less `Prefetch` *and* the optimizer would nest optimization beneath it).
+
+**Difficulty**: 4/10 — The trivial-queryset detection is the subtle part (it must conservatively reject every shape the optimizer's `Prefetch` would silently drop); opt-in plumbing and the strictness-workflow docs are the rest.
+
+**Source**: competitive-parity review (2026-06-16) "the one deliberate trade-off worth re-examining: prefetch merging"; the deferred note in [spec-035][spec-035] ("revisited only behind a strict no-custom-filter merge precondition").
+
+**What we'd do**: an **opt-in** safe prefetch-merge. When both the consumer and the optimizer target the same relation subtree with a `Prefetch` and the consumer's `Prefetch` queryset is *trivial* (row-set-identical to a bare-string prefetch), absorb it the way we already absorb a bare string — merging the optimizer's nested `select_related` / `only()` in — instead of the current B8 consumer-wins **drop**. Upstream's `PrefetchInspector.merge` does this unconditionally; we do it only behind the no-custom-filter precondition so the permission-boundary guarantee is never weakened.
+
+**Spec**:
+
+- **Opt-in only; default is unchanged.** The shipped consumer-wins drop (B8, `plans.py::diff_plan_for_queryset`) stays the default — it is a deliberate permission-boundary stance, not an oversight. Merge is enabled explicitly. (Open question for the spec: `DjangoOptimizerExtension(prefetch_merge=True)` kwarg vs. a `DJANGO_STRAWBERRY_FRAMEWORK = {"OPTIMIZER_PREFETCH_MERGE": True}` setting vs. per-type `Meta` — pin one, reject the others with reasons.)
+- **Trivial-queryset precondition (the safety crux).** A consumer `Prefetch` queryset qualifies for merge **only** when it carries no row-set or shape semantics the optimizer's `Prefetch` would silently discard: no `.filter()` / `.exclude()` (`query.where` empty), no custom-manager `get_queryset` boundary, no annotations / `extra`, no slicing, no `.distinct()`, no non-default ordering, no `.using()` to a different alias, and no `to_attr`. Any of these → consumer wins (drop), exactly as today. When in doubt, do **not** merge.
+- **Why `.filter()` is the boundary.** The optimizer's `Prefetch` carries column/join shape (`select_related` / `only()`) but represents the *full* related set. Absorbing a filtered consumer `Prefetch` would either silently widen the consumer's restricted row set — the exact permission-boundary violation B8 exists to prevent — or force us to reconstruct their filter. Restricting to trivial querysets sidesteps both: the rows are provably identical, so the merge only ever adds columns and joins.
+- **Strictness is how you find the sites.** With merge off, the dropped-then-N+1 case is already visible under `strictness="raise"`; that is the signal a consumer uses to discover a relation that *would* benefit from merge. Document the workflow (run strict → find the drop → opt into merge), so the trade-off is observable rather than silent.
+- **`only()` merge semantics.** The merged nested `only()` must union the FK-connector / pk columns the plan needs and never narrow below what a downstream resolver reads — the same projection contract the walker already enforces for its own `Prefetch` querysets.
+
+**Composes with**: `query_time_optimizer_disable` and `anti_n1_ci_audit` (strictness surfaces the affected sites), the shipped Queryset diffing (B8) and Strictness mode subsystems.
 
 ### `computed_fields_binding`
 

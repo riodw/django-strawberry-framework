@@ -53,22 +53,11 @@ from ..utils.relations import instance_accessor, is_many_side_relation_kind
 # the forward-resolver dispatch does not allocate a fresh empty set per call.
 _EMPTY_ELISIONS: frozenset[str] = frozenset()
 
-
-def _is_fk_id_elided(info: Any, field_name: str, parent_type: type | None = None) -> bool:
-    """Return ``True`` if B2 marked this forward relation as FK-id elided.
-
-    Relay ``GlobalID`` handling is intentionally kept out of this path -
-    Relay id resolution lives in ``types/relay.py`` (``_resolve_id_default``
-    and friends). Forward-relation FK-id elision continues to see only the
-    Django primary-key column it always saw (spec-011 Decision 7 #"FK-id elision scoping").
-    """
-    elisions = _get_context_value(
-        getattr(info, "context", None),
-        DST_OPTIMIZER_FK_ID_ELISIONS,
-        _EMPTY_ELISIONS,
-    )
-    key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
-    return key in elisions
+# Sentinel distinguishing "caller did not read the PLAN sentinel" from a real
+# ``planned is None``. ``forward_resolver`` reads the plan once and threads it
+# (plus the resolver key) into ``_check_n1`` so the runtime-path walk is not
+# repeated when both the FK-id-elision and N+1 checks need it (feedback L3).
+_PLAN_UNREAD: Any = object()
 
 
 def _build_fk_id_stub(root: Any, field_meta: FieldMeta) -> Any:
@@ -130,6 +119,8 @@ def _check_n1(
     accessor_name: str | None = None,
     to_attr: str | None = None,
     reason: str | None = None,
+    planned: Any = _PLAN_UNREAD,
+    precomputed_key: str | None = None,
 ) -> None:
     """B3: warn or raise if the relation is not planned and would lazy-load.
 
@@ -162,12 +153,27 @@ def _check_n1(
     reads as actionable rather than as an optimizer defect; the
     list-relation calls pass no ``reason`` and produce the byte-identical
     pre-slice message.
+
+    ``planned`` / ``precomputed_key`` (keyword-only, feedback L3): a caller that
+    already read the ``DST_OPTIMIZER_PLANNED`` sentinel and computed the resolver
+    key (``forward_resolver``) threads both so this function neither re-reads the
+    sentinel nor re-walks ``info.path``. Omitting them (every other call site)
+    keeps the original read-and-compute behavior.
     """
     context = getattr(info, "context", None)
-    planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
+    # ``forward_resolver`` may have already read the PLAN sentinel and computed
+    # the resolver key; reuse them when threaded so the ``info.path`` walk runs
+    # once per row, not once per consumer (feedback L3). Other call sites omit
+    # both and get the original read-and-compute behavior.
+    if planned is _PLAN_UNREAD:
+        planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
     if planned is None:
         return
-    key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
+    key = (
+        precomputed_key
+        if precomputed_key is not None
+        else resolver_key(parent_type, field_name, runtime_path_from_info(info))
+    )
     if key in planned:
         return
     if kind == "connection_to_attr":
@@ -270,6 +276,18 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
         def many_resolver(root: Any, info: Info) -> Any:
             _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
+            # Prefetched path (the optimized norm): Django stores the rows under
+            # ``_prefetched_objects_cache[accessor_name]`` - the same key the N+1
+            # probe above uses. Read it directly and return Django's materialized
+            # list, skipping the ``manager.all()`` QuerySet clone and the
+            # ``list(...)`` copy this otherwise pays per parent row (feedback H1).
+            # Same rows, same order. Any miss falls through to the manager path.
+            prefetched = getattr(root, "_prefetched_objects_cache", None)
+            if prefetched is not None:
+                cached = prefetched.get(accessor_name)
+                if cached is not None:
+                    result_cache = getattr(cached, "_result_cache", None)
+                    return result_cache if result_cache is not None else cached
             return list(getattr(root, accessor_name).all())
 
         return _name_resolver(many_resolver, field_name)
@@ -287,9 +305,33 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         return _name_resolver(reverse_one_to_one_resolver, field_name)
 
     def forward_resolver(root: Any, info: Info) -> Any:
-        if field_meta.attname is not None and _is_fk_id_elided(info, field_name, parent_type):
+        context = getattr(info, "context", None)
+        # FK-id elision (spec-011 Decision 7) and the N+1 probe both key off the
+        # resolver key, which requires an ``info.path`` walk. Read both sentinels
+        # first; when neither is active - the common request shape - skip the walk
+        # entirely. When at least one is active, walk once and share the key
+        # across both checks (feedback L3).
+        elisions = (
+            _get_context_value(context, DST_OPTIMIZER_FK_ID_ELISIONS, _EMPTY_ELISIONS)
+            if field_meta.attname is not None
+            else _EMPTY_ELISIONS
+        )
+        planned = _get_context_value(context, DST_OPTIMIZER_PLANNED)
+        if not elisions and planned is None:
+            return getattr(root, field_name)
+        key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
+        if elisions and key in elisions:
             return _build_fk_id_stub(root, field_meta)
-        _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
+        _check_n1(
+            info,
+            root,
+            field_name,
+            parent_type,
+            kind=kind,
+            accessor_name=accessor_name,
+            planned=planned,
+            precomputed_key=key,
+        )
         return getattr(root, field_name)
 
     return _name_resolver(forward_resolver, field_name)

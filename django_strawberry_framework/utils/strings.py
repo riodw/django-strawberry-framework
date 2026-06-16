@@ -15,13 +15,22 @@ ever shows up we'll add it here rather than re-deriving inline at the
 call site.
 """
 
+import functools
 
+
+@functools.lru_cache(maxsize=2048)
 def snake_case(name: str) -> str:
     """Convert a strict ``camelCase`` GraphQL name back to ``snake_case``.
 
     Strawberry's default name converter emits ``camelCase`` from
     ``snake_case`` Python attributes; reversing it lets us look up the
     corresponding Django field name without an extra mapping.
+
+    Memoized (``lru_cache``): the optimizer walker reverses the same
+    selection names every request over a small fixed vocabulary (the
+    schema's GraphQL field names), so the char-by-char rebuild is cached
+    rather than recomputed per selection per walk. Pure ``str -> str``,
+    so caching is always safe.
 
     Strict ``camelCase`` only - acronyms are *not* handled.  An input
     like ``"HTMLParser"`` becomes ``"h_t_m_l_parser"`` because each

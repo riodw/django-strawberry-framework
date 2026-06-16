@@ -44,7 +44,7 @@ from ..utils.input_values import (
     iter_active_fields,
 )
 from ..utils.permissions import (
-    active_permission_field_paths,
+    active_permission_targets,
     active_related_branches,
     extract_branch_value,
     invoke_permission_method,
@@ -86,6 +86,22 @@ _FORM_KEY_BY_PYTHON_ATTR: dict[str, str] = {
     python_attr: django_lookup
     for django_lookup, (python_attr, _) in reversed(LOOKUP_NAME_MAP.items())
 }
+
+# ``python_attr -> django-filter wire key`` for the logical operators, built once
+# at import: ``_LOGIC_KEYS`` is a frozen module constant, so ``_normalize_input``
+# re-derived an identical dict every call before this hoist (feedback L2).
+_LOGIC_WIRE_BY_PYTHON_ATTR: dict[str, str] = dict(_LOGIC_KEYS)
+
+# The filter-normalize traversal config is request-independent (it references the
+# same module-level ``_field_specs`` map by reference, which ``inputs.py`` mutates
+# in place at bind), so it is a module singleton rather than rebuilt per
+# ``_normalize_input`` call (feedback L2).
+_NORMALIZE_TRAVERSAL: SetInputTraversal = SetInputTraversal(
+    field_specs=_field_specs,
+    related_attr="related_filters",
+    logic_keys=_LOGIC_PYTHON_ATTRS,
+    unset_sentinel=UNSET,
+)
 
 
 def _read_qs(filterset_instance: Any) -> models.QuerySet:
@@ -696,16 +712,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # nested-dict shape), and ``LEAF`` runs the per-field operator-bag /
         # range normalization that stays local to the filter family.
         data: dict[str, Any] = {}
-        logic_lookup = dict(_LOGIC_KEYS)
-        config = SetInputTraversal(
-            field_specs=_field_specs,
-            related_attr="related_filters",
-            logic_keys=_LOGIC_PYTHON_ATTRS,
-            unset_sentinel=UNSET,
-        )
-        for field in iter_active_fields(cls, input_value, config):
+        for field in iter_active_fields(cls, input_value, _NORMALIZE_TRAVERSAL):
             if field.kind == LOGIC:
-                data[logic_lookup[field.python_attr]] = field.raw_value
+                data[_LOGIC_WIRE_BY_PYTHON_ATTR[field.python_attr]] = field.raw_value
                 continue
             if field.kind == RELATED:
                 # Related branches travel through `_apply_related_constraints`,
@@ -1273,11 +1282,27 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         excluded (walked by the logical-branch recursion / related-branch loop
         respectively); ``UNSET`` / ``None`` values are skipped (active-input-only
         contract, M2 of rev5). Thin delegate to
-        ``utils/permissions.py::active_permission_field_paths``; the filter side
-        excludes the logical operator attrs and falls back to the form-key map
-        for fields with no field-spec entry.
+        ``_active_permission_targets``'s ``LEAF`` half; the filter side excludes
+        the logical operator attrs and falls back to the form-key map for fields
+        with no field-spec entry.
         """
-        return active_permission_field_paths(
+        return cls._active_permission_targets(input_value)[0]
+
+    @classmethod
+    def _active_permission_targets(
+        cls,
+        input_value: Any,
+    ) -> tuple[list[str], list[tuple[str, RelatedFilter, Any]]]:
+        """Single-pass ``(leaf source paths, active related branches)`` for one level.
+
+        The fused traversal ``_run_permission_checks`` consumes (feedback H3):
+        one ``iter_active_fields`` walk yields both the per-field gate paths and
+        the active ``RelatedFilter`` branches, instead of two full walks. Thin
+        delegate to ``utils/permissions.py::active_permission_targets`` with the
+        filter family's config; ``_active_permission_field_paths`` keeps its
+        public shape by taking the ``LEAF`` half.
+        """
+        return active_permission_targets(
             cls,
             input_value,
             field_specs=_field_specs,

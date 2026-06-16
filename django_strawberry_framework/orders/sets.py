@@ -14,8 +14,8 @@ expands the file to:
 - Add the resolver-facing classmethod pair ``apply_sync`` /
   ``apply_async`` (no ``apply(...)`` dispatcher per Spec DoD 4(c)).
 - Add the classmethod permission pipeline
-  (``_run_permission_checks`` / ``_active_permission_field_paths``
-  / ``_iter_active_related_branches`` / ``_invoke_permission_method`` /
+  (``_run_permission_checks`` / ``_active_permission_targets`` /
+  ``_active_permission_field_paths`` / ``_invoke_permission_method`` /
   ``_request_from_info``) that drives active-input-only per-field
   ``check_<field>_permission`` dispatch per Spec Decision 8 step 6.
 - Add the cookbook-style ``get_flat_orders`` classmethod walking the
@@ -39,8 +39,7 @@ from ..sets_mixins import (
     expanded_once,
 )
 from ..utils.permissions import (
-    active_permission_field_paths,
-    active_related_branches,
+    active_permission_targets,
     extract_branch_value,
     invoke_permission_method,
     request_from_info,
@@ -52,6 +51,15 @@ from .inputs import Ordering, _field_specs, normalize_input_value
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
+
+
+def _verbatim_attr(python_attr: str) -> str:
+    """Order-side fallback path: the python attr is its own source path.
+
+    Module-level (not a per-call lambda) so ``_active_permission_targets`` does
+    not allocate a fresh closure each traversal.
+    """
+    return python_attr
 
 
 @lru_cache(maxsize=2048)
@@ -322,28 +330,6 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         return extract_branch_value(input_value, field_name)
 
     @classmethod
-    def _iter_active_related_branches(
-        cls,
-        input_value: Any,
-    ) -> list[tuple[str, RelatedOrder, Any]]:
-        """List ``(field_name, related_order, child_input)`` for present branches.
-
-        Active-branch scoping (spec-028 Decision 8 step 6 / Revision 4 H3) -- a
-        ``RelatedOrder`` is "active" when its key is present in the input.
-        Inactive branches are skipped end-to-end. Thin delegate to
-        ``utils/permissions.py::active_related_branches`` with
-        ``handle_top_level_list=True`` so each dataclass element of a top-level
-        list is walked separately (the parent gate fires once per active branch
-        occurrence; the ``_fired`` dedup collapses repeats per class).
-        """
-        return active_related_branches(
-            cls,
-            input_value,
-            related_attr="related_orders",
-            handle_top_level_list=True,
-        )
-
-    @classmethod
     def _active_permission_field_paths(cls, input_value: Any) -> list[str]:
         """Return the base django source path for each active top-level leaf.
 
@@ -353,19 +339,35 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         input list element populates it. ``RelatedOrder`` branches are excluded
         (they fire via the related-branch loop); ``None`` values are skipped
         (active-input-only). Thin delegate to
-        ``utils/permissions.py::active_permission_field_paths`` with
-        ``handle_top_level_list=True``; the order side has no logical operator
-        keys and falls back to the python-attr token verbatim when a field has
-        no field-spec entry (e.g. permission checks invoked outside the apply
-        pipeline before the bind populates ``_field_specs``).
+        ``_active_permission_targets``'s ``LEAF`` half; the order side has no
+        logical operator keys and falls back to the python-attr token verbatim
+        when a field has no field-spec entry (e.g. permission checks invoked
+        outside the apply pipeline before the bind populates ``_field_specs``).
         """
-        return active_permission_field_paths(
+        return cls._active_permission_targets(input_value)[0]
+
+    @classmethod
+    def _active_permission_targets(
+        cls,
+        input_value: Any,
+    ) -> tuple[list[str], list[tuple[str, RelatedOrder, Any]]]:
+        """Single-pass ``(leaf source paths, active related branches)`` for one level.
+
+        The fused traversal ``_run_permission_checks`` consumes (feedback H3):
+        one ``iter_active_fields`` walk yields both the per-field gate paths and
+        the active ``RelatedOrder`` branches, instead of two full walks. Thin
+        delegate to ``utils/permissions.py::active_permission_targets`` with the
+        order family's config (``handle_top_level_list=True`` for the top-level
+        list input shape); ``_active_permission_field_paths`` takes the ``LEAF``
+        half.
+        """
+        return active_permission_targets(
             cls,
             input_value,
             field_specs=_field_specs,
             related_attr="related_orders",
             logic_keys=frozenset(),
-            fallback_path=lambda python_attr: python_attr,
+            fallback_path=_verbatim_attr,
             handle_top_level_list=True,
         )
 

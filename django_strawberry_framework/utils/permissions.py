@@ -26,6 +26,7 @@ cycle -- same contract as ``utils/connections.py`` / ``utils/inputs.py``.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from functools import lru_cache
 from typing import Any
 
 from django.http import HttpRequest
@@ -40,12 +41,26 @@ from .input_values import (
     iter_input_items,
 )
 
+
+@lru_cache(maxsize=2048)
+def _check_method_name(field_path: str) -> str:
+    """Map a field path to its ``check_<field>_permission`` method name.
+
+    The transform is request-independent (it depends only on the declared field
+    path), so it is memoized over the bounded set of declared paths; only the
+    bound-instance ``getattr`` / ``callable`` probe in
+    ``invoke_permission_method`` stays per-request (feedback L5).
+    """
+    return f"check_{field_path.replace('__', '_')}_permission"
+
+
 # ``iter_input_items`` is single-sited in ``utils/input_values.py`` (the 0.0.9
 # DRY pass, ``docs/feedback.md`` Major 1). Re-exported here so the existing
 # ``from ..utils.permissions import iter_input_items`` consumers (``filters/sets.py``,
 # the permission test suite) keep their import path.
 __all__ = [
     "active_permission_field_paths",
+    "active_permission_targets",
     "active_related_branches",
     "extract_branch_value",
     "invoke_permission_method",
@@ -120,7 +135,7 @@ def invoke_permission_method(
     entirely. The dedup is scoped to the supplied set -- the caller passes the
     per-class set keyed out of its shared ``_fired`` map.
     """
-    method_name = f"check_{field_path.replace('__', '_')}_permission"
+    method_name = _check_method_name(field_path)
     if fired is not None and method_name in fired:
         return
     method = getattr(bare_instance, method_name, None)
@@ -128,6 +143,61 @@ def invoke_permission_method(
         method(request)
         if fired is not None:
             fired.add(method_name)
+
+
+def _verbatim_path(python_attr: str) -> str:
+    """Fallback path that returns the attr unchanged (the related-only callers)."""
+    return python_attr
+
+
+def active_permission_targets(
+    cls: type,
+    input_value: Any,
+    *,
+    field_specs: Mapping[Any, Any],
+    related_attr: str,
+    logic_keys: frozenset[str],
+    fallback_path: Callable[[str], str],
+    unset_sentinel: Any = None,
+    handle_top_level_list: bool = False,
+) -> tuple[list[str], list[tuple[str, Any, Any]]]:
+    """Partition active top-level fields into ``(leaf_paths, related_branches)`` in ONE walk.
+
+    ``run_active_input_permission_checks`` needs both the per-field gate paths
+    (``LEAF``) and the related branches (``RELATED``) at the same nesting level.
+    Running ``iter_active_fields`` once and partitioning by ``.kind`` removes the
+    second full traversal + re-classification + config rebuild the two separate
+    walkers otherwise pay per level (feedback H3). ``LOGIC`` records are dropped
+    (the logical-branch recursion owns them).
+
+    The single config is the superset of the two callers': ``field_specs`` and
+    ``logic_keys`` are populated. ``RELATED`` classification keys only off
+    ``related_attr`` membership (logic and related names are disjoint, and the
+    branch tuple reads ``related_obj`` / ``raw_value``, never ``spec``), so the
+    ``RELATED`` half is byte-identical to ``active_related_branches``'s
+    field-spec-less, logic-key-less config; the ``LEAF`` half matches
+    ``active_permission_field_paths`` exactly. Both are kept as thin wrappers
+    over this so the classification rule stays single-sited.
+    """
+    config = SetInputTraversal(
+        field_specs=field_specs,
+        related_attr=related_attr,
+        logic_keys=logic_keys,
+        unset_sentinel=unset_sentinel,
+        handle_top_level_list=handle_top_level_list,
+    )
+    leaf_paths: list[str] = []
+    branches: list[tuple[str, Any, Any]] = []
+    for field in iter_active_fields(cls, input_value, config):
+        if field.kind == LEAF:
+            leaf_paths.append(
+                field.spec.django_source_path
+                if field.spec is not None
+                else fallback_path(field.python_attr),
+            )
+        elif field.kind == RELATED:
+            branches.append((field.python_attr, field.related_obj, field.raw_value))
+    return leaf_paths, branches
 
 
 def active_related_branches(
@@ -156,18 +226,23 @@ def active_related_branches(
     which is immaterial here (the per-class ``_fired`` dedup, the AND-commutative
     ``_apply_related_constraints`` narrowing, and the field-name-keyed visibility
     map are all order-independent).
+
+    Thin wrapper over ``active_permission_targets`` (keeps the single-pass
+    classification single-sited, feedback H3): ``RELATED`` records are
+    independent of ``field_specs`` / ``logic_keys``, so the empty/identity values
+    here yield the same branch tuples this always returned.
     """
-    config = SetInputTraversal(
+    _leaf_paths, branches = active_permission_targets(
+        cls,
+        input_value,
         field_specs={},
         related_attr=related_attr,
+        logic_keys=frozenset(),
+        fallback_path=_verbatim_path,
         unset_sentinel=unset_sentinel,
         handle_top_level_list=handle_top_level_list,
     )
-    return [
-        (field.python_attr, field.related_obj, field.raw_value)
-        for field in iter_active_fields(cls, input_value, config)
-        if field.kind == RELATED
-    ]
+    return branches
 
 
 def active_permission_field_paths(
@@ -200,21 +275,21 @@ def active_permission_field_paths(
     and ``handle_top_level_list`` (order side) aggregates across the elements of
     a top-level list input -- both handled inside the classifier (the 0.0.9 DRY
     pass, ``docs/feedback.md`` Major 1).
+
+    Thin wrapper over ``active_permission_targets`` (single-sited classification,
+    feedback H3): returns only the ``LEAF`` half.
     """
-    config = SetInputTraversal(
+    leaf_paths, _branches = active_permission_targets(
+        cls,
+        input_value,
         field_specs=field_specs,
         related_attr=related_attr,
         logic_keys=logic_keys,
+        fallback_path=fallback_path,
         unset_sentinel=unset_sentinel,
         handle_top_level_list=handle_top_level_list,
     )
-    return [
-        field.spec.django_source_path
-        if field.spec is not None
-        else fallback_path(field.python_attr)
-        for field in iter_active_fields(cls, input_value, config)
-        if field.kind == LEAF
-    ]
+    return leaf_paths
 
 
 def run_active_input_permission_checks(
@@ -243,12 +318,15 @@ def run_active_input_permission_checks(
     """
     class_fired = fired.setdefault(cls, set())
 
-    # Permission gates key on the SOURCE FIELD (one fire per field across all
-    # its lookups), resolved by ``_active_permission_field_paths``.
-    for field_path in cls._active_permission_field_paths(input_value):
+    # ONE active-input traversal yields both the per-field gate paths and the
+    # related branches for this level (feedback H3); the two used to be separate
+    # full walks of the same input. Gates key on the SOURCE FIELD (one fire per
+    # field across all its lookups).
+    field_paths, related_branches = cls._active_permission_targets(input_value)
+    for field_path in field_paths:
         cls._invoke_permission_method(bare, field_path, request, fired=class_fired)
 
-    for field_name, related_obj, child_input in cls._iter_active_related_branches(input_value):
+    for field_name, related_obj, child_input in related_branches:
         child_set = getattr(related_obj, target_attr)
         if child_set is not None and hasattr(child_set, "_run_permission_checks"):
             # Child set is (usually) a different class; it keys its own per-class

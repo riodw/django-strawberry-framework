@@ -1,360 +1,445 @@
-# spec-034 Permissions — Implementation vs. the django-graphene-filters cookbook recipes
+# Performance deep-dive — `django_strawberry_framework` vs `strawberry_django`
 
-Comparison pass. Subject: how the shipped spec-034 implementation lines up against
-the two upstream cookbook reference files the package cribs from —
-`~/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py`
-(the consumer `get_queryset` cascade recipe) and `.../recipes/fields.py` (the
-per-field `FieldSet` recipe). Read alongside the cookbook's `recipes/models.py`
-(FK nullability) and its permission tests (`recipes/tests/test_permissions_nested.py`)
-to pin upstream's *intended* behavior, not just its source shape.
+Comparison pass. Subject: per-request / per-row runtime efficiency of our shipped
+read path against the reference package
+`~/projects/strawberry-django-main/strawberry_django`. The original mandate was
+narrow: find places where we **already ship the feature** but compute it more slowly
+than the reference, and that are **not already carded** (KANBAN.md, `spec-035`
+optimizer-hardening, `spec-033` connection-optimizer). This verified revision keeps
+that framing but corrects two classifications: H2 is a real cache-hit hot-path bug,
+but TODO-035 already owns it through the "plan-cache hit path gains zero allocations"
+acceptance line; B1 is likewise already named in `spec-033` as a deferred root
+`totalCount` micro-optimization. Pure feature gaps and the already-carded items (G1
+`_result_cache` guard, G2 operation gating, G3 fragment narrowing, windowed nested-
+prefetch pagination, nested `totalCount` window reuse, annotate hints, prefetch
+merging, GFK/polymorphic, `disabled()`) are out of scope as new findings.
 
-No `pytest` run this pass (`AGENTS.md`: only when explicitly asked). This is a
-source + upstream-test comparison; where a runtime claim is load-bearing it is
-called out as such and tied to the upstream test that proves it.
+No `pytest` run this pass (`AGENTS.md`: only when explicitly asked). Every claim
+below was read in both trees; OUR anchors are symbol-qualified (`path::Symbol
+#"substring"`), reference anchors are cited by `path:line` (external package).
+Each finding states explicitly whether it is a fresh uncarded item, already owned
+by a card/spec, or a watch-only note. None of the proposed speedups changes wire
+output, GlobalID opacity, the visibility cascade, or any `check_<field>_permission`
+gate — they remove work, not behavior.
 
-**How to read this.** Each finding carries a `fix:` tag — `SPEC` (spec-doc edit),
-`PRODUCTS DOC COMMENTS` (comment/marker refresh in the fakeshop app), or `none`
-(verified-correct / forward note). Actionable findings (H1, L3) end with an
-**Apply** block: an exact `path::Symbol` anchor and a before → after for a new dev
-to land the change with no further discovery. Every code/spec claim below is
-anchored in the `AGENTS.md` symbol-qualified form (`path::Symbol #"substring"`).
+**Verdict.** We hold real architectural advantages the reference lacks (global LRU
+plan cache, FK-id elision, strictness N+1 detection, class-creation-time
+`FieldMeta` precompute). But on two fresh shared hot paths, plus one TODO-035-owned
+cache-hit path, we leave measurable time on the table:
 
-**Verdict.** The cascade *helper* is a faithful port of the cookbook's row-exclusion
-mechanism, with package-specific tightenings already recorded in the spec. The
-current product hooks deliberately diverge from the cookbook's consumer recipe in
-one place: the cookbook keeps the `view_<model>` branch as a bare per-model grant
-and resolves hidden FK targets with **sentinels**; our package never adopted that
-sentinel resolver tier (Decision 6), so the Revision-8 fix made the branch
-**cascade** instead. That is defensible and the runtime behavior is already
-documented (Slice 4 checklist, Revision 8, the test plan) — the one remaining gap
-is that **Decision 6 and the parity table** never name the cookbook divergence
-explicitly, so "required parity" reads broader than it is. `fields.py` has no
-`0.0.10` counterpart by design (deferred to `0.1.1`).
+1. **MAJOR — every many-side relation field clones a `QuerySet` and copies the
+   prefetched result list, per parent row.** (`types/resolvers.py`)
+2. **MAJOR, already TODO-035-owned — the optimizer converts the whole AST to
+   Strawberry selection objects on every request and then throws the result away
+   on a plan-cache hit.**
+   (`optimizer/extension.py`)
+3. **MAJOR — the filter/order permission pass walks and re-classifies the entire
+   input twice per nesting level when one pass yields both halves.**
+   (`utils/permissions.py`)
+
+One further MAJOR-class candidate (the hand-rolled selection-collection triple walk
+vs graphql-core's `collect_subfields`), one Low/watch item already documented in the
+registry review (GlobalID decode `O(types)` per id), one borderline item already
+noted as uncarded backlog in `spec-033` (root `totalCount` fires a second `COUNT`),
+and a batch of minor allocation/memoization wins follow.
+
+## Resolution (2026-06-15 implementation pass)
+
+Implemented the fresh, uncarded, behavior-neutral wins and reconciled the rest
+against their owning cards:
+
+- **Fixed (CODE):** **H1** (`many_resolver` reads `_prefetched_objects_cache`
+  directly, no manager clone / list copy), **H3** (`run_active_input_permission_checks`
+  now does ONE `iter_active_fields` pass via `active_permission_targets`; the two
+  walkers are thin wrappers over it), **L2** (`_LOGIC_WIRE_BY_PYTHON_ATTR` +
+  `_NORMALIZE_TRAVERSAL` hoisted to module scope), **L3** (`forward_resolver`
+  computes the `info.path`/resolver-key once and only when an FK-id-elision or N+1
+  check needs it), **L4** (`snake_case` memoized), **L5** (`_check_method_name`
+  memoized).
+- **Withdrawn:** **L1** — `feedback2.md`'s "No Action" supersedes it (see L1 below).
+- **Deferred to owning cards (not touched this pass):** **H2** (TODO-035 owns the
+  zero-allocation plan-cache-hit path), **H5** (must land with/after G3's `spec-035`
+  selection-normalization rewrite — fixing now double-churns it), **H4** (watch-only,
+  profile-triggered), **B1** (maintainer carding call), and the `_result_cache`
+  guard (carded under G1 / `spec-035`).
+
+The descriptions below are the original findings, retained for provenance.
 
 ## Findings
 
-### H1 — `view_<model>` semantics diverge from the cookbook (row-narrowing chosen over sentinels), but Decision 6 / the parity table don't say so — MEDIUM-HIGH — fix: SPEC
+### H1 — `many_resolver` clones a `QuerySet` + copies the prefetched result list on every parent row — MAJOR — fix: CODE
 
-The cookbook's four `get_queryset` hooks
-(`recipes/schema.py::ObjectNode.get_queryset` and siblings) use a three-branch
-shape: staff → all; `has_perm("recipes.view_<model>")` → `queryset.filter(is_private=False)`;
-else → `apply_cascade_permissions(cls, queryset.filter(is_private=False), info)`.
-The **middle (`view_<model>`) branch does not cascade** — it is a bare per-model
-grant. Our shipped hooks
-(`examples/fakeshop/apps/products/schema.py::ItemType.get_queryset` and the three
-siblings) now run `apply_cascade_permissions(...)` in **every** non-staff branch,
-including `view_<model>` — verifiable inline: `ItemType.get_queryset`'s
-`has_perm("products.view_item")` arm and its fallback arm both return
-`#"apply_cascade_permissions(cls, queryset.filter(is_private=False), info)"`.
+**OUR anchor:** `django_strawberry_framework/types/resolvers.py::_make_relation_resolver`
+— the `many_resolver` closure, `#"return list(getattr(root, accessor_name).all())"`.
+**Reference:** `strawberry_django/resolvers.py:240` (`resolve_base_manager`), wired at
+`strawberry_django/fields/field.py:282` / `:297`.
 
-This is not a port slip — the cookbook's bare-filter `view_<model>` is
-*deliberate*, and it is paired with a behavior our package never ported:
+Our generated many-side resolver (M2M, reverse FK) is unconditionally
+`list(getattr(root, accessor_name).all())`. On the **prefetched path** — the normal
+optimized path, since the optimizer prefetches these relations — Django already stores
+the relation under `_prefetched_objects_cache[...]` (in the probed Django version, as a
+materialized `QuerySet` whose `_result_cache` points at the prefetched list).
+`RelatedManager.all()` still constructs a fresh `QuerySet` wrapper over that cache, and
+our `list(...)` then copies the materialized result list for output. That is one
+`QuerySet` allocation **plus one redundant full list copy per many-side relation field,
+per parent row** — and a connection page multiplies it by
+`page_size × (#many-relations selected)`.
+The docstring at `_make_relation_resolver #"manager.all() is prefetch-aware"` shows the
+team already knows `.all()` is prefetch-aware; the cost is the construction + copy it
+hides, not a DB hit.
 
-- Upstream regular/anonymous users **are** cascade-narrowed
-  (`test_permissions_nested.py::test_non_staff_sees_public_objects` asserts the
-  result equals `cascade_public_count` — public Objects whose ObjectType is also
-  public). Our anonymous/`else` branch matches this exactly.
-- Upstream `view_<model>` users are **not** cascade-narrowed and instead see all
-  public rows of that model, with hidden non-null FK targets resolved as
-  **sentinels** — real FK id preserved, other fields masked, `is_redacted=True`,
-  *no error, no dropped row*. This is a first-class upstream mechanism, not a test
-  artifact: `django_graphene_filters/object_type.py::AdvancedDjangoObjectType.get_node`
-  catches the "row exists but `get_queryset` hid it" case and returns
-  `_make_sentinel(pk=0)` instead of `None`/raising, and
-  `AdvancedDjangoObjectType.__init_subclass_with_meta__` documents that **forward
-  FK fields resolve *through* `get_node`** when the Relay `Node` interface is
-  present (so the sentinel covers nested FK traversal, not just root `node(id:)`
-  refetch). Proven live by
-  `test_permissions_nested.py::test_view_object_user_object_type_id_consistency`
-  (selects nested `objectType { … }`, asserts `assertResponseNoErrors`).
+The reference reads the cache **directly** — `result_instance._prefetched_objects_cache[manager.prefetch_cache_name]`
+(ManyRelated) or `[remote_field.cache_name]` (reverse FK) — returning Django's
+already-materialized cache object with zero manager-clone construction, and only falls
+back to `manager.all()` on a genuine cache miss.
 
-The cookbook's models confirm the structural parity that makes this matter:
-`Object.object_type`, `Attribute.object_type`, `Value.attribute`, and
-`Value.object` are all **non-null** FKs — identical to fakeshop's
-`Item.category` / `Property.category` / `Entry.item` / `Entry.property`. So both
-projects face the same question — *what does a `view_<model>` user see when a
-visible row's mandatory FK target is hidden?* — and answer it differently:
+#### Apply
 
-| | cookbook (graphene stack) | spec-034 (strawberry stack) |
-| --- | --- | --- |
-| regular / anon branch | cascade (row exclusion) | cascade (row exclusion) — **parity** |
-| `view_<model>` branch | bare filter; **row kept**, hidden FK → **sentinel** | **cascade**; row **dropped** |
-| `view_<model>` + hidden non-null FK selected | resolves (sentinel), no error | row never returned (cascaded out) |
-
-**The row-drop itself is NOT unique to us — it is the shared
-`apply_cascade_permissions` helper, and the cookbook drops identically wherever it
-invokes it** (its anon/regular branch; a cookbook consumer could put cascade in the
-`view_<model>` branch too). Upstream is explicit that cascade and sentinel are the
-two complementary tools for the same situation: `object_type.py::get_node`'s log
-line reads *"… Use apply_cascade_permissions() in get_queryset to exclude parent
-rows whose FK targets are hidden,"* and the class docstring's `.. warning::` says
-to reach for cascade *"if [the sentinel redaction] is unacceptable for your use
-case."* So our cascade-everywhere policy is an upstream-**sanctioned**
-configuration — not an invented behavior.
-
-What we genuinely lack is the **other** tool. The package consciously declined the
-sentinel half: spec
-`docs/spec-034-permissions-0_0_10.md::Decision 6 #"row exclusion is the cascade contract"`
-ports only the cascade helper and leaves the resolver-level `get_node` sentinel out
-of scope — and our forward-FK resolver reads the FK by a bare accessor with no
-sentinel/`DoesNotExist` fallback:
-`django_strawberry_framework/types/resolvers.py::_make_relation_resolver`'s nested
-`forward_resolver` ends `#"return getattr(root, field_name)"` (contrast its
-`reverse_one_to_one_resolver` sibling, which *does* wrap the accessor in
-`#"except related_does_not_exist:"` → `return None`). So a bare-filter
-`view_<model>` branch in our stack would raise `RelatedObjectDoesNotExist`
-("Entry has no item") where the cookbook degrades to a sentinel. The H1 fix
-(cascade in the `view_<model>` branch) is therefore the package's **only available
-substitute** for the sentinel: we drop the row because we cannot mask the FK.
-
-Net: the cascade **helper** is at parity (the "required parity" row holds — the
-drop behaves identically in both stacks). The divergence is two-layered: (1) we
-have **no sentinel `get_node` path** at all, so a consumer *cannot* reproduce the
-cookbook's bare-filter `view_<model>` recipe in our package without hitting a hard
-error (a real capability gap, broader than fakeshop); and (2) consequently our
-example's `view_<model>` semantics are strictly **more restrictive** than the
-cookbook's (relation-coherent narrowing vs. a per-model grant with sentinel FKs).
-Both are reasonable given (1) — but the spec's `Decision 6` and parity table
-present this next to a bare "required parity" claim without naming the divergence.
-
-**Already documented (do not re-document):** the *runtime* cascade-everywhere
-behavior is covered — `docs/spec-034-permissions-0_0_10.md` Slice 4 checklist
-(`#"every non-staff branch — including the matching view_<model> permission"`),
-the Revision 8 ledger entry (`#"the view_<model> branch cascades too"`), and the
-test plan (`test_cascade_view_item_user_respects_category_visibility` /
-`test_cascade_view_entry_user_nested_selection_drops_hidden_targets`). What is
-*missing* is only the cookbook-divergence framing at Decision 6 + the parity table.
-
-#### Apply (spec only — the code behavior is the defensible choice)
-
-Two edits, both in `docs/spec-034-permissions-0_0_10.md`. No code change.
-
-**1. Parity-table status cell** — `#"required parity"` row (the
-`django_graphene_filters: permissions.py::apply_cascade_permissions` row). Qualify
-the bare claim:
+In `many_resolver`, probe the prefetch cache first (the in-module `_will_lazy_load_many`
+already inspects `_prefetched_objects_cache`, so the accessor→cache-key mapping is at
+hand) and return the cached result directly; fall through to
+`list(getattr(root, accessor_name).all())` only on a miss.
 
 ```diff
-- | django_graphene_filters: permissions.py::apply_cascade_permissions … | permissions.py::apply_cascade_permissions (Decision 5) | **this card (`0.0.10`) — required parity** |
-+ | django_graphene_filters: permissions.py::apply_cascade_permissions … | permissions.py::apply_cascade_permissions (Decision 5) | **this card (`0.0.10`) — required parity (helper-level; the consumer `view_<model>` branch intentionally diverges — see Decision 6)** |
+ def many_resolver(root: Any, info: Info) -> Any:
+     _check_n1(info, root, field_name, parent_type, kind=kind, accessor_name=accessor_name)
+-    return list(getattr(root, accessor_name).all())
++    cache = getattr(root, "_prefetched_objects_cache", None)
++    if cache is not None:
++        cached = cache.get(_prefetch_cache_key(field))   # M2M cache name / reverse-FK cache name
++        if cached is not None:
++            result_cache = getattr(cached, "_result_cache", None)
++            return result_cache if result_cache is not None else cached
++    return list(getattr(root, accessor_name).all())
 ```
 
-**2. Decision 6** — append one note paragraph after the "Alternatives considered"
-line. It names the divergence and fixes the "required parity" reading:
+Resolve `_prefetch_cache_key(field)` once at resolver-build time (it is a property of
+the relation descriptor, not of the row), mirroring `resolve_base_manager`'s
+`prefetch_cache_name` / `remote_field.cache_name` split with the `5.1+ cache_name` vs
+`get_cache_name()` fallback. **Behavior is identical** — same rows, same order; the
+returned value is the prefetched result list when Django stores a materialized
+`QuerySet`, or the cache object itself when Django stores a list-like value. The
+fallback stays the current manager path.
 
-```markdown
-**Consumer-recipe divergence (cookbook `view_<model>`).** Parity is at the *helper*
-level. The cookbook's consumer recipe (`recipes/schema.py`) keeps its middle
-`has_perm("recipes.view_<model>")` branch as a bare `queryset.filter(is_private=False)`
-and leans on its resolver-level sentinel
-(`object_type.py::AdvancedDjangoObjectType.get_node` / `_make_sentinel`,
-`is_redacted=True`) to mask a hidden non-null FK target without dropping the row.
-This package deliberately did not port that sentinel tier — `types/resolvers.py`'s
-forward-FK `forward_resolver` reads the FK by bare `getattr(root, field_name)` with
-no `DoesNotExist`/sentinel fallback — so the fakeshop hooks instead **cascade in
-every non-staff branch, including `view_<model>`** (`apps/products/schema.py`,
-Revision 8). Consequence: a `products.view_item` grant does **not** let a user see
-an item whose `category` is hidden (the row drops), where upstream `view_object`
-would keep the row and sentinel the FK. This is a taxonomy-consistent choice, not a
-parity break — relation visibility is handled by row-narrowing
-(`TODO-BETA-046-0.1.1` codifies FieldSet as the field-level tier; there is no
-node-sentinel tier). The sentinel is a **deliberate non-goal**, not a deferral.
+**Confirmations.** (a) Shared feature: both packages resolve many-side relations from a
+generated relation resolver; this package materializes a list, while the reference
+returns Django's cached/manager iterable. (b) Grepped KANBAN /
+`spec-033` / `spec-035`: `resolve_base_manager` / `_prefetched_objects_cache` for the
+**list-relation** resolver is not carded. `spec-033 #"re-running the pipeline over
+prefetched rows is rejected"` concerns the **connection windowed-prefetch fallback**, a
+different mechanism — not the plain `many_resolver`.
+
+### H2 — Plan-cache hits still pay the full AST→Strawberry conversion, then discard it — MAJOR, already TODO-035-owned — fix: CODE under TODO-035
+
+**OUR anchor:** `django_strawberry_framework/optimizer/extension.py::DjangoOptimizerExtension.apply_to`
+(or the method owning `#"selections = ast_to_converted_selections(info, info.field_nodes)"`),
+feeding `_get_or_build_plan`.
+**Reference:** no plan cache exists upstream; the structural contrast is the early-out at
+`strawberry_django/optimizer.py:1628` (`if is_optimized(qs) or qs._result_cache is not None: return qs`)
+which short-circuits *before* selection work.
+
+In `apply_to` we call `ast_to_converted_selections(info, info.field_nodes)` and
+`selection_extractor(...)` **unconditionally**, then pass the result into
+`_get_or_build_plan`. But `_get_or_build_plan` first computes the cache key
+(`_build_cache_key`, from `print_ast` + variables — `#"cache_key = self._build_cache_key(info, target_model, origin)"`)
+and on a **cache hit returns the cached plan immediately** (`#"if cached_plan is not None:"`),
+never touching `node_selections`. So **every cache-hit request** pays the full recursive
+AST conversion — Strawberry dataclass allocation per node plus `convert_arguments` /
+`convert_directives` per node — for a result that is dropped on the floor. The plan
+cache (B1) exists precisely to make hot queries cheap, yet the single most expensive
+pre-plan step runs on every hit.
+
+#### Apply
+
+Reorder so the cache key is built and the cache consulted **before** converting
+selections; convert (the input to `plan_optimizations`) only on a miss. The cache key
+derives from `info.operation` / `print_ast` / variables and does **not** depend on the
+converted selections, so the reorder is behavior-neutral — identical plan on a hit, only
+the dead conversion removed.
+
+```diff
+-selections = ast_to_converted_selections(info, info.field_nodes)
+-node_selections = selection_extractor(selections, info)
+-plan = self._get_or_build_plan(node_selections, target_model, info, target_type)
++def _build_selections():
++    selections = ast_to_converted_selections(info, info.field_nodes)
++    return selection_extractor(selections, info)
++# _get_or_build_plan calls _build_selections() only inside the cache-miss branch
++plan = self._get_or_build_plan(_build_selections, target_model, info, target_type)
 ```
 
-(Optionally add the same one-liner to the Slice 4 hook narrative, but it is already
-implied by the checklist line — the Decision 6 note is the load-bearing one.)
+(Thread a thunk, or split `_get_or_build_plan` into `key → lookup → (miss) convert+build`.)
+This directly advances TODO-035's own stated acceptance line that the cache-hit path
+"gains zero allocations," which today it does not.
 
-### M1 — `fields.py` (the `FieldSet` per-field layer) has no `0.0.10` counterpart by design; the deferral boundary is clean — MEDIUM — fix: none (confirm + forward notes)
+**Confirmations.** (a) Shared feature: both the AST conversion and (ours-only) the plan
+cache ship today. (b) Grepped KANBAN / `spec-035`: the earlier "uncarded" claim was
+incorrect. TODO-035 explicitly owns this outcome through its zero-allocation
+plan-cache-hit acceptance line, even though it does not spell this exact thunking shape.
 
-`recipes/fields.py` is entirely the **per-field** permission layer:
-`*FieldSet(AdvancedFieldSet)` classes with `resolve_<field>` tiered visibility (a
-shared `_resolve_date` giving staff → full / `view_<model>` → day / authenticated
-→ month / anonymous → year precision), `check_<field>_permission` gates that
-`raise GraphQLError` for anonymous, a computed `display_name`, and a `_user(info)`
-helper. spec-034
-`docs/spec-034-permissions-0_0_10.md::Decision 2 #"the per-field read gate is defined here and implemented with FieldSet"`
-explicitly scopes this out: per-field read gates are hosted on `FieldSet`, a
-`0.1.1` deliverable — the live card is **`TODO-BETA-046-0.1.1`** (`KANBAN.md`),
-whose body already names the "redaction-vs-denial split" and `recipes/fields.py` as
-its canonical shape. Our products types carry staged `fields_class` markers, but
-the markers cite the **stale** number `TODO-BETA-038-0.1.1` — covered by L3. So
-there is correctly nothing to port here for `0.0.10`.
+### H3 — Filter/Order permission pass walks + re-classifies the whole input twice per level — MAJOR — fix: CODE
 
-Forward notes for the `0.1.1` port (not actionable now, recorded so they aren't
-rediscovered cold):
-- `fields.py` reads the user via `info.context.user` / `_user(info)`. The `0.1.1`
-  port needs the same `info.context.request.user` adaptation our `get_queryset`
-  hooks already make (`docs/spec-034-permissions-0_0_10.md::User-facing API #"info.context.request.user, not info.context.user"`).
-  Centralizing a canonical `_user(info)` over
-  `django_strawberry_framework/utils/permissions.py::request_from_info` would fix
-  all `FieldSet` sites at once.
-- `fields.py`'s `check_<field>_permission` gates are the same vocabulary as the
-  shipped `FilterSet` / `OrderSet` `check_<field>_permission` gates that
-  `Decision 11 #"existing check_<field>_permission filter/order gates survive unchanged"`
-  already reconciles — the `FieldSet` read gate is that gate on a third host. No
-  new contract, just a new host.
-- Cookbook `ValueNode` **omits** `description` from `fields` ("not included for
-  permissions testing"); our `EntryType.Meta` **keeps** `description` (line tagged
-  `#"TODO-BETA-038-0.1.1 FieldSet read gates"` — stale number, see L3) so it can be
-  FieldSet-gated later. Opposite tactic, same intent — ours defers rather than
-  omits; fine, just note the two examples will read differently to a migrant.
+**OUR anchor:** `django_strawberry_framework/utils/permissions.py::run_active_input_permission_checks`
+— `#"for field_path in cls._active_permission_field_paths(input_value):"` immediately
+followed by `#"for field_name, related_obj, child_input in cls._iter_active_related_branches(input_value):"`.
+The two wrappers are `active_permission_field_paths` (keeps `LEAF`) and
+`active_related_branches` (keeps `RELATED`), each of which independently runs
+`iter_active_fields(cls, input_value, config)` (`utils/input_values.py::iter_active_fields`).
+**Reference:** `strawberry_django/ordering.py:127` (`process_order`, single
+`for f in OrderSequence.sorted(...)` pass) and `strawberry_django/filters.py:197`
+(`process_filters`, single `for f in sorted(...)` pass). This is a traversal-shape
+comparison, not a one-for-one permission-feature comparison; upstream does not carry
+our active-input permission gate.
 
-### L1 — Query root shape: cookbook exposes single-node `Node.Field` entry points + connections; ours is connections-only — LOW — fix: none (deferred, documented)
+`run_active_input_permission_checks` traverses the same input dataclass **twice per
+nesting level**: `_active_permission_field_paths` runs the full `iter_active_fields`
+classifier and keeps only `LEAF` records; `_iter_active_related_branches` runs the full
+classifier *again* and keeps only `RELATED` records. The classifier already emits `LEAF`,
+`RELATED`, **and** `LOGIC` in a single pass — the two callers just discard the kinds
+they don't want. Each pass also rebuilds a `SetInputTraversal` config object. On the
+filter side the same input is then walked a **third** time by `_normalize_input` (see
+L2). The reference's analogous filter/order traversal does its own field processing in
+one pass.
 
-`recipes/schema.py::Query` declares both `object_type = Node.Field(ObjectTypeNode)`
-(single-node refetch) **and** `all_object_types = AdvancedDjangoFilterConnectionField(...)`
-per type. Our `apps/products/schema.py::Query` is connections-only
-(`all_categories` / `all_items` / `all_properties` / `all_entries`); the root
-`node(id:)` / `nodes(ids:)` Relay entry points are deferred to the fakeshop-schema
-activation card — live number **`TODO-BETA-052-0.1.5`** (the `Query` docstring
-cites the stale `TODO-BETA-051-0.1.5` — see L3). Expected divergence-with-deferral;
-no cascade implication (node refetch routes through the same `get_queryset`).
+#### Apply
 
-### L2 — Meta-key staging and `fields` spelling — LOW — fix: none (faithful incremental port)
+Run `iter_active_fields` **once** with a config that is the superset of both current
+configs (`field_specs` + `logic_keys` populated), then partition the yielded
+`ActiveField` records by `.kind` into the leaf-path loop and the related-branch loop:
 
-Cookbook nodes carry `aggregate_class`, `fields_class`, and `search_fields`
-**live** and use `fields = "__all__"`. Ours wires `filterset_class` /
-`orderset_class` live (matching), stages the other three commented with their
-card tags, and uses explicit field tuples instead of `"__all__"`. This is the
-package's deliberate incremental-activation pattern (uncomment each as its card
-ships) plus a more explicit field surface — not a gap. The stale staged-card
-numbers on those commented lines are the subject of L3.
-
-### L3 — Stale staged-card numbers in the products schema point readers at dead card ids — LOW — fix: PRODUCTS DOC COMMENTS
-
-`examples/fakeshop/apps/products/schema.py` still stages future Meta keys against
-**renumbered** card ids. (Note: this is *separate* from the `TODO-ALPHA-027/034`
-permission comments Revision 8 already retargeted — those are fixed; these
-`TODO-BETA-*` staging numbers are not.) Verified against `KANBAN.md`:
-
-| Stale id in schema.py | Live KANBAN id | Card |
-| --- | --- | --- |
-| `TODO-BETA-038-0.1.1` | `TODO-BETA-046-0.1.1` | `FieldSet` |
-| `TODO-BETA-039-0.1.2` | `TODO-BETA-047-0.1.2` | `Meta.search_fields` support |
-| `TODO-BETA-040-0.1.3` | `TODO-BETA-049-0.1.3` | Aggregation subsystem |
-| `TODO-BETA-051-0.1.5` | `TODO-BETA-052-0.1.5` | Fakeshop schema activation |
-
-(`TODO-BETA-051` is especially wrong: the only live `051` card is `0.1.4`, a
-different card — there is no `051-0.1.5`.)
-
-This does not affect spec-034 behavior, but a migrant currently follows dead ids.
-Refresh only the comments/docstring markers; **do not** hand-edit generated
-`KANBAN.md` output.
-
-#### Apply (comment/marker refresh only)
-
-In `examples/fakeshop/apps/products/schema.py`, replace the stale ids everywhere
-they appear (find-and-replace is safe — these strings occur only in comments and
-one `Meta.fields` inline comment):
-
-```
-TODO-BETA-038-0.1.1  →  TODO-BETA-046-0.1.1   # 5 sites: module docstring + import + 4 fields_class lines + the EntryType "description" inline comment
-TODO-BETA-039-0.1.2  →  TODO-BETA-047-0.1.2   # 5 sites: module docstring + 4 search_fields lines
-TODO-BETA-040-0.1.3  →  TODO-BETA-049-0.1.3   # 6 sites: module docstring + import + 4 aggregate_class lines
-TODO-BETA-051-0.1.5  →  TODO-BETA-052-0.1.5   # 1 site: the Query docstring "Still deferred to …" line
+```python
+config = SetInputTraversal(field_specs=field_specs, related_attr=related_attr,
+                           logic_keys=logic_keys, unset_sentinel=..., handle_top_level_list=...)
+leaves, branches = [], []
+for f in iter_active_fields(cls, input_value, config):
+    if f.kind == LEAF:     leaves.append(...)
+    elif f.kind == RELATED: branches.append(...)
 ```
 
-Anchors to spot-check after the sweep:
-`schema.py #"DONE-034-0.0.10` permissions, `TODO-BETA-046-0.1.1` fieldsets"` (the
-module-docstring roadmap line), `EntryType.Meta #"Future: drop this entry"` (the
-`description` field comment), and `Query #"Still deferred to"` (the docstring).
-After editing, run the repo's `uv run ruff format .` / `uv run ruff check --fix .`
-per `AGENTS.md` (comment-only changes, but keep the habit).
+Caveat to verify when fusing: `active_related_branches` currently passes
+`field_specs={}` and no `logic_keys`, while `active_permission_field_paths` passes both.
+`RELATED` classification keys off `related_attr` membership and is independent of
+`field_specs`/`logic_keys`, so the superset config must yield byte-identical `RELATED`
+records — pin that with the existing permission tests. Dedup is per-class and
+order-independent (the code documents this at `#"the per-class _fired dedup ... are all
+order-independent"`), so the fused order is safe. This removes one full input traversal
++ re-classification per recursion level on every filtered/ordered request.
 
-## Verified faithful (no action)
+**Confirmations.** (a) Shipped feature: active-input per-field + per-branch permission
+dispatch ships in both our `FilterSet` and `OrderSet` paths. The upstream reference is
+only evidence that the analogous filter/order traversal can be organized as one pass.
+(b) Grepped KANBAN / specs:
+`run_active_input_permission_checks` / `iter_active_fields` single-pass fusion is not
+carded (the only carded perf surface is the optimizer, `spec-035`).
 
-- **Cookbook branch vocabulary** — staff, per-model view permission, and fallback
-  users are still the three policy tiers. The fallback cascade branch is a 1:1
-  port; the per-model view branch is the intentional H1 divergence and should not
-  be described as faithful 1:1 behavior.
-- **The cascade call shape** —
-  `apply_cascade_permissions(cls, queryset.filter(is_private=False), info)`
-  (`schema.py::ItemType.get_queryset` et al.) is byte-for-byte the cookbook's
-  consumer line.
-- **Context adaptation** — cookbook `getattr(info.context, "user", None)` →
-  ours `getattr(getattr(info.context, "request", None), "user", None)`, required
-  because `StrawberryDjangoContext` exposes `request`/`response`, not `.user`
-  (`docs/spec-034-permissions-0_0_10.md::User-facing API #"info.context.request.user"`);
-  correct and necessary, not a divergence.
-- **Anonymous/regular cascade behavior** matches the cookbook's
-  `test_non_staff_sees_public_objects` / `test_not_authenticated_cascade_permissions`
-  (rows narrowed to public-with-visible-FK-targets at every depth).
-- **The cascade helper itself** remains at contract parity with
-  `django_graphene_filters/permissions.py::apply_cascade_permissions` (ported
-  verbatim plus the Django-6.0 `column`-value correction in
-  `django_strawberry_framework/permissions.py::_is_cascadable_edge #"getattr(field, \"column\", None) is not None"`;
-  see spec Revisions 5/7).
+### H4 — GlobalID type-name decode is `O(types)` per id instead of a keyed lookup — LOW / watch-only — fix: defer until trigger
 
-## Relationship to the prior reviews
+**OUR anchor:** `django_strawberry_framework/registry.py::TypeRegistry.definition_for_graphql_name`
+— `#"for type_cls, definition in self.iter_definitions()"`, called from
+`types/relay.py::decode_global_id` (`#"definition_for_graphql_name"`).
+**Reference:** `strawberry_django/relay/utils.py:223` (`resolve_model_node`) resolves the
+source type directly, with no per-id type scan. This is not directly comparable:
+upstream is handed a model/type source at this point, while this package also supports
+type-name GlobalID strategies that must invert `definition.graphql_type_name`.
 
-- The earlier `docs/feedback.md` pass (H1 non-null-FK runtime error, M1
-  async-recourse text, M2 malformed-`fields=` `TypeError`) is **already resolved**
-  in spec Revision 8 and the current code (every non-staff branch cascades; the
-  sync-misuse text is surface-aware; `_validate_fields` rejects
-  non-iterable/non-string `fields=` as `ConfigurationError`).
-- `docs/feedback2.md` (the second post-build review) overlaps this pass at one
-  point only: its **L1** swept the stale `TODO-ALPHA-027/034` *permission* comments
-  (retargeted in Revision 8). The `TODO-BETA-*` *staging* numbers in **L3 above are
-  a different, still-open set** — do both as one comment sweep if convenient.
-- This pass does not re-open resolved items — it re-frames the H1 fix through the
-  cookbook lens: the fix is sound, but it is a *divergence* from the reference
-  recipe (which solves the same problem with sentinels), and H1's Apply block is
-  what records that at Decision 6 + the parity table.
+`definition_for_graphql_name` builds a list comprehension over **every registered
+definition**, calling `implements_relay_node(type_cls)` (an `issubclass` check) on each,
+**on every call**. `decode_global_id` calls it once per id under the `type` / `type+model`
+GlobalID strategies, and `relay.py::DjangoNodesField._resolve` decodes per id
+(`#"_decode_or_graphql_error(raw_id) for raw_id in ids"`), so a batch
+`nodes(ids: [...])` request under the `type` strategy is **`O(ids × types)`**. (The
+default `model` strategy uses `apps.get_model` + a dict `registry.get` and is unaffected
+— this bites only the non-default type-name strategies.)
 
-## Scope & card placement (alpha vs beta) — what defers, what's now
+#### Apply
 
-Phase rule (maintainer-stated): **alpha = match graphene-django + strawberry-django;
-beta = the django-graphene-filters–specific surface.** `KANBAN.md` confirms it —
-alpha cards `035–044` are mutations/uploads/forms/serializers/auth/channels/debug
-(the two base libraries' parity), beta cards `045–057` are the
-django-graphene-filters `Advanced*` surface (FieldSet, search, aggregation, …).
+Do not promote this as an immediate CODE fix unless profiling shows node-decode latency
+dominated by the scan under a large Relay-Node catalog. If that trigger fires, build a
+`graphql_type_name → definition` index **once** at `mark_finalized()`. The registry is
+immutable post-finalize (`_check_mutable` enforces it; `related_target_for` already gates
+its cache on `is_finalized()`), so detect the ambiguity collision once at build (raising
+the same `ConfigurationError` with the same `colliding` message) and turn each decode
+into a single dict lookup. Same misses, same ambiguity errors, same routing.
 
-The package's own **redaction taxonomy** decides most of this.
-`KANBAN.md::TODO-BETA-046-0.1.1` (`FieldSet`, "Why it matters") states it outright:
-*"Filter / order / cascade all use queryset narrowing — they remove rows. FieldSet
-is the one place where a row stays visible but a field is either redacted or guarded
-behind an error."* So the package has two deliberate tiers — **relation/row
-visibility = narrowing (cascade)**; **field visibility = FieldSet (redact value /
-deny)** — and **no node-sentinel tier**. The upstream `get_node` sentinel is the
-*third* approach the package consciously did not adopt (Decision 6 = row-exclusion).
+**Confirmations.** (a) Shipped feature: this package's type-name GlobalID decode resolves
+to a registered type; the upstream reference is an alternate node-resolution shape, not
+the same type-name inversion feature. (b) Grepped KANBAN / spec-031 / spec-032: no
+implementation card owns the index. But the registry review already records this as a
+Low, profile-triggered note
+(`docs/review/rev-registry.md #"Linear scan in definition_for_graphql_name"`) and
+explicitly rejects adding mutable registry state before the large-catalog trigger. The
+previous "MAJOR" / fresh-uncarded classification was overstated.
 
-Mapping each finding to where it belongs:
+### H5 — Hand-rolled selection collection triple-walks the tree instead of using `collect_subfields` — MAJOR (highest payoff, largest change) — fix: CODE
 
-| Finding | Belongs to | Already carded? | Act now? |
-| --- | --- | --- | --- |
-| Relation-level **sentinel / `get_node` redaction** (`is_redacted`, `_make_sentinel`) — the H1 divergence | **beta** parity-adjacent; but **superseded by the row-narrowing tier** the package already chose | **No card — and arguably shouldn't get one.** 034 raised it as an open question and Decision 6 picked row-exclusion; `TODO-BETA-046-0.1.1` codifies FieldSet as the field-level redaction tier, not a node-sentinel tier | **No code.** Record as a **deliberate non-goal** (H1 Apply, edit 2), *or* a beta parity card only if strict django-graphene-filters parity is wanted — note it conflicts with the taxonomy |
-| **FieldSet** per-field redaction/denial (`fields.py`) | beta | **Yes — `TODO-BETA-046-0.1.1`** (field-level only; does *not* cover node sentinels) | No (deferred) |
-| Single-node `node(id:)`/`nodes` root fields | beta | **Yes — `TODO-BETA-052-0.1.5`** | No (deferred) |
-| `search_fields` / `aggregate_class` staging | beta | **Yes — `TODO-BETA-047-0.1.2` / `TODO-BETA-049-0.1.3`** | No (deferred) |
-| `view_<model>` cascade-everywhere semantics (H1 symptom) | alpha example choice | n/a | **Docs only** (H1 Apply) |
-| Stale staged-card numbers (L3) | alpha hygiene | n/a | **Comment refresh** (L3 Apply) |
+**OUR anchor:** `optimizer/selections.py::ast_to_converted_selections` →
+`optimizer/selections.py::included_field_selections` (`#"return included fields with
+fragment bodies inlined"`) → `optimizer/walker.py` `#"_merge_aliased_selections(_included_field_selections(selections))"`.
+**Reference:** `strawberry_django/optimizer.py:1305` (`_get_selections`) →
+`strawberry_django/utils/gql_compat.py:21` (`get_sub_field_selections`).
 
-**Are we pigeonholed? No.** The H1 cascade-everywhere is not a stopgap for a missing
-feature; it is the package *applying its own row-narrowing tier consistently*. A
-future sentinel, if ever wanted, is still additive (a branch near
-`django_strawberry_framework/types/resolvers.py::_make_relation_resolver #"return getattr(root, field_name)"`
-plus the Relay node path); 034 locked nothing. So there is no structural reason to
-build it now, and a real architectural reason not to: it competes with the
-row-narrowing model the package committed to.
+For every plan build we do graphql-core's job in pure Python, and we walk the same tree
+**three times**: (1) `ast_to_converted_selections` recursively builds Strawberry
+`SelectedField` / `FragmentSpread` / `InlineFragment` dataclasses (per-node
+`convert_arguments` / `convert_directives`); (2) `_included_field_selections` re-walks to
+evaluate `@skip`/`@include` and inline fragment bodies; (3) `_merge_aliased_selections`
+re-walks to group by response key (with a per-node `snake_case` — see L4).
 
-**Now-work is documentation only**, and is fully captured by the two Apply blocks
-above:
-1. H1 Apply — Decision 6 note + parity-table qualifier (the cookbook divergence /
-   sentinel-as-non-goal framing).
-2. L3 Apply — refresh the stale `TODO-BETA-038/039/040/051` staging numbers in
-   `apps/products/schema.py` to `046/047/049/052`.
+graphql-core ships `collect_sub_fields` (3.2) / `collect_subfields` (3.3) — the exact
+routine the executor uses — which does fragment inlining, `@skip`/`@include` evaluation,
+and grouping-by-response-key **in one optimized pass**, returning
+`dict[response_key, list[FieldNode]]`. The reference calls it directly. Collapsing our
+three passes onto it is the largest change here but the biggest structural win, and it
+honors fragment type-conditions identically (relevant to the in-flight G3 narrowing,
+which becomes a predicate over the collected groups rather than a fourth walk).
 
-(`KANBAN.md` is DB-generated — any *card* change goes through the ORM + the KANBAN
-exporters, not a hand-edit of `KANBAN.md`. The L3 sweep touches only source
-comments, not the board.)
+> **Sequencing note:** G3 (`spec-035`) rewrites this same
+> `included_field_selections` / `_included_field_selections` seam for *correctness*.
+> Land H5 **after** G3 (or fold H5 into G3's rewrite) to avoid double-churning the
+> selection-normalization code — the WIP card already warns against concurrent walker
+> churn there.
+
+Correction to the original wording: this is not a drop-in replacement. Our
+`ast_to_converted_selections` also works around Strawberry's anonymous-inline-fragment
+conversion crash and seeds `Info.selected_fields` for connection paths through
+`prime_selected_fields`; those contracts must survive any `collect_subfields` rewrite.
+Treat H5 as a larger adapter replacement that preserves the anonymous-fragment,
+connection-direct-child, response-key-argument, and G3 type-condition semantics — not as
+simply swapping one helper call.
+
+**Confirmations.** (a) Shared feature: fragment inlining + directive filtering + alias
+merging is exactly what `included_field_selections` + `_merge_aliased_selections` do.
+(b) Grepped KANBAN / `spec-035`: no mention of `collect_sub_fields` /
+`get_sub_field_selections`; G3 is a correctness narrowing predicate, not a perf rewrite
+of how selections are collected.
+
+### B1 — Root-connection `totalCount` fires a second `COUNT` query instead of folding it into the rows query — MAJOR, but flagged as already-noted-uncarded-backlog — fix: CODE (maintainer call)
+
+**OUR anchor:** `django_strawberry_framework/connection.py::_attach_count_sync`
+(`#"nodes.count()"`) and `_attach_count_async` (`#"await nodes.acount()"`), reached from
+the generated `<TypeName>Connection.resolve_connection` in `_build_total_count_connection`.
+**Reference:** `strawberry_django/relay/list_connection.py:129` (partition-less
+`Window(Count(1))` annotation on the optimized root queryset), consumed at `:67`
+(`total_count` reads it off the first edge's node).
+
+When a **root** connection selects `totalCount`, we issue **two SQL statements**: the
+sliced rows query (via Strawberry's `ListConnection.resolve_connection`) **and** a
+separate `SELECT COUNT(*)` on the pre-slice `nodes` queryset. Upstream issues **one**:
+for an optimized root queryset it annotates `Window(Count(1), partition_by=None)` so
+every returned row already carries the total, and reads it off `edges[0].node`. Our
+window machinery (`optimizer/plans.py::apply_window_pagination`) is `partition_by`-based
+and emitted only for **nested** prefetch connections; the root path has no window-fold
+equivalent.
+
+**Apply (if pursued):** when the resolver source is a single optimized `QuerySet` and
+`totalCount` is selected, annotate the partition-less count window on `nodes` before
+delegating to `super().resolve_connection`, and read it from the first materialized
+edge's node; fall back to `.count()`/`.acount()` on zero rows (no row to read) or when
+`DISTINCT` is present (upstream guards both). The M1 `Int!`/non-queryset guard
+(`_guard_total_count_countable`) is untouched; result is byte-identical.
+
+> **Provenance flag (honesty):** unlike H1–H5, this one is **already named** in
+> `spec-033 #"BACKLOG-worthy, not cut-blocking"` / `#"no card yet"` as a deferred
+> post-`0.0.9` micro-optimization for the **root** path (the carded `DONE-033` window
+> work is nested-only). It is **not in KANBAN.md**, so it technically clears the bar, but
+> it is not a fresh discovery — it is a known, deliberately-deferred idea. Surfacing it
+> here for completeness; whether to promote it to a card is a maintainer call.
+
+## Minor findings (batch — allocation / memoization, all behavior-neutral)
+
+- **L1 — WITHDRAWN (superseded by `feedback2.md` "No Action").** This originally
+  proposed an `@lru_cache` over the registry-less fallback branch of
+  `optimizer/walker.py::_resolve_field_map`
+  (`#"{f.name: f for f in model._meta.get_fields()}"`). The `feedback2.md`
+  verification pass reaches the opposite, better-reasoned conclusion and the two are
+  now reconciled in its favor: (1) the fallback fires only when `registry.get(model)`
+  misses, but a relation is only *selectable* in GraphQL when its target has a
+  registered `DjangoType`, so the B7 `definition.field_map` precompute already covers
+  the real per-request traffic — the fallback is an edge case, not a per-row loop;
+  (2) the cache would couple to `registry.clear()` invalidation for near-zero benefit.
+  **No code.** The narrow caches on genuinely-immutable metadata
+  (`permissions.py::_cascadable_edges`, `orders/sets.py::_path_traverses_to_many`,
+  and now `utils/strings.py::snake_case`) remain the correct boundary.
+
+- **L2 — `_normalize_input` rebuilds `dict(_LOGIC_KEYS)` + a `SetInputTraversal` per
+  call.** `filters/sets.py::FilterSet._normalize_input` (`#"logic_lookup = dict(_LOGIC_KEYS)"`).
+  `_LOGIC_KEYS` is a frozen module constant; the dict and the config are identical every
+  call, and `_normalize_input` runs once per `apply_*`, again via `_run_permission_checks`,
+  and once per nested `_q_for_branch` sibling. Reference uses a module-level
+  `lookup_name_conversion_map` (`strawberry_django/filters.py:109`). Fix: hoist
+  `_LOGIC_WIRE_BY_PYTHON_ATTR = dict(_LOGIC_KEYS)` to module scope (our
+  `_FORM_KEY_BY_PYTHON_ATTR` already is — this one was left inline) and make the
+  filter-normalize `SetInputTraversal` a module singleton. Uncarded.
+
+- **L3 — forward-relation resolver walks `info.path` twice per row.**
+  `types/resolvers.py::_make_relation_resolver` `forward_resolver`
+  (`#"if field_meta.attname is not None and _is_fk_id_elided"`): `_is_fk_id_elided` walks
+  `info.path` → builds the runtime-path tuple → joins the resolver-key string, and then
+  (common case, elision off) `_check_n1` recomputes the **identical** walk + key from
+  scratch when the optimizer sentinels are present. Important correction: `_check_n1`
+  already returns before walking when `DST_OPTIMIZER_PLANNED` is absent; the unconditional
+  empty-sentinel work is on `_is_fk_id_elided`, which computes the key even when the
+  FK-id-elision set is empty. Fix: short-circuit `_is_fk_id_elided` before the path walk
+  when the elision set is empty, and compute `runtime_path_from_info(info)` +
+  `resolver_key(...)` once in `forward_resolver` when both FK-id-elision and strictness
+  checks need it (thread via an optional precomputed-key param).
+  Behavior-neutral; uncarded (spec-003 defines the helpers, not this redundancy).
+
+- **L4 — per-selection `snake_case` recomputed char-by-char, uncached.**
+  `optimizer/walker.py` (`#"snake_case(sel.name)"`, repeated in `_merge_aliased_selections`
+  and `_selected_scalar_names`); impl `utils/strings.py::snake_case`. Called once per
+  selection per walk over a tiny fixed vocabulary that repeats every request. Reference
+  avoids the reverse-conversion entirely (matches on the precomputed GraphQL name via
+  `name_converter`, reads `field.django_name`). Fix: `@functools.lru_cache` on
+  `snake_case`, or carry the resolved Django name on `FieldMeta` so it is precomputed
+  once at class-creation. Smallest win; trivially safe. Uncarded. (Naturally folds into
+  H5 if that lands.)
+
+- **L5 — `invoke_permission_method` re-derives the `check_*` method-name string per
+  field per request.** `utils/permissions.py::invoke_permission_method`
+  (`#"method_name = f\"check_{field_path.replace('__', '_')}_permission\""`). The
+  `field_path → method_name` transform is request-independent; only the bound-instance
+  `getattr`/`callable` probe must stay per-request. Reference memoizes its per-field
+  introspection (`strawberry_django/filters.py:140`,
+  `@lru_cache _function_allow_passing_info`). Fix: `lru_cache` the pure string transform
+  (bounded by declared field paths). The reference example is an analogous
+  per-field-introspection cache, not a matching permission hook. Smallest of the batch;
+  uncarded.
+
+## Checked and explicitly rejected (not findings)
+
+- **LIMIT/OFFSET slicing & over-fetch-by-1 for `hasNextPage`** — identical; both delegate
+  to Strawberry's `ListConnection.resolve_connection` (`SliceMetadata.overfetch = end + 1`).
+- **ListConnection cursor encode/decode** — identical (both build edges via
+  `Edge.resolve_edge` over an integer-offset cursor). Upstream's richer
+  `DjangoCursorConnection` tuple/JSON cursor is a **different connection type we don't
+  implement** — a feature gap, not a slower shared path (out of scope by rule 1).
+- **`should_resolve_list_connection_edges`** (skip edge materialization when only
+  `totalCount` selected) — upstream applies it only in `DjangoCursorConnection`
+  (`cursor_connection.py:396`), not the `DjangoListConnection` we mirror; not a shared-gap.
+- **`_q_for_branch` per-branch `deepcopy(base_filters)`** — per-request, but it is a
+  documented django-filter `BaseFilterSet.__init__` cost (M-filters-6, "profile before
+  optimizing"), bounded by `_MAX_LOGIC_DEPTH`, reaching into django-filter copy semantics
+  — out of bounds for a behavior-neutral speedup.
+- **`get_filters` / `_expand_related_filter` deepcopy** — runs at class-finalize and is
+  cached in `_expanded_filters` / `base_filters`, not per-request.
+- **`diff_plan_for_queryset` prefetch reconciliation** — could not establish it as slower
+  than upstream's `PrefetchInspector.merge` (the merge path is itself an explicit
+  non-goal / consumer-wins safety stance, spec-004 B8).
+- **Plan cache itself, `print_ast` cost, `_path_traverses_to_many`** — OUR-only
+  advantages with no shared counterpart, or already `@lru_cache`'d.
 
 ## Net
 
-The implementation is a faithful port of the cookbook's cascade recipe; the
-`Advanced*` surface (`fields.py` et al.) is correctly **beta** and already carded.
-The relation-level sentinel has **no card** — but reading `TODO-BETA-046-0.1.1`
-shows that's by design, not omission: the package's redaction taxonomy is
-row-narrowing for relations + FieldSet for fields, with **no node-sentinel tier**.
-So the H1 divergence is a *deliberate, coherent* choice; the right move is to
-**document it as such** (H1 Apply → Decision 6) and refresh the stale staged-card
-numbers (L3 Apply). We are **not** pigeonholed; nothing structural needs to happen
-now, and no production code change is recommended.
+Two clean, verified, uncarded MAJOR wins (**H1** many-resolver clone/list copy and
+**H3** double input walk), one verified MAJOR that is already TODO-035-owned (**H2**
+cache-hit conversion discard), one larger MAJOR-class candidate (**H5**
+`collect_subfields`, with the adapter caveats above), one Low/watch item already
+documented in registry review (**H4** GlobalID `O(types)` decode), one borderline
+already-noted-backlog item (**B1** root `totalCount`), and five minor
+allocation/memoization wins (**L1–L5**). The intended fixes are behavior-preserving:
+same rows, same ids, same gates, same SQL semantics — they delete redundant work, not
+authorization or visibility logic. Recommended order for **new** work by payoff-to-risk:
+**H1** → **H3** → **L2/L4/L5** (trivial) → **L1/L3** (small invalidation/threading care)
+→ **H5** (fold into G3 or land after it) → **B1** (maintainer call on carding). **H2**
+should be handled inside TODO-035 rather than counted as a separate new card.

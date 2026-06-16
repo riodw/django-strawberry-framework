@@ -126,12 +126,11 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
 
     class _Parent:
         @classmethod
-        def _active_permission_field_paths(cls, input_value):
-            return ["name", "name"]  # repeated -> must dedup
-
-        @classmethod
-        def _iter_active_related_branches(cls, input_value):
-            return [("child", related_obj, {"x": 1})]
+        def _active_permission_targets(cls, input_value):
+            # The fused single-pass contract ``run_active_input_permission_checks``
+            # now consumes (feedback H3): one call yields BOTH the per-field gate
+            # paths (repeated ``name`` -> must dedup) and the related branches.
+            return ["name", "name"], [("child", related_obj, {"x": 1})]
 
         @staticmethod
         def _invoke_permission_method(

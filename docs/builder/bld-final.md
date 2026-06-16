@@ -164,3 +164,11 @@ location"); only the `SpecDoc.url` DB field points forward at the `docs/SPECS/` 
 Gate passes on all seven commands. **Status: `final-accepted`.** The gate closes the build cycle;
 Worker 0 may mark the final checklist box `- [x]` and hand off to the maintainer for review and
 commit.
+
+## Post-build review correction (2026-06-16, applied during the docs/feedback.md review pass)
+
+The final-verification "no spec edit needed / spec status line accurate" conclusion was superseded by the first rigorous implementation review (`docs/feedback.md`). Corrections applied after this build committed:
+- **Spec reconciled to completed voice (Revision 4):** Status line, slice checklist (Slices 2 + 4 ticked), Problem statement / Current state (incl. the stale `OperationType` "returns nothing" grep evidence), and DoD now describe the shipped `DONE-035-0.0.10` state. `check_spec_glossary` re-run → OK: 23 terms.
+- **SpecDoc URL lifecycle fix:** the card's `SpecDoc.url` was pointing at the not-yet-existent `docs/SPECS/spec-035-…md` archive path (a broken board link). Per `AGENTS.md`, the spec stays at its live `docs/spec-035-…md` path until the next author's `docs/SPECS/NEXT.md` Step 8 sweep; the URL (and spec DoD item 10) were corrected to the live path. KANBAN regenerated.
+- **Stale DONE-035 card body:** planning_state → Shipped; G2 "open decision" → resolved (Decision 5); G3 scope/why-it-matters → DEFERRED markers; Files section now includes `types/resolvers.py` + `tests/types/test_resolvers.py`.
+- **Test depth (P2):** added a real `mutation` execution test (`tests/optimizer/test_extension.py`) and a real `Item.objects.only("name")` deferred-instance test (`tests/types/test_resolvers.py`).

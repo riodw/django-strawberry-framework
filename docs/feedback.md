@@ -1,159 +1,137 @@
-# Review — `docs/spec-035-optimizer_hardening-0_0_10.md`
+# Review - spec-035 implementation
 
-Deep pass after staging `TODO(spec-035 Slice N)` anchors across the optimizer,
-tests, and docs. The spec is directionally good for G2, but G3 currently rests on
-a production-reachability claim that does not match the live optimizer entry path.
+Reviewed the current `DONE-035` implementation against
+`docs/spec-035-optimizer_hardening-0_0_10.md`, the optimizer/resolver code paths,
+the new tests, and the generated docs. I did not find a production-code blocker in
+the G2 gate threading itself: `django_strawberry_framework/optimizer/walker.py::plan_optimizations`
+derives the operation gate once and threads it through the scalar writer,
+relation connector writer, prefetch connector writer, and scalar-only connection
+window writer. The FK-id elision fallback in
+`django_strawberry_framework/types/resolvers.py::_build_fk_id_stub` also addresses
+the consumer-`.only()` hazard at the right layer.
+
+The remaining issues are source-of-truth/documentation correctness and test
+depth. The docs are not just cosmetic here: this project treats specs, generated
+Kanban output, glossary links, and build artifacts as navigational source for the
+next implementer.
 
 ## Findings
 
-### P1 — G3's claimed production trigger is not optimized today
+### P1 - The canonical spec still describes G2 and the doc wrap as unfinished
 
-The spec says the G3 failure mode is consumer-constructible today via an
-`@strawberry.interface` implemented by multiple `DjangoType`s and exposed as a
-queryset-returning field, and that the optimizer would mis-walk that abstract
-selection. Current code does not appear to reach the walker for that shape.
+The implementation and generated board now say card 035 is done, but the spec
+file still reads like an in-progress design. Examples:
 
-`django_strawberry_framework/optimizer/extension.py::_resolve_model_from_return_type`
-unwraps `info.return_type`, looks up the Strawberry definition by GraphQL type
-name, then calls `registry.model_for_type(origin)`. For an interface or union
-origin, `origin` is not a registered `DjangoType`, so `model_for_type(...)`
-returns `None` and `_optimize` passes the queryset through unchanged. That means
-the sibling-concrete-type N+1 / over-planning behavior is not currently a
-production optimizer bug for abstract root fields; pure
-`tests/optimizer/test_walker.py` calls would be testing a planner state the
-extension cannot currently produce.
+- `docs/spec-035-optimizer_hardening-0_0_10.md #"Status: G1 shipped"` says
+  "G2 + the doc wrap remain" and "Slice 2 ... is the only functional build
+  remaining."
+- `docs/spec-035-optimizer_hardening-0_0_10.md #"Each top-level item maps"` says
+  Slices 2 and 4 are unticked / not started.
+- `docs/spec-035-optimizer_hardening-0_0_10.md #"G1 has since been closed"` says
+  "G2 and G3 remain."
+- `docs/spec-035-optimizer_hardening-0_0_10.md #"grep -rn \"OperationType\""` says
+  `OperationType` returns nothing, which is now false because
+  `django_strawberry_framework/optimizer/walker.py::_enable_only_for_operation`
+  imports and uses it.
 
-Necessary spec correction: choose one path before coding.
+This is a real source-of-truth problem. A new developer reading the spec would
+believe the G2 runtime work is still pending, while the code and generated board
+say it shipped. It also undermines future review because the "Current state" and
+DoD sections no longer match the checkout.
 
-- If G3 is meant to ship in this card, expand Slice 3 to include the missing
-  production entry contract for abstract return types. That is a larger design:
-  how to resolve target model(s), origin type, plan-cache identity, and possible
-  concrete types for interface / union returns without violating the spec's
-  "registry-only, no per-request graphql-core introspection" rule.
-- If that larger abstract-entry work is out of scope, defer G3 to the future
-  `polymorphic_interface_connections` / abstract-optimizer card and revise this
-  spec to say G3 is preparatory only, not a fix for a currently optimized
-  consumer path.
+Required fix: add a final implementation revision to the spec and update the
+status/current-state/checklist/DoD wording to the completed state: G1 shipped in
+`d1dea2fd`, G2 shipped in this build, Slice 4 completed, G3 deferred. The
+expected-delta/current-grep language should be rewritten or removed rather than
+left as stale pre-build evidence. Re-run
+`uv run python scripts/check_spec_glossary.py --spec docs/spec-035-optimizer_hardening-0_0_10.md`
+afterward.
 
-The existing planned live `allLibraryGenresConnection { ... on GenreType { ... } }`
-test is still useful as no-regression coverage for a matching concrete fragment,
-but it does not prove the sibling-fragment bug because that concrete field cannot
-legally select sibling concrete fragments.
+### P1 - The generated Kanban card points to a non-existent spec and contains stale card text
 
-### P1 — Decision 5's FK-id-elision safety argument misses consumer `.only()`
+`KANBAN.md #"Spec:"` links `DONE-035-0.0.10` to
+`docs/SPECS/spec-035-optimizer_hardening-0_0_10.md`, but that file is not present.
+The live spec remains at `docs/spec-035-optimizer_hardening-0_0_10.md`.
 
-Decision 5 keeps FK-id elision enabled under non-`QUERY` operations because G2
-suppresses optimizer-owned `.only()`, so "the full source row loads." That is not
-always true. The consumer can return a queryset that already has `.only(...)`;
-`django_strawberry_framework/optimizer/plans.py::diff_plan_for_queryset` preserves
-the consumer projection and drops optimizer `only_fields` under the B8
-consumer-wins rule.
+That is not consistent with the repository rule in `AGENTS.md`: completed specs
+stay at `docs/spec-NNN-...md` until the next spec author runs the batched
+`docs/SPECS/NEXT.md` archive sweep, which moves prior specs and rewrites
+cross-references in the same pass. Moving the DB-backed `SpecDoc.url` ahead of
+the file move creates a broken public link in the board.
 
-If a mutation resolver returns `Item.objects.only("name")` and the selection asks
-for `{ category { id } }`, the plan can still carry an FK-id elision for
-`category`, but `category_id` is deferred by the consumer projection.
-`django_strawberry_framework/types/resolvers.py::_build_fk_id_stub` reads
-`getattr(root, field_meta.attname)`, which would trigger a deferred-column fetch
-per row. Worse, because the relation was recorded as planned, strictness may not
-surface the fallback as an unplanned N+1.
+The same generated card also still carries pre-implementation wording:
 
-Necessary spec correction:
+- `KANBAN.md #"Status: Needs spec"` renders a DONE card as needing a spec.
+- `KANBAN.md #"G2 open decision"` still says the FK-id elision decision is open,
+  even though the spec and code resolved it with the loaded-check in
+  `django_strawberry_framework/types/resolvers.py::_build_fk_id_stub`.
+- `KANBAN.md #"G3 - fragment type-condition narrowing"` still describes G3 as a
+  shipping implementation and later says "G3 closes" the silent-N+1 class,
+  despite the spec deferring all G3 runtime code.
+- `KANBAN.md #"Package files"` omits
+  `django_strawberry_framework/types/resolvers.py` and
+  `tests/types/test_resolvers.py`, which are where Decision 5 actually landed.
 
-- Add a G2/G5 edge case for consumer-provided `.only(...)` under both `QUERY` and
-  non-`QUERY` operations.
-- Amend Decision 5: FK-id elision stays enabled only when the source FK column is
-  guaranteed loaded by either the optimizer plan or the consumer projection.
-- Add an implementation rule for the consumer-projection case. The clean fix is
-  not just "drop all elisions" after diffing, because the elision branch did not
-  also record a `select_related` fallback. The spec should define whether the
-  plan stores enough metadata to restore a join, or whether resolver-time elision
-  checks fall back loudly when the FK attname is absent from `root.__dict__`.
+Required fix: update the Kanban DB rows, then regenerate `KANBAN.md` and
+`KANBAN.html`; do not hand-edit the rendered files. Either keep the spec URL on
+`docs/spec-035-optimizer_hardening-0_0_10.md` until the real archive sweep, or
+perform the archive move and all reference rewrites in the same change. Also
+rewrite the DONE card body to match the final spec: G1 + G2 shipped, G3 deferred,
+FK-id decision resolved, resolver file/test included.
 
-### P2 — G3 omits the walker's second fragment-inlining consumer
+### P2 - G2 lacks a real GraphQL mutation execution test
 
-The spec names `walker.py::_walk_selections` as the G3 classifier call site, but
-`django_strawberry_framework/optimizer/walker.py::_selected_scalar_names` also
-calls `_included_field_selections(...)`. That helper decides whether FK-id
-elision is safe for `{ relation { id } }` selections.
+The new G2 tests in `tests/optimizer/test_walker.py` do a good job proving the
+walker behavior with synthetic `OperationType.MUTATION` / `OperationType.SUBSCRIPTION`
+info objects. `tests/optimizer/test_extension.py::test_query_and_mutation_plans_coexist_distinct_keys`
+also proves the printed AST cache-key separation.
 
-If G3 is implemented only at `_walk_selections`, relation child selections can
-still be flattened unconditionally during FK-id-elision analysis. Depending on
-the eventual abstract-entry shape, that can make elision decisions from sibling
-or unknown composite fragments using different semantics than the main walk.
+What is still missing is one actual Strawberry execution where a `mutation`
+root field returns a queryset and the installed `DjangoOptimizerExtension`
+receives the real `info.operation.operation` object from the GraphQL runtime.
+Without that, the most important integration seam for G2 is inferred from a
+test double. A mismatch in Strawberry/graphql-core `Info` shape, enum identity,
+or extension handoff would not be caught.
 
-Necessary spec correction: Decision 6 and the source file list should explicitly
-cover `_selected_scalar_names`. Either thread the same classifier into it, or
-prove and document that it only receives concretely typed relation child
-selections where sibling fragments are GraphQL-invalid.
+Required fix: add an in-process package test in
+`tests/optimizer/test_extension.py` that defines a temporary `Mutation` field
+returning `Item.objects.all()`, executes a real `mutation { ... }`, and asserts
+the published plan has empty `only_fields` while `select_related` and
+`prefetch_related` survive for relation selections. This belongs in `tests/`
+rather than `examples/fakeshop/test_query/` because the current fakeshop schema
+has no mutation surface; the first card that adds one should add the live HTTP
+acceptance test then.
 
-### P2 — The registry-only classifier needs a concrete name-resolution contract
+### P2 - The FK-id deferred-column guard is tested with doubles, not a real deferred model instance
 
-Decision 6 says "known sibling concrete type" means a registry-known object type
-that is neither the planning type nor an implemented interface. The current
-registry has `definition_for_graphql_name(...)`, but that helper is Relay-Node
-specific and raises on misses/ambiguity; G3 needs a non-Relay lookup across all
-registered `DjangoTypeDefinition`s.
+`tests/types/test_resolvers.py::test_fk_id_elision_falls_back_when_consumer_only_defers_fk`
+is directionally correct and asserts the right contract: do not read the deferred
+FK column, force strictness visibility, and fall through to normal relation
+resolution under `warn`.
 
-The spec also needs to say exactly how interface GraphQL names are collected from
-`definition.interfaces` and `origin.__mro__`. For Strawberry interfaces, the
-GraphQL name should come from the Strawberry definition metadata, not from the
-Python class name, so `Meta.name` / `@strawberry.interface(name=...)` style naming
-does not drift.
+The subtle dependency is Django's actual deferred-field bookkeeping. The
+implementation relies on `root.get_deferred_fields()` containing
+`field_meta.attname` and the attname being absent from `root.__dict__`.
+The current test double simulates that shape, but it does not prove that a real
+`Item.objects.only("name")` instance has the exact shape the guard expects.
 
-Necessary spec correction:
+Required fix: add a small `@pytest.mark.django_db` test in
+`tests/types/test_resolvers.py` using a real `Item` loaded via
+`Item.objects.only("name").get(...)`. Assert `category_id` is deferred, then run
+the generated relation resolver with both FK-id-elision and planned sentinels
+present under strictness `raise` or `warn`. This pins the Django contract the
+guard depends on without needing a live mutation surface.
 
-- Define the lookup primitive: scan `registry.iter_definitions()` for
-  `definition.graphql_type_name` across all registered `DjangoType`s, not only
-  Relay-Node types.
-- Define ambiguity behavior. Prefer fail-closed as `RECURSE_FRAGMENTS_ONLY` or
-  a loud implementation error during tests, but do not leave duplicate GraphQL
-  names as an implicit first-match.
-- Define interface-name extraction from Strawberry definition metadata for both
-  declared interfaces and MRO-inherited interfaces.
+## Lower-Risk Notes
 
-### P3 — The live G3 test is coverage/no-regression, not a behavioral proof
-
-The planned live test under `examples/fakeshop/test_query/test_library_api.py`
-selects `... on GenreType { books { title } }` under the concrete
-`allLibraryGenresConnection` field. That path should already plan today because
-the current fragment inliner unconditionally inlines typed fragments. After G3,
-it proves matching-type fragments still inline and gives live coverage of the
-new classifier branch, but it is not a red/green reproduction of the G3 bug.
-
-Necessary spec correction: label this live test as mandatory live reachability
-coverage and matching-type no-regression, not as evidence that G3 closes the
-sibling-fragment bug. The actual behavioral proof needs either a real production
-abstract optimizer path (see P1) or a clearly synthetic package-internal planner
-contract.
-
-### P3 — The configuration concern is not part of spec-035
-
-The prompt asks about a setting read/validation anchor in
-`django_strawberry_framework/types/relay.py` instead of `conf.py`. That is not a
-spec-035 requirement. This optimizer-hardening spec explicitly says "no settings
-key," and none of the staged spec-035 anchors touch `types/relay.py` or `conf.py`.
-
-For the existing Relay setting path, `types/relay.py::_resolve_globalid_strategy`
-reads `conf.settings.RELAY_GLOBALID_STRATEGY` and validates it at type
-finalization, not during query execution. That does not add per-request runtime
-overhead or request-time thread-safety risk; at worst it repeats domain
-validation once per finalized Relay type during schema build. `conf.py` remains
-the correct thin settings reader, because it should validate mapping shape but
-not every feature-specific domain value.
-
-No spec-035 correction is needed for configuration. If the concern is about
-spec-031 / GlobalID strategy, review that spec separately.
-
-## Recommended Spec Edits Before Production Code
-
-1. Rework or defer G3. Do not ship synthetic-only G3 under the claim that it
-   fixes a current consumer-constructible optimized abstract field until the
-   production optimizer can actually enter that path.
-2. Add the consumer `.only(...)` + FK-id-elision edge case to G2/Decision 5 and
-   define a real fallback that does not silently lazy-load while strictness thinks
-   the relation is planned.
-3. Include `_selected_scalar_names` in the G3 source and test plan.
-4. Define the registry name-resolution helper and ambiguity behavior for G3.
-5. Reword the live G3 test as no-regression/coverage, with the real sibling-case
-   proof tied to either the expanded production path or explicitly synthetic
-   planner tests.
+- `docs/builder/bld-final.md #"Spec changes made"` records that the stale spec
+  status line is still accurate. I disagree with that final-verification
+  conclusion for the reasons above; update the artifact or record a correction
+  if these build artifacts remain committed for the active cycle.
+- The build-artifact reset that removed the prior 034 `docs/builder/build-*` and
+  `docs/builder/bld-*` files appears consistent with
+  `docs/builder/BUILD.md` pre-flight rules; I would not treat that deletion as a
+  defect.
+- `uv run python scripts/check_spec_glossary.py --spec docs/spec-035-optimizer_hardening-0_0_10.md`
+  currently passes (`OK: 23 terms`), so the glossary-term inventory is not the
+  problem. The problem is stale completion state and broken/generated links.

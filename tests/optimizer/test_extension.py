@@ -1209,6 +1209,69 @@ def test_query_and_mutation_plans_coexist_distinct_keys():
     ) != DjangoOptimizerExtension._build_cache_key(info_mutation, Item)
 
 
+@pytest.mark.django_db
+def test_mutation_real_execution_suppresses_only_keeps_select_related():
+    """spec-035 G2 (review P2): a REAL ``mutation`` execution suppresses ``only``.
+
+    The walker-level tests prove the gate with synthetic ``OperationType.MUTATION``
+    info doubles; this proves the integration seam end-to-end - a Strawberry
+    ``mutation`` root field returning a queryset, with the installed
+    ``DjangoOptimizerExtension`` receiving the REAL ``info.operation.operation``
+    object from the graphql-core runtime (not a test double). Under the mutation
+    the published plan carries empty ``only_fields`` while ``select_related``
+    survives for the relation selection; the byte-identical selection under a
+    ``query`` still projects ``only_fields`` (non-vacuous contrast proving the
+    gate is operation-driven, not a blanket disable).
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    @strawberry.type
+    class Mutation:
+        @strawberry.mutation
+        def touch_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    finalize_django_types()
+    ext = DjangoOptimizerExtension()
+    schema = strawberry.Schema(query=Query, mutation=Mutation, extensions=[lambda: ext])
+
+    mutation_ctx = SimpleNamespace()
+    mutation_result = schema.execute_sync(
+        "mutation { touchItems { name category { name } } }",
+        context_value=mutation_ctx,
+    )
+    assert mutation_result.errors is None
+    mutation_plan = mutation_ctx.dst_optimizer_plan
+    assert mutation_plan.only_fields == ()
+    assert mutation_plan.select_related == ("category",)
+
+    query_ctx = SimpleNamespace()
+    query_result = schema.execute_sync(
+        "query { allItems { name category { name } } }",
+        context_value=query_ctx,
+    )
+    assert query_result.errors is None
+    query_plan = query_ctx.dst_optimizer_plan
+    assert query_plan.select_related == ("category",)
+    assert query_plan.only_fields != ()
+
+
 def test_cache_eviction_removes_old_entries(monkeypatch):
     """B1: the plan cache evicts least-recently-used entries when full."""
     from graphql import parse

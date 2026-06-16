@@ -78,6 +78,12 @@ def plan_optimizations(
     nested ``_walk_selections`` calls leave ``source_type`` ``None`` so
     nested targets continue to route through the primary.
     """
+    # TODO(spec-035 Slice 2): derive the operation-wide projection gate here.
+    # Pseudocode: absent or partial ``info`` keeps projection enabled; ``QUERY``
+    # keeps it enabled; ``MUTATION`` and ``SUBSCRIPTION`` close it. Thread that
+    # single flag through every walk recursion so root plans, generated
+    # ``Prefetch`` child plans, and scalar-only connection windows share one
+    # operation decision.
     plan = OptimizationPlan()
     _walk_selections(
         selected_fields,
@@ -281,6 +287,13 @@ def _walk_selections(
     """
     type_cls, definition, field_map = _resolve_field_map(model, source_type=source_type)
     hints_map = _resolve_optimizer_hints(definition)
+    # TODO(spec-035 Slice 3): supply a registry-only type-condition classifier
+    # to ``included_field_selections`` at this planning seam.
+    # Pseudocode: accept the planning type's GraphQL name plus declared and
+    # MRO-inherited interface names; skip known sibling concrete types; recurse
+    # fragments-only for unknown composite/union names; never accept the model
+    # primary type merely because the Django model matches. The classifier must
+    # not call into graphql-core schema introspection.
     merged = _merge_aliased_selections(_included_field_selections(selections))
     relation_connections = getattr(definition, "relation_connections", None) or {}
     for sel in merged:
@@ -350,6 +363,11 @@ def _walk_selections(
                     # still lands on the FK column ``user_id`` instead of
                     # the relation name, which would drag the related row
                     # back via ``.only("user")``.
+                    # TODO(spec-035 Slice 2): guard this Relay custom-pk
+                    # projection with the operation-wide ``enable_only`` flag.
+                    # Pseudocode: when the flag is closed, do not append this
+                    # id column; the full row is loaded, so resolver reads stay
+                    # safe without a column mask.
                     column = getattr(db_field, "attname", None) or id_attr
                     append_unique(plan.only_fields, f"{prefix}{column}")
             continue
@@ -358,6 +376,10 @@ def _walk_selections(
             # type is a Relay-declared ``DjangoType``, this is the
             # default-pk path (the model's pk attname IS ``"id"``); the
             # custom-pk path is handled above.
+            # TODO(spec-035 Slice 2): guard scalar-column appends with the
+            # operation-wide ``enable_only`` flag. Pseudocode: QUERY appends as
+            # today; MUTATION/SUBSCRIPTION leave ``plan.only_fields`` untouched
+            # while relation planning and FK-id elision continue.
             append_unique(plan.only_fields, f"{prefix}{django_name}")
             continue
 
@@ -514,6 +536,11 @@ def _record_relation_access(
     elided path and reintroduce the N+1.
     """
     attname = getattr(django_field, "attname", None)
+    # TODO(spec-035 Slice 2): make connector-column projection conditional on
+    # the operation-wide ``enable_only`` flag, while always recording resolver
+    # identities. Pseudocode: QUERY appends ``attname`` as today; non-QUERY
+    # skips the append because the source row is fully loaded, but strictness
+    # still receives the planned resolver keys.
     if attname is not None:
         append_unique(plan.only_fields, f"{prefix}{attname}")
     append_unique_many(plan.planned_resolver_keys, resolver_identities)
@@ -530,6 +557,10 @@ def _build_prefetch_child_queryset(
     has_custom_get_queryset: bool,
 ) -> Any:
     """Build and optimize the child queryset for a generated ``Prefetch``."""
+    # TODO(spec-035 Slice 2): child plans must inherit the root operation's
+    # ``enable_only`` flag. Pseudocode: a mutation selecting a to-many relation
+    # still builds a ``Prefetch``, but the child plan and applied child queryset
+    # carry no deferred-loading mask.
     child_plan = OptimizationPlan()
     _walk_selections(
         sel.selections,
@@ -724,6 +755,11 @@ def _selected_scalar_names(
     # exercised through the root _walk_selections path, not through this
     # helper. (spec-018 rev6 M1 audit invariant.)
     _type_cls, _definition, field_map = _resolve_field_map(model)
+    # TODO(spec-035 Slice 3): audit this FK-id-elision helper as the walker's
+    # second ``included_field_selections`` consumer. Pseudocode: either share
+    # the same type-condition classifier used by ``_walk_selections`` or prove
+    # the helper only receives concretely typed relation child selections where
+    # sibling fragments are GraphQL-invalid.
     scalar_names: set[str] = set()
     for sel in _merge_aliased_selections(_included_field_selections(selections)):
         django_name = snake_case(sel.name)
@@ -892,11 +928,18 @@ def _project_scalar_only_window(
         append_unique(fields, connector)
     for column in _concrete_order_columns(order_by, related_model):
         append_unique(fields, column)
+    # TODO(spec-035 Slice 2): make this direct ``.only(...)`` call conditional
+    # on the inherited ``enable_only`` flag. Pseudocode: QUERY keeps the
+    # pk/connector/order projection; mutation/subscription return the child
+    # queryset unchanged before window annotations are applied.
     return child_queryset.only(*fields)
 
 
 def _ensure_connector_only_fields(plan: OptimizationPlan, parent_field: Any) -> None:
     """Inject columns Django needs to attach prefetched rows to parents."""
+    # TODO(spec-035 Slice 2): also short-circuit when ``enable_only`` is closed.
+    # Pseudocode: under non-QUERY operations, generated Prefetch querysets stay
+    # relation-planned but have empty ``query.deferred_loading``.
     if not plan.only_fields:
         return
     attname = _connector_only_field(parent_field)

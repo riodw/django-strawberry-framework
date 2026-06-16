@@ -2633,6 +2633,12 @@ def test_anonymous_inline_fragment_with_directive_around_node_field_resolves():
     assert all("id" not in edge["node"] for edge in edges)
 
 
+# TODO(spec-035 Slice 3): extend this live connection-fragment block with the
+# matching-type relation-planning acceptance test required by the test_query
+# README. Pseudocode: seed multiple genres and books, capture SQL around
+# ``allLibraryGenresConnection { edges { node { ... on GenreType { books {
+# title } } } } }``, assert the response succeeds, and assert the books M2M is
+# prefetched rather than loaded once per genre.
 @pytest.mark.django_db
 def test_typed_inline_fragment_under_connection_field_still_resolves():
     """A typed inline fragment (``... on T {}``) under a connection field stays working.

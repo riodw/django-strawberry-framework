@@ -3314,4 +3314,25 @@ def test_window_subquery_wrap_preserves_only_mask_and_child_select_related():
         registry.clear()
 
 
+# TODO(spec-035 Slice 2): add G2 operation-type projection-gating pins here.
+# Pseudocode: build fake ``info`` objects whose operation is QUERY, MUTATION,
+# SUBSCRIPTION, absent, and partial/operation-less; assert query plans still
+# carry ``only_fields`` while non-query plans keep select/prefetch/fk elision but
+# carry no root, connector, prefetch-child, or scalar-window column projection.
+# Required named cases from the spec: mutation root drops ``only_fields`` but
+# keeps select/prefetch, mutation to-one applied queryset has no deferred mask,
+# mutation to-many ``Prefetch.queryset`` has no deferred mask, scalar-only
+# connection window does not call ``.only(...)``, subscription is gated, and
+# FK-id elision remains enabled under mutation.
+
+# TODO(spec-035 Slice 3): add G3 walker narrowing pins here.
+# Pseudocode: synthesize interface/union-like selection trees and registered
+# DjangoType definitions; assert sibling concrete fragments are skipped whole,
+# inherited-interface fragments still inline, same-named sibling relations do
+# not over-plan, primary fragments skip under secondary roots but inline under
+# primary roots, unknown composite/union wrappers recurse into nested matching
+# fragments while dropping their own direct fields, anonymous inline fragments
+# stay unconditional, and connection-wrapped sibling fragments narrow at the
+# node walk.
+
 # Helper-move (Decision 9) no-regression lives in test_extension.py (unmodified).

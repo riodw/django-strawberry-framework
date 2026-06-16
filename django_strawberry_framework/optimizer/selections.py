@@ -312,6 +312,12 @@ def response_keys(selection: Any) -> tuple[str, ...]:
     )
 
 
+# TODO(spec-035 Slice 3): add a tri-state fragment classifier to this converted
+# selection inliner, but keep the default path byte-for-byte unconditional.
+# Pseudocode: no classifier means INLINE-all for extension cache-key and
+# connection extraction callers; a walker-supplied classifier returns INLINE,
+# SKIP, or RECURSE_FRAGMENTS_ONLY. The recursion mode drops direct fields for an
+# unknown composite/union condition while still re-checking nested fragments.
 def included_field_selections(selections: list[Any]) -> list[Any]:
     """Return included fields with fragment bodies inlined before field merging.
 

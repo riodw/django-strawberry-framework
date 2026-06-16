@@ -392,6 +392,11 @@ Root batch refetch field — the Relay-spec `nodes(ids: [ID!]!): [Node]!` siblin
 
 **Status:** shipped (`0.0.2`).
 
+<!-- TODO(spec-035 Slice 4): append the optimizer-hardening guard notes here.
+Pseudocode: add G1 evaluated-queryset pass-through, G2 non-QUERY no-column-mask
+behavior, and G3 fragment-narrowing behavior to the shipped-behavior list, plus
+a short "what the optimizer will not touch" sentence. -->
+
 Strawberry schema extension that translates selected GraphQL fields into Django ORM optimization calls. Opt-in at Strawberry schema construction time:
 
 ```python
@@ -546,6 +551,10 @@ Calling it a second time is a no-op. Declaring a new concrete `DjangoType` after
 ## FK-id elision
 
 **Status:** shipped (`0.0.3`).
+
+<!-- TODO(spec-035 Slice 4): record the Decision-5 non-QUERY behavior here.
+Pseudocode: FK-id elision stays enabled for mutation/subscription operations
+because G2 loads the full parent row when it suppresses `.only()`. -->
 
 For `{ category { id } }` and similar `id`-only forward-relation selections, the optimizer reads the FK column off the parent row — no JOIN, no second query, no Python attribute access on a related instance.
 
@@ -890,6 +899,10 @@ Companion `BACKLOG.md` item 41 covers first-class sharding-aware planning post-`
 ## `only()` projection
 
 **Status:** shipped (`0.0.2`).
+
+<!-- TODO(spec-035 Slice 4): add the G2 operation-type gate here.
+Pseudocode: `.only()` applies for QUERY operations; mutation and subscription
+querysets keep relation planning but carry no column deferral. -->
 
 Scalar GraphQL selections become Django `.only(...)` projections so unselected columns are not fetched from the database. Connector columns required for `select_related`, reverse FK, FK / OneToOne, and M2M attachment paths are preserved automatically so Django can stitch related rows without lazy loads.
 
@@ -1271,6 +1284,11 @@ The keyword-only `extra_scalar_map=` and the `**config_kwargs` passthrough compo
 ## Strictness mode
 
 **Status:** shipped (`0.0.3`).
+
+<!-- TODO(spec-035 Slice 4): append the G3 strictness outcome here.
+Pseudocode: sibling concrete fragments under interface/union-shaped planning are
+narrowed out before planning, so strictness no longer reports the old branch as
+a runtime N+1 when the resolver never executes it. -->
 
 `DjangoOptimizerExtension(strictness="off" | "warn" | "raise")` controls how the optimizer reacts when an unplanned relation access would actually lazy-load (an accidental N+1).
 

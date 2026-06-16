@@ -2,45 +2,70 @@
 
 Target: [Spec 035][spec-035].
 
+Scope: second pass after the maintainer revisions, with the test-placement claims checked
+against the live HTTP coverage rule in the [fakeshop test-query README][test-query-readme].
+
 ## Findings
 
-### Major 1 - G2 does not define a complete `.only()` kill switch
+### Major 1 - G3 test placement still overclaims package-only coverage
 
-Decision 4 says non-`QUERY` operations suppress `only_fields` across the whole plan tree, but the mechanism narrows to "scalar columns are never appended" and relies on `django_strawberry_framework/optimizer/walker.py::_ensure_connector_only_fields` no-op behavior. That misses existing projection writers.
+The revised spec still says G3 needs synthetic union / interface schemas and is not reachable
+by a single live products GraphQL query, so all G3 coverage belongs in `tests/optimizer/`.
+That is too broad under the [test-query README][test-query-readme].
 
-The current walker writes or applies column projection through more than scalar leaves: `django_strawberry_framework/optimizer/walker.py::_walk_selections` appends Relay custom-pk and scalar columns, `django_strawberry_framework/optimizer/walker.py::_record_relation_access` appends FK connector columns on every relation traversal, `django_strawberry_framework/optimizer/walker.py::_ensure_connector_only_fields` appends prefetch connector columns, and `django_strawberry_framework/optimizer/walker.py::_project_scalar_only_window` calls `.only(...)` directly for scalar-only nested connection windows. If Slice 2 only blocks scalar appends, a mutation selecting a relation can still get non-empty `only_fields`, and scalar-only relation connections can still apply `.only(...)` without touching `OptimizationPlan.only_fields`.
+The fakeshop schema already exposes a real optimized connection path through
+[library schema][library-schema] `Query.all_library_genres_connection`, and the live suite
+already has [test_library_api.py][test-library-api]
+`test_typed_inline_fragment_under_connection_field_still_resolves` proving that
+`... on GenreType` under `edges { node { ... } }` is a valid `/graphql/` shape. G3's own test
+list includes matching-type fragments and connection-wrapped fragments. At least that subset
+is reachable over the real HTTP stack and should not be earned only through synthetic
+package tests.
 
-Recommended fix: make Decision 4 require an explicit projection gate threaded through every `_walk_selections` call and every helper that writes or applies projection, or add a plan-level `enable_only` flag that all projection writers must check. Keep FK-id elision enabled, but do not let connector-column helpers populate `only_fields` when projection is disabled. Add tests that inspect the applied querysets, not just the root plan tuple: root to-one relation, to-many `Prefetch.queryset.query.deferred_loading`, and scalar-only nested connection windows should all prove no `.only()` is applied under mutation/subscription.
+Recommended fix: split Decision 8, the Test Plan, and the DoD by reachability. Keep the
+synthetic package tests for sibling concrete exclusion, unknown composite fallback,
+secondary-type primary-fragment behavior, same-named relation regression, and strictness
+internals. Add a live `examples/fakeshop/test_query/` test, using the
+`_reload_project_schema_for_acceptance_tests` fixture pattern, for the concrete reachable
+case: a typed fragment on `GenreType` under `allLibraryGenresConnection` that selects a
+relation such as `books { title }` and asserts the optimizer-planned SQL shape rather than
+only response success. That would directly exercise
+[selections.py][selections] `included_field_selections` and [walker.py][walker]
+`_walk_selections` through `/graphql/`.
 
-### Major 2 - G3 primary-type-name matching violates GraphQL type-condition semantics
+### Medium 1 - G2 needs an explicit future live-test handoff
 
-Decision 6 accepts the model's registered primary type name when planning a secondary type over the same model. That is not how GraphQL type conditions work. A fragment condition matches the runtime GraphQL type or an abstract type it belongs to, not the Django model. If a resolver returns `SecondaryItemType`, a `... on PrimaryItemType` fragment should not inline just because both types map to `Item`.
+The package-only G2 tests are justified for this card because the fakeshop schema has no
+mutation surface yet. The spec is also clear that G2 exists to protect the upcoming
+`0.0.11` mutation cohort. Once a fakeshop mutation returning a queryset exists, the
+[test-query README][test-query-readme] makes live `/graphql/` coverage mandatory for the
+consumer-visible behavior.
 
-Inlining primary-type fragments for a secondary reintroduces the over-planning class G3 is supposed to remove. It can plan fields or relations that the secondary does not expose, and it can cross distinct `get_queryset`, `relation_shapes`, or field-override contracts. The existing plan cache already includes the origin Strawberry type, so there is no cache reason to blur primary and secondary types.
+Recommended fix: add a precise handoff in the G2 Test Plan or Out-of-scope section: no live
+test lands in this card because no mutation operation is exposed, but the first mutation
+card must add or migrate a live `examples/fakeshop/test_query/` acceptance test using the
+reload fixture pattern. That test should prove a mutation queryset response keeps
+`select_related` / `prefetch_related` while carrying no deferred loading. Without that
+handoff, the spec can leave the write-side surface with only package-internal proof after it
+becomes live-reachable.
 
-Recommended fix: the accept set should be the current planning type's own GraphQL name plus abstract interfaces it actually implements. If `source_type is None`, `django_strawberry_framework/optimizer/walker.py::_resolve_field_map` already routes to `registry.get(model)`, so the primary type naturally accepts its own name when it is the current planning type. Drop the model-primary-name accept rule, update the companion CSV's `Meta.primary` note, and add a secondary-return regression where `... on PrimaryType` is skipped while a primary-return plan still accepts it.
+### Minor 1 - Standing-doc line-number anchors remain
 
-### Major 3 - G3 under-specifies abstract type conditions outside `Meta.interfaces`
+The revised spec fixed most behavioral issues, but it still preserves raw line-number
+citations in the revision history, parity checkpoint, and risks section. This is a standing
+design doc, so the repository source-reference convention still applies: use
+symbol-qualified paths or unique-substring anchors, and reserve raw line numbers for
+per-cycle scratch artifacts.
 
-Decision 6 says a non-matching `type_condition` is skipped outright. That is safe for known sibling object types, but it is not enough for every valid abstract GraphQL shape. A fragment can be conditioned on a union, or on an interface a `DjangoType` implements through direct inheritance rather than the `Meta.interfaces` tuple. Skipping the whole subtree for an unknown abstract condition can under-plan valid nested fragments that do match the current concrete type.
-
-Recommended fix: either narrow the supported scope explicitly or define a conservative fallback. For registry-known object type names and known implemented interface names, skip non-matches. For unknown composite condition names, recurse into nested fragments without accepting direct fields, or record the shape as out of scope and test the fallback behavior. Also define interface-name collection from finalized Strawberry metadata or the class MRO, not only the raw `Meta.interfaces` tuple, so direct interface inheritance remains consistent with the package's existing interface support.
-
-### Medium 1 - The spec cannot grant `CHANGELOG.md` edit permission by itself
-
-The spec repeatedly says Slice 4 "grants" the per-card `CHANGELOG.md` edit permission. That conflicts with the repository instruction that `CHANGELOG.md` is edited only when explicitly instructed. A standing design doc can describe required release-note work, but it should not be treated as an active user instruction for a future agent turn.
-
-Recommended fix: rephrase the Slice 4 sections to say the maintainer prompt for Slice 4 must explicitly include the `CHANGELOG.md` edit. Keep the planned bullets, but remove wording that implies the spec itself grants permission.
-
-### Minor 1 - Standing-doc source references still use line-number anchors
-
-The spec intentionally records audit anchors, but it still contains standing-doc references to old local line-number anchors and upstream optimizer line numbers. `AGENTS.md` requires standing docs and specs to use symbol-qualified paths or unique substrings rather than raw line-number references; raw line numbers are reserved for per-cycle scratchpads.
-
-Recommended fix: convert local references to symbol-qualified form such as `django_strawberry_framework/optimizer/walker.py::_walk_selections #"unknown-name guard"` or `path #"unique substring"`. If upstream line numbers are valuable as audit evidence, keep them in a review scratchpad or replace them with stable external permalinks plus prose that the behavior, not the line number, is the contract.
+Recommended fix: rewrite local card-citation corrections to symbol-qualified references and
+replace upstream line-number prose with stable behavior descriptions or external permalinks.
+The audit evidence can stay, but the design doc should make the behavior the contract, not
+the old line location.
 
 ## Check Run
 
-- `uv run python scripts/check_spec_glossary.py --spec docs/spec-035-optimizer_hardening-0_0_10.md` - passed: `OK: 21 terms`.
+- `uv run python scripts/check_spec_glossary.py --spec docs/spec-035-optimizer_hardening-0_0_10.md`
+  passed: `OK: 21 terms - all have glossary entries and at least one spec link.`
 
 <!-- LINK DEFINITIONS -->
 
@@ -54,10 +79,15 @@ Recommended fix: convert local references to symbol-qualified form such as `djan
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
+[selections]: ../django_strawberry_framework/optimizer/selections.py
+[walker]: ../django_strawberry_framework/optimizer/walker.py
 
 <!-- tests/ -->
 
 <!-- examples/ -->
+[library-schema]: ../examples/fakeshop/apps/library/schema.py
+[test-library-api]: ../examples/fakeshop/test_query/test_library_api.py
+[test-query-readme]: ../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->
 

@@ -148,6 +148,11 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 - Labels: `hardening`, `optimizer`, `performance`, `query-planning`
 - Spec: [spec-035-optimizer_hardening-0_0_10.md](docs/spec-035-optimizer_hardening-0_0_10.md)
 
+<!-- TODO(spec-035 Slice 4): completion wrap is DB/re-render owned.
+Pseudocode: after G2/G3/docs ship, move this card to Done with the next
+DONE-NNN-0.0.10 id and point the spec reference at the archived
+docs/SPECS/spec-035-optimizer_hardening-0_0_10.md path. -->
+
 #### Predicted files
 
 - [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)

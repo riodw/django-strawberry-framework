@@ -4309,3 +4309,18 @@ def test_plan_with_cascading_hook_uncacheable():
     assert plain_ext.cache_info().hits == 1
     assert plain_ext.cache_info().misses == 1
     assert plain_ext.cache_info().size == 1
+
+
+# TODO(spec-035 Slice 2): add extension-level G2 cache and operation pins here.
+# Pseudocode: execute textually similar query and mutation operations against
+# one extension instance; assert the printed-AST cache stores distinct plans,
+# the query plan carries ``only_fields``, and the mutation plan does not. Keep
+# this package-internal because fakeshop exposes no mutation queryset surface
+# until the 0.0.11 mutation cohort.
+
+# TODO(spec-035 Slice 3): add the strictness no-false-fire package pin here if
+# it needs real extension execution rather than pure walker inspection.
+# Pseudocode: execute an abstract/interface-shaped query whose sibling fragment
+# is correctly narrowed; assert strictness ``warn`` emits no optimizer warning
+# and strictness ``raise`` returns no "Unplanned N+1" GraphQL error for the
+# sibling branch the resolver never runs.

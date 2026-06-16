@@ -9,8 +9,8 @@ Schema audit,schema-audit,registry/interface descent G3 narrowing mirrors at wal
 Relation handling,relation-handling,relation-planning contract G3 must not regress
 Connection-aware optimizer planning,connection-aware-optimizer-planning,DONE-033 owns the perf findings; the walker seam G3 lands after
 DjangoType,djangotype,the planning type whose name/interfaces G3 matches a fragment against
-Meta.primary,metaprimary,primary type name is in the G3 type-condition accept set
-Meta.interfaces,metainterfaces,interface names are in the G3 type-condition accept set
+Meta.primary,metaprimary,primary type's own name carries a fragment only when the primary type itself roots the walk; a `... on PrimaryType` fragment is NOT accepted when a secondary type roots it (G3)
+Meta.interfaces,metainterfaces,implemented-interface names are in the G3 accept set; collected from finalized definition.interfaces / MRO not the raw tuple alone
 Relay Node integration,relay-node-integration,interface-shaped planning type (relay.Node) for G3 matching
 ConfigurationError,configurationerror,named only to confirm no new validation surface this card
 Multi-database cooperation,multi-database-cooperation,guards are alias-agnostic; .using()/router behavior unchanged

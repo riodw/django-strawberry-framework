@@ -392,11 +392,6 @@ Root batch refetch field — the Relay-spec `nodes(ids: [ID!]!): [Node]!` siblin
 
 **Status:** shipped (`0.0.2`).
 
-<!-- TODO(spec-035 Slice 4): append the optimizer-hardening guard notes here.
-Pseudocode: add G1 evaluated-queryset pass-through, G2 non-QUERY no-column-mask
-behavior, and G3 fragment-narrowing behavior to the shipped-behavior list, plus
-a short "what the optimizer will not touch" sentence. -->
-
 Strawberry schema extension that translates selected GraphQL fields into Django ORM optimization calls. Opt-in at Strawberry schema construction time:
 
 ```python
@@ -421,6 +416,10 @@ Shipped behavior:
 - custom [`get_queryset`](#get_queryset-visibility-hook) downgrade from join to `Prefetch`
 - async resolver support
 - multi-type plan-cache separation: primary-return and secondary-return resolvers on the same Django model receive distinct cache entries via the resolver's origin Strawberry type
+- evaluated-queryset pass-through (G1, `0.0.10`): if the consumer's root resolver already evaluated the queryset (`len(qs)`, `bool(qs)`, slicing), `_optimize` returns it unchanged rather than re-executing it through an `.only()` / `select_related` clone
+- non-`QUERY` column-projection suppression (G2, `0.0.10`): for mutation / subscription operations the optimizer applies no [`only`](#only-projection) column deferral at plan-build time — `select_related` / `prefetch_related` still apply, but the returned queryset carries no selection-shaped deferred-field set
+
+What the optimizer will not touch: a queryset the consumer already evaluated (G1), and column projection on non-`QUERY` operations (G2).
 
 Constructor accepts a `strictness` argument — see [Strictness mode](#strictness-mode). Classmethod [`check_schema`](#schema-audit) audits schema-reachable `DjangoType`s.
 
@@ -552,10 +551,6 @@ Calling it a second time is a no-op. Declaring a new concrete `DjangoType` after
 
 **Status:** shipped (`0.0.3`).
 
-<!-- TODO(spec-035 Slice 4): record the Decision-5 non-QUERY behavior here.
-Pseudocode: FK-id elision stays enabled for mutation/subscription operations
-because G2 loads the full parent row when it suppresses `.only()`. -->
-
 For `{ category { id } }` and similar `id`-only forward-relation selections, the optimizer reads the FK column off the parent row — no JOIN, no second query, no Python attribute access on a related instance.
 
 Safety properties:
@@ -566,6 +561,8 @@ Safety properties:
 - branch-isolated: aliases and sibling root fields do not leak elision state into each other
 
 FK-id elisions are stashed on `info.context.dst_optimizer_plan.fk_id_elisions` (tuple, as part of the plan) and `info.context.dst_optimizer_fk_id_elisions` (standalone set, for resolver-time membership checks).
+
+As of `0.0.10`, elision stays enabled under non-`QUERY` operations, with a consumer-`.only()` loaded-check: a consumer-returned `.only(...)` queryset survives queryset diffing and can defer the FK column even when the optimizer suppresses its own `.only()`, so the elision stub verifies the FK column is loaded on the parent row and falls back loudly ([strictness](#strictness-mode)-visible) when a consumer projection deferred it, rather than a silent per-row lazy load.
 
 **See also:** [`only()` projection](#only-projection) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache).
 
@@ -900,11 +897,9 @@ Companion `BACKLOG.md` item 41 covers first-class sharding-aware planning post-`
 
 **Status:** shipped (`0.0.2`).
 
-<!-- TODO(spec-035 Slice 4): add the G2 operation-type gate here.
-Pseudocode: `.only()` applies for QUERY operations; mutation and subscription
-querysets keep relation planning but carry no column deferral. -->
-
 Scalar GraphQL selections become Django `.only(...)` projections so unselected columns are not fetched from the database. Connector columns required for `select_related`, reverse FK, FK / OneToOne, and M2M attachment paths are preserved automatically so Django can stitch related rows without lazy loads.
+
+As of `0.0.10`, `.only(...)` is applied for `QUERY` operations only (G2): a mutation / subscription queryset keeps `select_related` / `prefetch_related` but carries no column deferral, so a mutation-returned queryset never carries a selection-shaped deferred-field set (see [`DjangoOptimizerExtension`](#djangooptimizerextension)).
 
 **See also:** [FK-id elision](#fk-id-elision) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache).
 
@@ -1285,11 +1280,6 @@ The keyword-only `extra_scalar_map=` and the `**config_kwargs` passthrough compo
 
 **Status:** shipped (`0.0.3`).
 
-<!-- TODO(spec-035 Slice 4): append the G3 strictness outcome here.
-Pseudocode: sibling concrete fragments under interface/union-shaped planning are
-narrowed out before planning, so strictness no longer reports the old branch as
-a runtime N+1 when the resolver never executes it. -->
-
 `DjangoOptimizerExtension(strictness="off" | "warn" | "raise")` controls how the optimizer reacts when an unplanned relation access would actually lazy-load (an accidental N+1).
 
 - `"off"` — silent production default.
@@ -1301,6 +1291,8 @@ Warnings and errors fire only when the relation access actually causes a lazy lo
 As of `0.0.9`, connection paths participate too: an unplanned, unserved nested-`<field>Connection` access fires the same `OptimizerError` (`"raise"`) / logged warning (`"warn"`) contract through the same resolver-key vocabulary the list relations use, so a nested connection that falls back to per-parent resolution (sidecar `filter:` / `orderBy:` input, divergent aliases, an `OptimizerHint.SKIP` relation, a `.distinct()` target) is no longer a silent N+1 — see [Connection-aware optimizer planning](#connection-aware-optimizer-planning).
 
 Planned resolver keys and lookup paths are stashed on `info.context` for introspection during strictness incidents.
+
+Interface / union sibling-concrete-type fragment narrowing (the would-be G3 strictness interaction) is deferred to the abstract-return optimizer entry card (the `BACKLOG.md` `polymorphic_interface_connections` work); strictness behavior is unchanged by that deferred work.
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Schema audit](#schema-audit).
 

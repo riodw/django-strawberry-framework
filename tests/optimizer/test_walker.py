@@ -21,6 +21,7 @@ import pytest
 from apps.products.models import Category, Entry, Item
 from django.db import models
 from django.db.models import Prefetch
+from graphql import OperationType
 
 from django_strawberry_framework import OptimizerHint
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -3314,16 +3315,202 @@ def test_window_subquery_wrap_preserves_only_mask_and_child_select_related():
         registry.clear()
 
 
-# TODO(spec-035 Slice 2): add G2 operation-type projection-gating pins here.
-# Pseudocode: build fake ``info`` objects whose operation is QUERY, MUTATION,
-# SUBSCRIPTION, absent, and partial/operation-less; assert query plans still
-# carry ``only_fields`` while non-query plans keep select/prefetch/fk elision but
-# carry no root, connector, prefetch-child, or scalar-window column projection.
-# Required named cases from the spec: mutation root drops ``only_fields`` but
-# keeps select/prefetch, mutation to-one applied queryset has no deferred mask,
-# mutation to-many ``Prefetch.queryset`` has no deferred mask, scalar-only
-# connection window does not call ``.only(...)``, subscription is gated, and
-# FK-id elision remains enabled under mutation.
+# ---------------------------------------------------------------------------
+# spec-035 Slice 2 - G2 operation-type gating of ``.only()`` (Decision 4)
+# ---------------------------------------------------------------------------
+
+
+def _op_info(operation, relay_max_results=100):
+    """Build a minimal operation-bearing ``info`` for the G2 gate.
+
+    Mirrors ``_fake_info``'s ``schema.config`` / ``path`` shape (so
+    ``_relay_max_results_from_info`` and ``runtime_path_from_info`` resolve)
+    and adds the ``operation.operation`` chain ``_enable_only_for_operation``
+    reads. ``_fake_info`` itself has no ``operation`` attribute, so it exercises
+    the partial-``info`` defensive arm; this factory exercises the
+    QUERY / MUTATION / SUBSCRIPTION arms without mutating the shared helper.
+    """
+    return SimpleNamespace(
+        operation=SimpleNamespace(operation=operation),
+        schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=relay_max_results)),
+        path=None,
+        variable_values={},
+    )
+
+
+def test_mutation_queryset_drops_only_keeps_select_prefetch():
+    """A mutation root plan drops ``only_fields`` but keeps select/prefetch.
+
+    A to-one (``category``) and a to-many (``entries``) selection together prove
+    both relation shapes survive while the column projection is suppressed
+    (spec-035 Decision 4).
+    """
+    plan = plan_optimizations(
+        [
+            _sel("name"),
+            _sel("category", selections=[_sel("name")]),
+            _sel("entries", selections=[_sel("name")]),
+        ],
+        Item,
+        info=_op_info(OperationType.MUTATION),
+    )
+    assert plan.only_fields == ()
+    assert plan.select_related == ("category",)
+    assert plan.prefetch_related != ()
+
+
+def test_mutation_to_one_relation_applies_no_only():
+    """Applied-queryset pin: a mutation to-one carries no deferred mask but keeps the join.
+
+    Gates ``_record_relation_access``'s FK-connector append: the applied queryset
+    has Django's default empty defer-set ``(frozenset(), True)`` (no ``.only()``)
+    while ``select_related`` still carries the join.
+    """
+    plan = plan_optimizations(
+        [_sel("category", selections=[_sel("name")])],
+        Item,
+        info=_op_info(OperationType.MUTATION),
+    )
+    qs = plan.apply(Item.objects.all())
+    assert qs.query.deferred_loading == (frozenset(), True)
+    assert qs.query.select_related == {"category": {}}
+
+
+def test_mutation_to_many_prefetch_no_deferred_loading():
+    """A mutation to-many keeps the ``Prefetch`` but its child carries no deferred mask.
+
+    Gates ``_ensure_connector_only_fields`` (the prefetch-connector writer): the
+    ``Prefetch`` is preserved while its child queryset has Django's default empty
+    defer-set.
+    """
+    plan = plan_optimizations(
+        [_sel("items", selections=[_sel("name")])],
+        Category,
+        info=_op_info(OperationType.MUTATION),
+    )
+    outer = _prefetch_entry(plan)
+    assert outer.prefetch_to == "items"
+    assert outer.queryset.query.deferred_loading == (frozenset(), True)
+
+
+def test_mutation_scalar_only_connection_window_no_only():
+    """A scalar-only connection window under a mutation applies no ``.only(...)``.
+
+    Gates ``_project_scalar_only_window`` (the direct ``.only(...)`` writer that
+    never touches ``OptimizationPlan.only_fields``): the windowed ``Prefetch``
+    child carries Django's default empty defer-set while the window annotations
+    and the prefetch itself are still present (spec-035 Decision 4 / edge case
+    line 315).
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        shelf_model, shelf_type = types["Shelf"]
+        plan = plan_optimizations(
+            [_conn_sel("booksConnection", scalar_children=["totalCount"], arguments={"first": 3})],
+            shelf_model,
+            info=_op_info(OperationType.MUTATION),
+            source_type=shelf_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert prefetch.queryset.query.deferred_loading == (frozenset(), True)
+        # The window itself is still planned (annotation present, prefetch kept).
+        from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
+
+        assert WINDOW_ROW_NUMBER in prefetch.queryset.query.annotations
+    finally:
+        registry.clear()
+
+
+def test_query_identical_selection_still_projects_only():
+    """The operation-scoped proof: the SAME selection under QUERY (and ``None``) projects.
+
+    Contrasts ``test_mutation_to_one_relation_applies_no_only``: a textually
+    identical to-one selection under a ``query`` operation, and under ``info=None``,
+    both carry the expected non-empty deferred-loading set - so the gate is
+    operation-scoped, not a blanket disable (spec-035 Decision 4).
+    """
+    for info in (_op_info(OperationType.QUERY), None):
+        plan = plan_optimizations(
+            [_sel("category", selections=[_sel("name")])],
+            Item,
+            info=info,
+        )
+        qs = plan.apply(Item.objects.all())
+        only_fields, defer = qs.query.deferred_loading
+        assert defer is False
+        assert {"category_id", "category__name"} <= set(only_fields)
+
+
+def test_subscription_operation_gated():
+    """A subscription operation drops ``only_fields`` under the same gate.
+
+    ``info.operation.operation is not OperationType.QUERY`` covers SUBSCRIPTION
+    identically to MUTATION (spec-035 Decision 4 / edge case line 317).
+    """
+    plan = plan_optimizations(
+        [_sel("name"), _sel("category", selections=[_sel("name")])],
+        Item,
+        info=_op_info(OperationType.SUBSCRIPTION),
+    )
+    assert plan.only_fields == ()
+    assert plan.select_related == ("category",)
+
+
+def test_enable_only_defaults_enabled_without_info():
+    """The defensive arms: ``None`` info and partial doubles default to enabled.
+
+    Covers the no-``info`` -> enabled and partial-``info`` -> enabled arms so the
+    ``getattr``-defensive derivation never raises ``AttributeError`` and projects
+    by default (spec-035 Decision 4 / edge case line 320). Also drives the
+    ``_enable_only_for_operation`` three-arm truth table directly.
+    """
+    from django_strawberry_framework.optimizer.walker import _enable_only_for_operation
+
+    # No info -> enabled.
+    plan = plan_optimizations([_sel("name")], Category, info=None)
+    assert plan.only_fields == ("name",)
+    # Partial info whose ``operation`` is absent -> enabled, no AttributeError.
+    plan = plan_optimizations([_sel("name")], Category, info=SimpleNamespace())
+    assert plan.only_fields == ("name",)
+    # Partial info whose ``operation`` is ``None`` -> enabled.
+    plan = plan_optimizations(
+        [_sel("name")],
+        Category,
+        info=SimpleNamespace(operation=None),
+    )
+    assert plan.only_fields == ("name",)
+    # ``operation.operation`` is ``None`` -> enabled.
+    plan = plan_optimizations(
+        [_sel("name")],
+        Category,
+        info=SimpleNamespace(operation=SimpleNamespace(operation=None)),
+    )
+    assert plan.only_fields == ("name",)
+    # Truth table on the helper directly.
+    assert _enable_only_for_operation(None) is True
+    assert _enable_only_for_operation(_op_info(OperationType.QUERY)) is True
+    assert _enable_only_for_operation(_op_info(OperationType.MUTATION)) is False
+    assert _enable_only_for_operation(_op_info(OperationType.SUBSCRIPTION)) is False
+
+
+def test_mutation_id_only_relation_still_records_elision():
+    """The walker half of Decision 5: elision stays recorded under a mutation.
+
+    A mutation ``{ category { id } }`` selection still records the FK-id elision
+    (elision stays enabled - it is operation-independent) while the
+    ``_record_relation_access`` FK-connector append is suppressed, so
+    ``only_fields`` is empty. The resolver-time loaded-check is the other half
+    (``tests/types/test_resolvers.py``).
+    """
+    plan = plan_optimizations(
+        [_sel("category", selections=[_sel("id")])],
+        Item,
+        info=_op_info(OperationType.MUTATION),
+    )
+    assert plan.fk_id_elisions == ("category@category",)
+    assert plan.only_fields == ()
+
 
 # TODO(spec-035 Slice 3): add G3 walker narrowing pins here.
 # Pseudocode: synthesize interface/union-like selection trees and registered

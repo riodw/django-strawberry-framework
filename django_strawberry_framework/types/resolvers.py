@@ -59,11 +59,57 @@ _EMPTY_ELISIONS: frozenset[str] = frozenset()
 # repeated when both the FK-id-elision and N+1 checks need it (feedback L3).
 _PLAN_UNREAD: Any = object()
 
+# Sentinel returned by ``_build_fk_id_stub`` when the FK ``attname`` is deferred
+# on ``root`` (spec-035 Decision 5). FK-id elision reads the FK column off the
+# parent row; G2 guarantees the row loads for OPTIMIZER-owned projections, but a
+# consumer-returned ``.only(...)`` survives B8 consumer-wins diffing and can
+# defer the FK column while the plan still carries the elision. Reading the
+# deferred column here would silently lazy-load per row - and because the
+# relation is recorded as planned, strictness would never see it. The stub
+# signals "elision unsafe" instead of reading the column; ``forward_resolver``
+# treats the sentinel as not-elided and falls through to the normal
+# related-object resolve so ``_check_n1`` (strictness) sees the access.
+_FK_ELISION_UNSAFE: Any = object()
+
+
+def _fk_attname_is_deferred(root: Any, attname: str) -> bool:
+    """Return ``True`` when reading ``root.<attname>`` would trigger a deferred fetch.
+
+    The FK column lives in ``root.__dict__`` on a fully-loaded instance and is
+    absent on a deferred one (the ``DeferredAttribute`` descriptor lazy-loads on
+    access) - the same loaded signal ``_will_lazy_load_single`` uses, applied to
+    the FK *column* attname rather than the relation field name. Absence from
+    ``__dict__`` alone is not enough: the resolver's "compatibility for test
+    doubles" contract treats a class-attribute-backed value (a plain test
+    double, no DB) as loaded, so deferral is confirmed only when ``root`` is a
+    real Django instance whose ``get_deferred_fields()`` lists the column. A
+    double can simulate the deferred case by exposing a ``get_deferred_fields``
+    that returns the attname while keeping it out of ``__dict__``.
+    """
+    if attname in getattr(root, "__dict__", {}):
+        return False
+    get_deferred_fields = getattr(root, "get_deferred_fields", None)
+    if get_deferred_fields is None:
+        return False
+    return attname in get_deferred_fields()
+
 
 def _build_fk_id_stub(root: Any, field_meta: FieldMeta) -> Any:
-    """Build a target-model stub from ``root.<attname>`` for B2 id-only selections."""
+    """Build a target-model stub from ``root.<attname>`` for B2 id-only selections.
+
+    Returns ``_FK_ELISION_UNSAFE`` when ``field_meta.attname`` is deferred on
+    ``root`` (spec-035 Decision 5 - a consumer ``.only(...)`` that dropped the FK
+    column survives B8 consumer-wins diffing while the plan still carries the
+    elision). In that case the column is NOT read (which would be the silent
+    per-row lazy load Decision 5 forbids); the caller falls back loudly so
+    strictness sees the access. A fully-loaded column (the
+    optimizer-owned-projection norm and the consumer-``.only()``-that-includes-
+    the-FK case) builds the stub as before.
+    """
     if field_meta.attname is None or field_meta.related_model is None:
         return None
+    if _fk_attname_is_deferred(root, field_meta.attname):
+        return _FK_ELISION_UNSAFE
     related_id = getattr(root, field_meta.attname)
     if related_id is None:
         return None
@@ -121,6 +167,7 @@ def _check_n1(
     reason: str | None = None,
     planned: Any = _PLAN_UNREAD,
     precomputed_key: str | None = None,
+    force_unplanned: bool = False,
 ) -> None:
     """B3: warn or raise if the relation is not planned and would lazy-load.
 
@@ -159,6 +206,15 @@ def _check_n1(
     key (``forward_resolver``) threads both so this function neither re-reads the
     sentinel nor re-walks ``info.path``. Omitting them (every other call site)
     keeps the original read-and-compute behavior.
+
+    ``force_unplanned`` (keyword-only, spec-035 Decision 5): when ``True`` the
+    ``key in planned`` short-circuit is bypassed so the lazy-load probe runs even
+    for a relation the plan recorded as planned. ``forward_resolver`` sets it when
+    FK-id elision turned out unsafe (the consumer ``.only(...)`` deferred the FK
+    column): the relation IS in ``planned`` because the elision branch recorded
+    it, but the access will genuinely lazy-load, so strictness must see it rather
+    than mistake the planned key for a satisfied relation. The loaded common path
+    never reaches this call with the flag set, so it stays a no-op there.
     """
     context = getattr(info, "context", None)
     # ``forward_resolver`` may have already read the PLAN sentinel and computed
@@ -174,7 +230,7 @@ def _check_n1(
         if precomputed_key is not None
         else resolver_key(parent_type, field_name, runtime_path_from_info(info))
     )
-    if key in planned:
+    if key in planned and not force_unplanned:
         return
     if kind == "connection_to_attr":
         # The windowed page already landed under ``to_attr`` when present;
@@ -320,8 +376,21 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
         if not elisions and planned is None:
             return getattr(root, field_name)
         key = resolver_key(parent_type, field_name, runtime_path_from_info(info))
+        elision_unsafe = False
         if elisions and key in elisions:
-            return _build_fk_id_stub(root, field_meta)
+            # spec-035 Decision 5: ``_build_fk_id_stub`` returns
+            # ``_FK_ELISION_UNSAFE`` when the FK column is deferred (a consumer
+            # ``.only(...)`` that dropped it). Treat that as not-elided and fall
+            # through to the normal resolve so ``_check_n1`` (strictness) sees
+            # the access instead of a silent per-row lazy load.
+            stub = _build_fk_id_stub(root, field_meta)
+            if stub is not _FK_ELISION_UNSAFE:
+                return stub
+            # The relation is in ``planned`` (the elision branch recorded it), so
+            # ``_check_n1`` would short-circuit on the planned key and stay silent.
+            # Force the lazy-load probe so the fallback is strictness-visible
+            # rather than a silent planned-relation lazy load (Decision 5).
+            elision_unsafe = True
         _check_n1(
             info,
             root,
@@ -331,6 +400,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
             accessor_name=accessor_name,
             planned=planned,
             precomputed_key=key,
+            force_unplanned=elision_unsafe,
         )
         return getattr(root, field_name)
 

@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-06-15
+Last refreshed: 2026-06-16
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -81,15 +81,15 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**58.6% complete** toward `1.0.0` - 34 of 58 cards done (59.9% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**60.3% complete** toward `1.0.0` - 35 of 58 cards done (61.6% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 34/44 (77.3%) | 76.3% |
+| Alpha (pre-0.1.0) | 35/44 (79.5%) | 78.5% |
 | Beta (pre-1.0.0) | 0/13 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
-To complete the Alpha (pre-0.1.0) milestone: **77.3%**.
+To complete the Alpha (pre-0.1.0) milestone: **79.5%**.
 
 ## Board columns
 
@@ -97,7 +97,7 @@ To complete the Alpha (pre-0.1.0) milestone: **77.3%**.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | [spec-035-optimizer_hardening-0_0_10.md](docs/spec-035-optimizer_hardening-0_0_10.md) |
+| `DONE-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | [spec-035-optimizer_hardening-0_0_10.md](docs/SPECS/spec-035-optimizer_hardening-0_0_10.md) |
 | `DONE-034-0.0.10` - Permissions subsystem | [spec-034-permissions-0_0_10.md](docs/SPECS/spec-034-permissions-0_0_10.md) |
 | `DONE-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/SPECS/spec-033-connection_optimizer-0_0_9.md) |
 | `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md) |
@@ -135,101 +135,7 @@ To complete the Alpha (pre-0.1.0) milestone: **77.3%**.
 
 ## In progress
 
-Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
-
-<a id="optimizer_robustness_hardening_upstream_comparison_guards"></a>
-### [WIP-ALPHA-035-0.0.10 - Optimizer robustness hardening (upstream-comparison guards)](KANBAN.html#optimizer_robustness_hardening_upstream_comparison_guards)
-
-- Priority: Medium-high
-- Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
-- Status: Needs spec
-- Relative size: M
-- Labels: `hardening`, `optimizer`, `performance`, `query-planning`
-- Spec: [spec-035-optimizer_hardening-0_0_10.md](docs/spec-035-optimizer_hardening-0_0_10.md)
-
-<!-- TODO(spec-035 Slice 4): completion wrap is DB/re-render owned.
-Pseudocode: after G2/G3/docs ship, move this card to Done with the next
-DONE-NNN-0.0.10 id and point the spec reference at the archived
-docs/SPECS/spec-035-optimizer_hardening-0_0_10.md path. -->
-
-#### Predicted files
-
-- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
-- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
-- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
-- [`tests/optimizer/test_extension.py`](tests/optimizer/test_extension.py)
-- [`tests/optimizer/test_walker.py`](tests/optimizer/test_walker.py)
-
-#### Planning note
-
-Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/` against `~/projects/strawberry-django-main/strawberry_django/optimizer.py` (1,823 lines, 36 capabilities inventoried). Three robustness gaps were verified absent in our source by direct inspection (grep + read, not inferred): no evaluated-queryset guard (zero `_result_cache` references package-wide), no operation-type gating of `.only()` (zero `OperationType` references), and no fragment `type_condition` narrowing (`type_condition` is only used as a fragment *marker* at `walker.py:845` and cloned at `extension.py:346`, never matched). Each guard exists upstream with a known mechanism and file:line anchor. The two big *performance* findings from the same audit — windowed nested-prefetch pagination and `totalCount` window-annotation reuse — are already owned by `Connection-aware optimizer planning` (WIP) and are explicitly NOT in this card. Ships in 0.0.10 because guard G2 must land before the 0.0.11 mutations cohort makes mutation root resolvers returning querysets a mainstream consumer path.
-
-#### Dependencies
-
-- `DONE-033-0.0.9` - Connection-aware optimizer planning
-
-#### Scope
-
-- G1 - evaluated-queryset guard. Today `DjangoOptimizerExtension._optimize` applies the plan to any root queryset; if the consumer's root resolver already evaluated it (a `len(qs)` guard, a `bool(qs)` branch, slicing for a log line), our `.only()` / `.select_related()` clone silently re-executes the SQL - a doubled query invisible to the consumer. Upstream guards this twice: the resolve hook only optimizes when `ret._result_cache is None` (`strawberry_django/optimizer.py:1781`) and `optimize()` re-checks `is_optimized(qs) or qs._result_cache is not None` (`optimizer.py:1628`). Implement: in `extension.py::_optimize`, AFTER the manager-to-`.all()` coercion at `extension.py:714` (a manager coercion always yields a fresh unevaluated queryset, so the guard must not fire before it) and BEFORE `diff_plan_for_queryset`, return the result unchanged when `getattr(queryset, "_result_cache", None) is not None`. Read defensively with `getattr` per the package posture pinned in `field_meta.py::_target_pk_name`.
-- G1 non-goals: do NOT port upstream's `is_optimized()` flag, `CONFIG_KEY` queryset config, or the `QuerySet._clone` monkeypatch (`strawberry_django/queryset.py:50-62`) - those exist upstream because their optimizer can run at nested resolvers; our O3 root gate (`info.path.prev is None`, spec-002) already guarantees single application, so execution-state (`_result_cache`) is the only missing check.
-- G2 - operation-type gating of `.only()`. We project `only_fields` onto mutation/subscription root querysets identically to queries; upstream disables `only` for non-QUERY operations (`enable_only and info.operation.operation == OperationType.QUERY`, `strawberry_django/optimizer.py:1784`, re-checked at `:1817`). Risk: a mutation resolver returning a queryset gets a selection-set-shaped `.only()`; post-mutation consumer code touching any unprojected field triggers one deferred-field refetch query per access, and `Model.save()` on a deferred instance writes only loaded fields (Django's documented deferred-save semantics) - a surprising interaction with signal handlers and downstream writes. Implement: suppress `only_fields` (keep `select_related` / `prefetch_related`) when `info.operation.operation is not OperationType.QUERY`, at plan-build time in the walker entry point.
-- G2 cache-safety argument (spec-004 B1 grounding): gating at plan-build time is safe with ZERO cache-key change because the plan-cache key's first component is the printed operation AST (`_print_operation_with_reachable_fragments`, `extension.py:920-982`), and `print_ast(operation)` includes the `query` / `mutation` / `subscription` keyword - a query document and a mutation document can never collide on one cache entry.
-- G2 open decision (record in spec): whether FK-id elision stays enabled for non-QUERY ops. With `only` suppressed the full source row loads, so the FK `attname` column the elision stub reads (`types/resolvers.py::_build_fk_id_stub`) is always present - elision remains *correct* - but the spec must decide and pin it with a test either way.
-- G3 - fragment type-condition narrowing. The walker treats `type_condition` purely as a fragment marker (`walker.py:845` is `hasattr(selection, "type_condition")`); `_included_field_selections` (`walker.py:733`) inlines every fragment body unconditionally. Two verified failure modes on interface/union queries: (a) fields from sibling concrete types miss the current `field_map` and fall through the unknown-name guard (`walker.py:203` `if django_field is None:` -> `continue`) - those branches are silently UNPLANNED, so every sibling-type relation selection is an N+1 the plan can never cover (B3 strictness fires at runtime, which is detection, not prevention); (b) a same-named relation existing on two members gets planned for the wrong branch - a spurious `select_related` join / over-projection (over-fetch, never wrong data).
-- G3 implementation (bounded, registry-only): when a fragment carries a non-None `type_condition`, inline its body only when the condition's type name matches the current planning type - the `type_cls` returned by `_resolve_field_map` (`walker.py:197`): its own GraphQL name, a name in its `Meta.interfaces`, or the registered primary type name for the model; otherwise skip the fragment subtree. Resolve names through the registry/definition only - NO graphql-core schema lookups in the walk, preserving the B7 invariant (zero per-request Django/schema introspection). Upstream's heavier alternative for contrast: per-model concrete-type resolution via `get_possible_concrete_types` (`strawberry_django/utils/inspect.py:206-245`) with a per-concrete-type `ResolveInfo` re-walk (`optimizer.py:1492-1517`) - explicitly out of scope; we narrow, we do not multi-plan.
-- G3 cache-safety argument: narrowing is a pure function of (document, target_model, origin) - all three are already plan-cache key components (`extension.py:920-982`), so narrowed plans cache correctly with no key change.
-
-#### Definition of done
-
-- [ ] Spec file added under `docs/SPECS/` (numbered to the card at implementation time, suffix `optimizer_hardening-0_0_10`), recording all three guard mechanisms, the G2 elision decision, and the deferred-findings table from the 2026-06-11 audit with upstream file:line anchors.
-- [ ] G1: early-return lands in `extension.py::_optimize`; test pins the pass-through - root resolver evaluates the queryset (`len(qs)`) then returns it; assert exactly one SQL query total and that the returned object is the SAME queryset instance (not a re-executing clone). A second test pins that the manager-coercion path (`Model.objects`) still optimizes (the guard must sit after `extension.py:714`).
-- [ ] G2: a mutation operation whose root resolver returns a queryset produces a plan with empty `only_fields` while `select_related` / `prefetch_related` survive; a textually-identical selection set under a `query` operation still projects `only_fields`; both plans coexist in the cache (distinct printed-AST keys). Subscription operations covered by the same gate.
-- [ ] G2: the FK-id elision under non-QUERY ops decision is pinned by a dedicated test matching whatever the spec records.
-- [ ] G3: union and interface fragment tests - sibling-type fragment bodies are excluded from the plan (no spurious `select_related` / `only` entries); matching-type and interface-implementor fragments still plan; the same-named-relation-on-two-members shape is a dedicated regression test; B3 strictness keys remain branch-sensitive after narrowing (no regression in `tests/optimizer/` strictness coverage).
-- [ ] Strictness `warn` no longer fires for relation selections inside correctly-narrowed sibling fragments that the resolver never executes (the old silent-N+1 signature is gone from that path).
-- [ ] No B1-B8 regressions: full suite green at the 100% coverage gate; the plan-cache hit path gains zero allocations (memoized id-resolver check stays ~40ns, cache-hit promotion unchanged); `ruff format` + `ruff check` clean.
-- [ ] Optimizer docs (`docs/` optimizer page or README optimizer section) gain a short 'what the optimizer will not touch' note covering evaluated querysets and non-query operations.
-
-#### Files likely touched
-
-- `django_strawberry_framework/optimizer/extension.py` - G1 `_result_cache` early return in `_optimize`; G2 operation-type read threaded to plan build.
-- `django_strawberry_framework/optimizer/walker.py` - G2 `only_fields` suppression at `plan_optimizations` entry; G3 `type_condition` matching in `_included_field_selections` (and the extension-side fragment clone helpers `_named_children` / `_node_children_with_runtime_prefix` if connection extraction needs the same narrowing).
-- `django_strawberry_framework/optimizer/plans.py` - only if the G2 gate lands at apply-time instead of build-time (spec decides; build-time preferred for cacheability).
-- `tests/optimizer/test_extension.py`, `tests/optimizer/test_walker.py` - mirrored guard tests.
-- `docs/SPECS/spec-<NNN>-optimizer_hardening-0_0_10.md` - new.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py:1781` - the resolve hook optimizes only when `isinstance(ret, QuerySet) and ret._result_cache is None`; `optimizer.py:1628` re-guards inside `optimize()` with `is_optimized(qs) or qs._result_cache is not None`; `queryset.py:50-62` monkeypatches `QuerySet._clone` to carry the optimized flag across clones. The execution-state half of this contract (G1) is the part we are missing; the flag half is redundant under our O3 root gate.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py:1784` and `:1817` - `enable_only` is ANDed with `info.operation.operation == OperationType.QUERY`, so `.only()` is never applied to mutation/subscription querysets while select/prefetch optimization stays on - exactly the G2 split this card adopts.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py:1492-1517` + `utils/inspect.py:206-245` (`get_possible_concrete_types`) - upstream resolves the concrete types a model can render as and re-walks hints per concrete type under a synthesized `ResolveInfo`; G3 adopts the narrowing outcome through the registry instead of the schema, without the per-type re-walk.
-
-#### Why it matters
-
-- G2 is sequencing-critical: the 0.0.11 mutations cohort (`Mutations + auto-generated Input types` onward) makes mutation root resolvers returning querysets a mainstream path; shipping mutations on top of an ungated `.only()` bakes deferred-refetch storms and deferred-`save()` surprises into the first write-side release.
-- G3 closes the only known silent-N+1 class left in the walker: every interface/union sibling-type branch is unplanned today, and B3 strictness only detects it at runtime in dev - the plan itself can never cover it.
-- G1 protects consumer-evaluated querysets from invisible double execution - the exact 'respect what the consumer already did' posture spec-004 B8 pinned for optimization state, extended to execution state.
-- All three are robustness parity items against `strawberry_django` (each verified at a specific upstream line) while preserving the four advantages the 2026-06-11 audit confirmed we hold over upstream: the global LRU plan cache (B1), FK-id elision (B2), strictness N+1 detection (B3), and class-creation-time `FieldMeta` precomputation (B7).
-
-#### Dependencies
-
-- G3 rewrites fragment inlining in the same `walker.py` selection-normalization seam (`_included_field_selections` / `_named_children`) that connection-aware planning extends; land after it to avoid concurrent walker churn, and so G3's union/interface tests can cover connection-wrapped fragments too.
-
-#### Other
-
-- Deferred audit finding (owned elsewhere): windowed nested-prefetch pagination (`strawberry_django/pagination.py:209-282`, `RowNumber` window partitioned by the relation FK) and `totalCount` reuse from the `_strawberry_total_count` window annotation (`relay/list_connection.py`) are the nested-connection performance findings - both already scoped under `Connection-aware optimizer planning`.
-- Deferred audit finding (not scheduled): annotation hints - upstream supports `field(annotate=...)` including callables receiving `Info` (`strawberry_django/optimizer.py:492-511`, placeholder-label mechanism at `:206-210` / `:786-798`); we have no annotate path, so computed DB fields cannot be auto-planned. Adjacent to the BACKLOG model-property / cached-property optimization-hints item; promote together if scheduled.
-- Deferred audit finding (deliberate non-adoption, record as a spec non-goal): prefetch MERGING - upstream's `PrefetchInspector.merge` (`strawberry_django/utils/inspect.py:324-387`) unions `only` sets and merges conflicting `Prefetch` querysets, using an `_optimizer_sentinel` marker (`optimizer.py:352-355`) to permit unsafe merges of its own prefetches. Our consumer-wins drop in `diff_plan_for_queryset` (spec-004 B8) is a permission-boundary safety stance, not an oversight; revisit only behind a strict no-custom-filter merge precondition.
-- Deferred audit findings (out of scope, record as spec non-goals): GenericForeignKey prefetch (`strawberry_django/optimizer.py:1081-1087`), django-polymorphic / InheritanceManager `select_subclasses` cooperation (`optimizer.py:1251-1252`, `:1643-1664`), and a `DjangoOptimizerExtension.disabled()` contextvar escape hatch (`optimizer.py:1796-1803`).
-- Audit method note: both inventories were produced from source on 2026-06-11 (36 upstream capabilities; full subsystem map of ours); every gap claimed here was re-verified by direct grep/read of our package before this card was written - no claim rests on the inventory alone.
-
-#### Card references
-
-- Dependency: G3 rewrites fragment inlining in the same `walker.py` selection-normalization seam (`_included_field_selections` / `_named_children`) that connection-aware planning extends; land after it to avoid concurrent walker churn, and so G3's union/interface tests can cover connection-wrapped fragments too. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
-- Related: G2 (`.only()` gating by operation type) must land before the 0.0.11 mutations cohort makes mutation root querysets a mainstream consumer path. -> `TODO-ALPHA-036-0.0.11` - Mutations + auto-generated Input types
-- Related: G1 extends spec-004 B8's consumer-state reconciliation from optimization state to execution state; G2's cache-safety argument rests on the spec-004 B1 printed-AST cache key. -> `DONE-004-0.0.3` - Optimizer beyond slices B1-B8
-- Related: G1's minimal shape (no clone monkeypatch, no optimized flag) is justified by the O3 root gate; G3 lives in the O2 walker's selection-normalization seam. -> `DONE-002-0.0.2` - Optimizer O1-O6 foundation
+Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts. No active WIP cards.
 
 ## To Do - Alpha (0.1.0)
 
@@ -1488,6 +1394,123 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 ## Done
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
+
+<a id="optimizer_robustness_hardening_upstream_comparison_guards"></a>
+### [DONE-035-0.0.10 - Optimizer robustness hardening (upstream-comparison guards)](KANBAN.html#optimizer_robustness_hardening_upstream_comparison_guards)
+
+- Priority: Medium-high
+- Parity: 🍓 strawberry-graphql-django (Required)
+- Severity: Medium
+- Status: Needs spec
+- Relative size: M
+- Labels: `hardening`, `optimizer`, `performance`, `query-planning`
+- Spec: [spec-035-optimizer_hardening-0_0_10.md](docs/SPECS/spec-035-optimizer_hardening-0_0_10.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
+| [Queryset diffing](docs/GLOSSARY.md#queryset-diffing) | shipped (`0.0.3`) |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [`Meta.relation_shapes`](docs/GLOSSARY.md#metarelation_shapes) | shipped (`0.0.9`) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
+| [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
+| [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
+| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | planned for `0.0.11` |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.11` |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
+
+#### Package files
+
+- [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
+- [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
+- [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`tests/optimizer/test_extension.py`](tests/optimizer/test_extension.py)
+- [`tests/optimizer/test_walker.py`](tests/optimizer/test_walker.py)
+
+#### Planning note
+
+Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/` against `~/projects/strawberry-django-main/strawberry_django/optimizer.py` (1,823 lines, 36 capabilities inventoried). Three robustness gaps were verified absent in our source by direct inspection (grep + read, not inferred): no evaluated-queryset guard (zero `_result_cache` references package-wide), no operation-type gating of `.only()` (zero `OperationType` references), and no fragment `type_condition` narrowing (`type_condition` is only used as a fragment *marker* at `walker.py:845` and cloned at `extension.py:346`, never matched). Each guard exists upstream with a known mechanism and file:line anchor. The two big *performance* findings from the same audit — windowed nested-prefetch pagination and `totalCount` window-annotation reuse — are already owned by `Connection-aware optimizer planning` (WIP) and are explicitly NOT in this card. Ships in 0.0.10 because guard G2 must land before the 0.0.11 mutations cohort makes mutation root resolvers returning querysets a mainstream consumer path.
+
+#### Dependencies
+
+- `DONE-033-0.0.9` - Connection-aware optimizer planning
+
+#### Scope
+
+- G1 - evaluated-queryset guard. Today `DjangoOptimizerExtension._optimize` applies the plan to any root queryset; if the consumer's root resolver already evaluated it (a `len(qs)` guard, a `bool(qs)` branch, slicing for a log line), our `.only()` / `.select_related()` clone silently re-executes the SQL - a doubled query invisible to the consumer. Upstream guards this twice: the resolve hook only optimizes when `ret._result_cache is None` (`strawberry_django/optimizer.py:1781`) and `optimize()` re-checks `is_optimized(qs) or qs._result_cache is not None` (`optimizer.py:1628`). Implement: in `extension.py::_optimize`, AFTER the manager-to-`.all()` coercion at `extension.py:714` (a manager coercion always yields a fresh unevaluated queryset, so the guard must not fire before it) and BEFORE `diff_plan_for_queryset`, return the result unchanged when `getattr(queryset, "_result_cache", None) is not None`. Read defensively with `getattr` per the package posture pinned in `field_meta.py::_target_pk_name`.
+- G1 non-goals: do NOT port upstream's `is_optimized()` flag, `CONFIG_KEY` queryset config, or the `QuerySet._clone` monkeypatch (`strawberry_django/queryset.py:50-62`) - those exist upstream because their optimizer can run at nested resolvers; our O3 root gate (`info.path.prev is None`, spec-002) already guarantees single application, so execution-state (`_result_cache`) is the only missing check.
+- G2 - operation-type gating of `.only()`. We project `only_fields` onto mutation/subscription root querysets identically to queries; upstream disables `only` for non-QUERY operations (`enable_only and info.operation.operation == OperationType.QUERY`, `strawberry_django/optimizer.py:1784`, re-checked at `:1817`). Risk: a mutation resolver returning a queryset gets a selection-set-shaped `.only()`; post-mutation consumer code touching any unprojected field triggers one deferred-field refetch query per access, and `Model.save()` on a deferred instance writes only loaded fields (Django's documented deferred-save semantics) - a surprising interaction with signal handlers and downstream writes. Implement: suppress `only_fields` (keep `select_related` / `prefetch_related`) when `info.operation.operation is not OperationType.QUERY`, at plan-build time in the walker entry point.
+- G2 cache-safety argument (spec-004 B1 grounding): gating at plan-build time is safe with ZERO cache-key change because the plan-cache key's first component is the printed operation AST (`_print_operation_with_reachable_fragments`, `extension.py:920-982`), and `print_ast(operation)` includes the `query` / `mutation` / `subscription` keyword - a query document and a mutation document can never collide on one cache entry.
+- G2 open decision (record in spec): whether FK-id elision stays enabled for non-QUERY ops. With `only` suppressed the full source row loads, so the FK `attname` column the elision stub reads (`types/resolvers.py::_build_fk_id_stub`) is always present - elision remains *correct* - but the spec must decide and pin it with a test either way.
+- G3 - fragment type-condition narrowing. The walker treats `type_condition` purely as a fragment marker (`walker.py:845` is `hasattr(selection, "type_condition")`); `_included_field_selections` (`walker.py:733`) inlines every fragment body unconditionally. Two verified failure modes on interface/union queries: (a) fields from sibling concrete types miss the current `field_map` and fall through the unknown-name guard (`walker.py:203` `if django_field is None:` -> `continue`) - those branches are silently UNPLANNED, so every sibling-type relation selection is an N+1 the plan can never cover (B3 strictness fires at runtime, which is detection, not prevention); (b) a same-named relation existing on two members gets planned for the wrong branch - a spurious `select_related` join / over-projection (over-fetch, never wrong data).
+- G3 implementation (bounded, registry-only): when a fragment carries a non-None `type_condition`, inline its body only when the condition's type name matches the current planning type - the `type_cls` returned by `_resolve_field_map` (`walker.py:197`): its own GraphQL name, a name in its `Meta.interfaces`, or the registered primary type name for the model; otherwise skip the fragment subtree. Resolve names through the registry/definition only - NO graphql-core schema lookups in the walk, preserving the B7 invariant (zero per-request Django/schema introspection). Upstream's heavier alternative for contrast: per-model concrete-type resolution via `get_possible_concrete_types` (`strawberry_django/utils/inspect.py:206-245`) with a per-concrete-type `ResolveInfo` re-walk (`optimizer.py:1492-1517`) - explicitly out of scope; we narrow, we do not multi-plan.
+- G3 cache-safety argument: narrowing is a pure function of (document, target_model, origin) - all three are already plan-cache key components (`extension.py:920-982`), so narrowed plans cache correctly with no key change.
+
+#### Definition of done
+
+- [x] Spec file added under `docs/SPECS/` (numbered to the card at implementation time, suffix `optimizer_hardening-0_0_10`), recording all three guard mechanisms, the G2 elision decision, and the deferred-findings table from the 2026-06-11 audit with upstream file:line anchors.
+- [x] G1: early-return lands in `extension.py::_optimize`; test pins the pass-through - root resolver evaluates the queryset (`len(qs)`) then returns it; assert exactly one SQL query total and that the returned object is the SAME queryset instance (not a re-executing clone). A second test pins that the manager-coercion path (`Model.objects`) still optimizes (the guard must sit after `extension.py:714`).
+- [x] G2: a mutation operation whose root resolver returns a queryset produces a plan with empty `only_fields` while `select_related` / `prefetch_related` survive; a textually-identical selection set under a `query` operation still projects `only_fields`; both plans coexist in the cache (distinct printed-AST keys). Subscription operations covered by the same gate.
+- [x] G2: the FK-id elision under non-QUERY ops decision is pinned by a dedicated test matching whatever the spec records.
+- [ ] **[DEFERRED to the abstract-return optimizer entry card — BACKLOG `polymorphic_interface_connections`; see spec-035 Decision 6/7 / Revision 3]** G3: union and interface fragment tests - sibling-type fragment bodies are excluded from the plan (no spurious `select_related` / `only` entries); matching-type and interface-implementor fragments still plan; the same-named-relation-on-two-members shape is a dedicated regression test; B3 strictness keys remain branch-sensitive after narrowing (no regression in `tests/optimizer/` strictness coverage).
+- [ ] **[DEFERRED to the abstract-return optimizer entry card — BACKLOG `polymorphic_interface_connections`; see spec-035 Decision 6/7 / Revision 3]** Strictness `warn` no longer fires for relation selections inside correctly-narrowed sibling fragments that the resolver never executes (the old silent-N+1 signature is gone from that path).
+- [x] No B1-B8 regressions: full suite green at the 100% coverage gate; the plan-cache hit path gains zero allocations (memoized id-resolver check stays ~40ns, cache-hit promotion unchanged); `ruff format` + `ruff check` clean.
+- [x] Optimizer docs (`docs/` optimizer page or README optimizer section) gain a short 'what the optimizer will not touch' note covering evaluated querysets and non-query operations.
+
+#### Files likely touched
+
+- `django_strawberry_framework/optimizer/extension.py` - G1 `_result_cache` early return in `_optimize`; G2 operation-type read threaded to plan build.
+- `django_strawberry_framework/optimizer/walker.py` - G2 `only_fields` suppression at `plan_optimizations` entry; G3 `type_condition` matching in `_included_field_selections` (and the extension-side fragment clone helpers `_named_children` / `_node_children_with_runtime_prefix` if connection extraction needs the same narrowing).
+- `django_strawberry_framework/optimizer/plans.py` - only if the G2 gate lands at apply-time instead of build-time (spec decides; build-time preferred for cacheability).
+- `tests/optimizer/test_extension.py`, `tests/optimizer/test_walker.py` - mirrored guard tests.
+- `docs/SPECS/spec-<NNN>-optimizer_hardening-0_0_10.md` - new.
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py:1781` - the resolve hook optimizes only when `isinstance(ret, QuerySet) and ret._result_cache is None`; `optimizer.py:1628` re-guards inside `optimize()` with `is_optimized(qs) or qs._result_cache is not None`; `queryset.py:50-62` monkeypatches `QuerySet._clone` to carry the optimized flag across clones. The execution-state half of this contract (G1) is the part we are missing; the flag half is redundant under our O3 root gate.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py:1784` and `:1817` - `enable_only` is ANDed with `info.operation.operation == OperationType.QUERY`, so `.only()` is never applied to mutation/subscription querysets while select/prefetch optimization stays on - exactly the G2 split this card adopts.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py:1492-1517` + `utils/inspect.py:206-245` (`get_possible_concrete_types`) - upstream resolves the concrete types a model can render as and re-walks hints per concrete type under a synthesized `ResolveInfo`; G3 adopts the narrowing outcome through the registry instead of the schema, without the per-type re-walk.
+
+#### Why it matters
+
+- G2 is sequencing-critical: the 0.0.11 mutations cohort (`Mutations + auto-generated Input types` onward) makes mutation root resolvers returning querysets a mainstream path; shipping mutations on top of an ungated `.only()` bakes deferred-refetch storms and deferred-`save()` surprises into the first write-side release.
+- G3 closes the only known silent-N+1 class left in the walker: every interface/union sibling-type branch is unplanned today, and B3 strictness only detects it at runtime in dev - the plan itself can never cover it.
+- G1 protects consumer-evaluated querysets from invisible double execution - the exact 'respect what the consumer already did' posture spec-004 B8 pinned for optimization state, extended to execution state.
+- All three are robustness parity items against `strawberry_django` (each verified at a specific upstream line) while preserving the four advantages the 2026-06-11 audit confirmed we hold over upstream: the global LRU plan cache (B1), FK-id elision (B2), strictness N+1 detection (B3), and class-creation-time `FieldMeta` precomputation (B7).
+
+#### Dependencies
+
+- G3 rewrites fragment inlining in the same `walker.py` selection-normalization seam (`_included_field_selections` / `_named_children`) that connection-aware planning extends; land after it to avoid concurrent walker churn, and so G3's union/interface tests can cover connection-wrapped fragments too.
+
+#### Other
+
+- Deferred audit finding (owned elsewhere): windowed nested-prefetch pagination (`strawberry_django/pagination.py:209-282`, `RowNumber` window partitioned by the relation FK) and `totalCount` reuse from the `_strawberry_total_count` window annotation (`relay/list_connection.py`) are the nested-connection performance findings - both already scoped under `Connection-aware optimizer planning`.
+- Deferred audit finding (not scheduled): annotation hints - upstream supports `field(annotate=...)` including callables receiving `Info` (`strawberry_django/optimizer.py:492-511`, placeholder-label mechanism at `:206-210` / `:786-798`); we have no annotate path, so computed DB fields cannot be auto-planned. Adjacent to the BACKLOG model-property / cached-property optimization-hints item; promote together if scheduled.
+- Deferred audit finding (deliberate non-adoption, record as a spec non-goal): prefetch MERGING - upstream's `PrefetchInspector.merge` (`strawberry_django/utils/inspect.py:324-387`) unions `only` sets and merges conflicting `Prefetch` querysets, using an `_optimizer_sentinel` marker (`optimizer.py:352-355`) to permit unsafe merges of its own prefetches. Our consumer-wins drop in `diff_plan_for_queryset` (spec-004 B8) is a permission-boundary safety stance, not an oversight; revisit only behind a strict no-custom-filter merge precondition.
+- Deferred audit findings (out of scope, record as spec non-goals): GenericForeignKey prefetch (`strawberry_django/optimizer.py:1081-1087`), django-polymorphic / InheritanceManager `select_subclasses` cooperation (`optimizer.py:1251-1252`, `:1643-1664`), and a `DjangoOptimizerExtension.disabled()` contextvar escape hatch (`optimizer.py:1796-1803`).
+- Audit method note: both inventories were produced from source on 2026-06-11 (36 upstream capabilities; full subsystem map of ours); every gap claimed here was re-verified by direct grep/read of our package before this card was written - no claim rests on the inventory alone.
+
+#### Card references
+
+- Dependency: G3 rewrites fragment inlining in the same `walker.py` selection-normalization seam (`_included_field_selections` / `_named_children`) that connection-aware planning extends; land after it to avoid concurrent walker churn, and so G3's union/interface tests can cover connection-wrapped fragments too. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
+- Related: G2 (`.only()` gating by operation type) must land before the 0.0.11 mutations cohort makes mutation root querysets a mainstream consumer path. -> `TODO-ALPHA-036-0.0.11` - Mutations + auto-generated Input types
+- Related: G1 extends spec-004 B8's consumer-state reconciliation from optimization state to execution state; G2's cache-safety argument rests on the spec-004 B1 printed-AST cache key. -> `DONE-004-0.0.3` - Optimizer beyond slices B1-B8
+- Related: G1's minimal shape (no clone monkeypatch, no optimized flag) is justified by the O3 root gate; G3 lives in the O2 walker's selection-normalization seam. -> `DONE-002-0.0.2` - Optimizer O1-O6 foundation
 
 <a id="permissions_subsystem"></a>
 ### [DONE-034-0.0.10 - Permissions subsystem](KANBAN.html#permissions_subsystem)

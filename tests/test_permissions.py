@@ -34,6 +34,13 @@ Test-plan homes (spec-034 Test plan):
   * Slice 4 - live HTTP coverage extends ``examples/fakeshop/test_query/test_products_api.py``.
 """
 
+# TODO(spec-036 Slice 3): add the package-level permission pin for mutation
+# update/delete lookups.
+# Pseudocode: declare a mutation target type whose get_queryset hides a real
+# row through apply_cascade_permissions, run the mutation lookup helper against
+# that row, and assert the resolver receives the same not-found FieldError shape
+# as a genuinely missing id with no existence-leak branch.
+
 import contextlib
 import os
 from types import SimpleNamespace

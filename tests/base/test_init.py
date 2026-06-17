@@ -32,6 +32,12 @@ def test_public_api_surface_is_pinned():
     # re-export of an internal name) shows up at test time. New public
     # names only land when a future spec adds them; version changes are
     # maintainer-commanded and do not imply public-surface widening.
+    # TODO(spec-036 Slice 1-3): append the mutation exports as their owning
+    # slices make them concrete.
+    # Pseudocode: add ``FieldError`` with the input/envelope slice,
+    # ``DjangoMutation`` with the base-class slice, and ``DjangoMutationField``
+    # with the field-factory slice; do not edit ``test_version`` here because
+    # the joint 0.0.11 cut owns the version assertion.
     assert django_strawberry_framework.__all__ == (
         "BigInt",
         "DjangoConnection",

@@ -455,6 +455,13 @@ The optimizer, scalar conversions, and relation resolution machinery are richer 
 
 ### Coming from DRF + `django-filter`
 
+<!-- TODO(spec-036 Slice 5): adjust this migration shape once the base ships.
+Pseudocode: mark DjangoMutation itself as shipped for model-driven operations,
+leave the SerializerMutation / Meta.serializer_class flavor targeted at
+0.0.13, and keep the single shared FieldError envelope wording aligned with
+docs/GLOSSARY.md.
+-->
+
 Your existing `django_filters.FilterSet` migrates to `Meta.filterset_class` via a one-line parent-class swap to `django_strawberry_framework.filters.FilterSet`; the package's `FilterSet` IS a `django_filters.filterset.BaseFilterSet` subclass, so every `Filter` / `FilterMethod` / form-cleaning primitive you already use carries over unchanged. The DRF `Serializer` becomes the basis for the auto-generated mutation `Input` type via `Meta.serializer_class`.
 
 ```python

@@ -8,6 +8,13 @@
 
 ## What products demonstrates today
 
+<!-- TODO(spec-036 Slice 5): add a products-centric mutation section after the
+live write surface ships.
+Pseudocode: describe create/update/delete over products, the shared FieldError
+envelope, permission-scoped update/delete lookups, and the optimizer-backed
+post-write response refetch without broadening this file beyond products.
+-->
+
 `examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.9` it exercises, end to end, the package capabilities a real consumer reaches for:
 
 - **`DjangoType` schema** — four types configured entirely through `class Meta` (`model` + `fields`), with forward-FK + reverse-FK traversal and four root Relay connection fields (`allCategories` / `allItems` / `allProperties` / `allEntries`, each a `DjangoConnectionField` as of `0.0.9`).

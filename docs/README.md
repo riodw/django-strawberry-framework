@@ -90,6 +90,13 @@ As of `0.0.9` the default Relay `GlobalID` payload is the Django model label (`a
 
 ## Today and coming next
 
+<!-- TODO(spec-036 Slice 5): move the model-driven mutation foundation from
+"Coming next" into "Shipped today" after implementation.
+Pseudocode: add the class Meta create/update/delete shape, keep Upload as the
+sibling 0.0.11 card, and keep form, serializer, and auth flavors in 0.0.12 and
+0.0.13 rather than lumping them into the foundation.
+-->
+
 For the current capability snapshot — what the package can actually do in the example project right now — see [`../TODAY.md`][today]. For the per-feature glossary covering every shipped / planned / deferred capability (deep-linkable by anchor — `GLOSSARY.md#filterset`, `GLOSSARY.md#fk-id-elision`, …), see [`GLOSSARY.md`][glossary]. For the long-term destination and the migration-shape diffs against `graphene-django` and `strawberry-graphql-django`, see [`../GOAL.md`][goal].
 
 A quick summary:

@@ -678,6 +678,15 @@ def finalize_django_types() -> None:
     # time. Warn (do not raise) and point at the ``type`` opt-out.
     _warn_model_label_secondary_collapse(multi_type_models)
 
+    # TODO(spec-036 Slice 2): bind ``DjangoMutation`` declarations in this
+    # phase-2.5 window, after primary-type state is settled and before
+    # ``strawberry.type`` freezes the schema classes.
+    # Pseudocode:
+    # - import the mutation binder from ``mutations.sets`` cycle-safely;
+    # - resolve each mutation's model primary ``DjangoType`` via the registry;
+    # - materialize generated ``Input`` / ``PartialInput`` / payload classes;
+    # - raise ``ConfigurationError`` for missing or ambiguous primary targets;
+    # - leave ``DEFERRED_META_KEYS`` and ``ALLOWED_META_KEYS`` unchanged.
     _bind_filtersets()
     _bind_ordersets()
 

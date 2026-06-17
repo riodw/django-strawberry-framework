@@ -42,6 +42,16 @@ from django_strawberry_framework import (
 
 from . import filters, models, orders
 
+# TODO(spec-036 Slice 4): add the products write surface once DjangoMutation
+# and DjangoMutationField are public.
+# Pseudocode:
+# - import DjangoMutation and DjangoMutationField from django_strawberry_framework;
+# - declare Create/Update/Delete mutations for Item plus at least one Category
+#   write, each using nested Meta with model and operation;
+# - expose them on a Strawberry ``Mutation`` class as unannotated
+#   DjangoMutationField attributes;
+# - keep Query unchanged and add ``Mutation`` to ``__all__``.
+
 
 class CategoryType(DjangoType):
     class Meta:

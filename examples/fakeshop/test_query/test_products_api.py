@@ -106,6 +106,18 @@ def _global_id(type_name: str, pk: int) -> str:
     return str(relay.GlobalID(type_name=type_name, node_id=str(pk)))
 
 
+# TODO(spec-036 Slice 4): add live /graphql mutation acceptance coverage.
+# Pseudocode:
+# - start each products catalog/auth test with seed_data(N) or create_users(N);
+# - execute createItem, updateItem, deleteItem, and one Category write over HTTP;
+# - assert success payloads contain the optimizer-refetched object and no errors;
+# - assert duplicate Item name/category returns the FieldError envelope;
+# - assert partial update distinguishes omitted fields from explicit null;
+# - assert permission-scoped update/delete hide private rows as not found;
+# - capture SQL for a mutation response selecting a relation and assert no
+#   deferred loading while select_related/prefetch_related still apply.
+
+
 @pytest.mark.django_db
 def test_emitted_globalid_is_model_anchored():
     """An emitted ``node { id }`` decodes to the Django model label, not the type name.

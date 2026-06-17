@@ -3319,6 +3319,13 @@ def test_window_subquery_wrap_preserves_only_mask_and_child_select_related():
 # spec-035 Slice 2 - G2 operation-type gating of ``.only()`` (Decision 4)
 # ---------------------------------------------------------------------------
 
+# TODO(spec-036 Slice 3): extend this G2 group with the mutation-refetch mirror
+# required by the mutations foundation.
+# Pseudocode: synthesize the exact selection a DjangoMutation payload resolver
+# will hand to the optimizer; assert the response queryset plan keeps
+# select_related and Prefetch entries while ``only_fields`` and applied
+# deferred-loading masks stay empty under OperationType.MUTATION.
+
 
 def _op_info(operation, relay_max_results=100):
     """Build a minimal operation-bearing ``info`` for the G2 gate.

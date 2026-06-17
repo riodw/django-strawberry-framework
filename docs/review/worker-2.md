@@ -14,6 +14,7 @@ Worker 2 runs as a **fresh subagent invocation per cycle item**, dispatched by W
 - **Task list management is Worker 0's domain.** Don't mention or update it.
 - **Cycle scope is fixed.** No unrelated cleanup, no preemptive next-cycle work.
 - **Shape #5 skips you.** If dispatched onto a shape-#5 artifact already at `fix-implemented` with Worker-1-attributed Fix report, return immediately noting the dispatch error.
+- **Editing `Status:`: anchor on the `# Review:` header line.** Artifacts often hold 2-3 `Status:` strings (the real one at top, plus quoted prose lower down). Edit only the top one; include the `# Review:` heading in your match to avoid a multi-match collision.
 
 ## Required reading
 

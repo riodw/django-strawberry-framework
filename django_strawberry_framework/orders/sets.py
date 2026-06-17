@@ -44,6 +44,7 @@ from ..utils.permissions import (
     invoke_permission_method,
     request_from_info,
     run_active_input_permission_checks,
+    verbatim_path,
 )
 from ..utils.relations import is_many_side_relation_kind, relation_kind
 from .base import RelatedOrder
@@ -51,15 +52,6 @@ from .inputs import Ordering, _field_specs, normalize_input_value
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
-
-
-def _verbatim_attr(python_attr: str) -> str:
-    """Order-side fallback path: the python attr is its own source path.
-
-    Module-level (not a per-call lambda) so ``_active_permission_targets`` does
-    not allocate a fresh closure each traversal.
-    """
-    return python_attr
 
 
 @lru_cache(maxsize=2048)
@@ -367,7 +359,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
             field_specs=_field_specs,
             related_attr="related_orders",
             logic_keys=frozenset(),
-            fallback_path=_verbatim_attr,
+            fallback_path=verbatim_path,
             handle_top_level_list=True,
         )
 

@@ -2,26 +2,50 @@
 
 Status: verified
 
+> **Re-opened folder pass.** This artifact previously closed `verified` against an
+> empty cycle diff. Commit `79b74b46` ("consolidate active permission targets") then
+> rewrote `filters/sets.py` (~+53 lines) and introduced a new folder-level dependency:
+> `filters/sets.py` now imports `utils/permissions.py::active_permission_targets`, a new
+> single-pass LEAF/RELATED classifier. The prior folder review predated that edge, so this
+> item re-opened. The sections below are REWRITTEN against CURRENT source at HEAD
+> (the maintainer's change is committed; `git diff HEAD -- django_strawberry_framework/filters/`
+> is empty). The new `filters → utils.permissions` edge got the folder-level
+> circular-import and DRY attention the dispatch called for. The four sibling artifacts
+> (`base`/`factories`/`inputs`/`sets`) are all `verified` against current source —
+> `sets.py` was just re-verified after `79b74b46`. Iteration history is preserved by this
+> note + the prior `verified` close (now superseded).
+
 Folder pass over `django_strawberry_framework/filters/`: `base.py`, `factories.py`,
 `inputs.py`, `sets.py` (all four sibling artifacts `verified`) plus the folder
-`__init__.py` (covered here, not separately). Cycle diff
-`git diff 43f7589ad36fa49d930ed2c4de13743b3f6c2fce -- django_strawberry_framework/filters/`
-is EMPTY — standing-code folder review, no source touched this cycle.
+`__init__.py` (covered here, not separately). Shadow overviews regenerated this cycle via
+`python scripts/review_inspect.py --all --output-dir docs/shadow`. Cycle diff
+`git diff HEAD -- django_strawberry_framework/filters/` is EMPTY — the maintainer's commit
+is in HEAD, so this is a standing-code folder review against the post-refactor source.
 
 ## DRY analysis
 
-- None at folder scope. The folder's one cross-sibling consolidation candidate — the
-  filter/order family wrappers (`FilterSet`/`OrderSet` twins of `_iter_input_items`,
-  `_request_from_info`, `_iter_active_related_branches`, `_active_permission_field_paths`,
-  the alias block, and the `_make_hashable`/`_make_cache_key`/`get_*_class` Layer-6 trio) —
-  is a CROSS-FOLDER (`filters/` vs `orders/`) relationship, not an intra-`filters/`
-  duplication, and is already deferred-with-trigger in the sibling artifacts:
-  `rev-filters__factories.md` (trigger: "the `orders/factories.py` Layer-6 TODO anchor is
-  resolved", `orders/factories.py` #"TODO(spec-028-orders-0_0_8 Decision 12") and the
-  cycle-11/cycle-12 `sets_mixins`/`base` notes (trigger: "re-confirm all 3 families share
-  the params when AggregateSet / fieldsets WIP-ALPHA-028 lands"). Per the dispatch, the
-  filter/order cross-folder relationship belongs to the project pass — forwarded by citation
-  to `docs/review/rev-django_strawberry_framework.md`, not re-opened here. Within `filters/`
+- None at folder scope. The `79b74b46` refactor IS a DRY consolidation and it lands the
+  permission-target plumbing at its maximally-factored, single-sited shape: the new
+  `utils/permissions.py::active_permission_targets` is the one single-pass LEAF/RELATED
+  classifier that both `active_permission_field_paths` and `active_related_branches`
+  (`utils/permissions.py::active_permission_field_paths`, `::active_related_branches`) now wrap, and
+  that `run_active_input_permission_checks` consumes once per level. The FilterSet-side
+  `_active_permission_targets` (`filters/sets.py::FilterSet._active_permission_targets`) and its
+  `_active_permission_field_paths` LEAF slice are thin delegates to that shared core — they
+  are NOT intra-`filters/` duplication. The folder's one genuine cross-sibling consolidation
+  candidate — the filter/order family wrappers (`FilterSet`/`OrderSet` twins of
+  `_iter_input_items`, `_request_from_info`, `_iter_active_related_branches`,
+  `_active_permission_field_paths`, the now-added `_active_permission_targets` twin, the alias
+  block, and the `_make_hashable`/`_make_cache_key`/`get_*_class` Layer-6 trio) — is a
+  CROSS-FOLDER (`filters/` ↔ `orders/`) relationship, not an intra-`filters/` duplication. It
+  is already deferred-with-trigger in the sibling artifacts: `rev-filters__factories.md`
+  (trigger: "the `orders/factories.py` Layer-6 TODO anchor is resolved",
+  `orders/factories.py` #"TODO(spec-028-orders-0_0_8 Decision 12") and the cycle-11/cycle-12
+  `sets_mixins`/`base` notes (trigger: "re-confirm all 3 families share the params when
+  AggregateSet / fieldsets WIP-ALPHA-028 lands"). Per the dispatch, the filter/order
+  cross-folder relationship (including the post-refactor `_active_permission_targets` twin)
+  belongs to the project pass — forwarded by citation to
+  `docs/review/rev-django_strawberry_framework.md`, not re-opened here. Within `filters/`
   itself every shared mechanism is single-sited (see `### DRY recap`); there is no
   intra-folder helper duplicated across two siblings to hoist.
 
@@ -40,7 +64,9 @@ double-`getattr` in `RelatedFilter.get_queryset`, `factories`'s `_make_cache_key
 `key=repr` asymmetry, `inputs`'s `_iter_filterset_subclasses` alias + `construct_search`
 deferred helper, `sets`'s `_q_for_branch` async stash-miss fallback. All are local
 pre-empt-re-flag notes already verified no-action at file scope; none is a folder-level
-defect and none recurs as a folder-wide pattern.)
+defect and none recurs as a folder-wide pattern. The `79b74b46` refactor introduced no new
+Low at any scope — `sets.py`'s re-verified artifact carries the same single no-action Low it
+had before.)
 
 ## What looks solid
 
@@ -53,100 +79,139 @@ defect and none recurs as a folder-wide pattern.)
   `..utils.inputs` in `inputs.py:57-60` and the BFS argument factory subclasses
   `..utils.inputs.GeneratedInputArgumentsFactory` in `factories.py`; the apply pipeline's
   traversal/permission/visibility primitives delegate to `..utils.permissions`,
-  `..utils.input_values`, `..utils.querysets`, and `..sets_mixins` in `sets.py:651-1288`;
-  the lazy related-target binding is parameterized through `..sets_mixins.RelatedSetTargetMixin`
-  in `base.py:393-394`; the GlobalID strategy frozensets are read from the canonical
+  `..utils.input_values`, `..utils.querysets`, and `..sets_mixins`; the lazy related-target
+  binding is parameterized through `..sets_mixins.RelatedSetTargetMixin` in `base.py:393-394`;
+  the GlobalID strategy frozensets are read from the canonical
   `..types.relay.MODEL_LABEL_STRATEGIES`/`TYPE_NAME_STRATEGIES` in `base.py:47`; and the
   `__init__.py::filter_input_type` body is shared with `orders/__init__.py::order_input_type`
-  via `..utils.inputs.build_lazy_input_annotation` (`__init__.py:75-83`). The 0.0.9 DRY pass
-  (`docs/feedback.md` Major 1 + 3) already drove this convergence; the folder pass confirms
-  it is complete, not residual.
-- **New helpers considered (folder-wide).** A folder-internal shared helper for the three
-  `and`/`or`/`not` branch-unrolling loops in `sets.py`
-  (`_collect_nested_visibility_querysets_async` / `_run_permission_checks` /
-  `_evaluate_logic_tree`) was considered and rejected at file scope (each unrolls the same
-  three branches with divergent per-branch operator semantics — async derive vs perm
-  recursion vs `Q` `&`/`|`/`~` composition); confirmed correct at folder scope too — there is
-  no second sibling that shares that loop shape, so it is a within-`sets.py` concern, not a
+  via `..utils.inputs.build_lazy_input_annotation` (`__init__.py:75-83`). The `79b74b46`
+  refactor STRENGTHENED this property at the permission layer: the new single-pass
+  `active_permission_targets` (`utils/permissions.py::active_permission_targets`) makes the
+  LEAF/RELATED classification rule single-sited in `..utils.permissions`, with
+  `FilterSet._active_permission_targets` / `_active_permission_field_paths`
+  (`filters/sets.py::FilterSet._active_permission_targets`, `filters/sets.py:1289`) reduced to
+  thin per-family delegates. The 0.0.9 DRY pass (`docs/feedback.md` Major 1 + 3) drove the
+  original convergence; the folder pass confirms it is complete and the refactor extended it,
+  not residual.
+- **New helpers considered (folder-wide).** The `79b74b46` refactor already extracted the
+  right shared helper — `active_permission_targets` — at the correct level (`..utils`,
+  consumed by both `filters/sets.py` and `orders/sets.py`), so there is no folder-internal
+  helper to hoist from it. A folder-internal shared helper for the three `and`/`or`/`not`
+  branch-unrolling loops in `sets.py` (`_collect_nested_visibility_querysets_async` /
+  `_run_permission_checks` / `_evaluate_logic_tree`) was considered and rejected at file scope
+  (each unrolls the same three branches with divergent per-branch operator semantics — async
+  derive vs perm recursion vs `Q` `&`/`|`/`~` composition); confirmed correct at folder scope
+  too — no second sibling shares that loop shape, so it is a within-`sets.py` concern, not a
   folder hoist. The `normalize_input_value` pair (`filters/inputs.py` vs `orders/inputs.py`)
-  was re-examined at folder scope per the dispatch and CONFIRMED intentionally NOT a shared
-  traversal: the filter side is a flat isinstance-ladder mapping ONE raw value to
-  django-filter form-data by filter class (`inputs.py:412-460`), while the order side walks
-  the input DATACLASS via `..utils.input_values.iter_active_fields`. Different abstraction
-  levels (value-shape adapter vs structure walker), no shared body — folding them would
-  invent a false abstraction. This is a `filters/`↔`orders/` cross-folder pair regardless, so
-  the disposition is recorded for the project pass; the within-`filters/` finding is simply
-  that nothing in this folder duplicates it.
+  remains intentionally NOT a shared traversal: the filter side is a flat isinstance-ladder
+  mapping ONE raw value to django-filter form-data by filter class (`inputs.py:412-460`),
+  while the order side walks the input DATACLASS via `..utils.input_values.iter_active_fields`.
+  Different abstraction levels (value-shape adapter vs structure walker), no shared body. This
+  is a `filters/`↔`orders/` cross-folder pair regardless, so the disposition is recorded for
+  the project pass; the within-`filters/` finding is that nothing in this folder duplicates it.
 - **Duplication risk in the folder (cross-sibling literals).** Ran the folder-pass
-  repeated-literal check across the four sibling shadow overviews. The only literal recurring
-  in 2+ files is the family label `FilterSet`/`filterset` (`inputs.py` 2x, `sets.py` 3x,
-  `factories.py` 2x as `filterset`). Every occurrence is one of: (a) a reference to the
-  `FilterSet` class itself (imported from `.sets`, the single canonical definition); (b) the
-  family-label string passed to the shared `materialize_generated_input_class` /
-  `clear_generated_input_namespace` substrate (`inputs.py:824`/`882`); or (c) the
-  `_related_target_attr = "filterset"` BFS slot in `factories.py` whose `orderset` twin the
-  shared base parameterizes. None is a string-keyed dispatch constant that two siblings
-  re-type independently, so there is no cross-file const to hoist. The per-file literals
-  flagged in the overviews (`contains`/`istartswith`/`week_day`/`field_name` in `inputs.py`;
-  `related_filters`/`_owner_definition`/`is_relation` in `sets.py`) appear in ONE sibling
-  each — intra-file role splits already cleared in the per-file artifacts, not folder-level.
+  repeated-literal check across the four sibling shadow overviews + `__init__.py` (regenerated
+  this cycle). The only literals recurring in 2+ files are the family labels
+  `FilterSet`/`filterset` (`inputs.py` 2x, `sets.py` 3x, `factories.py` 2x as `filterset`).
+  Every occurrence is one of: (a) a reference to the `FilterSet` class itself (imported from
+  `.sets`, the single canonical definition); (b) the family-label string passed to the shared
+  `materialize_generated_input_class` / `clear_generated_input_namespace` substrate
+  (`inputs.py:824`/`882`); or (c) the `_related_target_attr = "filterset"` BFS slot in
+  `factories.py` whose `orderset` twin the shared base parameterizes. None is a string-keyed
+  dispatch constant that two siblings re-type independently. The `79b74b46` refactor added NO
+  new cross-file string literal — `active_permission_targets` is imported as a symbol, not a
+  string, and `_active_permission_targets` is a method name, not a repeated literal in any
+  shadow. The per-file literals flagged in the overviews
+  (`contains`/`istartswith`/`week_day`/`field_name` in `inputs.py`;
+  `related_filters`/`_owner_definition`/`is_relation` in `sets.py`) appear in ONE sibling each
+  — intra-file role splits already cleared in the per-file artifacts, not folder-level.
 
 ### Other positives
 
-- **Dependency direction is one-way and acyclic.** Folder-pass import comparison across the
-  four siblings + `__init__.py`: all imports point OUTWARD/upward
-  (`..utils`, `..types`, `..exceptions`, `..registry`, `..sets_mixins`, `..conf`) or sideways
-  in a single direction — `factories.py` → `.sets`, `inputs.py` → `.sets`. `base.py` imports
-  no `filters/` sibling; `sets.py` imports no `filters/` sibling. `__init__.py` aggregates all
-  four (`.base`, `.inputs`, `.sets`) plus `..utils.inputs`. No sibling imports `factories` or
-  `__init__`, so there is no intra-folder cycle. The `base.py` → `..types.relay` /
-  `..types.definition` edge is the documented safe acyclic `filters → types` direction
-  (`base.py:41-46`); `types/relay.py` reaches back into `filters`/`registry` only via
-  in-function imports, so no load cycle. `inputs.py`'s `..types.converters` imports are
-  local-in-function for the same reason (`inputs.py:267`/`292`).
-- **`__init__.py` export surface is consistent and minimal.** `__all__` (`__init__.py:86-103`)
-  is a sorted tuple of exactly the consumer-facing surface: the `base` primitives, the
-  `FilterSet`/`FilterSetMetaclass` pair, and the `filter_input_type` Decision-11 helper. The
-  internal-only re-imports `INPUTS_MODULE_PATH`/`_input_type_name_for` (`__init__.py:35`) and
-  `_helper_referenced_filtersets` (`__init__.py:44`) are deliberately NOT in `__all__` —
-  they exist for the `filter_input_type` body and the finalizer's phase-2.5 orphan check, and
-  the module docstring + inline comments (`__init__.py:38-43`) document the ledger's
-  `registry.clear()` lifecycle and the finalizer wiring. The `Filter` re-export is documented
-  as a deliberate plain re-export of `django_filters.Filter` (NOT a subclass) that shadows the
-  upstream name (`__init__.py:9-14`) — an intentional namespace surface, not drift.
+- **The new `filters → utils.permissions` edge is one-way and acyclic — re-confirmed for the
+  re-open.** `utils/permissions.py` imports only `__future__`, stdlib
+  (`collections.abc`, `functools`, `typing`), `django.http`, `..exceptions`, and
+  `.input_values` (`utils/permissions.py:26-35`) — ZERO imports back into `filters/` at load
+  time or in-function. The only `filters` tokens in the module are comment/docstring
+  references (`utils/permissions.py:59`, `:217`, `:315`), not imports. So the
+  `filters/sets.py → ..utils.permissions` edge (`filters/sets.py:46-54`, pulling
+  `active_permission_targets` + 6 siblings) is a strict outward/upward dependency:
+  `filters/sets.py → utils/permissions.py → {exceptions, utils.input_values}`. `orders/sets.py`
+  shares the identical outward edge (`orders/sets.py:42`), so the two families fan IN to the
+  shared `utils` core; there is no fan-out from `utils` back to either family. No cycle is
+  introduced by the refactor.
+- **Folder-internal dependency direction stays one-way and acyclic.** Load-time intra-folder
+  edges: `inputs.py → .base` (`inputs.py:44`); `sets.py → {.base, .inputs}`
+  (`sets.py:60-61`); `factories.py → {.inputs, .sets}` (`factories.py:36-37`); `__init__.py →
+  {.base, .inputs, .sets}` (`__init__.py:20,35,36`). `base.py` imports no `filters/` sibling.
+  Topological order `base → inputs → sets → factories`, strictly acyclic; no sibling imports
+  `factories` or `__init__`. The `base.py → ..types.relay` / `..types.definition` edge is the
+  documented safe acyclic `filters → types` direction (`base.py:41-47`); `types/relay.py`
+  reaches back into `filters`/`registry` only via in-function imports, so no load cycle.
+  `inputs.py`'s `..types.converters` imports are local-in-function for the same reason.
+  Empirically verified: `import django_strawberry_framework.filters` succeeds (no
+  circular-import error), `__all__` length 16, sorted.
+- **`__init__.py` export surface is consistent and minimal (unchanged by the refactor).**
+  `__all__` (`__init__.py:86-103`) is a sorted 16-name tuple of exactly the consumer-facing
+  surface: the `base` primitives, the `FilterSet`/`FilterSetMetaclass` pair, and the
+  `filter_input_type` Decision-11 helper. The internal-only re-imports
+  `INPUTS_MODULE_PATH`/`_input_type_name_for` (`__init__.py:35`) and
+  `_helper_referenced_filtersets` (`__init__.py:44`) are deliberately NOT in `__all__` — they
+  exist for the `filter_input_type` body and the finalizer's phase-2.5 orphan check, documented
+  inline (`__init__.py:38-43`). The `Filter` re-export is documented as a deliberate plain
+  re-export of `django_filters.Filter` (NOT a subclass) that shadows the upstream name
+  (`__init__.py:9-14`). `79b74b46` added/renamed only private `_`-prefixed helpers inside
+  `sets.py`, none of which surface through `__init__.py` — the export surface is byte-identical
+  to the prior pass.
+- **The duck-typed permission contract holds across both families.** Both
+  `FilterSet._active_permission_targets` (`filters/sets.py:1292`) and
+  `OrderSet._active_permission_targets` (`orders/sets.py:350`) define the method, so the
+  `cls._active_permission_targets(...)` call in the shared
+  `utils/permissions.py::run_active_input_permission_checks` (`utils/permissions.py:325`)
+  resolves on either family. The folder-level concern the new edge could have raised — a
+  FilterSet-only method that the shared core assumes exists on every family — is satisfied:
+  the order twin lands the symmetric method in the same commit.
 - **Naming + error-handling are consistent across siblings.** All four siblings raise the
-  single `..exceptions.ConfigurationError` for misconfiguration (factories' `model is None`
-  guard, sets' mixed-model `combine` guard, the `__init__` orphan check) and `TypeError` only
-  for consumer-declaration misuse (`filter_input_type` non-`FilterSet` arg). The family-label
-  naming (`FilterSet`/`filterset`/`FilterInputType`) is applied uniformly and its asymmetry
-  vs the `orders/` twin (`OrderSet`/`orderset`) is exactly what the shared `utils`/`sets_mixins`
-  bases parameterize. No naming drift between siblings.
+  single `..exceptions.ConfigurationError` for misconfiguration and `TypeError` only for
+  consumer-declaration misuse (`filter_input_type` non-`FilterSet` arg). The family-label
+  naming (`FilterSet`/`filterset`/`FilterInputType`) is applied uniformly and its asymmetry vs
+  the `orders/` twin (`OrderSet`/`orderset`) is exactly what the shared `utils`/`sets_mixins`
+  bases parameterize. No naming drift between siblings; the refactor's new private helper names
+  (`_active_permission_targets`, `active_permission_targets`) follow the existing
+  family-method / utils-function split.
 - **Comment consistency.** The cross-family provenance comments are consistent and accurate:
   `__init__.py:69-74` names the shared `order_input_type` twin and the 0.0.9 DRY-pass
   `build_lazy_input_annotation` helper; `base.py:41-46` documents the import-cycle direction;
-  `inputs.py` documents the deferred-card `construct_search` and the alias-block addressability
-  contract. Each sibling's deferred-surface comments name the same future cards
-  (`Meta.search_fields` → 0.1.2, Layer-6 auto-gen → spec-027 Non-goal) consistently.
+  `sets.py`'s new delegate docstrings (`_active_permission_targets`,
+  `_active_permission_field_paths`) name `utils/permissions.py::active_permission_targets` as
+  the shared core, matching the `orders/sets.py` twin docstrings. Each sibling's deferred-surface
+  comments name the same future cards consistently.
 
 ### Summary
 
-Folder pass over `filters/` (`base`/`factories`/`inputs`/`sets` + `__init__.py`); all four
-per-file artifacts are `verified` and the cycle diff against the baseline is empty. The folder
-is structurally clean at folder scope: dependency direction is strictly one-way and acyclic
-(siblings depend on `.sets` and outward on `..utils`/`..types`/`..sets_mixins`, never on each
-other circularly), the `__init__.py` export surface is the minimal sorted consumer set with
-internal helpers correctly excluded, error-handling (`ConfigurationError` vs `TypeError`) and
-family-label naming are consistent across siblings, and the cross-family provenance comments
-agree. The folder-pass repeated-literal check found no cross-file string-keyed dispatch
-constant to hoist — the only 2+-file literal (`FilterSet`/`filterset`) is in every case a class
-reference, a family-label arg to the already-single-sited `utils.inputs` substrate, or a
-parameterized slot, not duplicated logic. The one genuine consolidation candidate (the
-filter/order family wrappers, including the `normalize_input_value` pair re-confirmed as
-intentionally NOT a shared traversal) is a `filters/`↔`orders/` CROSS-FOLDER relationship,
-already deferred-with-trigger in the sibling artifacts and forwarded to the project pass
-`docs/review/rev-django_strawberry_framework.md` per the dispatch — not an intra-folder defect.
-No High, no Medium, no folder-level Low. No-findings folder pass with an empty cycle diff
-(shape #3 → no-source-edit shape #5).
+Re-opened folder pass over `filters/` (`base`/`factories`/`inputs`/`sets` + `__init__.py`)
+after commit `79b74b46` rewrote `filters/sets.py` and introduced a new
+`filters/sets.py → utils/permissions.py::active_permission_targets` dependency. All four
+per-file artifacts are `verified` against current source (`sets.py` just re-verified post-refactor)
+and the cycle diff against HEAD is empty. The headline re-open question — does the new
+`filters → utils.permissions` edge create a cycle — is answered NO: `utils/permissions.py`
+imports only stdlib/django/`..exceptions`/`.input_values` with zero back-edge into `filters/`,
+so the edge is a strict outward dependency and both filter and order families fan IN to the
+shared `utils` core. The refactor is a DRY consolidation that strengthens the folder's
+"every shared mechanism delegates to a single-sited helper outside the folder" property at the
+permission layer, and it preserves the duck-typed contract by landing the symmetric
+`_active_permission_targets` method on the OrderSet twin in the same commit. Folder-internal
+dependency direction stays one-way/acyclic (`base → inputs → sets → factories`,
+empirically import-clean), the `__init__.py` export surface is unchanged (the minimal sorted
+16-name consumer set, internal helpers excluded), error-handling and family-label naming stay
+consistent across siblings, and the regenerated folder-pass repeated-literal check found no
+new cross-file string-keyed dispatch constant (the refactor imports a symbol, not a literal).
+The one genuine consolidation candidate (the filter/order family wrappers, now including the
+`_active_permission_targets` twin, plus the re-confirmed `normalize_input_value` pair) is a
+`filters/`↔`orders/` CROSS-FOLDER relationship, already deferred-with-trigger in the sibling
+artifacts and forwarded to the project pass `docs/review/rev-django_strawberry_framework.md`
+per the dispatch — not an intra-folder defect. No High, no Medium, no folder-level Low.
+No-findings folder pass with an empty cycle diff (shape #3 → no-source-edit shape #5).
 
 ---
 
@@ -161,26 +226,39 @@ None — no-source-edit cycle.
 None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — pass; 267 files left unchanged.
-- `uv run ruff check --fix .` — pass; All checks passed (COM812/formatter-conflict warning is
+- `uv run ruff format .` — pass; 270 files left unchanged.
+- `uv run ruff check .` — pass; "All checks passed!" (the COM812/formatter-conflict notice is
   pre-existing config noise, not a result of this cycle).
 
 ### Notes for Worker 3
-- Folder pass; cycle diff `git diff 43f7589ad36fa49d930ed2c4de13743b3f6c2fce --
-  django_strawberry_framework/filters/` is EMPTY (and `--stat` empty over the same path).
-  Standing-code folder review, no source touched.
+- Re-opened folder pass after commit `79b74b46` ("consolidate active permission targets").
+  `git diff HEAD -- django_strawberry_framework/filters/` is EMPTY — the maintainer's change is
+  committed; this is standing-code folder review against HEAD. Shadow overviews regenerated this
+  cycle (`python scripts/review_inspect.py --all --output-dir docs/shadow`).
+- **Import-direction verdict on the new `filters → utils.permissions` edge: ONE-WAY, ACYCLIC.**
+  `utils/permissions.py` imports only `__future__`, stdlib, `django.http`, `..exceptions`,
+  `.input_values` (`utils/permissions.py:26-35`); zero imports back into `filters/` (the three
+  `filters` mentions are comment/docstring text). `filters/sets.py:46-54` and `orders/sets.py:42`
+  both depend OUTWARD on the shared `..utils.permissions` core. No cycle. Empirically:
+  `import django_strawberry_framework.filters` succeeds, `__all__` len 16, sorted.
 - No High / no Medium / no folder-level Low. The four siblings' per-file no-action Lows were
-  each verified no-action in their own `verified` artifacts; none recurs as a folder pattern.
-- DRY = None at folder scope. The filter/order family-wrapper consolidation (incl. the
-  `normalize_input_value` pair, re-confirmed intentionally NOT a shared traversal per the
-  dispatch) is a CROSS-FOLDER relationship, already deferred-with-trigger in
-  `rev-filters__factories.md` (trigger: order-side Layer-6 TODO resolved) and the
-  cycle-11/12 sibling notes (trigger: AggregateSet/fieldsets WIP-ALPHA-028 lands). Forwarded by
-  citation to the project pass `docs/review/rev-django_strawberry_framework.md`; NOT re-opened
-  here.
-- Import-direction confirmed one-way/acyclic; `__init__.py` export surface consistent (no
-  GLOSSARY-only fix in scope — `filter_input_type` GLOSSARY:494 and `FilterSet`/`RelatedFilter`/
-  `Meta.filterset_class` entries were verified accurate in the per-file artifacts, no drift).
+  each verified no-action in their own `verified` artifacts; none recurs as a folder pattern; the
+  refactor introduced no new Low.
+- DRY = None at folder scope. The refactor IS a DRY consolidation (single-sited
+  `active_permission_targets`). The filter/order family-wrapper consolidation — now including the
+  new `_active_permission_targets` twin and the re-confirmed `normalize_input_value` pair — is a
+  CROSS-FOLDER relationship, already deferred-with-trigger in `rev-filters__factories.md`
+  (trigger: order-side Layer-6 TODO resolved) and the cycle-11/12 sibling notes (trigger:
+  AggregateSet/fieldsets WIP-ALPHA-028 lands). Forwarded by citation to the project pass
+  `docs/review/rev-django_strawberry_framework.md`; NOT re-opened here.
+- Duck-typed contract: both `FilterSet._active_permission_targets` (`filters/sets.py:1292`) and
+  `OrderSet._active_permission_targets` (`orders/sets.py:350`) define the method the shared
+  `run_active_input_permission_checks` (`utils/permissions.py:325`) calls — the order twin lands
+  in the same commit, so the shared core's assumption holds for both families.
+- `__init__.py` export surface unchanged by the refactor (private `_`-prefixed helpers only).
+  No GLOSSARY-only fix in scope — `filter_input_type` (GLOSSARY:494) and the
+  `FilterSet`/`RelatedFilter`/`Meta.filterset_class` entries were verified accurate in the
+  per-file artifacts; the refactor renamed only private helpers, none documented public contract.
 
 ---
 
@@ -189,95 +267,86 @@ None — no-source-edit cycle.
 Filled by Worker 1 per no-source-edit cycle pattern. No comment/docstring edits warranted at
 folder scope — the `__init__.py` module docstring, the `filter_input_type` docstring, the
 ledger lifecycle comment block (`__init__.py:38-43`), and the cross-family provenance comment
-(`__init__.py:69-74`) are accurate and consistent with the siblings; the per-file artifacts
-already cleared each sibling's comments.
+(`__init__.py:69-74`) are accurate and consistent with the siblings; `sets.py`'s new delegate
+docstrings (`_active_permission_targets` / `_active_permission_field_paths` naming
+`utils/permissions.py::active_permission_targets` as the shared core) match the `orders/sets.py`
+twin and were already cleared in the re-verified `rev-filters__sets.md`. The per-file artifacts
+cleared each sibling's comments.
 
 ---
 
 ## Changelog disposition
 
 Filled by Worker 1 per no-source-edit cycle pattern. Not warranted — no source change this
-cycle (empty folder diff against the baseline). Per AGENTS.md "Do not update CHANGELOG.md unless
-explicitly instructed" and the active plan `docs/review/review-0_0_10.md` carrying no changelog
-directive for review cycles.
+cycle (empty folder diff against HEAD; the maintainer's `79b74b46` refactor predates this review
+and is the maintainer's to changelog if desired). Per AGENTS.md "Do not update CHANGELOG.md
+unless explicitly instructed" and the active plan `docs/review/review-0_0_10.md` carrying no
+changelog directive for review cycles.
 
 ---
 
 ## Verification (Worker 3)
 
+Terminal verification of the RE-OPENED `filters/` folder pass (shape #5, no-source-edit;
+baseline HEAD `5724429c`). Independently confirmed every load-bearing claim.
+
 ### Logic verification outcome
-No-findings folder pass (shape #3 -> no-source-edit shape #5): High / Medium / Low all 0 at
-folder scope. Nothing to address; the four siblings' per-file no-action Lows are each closed in
-their own `verified` artifacts and none recurs as a folder-wide pattern (re-read the Low section
-and confirmed each is one-sibling-local, not a folder defect).
+No-findings folder pass (High 0 / Medium 0 / Low 0 at folder scope), so there is no per-finding
+disposition to audit. Instead the load-bearing standing-code claims were each independently
+re-derived:
 
-Independently re-derived the three folder-level structural claims rather than trusting the prose:
-
-- **Import direction one-way / acyclic — CONFIRMED, with a wording note.** Parsed all five files
-  and separated load-time imports from TYPE_CHECKING / in-function ones. Load-time intra-folder
-  edges are: `inputs -> base`; `sets -> {base, inputs}`; `factories -> {inputs, sets}`; `base`
-  imports no filters sibling. Topological order `base -> inputs -> sets -> factories`, strictly
-  acyclic. The `inputs -> sets` reference at `inputs.py:64` is TYPE_CHECKING-only (under
-  `if TYPE_CHECKING:`) and the `inputs.py:629` `.base` import is in-function — neither executes at
-  module load, so no load cycle. Verified empirically: `import django_strawberry_framework.filters`
-  succeeds (no circular-import error), `__all__` length 16. NOTE: the artifact's prose "`sets.py`
-  imports no `filters/` sibling" is imprecise — `sets.py` does import `.base` and `.inputs` at
-  lines 60-61, and `factories.py` imports `.inputs` (line 36) in addition to `.sets`. This
-  understates the edge set but does NOT contradict the load-bearing conclusion (one-way, acyclic,
-  no intra-folder cycle), which is correct. Not a rejection trigger; recorded for accuracy.
-- **`__init__.py` `__all__` is the minimal sorted consumer surface — CONFIRMED.** Programmatically
-  verified `__all__` (16 names) is sorted. The three internal-only re-imports
-  (`INPUTS_MODULE_PATH`, `_input_type_name_for` at `__init__.py:35`; `_helper_referenced_filtersets`
-  at `__init__.py:44`) are all confirmed ABSENT from `__all__` — correctly excluded as
-  body-internal / finalizer-wiring helpers, not consumer surface.
-- **Cross-folder DRY forward is genuinely cross-folder — CONFIRMED.** `def normalize_input_value`
-  exists once in `filters/inputs.py:412` and once in `orders/inputs.py:260` (two folders), not
-  twice within `filters/`. The Layer-6 family-wrapper consolidation candidate likewise spans
-  `filters/factories.py` <-> `orders/factories.py`. The defer-with-trigger is recorded verbatim in
-  the sibling artifact `rev-filters__factories.md` and keyed to the anchor at
-  `orders/factories.py:85` (`# TODO(spec-028-orders-0_0_8 Decision 12; standing deferred non-goal):`),
-  confirmed present. Both Layer-6 surfaces are presently unconsumed, so hoisting now would build
-  shared machinery for two non-shipped surfaces — deferral is sound. The project-pass artifact
-  `rev-django_strawberry_framework.md` does not yet exist; that is the expected later cycle item,
-  and the forward is by citation to where it will live with the binding trigger held in the
-  closed sibling artifact. Not a defect.
-
-Independently confirmed there is NO missed in-folder consolidation: extracted every `def`/`async
-def` name across the four siblings; zero names appear in 2+ files — no duplicated helper body to
-hoist. The folder-wide DRY recap (every shared mechanism delegates to a single-sited helper
-OUTSIDE the folder via `..utils`/`..sets_mixins`/`..types`) holds; the only 2+-file literal
-(`FilterSet`/`filterset`) is in every case a class reference, a family-label arg to the
-already-single-sited `utils.inputs` substrate, or the parameterized `_related_target_attr` slot —
-not a string-keyed dispatch constant.
+- **Import-cycle verdict on the new `filters → utils.permissions` edge: NO CYCLE — confirmed by
+  reading the actual import lines.** `utils/permissions.py` import block (lines 26-35) is exactly
+  `__future__`, `collections.abc`, `functools.lru_cache`, `typing.Any`, `django.http.HttpRequest`,
+  `..exceptions.ConfigurationError`, `.input_values` — ZERO back-edge into `filters/`. The only
+  `filters` tokens in the module (lines 59, 217, 315) are comment/docstring text, not imports
+  (grep-confirmed). `filters/sets.py:46-47` and `orders/sets.py:41-42` both depend OUTWARD on
+  `..utils.permissions`, so both families fan IN to the shared core; no fan-out back. The edge is
+  strictly `filters/sets.py → utils/permissions.py → {exceptions, utils.input_values}`.
+- **Empirically import-clean.** `import django_strawberry_framework.filters` (under Django setup)
+  succeeds with no circular-import error; `__all__` length 16 and `list(__all__) == sorted(...)`
+  both true — the artifact's surface claim is byte-exact (`ArrayFilter … validate_range`).
+- **Duck-typed `_active_permission_targets` contract holds on both families.** The shared call
+  site `cls._active_permission_targets(input_value)` (`utils/permissions.py:325`, inside
+  `run_active_input_permission_checks`) resolves on whichever family `cls` is; both
+  `filters/sets.py:1292` and `orders/sets.py:350` define the method (grep-confirmed). The order
+  twin lands in the same commit, so the shared core's assumption is satisfied for both.
+- **Cross-folder DRY forward is genuinely cross-folder.** `grep -rln "def _active_permission_targets"`
+  returns exactly two paths in two distinct folders (`filters/sets.py`, `orders/sets.py`) — the
+  family-wrapper consolidation (now including this twin) is a `filters/`↔`orders/` relationship,
+  correctly forwarded to the project pass `rev-django_strawberry_framework.md`, not an intra-folder
+  defect. The forward-target artifact does not yet exist (project pass unopened); that is the
+  expected forward-by-citation + open-box pattern, not a gap.
 
 ### DRY findings disposition
-None at folder scope (correct). The single genuine consolidation candidate (filter/order family
-wrappers incl. the `normalize_input_value` pair) is a `filters/` <-> `orders/` cross-folder
-relationship, deferred-with-trigger in the sibling artifacts and forwarded by citation to the
-project pass. No intra-folder duplication to act on.
+None at folder scope, accepted. The `79b74b46` refactor IS a DRY consolidation that strengthens
+the folder's "every shared mechanism delegates to a single-sited helper outside the folder"
+property at the permission layer; the one genuine consolidation candidate is cross-folder and
+forwarded. Verified the cross-folder claim directly (two-folder grep above).
 
 ### Temp test verification
-- None. No-source-edit cycle, no behavior to pin; the folder-level claims are verifiable by AST
-  parse + import smoke + grep, all run above.
-- Disposition: n/a.
+None needed — no behavior change to prove (empty cycle diff; the fused-walk behavior was already
+proven equivalent in the just-closed `rev-filters__sets.md` re-verify). No temp tests created.
 
 ### Shape #5 checks
-1. Cycle diff `git diff <baseline> -- django_strawberry_framework/filters/` empty; `--stat` over
-   `django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` empty; broad
-   `git diff --stat <baseline>` fully empty (no dirty tree this cycle).
-2. Each Worker 2 section opens with `Filled by Worker 1 per no-source-edit cycle pattern.` (Fix
-   report / Comment-docstring pass / Changelog disposition). Confirmed.
-3. No GLOSSARY-only fix in scope (all Lows no-action or forwarded; none is a GLOSSARY-only edit).
-4. Changelog `Not warranted` cites BOTH AGENTS.md and the active plan's silence; `git diff --
-   CHANGELOG.md` empty. Confirmed.
-5. `uv run ruff format --check django_strawberry_framework/filters/` -> 5 files already formatted;
-   `uv run ruff check django_strawberry_framework/filters/` -> All checks passed. (COM812
-   formatter-conflict warning is pre-existing config noise.)
+1. `git diff HEAD -- django_strawberry_framework/filters/` is EMPTY (confirmed). Working-tree
+   dirty paths (`management/`, KANBAN, specs, db.sqlite3) touch no `filters/` file — they are
+   closed sibling cycles (`rev-management__commands.md`) / concurrent maintainer work, not a
+   rejection trigger.
+2. All three Worker 2 sections start with `Filled by Worker 1 per no-source-edit cycle pattern.`
+   (lines 220, 267, 280).
+3. No Low at folder scope to phrase; the four per-file no-action Lows are forwarded by citation
+   to their own `verified` artifacts. No GLOSSARY-only fix present (refactor renamed private
+   helpers only; GLOSSARY entries verified accurate in per-file artifacts) — not disqualifying.
+4. Changelog `Not warranted` cites BOTH AGENTS.md ("Do not update CHANGELOG.md unless explicitly
+   instructed") AND the active plan's silence (`review-0_0_10.md`, no changelog directive);
+   `git diff -- CHANGELOG.md` empty. "Not warranted" framing honest — no public surface changed
+   (`__all__` byte-identical, private-helper renames only).
+5. `uv run ruff format --check django_strawberry_framework/filters/` → 5 files already formatted
+   (COM812 notice is pre-existing config noise); `uv run ruff check django_strawberry_framework/filters/`
+   → "All checks passed!".
 
 ### Verification outcome
-`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `filters/` folder-pass
-checklist box at `docs/review/review-0_0_10.md:85`. The folder is structurally clean at folder
-scope: import direction one-way/acyclic (load-time edges only, empirically import-clean),
-`__init__.py` `__all__` the minimal sorted consumer surface with internal helpers excluded, no
-intra-folder duplicated helper body, and the one genuine consolidation candidate correctly
-forwarded as cross-folder. Zero edits, shape #5 preamble/ruff/changelog all met.
+cycle accepted; verified — sets top-level `Status: verified` AND marks the re-opened `filters/`
+folder-pass checklist box. Import-cycle verdict: the new `filters → utils.permissions` edge is
+one-way and acyclic; no cycle introduced.

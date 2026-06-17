@@ -1,4 +1,4 @@
-"""OrderArgumentsFactory tests for BFS input generation and dynamic OrderSet caching.
+"""OrderArgumentsFactory tests for BFS input generation.
 
 Covers ``OrderArgumentsFactory``'s BFS walk, per-class collision check,
 idempotency, subclass rejection, and the leaf / related-branch

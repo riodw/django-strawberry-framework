@@ -54,7 +54,7 @@ Run it: `uv run python scripts/bench_plan_cache.py`.
 
 **Coming from `strawberry-graphql-django`?** Keep Strawberry; lose the decorators. Configuration moves into `class Meta` so it's consistent with the rest of your Django app. Plus the optimizer wins above, and queryset diffing.
 
-**Coming from DRF + django-filter?** Your `Meta.model` / `fields` / `exclude` / `filterset_class` mental model travels straight over — and filtering *and* ordering ship today via `Meta.filterset_class` / `Meta.orderset_class`. Mutations are on the roadmap (`0.0.11`): planned as `DjangoMutation` classes with the same nested-`Meta` shape, including a DRF-serializer flavor via `Meta.serializer_class`.
+**Coming from DRF + django-filter?** Your `Meta.model` / `fields` / `exclude` / `filterset_class` mental model travels straight over — and filtering *and* ordering ship today via `Meta.filterset_class` / `Meta.orderset_class`. Mutations are on the roadmap: the `DjangoMutation` foundation lands in `0.0.11` with the same nested-`Meta` shape, and a DRF-serializer flavor via `Meta.serializer_class` follows in `0.0.13`.
 
 ## Status
 

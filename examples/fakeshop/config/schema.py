@@ -29,6 +29,13 @@ class Query(LibraryQuery, ProductsQuery, ScalarsQuery, KanbanQuery, GlossaryQuer
     """Top-level Query - extends each app's Query."""
 
 
+# TODO(spec-036 Slice 4): compose the products Mutation into the project schema.
+# Pseudocode:
+# - import ``Mutation as ProductsMutation`` from ``apps.products.schema``;
+# - declare a top-level Strawberry ``Mutation`` class that extends it;
+# - pass ``mutation=Mutation`` into ``strawberry.Schema`` below;
+# - keep finalization before Schema construction so mutation payload lazy refs
+#   resolve after phase-2.5 binding.
 finalize_django_types()
 
 # Module-level singleton wrapped in a factory: ``get_extensions`` runs the

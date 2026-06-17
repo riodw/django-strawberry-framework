@@ -54,6 +54,13 @@ Run it: `uv run python scripts/bench_plan_cache.py`.
 
 **Coming from `strawberry-graphql-django`?** Keep Strawberry; lose the decorators. Configuration moves into `class Meta` so it's consistent with the rest of your Django app. Plus the optimizer wins above, and queryset diffing.
 
+<!-- TODO(spec-036 Slice 5): update this migration pitch after the mutation
+foundation ships.
+Pseudocode: say model-driven DjangoMutation create/update/delete now ships in
+0.0.11, keep DRF serializer mutations explicitly targeted at 0.0.13, and do
+not imply the form/serializer/auth flavors are part of the 0.0.11 foundation.
+-->
+
 **Coming from DRF + django-filter?** Your `Meta.model` / `fields` / `exclude` / `filterset_class` mental model travels straight over — and filtering *and* ordering ship today via `Meta.filterset_class` / `Meta.orderset_class`. Mutations are on the roadmap: the `DjangoMutation` foundation lands in `0.0.11` with the same nested-`Meta` shape, and a DRF-serializer flavor via `Meta.serializer_class` follows in `0.0.13`.
 
 ## Status

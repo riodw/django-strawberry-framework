@@ -21,6 +21,13 @@ Current package version: `0.0.10`. Alpha-quality — suitable for internal tools
 
 ## Public exports
 
+<!-- TODO(spec-036 Slice 5): promote the mutation foundation glossary state.
+Pseudocode: add DjangoMutation, DjangoMutationField, and FieldError to Public
+exports; promote DjangoMutation, Input type generation, and FieldError envelope
+from planned to shipped; add a DjangoMutationField entry and Index row; note the
+G2 mutation handoff in the only() projection entry.
+-->
+
 Symbols re-exported from `django_strawberry_framework`:
 
 - [`BigInt`](#bigint-scalar) — JSON-safe scalar for 64-bit integer fields.

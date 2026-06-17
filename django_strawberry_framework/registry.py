@@ -515,6 +515,13 @@ class TypeRegistry:
             "_helper_referenced_ordersets",
             lambda ledger: ledger.clear(),
         )
+        # TODO(spec-036 Slice 1-2): co-clear mutation generated-input globals,
+        # payload globals, helper ledgers, and registered ``DjangoMutation``
+        # classes once the mutation package owns those lifecycle maps.
+        # Pseudocode:
+        # - call ``mutations.inputs.clear_mutation_input_namespace()``;
+        # - call the mutation declaration registry clear hook from ``sets.py``;
+        # - keep every co-clear best-effort and independent like filters/orders.
         _clear_if_importable(
             "django_strawberry_framework.connection",
             "clear_connection_type_cache",

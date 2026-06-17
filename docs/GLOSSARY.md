@@ -601,7 +601,7 @@ The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` 
 
 **Status:** planned for `0.0.14`.
 
-`unittest.TestCase` subclass for live HTTP-level testing patterns. Mirrors `strawberry-django`'s `test/client.py`. Provides `query()` / `mutate()` helpers and assertion shortcuts.
+`unittest.TestCase` subclass for live HTTP-level testing patterns. The `GraphQLTestCase` name and mixin-first shape come from `graphene-django`'s `utils/testing.py` (`GraphQLTestCase` / `GraphQLTestMixin` / `graphql_query`); the underlying HTTP client mirrors `strawberry-django`'s `test/client.py` ([`TestClient`](#testclient) / `AsyncTestClient`). Provides `query()` / `mutate()` helpers and assertion shortcuts.
 
 **See also:** [`TestClient`](#testclient).
 
@@ -611,7 +611,7 @@ The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` 
 
 [`DjangoMutation`](#djangomutation) auto-generates two input types from a Django model declared in `Meta.model`:
 
-- **`Input`** — every field required (matches `Model.objects.create(...)` semantics).
+- **`Input`** — the create shape (`Model.objects.create(...)` semantics). A field is required only when it has no usable Django `default`, is not `null=True`, and (for text fields) is not `blank=True`; fields that do have a default/blank/null are optional. This is the DRF `required=False`-from-`default`/`blank`/`null` rule, not a blanket "every field required".
 - **`PartialInput`** — every field optional (matches `Model.objects.update(...)` semantics).
 
 Both preserve the relation-override contract from the foundation slice: consumer-authored input fields are honored rather than clobbered by generated ones.

@@ -10,7 +10,7 @@ The upstream trees are captured for reference while shaping `django-strawberry-f
 
 Source: `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django`
 
-```text
+```bash
 graphene_django/
 ├── debug/
 │   ├── exception/
@@ -79,7 +79,7 @@ graphene_django/
 
 Source: `/Users/riordenweber/projects/strawberry-django-main/strawberry_django`
 
-```text
+```bash
 strawberry_django/
 ├── auth/
 │   ├── __init__.py
@@ -161,7 +161,7 @@ strawberry_django/
 
 Source: `/Users/riordenweber/projects/django-graphene-filters/django_graphene_filters`
 
-```text
+```bash
 django_graphene_filters/
 ├── __init__.py
 ├── aggregate_arguments_factory.py
@@ -189,7 +189,7 @@ django_graphene_filters/
 
 Source: `django_strawberry_framework/`
 
-```text
+```bash
 django_strawberry_framework/    # Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its Django patches at app load.
@@ -253,7 +253,7 @@ The current package tree merged with every not-yet-existing path linked from a W
 
 Source: `django_strawberry_framework/ (+ planned card paths)`
 
-```text
+```bash
 django_strawberry_framework/    # Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its Django patches at app load.
@@ -333,7 +333,7 @@ Tests live in four deliberate places, each chosen by what the test is proving. T
 
 Source: `tests/`
 
-```text
+```bash
 tests/    # Package-internal tests for django_strawberry_framework.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and Django patch application.
@@ -373,7 +373,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 ├── orders/    # Package tests for the OrderSet subsystem.
 │   ├── test_base.py              # RelatedOrder tests for nested ordering paths and lazy related-class handling.
 │   ├── test_composition.py       # Filter and order composition smoke tests for Layer-3 read-side integration.
-│   ├── test_factories.py         # OrderArgumentsFactory tests for BFS input generation and dynamic OrderSet caching.
+│   ├── test_factories.py         # OrderArgumentsFactory tests for BFS input generation.
 │   ├── test_finalizer.py         # Finalizer tests for order binding, Meta.orderset_class promotion, and orphan validation.
 │   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
@@ -407,7 +407,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 
 Source: `examples/fakeshop/apps/*/tests/`
 
-```text
+```bash
 examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the app they protect.
 ├── glossary/
 │   └── tests/    # Non-live app tests for glossary models, factories, and import commands.
@@ -438,7 +438,7 @@ examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the
 
 Source: `examples/fakeshop/tests/`
 
-```text
+```bash
 examples/fakeshop/tests/    # Example-project tests for fakeshop behavior without live /graphql HTTP.
 ├── test_export_schema.py         # Fakeshop project command tests for export_schema against the configured schema.
 ├── test_inspect_django_type.py   # Fakeshop project command tests for inspect_django_type against example DjangoTypes.
@@ -448,7 +448,7 @@ examples/fakeshop/tests/    # Example-project tests for fakeshop behavior withou
 
 Source: `examples/fakeshop/test_query/`
 
-```text
+```bash
 examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consumer-visible API.
 ├── README.md                     # Live GraphQL-API tests for the fakeshop example project.
 ├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
@@ -467,7 +467,7 @@ The current test trees merged with the not-yet-existing test paths linked from W
 
 Source: `tests/ (+ planned card paths)`
 
-```text
+```bash
 tests/    # Package-internal tests for django_strawberry_framework.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and Django patch application.
@@ -512,7 +512,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 ├── orders/    # Package tests for the OrderSet subsystem.
 │   ├── test_base.py              # RelatedOrder tests for nested ordering paths and lazy related-class handling.
 │   ├── test_composition.py       # Filter and order composition smoke tests for Layer-3 read-side integration.
-│   ├── test_factories.py         # OrderArgumentsFactory tests for BFS input generation and dynamic OrderSet caching.
+│   ├── test_factories.py         # OrderArgumentsFactory tests for BFS input generation.
 │   ├── test_finalizer.py         # Finalizer tests for order binding, Meta.orderset_class promotion, and orphan validation.
 │   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
@@ -551,7 +551,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 
 Source: `examples/fakeshop/`
 
-```text
+```bash
 examples/fakeshop/    # A Django + Strawberry GraphQL example project that exercises django-strawberry-framework end-to-end.
 ├── manage.py                     # Django command-line entry point for the fakeshop example project.
 ├── config/    # Project orchestration package for fakeshop settings, URLs, WSGI, and schema composition.

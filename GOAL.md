@@ -1,5 +1,7 @@
 # GOAL
 
+- /Users/riordenweber/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
+
 ## North star
 
 `django-strawberry-framework` should be **the DRF-shaped, `class Meta`-driven Django integration for Strawberry GraphQL**. The destination is the developer experience proven by `django-graphene-filters` — declarative `Meta` classes, automatic input-type generation, rich filter / order / aggregate / fieldset sidecars, layered permissions including cascade visibility — on a modern Strawberry foundation, without Graphene runtime baggage.
@@ -12,7 +14,7 @@ When the package is feature-complete at `1.0.0`, a single Django app — call it
 
 > **Reading this as a glossary lookup**: every symbol you see below (`DjangoType`, `FilterSet`, `RelatedFilter`, `apply_cascade_permissions`, `Meta.filterset_class`, `Meta.orderset_class`, `Meta.aggregate_class`, `Meta.fields_class`, `Meta.search_fields`, `DjangoConnectionField`, `DjangoNodeField`, `OrderSet`, `RelatedOrder`, `AggregateSet`, `RelatedAggregate`, `FieldSet`, …) has a per-feature entry in [`docs/GLOSSARY.md`][glossary]. Use that file when a symbol is unfamiliar — it answers *"is this shipped today, and what exactly does it do?"* for every symbol shown below. The [alphabetical Index][glossary-index] at the top of `GLOSSARY.md` is the fastest entry point — every entry is deep-linked, so you can also URL-jump straight to e.g. [`#filterset`][glossary-filterset] or [`#metafilterset_class`][glossary-metafilterset-class].
 
-```text
+```bash
 apps/astronomy/
 ├── models.py        # Django models
 ├── schema.py        # DjangoType nodes + Query

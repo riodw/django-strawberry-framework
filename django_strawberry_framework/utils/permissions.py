@@ -67,6 +67,7 @@ __all__ = [
     "iter_input_items",
     "request_from_info",
     "run_active_input_permission_checks",
+    "verbatim_path",
 ]
 
 
@@ -145,8 +146,15 @@ def invoke_permission_method(
             fired.add(method_name)
 
 
-def _verbatim_path(python_attr: str) -> str:
-    """Fallback path that returns the attr unchanged (the related-only callers)."""
+def verbatim_path(python_attr: str) -> str:
+    """Shared identity ``fallback_path``: the python attr IS its own source path.
+
+    Used wherever a caller has no lookup-to-source remapping to apply -- the
+    related-only ``active_related_branches`` discard caller and the order side's
+    ``OrderSet._active_permission_targets`` (whose order attrs map verbatim). The
+    filter side passes its own real remap instead. Module-level (not a per-call
+    lambda) so order-side traversals do not allocate a fresh closure each walk.
+    """
     return python_attr
 
 
@@ -238,7 +246,7 @@ def active_related_branches(
         field_specs={},
         related_attr=related_attr,
         logic_keys=frozenset(),
-        fallback_path=_verbatim_path,
+        fallback_path=verbatim_path,
         unset_sentinel=unset_sentinel,
         handle_top_level_list=handle_top_level_list,
     )

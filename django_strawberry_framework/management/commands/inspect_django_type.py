@@ -44,6 +44,7 @@ from strawberry.types.base import StrawberryList, StrawberryOptional
 from strawberry.types.field import UNRESOLVED
 from strawberry.utils.importer import import_module_symbol
 
+from django_strawberry_framework.management.commands._imports import import_or_command_error
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.scalars import BigInt
 from django_strawberry_framework.types.base import DjangoType
@@ -100,10 +101,12 @@ class Command(BaseCommand):
         """Import the schema (if given), resolve the type, and print its field table."""
         schema = options.get("schema")
         if schema:
-            try:
-                import_module_symbol(schema, default_symbol_name="schema")
-            except (ImportError, AttributeError) as e:
-                raise CommandError(str(e)) from e
+            # Import-for-side-effect: the return is intentionally discarded; the
+            # call exists only to register and finalize every type before
+            # resolution (required for a cold CLI process).
+            import_or_command_error(
+                lambda: import_module_symbol(schema, default_symbol_name="schema"),
+            )
 
         target = self._resolve_type(options["type"])
         if not (isinstance(target, type) and issubclass(target, DjangoType)):
@@ -123,10 +126,7 @@ class Command(BaseCommand):
     def _resolve_type(self, arg: str) -> object:
         """Resolve the ``type`` argument by shape - dotted path vs bare registered name."""
         if "." in arg:
-            try:
-                return import_string(arg)
-            except (ImportError, AttributeError) as e:
-                raise CommandError(str(e)) from e
+            return import_or_command_error(lambda: import_string(arg))
         return self._resolve_bare_name(arg)
 
     @staticmethod

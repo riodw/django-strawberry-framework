@@ -312,12 +312,18 @@ def response_keys(selection: Any) -> tuple[str, ...]:
     )
 
 
-# TODO(spec-035 Slice 3): add a tri-state fragment classifier to this converted
-# selection inliner, but keep the default path byte-for-byte unconditional.
-# Pseudocode: no classifier means INLINE-all for extension cache-key and
-# connection extraction callers; a walker-supplied classifier returns INLINE,
-# SKIP, or RECURSE_FRAGMENTS_ONLY. The recursion mode drops direct fields for an
-# unknown composite/union condition while still re-checking nested fragments.
+# TODO(BACKLOG polymorphic_interface_connections - the abstract-return optimizer
+# entry card): add a tri-state fragment classifier to this converted selection
+# inliner, but keep the default path byte-for-byte unconditional. Reachability:
+# an abstract (interface/union) root field never reaches the walker today -
+# registry.model_for_type returns None for the abstract origin, so _optimize
+# passes the queryset through before this inliner runs; the classifier therefore
+# ships nothing until that card first builds the abstract-return production-entry
+# contract (R1). Pseudocode: no classifier means INLINE-all for extension
+# cache-key and connection extraction callers; a walker-supplied classifier
+# returns INLINE, SKIP, or RECURSE_FRAGMENTS_ONLY. The recursion mode drops
+# direct fields for an unknown composite/union condition while still re-checking
+# nested fragments.
 def included_field_selections(selections: list[Any]) -> list[Any]:
     """Return included fields with fragment bodies inlined before field merging.
 

@@ -99,6 +99,8 @@ CYCLE_BASELINE=$(git stash create)  # at cycle start; empty SHA if working tree 
 
 Pass the SHA to every dispatch this cycle. Cycle diffs use `git diff "$CYCLE_BASELINE" -- …`. Empty SHA → use HEAD. Stash-create commits don't appear on the stash stack; Git reflog-GCs them.
 
+**Concurrent-work fallbacks.** `git stash create` fails when the index has staged entries (e.g. a concurrent maintainer commit-in-progress) — fall back to baseline HEAD and have subagents scope to the specific cycle file (`git diff HEAD -- <target>`); since each item touches distinct files, file-scoped diffs stay clean even with accumulated review work in other files. **Drift re-open:** if the run spans concurrent maintainer commits, an already-`verified` artifact whose source later changed is stale — re-open it (uncheck the box, re-run the full cycle against current source) before the final gate. Refresh `docs/shadow/` (`--all`) after any such gap so reviews read current source.
+
 ### Cycle-closing re-check
 
 Diffs always scope via `$CYCLE_BASELINE`. Tiered:

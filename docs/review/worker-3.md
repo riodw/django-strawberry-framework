@@ -39,6 +39,10 @@ Worker 3 may edit:
 
 Worker 3 must not: implement source changes, approve unrelated cleanup, mark the checkbox before all sub-passes are accepted, run pytest preemptively (only when a test was introduced or focused confirmation is required), mention Worker 0's task list, read other workers' memory, or commit. Memory is append-only; consolidate when approaching ~75 lines.
 
+## Diff scoping (zero-edit proof)
+
+Scope edits **per item, not cycle-wide.** The cycle-wide `git diff --stat` is often dirty with closed sibling cycles' work; that is not a rejection trigger. The zero-edit proof for a shape-#5 item is `git diff HEAD -- <target>` empty AND the target absent from the stat. Attribute any unexpected dirty hunk by finding its owning `rev-*.md` (`Status: verified`, box `[x]`). **Content-not-identifier:** a stale line number or baseline SHA is cosmetic — verify a cited claim by grepping the quoted substring against live source, never by the number.
+
 ## Artifact `Status:` (Worker 3 view)
 
 Worker 3 owns interim `logic-accepted` / `comments-accepted` and terminal `verified` / `revision-needed`. Full state machine in `REVIEW.md`.

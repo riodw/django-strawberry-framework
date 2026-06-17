@@ -300,6 +300,21 @@ class Query:
         return queryset
 
     @strawberry.field
+    def all_library_branches_eager_eval(self, info: strawberry.Info) -> list[BranchType]:
+        # G1 (spec-035): the evaluated-queryset guard, dogfooded. A consumer that
+        # evaluates its queryset before returning it - here an ``if not queryset``
+        # empty-guard whose ``bool(...)`` populates ``_result_cache`` - must NOT be
+        # re-executed by the optimizer. ``DjangoOptimizerExtension._optimize`` sees
+        # the populated cache and returns the queryset unchanged instead of cloning
+        # it and applying ``.only(...)``, which would double the SQL (one logical
+        # read -> two queries). Pinned live in ``test_query/test_library_api.py``
+        # (``test_library_evaluated_queryset_not_re_executed_over_http``).
+        queryset = BranchType.get_queryset(models.Branch.objects.order_by("id"), info)
+        if not queryset:  # evaluates the queryset -> _result_cache populated
+            return []
+        return queryset
+
+    @strawberry.field
     def all_library_shelves(
         self,
         info: strawberry.Info,

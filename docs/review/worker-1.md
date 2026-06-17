@@ -46,6 +46,8 @@ The `## DRY analysis` section lists **actionable** DRY consolidation candidates 
 
 If no real opportunities exist for the file, write a single bullet `- None — <one sentence why the current factoring is correct>`. Silence on DRY is not acceptance.
 
+**Orphaned / duplicated helper → act-now vs defer turns on the `_`/`__all__` axis.** A private (`_`-prefixed) symbol with a byte-identical twin is act-now dedupe; an orphaned-but-public (`__all__`-exported, zero first-party callers) symbol is forward-defer (removing it is a breaking change). Confirm a refactor-orphan vs never-used with `git log -S 'name('`.
+
 The positive audit trail — "Existing patterns reused", "No new helper needed at this granularity", "Considered-and-rejected duplication" — belongs in the artifact's `## What looks solid` section under a `### DRY recap` H3 subsection, NOT in `## DRY analysis`. The DRY-cycle export script (`docs/dry/export_dry_review.py`) extracts every top-level bullet from `## DRY analysis` as a finding, so recap bullets become noise in the consolidation plan and force every DRY cycle to re-triage them.
 
 ### `## What looks solid` subsection structure
@@ -104,6 +106,8 @@ Before finalising, grep `docs/GLOSSARY.md` for backticked symbols from your targ
 ## No-source-edit cycle (shape #5)
 
 Qualifies when the cycle produces **zero edits to any tracked file** (source, tests, GLOSSARY, CHANGELOG, any path) AND no High / no behaviour-changing Medium AND every Low is forward-looking or forwarded.
+
+A dispatch's "+N changed file" can be **cumulative work already in HEAD**, not a pending edit — confirm `git diff HEAD -- <target>` is empty before assuming a standard three-spawn cycle. Verify cited content by grepping the quoted substring, never by trusting a line number or baseline SHA (both drift as HEAD moves).
 
 **GLOSSARY-only fixes do NOT qualify** — they need a real edit; route through shape #4 (Worker 2 makes the edit).
 

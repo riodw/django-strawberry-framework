@@ -295,6 +295,39 @@ def test_library_optimizer_selects_book_shelf_in_http_query():
 
 
 @pytest.mark.django_db
+def test_library_evaluated_queryset_not_re_executed_over_http():
+    """G1 (spec-035): a resolver that EVALUATES its queryset before returning it
+    runs exactly ONE SQL query over the live stack.
+
+    ``all_library_branches_eager_eval`` does ``if not queryset: return []``,
+    whose ``bool(queryset)`` populates ``_result_cache``. The optimizer's
+    evaluated-queryset guard passes the already-executed queryset through
+    instead of cloning it and applying ``.only(...)`` - which, pre-G1, would
+    re-execute the SQL (two queries for one logical read). The guard makes it
+    one.
+    """
+    _seed_library_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryBranchesEagerEval { name }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": {"allLibraryBranchesEagerEval": [{"name": "Central"}]},
+    }
+    # G1: exactly one query - the consumer's own ``bool(queryset)`` evaluation.
+    # Without the evaluated-queryset guard, the optimizer's ``.only()`` clone
+    # would re-execute and this would be two.
+    assert len(captured) == 1
+
+
+@pytest.mark.django_db
 def test_library_reverse_fk_and_m2m_prefetch_sql_shape_over_http():
     _seed_library_graph()
 

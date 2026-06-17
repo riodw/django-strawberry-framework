@@ -85,3 +85,42 @@ Filled by Worker 1 per no-source-edit cycle pattern. No comment or docstring edi
 ## Changelog disposition
 
 Filled by Worker 1 per no-source-edit cycle pattern. **Not warranted.** No source change this cycle (cycle diff against baseline empty); AGENTS.md forbids `CHANGELOG.md` edits unless explicitly instructed, and the active plan (`docs/review/review-0_0_10.md`) authorizes no changelog work. Low 2's CHANGELOG-prose observation is recorded for the maintainer but is not an edit this cycle performs.
+
+---
+
+## Verification (Worker 3)
+
+### Logic verification outcome
+Terminal-verify, shape #5 (no-source-edit). Baseline = HEAD; working tree clean. `git diff HEAD -- django_strawberry_framework/management/commands/inspect_django_type.py` empty; `git diff --stat HEAD -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` empty for all paths. Zero edits confirmed.
+
+High 0 / Medium 0 — concur after independent source read.
+
+- **DjangoType lookup is correct.** `handle` reads the registration attribute `__django_strawberry_definition__` (set at `types/base.py::__init_subclass__` line 649, read defensively at line 683), distinct from Strawberry's native `__strawberry_definition__`. The two attributes are used for two distinct purposes and never conflated: registration/finalization state vs. finalized Strawberry field metadata. The `definition is None` (abstract/no-Meta base) and `finalized is False` guards each map to a tested `CommandError` branch.
+- **The two read paths are correct and match their docstrings.** `origin.__annotations__` for auto-synthesized scalar/relation rows (`_scalar_row` line 292, `_relation_row` line 240); `origin.__strawberry_definition__.fields` for consumer-authored fields (`_consumer_authored_row` line 323) and `"connection"`-shaped relations (`_connection_only_relation_row` line 282). The connection-only branch never indexes the popped list annotation: `_suppressed_connection_name` guards `if field.name in origin.__annotations__: return None` (line 260) before inverting `relation_connections`. Verified `relation_connections` is the `{generated: name}` map set in `types/finalizer.py::_record_relation_connection` (line 349) and documented at `types/definition.py:86`; the command's inverted lookup `(gen for gen, rel in connections.items() if rel == field.name)` (line 263) reads it correctly.
+- **snake_case keying matches the package convention.** `field_map[snake_case(field.name)]` (line 192) mirrors the construction site `field_map = {snake_case(f.name): FieldMeta.from_django_field(f) ...}` (`types/base.py:488`) and the canonical read sites (`types/base.py:1388`, `:1572`). No keying drift.
+- **All cross-referenced FieldMeta/definition attributes exist** with matching shapes: `relation_kind`, `is_relation`, `is_many_side`, `nullable` (FieldMeta); `field_map`, `selected_fields`, `finalized`, `relation_connections`, `consumer_authored_fields`, and the four `consumer_{annotated,assigned}_{scalar,relation}_fields` frozensets (definition).
+
+**Both Lows are genuinely no-action this cycle:**
+
+- **Low 1 (unreachable relation-kind label fallback) — forward-trigger-gated with a valid trigger.** `RelationKind` is exactly the 4-value `Literal` at `utils/relations.py:7-12` (`"many"`, `"reverse_many_to_one"`, `"reverse_one_to_one"`, `"forward_single"`), and `_RELATION_KIND_LABELS` (lines 60-65) maps all four. The `.get(kind, kind)` fallback (lines 242, 286) cannot fire for any value `relation_kind` returns today — confirmed by reading both files. The trigger ("a fifth `RelationKind` member lands without a matching label, in the same change") is genuine and falsifiable; adding a label for a non-existent kind now would be speculative. No-action correct.
+- **Low 2 (CHANGELOG summary omits the `__strawberry_definition__` read path) — maintainer-deferred changelog matter, not a source defect.** The cited entry has drifted from `CHANGELOG.md:36` to `CHANGELOG.md:42` (concurrent maintainer commits inserted the `DjangoConnectionField` block above it — AGENTS.md #33 out-of-scope work), but the cited prose is verbatim intact: "reads the resolved annotation from `origin.__annotations__` ... not a `convert_scalar` re-run". The premise — that this one-liner elides the second authoritative source — holds. The source code matches its own docstrings (module docstring lines 9-21 document both paths) and the GLOSSARY entry (`docs/GLOSSARY.md:1209`) is precise (documents both `origin.__annotations__` and `origin.__strawberry_definition__`, the `"connection"`-shape exception, and the `UNRESOLVED` raise). So only the CHANGELOG summary is lossy; this is a maintainer changelog decision, not a code/docstring drift. AGENTS.md forbids unauthorized `CHANGELOG.md` edits and the active plan authorizes none. No-action correct; line-number drift is cosmetic.
+
+### Docstring accuracy
+No mis-attribution. Module docstring (lines 9-21), `_resolve_row` dispatch-order rationale (lines 178-191), `_relation_row` / `_suppressed_connection_name` / `_connection_only_relation_row` connection-shape explanations, the `_consumer_authored_row` UNRESOLVED rationale, and the lines-58-59 "unmapped kinds fall back to the raw token" comment all match the code's real (and for the fallback, currently-unreachable-but-correct defensive) behavior. The comment pass no-op is justified.
+
+### DRY findings disposition
+- Bullet 1 (parallel `_render_annotation` / `_render_strawberry_type` renderers) and bullet 2 (shared `_scalar_name` chokepoint) — concur: deliberate parallel mirrors over two distinct input vocabularies; a unified renderer would re-couple them. Not a consolidation target.
+- Bullet 3 (shared import-or-CommandError shape with `export_schema`) — forwarded by citation to the folder pass `rev-management__commands.md`. That artifact does not yet exist but its checklist box is planned and open (`docs/review/review-0_0_10.md:90`, `[ ]`); a forward-by-citation is recorded in this artifact's DRY analysis for the folder pass to triage, which is the correct disposition (not a local defect). Soundly recorded.
+
+### Temp test verification
+- No temp tests required — no-source-edit cycle, every claim verified by source/artifact cross-read.
+
+### Shape #5 checklist
+1. Baseline diff empty for all owned paths — confirmed.
+2. Each Worker 2 section opens with `Filled by Worker 1 per no-source-edit cycle pattern.` — confirmed (Fix report, Comment/docstring pass, Changelog disposition).
+3. Every Low has verbatim trigger phrasing (Low 1) or is a maintainer-deferred changelog matter (Low 2); the DRY item is forwarded. No GLOSSARY-only fix present.
+4. Changelog `Not warranted` cites BOTH AGENTS.md and the active plan's silence; `git diff -- CHANGELOG.md` empty — confirmed. Internal-only framing matches the empty diff scope.
+5. `uv run ruff format --check` (1 file already formatted) + `uv run ruff check` (All checks passed) on the target — both clean.
+
+### Verification outcome
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the checklist box.

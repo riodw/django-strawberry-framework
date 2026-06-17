@@ -7,6 +7,8 @@ from strawberry import Schema
 from strawberry.printer import print_schema
 from strawberry.utils.importer import import_module_symbol
 
+from django_strawberry_framework.management.commands._imports import import_or_command_error
+
 
 class Command(BaseCommand):
     """Export the GraphQL SDL for a strawberry.Schema symbol."""
@@ -33,13 +35,9 @@ class Command(BaseCommand):
         ``[0.0.7] Changed`` "--path now requires a value when the flag is
         given" contract).
         """
-        try:
-            schema_symbol = import_module_symbol(
-                options["schema"],
-                default_symbol_name="schema",
-            )
-        except (ImportError, AttributeError) as e:
-            raise CommandError(str(e)) from e
+        schema_symbol = import_or_command_error(
+            lambda: import_module_symbol(options["schema"], default_symbol_name="schema"),
+        )
 
         if not isinstance(schema_symbol, Schema):
             raise CommandError("The `schema` must be an instance of strawberry.Schema")

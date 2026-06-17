@@ -196,7 +196,7 @@ DJANGO_STRAWBERRY_FRAMEWORK = {"OPTIMIZER_DEFAULT": "off"}
 - **Mechanism.** A module-level `WeakKeyDictionary[OperationDefinitionNode, str]` mapping the operation node to its printed, reachable-fragment-aware key component. Weak keys so a node collected with its document drops its entry automatically — no unbounded growth, no manual eviction, no invalidation pass.
 - **Only the printed-AST component is memoized, not the whole key.** The full cache key stays `(printed-AST, frozenset vars, model, path tuple, origin)`; variables, model, path, and origin still vary per request and are combined fresh. This card removes only the `print_ast` cost, which is the request-invariant part for a given node.
 - **Correctness.** The printed key already folds in reachable fragments, and a reused node identity *is* the same document — so its printed form is invariant and the memo can never go stale for a live node. The per-execution `_printed_ast_cache` ContextVar stays as the within-request memo; this adds a cross-request layer above it.
-- **Measure it.** Extend [`scripts/bench_plan_cache.py`](scripts/bench_plan_cache.py) to isolate key-build time on the hit path (as it already isolates the walk via warm-vs-cold), so the win is quantified rather than asserted — the residual after the walk is exactly what this targets.
+- **Measure it.** Extend [`scripts/bench_plan_cache.py`][bench-plan-cache] to isolate key-build time on the hit path (as it already isolates the walk via warm-vs-cold), so the win is quantified rather than asserted — the residual after the walk is exactly what this targets.
 
 **Composes with**: the shipped Plan cache (B1) and `cache_info()` (this is the next per-request win after the walk the cache already eliminates), and `scripts/bench_plan_cache.py` (the measurement harness).
 
@@ -1732,6 +1732,7 @@ If a card turns out to be wrong (the upstream packages ship it, real-world adopt
 <!-- examples/ -->
 
 <!-- scripts/ -->
+[bench-plan-cache]: scripts/bench_plan_cache.py
 
 <!-- .venv/ -->
 

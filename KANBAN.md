@@ -1439,8 +1439,10 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - [`django_strawberry_framework/optimizer/extension.py`](django_strawberry_framework/optimizer/extension.py)
 - [`django_strawberry_framework/optimizer/plans.py`](django_strawberry_framework/optimizer/plans.py)
 - [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
+- [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
 - [`tests/optimizer/test_extension.py`](tests/optimizer/test_extension.py)
 - [`tests/optimizer/test_walker.py`](tests/optimizer/test_walker.py)
+- [`tests/types/test_resolvers.py`](tests/types/test_resolvers.py)
 
 #### Planning note
 
@@ -1463,7 +1465,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 
 #### Definition of done
 
-- [x] Spec file added under `docs/SPECS/` (numbered to the card at implementation time, suffix `optimizer_hardening-0_0_10`), recording all three guard mechanisms, the G2 elision decision, and the deferred-findings table from the 2026-06-11 audit with upstream file:line anchors.
+- [x] Spec file added under `docs/` (numbered to the card at implementation time, suffix `optimizer_hardening-0_0_10`; it stays at the live working path until the next spec author's batched archive sweep relocates it to `docs/SPECS/`), recording all three guard mechanisms, the G2 elision decision, and the deferred-findings table from the 2026-06-11 audit with upstream file:line anchors.
 - [x] G1: early-return lands in `extension.py::_optimize`; test pins the pass-through - root resolver evaluates the queryset (`len(qs)`) then returns it; assert exactly one SQL query total and that the returned object is the SAME queryset instance (not a re-executing clone). A second test pins that the manager-coercion path (`Model.objects`) still optimizes (the guard must sit after `extension.py:714`).
 - [x] G2: a mutation operation whose root resolver returns a queryset produces a plan with empty `only_fields` while `select_related` / `prefetch_related` survive; a textually-identical selection set under a `query` operation still projects `only_fields`; both plans coexist in the cache (distinct printed-AST keys). Subscription operations covered by the same gate.
 - [x] G2: the FK-id elision under non-QUERY ops decision is pinned by a dedicated test matching whatever the spec records.
@@ -1478,7 +1480,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 - `django_strawberry_framework/optimizer/walker.py` - G2 `only_fields` suppression at `plan_optimizations` entry; G3 `type_condition` matching in `_included_field_selections` (and the extension-side fragment clone helpers `_named_children` / `_node_children_with_runtime_prefix` if connection extraction needs the same narrowing). **[As shipped: the G2 `enable_only` gate landed in `walker.py` threaded through every projection writer; G3 `type_condition` matching is DEFERRED (no code). The Decision 5 FK-id-elision loaded-check landed in `django_strawberry_framework/types/resolvers.py`, with tests in `tests/types/test_resolvers.py`.]**
 - `django_strawberry_framework/optimizer/plans.py` - only if the G2 gate lands at apply-time instead of build-time (spec decides; build-time preferred for cacheability).
 - `tests/optimizer/test_extension.py`, `tests/optimizer/test_walker.py` - mirrored guard tests.
-- `docs/SPECS/spec-<NNN>-optimizer_hardening-0_0_10.md` - new.
+- `docs/spec-035-optimizer_hardening-0_0_10.md` - new (lives at the live working path; the `docs/SPECS/` archive move is the next spec author's batched sweep, never per-card).
 
 #### Verified in upstream
 
@@ -1518,7 +1520,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
 - Severity: Major
-- Status: In progress
+- Status: Shipped
 - Relative size: L
 - Labels: `optimizer`, `permissions`, `public-api`, `security`
 - Spec: [spec-034-permissions-0_0_10.md](docs/SPECS/spec-034-permissions-0_0_10.md)
@@ -1572,11 +1574,18 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 
 #### Package files
 
-- `django_strawberry_framework/permissions.py` (historical)
+- [`django_strawberry_framework/permissions.py`](django_strawberry_framework/permissions.py)
+- [`django_strawberry_framework/utils/permissions.py`](django_strawberry_framework/utils/permissions.py)
+- [`examples/fakeshop/test_query/test_products_api.py`](examples/fakeshop/test_query/test_products_api.py)
+- [`tests/optimizer/test_extension.py`](tests/optimizer/test_extension.py)
+- [`tests/test_connection.py`](tests/test_connection.py)
+- [`tests/test_list_field.py`](tests/test_list_field.py)
+- [`tests/test_permissions.py`](tests/test_permissions.py)
+- [`tests/test_relay_node_field.py`](tests/test_relay_node_field.py)
 
 #### Planning note
 
-Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, info)` from `django_graphene_filters.permissions`. The cookbook line `return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` is the canonical consumer surface — a single composable helper that walks the model graph at call time, runs each owner type's `get_queryset(qs, info)` against the related queryset, and returns a queryset that respects per-type row-level visibility across every traversed FK / OneToOne edge. Ships alongside per-field permission hooks declared via `Meta` (resolved by the field-level gate's owning `FieldSet`) and integrates with the optimizer's `Prefetch` downgrade so cascaded relations stay N+1-safe.
+Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, info)` from `django_graphene_filters.permissions`. The cookbook line `return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` is the canonical consumer surface — a single composable helper that walks the model graph at call time, runs each owner type's `get_queryset(qs, info)` against the related queryset, and returns a queryset that respects per-type row-level visibility across every traversed FK / OneToOne edge. Integrates with the optimizer's `Prefetch` downgrade so cascaded relations stay N+1-safe; per-field permission hooks via the reserved `Meta.fields_class` slot are deferred to the later FieldSet work (`TODO-BETA-044-0.1.1`), not shipped in this card.
 
 #### Dependencies
 
@@ -1585,7 +1594,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 #### Scope
 
 - `apply_cascade_permissions`
-- per-field permission hooks declared via `Meta`
+- reserved `Meta.fields_class` slot for per-field permission hooks; the per-field read-gate itself ships with the later FieldSet work (`TODO-BETA-044-0.1.1`), not in this card
 - Optimizer cooperation: cascaded relations downgrade to `Prefetch(queryset=...)` so visibility filters survive the join (carries the existing `get_queryset` → `Prefetch` downgrade contract across the cascade walk).
 - composable permission rules that remain visible from the owning type/query surface
 - Public callable surface: `apply_cascade_permissions(cls, queryset, info, fields=None)` returns a queryset; optional `fields=` argument scopes the cascade to specific FK names. Both sync and async variants ship; async variant uses `sync_to_async` around the cascade walker to stay event-loop-safe.

@@ -1626,7 +1626,11 @@ window.KANBAN_CARDS = window.KANBAN_DATA.cards;
             return {
               statuses: list("statuses"),
               milestones: list("milestones"),
-              versions: list("targetVersions"),
+              versions: list("targetVersions")
+                .slice()
+                .sort((left, right) =>
+                  this.compareVersions(left.number, right.number),
+                ),
               priorities: list("priorities"),
               severities: list("severities"),
               sizes: list("relativeSizes"),
@@ -1892,6 +1896,23 @@ window.KANBAN_CARDS = window.KANBAN_DATA.cards;
           },
           _escapeMarkdownLinkText(value) {
             return String(value || "").replace(/[\\[\]]/g, "\\$&");
+          },
+          versionParts(value) {
+            return String(value || "")
+              .split(".")
+              .map((part) => Number(part.replace(/\D.*$/, "")) || 0);
+          },
+          compareVersions(left, right) {
+            const leftParts = this.versionParts(left);
+            const rightParts = this.versionParts(right);
+            const length = Math.max(leftParts.length, rightParts.length);
+            for (let index = 0; index < length; index += 1) {
+              const delta = (leftParts[index] || 0) - (rightParts[index] || 0);
+              if (delta !== 0) {
+                return delta;
+              }
+            }
+            return 0;
           },
           cardKey(card) {
             // Reads the cardId field (sourced from Card.card_id in the model)

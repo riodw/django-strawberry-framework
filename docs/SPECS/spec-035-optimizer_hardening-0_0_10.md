@@ -464,75 +464,75 @@ The completion contract the card is built against. Items are grouped by slice; *
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[backlog]: ../BACKLOG.md
-[changelog]: ../CHANGELOG.md
-[contributing]: ../CONTRIBUTING.md
-[kanban]: ../KANBAN.md
-[readme]: ../README.md
-[start]: ../START.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[backlog]: ../../BACKLOG.md
+[changelog]: ../../CHANGELOG.md
+[contributing]: ../../CONTRIBUTING.md
+[kanban]: ../../KANBAN.md
+[readme]: ../../README.md
+[start]: ../../START.md
+[today]: ../../TODAY.md
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[glossary]: GLOSSARY.md
-[glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
-[glossary-auth-mutations]: GLOSSARY.md#auth-mutations
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-connection-aware-optimizer-planning]: GLOSSARY.md#connection-aware-optimizer-planning
-[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
-[glossary-djangomutation]: GLOSSARY.md#djangomutation
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-fk-id-elision]: GLOSSARY.md#fk-id-elision
-[glossary-get-queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-metainterfaces]: GLOSSARY.md#metainterfaces
-[glossary-metaoptimizer_hints]: GLOSSARY.md#metaoptimizer_hints
-[glossary-metaprimary]: GLOSSARY.md#metaprimary
-[glossary-metarelation_shapes]: GLOSSARY.md#metarelation_shapes
-[glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
-[glossary-only-projection]: GLOSSARY.md#only-projection
-[glossary-optimizerhint]: GLOSSARY.md#optimizerhint
-[glossary-plan-cache]: GLOSSARY.md#plan-cache
-[glossary-queryset-diffing]: GLOSSARY.md#queryset-diffing
-[glossary-relation-handling]: GLOSSARY.md#relation-handling
-[glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
-[glossary-schema-audit]: GLOSSARY.md#schema-audit
-[glossary-strictness-mode]: GLOSSARY.md#strictness-mode
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[glossary]: ../GLOSSARY.md
+[glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-auth-mutations]: ../GLOSSARY.md#auth-mutations
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-connection-aware-optimizer-planning]: ../GLOSSARY.md#connection-aware-optimizer-planning
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangomutation]: ../GLOSSARY.md#djangomutation
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fk-id-elision]: ../GLOSSARY.md#fk-id-elision
+[glossary-get-queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-metainterfaces]: ../GLOSSARY.md#metainterfaces
+[glossary-metaoptimizer_hints]: ../GLOSSARY.md#metaoptimizer_hints
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-metarelation_shapes]: ../GLOSSARY.md#metarelation_shapes
+[glossary-multi-database-cooperation]: ../GLOSSARY.md#multi-database-cooperation
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-optimizerhint]: ../GLOSSARY.md#optimizerhint
+[glossary-plan-cache]: ../GLOSSARY.md#plan-cache
+[glossary-queryset-diffing]: ../GLOSSARY.md#queryset-diffing
+[glossary-relation-handling]: ../GLOSSARY.md#relation-handling
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-schema-audit]: ../GLOSSARY.md#schema-audit
+[glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[spec-002]: SPECS/spec-002-optimizer-0_0_2.md
-[spec-004]: SPECS/spec-004-optimizer_beyond-0_0_3.md
-[spec-033]: SPECS/spec-033-connection_optimizer-0_0_9.md
-[spec-034]: SPECS/spec-034-permissions-0_0_10.md
+[next]: NEXT.md
+[spec-002]: spec-002-optimizer-0_0_2.md
+[spec-004]: spec-004-optimizer_beyond-0_0_3.md
+[spec-033]: spec-033-connection_optimizer-0_0_9.md
+[spec-034]: spec-034-permissions-0_0_10.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[definition]: ../django_strawberry_framework/types/definition.py
-[extension]: ../django_strawberry_framework/optimizer/extension.py
-[field-meta]: ../django_strawberry_framework/optimizer/field_meta.py
-[plans]: ../django_strawberry_framework/optimizer/plans.py
-[querysets]: ../django_strawberry_framework/utils/querysets.py
-[registry]: ../django_strawberry_framework/registry.py
-[selections]: ../django_strawberry_framework/optimizer/selections.py
-[types-base]: ../django_strawberry_framework/types/base.py
-[types-resolvers]: ../django_strawberry_framework/types/resolvers.py
-[walker]: ../django_strawberry_framework/optimizer/walker.py
+[definition]: ../../django_strawberry_framework/types/definition.py
+[extension]: ../../django_strawberry_framework/optimizer/extension.py
+[field-meta]: ../../django_strawberry_framework/optimizer/field_meta.py
+[plans]: ../../django_strawberry_framework/optimizer/plans.py
+[querysets]: ../../django_strawberry_framework/utils/querysets.py
+[registry]: ../../django_strawberry_framework/registry.py
+[selections]: ../../django_strawberry_framework/optimizer/selections.py
+[types-base]: ../../django_strawberry_framework/types/base.py
+[types-resolvers]: ../../django_strawberry_framework/types/resolvers.py
+[walker]: ../../django_strawberry_framework/optimizer/walker.py
 
 <!-- tests/ -->
-[test-base-init]: ../tests/base/test_init.py
-[test-opt-extension]: ../tests/optimizer/test_extension.py
-[test-opt-walker]: ../tests/optimizer/test_walker.py
-[test-resolvers]: ../tests/types/test_resolvers.py
+[test-base-init]: ../../tests/base/test_init.py
+[test-opt-extension]: ../../tests/optimizer/test_extension.py
+[test-opt-walker]: ../../tests/optimizer/test_walker.py
+[test-resolvers]: ../../tests/types/test_resolvers.py
 
 <!-- examples/ -->
-[library-schema]: ../examples/fakeshop/apps/library/schema.py
-[test-library-api]: ../examples/fakeshop/test_query/test_library_api.py
-[test-query-dir]: ../examples/fakeshop/test_query/
-[test-query-readme]: ../examples/fakeshop/test_query/README.md
+[library-schema]: ../../examples/fakeshop/apps/library/schema.py
+[test-library-api]: ../../examples/fakeshop/test_query/test_library_api.py
+[test-query-dir]: ../../examples/fakeshop/test_query
+[test-query-readme]: ../../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->
 

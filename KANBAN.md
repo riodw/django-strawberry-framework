@@ -97,7 +97,7 @@ To complete the Alpha (pre-0.1.0) milestone: **79.5%**.
 
 | Card | Spec file |
 | --- | --- |
-| `DONE-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | [spec-035-optimizer_hardening-0_0_10.md](docs/spec-035-optimizer_hardening-0_0_10.md) |
+| `DONE-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | [spec-035-optimizer_hardening-0_0_10.md](docs/SPECS/spec-035-optimizer_hardening-0_0_10.md) |
 | `DONE-034-0.0.10` - Permissions subsystem | [spec-034-permissions-0_0_10.md](docs/SPECS/spec-034-permissions-0_0_10.md) |
 | `DONE-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/SPECS/spec-033-connection_optimizer-0_0_9.md) |
 | `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation) | [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md) |
@@ -150,6 +150,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - Status: Planned
 - Relative size: XL
 - Labels: `graphql-api`, `mutations`, `permissions`, `public-api`
+- Spec: [spec-036-mutations-0_0_11.md](docs/spec-036-mutations-0_0_11.md)
 
 #### Predicted files
 
@@ -1404,7 +1405,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Status: Shipped
 - Relative size: M
 - Labels: `hardening`, `optimizer`, `performance`, `query-planning`
-- Spec: [spec-035-optimizer_hardening-0_0_10.md](docs/spec-035-optimizer_hardening-0_0_10.md)
+- Spec: [spec-035-optimizer_hardening-0_0_10.md](docs/SPECS/spec-035-optimizer_hardening-0_0_10.md)
 
 #### Glossary terms
 

@@ -49,6 +49,11 @@ from typing import Any
 
 _FAKESHOP = Path(__file__).resolve().parent.parent / "examples" / "fakeshop"
 
+# Below this many measured iterations, warm-vs-cold timing deltas are dominated
+# by noise (a single sample can even make ``cold`` look faster than ``warm``),
+# so the per-request walk delta is suppressed rather than reported as if real.
+_MIN_RELIABLE_ITERATIONS = 100
+
 
 def _bootstrap_django() -> None:
     """Configure Django against an in-memory DB and migrate + seed it.
@@ -170,6 +175,12 @@ def main() -> int:
         f"plan-cache benchmark - {args.iterations} iterations/mode "
         f"({args.warmup} warmup), seed={args.seed}\n",
     )
+    if args.iterations < _MIN_RELIABLE_ITERATIONS:
+        print(
+            f"NOTE: {args.iterations} iterations is below the "
+            f"{_MIN_RELIABLE_ITERATIONS}-iteration reliability floor; "
+            "walk/speedup are suppressed (shown as n/a).\n",
+        )
     header = f"{'query':<52} {'cacheable':>9} {'warm us':>9} {'cold us':>9} {'walk us':>9} {'speedup':>8}"
     print(header)
     print("-" * len(header))
@@ -199,11 +210,20 @@ def main() -> int:
         warm_med = statistics.median(warm_t)
         cold_med = statistics.median(cold_t)
         walk = cold_med - warm_med
-        speedup = cold_med / warm_med if warm_med else float("nan")
-        cacheable = "yes" if warm_info.hits > 0 else "no"
+        # Cacheability is a property of the built plan, not of how many hits a
+        # given run happened to observe: a single warm execution has zero hits
+        # yet the plan IS cached. Read it from cache-entry behaviour - a plan
+        # was stored iff the cache holds an entry after the run.
+        cacheable = "yes" if warm_info.size > 0 else "no"
+        # Only present a walk delta when there are enough samples for the median
+        # to be stable and the sign to be meaningful; otherwise n/a, never a
+        # negative "saved work" figure.
+        reliable = args.iterations >= _MIN_RELIABLE_ITERATIONS and walk > 0
+        walk_cell = f"{_us(walk):.1f}" if reliable else "n/a"
+        speed_cell = f"{cold_med / warm_med:.2f}x" if reliable and warm_med else "n/a"
         print(
             f"{label:<52} {cacheable:>9} {_us(warm_med):>9.1f} {_us(cold_med):>9.1f} "
-            f"{_us(walk):>9.1f} {speedup:>7.2f}x",
+            f"{walk_cell:>9} {speed_cell:>8}",
         )
         print(
             f"{'':<52} cache_info(warm): hits={warm_info.hits} "
@@ -211,9 +231,12 @@ def main() -> int:
         )
 
     print(
-        "\nwarm = plan cache persists (this package's default).\n"
+        "\ncacheable = the built plan is cached (the cache holds an entry after the run), "
+        "independent of how many hits this run observed.\n"
+        "warm = plan cache persists (this package's default).\n"
         "cold = plan cache cleared before every request (upstream's per-request re-walk).\n"
-        "walk = cold - warm = the selection-tree walk the cache eliminates per cached request.",
+        "walk = cold - warm = the selection-tree walk the cache eliminates per cached request "
+        f"(n/a below {_MIN_RELIABLE_ITERATIONS} iterations or when noise-dominated).",
     )
     return 0
 

@@ -94,7 +94,7 @@ For the current capability snapshot — what the package can actually do in the 
 
 A quick summary:
 
-**Shipped today** (`0.0.8`):
+**Shipped today** (`0.0.10`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`
 - scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, file/image, choice enums)
 - specialized scalar conversions (`BigIntegerField` / `PositiveBigIntegerField` → `BigInt`, `JSONField` → `JSON`, PostgreSQL `ArrayField` → `list[T]`, PostgreSQL `HStoreField` → `JSON`)
@@ -121,8 +121,7 @@ A quick summary:
 - `manage.py inspect_django_type` (new in `0.0.9`) — diagnostic command printing a finalized `DjangoType`'s per-field GraphQL resolution table (Django field → resolved GraphQL type → nullability → converter row). Dispatches the positional arg by shape (dotted path vs unique bare-name registry lookup) and accepts `--schema <selector>` to register + finalize on a cold CLI process. See [`GLOSSARY.md#schema-introspection-management-command`][glossary-inspect-django-type].
 - `apply_cascade_permissions` / `aapply_cascade_permissions` (new in `0.0.10`) — cascade-permissions subsystem: one call inside a type's `get_queryset` cascades that type's visibility across its single-column forward FK / OneToOne edges, dropping parent rows whose targets a target type's own `get_queryset` hides. Four invariants (`ContextVar` cycle guard, single-column forward scope, nullable-FK preservation, caller-alias pinning), loud `fields=` validation, a sync + `sync_to_async` async pair, and zero added query round-trips (the `__in` subqueries compile into the caller's single `SELECT`); composes with the shipped `check_<field>_permission` gates, connections, node refetch, and list fields through their existing seams. Exported from the package root. See [`GLOSSARY.md#apply_cascade_permissions`][glossary-apply-cascade-permissions].
 
-**Coming next — remaining alpha (`0.0.10` → `0.0.14`):**
-- `0.0.10` — cascade-permissions subsystem and optimizer robustness hardening (upstream-comparison guards)
+**Coming next — remaining alpha (`0.0.11` → `0.0.14`):**
 - `0.0.11` — mutations + auto-generated `Input` types, and the `Upload` scalar + file/image field mapping
 - `0.0.12` — form-based mutations (Django Forms / ModelForms)
 - `0.0.13` — DRF serializer mutations (`SerializerMutation`) and auth mutations (`login` / `logout` / `register`)

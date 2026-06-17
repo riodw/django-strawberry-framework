@@ -106,10 +106,13 @@ def tracked_path_link(tracked_path: dict[str, Any], *, planned: bool) -> str:
 def card_column_key(card: dict[str, Any]) -> str:
     """Return the board column key that owns ``card``."""
     status = card["status"]["key"]
+    planning_state = card["planningState"]["key"] if card.get("planningState") else ""
     milestone = card["milestone"]["key"] if card.get("milestone") else ""
     if status == "done":
         return "done"
-    if status == "wip":
+    if status == "backlog":
+        return "backlog"
+    if planning_state == "in_progress":
         return "in-progress"
     if status == "todo" and milestone == "alpha":
         return "to-do-alpha-010"
@@ -231,7 +234,7 @@ def compute_tokens(dashboard_data: dict[str, Any]) -> dict[str, str]:
     """
     cards = dashboard_data["cards"]
 
-    def versions_for(status_key: str) -> list[str]:
+    def versions_for_status(status_key: str) -> list[str]:
         return sorted(
             {
                 card["targetVersion"]["number"]
@@ -241,12 +244,24 @@ def compute_tokens(dashboard_data: dict[str, Any]) -> dict[str, str]:
             key=_version_key,
         )
 
-    wip_versions = versions_for("wip")
-    done_versions = versions_for("done")
-    active_version = (
-        wip_versions[0] if wip_versions else (done_versions[-1] if done_versions else "")
+    in_progress_versions = sorted(
+        {
+            card["targetVersion"]["number"]
+            for card in cards
+            if (card.get("planningState") or {}).get("key") == "in_progress"
+            and card.get("targetVersion")
+        },
+        key=_version_key,
     )
-    has_wip = any(card["status"]["key"] == "wip" for card in cards)
+    done_versions = versions_for_status("done")
+    active_version = (
+        in_progress_versions[0]
+        if in_progress_versions
+        else (done_versions[-1] if done_versions else "")
+    )
+    has_in_progress = any(
+        (card.get("planningState") or {}).get("key") == "in_progress" for card in cards
+    )
     dates = [card.get("updatedDate") for card in cards]
     dates += [doc.get("updatedDate") for doc in dashboard_data["boardDocs"]]
     dates = [date for date in dates if date]
@@ -255,7 +270,7 @@ def compute_tokens(dashboard_data: dict[str, Any]) -> dict[str, str]:
     return {
         "active_version": active_version,
         "last_refreshed": last_refreshed,
-        "in_progress_intro": "" if has_wip else "No active WIP cards.",
+        "in_progress_intro": "" if has_in_progress else "No cards in progress.",
         "relative_size_scale": render_relative_size_scale(dashboard_data),
     }
 

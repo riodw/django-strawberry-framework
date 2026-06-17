@@ -210,10 +210,6 @@ needs spec
 - Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-040-0.0.13` - Auth mutations (login / logout / register)
 - Related: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by 038 / 039 / 040. -> `DONE-027-0.0.8` - Filtering subsystem
 
-## To Do - Alpha (0.1.0)
-
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
-
 <a id="upload_scalar_and_file_image_field_mapping"></a>
 ### [TODO-ALPHA-037-0.0.11 - Upload scalar and file / image field mapping](KANBAN.html#upload_scalar_and_file_image_field_mapping)
 
@@ -265,6 +261,10 @@ planned
 
 - Related: Mutation input-type generation (`WIP-ALPHA-036-0.0.11`) maps the same fields to Strawberry's `Upload` scalar. -> `WIP-ALPHA-036-0.0.11` - Mutations + auto-generated Input types
 - Related: pairs with `WIP-ALPHA-036-0.0.11` for the write side. -> `WIP-ALPHA-036-0.0.11` - Mutations + auto-generated Input types
+
+## To Do - Alpha (0.1.0)
+
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 <a id="form_based_mutations_django_forms_modelforms"></a>
 ### [TODO-ALPHA-038-0.0.12 - Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)

@@ -1,261 +1,157 @@
-# Spec 036 architecture review
+# Spec 036 implementation review
 
-Scope: full reread of `docs/spec-036-mutations-0_0_11.md`, cross-checked against the
-TODO anchors, the existing finalizer and registry shape, Relay global ID handling, settings
-handling, and the fakeshop test placement rules.
+Scope: current implementation of [`spec-036-mutations-0_0_11.md`](spec-036-mutations-0_0_11.md),
+reviewed against the revised spec, the mutation code, products live surface, and the package
+tests. I did not run pytest, per repository instruction; this is a static/code-path review with
+light source introspection.
 
-Verdict: the spec direction is sound, but it is not ready for production implementation until
-the high-severity contract gaps below are resolved. Most issues are not about whether the lines
-can be reached; they are about whether the mutation foundation will keep the same contract pressure
-as the existing query/filter/relay surface.
+Verdict: the implementation is close in shape, but it is not production-ready. The biggest
+remaining issues are not cosmetic: the root mutation id path can mutate/delete by the wrong
+GlobalID type, relation writes can attach hidden related rows, and delete payloads likely lose the
+id the spec promises for cache eviction.
 
 ## Findings
 
-### High - Generated input names conflict with mutation-level narrowing
+### P1 - `update` / `delete` accept a wrong-type GlobalID as a raw pk
 
-Decision 6 says generated inputs use stable model names such as `CategoryInput` and
-`CategoryPartialInput`, and that two mutations over one model share the same input type. The same
-decision also allows each mutation to narrow editable fields with `Meta.fields` and `Meta.exclude`.
+`django_strawberry_framework/mutations/resolvers.py::_coerce_lookup_id` decodes a base64
+GlobalID with `relay.GlobalID.from_id(id).node_id` and discards the decoded type name. That means
+`updateItem(id: <Category GlobalID>)` can update `Item(pk=<same numeric id>)` if the pks overlap.
+Malformed strings also fall through as raw pk values, so an integer-pk model can raise a Django
+coercion error instead of returning the mutation envelope.
 
-Those two requirements conflict. Two create mutations for the same model can have different field
-sets, but GraphQL type names are schema-global. Reusing `CategoryInput` would either leak fields
-that one mutation meant to exclude or accidentally make another mutation too narrow.
+This breaks the same no-cross-model rule the spec requires for relation ids and is worse on the
+root id because it targets the object being mutated/deleted.
 
-Required spec correction:
+Required fix:
 
-- Define the generated input cache key as the complete input shape, not only the model.
-- Either include the mutation class name or a deterministic field-shape suffix in generated type
-  names when `Meta.fields` or `Meta.exclude` narrows the model.
-- If the release wants stable model-only names, then remove mutation-specific generated narrowing
-  from 0.0.11 and require custom input classes for divergent shapes.
+- Replace `_coerce_lookup_id` with a target-aware decoder, e.g. decode through
+  `django_strawberry_framework/types/relay.py::decode_global_id`, verify the resolved model is the
+  mutation target model, and return a `FieldError(field="id", ...)` on malformed or wrong-type ids.
+- Do not run the queryset lookup after a wrong-type id.
+- Add package and live coverage for `updateItem(id: <Category GlobalID>)` and
+  `deleteItem(id: <Category GlobalID>)` where an `Item` with the same numeric pk exists.
 
-### High - Partial update validation can skip composite constraints
+### P1 - Relation id writes do not enforce target visibility
 
-Decision 8 says partial updates call `full_clean(exclude=<fields the PartialInput did not
-provide>)`. That is too broad for Django constraint validation. If `Item.name` is updated without
-providing `category`, excluding `category` can skip validation of the `unique_item_per_category`
-constraint even though the current instance has a category value.
+`django_strawberry_framework/mutations/resolvers.py::_decode_single_relation_id` type-checks a
+Relay GlobalID, then returns `value.node_id`. It never resolves the related row through the related
+target type's `get_queryset`. The later `full_clean()` FK validation uses Django's default manager,
+not the GraphQL visibility queryset.
 
-This conflicts with the stated requirement that duplicate unique constraints produce `FieldError`
-before save.
+So a non-staff caller can create or update an `Item` pointing at a private `Category` they cannot
+see, as long as they hold the write permission. The spec explicitly says a relation id for a row the
+caller cannot see should become a `FieldError` on that relation field, with no existence leak. The
+same issue applies to M2M id lists.
 
-Required spec correction:
+Required fix:
 
-- Partial updates must validate the updated instance with current database values filled in.
-- `exclude` must not exclude unprovided fields that participate in constraints with any provided
-  field.
-- Add an explicit acceptance case: updating only `Item.name` to collide with another item in the
-  same category returns a field or non-field validation error before save.
+- During relation decode, after type validation, locate the related row through the related model's
+  primary `DjangoType` visibility queryset (`initial_queryset` + `apply_type_visibility_sync`) and
+  return a field-keyed error when it is absent/hidden.
+- Apply this to FK, O2O, and M2M ids.
+- Add live fakeshop coverage for `createItem(categoryId: <private category gid>)` as a non-staff
+  permitted writer, plus package coverage for M2M hidden related ids.
 
-### High - Create authorization contradicts the live test plan
+### P1 - Delete payloads likely lose the deleted node id
 
-Decision 9 explicitly defers create authorization and says create refetches by primary key without
-visibility filtering. Decision 10 limits `get_queryset` authorization to update/delete lookup. The
-test plan then asks for an anonymous request that cannot mutate at all.
+`django_strawberry_framework/mutations/resolvers.py::_run_delete` fetches `snapshot`, then calls
+`snapshot.delete()`, then returns that same instance in the payload. Django clears the instance's pk
+after deletion. The live test query selects `node { id name category { name } }`, and the test
+docstring says the id is preserved, but `examples/fakeshop/test_query/test_products_api.py::test_delete_item_happy_path`
+never asserts the returned id.
 
-That is not currently derivable from the foundation contract. Without a create-time permission hook,
-anonymous create will succeed unless the example schema adds ad hoc product-specific checks, which
-would undermine the reusable mutation API being specified.
+The result is likely `node.id` encoding a `None` pk, or at least no guarantee of the original id.
+That breaks the spec's cache-eviction promise for delete payloads.
 
-Required spec correction:
+Required fix:
 
-- Either add a minimal mutation permission hook for 0.0.11, such as
-  `check_permission(info, operation, input)` or a DRF-like `get_permissions`, and use it for create,
-  update, and delete.
-- Or remove the "anonymous request cannot mutate at all" acceptance case from 0.0.11 and make
-  create authorization explicitly out of scope.
+- Preserve the original pk before deletion and return a detached snapshot whose pk/id attribute is
+  restored after `delete()`, or delete through a separate instance/queryset while keeping the
+  snapshot untouched.
+- Assert the returned delete payload id decodes to the original id in both package and live tests.
 
-The first option is architecturally stronger because it avoids shipping write APIs that can only be
-made safe with per-schema resolver workarounds.
+### P2 - Public SDL contract drift: spec says `GlobalID!`, implementation emits `ID!`
 
-### High - Relation GlobalID decoding must enforce target type
+`django_strawberry_framework/mutations/fields.py::_synthesized_mutation_signature` emits
+`id: ID!` for update/delete, and the live tests use `ID!`. The spec's user-facing API and DoD still
+say `id: GlobalID!`. This is not just cosmetic for clients or generated types: it changes where
+malformed values are rejected and is part of the public GraphQL schema.
 
-The spec says foreign key inputs use `<field>_id` and Relay targets accept GlobalIDs. It does not
-explicitly require that the decoded GlobalID type matches the target relation model.
+Required fix:
 
-That is a correctness hole. A well-formed `Item` GlobalID passed to a `category_id` input must not
-be treated as a raw primary key and looked up against `Category`, even if the numeric primary keys
-happen to overlap.
+- Choose one contract. If server-side decoding via `ID!` is intentional, update the spec, glossary,
+  README/TODAY examples, and tests to say `ID!` and document that the resolver performs GlobalID
+  validation.
+- If `GlobalID!` remains the contract, change the field signature and decide which malformed-id
+  failures can realistically be in-band rather than Strawberry variable-coercion errors.
 
-Required spec correction:
+### P2 - `Meta.permission_classes` is not validated
 
-- Relation ID decoding must verify the decoded type/model against the Django relation target before
-  lookup.
-- Wrong-type IDs must return `FieldError`, not `DoesNotExist`, and must not perform a cross-model
-  primary-key lookup.
-- Add live or package acceptance coverage for a valid but wrong-type GlobalID.
+The spec's DoD says an invalid permission class entry is rejected. In
+`django_strawberry_framework/mutations/sets.py::_validate_mutation_meta`, `permission_classes` is
+stored verbatim. The first real request then does `permission_class().has_permission(...)` in
+`django_strawberry_framework/mutations/sets.py::DjangoMutation.check_permission`, so a bad entry
+becomes a runtime `TypeError` / `AttributeError` instead of a class-creation `ConfigurationError`.
 
-### High - Payload object field naming is underspecified
+Required fix:
 
-The example uses `CreateItemPayload { item: ItemType errors: [FieldError!]! }`, but the spec never
-defines how the object field name is derived. This matters for `Category`, `Item`, `Property`, and
-any future model whose lowercase model name collides with Python or GraphQL naming constraints.
+- Normalize `permission_classes` to a tuple/list and validate each entry is an instantiable class
+  exposing `has_permission`.
+- Add a `tests/mutations/test_sets.py` case for bad entries.
 
-Required spec correction:
+### P2 - Nullable M2M input can crash the resolver
 
-- Define the payload object field naming rule.
-- Define collision behavior.
-- Pin the expected payload field names for the fakeshop models, including `Property`.
+Generated optional fields use `annotation | None` with `default=strawberry.UNSET`. For M2M this
+means a client can send `genres: null`. `django_strawberry_framework/mutations/resolvers.py::_decode_relation_id_list`
+then iterates `value` unconditionally, so `None` becomes a resolver exception instead of a typed
+mutation error.
 
-A uniform name such as `node` is simpler and avoids model-name edge cases. If the spec keeps
-model-derived names, the generated class builder needs explicit collision guards and tests.
+Required fix:
 
-### Medium - Many-to-many write semantics are in scope but not defined
+- Define the contract for explicit `null` on M2M: reject as a `FieldError`, treat as clear, or make
+  the generated type non-null-list-but-omittable if Strawberry supports that shape cleanly.
+- Add package coverage for omitted, empty list, valid list, wrong-type id, and explicit null.
 
-Decision 6 includes many-to-many fields in generated inputs, but the resolver pipeline never states
-whether a provided list replaces the entire relation, appends to it, or clears it when the list is
-empty.
+### P2 - Malformed relation GlobalIDs are not pinned to the promised envelope
 
-Required spec correction:
+The resolver comments say malformed relation ids become `FieldError`, but generated relation inputs
+use `strawberry.relay.GlobalID`. Strawberry can reject malformed GlobalID variable values during
+argument coercion before `django_strawberry_framework/mutations/resolvers.py::_wrong_type_field_error`
+ever runs. Existing tests pin valid-but-wrong-type ids, not malformed ids.
 
-- State that omitted many-to-many fields are unchanged on update.
-- State whether a provided list replaces the complete relation set.
-- State that an empty list clears the relation if the field is provided.
-- State whether related object lookup uses the target model default manager or a mutation queryset
-  hook.
+Required fix:
 
-This can remain package-internal test coverage because fakeshop products do not currently expose a
-many-to-many model.
+- Add an executable test for malformed `categoryId`.
+- If Strawberry coercion prevents in-band handling, update the spec to reserve `FieldError` for
+  well-formed-but-invalid/wrong-type ids and document malformed ids as top-level GraphQL errors.
 
-### Medium - Custom input classes need a mapping contract
+### Process check - `CHANGELOG.md` was edited
 
-The spec allows `input_class` to override generated inputs, but it only requires a Strawberry input
-class. The resolver still needs a deterministic mapping from input attributes to Django model fields,
-relation ID fields, and many-to-many fields.
+The current tree contains `CHANGELOG.md` mutation bullets. That is only compliant if the Slice 5
+maintainer prompt explicitly authorized a changelog edit. If that explicit instruction did not
+happen, this violates the repo rule and the spec's own warning that design docs cannot grant
+`CHANGELOG.md` permission.
 
-Required spec correction:
+Required fix:
 
-- Either restrict custom inputs in 0.0.11 to the same generated field names and relation ID naming
-  scheme.
-- Or add an explicit mapping API for custom input fields.
+- Verify the maintainer explicitly requested the changelog edit for this implementation pass.
+- If not, remove or defer the changelog bullets until the joint `0.0.11` cut / authorized Slice 5
+  prompt.
 
-Without this, a custom input can type-check as Strawberry input while still being impossible to
-apply safely to the model.
+## What looks sound
 
-### Medium - Non-field error sentinel is ambiguous
-
-The spec says non-field validation errors use an "empty / sentinel" field value. That value must be
-part of the public GraphQL contract.
-
-Required spec correction:
-
-- Pick one sentinel, preferably Django's `__all__`, and use it consistently for model-level and
-  constraint-level errors.
-- Add an acceptance test for a `UniqueConstraint` or `clean()` error that maps to the sentinel.
-
-### Medium - Transaction and async write boundaries are under-specified
-
-The resolver plan mentions sync and async pipelines and wrapping sync `get_queryset` with
-`sync_to_async` in async paths. It does not specify the transaction boundary for decode, validation,
-write, relation assignment, refetch, and payload construction.
-
-Required spec correction:
-
-- The write path should run inside `transaction.atomic()`.
-- Relation assignments and payload refetch/snapshot should be inside the same transaction.
-- The async path should either use a true async ORM path or run the synchronous ORM write pipeline
-  in one `sync_to_async(..., thread_sensitive=True)` call.
-
-Multiple sync ORM calls separated by awaits would be a fragile foundation and difficult to reason
-about under concurrent requests.
-
-### Medium - Delete payload semantics need deeper snapshot rules
-
-The spec says delete returns a pre-delete object snapshot and loads selected relations before
-deletion. It does not define how far nested selections, reverse relations, or connection children
-must be materialized before the delete occurs.
-
-Required spec correction:
-
-- Define that the response selection snapshot must be fully evaluated before deletion.
-- Include nested selected relations and connection children in that snapshot rule.
-- Keep the snapshot and deletion in one transaction.
-
-Without this, a resolver can appear to work for scalar fields while failing or silently changing
-behavior for selected relations after cascading deletes.
-
-### Medium - Generated payload and helper type collisions need a rule
-
-Generated GraphQL type names are schema-global. The spec names `CreateItemPayload`, `UpdateItemInput`,
-and similar helper classes, but it does not define behavior when two apps or modules declare mutation
-classes that would generate the same GraphQL name.
-
-Required spec correction:
-
-- Define whether duplicate generated names are rejected with `ConfigurationError` or disambiguated
-  by mutation class/module identity.
-- Add a package-level collision test.
-
-The existing framework tends to favor early configuration errors over silent schema drift; the
-mutation spec should keep that posture.
-
-### Medium - The live SQL assertions may be too brittle as written
-
-The test plan asks live HTTP tests to prove mutation response optimization and no deferred loading.
-Over `/graphql/`, SQL capture can prove broad behavior, but it is brittle for exact selected columns
-and cannot directly inspect the returned Django instance's `deferred_loading` state.
-
-Required spec correction:
-
-- Keep the live fakeshop test responsible for real `/graphql/` behavior, response shape, bounded
-  query count, and no accidental lazy query regressions visible through SQL capture.
-- Put exact queryset/deferred-loading assertions in package-level tests around the optimizer or
-  resolver internals.
-
-This preserves real-world coverage without turning live tests into SQL string snapshots.
-
-### Low - The "input target" wording can mislead implementation
-
-Several passages say mutation input generation resolves the primary `DjangoType`. The primary type
-is needed for return payloads and relation GlobalID strategy, but generated input fields should come
-from editable Django model fields, not from the read-side `DjangoType` field list.
-
-Required spec correction:
-
-- State explicitly that the primary `DjangoType` is not the source of generated input fields.
-- Generated input fields come from the model plus the mutation's write-side `Meta.fields`,
-  `Meta.exclude`, and custom input settings.
-
-## Configuration and performance note
-
-The setting-read concern does not appear to belong to this mutation spec. Spec 036 says no new
-settings key is added for mutations.
-
-For the existing Relay global ID setting, the current placement is architecturally acceptable:
-
-- `django_strawberry_framework/conf.py::Settings` reads and normalizes the consumer settings dict.
-- Domain validation lives near the consuming feature in
-  `django_strawberry_framework/types/base.py::_validate_globalid_strategy`.
-- `django_strawberry_framework/types/relay.py::_resolve_globalid_strategy` reads
-  `RELAY_GLOBALID_STRATEGY` during type finalization.
-- `django_strawberry_framework/types/relay.py::install_globalid_typename_resolver` records the
-  effective strategy on the finalized type definition and installs the resolver closure.
-
-That means the setting is not repeatedly validated during query execution. It is evaluated at schema
-construction/finalization time, which avoids the runtime overhead and thread-safety concerns raised
-in the prompt. Moving this validation into `conf.py` would make the settings reader more coupled to
-feature-specific semantics without improving request-time behavior.
-
-No spec 036 correction is needed for this point, except to avoid adding mutation settings unless the
-feature that needs them actually lands.
-
-## Test and documentation corrections
-
-Before implementation, update the spec test plan with these requirements:
-
-- Live fakeshop mutation tests must start with `seed_data(N)` or `create_users(N)` as required by
-  the repository rules.
-- Live tests own behavior reachable through `/graphql/`: success payloads, validation payloads,
-  permission behavior, GlobalID behavior, and response shape.
-- Package tests own internals that cannot be robustly asserted over HTTP: generated class caches,
-  duplicate name errors, exact deferred-loading state, custom input mapping failures, async pipeline
-  internals, and many-to-many behavior if fakeshop has no many-to-many model.
-- Documentation must define the final public names for generated inputs, payloads, `FieldError`,
-  relation ID inputs, and non-field error sentinel values.
+- The earlier architecture corrections mostly landed: generated inputs derive from editable model
+  fields, narrowed shapes use shape-derived names, payload slots are `node` / `result`, write auth
+  is separate from visibility, and the optimizer payload-selection extractor exists.
+- The live products surface follows the `examples/fakeshop/test_query/README.md` priority: core
+  reachable behavior is tested over `/graphql/`, with package tests covering internals.
+- The version boundary is preserved: package version remains `0.0.10`, with the joint `0.0.11` cut
+  still owning the version bump.
 
 ## Bottom line
 
-The spec should be revised before production code starts. The highest-priority fixes are generated
-input naming, partial update constraint validation, create authorization, relation GlobalID type
-checking, and payload field naming. Those define the public contract; changing them after 0.0.11
-would create avoidable compatibility debt.
+Fix the root id type-check, relation visibility checks, and delete id preservation before treating
+036 as shipped. Those are public-contract and security/correctness issues; the remaining P2 items
+are smaller but should be resolved before the mutation surface becomes a base for the form and
+serializer cards.

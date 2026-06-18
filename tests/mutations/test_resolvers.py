@@ -300,6 +300,21 @@ def test_unprovided_exclude_single_field_unique_group_kept():
     assert "description" in exclude
 
 
+def test_coerce_lookup_id_passthrough_when_no_globalid_type_slot():
+    """A value with no GlobalID type slot passes through unchecked (no target resolution).
+
+    The top-level ``id:`` type-check (spec-036 Decision 10 / finding-#1) only
+    applies to a decoded ``relay.GlobalID``. A raw pk string (one Strawberry cannot
+    parse as a GlobalID) and an already-coerced pk from an internal caller carry no
+    type slot, so ``_coerce_lookup_id`` returns them verbatim with no ``FieldError``
+    and without touching the target type - hence ``target_type=None`` is safe here.
+    These input shapes are unreachable through a real ``ID!`` GraphQL argument (it
+    always arrives as a string), so they are pinned package-internally.
+    """
+    assert resolvers._coerce_lookup_id("5", None) == ("5", None)
+    assert resolvers._coerce_lookup_id(5, None) == (5, None)
+
+
 @pytest.mark.django_db
 def test_integrity_error_race_fallback_via_mocked_save():
     """A save-time ``IntegrityError`` race maps to the envelope, not a 500 (Major-2)."""

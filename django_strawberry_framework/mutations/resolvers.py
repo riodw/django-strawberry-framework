@@ -569,7 +569,9 @@ def _run_update(
     payload_cls: type,
 ) -> Any:
     """The ``update`` branch: locate -> authorize -> set provided -> full_clean -> save -> re-fetch."""
-    node_id = _coerce_lookup_id(id)
+    node_id, id_error = _coerce_lookup_id(id, primary_type)
+    if id_error is not None:
+        return _build_payload(payload_cls, slot, None, [id_error])
     instance = _locate_instance(primary_type, node_id, info)
     if instance is None:
         return _build_payload(payload_cls, slot, None, [_not_found_error()])
@@ -619,7 +621,9 @@ def _run_delete(
     re-fetch is by pk without the visibility filter (Medium-1), consistent with
     create / update.
     """
-    node_id = _coerce_lookup_id(id)
+    node_id, id_error = _coerce_lookup_id(id, primary_type)
+    if id_error is not None:
+        return _build_payload(payload_cls, slot, None, [id_error])
     instance = _locate_instance(primary_type, node_id, info)
     if instance is None:
         return _build_payload(payload_cls, slot, None, [_not_found_error()])
@@ -692,29 +696,56 @@ def _save_or_field_errors(
     return None
 
 
-def _coerce_lookup_id(id: Any) -> Any:  # noqa: A002
-    """Coerce the ``id:`` argument to a pk lookup value.
+def _coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | None]:  # noqa: A002
+    """Coerce the ``id:`` to a pk, type-checking a ``GlobalID`` against the target (spec-036 Decision 10).
 
     ``DjangoMutationField`` declares ``id`` as the raw ``strawberry.ID`` string
-    (the ``DjangoNodeField`` server-side-decode precedent), so an ``id`` that is a
-    ``relay.GlobalID`` (a consumer passing a decoded object) yields its
-    ``node_id``; a wire-form base64 GlobalID string is decoded to its
-    ``node_id``; a raw pk string passes through. Django handles the column-type
-    coercion on the ``.get(pk=...)`` lookup.
+    (the ``DjangoNodeField`` server-side-decode precedent), so the value arrives as
+    a wire-form base64 GlobalID string (or, defensively, a decoded
+    ``relay.GlobalID`` / a raw pk). A decoded ``GlobalID`` is **type-checked against
+    the mutation's target model** - the same identity guard the typed
+    ``DjangoNodeField`` applies (``relay.py::_check_typed_match``) and the AR-H4
+    relation decode applies to ``<field>_id``: a well-formed id for the *wrong*
+    model (or an unresolvable type) returns a ``FieldError`` on ``id`` BEFORE any
+    pk lookup, never silently coerced to a bare pk that would target the same-pk
+    row of the right model. A raw pk string carries no type slot and passes through
+    unchecked (Django coerces it on the ``.get(pk=...)`` lookup).
+
+    Returns ``(node_id, None)`` on success or ``(None, FieldError)`` for a
+    wrong-type / unresolvable ``GlobalID``.
     """
-    if isinstance(id, relay.GlobalID):
-        return id.node_id
+    gid = id
     if isinstance(id, str):
         try:
-            return relay.GlobalID.from_id(id).node_id
+            gid = relay.GlobalID.from_id(id)
         except ValueError:
-            return id
-    return id
+            return id, None  # a raw pk string - no GlobalID type slot to check
+    if not isinstance(gid, relay.GlobalID):
+        return gid, None
+    target_model = target_type.__django_strawberry_definition__.model
+    try:
+        resolved_type, node_id = decode_global_id(gid)
+    except Exception:
+        return None, _invalid_lookup_id_error()
+    if resolved_type.__django_strawberry_definition__.model is not target_model:
+        return None, _invalid_lookup_id_error()
+    return node_id, None
 
 
 def _not_found_error() -> FieldError:
     """Build the not-found ``FieldError`` on ``id`` (hidden or missing - no existence leak)."""
     return FieldError(field="id", messages=["No matching row found."])
+
+
+def _invalid_lookup_id_error() -> FieldError:
+    """Build the wrong-type / unresolvable ``id`` ``FieldError`` (decided pre-lookup - no existence leak).
+
+    A ``GlobalID`` whose decoded type is not the mutation's target model (or whose
+    type cannot be resolved) is rejected here rather than coerced to a bare pk; the
+    failure is determined from the id's type slot alone, without a DB read, so it
+    reveals nothing about row existence (spec-036 Decision 10 / finding-#1).
+    """
+    return FieldError(field="id", messages=["Invalid id."])
 
 
 def _payload_cls_for(mutation_cls: type) -> type:

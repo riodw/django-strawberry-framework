@@ -11,8 +11,14 @@ from apps.kanban import models, services
 
 TRACKED_FILE = "django_strawberry_framework/types/base.py"
 OTHER_TRACKED_FILE = "django_strawberry_framework/optimizer/walker.py"
-PLANNED_PACKAGE_DIR = "django_strawberry_framework/mutations/"
-PLANNED_TEST_FILE = "tests/mutations/test_inputs.py"
+# Paths under allowed roots that are deliberately absent from the generated
+# allowlist (constants.py), so the importer treats them as planned/predicted
+# rows (is_current=False). Keep these fictional: if a real package or test dir
+# ever claims these paths they will land in constants.py, and
+# sync_tracked_paths_from_constants will flip is_current to True, breaking the
+# planned-row assertions below.
+PLANNED_PACKAGE_DIR = "django_strawberry_framework/planned_only/"
+PLANNED_TEST_FILE = "tests/planned_only/test_planned_only.py"
 
 
 @pytest.fixture(autouse=True)

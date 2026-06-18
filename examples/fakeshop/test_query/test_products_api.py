@@ -518,6 +518,83 @@ def test_create_item_wrong_type_global_id_on_category_id_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_update_item_wrong_type_global_id_on_id_is_field_error():
+    """A wrong-type / unresolvable ``GlobalID`` on the ``updateItem`` ``id:`` -> ``FieldError`` on ``id``.
+
+    The top-level ``id:`` is type-checked against the mutation's target model
+    (``Item``), the same identity guard the typed ``DjangoNodeField`` applies: a
+    well-formed ``Category`` GlobalID (the wrong model) - or a GlobalID naming an
+    unregistered type - is rejected as a ``FieldError`` on ``id`` BEFORE any
+    lookup, never silently coerced to a bare pk that would target the same-pk
+    ``Item``. ``node`` is null and the row is untouched (spec-036 Decision 10 /
+    finding-#1 hardening).
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="Untouched", category=category)
+    client = _login_with_perm("staff_1", "change_item")
+
+    # A well-formed Category GlobalID whose numeric pk collides with the Item's pk
+    # is the dangerous case: a bare-pk coercion would silently hit this Item.
+    wrong_gid = _global_id("products.category", item.pk)
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        client=client,
+        variables={"id": wrong_gid, "d": {"name": "Renamed"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItem"]
+    assert result["node"] is None
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["field"] == "id"
+    item.refresh_from_db()
+    assert item.name == "Untouched"
+
+    # A GlobalID naming a type that resolves to nothing is rejected the same way.
+    unresolvable_gid = _global_id("nope.nonexistent", item.pk)
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        client=client,
+        variables={"id": unresolvable_gid, "d": {"name": "Renamed"}},
+    )
+    result = response.json()["data"]["updateItem"]
+    assert result["node"] is None
+    assert result["errors"][0]["field"] == "id"
+    item.refresh_from_db()
+    assert item.name == "Untouched"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_delete_item_wrong_type_global_id_on_id_is_field_error():
+    """A wrong-type ``GlobalID`` on the ``deleteItem`` ``id:`` -> ``FieldError`` on ``id``, no deletion.
+
+    The same top-level ``id:`` type-check guards ``delete``: a ``Category``
+    GlobalID with a pk that collides with a real ``Item`` does not delete that
+    ``Item`` - it returns a ``FieldError`` on ``id`` and the row survives (spec-036
+    Decision 10 / finding-#1 hardening).
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="Survivor", category=category)
+    client = _login_with_perm("staff_1", "delete_item")
+
+    wrong_gid = _global_id("products.category", item.pk)
+    response = _post_graphql(_DELETE_ITEM, client=client, variables={"id": wrong_gid})
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["deleteItem"]
+    assert result["node"] is None
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["field"] == "id"
+    assert models.Item.objects.filter(pk=item.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     """G2 behavioral tier (AR-M7): a mutation response selecting a relation has no N+1, no lazy query.
 

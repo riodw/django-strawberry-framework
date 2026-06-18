@@ -8,6 +8,12 @@ using the shipped `DjangoType` surface, with connections-only root fields
 across nested selections - and windowed `Prefetch`es for nested
 relation-connection siblings - without per-resolver boilerplate.
 
+The module also exposes a `Mutation` type (spec-036 Slice 4): the
+`DjangoMutation` create / update / delete write surface over `Item` plus a
+`Category` create, each surfaced as an unannotated `DjangoMutationField`. The
+defaults apply - `DjangoModelPermission` write authorization and the post-write
+optimizer re-fetch under the `spec-035` G2 mutation gate.
+
 The eventual `1.0.0` shape - Relay-node types with the cookbook-shaped
 filter / order / aggregate / fields / search / permissions surface, a
 1-to-1 port of the `django-graphene-filters` cookbook recipe - is
@@ -36,21 +42,13 @@ from strawberry import relay
 from django_strawberry_framework import (
     DjangoConnection,
     DjangoConnectionField,
+    DjangoMutation,
+    DjangoMutationField,
     DjangoType,
     apply_cascade_permissions,
 )
 
 from . import filters, models, orders
-
-# TODO(spec-036 Slice 4): add the products write surface once DjangoMutation
-# and DjangoMutationField are public.
-# Pseudocode:
-# - import DjangoMutation and DjangoMutationField from django_strawberry_framework;
-# - declare Create/Update/Delete mutations for Item plus at least one Category
-#   write, each using nested Meta with model and operation;
-# - expose them on a Strawberry ``Mutation`` class as unannotated
-#   DjangoMutationField attributes;
-# - keep Query unchanged and add ``Mutation`` to ``__all__``.
 
 
 class CategoryType(DjangoType):
@@ -231,4 +229,47 @@ class Query:
     all_entries: DjangoConnection[EntryType] = DjangoConnectionField(EntryType)
 
 
-__all__ = ("Query",)
+class CreateItem(DjangoMutation):
+    class Meta:
+        model = models.Item
+        operation = "create"
+
+
+class UpdateItem(DjangoMutation):
+    class Meta:
+        model = models.Item
+        operation = "update"
+
+
+class DeleteItem(DjangoMutation):
+    class Meta:
+        model = models.Item
+        operation = "delete"
+
+
+class CreateCategory(DjangoMutation):
+    class Meta:
+        model = models.Category
+        operation = "create"
+
+
+@strawberry.type
+class Mutation:
+    """Fakeshop products app write surface - the `DjangoMutation` create / update / delete.
+
+    Each field is an unannotated `DjangoMutationField` (spec-036 Decision 7): the
+    return `<Name>Payload` is materialized at finalization and cannot be named at
+    import, so the factory types the field via a `strawberry.lazy` forward-ref. The
+    `Item` writes cover create / update / delete; `createCategory` exercises a
+    second model end to end. No `permission_classes` override - the default
+    `DjangoModelPermission` (the Django `add` / `change` / `delete` model perms) is
+    exactly what the live write-authorization tests exercise (spec-036 Decision 15).
+    """
+
+    create_item = DjangoMutationField(CreateItem)
+    update_item = DjangoMutationField(UpdateItem)
+    delete_item = DjangoMutationField(DeleteItem)
+    create_category = DjangoMutationField(CreateCategory)
+
+
+__all__ = ("Mutation", "Query")

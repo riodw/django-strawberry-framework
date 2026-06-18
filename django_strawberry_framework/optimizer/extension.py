@@ -423,6 +423,36 @@ def _connection_node_child_selections(selections: list[Any], info: Any) -> list[
     return node_children
 
 
+def mutation_payload_child_selections(slot: str) -> SelectionExtractor:
+    """Build a selection extractor for a mutation payload's object slot (spec-036 Decision 9).
+
+    A mutation field returns ``<field> { <slot> { ...children } errors { ... } }``
+    where ``<slot>`` is ``node`` (Relay-Node target) or ``result`` (non-Node). The
+    post-write re-fetch must plan the SAME child-selection list a list field over
+    the node type would, so the walker sees the response selection rooted at the
+    node type - exactly the connection extractor's job, but navigating one
+    ``<slot>`` level instead of ``edges { node }``. Returns a closure over ``slot``
+    so the resolver passes ``mutation_payload_child_selections(slot)`` to
+    ``apply_connection_optimization``.
+    """
+
+    def _extract(selections: list[Any], info: Any) -> list[Any]:
+        node_children: list[Any] = []
+        root_path = runtime_path_from_info(info)
+        for field_selection in selections:
+            for slot_selection in _named_children(field_selection, slot):
+                slot_path = (*root_path, _response_key(slot_selection))
+                node_children.extend(
+                    _node_children_with_runtime_prefix(
+                        slot_selection,
+                        runtime_prefixes=(slot_path,),
+                    ),
+                )
+        return node_children
+
+    return _extract
+
+
 class CacheInfo(NamedTuple):
     """Plan-cache statistics (hits, misses, current size)."""
 
@@ -1132,15 +1162,18 @@ def apply_connection_optimization(
     target_type: type,
     queryset: models.QuerySet,
     info: Any,
+    *,
+    selection_extractor: SelectionExtractor = _connection_node_child_selections,
 ) -> models.QuerySet:
     """Apply the optimizer plan to a connection field's pre-slice queryset.
 
-    The connection field's own optimizer cooperation point (Decision 11).
-    Strawberry's ``ConnectionExtension`` returns a connection object, so the
-    schema middleware (``DjangoOptimizerExtension.resolve``) never sees the
-    pre-slice queryset and cannot optimize it; the connection resolver calls
-    this helper as the last pipeline step before handing the queryset to
-    ``ConnectionExtension`` for slicing.
+    The connection field's own optimizer cooperation point (Decision 11), also
+    reused by the mutation re-fetch (spec-036 Decision 9). Strawberry's
+    ``ConnectionExtension`` returns a connection object, so the schema middleware
+    (``DjangoOptimizerExtension.resolve``) never sees the pre-slice queryset and
+    cannot optimize it; the connection resolver calls this helper as the last
+    pipeline step before handing the queryset to ``ConnectionExtension`` for
+    slicing.
 
     Resolves ``target_model`` from ``target_type``'s registered definition
     (NOT from ``info.return_type``, which is the connection type) and delegates
@@ -1153,6 +1186,14 @@ def apply_connection_optimization(
     optimizer to self-optimize. This keeps the connection consistent with the
     rest of the schema: the middleware path only optimizes when the extension is
     installed, and connection fields follow the same opt-in contract.
+
+    ``selection_extractor`` defaults to the connection ``edges { node { ... } }``
+    navigator; a caller whose response selection nests the node type under a
+    different slot passes its own (the mutation re-fetch passes a
+    ``<payload>.node`` / ``<payload>.result`` extractor - spec-036 Decision 9), so
+    the walker sees the same child-selection list a list field over the node type
+    would. ``apply_to`` already accepts the extractor; this helper just forwards
+    it instead of hardcoding the connection shape.
 
     Returns ``queryset`` unchanged when ``target_type`` has no registered
     model (nothing to plan) or when no optimizer extension is installed.
@@ -1175,5 +1216,5 @@ def apply_connection_optimization(
         target_model,
         queryset,
         raw_info,
-        selection_extractor=_connection_node_child_selections,
+        selection_extractor=selection_extractor,
     )

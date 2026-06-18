@@ -16,6 +16,12 @@ from strawberry import auto  # noqa: E402  # logger must exist before subpackage
 
 from .connection import DjangoConnection, DjangoConnectionField  # noqa: E402
 from .list_field import DjangoListField  # noqa: E402
+from .mutations import (  # noqa: E402
+    DjangoModelPermission,
+    DjangoMutation,
+    DjangoMutationField,
+    FieldError,
+)
 from .optimizer import DjangoOptimizerExtension  # noqa: E402
 from .optimizer.hints import OptimizerHint  # noqa: E402
 from .permissions import (  # noqa: E402
@@ -26,14 +32,6 @@ from .relay import DjangoNodeField, DjangoNodesField  # noqa: E402
 from .scalars import BigInt, strawberry_config  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 
-# TODO(spec-036 Slice 1-3): promote the mutation symbols to the root public
-# surface as each owning slice lands.
-# Pseudocode:
-# - Slice 1 exposes ``FieldError`` from ``django_strawberry_framework.mutations``.
-# - Slice 2 exposes ``DjangoMutation`` from the same package.
-# - Slice 3 exposes ``DjangoMutationField`` once the field factory exists.
-# - Add the three names to ``__all__`` without bumping ``__version__``; the
-#   joint 0.0.11 cut shared with the Upload card owns the version files.
 __version__ = "0.0.10"
 
 __all__ = (
@@ -41,10 +39,14 @@ __all__ = (
     "DjangoConnection",
     "DjangoConnectionField",
     "DjangoListField",
+    "DjangoModelPermission",
+    "DjangoMutation",
+    "DjangoMutationField",
     "DjangoNodeField",
     "DjangoNodesField",
     "DjangoOptimizerExtension",
     "DjangoType",
+    "FieldError",
     "OptimizerHint",
     "SyncMisuseError",
     "__version__",

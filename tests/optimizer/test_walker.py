@@ -3319,12 +3319,9 @@ def test_window_subquery_wrap_preserves_only_mask_and_child_select_related():
 # spec-035 Slice 2 - G2 operation-type gating of ``.only()`` (Decision 4)
 # ---------------------------------------------------------------------------
 
-# TODO(spec-036 Slice 3): extend this G2 group with the mutation-refetch mirror
-# required by the mutations foundation.
-# Pseudocode: synthesize the exact selection a DjangoMutation payload resolver
-# will hand to the optimizer; assert the response queryset plan keeps
-# select_related and Prefetch entries while ``only_fields`` and applied
-# deferred-loading masks stay empty under OperationType.MUTATION.
+# spec-036 Slice 3 (AR-M7): the package-tier exact-`only_fields` plan-state mirror
+# for the DjangoMutation post-write re-fetch. The live `CaptureQueriesContext`
+# bounded-count assertion is Slice 4; this is its exact-state counterpart.
 
 
 def _op_info(operation, relay_max_results=100):
@@ -3364,6 +3361,41 @@ def test_mutation_queryset_drops_only_keeps_select_prefetch():
     assert plan.only_fields == ()
     assert plan.select_related == ("category",)
     assert plan.prefetch_related != ()
+
+
+def test_mutation_refetch_plan_drops_only_keeps_relations():
+    """The DjangoMutation post-write re-fetch plan-state mirror (spec-036 AR-M7 / Decision 9).
+
+    The package-tier exact-state counterpart to Slice 4's live behavioral
+    ``CaptureQueriesContext`` assertion. A mutation re-fetch hands the optimizer the
+    payload's node-type selection (the children of ``CreateItemPayload.node``,
+    flattened to the node-type selection - here a to-one ``category`` and a to-many
+    ``entries`` plus a scalar). Under ``OperationType.MUTATION`` (spec-035 G2) the
+    plan must carry empty ``only_fields`` while ``select_related`` /
+    ``prefetch_related`` survive, AND the APPLIED queryset must carry Django's
+    default empty defer-set ``(frozenset(), True)`` - i.e. no ``.only(...)`` - so a
+    post-write consumer touching an unprojected column never deferred-refetches.
+    The exact selection mirrors what ``mutation_payload_child_selections`` hands
+    ``plan_optimizations`` from a ``createItem { node { name category { name }
+    entries { name } } }`` response.
+    """
+    plan = plan_optimizations(
+        [
+            _sel("name"),
+            _sel("category", selections=[_sel("name")]),
+            _sel("entries", selections=[_sel("name")]),
+        ],
+        Item,
+        info=_op_info(OperationType.MUTATION),
+    )
+    assert plan.only_fields == ()
+    assert plan.select_related == ("category",)
+    assert plan.prefetch_related != ()
+    # The applied queryset carries no `.only(...)` deferral (the load-bearing G2
+    # property the live tier observes as a bounded query count with no lazy query).
+    qs = plan.apply(Item.objects.all())
+    assert qs.query.deferred_loading == (frozenset(), True)
+    assert qs.query.select_related == {"category": {}}
 
 
 def test_mutation_to_one_relation_applies_no_only():

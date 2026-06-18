@@ -678,15 +678,22 @@ def finalize_django_types() -> None:
     # time. Warn (do not raise) and point at the ``type`` opt-out.
     _warn_model_label_secondary_collapse(multi_type_models)
 
-    # TODO(spec-036 Slice 2): bind ``DjangoMutation`` declarations in this
-    # phase-2.5 window, after primary-type state is settled and before
-    # ``strawberry.type`` freezes the schema classes.
-    # Pseudocode:
-    # - import the mutation binder from ``mutations.sets`` cycle-safely;
-    # - resolve each mutation's model primary ``DjangoType`` via the registry;
-    # - materialize generated ``Input`` / ``PartialInput`` / payload classes;
-    # - raise ``ConfigurationError`` for missing or ambiguous primary targets;
-    # - leave ``DEFERRED_META_KEYS`` and ``ALLOWED_META_KEYS`` unchanged.
+    # Bind ``DjangoMutation`` declarations (spec-036 Slice 2 / Decision 12) in this
+    # phase-2.5 window, after primary-type state is settled
+    # (``_warn_model_label_secondary_collapse`` above) and before Phase 3's
+    # ``strawberry.type`` freezes the schema classes - so each mutation's resolved
+    # primary type, generated ``Input`` / ``PartialInput``, and ``<Name>Payload``
+    # are materialized as module globals of ``mutations.inputs`` before
+    # ``strawberry.Schema(...)`` resolves them. Function-local import (cycle-safe:
+    # ``types/finalizer.py`` stays independent of the mutations package's
+    # module-load order), mirroring the order / filter local-import idiom; the bind
+    # only matters when the consumer has imported the mutations subsystem. A
+    # missing / ambiguous primary target raises ``ConfigurationError``; no
+    # ``DEFERRED_META_KEYS`` / ``ALLOWED_META_KEYS`` change (a mutation ``Meta`` is
+    # its own namespace).
+    from ..mutations.sets import bind_mutations
+
+    bind_mutations()
     _bind_filtersets()
     _bind_ordersets()
 

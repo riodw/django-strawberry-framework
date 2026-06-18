@@ -90,13 +90,6 @@ As of `0.0.9` the default Relay `GlobalID` payload is the Django model label (`a
 
 ## Today and coming next
 
-<!-- TODO(spec-036 Slice 5): move the model-driven mutation foundation from
-"Coming next" into "Shipped today" after implementation.
-Pseudocode: add the class Meta create/update/delete shape, keep Upload as the
-sibling 0.0.11 card, and keep form, serializer, and auth flavors in 0.0.12 and
-0.0.13 rather than lumping them into the foundation.
--->
-
 For the current capability snapshot — what the package can actually do in the example project right now — see [`../TODAY.md`][today]. For the per-feature glossary covering every shipped / planned / deferred capability (deep-linkable by anchor — `GLOSSARY.md#filterset`, `GLOSSARY.md#fk-id-elision`, …), see [`GLOSSARY.md`][glossary]. For the long-term destination and the migration-shape diffs against `graphene-django` and `strawberry-graphql-django`, see [`../GOAL.md`][goal].
 
 A quick summary:
@@ -127,9 +120,10 @@ A quick summary:
 - `Meta.nullable_overrides` / `Meta.required_overrides` (new in `0.0.9`) — two tuple-set `Meta` keys that decouple a scalar field's GraphQL nullability from its Django column (`T!`→`T` or `T`→`T!`) without an `AlterField` migration or a consumer-authored annotation. Validated at type-creation (unknown / excluded / consumer-authored / relation / Relay-suppressed-pk targets and the both-sets collision raise `ConfigurationError`); scalar-only, and the override flips a choice field's generated enum nullability for free. See [`GLOSSARY.md#metanullable_overrides`][glossary-metanullable_overrides].
 - `manage.py inspect_django_type` (new in `0.0.9`) — diagnostic command printing a finalized `DjangoType`'s per-field GraphQL resolution table (Django field → resolved GraphQL type → nullability → converter row). Dispatches the positional arg by shape (dotted path vs unique bare-name registry lookup) and accepts `--schema <selector>` to register + finalize on a cold CLI process. See [`GLOSSARY.md#schema-introspection-management-command`][glossary-inspect-django-type].
 - `apply_cascade_permissions` / `aapply_cascade_permissions` (new in `0.0.10`) — cascade-permissions subsystem: one call inside a type's `get_queryset` cascades that type's visibility across its single-column forward FK / OneToOne edges, dropping parent rows whose targets a target type's own `get_queryset` hides. Four invariants (`ContextVar` cycle guard, single-column forward scope, nullable-FK preservation, caller-alias pinning), loud `fields=` validation, a sync + `sync_to_async` async pair, and zero added query round-trips (the `__in` subqueries compile into the caller's single `SELECT`); composes with the shipped `check_<field>_permission` gates, connections, node refetch, and list fields through their existing seams. Exported from the package root. See [`GLOSSARY.md#apply_cascade_permissions`][glossary-apply-cascade-permissions].
+- mutations + auto-generated `Input` types (new in `0.0.11`) — the package's write side: a `DjangoMutation` base configured through a nested `class Meta` (`model` + `operation` ∈ `{"create", "update", "delete"}`, the DRF shape, not Strawberry decorators), exposed on the schema's `Mutation` type through the `DjangoMutationField` factory (the write-side sibling of `DjangoConnectionField`). Auto-generated `<Model>Input` (each editable field required only when it has no usable Django `default` / `blank` / `null`, else optional) / `<Model>PartialInput` (all-optional) derive from `Meta.model` reusing the read-side scalar / relation converters (forward FK / OneToOne → `<field>_id`, M2M → `list[id]`); the shared `FieldError` envelope (`field` + `messages`) surfaces `full_clean()` validation through a `<Name>Payload` carrying the mutated object in a uniform `node` / `result` slot plus `errors: list[FieldError]!`. Write authorization is a separate, DRF-shaped contract — `Meta.permission_classes` (default `[DjangoModelPermission]`, the Django `add` / `change` / `delete` model perms) plus an overridable `check_permission` — kept distinct from `get_queryset` visibility (can-view ≠ can-write). `update` / `delete` lookups run through the target type's `get_queryset` (a hidden row is not-found, no existence leak); the post-write row is re-fetched and optimizer-planned (`select_related` / `prefetch_related`, no `.only()` under the mutation operation). Sync + async. `DjangoMutation` / `DjangoMutationField` / `FieldError` / `DjangoModelPermission` are exported from the package root. See [`GLOSSARY.md#djangomutation`][glossary-djangomutation].
 
 **Coming next — remaining alpha (`0.0.11` → `0.0.14`):**
-- `0.0.11` — mutations + auto-generated `Input` types, and the `Upload` scalar + file/image field mapping
+- `0.0.11` — the `Upload` scalar + file/image field mapping (the sibling write-side card; mutations + auto-generated `Input` types already shipped above)
 - `0.0.12` — form-based mutations (Django Forms / ModelForms)
 - `0.0.13` — DRF serializer mutations (`SerializerMutation`) and auth mutations (`login` / `logout` / `register`)
 - `0.0.14` — Channels ASGI router, debug-toolbar middleware, test-client helper, response-extensions debug middleware
@@ -279,6 +273,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-apply-cascade-permissions]: GLOSSARY.md#apply_cascade_permissions
 [glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
 [glossary-djangolistfield]: GLOSSARY.md#djangolistfield
+[glossary-djangomutation]: GLOSSARY.md#djangomutation
 [glossary-djangonodefield]: GLOSSARY.md#djangonodefield
 [glossary-filterset]: GLOSSARY.md#filterset
 [glossary-metaglobalid_strategy]: GLOSSARY.md#metaglobalid_strategy

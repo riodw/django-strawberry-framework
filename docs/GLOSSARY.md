@@ -21,23 +21,20 @@ Current package version: `0.0.10`. Alpha-quality — suitable for internal tools
 
 ## Public exports
 
-<!-- TODO(spec-036 Slice 5): promote the mutation foundation glossary state.
-Pseudocode: add DjangoMutation, DjangoMutationField, and FieldError to Public
-exports; promote DjangoMutation, Input type generation, and FieldError envelope
-from planned to shipped; add a DjangoMutationField entry and Index row; note the
-G2 mutation handoff in the only() projection entry.
--->
-
 Symbols re-exported from `django_strawberry_framework`:
 
 - [`BigInt`](#bigint-scalar) — JSON-safe scalar for 64-bit integer fields.
 - [`DjangoConnection`](#djangoconnection) — generic Relay connection return-type alias (`DjangoConnection[T]`).
 - [`DjangoConnectionField`](#djangoconnectionfield) — Relay connection field factory over a Relay-Node-shaped `DjangoType`.
 - [`DjangoListField`](#djangolistfield) — non-Relay `list[T]` factory function for root Query fields.
+- [`DjangoModelPermission`](#djangomodelpermission) — default write-authorization class (Django `add` / `change` / `delete` model perms) for `Meta.permission_classes`.
+- [`DjangoMutation`](#djangomutation) — model-driven create / update / delete mutation base configured through a nested `class Meta`.
+- [`DjangoMutationField`](#djangomutationfield) — write-side field factory exposing a `DjangoMutation` on the schema's `Mutation` type.
 - [`DjangoNodeField`](#djangonodefield) — root Relay `node(id:)` refetch field factory (bare interface and typed forms).
 - [`DjangoNodesField`](#djangonodesfield) — root Relay `nodes(ids:)` batch refetch field factory.
 - [`DjangoType`](#djangotype) — model-backed Strawberry type base class.
 - [`DjangoOptimizerExtension`](#djangooptimizerextension) — Strawberry schema extension that does ORM optimization.
+- [`FieldError`](#fielderror-envelope) — public typed validation-error type (`field` + `messages`) in the shared mutation-payload envelope.
 - [`OptimizerHint`](#optimizerhint) — typed wrapper for per-relation optimizer overrides.
 - [`SyncMisuseError`](#syncmisuseerror) — typed marker for sync resolver paths that receive an async `get_queryset` coroutine.
 - [`apply_cascade_permissions`](#apply_cascade_permissions) — cascade a type's `get_queryset` visibility through its single-column forward FK / OneToOne edges (sync).
@@ -78,12 +75,14 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`DjangoImageType`](#djangoimagetype) | planned for `0.0.11` |
 | [`DjangoListField`](#djangolistfield) | shipped (`0.0.7`) |
 | [`DjangoModelFormMutation`](#djangomodelformmutation) | planned for `0.0.12` |
-| [`DjangoMutation`](#djangomutation) | planned for `0.0.11` |
+| [`DjangoModelPermission`](#djangomodelpermission) | shipped (`0.0.11`) |
+| [`DjangoMutation`](#djangomutation) | shipped (`0.0.11`) |
+| [`DjangoMutationField`](#djangomutationfield) | shipped (`0.0.11`) |
 | [`DjangoNodeField`](#djangonodefield) | shipped (`0.0.9`) |
 | [`DjangoNodesField`](#djangonodesfield) | shipped (`0.0.9`) |
 | [`DjangoOptimizerExtension`](#djangooptimizerextension) | shipped (`0.0.2`) |
 | [`DjangoType`](#djangotype) | shipped (`0.0.5`) |
-| [`FieldError` envelope](#fielderror-envelope) | planned for `0.0.11` |
+| [`FieldError` envelope](#fielderror-envelope) | shipped (`0.0.11`) |
 | [`FieldSet`](#fieldset) | planned for `0.1.1` |
 | [`FilterSet`](#filterset) | shipped (`0.0.8`) |
 | [`filter_input_type`](#filter_input_type) | shipped (`0.0.8`) |
@@ -92,7 +91,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`get_child_queryset`](#get_child_queryset) | planned for `0.1.3` |
 | [`get_queryset` visibility hook](#get_queryset-visibility-hook) | shipped (`0.0.1`) |
 | [`GraphQLTestCase`](#graphqltestcase) | planned for `0.0.14` |
-| [Input type generation](#input-type-generation) | planned for `0.0.11` |
+| [Input type generation](#input-type-generation) | shipped (`0.0.11`) |
 | [`Meta.aggregate_class`](#metaaggregate_class) | planned for `0.1.3` |
 | [`Meta.choice_enum_names`](#metachoice_enum_names) | planned for `0.1.4` |
 | [`Meta.connection`](#metaconnection) | shipped (`0.0.9`) |
@@ -157,10 +156,10 @@ For readers exploring rather than looking up a specific term:
 - **Aggregation:** [`AggregateSet`](#aggregateset) · [`RelatedAggregate`](#relatedaggregate) · [`Meta.aggregate_class`](#metaaggregate_class) · [`get_child_queryset`](#get_child_queryset).
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
 - **Search:** [`Meta.search_fields`](#metasearch_fields).
-- **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [Per-field permission hooks](#per-field-permission-hooks).
+- **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoModelPermission`](#djangomodelpermission) · [Per-field permission hooks](#per-field-permission-hooks).
 - **Relay:** [Relay Node integration](#relay-node-integration) · [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoNodesField`](#djangonodesfield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
-- **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
+- **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoMutationField`](#djangomutationfield) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
 - **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware).
 - **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Django Trac #37064 hardening](#django-trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase).
@@ -371,13 +370,29 @@ Non-Relay `list[T]` **root Query field**. The smallest entry point for migrants 
 
 **See also:** [`DjangoFormMutation`](#djangoformmutation) · [`DjangoMutation`](#djangomutation).
 
+## `DjangoModelPermission`
+
+**Status:** shipped (`0.0.11`).
+
+The default write-authorization permission class consumers pass to [`DjangoMutation`](#djangomutation)'s `Meta.permission_classes` (which defaults to `[DjangoModelPermission]`). It enforces the Django `add` / `change` / `delete` **model permissions** — `create` requires `add`, `update` requires `change`, `delete` requires `delete` — so an anonymous caller or one missing the relevant model perm is denied. Write authorization is a first-class, DRF-shaped contract run by all three operations through an overridable `check_permission(info, operation, data, instance=None)` hook (`create` runs the check before validation with `instance=None`; `update` / `delete` run it after the visibility lookup with the located instance). It is kept **separate** from [`get_queryset`](#get_queryset-visibility-hook) visibility: can-view ≠ can-write — `get_queryset` scopes which rows are *visible*, `permission_classes` decides whether they may be *written*. A denial raises a top-level `GraphQLError` (not a [`FieldError`](#fielderror-envelope) envelope entry). Exported from the package root.
+
+**See also:** [`DjangoMutation`](#djangomutation) · [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [Per-field permission hooks](#per-field-permission-hooks).
+
 ## `DjangoMutation`
 
-**Status:** planned for `0.0.11`.
+**Status:** shipped (`0.0.11`).
 
-Base class for mutations with `Meta`-driven configuration; auto-generates [`Input` / `PartialInput`](#input-type-generation) types from Django models that preserve the relation-override contract; shared [`FieldError` envelope](#fielderror-envelope) reused across every mutation flavor; sync and async resolver paths; composition with the optimizer for the post-write return value (re-fetching the mutated row with the right `select_related` / `prefetch_related` for the response selection).
+Base class for the write side, configured through a nested `class Meta` (the DRF shape, not Strawberry decorators). `Meta.model` names the Django model; `Meta.operation` selects the verb — one of `"create"` / `"update"` / `"delete"`. Optional `Meta.fields` / `Meta.exclude` narrow the generated input shape; `Meta.input_class` / `Meta.partial_input_class` supply a hand-written input (which must follow the generated field-naming scheme); `Meta.permission_classes` sets write authorization (see [`DjangoModelPermission`](#djangomodelpermission)). The class is registered at creation and bound at [`finalize_django_types`](#finalize_django_types) phase 2.5, which resolves the model's **primary** [`DjangoType`](#djangotype) for the return payload and materializes the generated [`Input` / `PartialInput`](#input-type-generation) and `<Name>Payload` classes before `strawberry.Schema(...)` runs. The resolver pipeline runs decode → authorize → `full_clean()` → write → optimizer-re-fetch → payload, sync and async, with the write inside one `transaction.atomic()` (async via a single `sync_to_async(thread_sensitive=True)`). Validation failures surface through the shared [`FieldError` envelope](#fielderror-envelope) rather than raising at the GraphQL boundary; the post-write row is re-fetched and optimizer-planned for the response selection (under the mutation operation the G2 gate keeps `select_related` / `prefetch_related` but suppresses [`.only(...)`](#only-projection)). Exposed on the schema's `Mutation` type through the [`DjangoMutationField`](#djangomutationfield) factory. Exported from the package root.
 
-**See also:** [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope).
+**See also:** [`DjangoMutationField`](#djangomutationfield) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [`DjangoModelPermission`](#djangomodelpermission) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation).
+
+## `DjangoMutationField`
+
+**Status:** shipped (`0.0.11`).
+
+Field factory exposing a [`DjangoMutation`](#djangomutation) on the schema's `Mutation` type — the write-side sibling of [`DjangoConnectionField`](#djangoconnectionfield). Assigned to a class attribute with **no** class-attribute annotation (`create_item = DjangoMutationField(CreateItem)`): the return `<Name>Payload` is materialized at finalization and has no importable name at import, so the factory types the field itself via a `strawberry.lazy` forward-ref to the generated payload (resolved at schema build). It synthesizes the per-operation resolver argument signature — `data: <Model>Input!` for create, `id:` + `data: <Model>PartialInput!` for update, `id:` for delete — and dispatches the sync or async resolver via the same async-detection asymmetry [`DjangoListField`](#djangolistfield) uses (`is_async_callable` at construction for a consumer resolver, runtime async-context detection for the default resolver). Exported from the package root.
+
+**See also:** [`DjangoMutation`](#djangomutation) · [`DjangoConnectionField`](#djangoconnectionfield) · [`FieldError` envelope](#fielderror-envelope).
 
 ## `DjangoNodeField`
 
@@ -476,11 +491,11 @@ Validation contracts (errors surface as [`ConfigurationError`](#configurationerr
 
 ## `FieldError` envelope
 
-**Status:** planned for `0.0.11`.
+**Status:** shipped (`0.0.11`).
 
-Shared `errors: list[FieldError]` envelope returned by every mutation flavor — [`DjangoMutation`](#djangomutation), [`DjangoFormMutation`](#djangoformmutation), [`DjangoModelFormMutation`](#djangomodelformmutation), [`SerializerMutation`](#serializermutation). Each `FieldError` carries a `field` path and a `messages: list[str]`. Populated automatically from `form.errors` / `serializer.errors` / `ValidationError` raised inside `DjangoMutation.perform_mutation`.
+Shared `errors: list[FieldError]` envelope returned by every mutation flavor — [`DjangoMutation`](#djangomutation) and (reusing it unchanged) the `0.0.12` [`DjangoFormMutation`](#djangoformmutation) / [`DjangoModelFormMutation`](#djangomodelformmutation) and the `0.0.13` [`SerializerMutation`](#serializermutation) / [Auth mutations](#auth-mutations). The public `FieldError` `@strawberry.type` carries a `field: str` path and `messages: list[str]` (graphene-django's `ErrorType` shape). It is surfaced through a generated `<Name>Payload` wrapper that carries the mutated object in a uniform slot — `node` for a Relay-Node target, `result` for a non-Node target, never a model-derived name — plus `errors: list[FieldError]!`. A `full_clean()` `ValidationError` (including a `validate_constraints()` `UniqueConstraint` violation caught before `save()`, with multi-field constraints keyed to Django's `"__all__"` non-field sentinel) populates the envelope and returns a null object rather than raising at the GraphQL boundary; a concurrent-race `IntegrityError` maps to the same envelope as a documented fallback. (A write-authorization denial is a top-level `GraphQLError`, **not** a `FieldError` entry — see [`DjangoModelPermission`](#djangomodelpermission).) The type is **defined and frozen here** so the downstream flavor cards reuse the byte-identical shape.
 
-**See also:** [`DjangoMutation`](#djangomutation) · [`DjangoFormMutation`](#djangoformmutation) · [`SerializerMutation`](#serializermutation).
+**See also:** [`DjangoMutation`](#djangomutation) · [Input type generation](#input-type-generation) · [`DjangoModelPermission`](#djangomodelpermission) · [`DjangoFormMutation`](#djangoformmutation) · [`SerializerMutation`](#serializermutation).
 
 ## `FieldSet`
 
@@ -614,16 +629,16 @@ The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` 
 
 ## Input type generation
 
-**Status:** planned for `0.0.11`.
+**Status:** shipped (`0.0.11`).
 
-[`DjangoMutation`](#djangomutation) auto-generates two input types from a Django model declared in `Meta.model`:
+[`DjangoMutation`](#djangomutation) auto-generates two input types from the model's **editable** fields (narrowed by the mutation's own `Meta.fields` / `Meta.exclude` — **not** the read-side [`DjangoType`](#djangotype) selection), reusing the read-side scalar / choice-enum / specialized-scalar converters so read and write share one wire contract:
 
-- **`Input`** — the create shape (`Model.objects.create(...)` semantics). A field is required only when it has no usable Django `default`, is not `null=True`, and (for text fields) is not `blank=True`; fields that do have a default/blank/null are optional. This is the DRF `required=False`-from-`default`/`blank`/`null` rule, not a blanket "every field required".
-- **`PartialInput`** — every field optional (matches `Model.objects.update(...)` semantics).
+- **`<Model>Input`** — the create shape (`Model.objects.create(...)` semantics). A field is required only when it has no usable Django `default`, is not `null=True`, and (for text fields) is not `blank=True`; fields that do have a default / blank / null are optional (`strawberry.UNSET`). This is the DRF `required=False`-from-`default`/`blank`/`null` rule, not a blanket "every field required".
+- **`<Model>PartialInput`** — every field optional, `UNSET`-defaulted (matches `Model.objects.update(...)` semantics).
 
-Both preserve the relation-override contract from the foundation slice: consumer-authored input fields are honored rather than clobbered by generated ones.
+Editable-field selection drops the pk, `auto_now` / `auto_now_add` / `editable=False` columns, and reverse relations. A forward FK / OneToOne becomes a single `<field>_id` typed as the target's id — a `GlobalID` for a Relay-Node target, the raw pk scalar otherwise — type-checked against the relation target at decode (a wrong-type id is a [`FieldError`](#fielderror-envelope), never a cross-model pk lookup); an M2M becomes `list[<id>]` (replace-on-provide / clear-on-empty / unchanged-on-omit). The canonical full editable shape takes the stable `<Model>Input` / `<Model>PartialInput` name; a narrowed (`Meta.fields` / `Meta.exclude`) shape takes a deterministic shape-derived name, and two **distinct** shapes colliding on one generated name raise [`ConfigurationError`](#configurationerror) at finalization (identical shapes dedupe and share one type). All are materialized as module globals. The relation-override contract from `spec-010` holds: a consumer-authored input field is honored, not clobbered by a generated one.
 
-**See also:** [`DjangoMutation`](#djangomutation) · [`Upload` scalar](#upload-scalar).
+**See also:** [`DjangoMutation`](#djangomutation) · [`FieldError` envelope](#fielderror-envelope) · [`Upload` scalar](#upload-scalar).
 
 ## `Meta.aggregate_class`
 
@@ -906,7 +921,7 @@ Companion `BACKLOG.md` item 41 covers first-class sharding-aware planning post-`
 
 Scalar GraphQL selections become Django `.only(...)` projections so unselected columns are not fetched from the database. Connector columns required for `select_related`, reverse FK, FK / OneToOne, and M2M attachment paths are preserved automatically so Django can stitch related rows without lazy loads.
 
-As of `0.0.10`, `.only(...)` is applied for `QUERY` operations only (G2): a mutation / subscription queryset keeps `select_related` / `prefetch_related` but carries no column deferral, so a mutation-returned queryset never carries a selection-shaped deferred-field set (see [`DjangoOptimizerExtension`](#djangooptimizerextension)).
+As of `0.0.10`, `.only(...)` is applied for `QUERY` operations only (G2): a mutation / subscription queryset keeps `select_related` / `prefetch_related` but carries no column deferral, so a mutation-returned queryset never carries a selection-shaped deferred-field set (see [`DjangoOptimizerExtension`](#djangooptimizerextension)). As of `0.0.11` the G2 mutation gate is exercised **live** by the products write surface — the `spec-035` G2 live-test handoff is discharged ([`DjangoMutation`](#djangomutation)).
 
 **See also:** [FK-id elision](#fk-id-elision) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache).
 

@@ -76,11 +76,14 @@ def _reload_project_schema_for_acceptance_tests():
     _reload_products_project_schema()
 
 
-def _post_graphql(query: str, *, client: Client | None = None):
+def _post_graphql(query: str, *, client: Client | None = None, variables: dict | None = None):
     graphql_client = client or Client()
+    payload: dict = {"query": query}
+    if variables is not None:
+        payload["variables"] = variables
     return graphql_client.post(
         "/graphql/",
-        data={"query": query},
+        data=payload,
         content_type="application/json",
     )
 
@@ -106,16 +109,484 @@ def _global_id(type_name: str, pk: int) -> str:
     return str(relay.GlobalID(type_name=type_name, node_id=str(pk)))
 
 
-# TODO(spec-036 Slice 4): add live /graphql mutation acceptance coverage.
-# Pseudocode:
-# - start each products catalog/auth test with seed_data(N) or create_users(N);
-# - execute createItem, updateItem, deleteItem, and one Category write over HTTP;
-# - assert success payloads contain the optimizer-refetched object and no errors;
-# - assert duplicate Item name/category returns the FieldError envelope;
-# - assert partial update distinguishes omitted fields from explicit null;
-# - assert permission-scoped update/delete hide private rows as not found;
-# - capture SQL for a mutation response selecting a relation and assert no
-#   deferred loading while select_related/prefetch_related still apply.
+def _login_with_perm(username: str, *codenames: str) -> Client:
+    """Log in a seeded ``create_users(1)`` user after granting explicit products perms.
+
+    The faithful exercise of the default ``DjangoModelPermission`` (spec-036
+    Decision 15 / AR-H3): no ``create_users`` user holds ``add`` / ``change`` /
+    ``delete`` by default and ``staff_1`` is ``is_staff=True`` but NOT a superuser,
+    so a permitted caller must obtain the model perm in-test. Granting the explicit
+    ``Permission`` (the ``services.create_users`` ``Permission.objects.get(
+    codename=..., content_type__app_label="products")`` idiom) exercises the
+    codename check exactly - a superuser would pass via the superuser
+    short-circuit and never test the codename path. The user is re-fetched from the
+    DB after the grant so the per-request permission cache is not stale.
+    """
+    from django.contrib.auth.models import Permission
+
+    User = get_user_model()
+    user = User.objects.get(username=username)
+    for codename in codenames:
+        perm = Permission.objects.get(codename=codename, content_type__app_label="products")
+        user.user_permissions.add(perm)
+    user = User.objects.get(pk=user.pk)  # drop the stale perm cache
+    client = Client()
+    client.force_login(user)
+    return client
+
+
+# The live mutation query strings (the wire contract the SDL renders):
+# createItem(data: ItemInput!), updateItem(id: ID!, data: ItemPartialInput!),
+# deleteItem(id: ID!), createCategory(data: CategoryInput!). ``id`` is the raw
+# ``ID!`` GlobalID string (server-side-decoded - the DjangoNodeField precedent).
+_CREATE_ITEM = (
+    "mutation($d: ItemInput!) { createItem(data: $d) { "
+    "node { name category { name } } errors { field messages } } }"
+)
+_UPDATE_ITEM = (
+    "mutation($id: ID!, $d: ItemPartialInput!) { updateItem(id: $id, data: $d) { "
+    "node { name } errors { field messages } } }"
+)
+_DELETE_ITEM = (
+    "mutation($id: ID!) { deleteItem(id: $id) { "
+    "node { id name category { name } } errors { field messages } } }"
+)
+_CREATE_CATEGORY = (
+    "mutation($d: CategoryInput!) { createCategory(data: $d) { "
+    "node { name } errors { field messages } } }"
+)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_happy_path():
+    """``createItem`` with a permitted caller returns the optimizer-refetched node, no errors.
+
+    AR-H3 permitted-caller success on the codename path: ``view_item_1`` is granted
+    the explicit ``products.add_item`` (NOT a superuser). The payload ``node`` is
+    the optimizer re-fetch with the nested ``category { name }`` resolvable, and the
+    row persists in the DB after the request.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={
+            "d": {
+                "name": "LiveWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItem"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "LiveWidget", "category": {"name": category.name}}
+    created = models.Item.objects.get(name="LiveWidget", category=category)
+    assert created.description == ""
+    assert created.is_private is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_non_colliding_partial_update():
+    """A partial update changing only ``name`` to a fresh value persists, leaving other fields.
+
+    The spec's non-colliding partial-update case: ``ItemPartialInput`` provides
+    only ``name``; the unprovided ``description`` / ``isPrivate`` / ``categoryId``
+    are left unchanged in the DB (DRF ``partial=True`` parity). Driven as
+    ``staff_1`` (full visibility, so the located row is the private-flagged one)
+    granted the explicit ``change_item`` codename - ``staff_1`` is ``is_staff`` but
+    NOT a superuser, so the ``DjangoModelPermission`` codename check still runs
+    (AR-H3); visibility and write-authorization stay distinct contracts.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(
+        name="Before",
+        description="keep me",
+        category=category,
+        is_private=True,
+    )
+    client = _login_with_perm("staff_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk), "d": {"name": "After"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItem"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "After"}
+    item.refresh_from_db()
+    assert item.name == "After"
+    # Unprovided fields untouched.
+    assert item.description == "keep me"
+    assert item.is_private is True
+    assert item.category_id == category.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_delete_item_happy_path():
+    """``deleteItem`` returns the pre-deletion snapshot (id + relation) and removes the row.
+
+    The delete payload selects ``node { id name category { name } }`` - the AR-M5
+    snapshot-before-delete shape, fully materialized (the relation populated on the
+    detached instance) before ``delete()``. The id is preserved for client cache
+    eviction; the row is gone from the DB after the request.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="Doomed", category=category)
+    gid = _global_id("products.item", item.pk)
+    client = _login_with_perm("staff_1", "delete_item")
+
+    response = _post_graphql(_DELETE_ITEM, client=client, variables={"id": gid})
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["deleteItem"]
+    assert result["errors"] == []
+    assert result["node"]["name"] == "Doomed"
+    assert result["node"]["category"] == {"name": category.name}
+    assert not models.Item.objects.filter(pk=item.pk).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_category_happy_path():
+    """``createCategory`` (the >=1 Category write) creates a fresh-named row end to end.
+
+    Exercises a second model through the pipeline. ``Category.name`` is
+    ``unique=True``, so the name must not be one ``seed_data`` produced (Faker
+    provider names) - ``"zzz_live_cat"`` is reserved for the cascade seed helper's
+    namespace and never a provider name, so no spurious uniqueness ``FieldError``.
+    """
+    create_users(1)
+    seed_data(1)
+    client = _login_with_perm("view_category_1", "add_category")
+
+    response = _post_graphql(
+        _CREATE_CATEGORY,
+        client=client,
+        variables={"d": {"name": "zzz_live_cat"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createCategory"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "zzz_live_cat"}
+    assert models.Category.objects.filter(name="zzz_live_cat").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_unique_constraint_envelope_uses_all_sentinel():
+    """A duplicate ``(category, name)`` create returns a ``"__all__"``-keyed ``FieldError``.
+
+    The multi-field ``unique_item_per_category`` constraint is caught by
+    ``full_clean()``'s ``validate_constraints()`` BEFORE ``save()`` as a
+    ``ValidationError`` mapping ``NON_FIELD_ERRORS`` -> the ``"__all__"`` sentinel
+    (AR-M3). ``node`` is null, ``errors`` carries the one entry - NOT a top-level
+    GraphQL error and never an ``IntegrityError`` / 500.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    existing = models.Item.objects.create(name="Dup", category=category)
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={
+            "d": {
+                "name": existing.name,
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItem"]
+    assert result["node"] is None
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["field"] == "__all__"
+    # No second row was written.
+    assert models.Item.objects.filter(name="Dup", category=category).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_partial_collision_on_unique_constraint_changing_only_name():
+    """AR-H2: a ``name``-only update colliding on ``unique_item_per_category`` -> ``"__all__"``.
+
+    Two ``Item``s ``A`` / ``B`` under the SAME category; ``updateItem`` on ``A``
+    changing only ``name`` -> ``B``. The unchanged (unprovided) ``category``
+    co-participates in the composite constraint with the provided ``name``, so it is
+    NOT dropped from the ``full_clean(exclude=...)`` set - the collision is caught
+    before ``save()`` as a ``"__all__"``-keyed ``FieldError``, never an
+    ``IntegrityError``. ``A``'s name is unchanged in the DB.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item_a = models.Item.objects.create(name="A", category=category)
+    models.Item.objects.create(name="B", category=category)
+    client = _login_with_perm("staff_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        client=client,
+        variables={"id": _global_id("products.item", item_a.pk), "d": {"name": "B"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItem"]
+    assert result["node"] is None
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["field"] == "__all__"
+    item_a.refresh_from_db()
+    assert item_a.name == "A"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_anonymous_is_denied_top_level_error_no_write():
+    """AR-H3: an anonymous ``createItem`` is denied with a top-level error and no write.
+
+    The default ``DjangoModelPermission`` denies a caller with no authenticated
+    ``request.user`` (``is_authenticated == False``). The denial RAISES a top-level
+    ``GraphQLError`` (in ``payload["errors"]``), NOT a field-keyed ``FieldError``
+    envelope entry (spec-036 Decision 15) - and no row is written.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM,
+        variables={
+            "d": {
+                "name": "AnonWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    # The denial RAISES on a non-null ``createItem(...): CreateItemPayload!`` field,
+    # so GraphQL nulls the whole ``data`` - the authorization-failure surface, NOT a
+    # ``FieldError`` envelope entry on a present payload.
+    assert payload["data"] is None
+    assert "Not authorized" in payload["errors"][0]["message"]
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="AnonWidget").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_missing_model_perm_is_denied_no_write():
+    """AR-H3: a caller lacking ``add_item`` is denied with a top-level error, no write.
+
+    ``view_item_1`` holds only ``products.view_item`` (``create_users`` grants each
+    ``view_*`` user only the matching ``view_*`` perm) and LACKS ``add_item``, so
+    the default ``DjangoModelPermission`` denies the create - a top-level
+    ``GraphQLError``, no row written. Isolates the model-perm codename denial from
+    the anonymous case.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login("view_item_1")  # only products.view_item, no add_item
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={
+            "d": {
+                "name": "NoPermWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    assert payload["data"] is None
+    assert "Not authorized" in payload["errors"][0]["message"]
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="NoPermWidget").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_visibility_scoped_update_delete_hidden_private_row_is_not_found():
+    """Decision 10: a caller who holds the write perm but cannot SEE a private row gets not-found.
+
+    ``seed_cascade_split`` gives ``item_under_private`` (a public Item under a
+    PRIVATE category) and ``item_under_public``. A non-staff ``view_item_1`` user
+    (granted ``change_item`` + ``delete_item``) cannot see ``item_under_private``
+    (the ``ItemType.get_queryset`` cascade hides it through its private category),
+    so the update / delete LOCATE misses -> a not-found ``FieldError`` on ``id``
+    (indistinguishable from a genuinely-missing row, no existence leak). The write
+    perm is HELD, isolating the visibility miss from an authorization denial; the
+    same write succeeds for ``item_under_public``.
+    """
+    create_users(1)
+    chain = seed_cascade_split()
+    private_gid = _global_id("products.item", chain["item_under_private"].pk)
+    public_gid = _global_id("products.item", chain["item_under_public"].pk)
+    client = _login_with_perm("view_item_1", "change_item", "delete_item")
+
+    # Hidden private row: update -> not-found FieldError on `id`, row unchanged.
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        client=client,
+        variables={"id": private_gid, "d": {"name": "Renamed"}},
+    )
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItem"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["id"]
+    chain["item_under_private"].refresh_from_db()
+    assert chain["item_under_private"].name == "zzz_item_under_private"
+
+    # Hidden private row: delete -> not-found FieldError on `id`, row still present.
+    response = _post_graphql(_DELETE_ITEM, client=client, variables={"id": private_gid})
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["deleteItem"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["id"]
+    assert models.Item.objects.filter(pk=chain["item_under_private"].pk).exists()
+
+    # Contrast: the SAME write succeeds for the visible public row.
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        client=client,
+        variables={"id": public_gid, "d": {"name": "PublicRenamed"}},
+    )
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItem"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "PublicRenamed"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_wrong_type_global_id_on_category_id_is_field_error():
+    """AR-H4: a wrong-type ``GlobalID`` on ``categoryId`` -> ``FieldError`` on ``categoryId``.
+
+    ``categoryId`` is fed a well-formed ``Item`` GlobalID (the wrong target model).
+    The decode type-checks it against the relation's Django target (``Category``)
+    and returns a ``FieldError`` keyed to the input field ``categoryId`` - never a
+    cross-model pk lookup, never a raw ``DoesNotExist``, never a top-level
+    ``GraphQLError``. ``node`` is null and no row is written.
+    """
+    create_users(1)
+    seed_data(1)
+    some_item = models.Item.objects.first()
+    wrong_gid = _global_id("products.item", some_item.pk)
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={"d": {"name": "WrongTypeWidget", "categoryId": wrong_gid}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItem"]
+    assert result["node"] is None
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["field"] == "categoryId"
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="WrongTypeWidget").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
+    """G2 behavioral tier (AR-M7): a mutation response selecting a relation has no N+1, no lazy query.
+
+    Discharges the ``spec-035`` G2 live-test handoff at the BEHAVIORAL tier: a
+    ``createItem`` response selecting ``node { name category { name } }`` is wrapped
+    in ``CaptureQueriesContext``. The post-write re-fetch is one optimizer-planned
+    ``products_item`` queryset that keeps ``select_related`` / ``prefetch_related``
+    for the ``category`` relation, so exactly ONE ``products_category`` query
+    services it (no N+1) and no deferred-field lazy refetch fires (a regression
+    would show as an extra ``products_item`` SELECT after the re-fetch).
+
+    The absolute bounded count is DERIVED from a real run (BUILD.md forbids
+    guessing it). A write needs an authorized caller, so the count includes the
+    auth machinery; each query is annotated below (the per-query breakdown is
+    pinned in the inline comment beside the count assertion). The exact
+    ``only_fields`` / ``deferred_loading`` plan state is
+    the package mirror's job (``tests/optimizer/test_walker.py``, AR-M7) - this
+    live tier pins only the load-bearing behavior, NOT a column-exact SQL snapshot.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            _CREATE_ITEM,
+            client=client,
+            variables={
+                "d": {
+                    "name": "G2Widget",
+                    "categoryId": _global_id("products.category", category.pk),
+                },
+            },
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItem"]
+    assert result["errors"] == []
+    # The relation renders WITHOUT an error (planned, not a broken / lazy FK).
+    assert result["node"] == {"name": "G2Widget", "category": {"name": category.name}}
+
+    # Bounded count = 11, derived from a real run (stable across runs):
+    #   BEGIN + COMMIT                                    = 2 (the resolver's one
+    #                                                         transaction.atomic())
+    #   session + auth_user + user_perms + group_perms    = 4 (authorized-caller
+    #                                                         machinery)
+    #   validate_constraints: category-FK + item-unique   = 2 (full_clean before save)
+    #   INSERT products_item                              = 1
+    #   post-write re-fetch: products_item                = 1 (optimizer-planned)
+    #   the `category` relation:  products_category       = 1 (select_related/prefetch;
+    #                                                         no N+1, no lazy refetch)
+    sql = [query["sql"] for query in captured]
+    assert len(captured) == 11, sql
+    # G2 load-bearing property: the re-fetch reads the item once and the relation
+    # once - a deferred-field lazy refetch or an N+1 would add EXTRA products SELECTs.
+    item_selects = [
+        s for s in sql if "products_item" in s.lower() and s.strip().upper().startswith("SELECT")
+    ]
+    category_selects = [
+        s
+        for s in sql
+        if "products_category" in s.lower() and s.strip().upper().startswith("SELECT")
+    ]
+    # One re-fetch SELECT for the item, plus the validate_constraints SELECT-1.
+    assert len([s for s in item_selects if "select 1" not in s.lower()]) == 1, sql
+    # One category SELECT for the relation, plus the validate_constraints SELECT-1.
+    assert len([s for s in category_selects if "select 1" not in s.lower()]) == 1, sql
 
 
 @pytest.mark.django_db

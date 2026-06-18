@@ -716,6 +716,75 @@ def test_create_item_malformed_category_id_is_top_level_coercion_error():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_update_item_wellformed_id_uncoercible_node_id_is_not_found_no_crash():
+    """CR-1: a well-formed ``Item`` ``id:`` carrying an uncoercible ``node_id`` -> not-found, no 500.
+
+    Distinct from the malformed case above: this ``id`` IS a well-formed
+    ``products.item`` GlobalID, so it passes decode and the AR-H4 type-check - but
+    its ``node_id`` (``"abc"``) is not a valid integer-pk literal. The ``id`` is
+    coerced through the model's pk field and, failing, treated as not-found - a
+    ``FieldError`` on ``id`` (indistinguishable from a missing row), NEVER reaching
+    ``.get(pk="abc")`` where Django would raise a top-level ``ValueError`` (500) and
+    leak the pk column type. Pins the ``_coerce_lookup_id`` UNCOERCIBLE_PK branch
+    over the live HTTP stack (the malformed test above exercises only DECODE_FAILED,
+    the wrong-type test only WRONG_MODEL).
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="Untouched", category=category)
+    client = _login_with_perm("staff_1", "change_item")
+
+    bad_id = str(relay.GlobalID(type_name="products.item", node_id="abc"))
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        client=client,
+        variables={"id": bad_id, "d": {"name": "Renamed"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItem"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["id"]
+    item.refresh_from_db()
+    assert item.name == "Untouched"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_wellformed_relation_id_uncoercible_node_id_is_field_error_no_crash():
+    """CR-1: a well-formed ``Category`` ``categoryId`` with an uncoercible ``node_id`` -> ``FieldError``.
+
+    The relation analogue of the case above. ``categoryId`` is typed ``GlobalID``,
+    and a well-formed ``products.category`` GlobalID carrying ``node_id="abc"``
+    passes both Strawberry argument coercion (it IS a valid GlobalID, unlike the
+    top-level-error malformed case) and the AR-H4 type-check (it IS a Category id) -
+    but ``"abc"`` is not a valid integer pk. It is coerced and mapped to the uniform
+    relation ``FieldError`` on ``categoryId``, never reaching ``filter(pk__in=["abc"])``
+    where Django would raise a top-level ``ValueError`` (500). No row is written.
+    """
+    create_users(1)
+    seed_data(1)
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    bad_cat = str(relay.GlobalID(type_name="products.category", node_id="abc"))
+    response = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={"d": {"name": "UncoercibleRel", "categoryId": bad_cat}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItem"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["categoryId"]
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="UncoercibleRel").exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     """G2 behavioral tier (AR-M7): a mutation response selecting a relation has no N+1, no lazy query.
 

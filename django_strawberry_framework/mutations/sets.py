@@ -45,6 +45,7 @@ from typing import TYPE_CHECKING, Any, get_args, get_origin
 
 import strawberry
 from strawberry import relay
+from strawberry.types.base import StrawberryList
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
@@ -261,13 +262,18 @@ class _ValidatedMutationMeta:
         self.permission_classes = permission_classes
 
 
-def _normalize_field_sequence(value: Any) -> tuple[str, ...] | None:
+def _normalize_field_sequence(value: Any, *, label: str = "fields") -> tuple[str, ...] | None:
     """Return ``Meta.fields`` / ``Meta.exclude`` as a tuple of names, or ``None``.
 
     ``None`` means "unset". A non-``None`` value is coerced to a tuple so the
     bind and the generator see one shape (``editable_input_fields`` accepts a
     tuple). A bare string is a common mistake (it would iterate as characters),
-    so it is rejected here at class creation.
+    so it is rejected here at class creation. A duplicate name (e.g.
+    ``("name", "name", "category")``) is also rejected here: the duplicate would
+    otherwise collapse silently when the effective field set is taken as a
+    ``frozenset``, masking a malformed declaration, so it fails loud naming the
+    repeated field(s). ``label`` names which key (``fields`` / ``exclude``) is at
+    fault in the message.
     """
     if value is None:
         return None
@@ -276,7 +282,15 @@ def _normalize_field_sequence(value: Any) -> tuple[str, ...] | None:
             "DjangoMutation Meta.fields / Meta.exclude must be a sequence of field "
             f"names, not a bare string: {value!r}.",
         )
-    return tuple(value)
+    names = tuple(value)
+    seen: set[str] = set()
+    duplicates = sorted({name for name in names if name in seen or seen.add(name)})
+    if duplicates:
+        raise ConfigurationError(
+            f"DjangoMutation Meta.{label} declares duplicate field name(s): "
+            f"{duplicates!r}. Each field may appear at most once.",
+        )
+    return names
 
 
 def _validate_permission_classes(mutation_name: str, value: Any) -> list[Any]:
@@ -367,12 +381,23 @@ def _validate_mutation_meta(mutation_cls: type, meta: type) -> _ValidatedMutatio
             f"{sorted(_VALID_OPERATIONS)}; got {operation!r}.",
         )
 
-    fields = _normalize_field_sequence(getattr(meta, "fields", None))
-    exclude = _normalize_field_sequence(getattr(meta, "exclude", None))
+    fields = _normalize_field_sequence(getattr(meta, "fields", None), label="fields")
+    exclude = _normalize_field_sequence(getattr(meta, "exclude", None), label="exclude")
     if fields is not None and exclude is not None:
         raise ConfigurationError(
             f"DjangoMutation {name}.Meta declares both `fields` and `exclude`; "
             "supply at most one.",
+        )
+    if operation == "delete" and (fields is not None or exclude is not None):
+        # A ``delete`` is ``id:``-only and materializes NO input (spec-036 Decision
+        # 14), so ``fields`` / ``exclude`` have no effect. Because delete skips
+        # input generation, an unknown / malformed name in them is never validated
+        # by ``editable_input_fields`` either, so a typo'd field silently finalizes.
+        # Reject the inapplicable keys outright: declaring them on a delete is a
+        # configuration mistake regardless of whether the names are valid.
+        raise ConfigurationError(
+            f"DjangoMutation {name}.Meta.operation is 'delete', which is id-only and "
+            "takes no input; remove the inapplicable Meta.fields / Meta.exclude.",
         )
 
     input_class = getattr(meta, "input_class", None)
@@ -692,36 +717,51 @@ def _validate_relation_override_types(
     *,
     attr_name: str,
 ) -> None:
-    """Type-lock a consumer relation override to the generated ``GlobalID`` id (AR-M2 / Decision 10).
+    """Type- and shape-lock a consumer relation override to the generated id (AR-M2 / Decision 10).
 
     A relation column whose related model HAS a primary Relay-Node type generates a
     ``relay.GlobalID`` (forward FK / OneToOne) or ``list[relay.GlobalID]`` (M2M) input
     whose decode is **type-checked against the relation target** (spec-036 AR-H4) AND
     **visibility-checked through the related type's ``get_queryset``** (spec-036
     Decision 10 / feedback P1) - so a permitted writer cannot attach a row they could
-    not *see*. Both guarantees ride the ``GlobalID`` shape:
+    not *see*. Both guarantees ride the EXACT generated shape:
     ``resolvers.py::_decode_relation_id_set`` only type/visibility-checks a value that
-    ``isinstance(_, relay.GlobalID)`` and passes any other value through as a raw pk.
+    ``isinstance(_, relay.GlobalID)`` (the FK path unwraps a one-element list, the M2M
+    path iterates a flat list) and passes anything else through as a raw pk.
 
     The naming half of AR-M2 (``_validate_input_class``) lets a consumer override a
     relation field's *representation* under its generated ``<field>_id`` / ``list``
-    name, but it name-checks only - so a consumer could declare ``category_id: int``
-    (a raw pk) for a Relay-target relation, the CR-2 merge would honor the consumer
-    annotation, and at decode the value would be seen as a non-``GlobalID`` raw pk and
-    passed through - **bypassing both the AR-H4 type-check and the relation visibility
-    contract**. That is a privilege gap (attach-by-raw-pk to an unseeable row), so a
-    relation override MUST keep the generated ``GlobalID`` id type; a divergent
-    annotation is a fail-loud ``ConfigurationError`` (the AR-M2 posture).
+    name, but it name-checks only - so a consumer could declare a divergent TYPE or
+    CONTAINER SHAPE and the CR-2 merge would honor it, defeating the decode:
+
+    - ``category_id: int`` (raw pk core) - the value is seen as a non-``GlobalID`` raw
+      pk and passed through, bypassing both the AR-H4 type-check and the visibility
+      contract (attach-by-raw-pk to an unseeable row);
+    - ``genres: relay.GlobalID`` (M2M overridden as a SCALAR) - the resolver wraps the
+      scalar in a one-element list and decodes it as a single membership, or the
+      generated M2M list contract is violated, a top-level resolver / ORM error;
+    - ``genres: list[list[relay.GlobalID]]`` (NESTED list) - the inner lists are not
+      ``relay.GlobalID`` instances, so each is passed through as a raw pk into the M2M
+      ``.set(...)``, a top-level ORM error;
+    - ``category_id: list[relay.GlobalID]`` (FK overridden as a LIST) - the resolver
+      stores the list as the ``<field>_id`` attr and Django raises against the scalar
+      FK column under the MODEL field name, not the ``categoryId`` input field.
+
+    So a relation override MUST keep BOTH the generated ``relay.GlobalID`` core AND its
+    container shape (scalar for FK / OneToOne, one-level ``list`` for M2M); any
+    divergence in core type or list depth is a fail-loud ``ConfigurationError`` (the
+    AR-M2 posture), caught at the bind rather than crashing a request.
 
     Enforced at the phase-2.5 bind, NOT at class creation: whether the related model
     has a primary Relay-Node type is a ``registry.get`` lookup only reliably populated
     at finalization (this is exactly why ``_validate_input_class`` passes
     ``related_primary_type=None`` - the python-attr name is registry-independent, the
-    id *type* is not). The decision is single-sourced with the generator by reading
-    ``relation_input_annotation``'s emitted annotation, so "GlobalID iff Relay-Node
-    primary" cannot drift from what ``build_mutation_input`` produces. A raw-pk
-    relation (a non-Relay target) carries no visibility contract to defeat, so a
-    raw-pk override there is left alone.
+    id *type* is not). The expected shape is single-sourced with the generator by
+    reading ``relation_input_annotation``'s emitted annotation (core via
+    ``_annotation_core_is_global_id``, list depth via ``get_origin(...) is list``), so
+    "GlobalID iff Relay-Node primary" and "list iff M2M" cannot drift from what
+    ``build_mutation_input`` produces. A raw-pk relation (a non-Relay target) carries
+    no visibility contract to defeat, so an override there is left alone.
     """
     consumer_fields = {
         field.python_name: field for field in consumer_input.__strawberry_definition__.fields
@@ -738,15 +778,19 @@ def _validate_relation_override_types(
         consumer_field = consumer_fields.get(python_attr)
         if consumer_field is None:
             continue  # not overridden; the generated GlobalID remainder is used.
-        if _strawberry_field_core_type(consumer_field) is not relay.GlobalID:
+        expected_depth = 1 if get_origin(annotation) is list else 0
+        consumer_depth, consumer_core = _strawberry_field_shape(consumer_field)
+        if consumer_core is not relay.GlobalID or consumer_depth != expected_depth:
+            expected = "list[relay.GlobalID]" if expected_depth else "relay.GlobalID"
+            kind = "M2M" if expected_depth else "forward FK/OneToOne"
             raise ConfigurationError(
                 f"DjangoMutation {mutation_name}.Meta.{attr_name} overrides relation field "
-                f"{python_attr!r} with a non-GlobalID id type. {field.related_model.__name__} has "
-                "a primary Relay-Node type, so the generated relation input is a GlobalID (or "
-                "list[GlobalID] for M2M) that is type- and visibility-checked at decode "
-                "(spec-036 AR-H4 / Decision 10); a raw-pk override would be passed through "
-                "unchecked and bypass the relation visibility contract. Declare "
-                f"{python_attr!r} as relay.GlobalID.",
+                f"{python_attr!r} with an id type/shape that diverges from the generated input. "
+                f"{field.related_model.__name__} has a primary Relay-Node type, so the {kind} "
+                f"relation input is {expected} - type- and visibility-checked at decode (spec-036 "
+                "AR-H4 / Decision 10). A divergent core type or container shape would be passed "
+                "through unchecked (bypassing the relation visibility contract) or crash the "
+                f"resolver / ORM. Declare {python_attr!r} as {expected}.",
             )
 
 
@@ -766,22 +810,28 @@ def _annotation_core_is_global_id(annotation: Any) -> bool:
     return annotation is relay.GlobalID
 
 
-def _strawberry_field_core_type(field: Any) -> Any:
-    """Return a consumer field's core type, peeling ``Optional`` / ``list`` Strawberry wrappers.
+def _strawberry_field_shape(field: Any) -> tuple[int, Any]:
+    """Return a consumer field's ``(list_depth, core_type)``, peeling Strawberry wrappers.
 
-    A consumer relation override may be annotated ``relay.GlobalID``,
-    ``relay.GlobalID | None``, ``list[relay.GlobalID]``, or ``list[relay.GlobalID] | None``;
-    Strawberry resolves those to ``StrawberryOptional`` / ``StrawberryList`` wrappers
-    around the core type. Unwrapping ``of_type`` to the core lets the type-lock compare
-    a single identity (``is relay.GlobalID``) regardless of optional-ness or list-ness,
-    so a raw-pk core (``int``) or a ``strawberry.ID`` core is correctly rejected.
+    A consumer relation override resolves to nested ``StrawberryOptional`` /
+    ``StrawberryList`` wrappers around a core type: ``relay.GlobalID | None`` is a
+    ``StrawberryOptional(GlobalID)`` (depth 0), ``list[relay.GlobalID]`` is a
+    ``StrawberryList(GlobalID)`` (depth 1), ``list[list[relay.GlobalID]]`` is depth 2.
+    Optional wrappers are nullability (ignored for the shape); each ``StrawberryList``
+    counts one level of list depth. Returning ``(depth, core)`` lets the shape-lock
+    compare BOTH the core identity (``is relay.GlobalID``) and the list depth against
+    the generated relation annotation, so a wrong core (``int`` / ``strawberry.ID``), a
+    scalar-for-M2M, a list-for-FK, or a nested list are all caught.
     """
     type_ = field.type
+    depth = 0
     seen: set[int] = set()
     while hasattr(type_, "of_type") and id(type_) not in seen:
         seen.add(id(type_))
+        if isinstance(type_, StrawberryList):
+            depth += 1
         type_ = type_.of_type
-    return type_
+    return depth, type_
 
 
 def _bind_mutation(mutation_cls: type) -> None:

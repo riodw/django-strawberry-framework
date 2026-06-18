@@ -784,6 +784,78 @@ def test_create_item_wellformed_relation_id_uncoercible_node_id_is_field_error_n
     assert not models.Item.objects.filter(name="UncoercibleRel").exists()
 
 
+# A syntactically-valid but absurdly large integer ``node_id``: ``to_python`` casts
+# it to a Python int cleanly (no range check), so it would reach the ORM where
+# SQLite's parameter binding raises a raw ``OverflowError``. The pk field's
+# backend range validators reject it at coercion instead -> uncoercible (not found).
+_ABSURD_INTEGER_NODE_ID = "9" * 400
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_relation_id_absurd_huge_pk_is_field_error_no_overflow():
+    """An out-of-range ``Category`` relation pk -> ``FieldError`` on ``categoryId``, never an OverflowError 500.
+
+    A well-formed ``products.category`` GlobalID whose ``node_id`` is an absurd
+    integer (``"9" * 400``) passes decode and the AR-H4 type-check. ``to_python``
+    casts it to a Python int without range-checking, so before the fix it reached
+    the relation visibility ``filter(pk__in=[...])``, where SQLite raises a top-level
+    ``OverflowError`` (500). The shared pk coercer now runs the pk field's backend
+    range validators, so the out-of-range value is uncoercible -> the uniform
+    relation ``FieldError`` on ``categoryId``, no query issued, no row written.
+    """
+    create_users(1)
+    seed_data(1)
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    huge_cat = str(relay.GlobalID(type_name="products.category", node_id=_ABSURD_INTEGER_NODE_ID))
+    response = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={"d": {"name": "HugePk", "categoryId": huge_cat}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItem"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["categoryId"]
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="HugePk").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_id_absurd_huge_pk_is_not_found_no_overflow():
+    """An out-of-range top-level ``id:`` -> not-found ``FieldError`` on ``id``, consistent with the relation path.
+
+    The top-level ``updateItem`` ``id:`` analogue. ``.get(pk=<huge>)`` happens to
+    return ``DoesNotExist`` on SQLite (not an overflow), so this path already
+    behaved; the coercer change makes it decide uncoercible -> not-found at the same
+    coercion step the relation path uses, BEFORE any query, so both paths handle an
+    out-of-range pk identically. The item is untouched.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="Untouched", category=category)
+    client = _login_with_perm("staff_1", "change_item")
+
+    huge_id = str(relay.GlobalID(type_name="products.item", node_id=_ABSURD_INTEGER_NODE_ID))
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        client=client,
+        variables={"id": huge_id, "d": {"name": "Renamed"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItem"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["id"]
+    item.refresh_from_db()
+    assert item.name == "Untouched"
+
+
 @pytest.mark.django_db(transaction=True)
 def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     """G2 behavioral tier (AR-M7): a mutation response selecting a relation has no N+1, no lazy query.

@@ -109,6 +109,19 @@ def _coerce_pk_or_none(resolved_type: type, node_id: str) -> Any:
     (batch), with no query issued, so the no-existence-oracle property is
     unaffected (Decision 5, Revision 7 P2).
 
+    Coercion is ``to_python`` **then** ``run_validators``: ``to_python`` is a pure
+    type cast that does NOT range-check, so a syntactically-numeric but
+    out-of-range literal (e.g. ``"9" * 400`` against a 64-bit integer column)
+    casts to a Python ``int`` cleanly and would reach the ORM, where SQLite's
+    ``pk__in`` parameter binding raises a raw ``OverflowError`` (``Python int too
+    large to convert to SQLite INTEGER``). The field's own validators carry the
+    backend ``integer_field_range`` Min/MaxValueValidators, so ``run_validators``
+    rejects an out-of-range value as a ``ValidationError`` here - the SAME
+    "identifies no row" outcome as a non-numeric literal, decided before any query
+    so neither the node lookup nor the relation ``pk__in`` visibility query can
+    raise a backend ``OverflowError`` (feedback - relation huge-pk crash). A
+    column with no range/length validators (a plain string id) is unaffected.
+
     The coercion field is the SAME one the resolution filters on -
     ``resolved_type.resolve_id_attr()`` (the value
     ``_resolve_node(s)_default`` build their ``{id_attr: ...}`` / ``__in``
@@ -132,9 +145,11 @@ def _coerce_pk_or_none(resolved_type: type, node_id: str) -> Any:
         except FieldDoesNotExist:
             return node_id
     try:
-        return field.to_python(node_id)
+        value = field.to_python(node_id)
+        field.run_validators(value)
     except (ValueError, ValidationError):
         return None
+    return value
 
 
 def _check_typed_match(target_type: type | None, resolved: type) -> None:

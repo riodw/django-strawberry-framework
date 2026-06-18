@@ -1073,6 +1073,252 @@ def test_m2m_uncoercible_pk_id_is_field_error_no_crash():
 
 
 # ---------------------------------------------------------------------------
+# Choice-enum inputs reach Django as the raw choice value (feedback - bug 4)
+#
+# A ``choices`` column resolves to a generated Strawberry ``Enum`` on BOTH the
+# read type and the write input (the symmetric wire contract), so the client's
+# enum value arrives at the resolver as the ENUM MEMBER, not the raw string. The
+# resolver must unwrap it to its ``.value`` (the Django choice value) before
+# ``full_clean`` / ``save``, or a valid choice is rejected. ``Book.circulation_status``
+# is the real choice column (products has none, so this is package-tested).
+# ---------------------------------------------------------------------------
+
+
+def _build_book_choices_schema():
+    """Declare Branch/Shelf/Book primaries + full-shape create/update over ``Book``.
+
+    The create/update inputs are NOT narrowed, so the generated ``BookInput`` /
+    ``BookPartialInput`` include the ``circulation_status`` choice column (a
+    generated enum). ``Genre`` is intentionally left unregistered, so the optional
+    M2M ``genres`` input is raw-pk and simply omitted by these tests.
+    """
+
+    class BranchT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Branch
+            fields = ("id", "name")
+            primary = True
+
+    class ShelfT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code", "branch")
+            primary = True
+
+    class BookT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Book
+            fields = (
+                "id",
+                "title",
+                "circulation_status",
+                "shelf",
+            )
+            primary = True
+
+    class CreateBook(DjangoMutation):
+        class Meta:
+            model = library_models.Book
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    class UpdateBook(DjangoMutation):
+        class Meta:
+            model = library_models.Book
+            operation = "update"
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        create_book = DjangoMutationField(CreateBook)
+        update_book = DjangoMutationField(UpdateBook)
+
+    finalize_django_types()
+    return _schema(Mutation), (ShelfT, BookT)
+
+
+@pytest.mark.django_db
+def test_choice_enum_create_saves_raw_choice_value():
+    """A valid choice enum on create succeeds and persists the RAW choice value (bug 4).
+
+    The client sends the GraphQL enum value ``available``; it reaches the resolver
+    as ``BookCirculationStatusEnum.available``. Unwrapped to ``.value`` it is the
+    Django choice ``"available"`` that ``full_clean`` accepts and the column stores.
+    Without the unwrap, ``full_clean`` would reject the enum member as an invalid
+    choice.
+    """
+    schema, (ShelfT, _BookT) = _build_book_choices_schema()
+    shelf = _make_branch_shelf()
+    res = schema.execute_sync(
+        "mutation($d: BookInput!){ createBook(data:$d){ node{ id } errors{ field messages } } }",
+        variable_values={
+            "d": {
+                "title": "Dune",
+                "shelfId": global_id_for(ShelfT, shelf.pk),
+                "circulationStatus": "available",
+            },
+        },
+    )
+    assert res.errors is None, res.errors
+    assert res.data["createBook"]["errors"] == []
+    assert library_models.Book.objects.get(title="Dune").circulation_status == "available"
+
+
+@pytest.mark.django_db
+def test_choice_enum_update_saves_raw_choice_value():
+    """A valid choice enum on update persists the raw choice value too (bug 4)."""
+    schema, (_ShelfT, BookT) = _build_book_choices_schema()
+    shelf = _make_branch_shelf()
+    book = library_models.Book.objects.create(
+        title="Hyperion",
+        shelf=shelf,
+        circulation_status="available",
+    )
+    res = schema.execute_sync(
+        "mutation($id: ID!, $d: BookPartialInput!){ updateBook(id:$id, data:$d){ "
+        "node{ id } errors{ field messages } } }",
+        variable_values={
+            "id": global_id_for(BookT, book.pk),
+            "d": {"circulationStatus": "repair"},
+        },
+    )
+    assert res.errors is None, res.errors
+    assert res.data["updateBook"]["errors"] == []
+    book.refresh_from_db()
+    assert book.circulation_status == "repair"
+
+
+# ---------------------------------------------------------------------------
+# Raw-pk (non-Relay target) M2M existence check (feedback - bug 5)
+#
+# An M2M to a NON-Relay-Node target generates a raw-pk ``list[Int]`` input with no
+# GlobalID visibility contract. ``instance.<m2m>.set(pks)`` writes a through-table
+# row for whatever pks it is handed, so a nonexistent pk would create a dangling FK
+# row (an invalid FK SQLite flags at teardown) and return a false success. The
+# decode existence-checks the raw-pk M2M set before assignment.
+# ---------------------------------------------------------------------------
+
+
+def _build_book_raw_m2m_schema():
+    """Declare a NON-Relay ``Genre`` primary so ``Book.genres`` is a raw-pk ``list[Int]`` M2M."""
+    GenreT = type(
+        "GenreT",
+        (DjangoType,),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": library_models.Genre, "fields": ("id", "name"), "primary": True},
+            ),
+        },
+    )
+
+    class BranchT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Branch
+            fields = ("id", "name")
+            primary = True
+
+    class ShelfT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code", "branch")
+            primary = True
+
+    class BookT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Book
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
+            primary = True
+
+    class CreateBook(DjangoMutation):
+        class Meta:
+            model = library_models.Book
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    class UpdateBook(DjangoMutation):
+        class Meta:
+            model = library_models.Book
+            operation = "update"
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        create_book = DjangoMutationField(CreateBook)
+        update_book = DjangoMutationField(UpdateBook)
+
+    finalize_django_types()
+    return _schema(Mutation), (GenreT, ShelfT, BookT)
+
+
+@pytest.mark.django_db
+def test_create_raw_pk_m2m_nonexistent_id_is_field_error_no_dangling_row():
+    """A nonexistent raw-pk M2M id on create -> ``FieldError`` on the M2M field, no row (bug 5)."""
+    schema, (_GenreT, ShelfT, _BookT) = _build_book_raw_m2m_schema()
+    shelf = _make_branch_shelf()
+    before = library_models.Book.objects.count()
+    res = schema.execute_sync(
+        "mutation($d: BookInput!){ createBook(data:$d){ node{ id } errors{ field messages } } }",
+        variable_values={
+            "d": {
+                "title": "Dangling",
+                "shelfId": global_id_for(ShelfT, shelf.pk),
+                "genres": [99999],
+            },
+        },
+    )
+    assert_mutation_field_error(res, "createBook", "genres")
+    assert library_models.Book.objects.count() == before
+    assert not library_models.Book.objects.filter(title="Dangling").exists()
+
+
+@pytest.mark.django_db
+def test_update_raw_pk_m2m_nonexistent_id_is_field_error_no_dangling_row():
+    """A nonexistent raw-pk M2M id on update -> ``FieldError`` on the M2M field, set unchanged (bug 5)."""
+    schema, (_GenreT, _ShelfT, BookT) = _build_book_raw_m2m_schema()
+    shelf = _make_branch_shelf()
+    book = library_models.Book.objects.create(title="Seeded", shelf=shelf)
+    existing = library_models.Genre.objects.create(name="Sci-Fi")
+    book.genres.set([existing])
+    res = schema.execute_sync(
+        "mutation($id: ID!, $d: BookPartialInput!){ updateBook(id:$id, data:$d){ "
+        "node{ id } errors{ field messages } } }",
+        variable_values={"id": global_id_for(BookT, book.pk), "d": {"genres": [88888]}},
+    )
+    assert_mutation_field_error(res, "updateBook", "genres")
+    # The pre-existing M2M set is untouched (the failed write rolled back).
+    assert set(book.genres.values_list("pk", flat=True)) == {existing.pk}
+
+
+@pytest.mark.django_db
+def test_create_raw_pk_m2m_existing_id_succeeds():
+    """A valid raw-pk M2M id on create still succeeds and assigns (positive control, bug 5)."""
+    schema, (_GenreT, ShelfT, _BookT) = _build_book_raw_m2m_schema()
+    shelf = _make_branch_shelf()
+    genre = library_models.Genre.objects.create(name="Sci-Fi")
+    res = schema.execute_sync(
+        "mutation($d: BookInput!){ createBook(data:$d){ node{ id } errors{ field messages } } }",
+        variable_values={
+            "d": {
+                "title": "Valid",
+                "shelfId": global_id_for(ShelfT, shelf.pk),
+                "genres": [genre.pk],
+            },
+        },
+    )
+    assert res.errors is None, res.errors
+    assert res.data["createBook"]["errors"] == []
+    book = library_models.Book.objects.get(title="Valid")
+    assert set(book.genres.values_list("pk", flat=True)) == {genre.pk}
+
+
+# ---------------------------------------------------------------------------
 # Consumer input_class MERGE (spec-010 relation-override / AR-M2 / CR-2)
 # ---------------------------------------------------------------------------
 

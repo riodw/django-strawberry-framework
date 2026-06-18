@@ -448,6 +448,53 @@ def test_type_name_narrowed_shape_is_deterministic_and_distinct():
     assert name_a.startswith("Item") and name_a.endswith("Input")
 
 
+def test_type_name_token_boundaries_do_not_collide():
+    """Different field sets that share a pascalized token stream get distinct names (bug 8).
+
+    A per-segment-capitalize token (``IsPrivate``) keeps interior capitals, so a bare
+    concatenation re-decomposes ambiguously: ``("a_b", "c")`` and ``("a", "b_c")``
+    both collapse onto ``ABC`` - a generated GraphQL type-name collision that trips
+    the AR-M6 distinct-shape raise at materialize. A single-leading-capital token
+    (``[A-Z][a-z0-9]*``, underscores removed) makes the concatenation uniquely
+    decomposable at uppercase boundaries, so the suffix is injective over field-name
+    sets (``AbC`` vs ``ABc``) while staying underscore-free (Strawberry's GraphQL
+    name converter leaves the PascalCase name unchanged).
+    """
+    full = ("not_the_narrowed_set",)  # any set != either narrowing, so both are "narrowed"
+    left = mutation_input_type_name(
+        product_models.Item,
+        CREATE,
+        ("a_b", "c"),
+        full_field_names=full,
+    )
+    right = mutation_input_type_name(
+        product_models.Item,
+        CREATE,
+        ("a", "b_c"),
+        full_field_names=full,
+    )
+    assert left != right
+    assert left == "ItemAbCInput" and right == "ItemABcInput"
+
+
+def test_build_empty_field_set_raises_configuration_error():
+    """An empty effective field set fails loud as ``ConfigurationError`` (bug 6).
+
+    ``Meta.fields = ()`` (or an ``exclude`` covering every editable column) would
+    build an empty ``@strawberry.input``, which Strawberry rejects only at
+    ``Schema(...)`` build with a raw ``ValueError: Input Object type ... must define
+    one or more fields.`` The generator rejects it at the framework boundary first,
+    naming the model.
+    """
+    with pytest.raises(ConfigurationError, match="has no fields"):
+        build_mutation_input(
+            product_models.Category,
+            operation_kind=CREATE,
+            primary_type=CategoryType,
+            fields=(),
+        )
+
+
 # ---------------------------------------------------------------------------
 # materialize_mutation_input_class - dedupe + collision raise (AR-H1 / AR-M6)
 # ---------------------------------------------------------------------------

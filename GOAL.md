@@ -455,14 +455,7 @@ The optimizer, scalar conversions, and relation resolution machinery are richer 
 
 ### Coming from DRF + `django-filter`
 
-<!-- TODO(spec-036 Slice 5): adjust this migration shape once the base ships.
-Pseudocode: mark DjangoMutation itself as shipped for model-driven operations,
-leave the SerializerMutation / Meta.serializer_class flavor targeted at
-0.0.13, and keep the single shared FieldError envelope wording aligned with
-docs/GLOSSARY.md.
--->
-
-Your existing `django_filters.FilterSet` migrates to `Meta.filterset_class` via a one-line parent-class swap to `django_strawberry_framework.filters.FilterSet`; the package's `FilterSet` IS a `django_filters.filterset.BaseFilterSet` subclass, so every `Filter` / `FilterMethod` / form-cleaning primitive you already use carries over unchanged. The DRF `Serializer` becomes the basis for the auto-generated mutation `Input` type via `Meta.serializer_class`.
+Your existing `django_filters.FilterSet` migrates to `Meta.filterset_class` via a one-line parent-class swap to `django_strawberry_framework.filters.FilterSet`; the package's `FilterSet` IS a `django_filters.filterset.BaseFilterSet` subclass, so every `Filter` / `FilterMethod` / form-cleaning primitive you already use carries over unchanged. The `DjangoMutation` base ships today (`0.0.11`) for model-driven `create` / `update` / `delete` — a nested `class Meta: model = …; operation = "create"` auto-generates the `Input` / `PartialInput` types and surfaces validation through the shared `FieldError` envelope. The DRF `Serializer`-flavored mutation (`Meta.serializer_class`, the `SerializerMutation` shape below) lands in `0.0.13`, building on the same shipped base and reusing the same `FieldError` envelope.
 
 ```python
 from django_strawberry_framework.filters import FilterSet
@@ -487,7 +480,15 @@ class CategoryType(DjangoType):
         filterset_class = CategoryFilter
 
 
+# Shipped today (0.0.11) — the model-driven flavor:
 class CreateCategory(DjangoMutation):
+    class Meta:
+        model = Category
+        operation = "create"
+
+
+# Coming in 0.0.13 — the DRF-serializer flavor on the same base:
+class CreateCategoryFromSerializer(DjangoMutation):
     class Meta:
         serializer_class = CategorySerializer
 ```

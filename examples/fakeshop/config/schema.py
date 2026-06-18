@@ -14,6 +14,7 @@ import strawberry
 from apps.glossary.schema import Query as GlossaryQuery
 from apps.kanban.schema import Query as KanbanQuery
 from apps.library.schema import Query as LibraryQuery
+from apps.products.schema import Mutation as ProductsMutation
 from apps.products.schema import Query as ProductsQuery
 from apps.scalars.schema import Query as ScalarsQuery
 
@@ -29,13 +30,21 @@ class Query(LibraryQuery, ProductsQuery, ScalarsQuery, KanbanQuery, GlossaryQuer
     """Top-level Query - extends each app's Query."""
 
 
-# TODO(spec-036 Slice 4): compose the products Mutation into the project schema.
-# Pseudocode:
-# - import ``Mutation as ProductsMutation`` from ``apps.products.schema``;
-# - declare a top-level Strawberry ``Mutation`` class that extends it;
-# - pass ``mutation=Mutation`` into ``strawberry.Schema`` below;
-# - keep finalization before Schema construction so mutation payload lazy refs
-#   resolve after phase-2.5 binding.
+@strawberry.type
+class Mutation(ProductsMutation):
+    """Top-level Mutation - extends each app's Mutation.
+
+    Products is the only app with a write surface today (spec-036 Slice 4), so it
+    is the sole base; the composition shape mirrors ``Query`` for future apps. The
+    mutation phase-2.5 bind runs inside ``finalize_django_types()`` below, so the
+    ``DjangoMutationField`` lazy payload / ``data:`` refs resolve at ``Schema(...)``
+    build.
+    """
+
+
+# Finalization must precede ``strawberry.Schema(...)``: phase 2.5 materializes the
+# ``<Model>Input`` / ``<Model>PartialInput`` / ``<Name>Payload`` classes (and binds
+# the mutation fields) before the schema build resolves their lazy references.
 finalize_django_types()
 
 # Module-level singleton wrapped in a factory: ``get_extensions`` runs the
@@ -45,6 +54,7 @@ finalize_django_types()
 _optimizer = DjangoOptimizerExtension()
 schema = strawberry.Schema(
     query=Query,
+    mutation=Mutation,
     config=strawberry_config(),
     extensions=[lambda: _optimizer],
 )

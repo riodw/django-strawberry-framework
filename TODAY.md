@@ -8,13 +8,6 @@
 
 ## What products demonstrates today
 
-<!-- TODO(spec-036 Slice 5): add a products-centric mutation section after the
-live write surface ships.
-Pseudocode: describe create/update/delete over products, the shared FieldError
-envelope, permission-scoped update/delete lookups, and the optimizer-backed
-post-write response refetch without broadening this file beyond products.
--->
-
 `examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.9` it exercises, end to end, the package capabilities a real consumer reaches for:
 
 - **`DjangoType` schema** — four types configured entirely through `class Meta` (`model` + `fields`), with forward-FK + reverse-FK traversal and four root Relay connection fields (`allCategories` / `allItems` / `allProperties` / `allEntries`, each a `DjangoConnectionField` as of `0.0.9`).
@@ -277,6 +270,40 @@ class ItemType(DjangoType):
 
 Relation traversal into a type with a custom `get_queryset` is handled by the optimizer with a `Prefetch` downgrade, so target visibility filters are not bypassed by raw joins. As of `0.0.10` the four `products/schema.py` types' `get_queryset` hooks are live and call `apply_cascade_permissions(cls, ..., info)`, so visibility cascades across the `Entry → Item → Category` / `Entry → Property → Category` FK chain: an anonymous request loses any entry whose item or property points at a private category, staff sees everything, and a `view_<model>` user sees non-private rows but still loses entries under hidden targets (the cascade composes per edge). See [`docs/GLOSSARY.md#apply_cascade_permissions`][glossary-apply-cascade-permissions].
 
+## Mutations on products today
+
+As of `0.0.11` products exposes a `Mutation` type (in `products/schema.py`) alongside its connections-only `Query` — the package's write side, declared in the same `class Meta` shape as everything else (no Strawberry decorators). It carries `createItem` / `updateItem` / `deleteItem` plus a `createCategory`, each an unannotated `DjangoMutationField` over a `DjangoMutation` subclass; `config/schema.py` wires `mutation=Mutation` into the project schema. The full pipeline runs live over `/graphql/`:
+
+```graphql
+mutation {
+  createItem(
+    data: {
+      name: "Widget"
+      categoryId: "<GlobalID: products.category:<pk>>"
+    }
+  ) {
+    node {
+      name
+      category {
+        name
+      }
+    }
+    errors {
+      field
+      messages
+    }
+  }
+}
+```
+
+- **`create` / `update` / `delete`.** `createItem` takes a generated `ItemInput!` (each editable field required only when it has no usable Django `default` / `blank` / `null`, so `name` / `categoryId` are required while `description` / `isPrivate` are optional); `updateItem(id:, data:)` takes the all-optional `ItemPartialInput!`; `deleteItem(id:)` takes just the id. Forward FK becomes `categoryId` (a Relay `GlobalID`, type-checked against `Category` at decode — a wrong-type id is a `FieldError`, never a cross-model lookup).
+- **The shared `errors: list[FieldError]` envelope.** A `full_clean()` failure does not raise at the GraphQL boundary — it returns the payload with a null `node` and one `FieldError` (`field` + `messages`) per offending field. A duplicate that trips `Item`'s `unique_item_per_category` constraint is caught by `validate_constraints()` before `save()` and keyed to Django's `"__all__"` sentinel (the multi-field-constraint key).
+- **Permission-scoped `update` / `delete` lookups.** Both locate the row through `ItemType.get_queryset(...)`, so a caller who cannot *see* a private item gets a not-found `FieldError` on `id` — never an existence leak. Visibility (`get_queryset`) and write authorization are separate layers.
+- **Separate write authorization (`DjangoModelPermission`).** Every operation runs `Meta.permission_classes` (default `[DjangoModelPermission]`, the Django `add` / `change` / `delete` model perms). An anonymous caller or one missing the model perm is denied with a top-level `GraphQLError` before any write — distinct from the field-keyed `FieldError` envelope, and distinct from `get_queryset` visibility (can-view ≠ can-write).
+- **Optimizer-backed post-write re-fetch.** On success the payload's `node` is the mutated row re-fetched and optimizer-planned for the response selection. Because the operation is a mutation, the `spec-035` **G2** gate keeps `select_related` / `prefetch_related` but suppresses `.only(...)` column deferral — so selecting `node { category { name } }` plans the join without a deferred-field set. The live `CaptureQueriesContext` test pins the bounded query count.
+
+The live `/graphql/` suite at `examples/fakeshop/test_query/test_products_api.py` pins all of the above — the happy paths, the constraint envelope (including a partial update that collides on `unique_item_per_category` by changing only `name`), write-auth denial vs. success, the visibility-scoped not-found, the wrong-type `GlobalID`, and the G2 query-shape assertion that discharges the `spec-035` live-test handoff. See [`docs/GLOSSARY.md#djangomutation`][glossary-djangomutation].
+
 ## What products is still waiting for
 
 Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (tracked in [`KANBAN.md`][kanban]). Filtering and ordering are **not** on this list — they shipped in `0.0.8` and are wired today. `DjangoConnectionField` (Relay connections) is **not** on this list either — it shipped in `0.0.9` and products' four root fields are now connections (the cookbook-mirror conversion). The root `node(id:)` / `nodes(ids:)` Relay entry points and any `Meta.connection` (`totalCount`) opt-ins are **not** on this list either: both **shipped as package capabilities in `0.0.9`** (`DONE-032`) — see "Shipped package capabilities not exercised by products" below — and products simply hasn't wired them into its connections-only `Query` yet (deferred to the fakeshop-activation card, `TODO-BETA-051-0.1.5`).
@@ -305,6 +332,7 @@ These ship today but products' model shapes don't reach them; they're covered by
 <!-- docs/ -->
 [glossary]: docs/GLOSSARY.md
 [glossary-apply-cascade-permissions]: docs/GLOSSARY.md#apply_cascade_permissions
+[glossary-djangomutation]: docs/GLOSSARY.md#djangomutation
 [glossary-djangonodefield]: docs/GLOSSARY.md#djangonodefield
 [glossary-djangonodesfield]: docs/GLOSSARY.md#djangonodesfield
 [glossary-metaconnection]: docs/GLOSSARY.md#metaconnection

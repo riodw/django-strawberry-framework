@@ -51,7 +51,8 @@ from __future__ import annotations
 import contextlib
 import inspect
 from collections.abc import Sequence
-from typing import Any
+from enum import Enum
+from typing import Any, NamedTuple
 
 import strawberry
 from django.core.exceptions import FieldDoesNotExist, ValidationError
@@ -152,6 +153,60 @@ def _check_typed_match(target_type: type | None, resolved: type) -> None:
     raise GraphQLError(
         f"Wrong node type: expected a {expected} id, received a {received} id.",
     )
+
+
+class GlobalIDDecode(Enum):
+    """The outcome code of a typed ``GlobalID`` decode (spec-036 DRY-2).
+
+    A non-raising classification the caller maps to its own error surface
+    (``FieldError`` on ``id`` / relation ``FieldError`` / ``GraphQLError``), so the
+    decode + model-check + pk-coercion contract is single-sourced while the error
+    shape stays caller-specific.
+    """
+
+    OK = "ok"
+    DECODE_FAILED = "decode_failed"  # malformed / unresolvable type slot.
+    WRONG_MODEL = "wrong_model"  # decoded to a type whose model != the expected one.
+    UNCOERCIBLE_PK = "uncoercible_pk"  # right model, but node_id is not a valid pk literal.
+
+
+class DecodeResult(NamedTuple):
+    """The structured result of ``decode_model_global_id`` (spec-036 DRY-2).
+
+    ``pk`` is the coerced primary-key value ONLY when ``status is
+    GlobalIDDecode.OK`` (``None`` otherwise); ``resolved_type`` is the decoded
+    ``DjangoType`` when decode itself succeeded (``None`` when ``DECODE_FAILED``).
+    """
+
+    status: GlobalIDDecode
+    pk: Any | None
+    resolved_type: type | None
+
+
+def decode_model_global_id(value: Any, expected_model: type) -> DecodeResult:
+    """Decode a typed ``GlobalID`` against ``expected_model``, non-raising (spec-036 DRY-2).
+
+    The single source of the mutation typed-id contract the root ``id:`` decode
+    (``_coerce_lookup_id``) and the relation ``<field>_id`` decode
+    (``_decode_relation_id_set``) both consume: decode the value via
+    ``decode_global_id`` (shape-only), verify the resolved type's model **is**
+    ``expected_model``, and coerce ``node_id`` through the resolved type's id field
+    via ``_coerce_pk_or_none`` (the SAME coercer the node field uses, so an
+    uncoercible literal never reaches the ORM as a raw ``ValueError`` - feedback
+    CR-1). Returns a :class:`DecodeResult` whose :class:`GlobalIDDecode` status the
+    caller maps to its own error surface (this helper never raises a
+    ``GraphQLError`` - the node-field raising behavior stays in the node field).
+    """
+    try:
+        resolved_type, node_id = decode_global_id(value)
+    except Exception:
+        return DecodeResult(GlobalIDDecode.DECODE_FAILED, None, None)
+    if _model_for(resolved_type) is not expected_model:
+        return DecodeResult(GlobalIDDecode.WRONG_MODEL, None, resolved_type)
+    pk = _coerce_pk_or_none(resolved_type, node_id)
+    if pk is None:
+        return DecodeResult(GlobalIDDecode.UNCOERCIBLE_PK, None, resolved_type)
+    return DecodeResult(GlobalIDDecode.OK, pk, resolved_type)
 
 
 def _validate_node_target(target_type: type, *, field: str) -> None:

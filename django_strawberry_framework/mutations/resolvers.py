@@ -22,8 +22,8 @@ and the load-bearing invariants this module owns:
   silently attached. Applies to FK, OneToOne, and each M2M id (the M2M set is
   checked in one query). A well-formed id whose ``node_id`` is not a valid pk
   literal for the related column is coerced to "not found" (the same
-  ``FieldError``) via ``_coerce_pk_or_none`` before the query, never a raw Django
-  ``ValueError`` (feedback CR-1).
+  ``FieldError``) by the shared ``decode_model_global_id`` primitive before the
+  query, never a raw Django ``ValueError`` (feedback CR-1 / DRY-2).
 - **``update`` / ``delete`` locate runs through the target type's
   ``get_queryset`` for visibility only** (spec-036 Decision 10): a hidden row is
   not-found, indistinguishable from a genuinely missing row (no existence leak).
@@ -80,8 +80,7 @@ from ..optimizer.extension import (
     mutation_payload_child_selections,
 )
 from ..registry import registry
-from ..relay import _coerce_pk_or_none
-from ..types.relay import decode_global_id
+from ..relay import GlobalIDDecode, decode_model_global_id
 from ..utils.inputs import graphql_camel_name
 from ..utils.querysets import apply_type_visibility_sync, initial_queryset
 from .inputs import NON_FIELD_ERROR_KEY, FieldError, payload_object_slot
@@ -110,14 +109,15 @@ def _decode_relations(
     ``UNSET`` / ``null`` / value tri-state is preserved: ``UNSET`` means
     "omitted", an explicit ``None`` is kept as a provided ``None``). For each
     forward FK / OneToOne ``<field>_id`` whose value is a ``relay.GlobalID``,
-    ``decode_global_id`` resolves ``(target_type, node_id)`` and the decoded
-    target model is **type-checked against the relation's Django target model**
-    (spec-036 AR-H4): a wrong-type id returns a ``FieldError`` on that relation
-    field, never a cross-model pk lookup and never a raw ``DoesNotExist``. The
-    type-checked id is then **resolved through the related model's primary type
-    visibility ``get_queryset``** (spec-036 Decision 10 / feedback P1): a row the
-    caller cannot see is the same field-keyed ``FieldError``, never attached. A
-    raw pk scalar (a non-Relay target) is passed through unchanged - no decode and
+    ``_decode_relation_id_set`` (via the shared ``decode_model_global_id``
+    primitive) resolves + **type-checks the decoded model against the relation's
+    Django target model** (spec-036 AR-H4): a wrong-type id returns a ``FieldError``
+    on that relation field, never a cross-model pk lookup and never a raw
+    ``DoesNotExist``. The type-checked id is then **resolved through the related
+    model's primary type visibility ``get_queryset``** (spec-036 Decision 10 /
+    feedback P1): a row the caller cannot see is the same field-keyed
+    ``FieldError``, never attached. A raw pk scalar (a non-Relay target) is passed
+    through unchanged - no decode and
     no visibility check (there is no Relay-Node target type to scope it).
 
     Returns ``(scalar_and_fk_attrs, m2m_assignments, error)`` where
@@ -209,27 +209,50 @@ def _is_forward_concrete_relation(field: Any) -> bool:
     return getattr(field, "column", None) is not None and field.related_model is not None
 
 
-def _typecheck_relation_id(
+def _decode_relation_id_set(
     field_name: str,
-    value: Any,
+    values: list[Any],
     relation_field: Any,
-) -> tuple[Any, FieldError | None]:
-    """Type-check one relation id to a pk, WITHOUT the visibility check (spec-036 AR-H4).
+    info: Any,
+) -> tuple[list[Any], FieldError | None]:
+    """Decode a list of relation ids to pks: type-check + coerce each, then visibility once (DRY-2).
 
-    A ``relay.GlobalID`` is decoded via ``decode_global_id`` and its resolved
-    target model must be the relation's Django target model; a wrong-type id (or
-    a malformed one - ``decode_global_id`` raises ``ConfigurationError``) returns
-    a ``FieldError`` on ``field_name``, never a cross-model pk lookup. A raw pk
-    scalar (the non-Relay-target case) passes through unchanged. The visibility
-    check is layered on separately (``_relation_visibility_error``) so the M2M
-    list can verify its whole set in ONE query.
+    The single list-oriented relation decoder both the FK / OneToOne wrapper
+    (``_decode_single_relation_id``, a one-element list) and the M2M wrapper
+    (``_decode_relation_id_list``) delegate to, so the "type-check against the
+    relation target, coerce the pk, then visibility-check the GlobalID set in ONE
+    query" contract has a SINGLE implementation.
+
+    Each element: a ``relay.GlobalID`` is run through ``decode_model_global_id``
+    against the relation's Django target model - a decode failure, a wrong-model
+    id, or an uncoercible ``node_id`` (any non-``OK`` status) is the uniform
+    ``_relation_error`` on ``field_name`` (AR-H4 + feedback CR-1: a wrong-type id
+    is never a cross-model lookup, an uncoercible pk is never a raw ``ValueError``).
+    A raw pk scalar (a non-Relay-Node target, which has no ``GlobalID`` shape)
+    passes through unchanged - no decode, no coercion, no visibility hook to apply.
+    The decoded ``GlobalID`` set is then visibility-checked in one query (Decision
+    10 / feedback P1): a hidden / missing member is the same ``_relation_error``,
+    indistinguishable (no existence leak). A list is homogeneously typed (all
+    ``GlobalID`` for a Relay target, all raw pk otherwise), so ``needs_visibility``
+    is all-or-nothing and the whole coerced set is checked together.
     """
-    if not isinstance(value, relay.GlobalID):
-        return value, None
-    error = _wrong_type_field_error(field_name, value, relation_field)
-    if error is not None:
-        return None, error
-    return value.node_id, None
+    expected_model = relation_field.related_model
+    pks: list[Any] = []
+    needs_visibility = False
+    for value in values:
+        if not isinstance(value, relay.GlobalID):
+            pks.append(value)
+            continue
+        result = decode_model_global_id(value, expected_model)
+        if result.status is not GlobalIDDecode.OK:
+            return [], _relation_error(field_name)
+        pks.append(result.pk)
+        needs_visibility = True
+    if needs_visibility:
+        error = _relation_visibility_error(field_name, pks, expected_model, info)
+        if error is not None:
+            return [], error
+    return pks, None
 
 
 def _decode_single_relation_id(
@@ -238,24 +261,17 @@ def _decode_single_relation_id(
     relation_field: Any,
     info: Any,
 ) -> tuple[Any, FieldError | None]:
-    """Decode one FK / OneToOne id: type-check (AR-H4) then visibility (Decision 10 / feedback P1).
+    """Decode one FK / OneToOne id via the shared set decoder (DRY-2).
 
-    The ``GlobalID`` is type-checked against the relation's Django target model,
-    then - for a ``GlobalID`` (a Relay-Node target) - resolved through that
-    target's primary-type visibility ``get_queryset``: a row the caller cannot
-    see is the same field-keyed ``FieldError``, never silently attached via the
-    later ``full_clean`` FK check (which uses Django's default manager, not the
-    GraphQL visibility queryset). A raw pk scalar (no Relay-Node target) is passed
-    through with no visibility hook to apply.
+    Wraps the single value in a one-element list, delegates to
+    ``_decode_relation_id_set`` (type-check + coerce + visibility), and unwraps the
+    single pk. A non-``GlobalID`` value (a raw pk, or an explicit ``None`` clearing
+    a nullable FK) passes through the set decoder unchanged.
     """
-    pk, error = _typecheck_relation_id(field_name, value, relation_field)
+    pks, error = _decode_relation_id_set(field_name, [value], relation_field, info)
     if error is not None:
         return None, error
-    if isinstance(value, relay.GlobalID):
-        error = _relation_visibility_error(field_name, [pk], relation_field.related_model, info)
-        if error is not None:
-            return None, error
-    return pk, None
+    return pks[0], None
 
 
 def _decode_relation_id_list(
@@ -264,60 +280,19 @@ def _decode_relation_id_list(
     relation_field: Any,
     info: Any,
 ) -> tuple[list[Any], FieldError | None]:
-    """Decode an M2M ``list[<id>]`` to pks: null-reject, type-check each, then visibility once.
+    """Decode an M2M ``list[<id>]`` to pks: null-reject, then the shared set decoder (DRY-2).
 
     The list is the replace-set the post-save step assigns (AR-M1). An explicit
     ``null`` (reachable because the generated optional M2M field is
     ``list[<id>] | None``) is NOT a valid replace-set - it returns a ``FieldError``
     on ``field_name`` (the valid "clear" signal is an empty list ``[]``), rather
-    than iterating ``None`` into a resolver exception (feedback P2). Each element
-    is type-checked (a wrong-type ``GlobalID`` anywhere returns a ``FieldError``),
-    then the whole ``GlobalID`` set is visibility-checked in ONE query (Decision 10
-    / feedback P1): any hidden / missing member is a ``FieldError`` on
-    ``field_name``. A raw-pk list (a non-Relay-Node target) skips the visibility
-    check (no target type to scope it).
+    than iterating ``None`` into a resolver exception (feedback P2). A non-null list
+    delegates to ``_decode_relation_id_set`` (the same type-check + coerce +
+    one-query visibility contract the FK path uses).
     """
     if value is None:
         return [], _relation_null_error(field_name)
-    pks: list[Any] = []
-    needs_visibility = False
-    for element in value:
-        pk, error = _typecheck_relation_id(field_name, element, relation_field)
-        if error is not None:
-            return [], error
-        needs_visibility = needs_visibility or isinstance(element, relay.GlobalID)
-        pks.append(pk)
-    if needs_visibility and pks:
-        error = _relation_visibility_error(field_name, pks, relation_field.related_model, info)
-        if error is not None:
-            return [], error
-    return pks, None
-
-
-def _wrong_type_field_error(
-    field_name: str,
-    gid: relay.GlobalID,
-    relation_field: Any,
-) -> FieldError | None:
-    """Return a wrong-type ``FieldError`` for a relation ``GlobalID``, or ``None`` (spec-036 AR-H4).
-
-    ``decode_global_id`` resolves the id to its ``DjangoType``; the resolved
-    type's model must be the relation's ``related_model``. Mirrors the identity
-    check ``relay.py::_check_typed_match`` does for the typed node field, but
-    against the relation target model rather than a node-field target, and yields
-    a field-keyed ``FieldError`` (NOT a top-level ``GraphQLError``). A malformed
-    id surfaces as a ``FieldError`` too (``decode_global_id`` raises
-    ``ConfigurationError``), so a relation-id failure is uniformly field-keyed.
-    """
-    target_model = relation_field.related_model
-    try:
-        resolved_type, _node_id = decode_global_id(gid)
-    except Exception:
-        return _relation_error(field_name)
-    resolved_model = resolved_type.__django_strawberry_definition__.model
-    if resolved_model is not target_model:
-        return _relation_error(field_name)
-    return None
+    return _decode_relation_id_set(field_name, value, relation_field, info)
 
 
 def _relation_error(field_name: str) -> FieldError:
@@ -371,31 +346,21 @@ def _relation_visibility_error(
     ``async def get_queryset`` met here raises ``SyncMisuseError`` (the same sync
     discipline as the locate path).
 
-    ``decode_global_id`` validates payload SHAPE only, so a well-formed id can
-    still carry a ``node_id`` that is not a valid value for the related model's pk
-    column (e.g. ``"abc"`` for an integer pk). Each id is therefore coerced through
-    the related primary's pk field via ``_coerce_pk_or_none`` (the SAME single
-    source the node field uses) BEFORE the ``pk__in`` query: an uncoercible literal
-    is the uniform ``_relation_error`` (identifies no row - "not found", exactly
-    like the node field returns ``null``), never the raw Django ``ValueError``
-    (``"Field 'id' expected a number..."``) that would leak the pk column type and
-    surface as a top-level ``GraphQLError`` (feedback CR-1).
+    The ``pks`` arrive **already coerced** through the resolved type's pk field by
+    ``decode_model_global_id`` (the shared DRY-2 primitive), so an uncoercible
+    ``node_id`` was already mapped to ``_relation_error`` upstream and never reaches
+    the ``pk__in`` query as a raw Django ``ValueError`` (feedback CR-1). This step
+    only confirms visibility.
     """
     related_type = registry.get(related_model)
-    coerced_pks: list[Any] = []
-    for pk in pks:
-        coerced = _coerce_pk_or_none(related_type, pk)
-        if coerced is None:
-            return _relation_error(field_name)
-        coerced_pks.append(coerced)
     queryset = apply_type_visibility_sync(
         related_type,
         initial_queryset(related_type),
         info,
         _MUTATION_ASYNC_RECOURSE,
     )
-    visible = {str(pk) for pk in queryset.filter(pk__in=coerced_pks).values_list("pk", flat=True)}
-    if not {str(pk) for pk in coerced_pks} <= visible:
+    visible = {str(pk) for pk in queryset.filter(pk__in=pks).values_list("pk", flat=True)}
+    if not {str(pk) for pk in pks} <= visible:
         return _relation_error(field_name)
     return None
 
@@ -668,26 +633,31 @@ def _run_pipeline_sync(
         return _run_delete(mutation_cls, info, id, primary_type, slot, payload_cls)
 
 
-def _run_create(
-    mutation_cls: type,
-    info: Any,
-    data: Any,
-    model: type,
+def _validate_save_assign_refetch_payload(
+    instance: Any,
+    *,
+    exclude: list[str] | None,
+    m2m_assignments: list[Any],
     primary_type: type,
+    info: Any,
     slot: str,
     payload_cls: type,
 ) -> Any:
-    """The ``create`` branch: authorize -> build -> full_clean -> save -> M2M -> re-fetch -> payload."""
-    _authorize_or_raise(mutation_cls, info, "create", data, instance=None)
+    """The shared create / update write-finalization tail (spec-036 Decision 8 / DRY-3).
 
-    scalar_and_fk_attrs, m2m_assignments, decode_error = _decode_relations(model, data, info)
-    if decode_error is not None:
-        return _build_payload(payload_cls, slot, None, [decode_error])
-
-    instance = model(**scalar_and_fk_attrs)
+    ``create`` and ``update`` necessarily differ in their PRELUDE (authorization
+    placement, instance construction vs. visibility-located + ``setattr``, and the
+    partial-update ``exclude`` calculation), but from validation onward they run an
+    IDENTICAL tail: ``full_clean(exclude=...)`` into the envelope, ``save()`` (race
+    ``IntegrityError`` into the envelope), M2M assignment, the optimizer-planned
+    re-fetch by pk, and the success payload. Single-sourcing it here means a future
+    change to write finalization, save-error mapping, M2M timing, or the post-write
+    re-fetch is made ONCE rather than patched in both branches. ``exclude`` is
+    ``None`` for create (validate all fields) and the AR-H2-aware list for update.
+    """
     error_payload = _full_clean_or_payload(
         instance,
-        exclude=None,
+        exclude=exclude,
         slot=slot,
         payload_cls=payload_cls,
     )
@@ -703,6 +673,34 @@ def _run_create(
     return _build_payload(payload_cls, slot, obj, [])
 
 
+def _run_create(
+    mutation_cls: type,
+    info: Any,
+    data: Any,
+    model: type,
+    primary_type: type,
+    slot: str,
+    payload_cls: type,
+) -> Any:
+    """The ``create`` branch: authorize -> build -> [validate -> save -> M2M -> re-fetch -> payload]."""
+    _authorize_or_raise(mutation_cls, info, "create", data, instance=None)
+
+    scalar_and_fk_attrs, m2m_assignments, decode_error = _decode_relations(model, data, info)
+    if decode_error is not None:
+        return _build_payload(payload_cls, slot, None, [decode_error])
+
+    instance = model(**scalar_and_fk_attrs)
+    return _validate_save_assign_refetch_payload(
+        instance,
+        exclude=None,
+        m2m_assignments=m2m_assignments,
+        primary_type=primary_type,
+        info=info,
+        slot=slot,
+        payload_cls=payload_cls,
+    )
+
+
 def _run_update(
     mutation_cls: type,
     info: Any,
@@ -713,7 +711,7 @@ def _run_update(
     slot: str,
     payload_cls: type,
 ) -> Any:
-    """The ``update`` branch: locate -> authorize -> set provided -> full_clean -> save -> re-fetch."""
+    """The ``update`` branch: locate -> authorize -> set provided -> [validate -> save -> re-fetch]."""
     node_id, id_error = _coerce_lookup_id(id, primary_type)
     if id_error is not None:
         return _build_payload(payload_cls, slot, None, [id_error])
@@ -732,22 +730,15 @@ def _run_update(
 
     provided = _provided_attr_names(model, scalar_and_fk_attrs, m2m_assignments)
     exclude = _unprovided_exclude(model, provided)
-    error_payload = _full_clean_or_payload(
+    return _validate_save_assign_refetch_payload(
         instance,
         exclude=exclude,
+        m2m_assignments=m2m_assignments,
+        primary_type=primary_type,
+        info=info,
         slot=slot,
         payload_cls=payload_cls,
     )
-    if error_payload is not None:
-        return error_payload
-
-    write_error = _save_or_field_errors(instance)
-    if write_error is not None:
-        return _build_payload(payload_cls, slot, None, write_error)
-    _assign_m2m(instance, m2m_assignments)
-
-    obj = _refetch_optimized(primary_type, instance.pk, info, force_load=False)
-    return _build_payload(payload_cls, slot, obj, [])
 
 
 def _run_delete(
@@ -849,39 +840,34 @@ def _coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | Non
     ``node(id: ID!)`` Relay-spec signature the shipped ``DjangoNodeField`` uses
     (``relay.py`` line 287), so the package decodes the GlobalID **server-side**
     rather than letting Strawberry's argument coercion own it. The wire value
-    therefore arrives as a base64 GlobalID string; it is decoded via
-    ``decode_global_id`` and its resolved model **must be the mutation's target
-    model** - the same identity guard the typed ``DjangoNodeField`` applies
-    (``types/relay.py::_check_typed_match``) and the AR-H4 relation decode applies
-    to ``<field>_id``.
+    therefore arrives as a base64 GlobalID string; it is run through the shared
+    ``decode_model_global_id`` primitive (DRY-2) against the mutation's target
+    model - the same decode + model-check + pk-coercion contract the relation
+    ``<field>_id`` decode uses, and the identity guard the typed ``DjangoNodeField``
+    applies (``relay.py::_check_typed_match``).
 
-    A malformed id, a well-formed id naming an unresolvable type, a raw pk string
-    (no GlobalID shape), or a well-formed id for the *wrong* model all return a
-    ``FieldError`` on ``id`` BEFORE any pk lookup - no DB read, no existence leak -
-    never silently coerced to a bare pk that would target the same-pk row of the
-    right model (feedback #1, including the malformed-string Django-coercion leak:
-    a raw / malformed string never reaches ``.get(pk=...)``). A valid right-type
-    ``GlobalID`` then has its ``node_id`` coerced through the target's pk field via
-    ``_coerce_pk_or_none`` (the SAME single source the node field uses): a
-    well-formed id whose ``node_id`` is not a valid pk literal (e.g. ``"abc"`` for
-    an integer pk) is the not-found ``FieldError`` on ``id`` - identifies no row,
-    exactly like the node field returns ``null`` - never the raw Django
-    ``ValueError`` (``"Field 'id' expected a number..."``) that would leak the pk
-    column type and surface as a top-level ``GraphQLError`` (feedback CR-1).
+    The :class:`GlobalIDDecode` status maps to this surface's two error shapes:
+
+    - ``DECODE_FAILED`` (malformed / unresolvable type, or a raw pk string with no
+      GlobalID shape) and ``WRONG_MODEL`` (a well-formed id for the *wrong* model)
+      are an **invalid-id** ``FieldError`` on ``id`` BEFORE any pk lookup - no DB
+      read, no existence leak, never coerced to a bare pk that would target the
+      same-pk row of the right model (feedback #1);
+    - ``UNCOERCIBLE_PK`` (a right-type id whose ``node_id`` is not a valid pk
+      literal, e.g. ``"abc"`` for an integer pk) is the **not-found** ``FieldError``
+      on ``id`` - identifies no row, exactly like the node field returns ``null``,
+      never the raw Django ``ValueError`` that would leak the pk column type
+      (feedback CR-1).
 
     Returns ``(pk, None)`` on success or ``(None, FieldError)`` otherwise.
     """
-    try:
-        resolved_type, node_id = decode_global_id(id)
-    except Exception:
-        return None, _invalid_lookup_id_error()
     target_model = target_type.__django_strawberry_definition__.model
-    if resolved_type.__django_strawberry_definition__.model is not target_model:
+    result = decode_model_global_id(id, target_model)
+    if result.status in (GlobalIDDecode.DECODE_FAILED, GlobalIDDecode.WRONG_MODEL):
         return None, _invalid_lookup_id_error()
-    pk = _coerce_pk_or_none(resolved_type, node_id)
-    if pk is None:
+    if result.status is GlobalIDDecode.UNCOERCIBLE_PK:
         return None, _not_found_error()
-    return pk, None
+    return result.pk, None
 
 
 def _not_found_error() -> FieldError:

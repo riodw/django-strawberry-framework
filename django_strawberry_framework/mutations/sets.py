@@ -41,9 +41,10 @@ declared in this slice is inert: registered + bound at finalize, never resolved.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args, get_origin
 
 import strawberry
+from strawberry import relay
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
@@ -54,6 +55,7 @@ from .inputs import (
     build_payload_type,
     editable_input_fields,
     materialize_mutation_input_class,
+    mutation_input_shape,
     payload_object_slot,
     relation_input_annotation,
 )
@@ -551,7 +553,11 @@ def _resolve_primary_type(mutation_cls: type, model: type[models.Model]) -> type
     )
 
 
-def _materialize_input_for(meta: _ValidatedMutationMeta, primary_type: type) -> type | None:
+def _materialize_input_for(
+    mutation_name: str,
+    meta: _ValidatedMutationMeta,
+    primary_type: type,
+) -> type | None:
     """Build + materialize the operation's input class, or return ``None`` for ``delete``.
 
     ``create`` builds the ``<Model>Input`` (``CREATE`` kind); ``update`` builds the
@@ -581,22 +587,27 @@ def _materialize_input_for(meta: _ValidatedMutationMeta, primary_type: type) -> 
 
     consumer_input = meta.input_class if operation_kind == CREATE else meta.partial_input_class
     if consumer_input is not None:
-        return _materialize_merged_input(meta, primary_type, operation_kind, consumer_input)
+        return _materialize_merged_input(
+            mutation_name,
+            meta,
+            primary_type,
+            operation_kind,
+            consumer_input,
+        )
 
-    # Key the cache on the EFFECTIVE field set, not the raw ``(fields, exclude)``
-    # declaration: the generated name and the spec's type identity are derived
-    # from ``frozenset(effective field names)`` (spec-036 Decision 6 line 334;
-    # ``mutations.inputs.mutation_input_type_name``), so two declarations that
-    # narrow to the same effective shape via different spellings must dedupe to one
-    # type (spec-036 Edge cases line 509). ``editable_input_fields`` is the same
-    # selector ``build_mutation_input`` runs, so deriving the effective names here
-    # keeps the cache key single-sourced with the name and the identity tuple.
-    effective_field_names = frozenset(
-        field.name
-        for field in editable_input_fields(meta.model, fields=meta.fields, exclude=meta.exclude)
+    # Derive the shape ONCE (DRY-1): ``mutation_input_shape`` single-sources the
+    # cache key (the EFFECTIVE field set, NOT the raw ``(fields, exclude)``
+    # spelling - two narrowings to one effective shape must dedupe, spec-036
+    # Edge cases line 509) AND the generated name, so the bind cache key and the
+    # generated type name cannot drift. The same descriptor is handed to
+    # ``build_mutation_input`` so it does not re-walk the editable fields.
+    shape = mutation_input_shape(
+        meta.model,
+        operation_kind,
+        fields=meta.fields,
+        exclude=meta.exclude,
     )
-    shape_key = (meta.model, operation_kind, effective_field_names)
-    input_cls = _shape_build_cache.get(shape_key)
+    input_cls = _shape_build_cache.get(shape.cache_key)
     if input_cls is None:
         input_cls = build_mutation_input(
             meta.model,
@@ -604,13 +615,15 @@ def _materialize_input_for(meta: _ValidatedMutationMeta, primary_type: type) -> 
             primary_type=primary_type,
             fields=meta.fields,
             exclude=meta.exclude,
+            shape=shape,
         )
-        _shape_build_cache[shape_key] = input_cls
+        _shape_build_cache[shape.cache_key] = input_cls
     materialize_mutation_input_class(input_cls.__name__, input_cls)
     return input_cls
 
 
 def _materialize_merged_input(
+    mutation_name: str,
     meta: _ValidatedMutationMeta,
     primary_type: type,
     operation_kind: str,
@@ -632,19 +645,31 @@ def _materialize_merged_input(
     guarantees the two field sets are disjoint, there is no duplicate-field clash.
 
     The merged class is named + materialized under the **canonical shape name**
-    (``remainder.__name__`` - ``build_mutation_input`` derives it from the full
-    selected field set, which still includes the overridden columns, so it is the
-    same ``<Model>Input`` / shape-derived name the all-generated path would use):
-    the consumer customizes representations of existing columns, it does NOT change
-    the shape identity ``(model, operation kind, frozenset(effective names))``. A
-    merged input is therefore NOT cached in ``_shape_build_cache`` (it is
-    mutation-specific), and if two mutations resolve the same shape to two
-    different representations they collide on that name and raise the AR-M6
-    ``ConfigurationError`` at ``materialize_mutation_input_class`` - the same
-    fail-loud the all-generated collision uses.
+    (``shape.type_name`` from the shared ``mutation_input_shape`` descriptor, DRY-1
+    - derived from the full selected field set, which still includes the overridden
+    columns, so it is the same ``<Model>Input`` / shape-derived name the
+    all-generated path uses): the consumer customizes representations of existing
+    columns, it does NOT change the shape identity ``(model, operation kind,
+    frozenset(effective names))``. A merged input is therefore NOT cached in
+    ``_shape_build_cache`` (it is mutation-specific), and if two mutations resolve
+    the same shape to two different representations they collide on that name and
+    raise the AR-M6 ``ConfigurationError`` at ``materialize_mutation_input_class`` -
+    the same fail-loud the all-generated collision uses.
     """
     consumer_attrs = frozenset(
         field.python_name for field in consumer_input.__strawberry_definition__.fields
+    )
+    shape = mutation_input_shape(
+        meta.model,
+        operation_kind,
+        fields=meta.fields,
+        exclude=meta.exclude,
+    )
+    _validate_relation_override_types(
+        mutation_name,
+        consumer_input,
+        shape,
+        attr_name="input_class" if operation_kind == CREATE else "partial_input_class",
     )
     remainder = build_mutation_input(
         meta.model,
@@ -653,11 +678,110 @@ def _materialize_merged_input(
         fields=meta.fields,
         exclude=meta.exclude,
         overrides=consumer_attrs,
+        shape=shape,
     )
-    shape_name = remainder.__name__
-    merged = strawberry.input(type(shape_name, (consumer_input, remainder), {}))
-    materialize_mutation_input_class(shape_name, merged)
+    merged = strawberry.input(type(shape.type_name, (consumer_input, remainder), {}))
+    materialize_mutation_input_class(shape.type_name, merged)
     return merged
+
+
+def _validate_relation_override_types(
+    mutation_name: str,
+    consumer_input: type,
+    shape: Any,
+    *,
+    attr_name: str,
+) -> None:
+    """Type-lock a consumer relation override to the generated ``GlobalID`` id (AR-M2 / Decision 10).
+
+    A relation column whose related model HAS a primary Relay-Node type generates a
+    ``relay.GlobalID`` (forward FK / OneToOne) or ``list[relay.GlobalID]`` (M2M) input
+    whose decode is **type-checked against the relation target** (spec-036 AR-H4) AND
+    **visibility-checked through the related type's ``get_queryset``** (spec-036
+    Decision 10 / feedback P1) - so a permitted writer cannot attach a row they could
+    not *see*. Both guarantees ride the ``GlobalID`` shape:
+    ``resolvers.py::_decode_relation_id_set`` only type/visibility-checks a value that
+    ``isinstance(_, relay.GlobalID)`` and passes any other value through as a raw pk.
+
+    The naming half of AR-M2 (``_validate_input_class``) lets a consumer override a
+    relation field's *representation* under its generated ``<field>_id`` / ``list``
+    name, but it name-checks only - so a consumer could declare ``category_id: int``
+    (a raw pk) for a Relay-target relation, the CR-2 merge would honor the consumer
+    annotation, and at decode the value would be seen as a non-``GlobalID`` raw pk and
+    passed through - **bypassing both the AR-H4 type-check and the relation visibility
+    contract**. That is a privilege gap (attach-by-raw-pk to an unseeable row), so a
+    relation override MUST keep the generated ``GlobalID`` id type; a divergent
+    annotation is a fail-loud ``ConfigurationError`` (the AR-M2 posture).
+
+    Enforced at the phase-2.5 bind, NOT at class creation: whether the related model
+    has a primary Relay-Node type is a ``registry.get`` lookup only reliably populated
+    at finalization (this is exactly why ``_validate_input_class`` passes
+    ``related_primary_type=None`` - the python-attr name is registry-independent, the
+    id *type* is not). The decision is single-sourced with the generator by reading
+    ``relation_input_annotation``'s emitted annotation, so "GlobalID iff Relay-Node
+    primary" cannot drift from what ``build_mutation_input`` produces. A raw-pk
+    relation (a non-Relay target) carries no visibility contract to defeat, so a
+    raw-pk override there is left alone.
+    """
+    consumer_fields = {
+        field.python_name: field for field in consumer_input.__strawberry_definition__.fields
+    }
+    for field in shape.selected:
+        if not getattr(field, "is_relation", False):
+            continue
+        python_attr, _graphql_name, annotation = relation_input_annotation(
+            field,
+            related_primary_type=registry.get(field.related_model),
+        )
+        if not _annotation_core_is_global_id(annotation):
+            continue  # raw-pk relation (non-Relay target): no visibility contract to bypass.
+        consumer_field = consumer_fields.get(python_attr)
+        if consumer_field is None:
+            continue  # not overridden; the generated GlobalID remainder is used.
+        if _strawberry_field_core_type(consumer_field) is not relay.GlobalID:
+            raise ConfigurationError(
+                f"DjangoMutation {mutation_name}.Meta.{attr_name} overrides relation field "
+                f"{python_attr!r} with a non-GlobalID id type. {field.related_model.__name__} has "
+                "a primary Relay-Node type, so the generated relation input is a GlobalID (or "
+                "list[GlobalID] for M2M) that is type- and visibility-checked at decode "
+                "(spec-036 AR-H4 / Decision 10); a raw-pk override would be passed through "
+                "unchecked and bypass the relation visibility contract. Declare "
+                f"{python_attr!r} as relay.GlobalID.",
+            )
+
+
+def _annotation_core_is_global_id(annotation: Any) -> bool:
+    """Return whether a generated relation annotation's core id type is ``relay.GlobalID``.
+
+    ``relation_input_annotation`` emits ``relay.GlobalID`` (forward FK / OneToOne) or
+    ``list[relay.GlobalID]`` (M2M) for a Relay-Node-primary target, and the related
+    model's raw pk scalar (or ``list[<scalar>]``) otherwise. This peels the M2M ``list``
+    wrapper and compares the core against ``relay.GlobalID`` so both id shapes are
+    recognized from the one generator-emitted annotation (no separate Relay-vs-pk
+    re-derivation).
+    """
+    if get_origin(annotation) is list:
+        args = get_args(annotation)
+        return bool(args) and args[0] is relay.GlobalID
+    return annotation is relay.GlobalID
+
+
+def _strawberry_field_core_type(field: Any) -> Any:
+    """Return a consumer field's core type, peeling ``Optional`` / ``list`` Strawberry wrappers.
+
+    A consumer relation override may be annotated ``relay.GlobalID``,
+    ``relay.GlobalID | None``, ``list[relay.GlobalID]``, or ``list[relay.GlobalID] | None``;
+    Strawberry resolves those to ``StrawberryOptional`` / ``StrawberryList`` wrappers
+    around the core type. Unwrapping ``of_type`` to the core lets the type-lock compare
+    a single identity (``is relay.GlobalID``) regardless of optional-ness or list-ness,
+    so a raw-pk core (``int``) or a ``strawberry.ID`` core is correctly rejected.
+    """
+    type_ = field.type
+    seen: set[int] = set()
+    while hasattr(type_, "of_type") and id(type_) not in seen:
+        seen.add(id(type_))
+        type_ = type_.of_type
+    return type_
 
 
 def _bind_mutation(mutation_cls: type) -> None:
@@ -672,7 +796,7 @@ def _bind_mutation(mutation_cls: type) -> None:
     meta = mutation_cls._mutation_meta
     primary_type = _resolve_primary_type(mutation_cls, meta.model)
 
-    input_cls = _materialize_input_for(meta, primary_type)
+    input_cls = _materialize_input_for(mutation_cls.__name__, meta, primary_type)
 
     payload_cls = build_payload_type(
         mutation_cls.__name__,

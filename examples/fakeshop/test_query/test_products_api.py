@@ -292,6 +292,69 @@ def test_create_category_happy_path():
     assert models.Category.objects.filter(name="zzz_live_cat").exists()
 
 
+# A lone UTF-16 surrogate code point (U+D800), carried over the wire as a JSON
+# ``\ud800`` escape, is not a valid Unicode scalar value and cannot be encoded to
+# UTF-8 for storage. It is rejected at input decode as a field-keyed FieldError,
+# never reaching the DB-bound validate_unique/save where the backend would raise a
+# raw UnicodeEncodeError (an unmapped ValueError) and leak as a top-level error.
+_LONE_SURROGATE = "\ud800"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_category_surrogate_in_unique_name_is_field_error_no_crash():
+    """An unpaired surrogate in the unique ``name`` -> in-band ``FieldError`` on ``name``, no 500.
+
+    The unique-field path: ``name`` is ``unique=True``, so an unstorable value would
+    otherwise blow up inside ``full_clean()``'s ``validate_unique()`` DB lookup with
+    a raw ``UnicodeEncodeError``. Decode rejects it first as a ``FieldError`` on
+    ``name`` (the offending input field is decoded before ``description``), so the
+    response is the in-band envelope, not a top-level error with ``data: null``.
+    """
+    create_users(1)
+    client = _login_with_perm("view_category_1", "add_category")
+    before = models.Category.objects.count()
+
+    response = _post_graphql(
+        _CREATE_CATEGORY,
+        client=client,
+        variables={"d": {"name": f"surrogate-{_LONE_SURROGATE}", "description": _LONE_SURROGATE}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createCategory"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["name"]
+    assert models.Category.objects.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_category_surrogate_in_nonunique_description_is_field_error_no_crash():
+    """An unpaired surrogate in the non-unique ``description`` -> ``FieldError`` on ``description``, no 500.
+
+    The non-unique-field path: a clean ``name`` passes ``validate_unique()``, so the
+    unstorable ``description`` would otherwise blow up at ``save()``'s INSERT with a
+    raw ``UnicodeEncodeError``. Decode rejects it first as a ``FieldError`` on
+    ``description``; no row is written.
+    """
+    create_users(1)
+    client = _login_with_perm("view_category_1", "add_category")
+    before = models.Category.objects.count()
+
+    response = _post_graphql(
+        _CREATE_CATEGORY,
+        client=client,
+        variables={"d": {"name": "surrogate-description-only", "description": _LONE_SURROGATE}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createCategory"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["description"]
+    assert not models.Category.objects.filter(name="surrogate-description-only").exists()
+
+
 @pytest.mark.django_db(transaction=True)
 def test_create_item_unique_constraint_envelope_uses_all_sentinel():
     """A duplicate ``(category, name)`` create returns a ``"__all__"``-keyed ``FieldError``.

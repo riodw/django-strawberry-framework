@@ -159,9 +159,44 @@ def _decode_relations(
             scalar_and_fk_attrs[python_name] = pk
             continue
 
+        text_error = _unencodable_text_error(graphql_name, value)
+        if text_error is not None:
+            return {}, [], text_error
         scalar_and_fk_attrs[python_name] = _raw_choice_value(value)
 
     return scalar_and_fk_attrs, m2m_assignments, None
+
+
+def _unencodable_text_error(field_name: str, value: Any) -> FieldError | None:
+    r"""Reject a string input that cannot be encoded for storage (unpaired surrogate).
+
+    A GraphQL ``String`` can carry lone UTF-16 surrogate code points (e.g. U+D800
+    via a JSON ``\ud800`` escape) that are not valid Unicode scalar values and
+    cannot be encoded to UTF-8. Such a value would otherwise reach a
+    DB-bound operation - ``validate_unique()``'s lookup query (a unique column) or
+    ``save()``'s INSERT (any text column) - where the backend raises a raw
+    ``UnicodeEncodeError``. That is a ``ValueError`` the resolver does NOT map (it is
+    neither the ``ValidationError`` ``full_clean`` raises nor the ``IntegrityError``
+    ``save`` raises), so it escapes as a top-level GraphQL error with ``data: null``
+    instead of the field-keyed envelope (feedback - surrogate text leak). Reject it
+    HERE, at decode, before any DB-bound work, as a ``FieldError`` naming the
+    offending input field - the same in-band envelope every other input failure
+    returns - so neither the unique-field ``validate_unique`` path nor the plain
+    ``save`` path can leak the raw exception. ``str.encode("utf-8")`` is the
+    universal storability test: a lone surrogate fails it, while every valid scalar
+    value (including an embedded ``NUL``) passes, so this rejects ONLY genuinely
+    unstorable text. A non-string value (an int, a JSON dict whose own encoder
+    escapes nested surrogates, a choice enum) is passed through unchanged.
+    """
+    if isinstance(value, str):
+        try:
+            value.encode("utf-8")
+        except UnicodeEncodeError:
+            return FieldError(
+                field=field_name,
+                messages=["Text contains invalid Unicode (unpaired surrogate code points)."],
+            )
+    return None
 
 
 def _raw_choice_value(value: Any) -> Any:

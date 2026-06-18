@@ -27,13 +27,19 @@ diverge from the read-side factories, both forced by timing, not style:
 
 The per-operation argument signature is ``data: <Model>Input!`` (create), ``id``
 + ``data: <Model>PartialInput!`` (update), ``id`` only (delete) - spec-036
-Decision 14. The ``id`` argument is the raw ``strawberry.ID`` string (the
-``DjangoNodeField`` server-side-decode precedent, ``relay.py`` line 287): the
-package decodes / coerces it server-side, so malformed ids reach the resolver
-rather than being rejected by Strawberry's argument conversion. The SDL therefore
-renders ``id: ID!`` rather than the headline ``id: GlobalID!``; the difference is
-cosmetic for the wire contract (the node field shipped the same way) and is not a
-defect.
+Decision 14. The ``id`` argument is the raw ``strawberry.ID`` string - the
+``node(id: ID!)`` Relay-spec signature the shipped ``DjangoNodeField`` also uses
+(``relay.py`` line 287), so the package decodes the GlobalID **server-side**
+rather than letting Strawberry's argument conversion own it. The SDL renders
+``id: ID!`` by design (the Relay-spec / node-field contract), and the resolver
+decodes the id and type-checks it against the mutation's target model -
+``resolvers.py::_coerce_lookup_id`` returns a ``FieldError`` on ``id`` for a
+malformed / unresolvable / wrong-model id, never coercing it to a bare pk
+(feedback #1). This is a single, consistent contract (NOT the headline schema's
+``id: GlobalID!``, which the spec is reconciled to ``id: ID!`` to match - feedback
+#4); the relation ``<field>_id`` inputs, by contrast, ARE typed ``GlobalID`` (the
+Relay-Node target's id type), so malformed *relation* ids are a Strawberry
+coercion error while a well-formed-but-invalid one is the in-band ``FieldError``.
 
 Fallback (NOT implemented - spec-036 Decision 5 / Risks): if Strawberry rejects a
 resolver-typed field assigned with no class annotation, the documented fallback is

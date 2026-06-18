@@ -230,6 +230,111 @@ def test_permission_classes_explicit_override_honored():
     assert CreateItem._mutation_meta.permission_classes == [AllowAll]
 
 
+def test_permission_classes_tuple_is_normalized_to_list():
+    """A tuple ``permission_classes`` is normalized to a list (feedback P2)."""
+
+    class AllowAll:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            return True
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            permission_classes = (AllowAll,)
+
+    assert CreateItem._mutation_meta.permission_classes == [AllowAll]
+
+
+def test_permission_classes_bare_class_raises():
+    """A bare class (not wrapped in a sequence) raises at class creation (feedback P2).
+
+    The contract is a *sequence* of permission classes; a single class would
+    iterate as a ``TypeError`` inside ``check_permission`` at request time, so it is
+    rejected up front naming the sequence requirement.
+    """
+
+    class AllowAll:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            return True
+
+    with pytest.raises(ConfigurationError, match="must be a sequence of"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                permission_classes = AllowAll
+
+
+def test_permission_classes_bare_string_raises():
+    """A bare string ``permission_classes`` raises (would iterate as characters)."""
+    with pytest.raises(ConfigurationError, match="must be a sequence of"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                permission_classes = "AllowAll"
+
+
+def test_permission_classes_instance_entry_raises():
+    """An entry that is an INSTANCE (not a class) raises (feedback P2).
+
+    ``check_permission`` does ``permission_class().has_permission(...)`` - it
+    INSTANTIATES each entry - so an already-instantiated object is invalid and is
+    rejected at class creation rather than as a request-time ``TypeError``.
+    """
+
+    class AllowAll:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            return True
+
+    with pytest.raises(ConfigurationError, match="not a permission class exposing has_permission"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                permission_classes = [AllowAll()]  # instance, not the class
+
+
+def test_permission_classes_entry_without_has_permission_raises():
+    """A class entry lacking ``has_permission`` raises at class creation (feedback P2)."""
+
+    class NotAPermission:
+        pass
+
+    with pytest.raises(ConfigurationError, match="not a permission class exposing has_permission"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                permission_classes = [NotAPermission]
+
+
 # ---------------------------------------------------------------------------
 # _resolve_model seam (Medium-5)
 # ---------------------------------------------------------------------------

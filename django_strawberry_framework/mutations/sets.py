@@ -275,6 +275,51 @@ def _normalize_field_sequence(value: Any) -> tuple[str, ...] | None:
     return tuple(value)
 
 
+def _validate_permission_classes(mutation_name: str, value: Any) -> list[Any]:
+    """Validate + normalize ``Meta.permission_classes`` at class creation (feedback P2).
+
+    The DoD says an invalid ``permission_classes`` entry is rejected at
+    class-creation, not deferred to a request-time ``TypeError`` /
+    ``AttributeError`` inside ``DjangoMutation.check_permission`` (which does
+    ``permission_class().has_permission(...)``). So:
+
+    - ``None`` (unset) -> the ``[DjangoModelPermission]`` default seam.
+    - a bare ``str`` / ``bytes`` (a single name) or a bare class (forgot the
+      enclosing sequence) -> ``ConfigurationError``: the contract is a *sequence*
+      of permission classes.
+    - any other non-iterable -> ``ConfigurationError``.
+    - each entry must be a **class exposing a callable ``has_permission``** (the
+      shape ``check_permission`` instantiates + calls); an instance, a non-class
+      value, or a class without ``has_permission`` -> ``ConfigurationError``
+      naming the offending entry.
+
+    Returns the normalized ``list`` the snapshot stores (so ``check_permission``
+    iterates a known list, never a raw consumer value).
+    """
+    if value is None:
+        return [DjangoModelPermission]
+    if isinstance(value, (str, bytes, type)):
+        raise ConfigurationError(
+            f"DjangoMutation {mutation_name}.Meta.permission_classes must be a sequence of "
+            f"permission classes (e.g. [DjangoModelPermission]); got {value!r}.",
+        )
+    try:
+        classes = list(value)
+    except TypeError as exc:
+        raise ConfigurationError(
+            f"DjangoMutation {mutation_name}.Meta.permission_classes must be a sequence of "
+            f"permission classes (e.g. [DjangoModelPermission]); got {value!r}.",
+        ) from exc
+    for entry in classes:
+        if not isinstance(entry, type) or not callable(getattr(entry, "has_permission", None)):
+            raise ConfigurationError(
+                f"DjangoMutation {mutation_name}.Meta.permission_classes entry {entry!r} is not a "
+                "permission class exposing has_permission; each entry must be a class with a "
+                "has_permission(info, mutation, operation, data, instance) method.",
+            )
+    return classes
+
+
 def _validate_mutation_meta(mutation_cls: type, meta: type) -> _ValidatedMutationMeta:
     """Validate a concrete mutation's nested ``Meta`` at class creation (spec-036 Decision 5).
 
@@ -291,9 +336,13 @@ def _validate_mutation_meta(mutation_cls: type, meta: type) -> _ValidatedMutatio
     - **bad ``input_class`` / ``partial_input_class``** - not a ``@strawberry.input``
       type, or field names diverging from the generated scheme (AR-M2).
 
-    ``permission_classes`` defaults to ``[DjangoModelPermission]`` when unset
-    (spec-036 Decision 15 - the write-auth seam default is assigned here; the
-    enforcement runs in Slice 3's resolver).
+    ``permission_classes`` is validated + normalized by
+    ``_validate_permission_classes`` (feedback P2): it defaults to
+    ``[DjangoModelPermission]`` when unset, must otherwise be a *sequence* of
+    classes each exposing a callable ``has_permission``, and a bad entry is
+    rejected here at class creation rather than as a request-time ``TypeError`` /
+    ``AttributeError`` inside ``check_permission`` (spec-036 Decision 15 - the
+    write-auth seam; the enforcement runs in Slice 3's resolver).
     """
     name = mutation_cls.__name__
     declared = {key for key in vars(meta) if not key.startswith("_")}
@@ -343,9 +392,10 @@ def _validate_mutation_meta(mutation_cls: type, meta: type) -> _ValidatedMutatio
             exclude=exclude,
         )
 
-    permission_classes = getattr(meta, "permission_classes", None)
-    if permission_classes is None:
-        permission_classes = [DjangoModelPermission]
+    permission_classes = _validate_permission_classes(
+        name,
+        getattr(meta, "permission_classes", None),
+    )
 
     return _ValidatedMutationMeta(
         model=model,

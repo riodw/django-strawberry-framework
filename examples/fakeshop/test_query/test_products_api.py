@@ -258,6 +258,10 @@ def test_delete_item_happy_path():
     assert result["errors"] == []
     assert result["node"]["name"] == "Doomed"
     assert result["node"]["category"] == {"name": category.name}
+    # The id is preserved for cache eviction (feedback P1): it decodes to the
+    # ORIGINAL pk even though the row is gone - the deletion runs against the
+    # located instance, so Django's delete()-nulls-pk never touches this snapshot.
+    assert relay.GlobalID.from_id(result["node"]["id"]).node_id == str(item.pk)
     assert not models.Item.objects.filter(pk=item.pk).exists()
 
 
@@ -595,6 +599,123 @@ def test_delete_item_wrong_type_global_id_on_id_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_create_item_relation_id_for_hidden_category_is_field_error():
+    """feedback P1: a permitted writer cannot attach a `Category` they cannot SEE.
+
+    `seed_cascade_split` gives a PRIVATE category. A non-staff `view_item_1` user
+    (granted `add_item`) cannot see it (`CategoryType.get_queryset` hides private
+    categories from non-staff), so `createItem(categoryId=<private cat gid>)` is a
+    `FieldError` on `categoryId` - the relation id is resolved through the target's
+    visibility `get_queryset`, never silently attached via the later `full_clean`
+    FK check (which uses Django's default manager). The SAME create succeeds against
+    the visible public category, isolating the visibility miss from the write perm
+    (which is held throughout).
+    """
+    create_users(1)
+    chain = seed_cascade_split()
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    # Hidden private category: FieldError on categoryId, no write.
+    response = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={
+            "d": {
+                "name": "AttachHidden",
+                "categoryId": _global_id("products.category", chain["private_cat"].pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItem"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["categoryId"]
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="AttachHidden").exists()
+
+    # Visible public category: the same caller's same create succeeds.
+    response = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={
+            "d": {
+                "name": "AttachVisible",
+                "categoryId": _global_id("products.category", chain["public_cat"].pk),
+            },
+        },
+    )
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItem"]
+    assert result["errors"] == []
+    assert result["node"] == {
+        "name": "AttachVisible",
+        "category": {"name": chain["public_cat"].name},
+    }
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_malformed_id_is_field_error_no_coercion_crash():
+    """feedback #1: a malformed / raw-pk ``id:`` on `updateItem` -> `FieldError` on `id`, no crash.
+
+    The ``id:`` is `ID!` and decoded server-side; a string that is not a well-formed
+    GlobalID - a raw pk, or garbage - is a `FieldError` on ``id`` decided BEFORE any
+    lookup, never coerced to a bare pk that an integer-pk model would raise a Django
+    ``ValueError`` (top-level 500) on at ``.get(pk=...)``.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="Untouched", category=category)
+    client = _login_with_perm("staff_1", "change_item")
+
+    for bad_id in ("not-a-global-id", str(item.pk)):
+        response = _post_graphql(
+            _UPDATE_ITEM,
+            client=client,
+            variables={"id": bad_id, "d": {"name": "Renamed"}},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        result = payload["data"]["updateItem"]
+        assert result["node"] is None
+        assert [e["field"] for e in result["errors"]] == ["id"]
+    item.refresh_from_db()
+    assert item.name == "Untouched"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_malformed_category_id_is_top_level_coercion_error():
+    """feedback #7: a MALFORMED `categoryId` is a top-level coercion error, not a `FieldError`.
+
+    Relation ids are typed `GlobalID` (not `ID!`), so Strawberry rejects a malformed
+    value during argument coercion BEFORE the resolver runs - a top-level GraphQL
+    error, `data` null. The in-band `FieldError` envelope is reserved for a
+    well-formed-but-invalid / wrong-type / hidden relation id (the decode-time
+    AR-H4 + visibility checks). This pins the boundary the spec documents.
+    """
+    create_users(1)
+    seed_data(1)
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM,
+        client=client,
+        variables={"d": {"name": "Malformed", "categoryId": "not-a-valid-global-id"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    # Top-level GraphQL error (variable coercion), NOT an in-band FieldError envelope.
+    assert payload.get("errors"), payload
+    assert payload["data"] is None
+    assert not models.Item.objects.filter(name="Malformed").exists()
+
+
+@pytest.mark.django_db(transaction=True)
 def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     """G2 behavioral tier (AR-M7): a mutation response selecting a relation has no N+1, no lazy query.
 
@@ -638,18 +759,22 @@ def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     # The relation renders WITHOUT an error (planned, not a broken / lazy FK).
     assert result["node"] == {"name": "G2Widget", "category": {"name": category.name}}
 
-    # Bounded count = 11, derived from a real run (stable across runs):
+    # Bounded count = 12, derived from a real run (stable across runs):
     #   BEGIN + COMMIT                                    = 2 (the resolver's one
     #                                                         transaction.atomic())
     #   session + auth_user + user_perms + group_perms    = 4 (authorized-caller
     #                                                         machinery)
+    #   relation-id visibility decode: products_category  = 1 (feedback P1: the
+    #                                                         categoryId is resolved
+    #                                                         through CategoryType.
+    #                                                         get_queryset before write)
     #   validate_constraints: category-FK + item-unique   = 2 (full_clean before save)
     #   INSERT products_item                              = 1
     #   post-write re-fetch: products_item                = 1 (optimizer-planned)
     #   the `category` relation:  products_category       = 1 (select_related/prefetch;
     #                                                         no N+1, no lazy refetch)
     sql = [query["sql"] for query in captured]
-    assert len(captured) == 11, sql
+    assert len(captured) == 12, sql
     # G2 load-bearing property: the re-fetch reads the item once and the relation
     # once - a deferred-field lazy refetch or an N+1 would add EXTRA products SELECTs.
     item_selects = [
@@ -662,8 +787,10 @@ def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     ]
     # One re-fetch SELECT for the item, plus the validate_constraints SELECT-1.
     assert len([s for s in item_selects if "select 1" not in s.lower()]) == 1, sql
-    # One category SELECT for the relation, plus the validate_constraints SELECT-1.
-    assert len([s for s in category_selects if "select 1" not in s.lower()]) == 1, sql
+    # TWO real category SELECTs (plus the validate_constraints SELECT-1): the
+    # relation-id visibility decode (feedback P1) and the post-write re-fetch
+    # relation - neither is an N+1 / lazy refetch.
+    assert len([s for s in category_selects if "select 1" not in s.lower()]) == 2, sql
 
 
 @pytest.mark.django_db

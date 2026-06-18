@@ -160,7 +160,7 @@ _UPDATE = (
 )
 _DELETE = (
     "mutation($id: ID!){ deleteItem(id:$id){ "
-    "node{ name category{ name } } errors{ field messages } } }"
+    "node{ id name category{ name } } errors{ field messages } } }"
 )
 
 
@@ -204,13 +204,18 @@ def test_update_happy_path_partial_leaves_unprovided_unchanged():
 
 @pytest.mark.django_db
 def test_delete_happy_path_returns_snapshot_and_removes_row():
-    """A delete returns the pre-deletion snapshot in the slot; the row is gone."""
+    """A delete returns the pre-deletion snapshot (id preserved) in the slot; the row is gone."""
     schema, (_CategoryT, ItemT) = _build_item_schema()
     cat = product_models.Category.objects.create(name=_category_name())
     item = product_models.Item.objects.create(name="Doomed", category=cat)
     res = schema.execute_sync(_DELETE, variable_values={"id": _item_gid(ItemT, item.pk)})
     assert res.errors is None, res.errors
-    assert res.data["deleteItem"]["node"]["name"] == "Doomed"
+    node = res.data["deleteItem"]["node"]
+    assert node["name"] == "Doomed"
+    # The deleted node id is preserved for cache eviction (feedback P1): it decodes
+    # to the ORIGINAL pk even though the row is gone. The deletion runs against the
+    # located instance, so Django's delete()-nulls-pk never touches this snapshot.
+    assert relay.GlobalID.from_id(node["id"]).node_id == str(item.pk)
     assert not product_models.Item.objects.filter(pk=item.pk).exists()
 
 
@@ -300,19 +305,23 @@ def test_unprovided_exclude_single_field_unique_group_kept():
     assert "description" in exclude
 
 
-def test_coerce_lookup_id_passthrough_when_no_globalid_type_slot():
-    """A value with no GlobalID type slot passes through unchecked (no target resolution).
+def test_coerce_lookup_id_rejects_non_globalid():
+    """A non-GlobalID ``id:`` (raw pk string, garbage, non-string) is a ``FieldError`` on ``id``.
 
-    The top-level ``id:`` type-check (spec-036 Decision 10 / finding-#1) only
-    applies to a decoded ``relay.GlobalID``. A raw pk string (one Strawberry cannot
-    parse as a GlobalID) and an already-coerced pk from an internal caller carry no
-    type slot, so ``_coerce_lookup_id`` returns them verbatim with no ``FieldError``
-    and without touching the target type - hence ``target_type=None`` is safe here.
-    These input shapes are unreachable through a real ``ID!`` GraphQL argument (it
-    always arrives as a string), so they are pinned package-internally.
+    The update/delete ``id:`` MUST be a well-formed GlobalID (the node-field
+    server-side-decode contract). A raw pk string carries no type slot to check
+    against the target model, and a malformed string cannot decode at all, so both
+    are rejected as a ``FieldError`` on ``id`` BEFORE any pk lookup - never coerced
+    to a bare pk that would skip the AR-H4 type guard or raise a Django coercion
+    error at ``.get(pk=...)`` (feedback #1). ``decode_global_id`` rejects an
+    undecodable id before the target-model dereference, so ``target_type=None`` is
+    safe here. The end-to-end reachable forms are pinned live; this is the unit pin
+    of the no-passthrough contract.
     """
-    assert resolvers._coerce_lookup_id("5", None) == ("5", None)
-    assert resolvers._coerce_lookup_id(5, None) == (5, None)
+    for bad in ("5", "not-a-global-id", 5):
+        node_id, error = resolvers._coerce_lookup_id(bad, None)
+        assert node_id is None
+        assert error is not None and error.field == "id"
 
 
 @pytest.mark.django_db
@@ -357,6 +366,29 @@ def test_wrong_type_globalid_yields_field_error_no_cross_model_lookup():
     # No cross-model coercion happened: no second Item was created under the
     # (collided) Category pk path.
     assert product_models.Item.objects.filter(name="New").count() == 0
+
+
+@pytest.mark.django_db
+def test_relation_unresolvable_type_global_id_yields_field_error():
+    """A well-formed relation ``GlobalID`` naming an unregistered type -> ``FieldError`` (AR-H4 / feedback #7).
+
+    Distinct from the wrong-MODEL case (which decodes successfully then mismatches):
+    here ``decode_global_id`` itself raises (the ``type_name`` resolves to no
+    installed / registered Relay-Node type), so ``_wrong_type_field_error`` maps the
+    decode failure to a ``FieldError`` on ``categoryId`` - the uniformly-field-keyed
+    malformed-relation-id branch, never a top-level error from inside the resolver.
+    """
+    schema, (_CategoryT, _ItemT) = _build_item_schema()
+    bogus = str(relay.GlobalID(type_name="nope.nonexistent", node_id="1"))
+    res = schema.execute_sync(
+        _CREATE,
+        variable_values={"d": {"name": "X", "categoryId": bogus}},
+    )
+    assert res.errors is None, res.errors
+    payload = res.data["createItem"]
+    assert payload["node"] is None
+    assert payload["errors"][0]["field"] == "categoryId"
+    assert product_models.Item.objects.filter(name="X").count() == 0
 
 
 @pytest.mark.django_db
@@ -697,14 +729,23 @@ async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution(
 # ---------------------------------------------------------------------------
 
 
-def _build_book_schema():
-    """Declare Book/Genre/Shelf primaries + create/update mutations over the Book M2M."""
+def _build_book_schema(*, genre_get_queryset=None):
+    """Declare Book/Genre/Shelf primaries + create/update mutations over the Book M2M.
 
-    class GenreT(DjangoType, relay.Node):
-        class Meta:
-            model = library_models.Genre
-            fields = ("id", "name")
-            primary = True
+    ``genre_get_queryset`` optionally installs a visibility hook on the ``Genre``
+    primary type so the M2M relation-visibility check (feedback P1) can be driven.
+    """
+
+    genre_body: dict = {
+        "Meta": type(
+            "Meta",
+            (),
+            {"model": library_models.Genre, "fields": ("id", "name"), "primary": True},
+        ),
+    }
+    if genre_get_queryset is not None:
+        genre_body["get_queryset"] = genre_get_queryset
+    GenreT = type("GenreT", (DjangoType, relay.Node), genre_body)
 
     class ShelfT(DjangoType, relay.Node):
         class Meta:
@@ -797,6 +838,99 @@ def test_m2m_clear_on_empty_and_unchanged_on_omit():
     res = schema.execute_sync(update_q, variable_values={"id": book_gid, "d": {"genres": []}})
     assert res.errors is None, res.errors
     assert book.genres.count() == 0
+
+
+_CREATE_BOOK = (
+    "mutation($d: BookGenresShelfTitleInput!){ createBook(data:$d){ "
+    "node{ id title } errors{ field messages } } }"
+)
+
+
+@pytest.mark.django_db
+def test_m2m_hidden_related_id_is_field_error():
+    """An M2M id for a row the related type hides -> ``FieldError`` on the M2M field (feedback P1).
+
+    ``GenreT.get_queryset`` hides the ``"Secret"`` genre, so a ``createBook`` whose
+    ``genres`` list includes the hidden genre's id is a ``FieldError`` on ``genres``
+    (hidden indistinguishable from missing, no existence leak) - the same
+    visibility contract FK ids get, applied to the whole M2M set in one query. No
+    book is written.
+    """
+
+    @classmethod
+    def _hide_secret(cls, queryset, info):
+        return queryset.exclude(name="Secret")
+
+    schema, (GenreT, ShelfT, _BookT) = _build_book_schema(genre_get_queryset=_hide_secret)
+    shelf = _make_branch_shelf()
+    visible = library_models.Genre.objects.create(name="Sci-Fi")
+    hidden = library_models.Genre.objects.create(name="Secret")
+    res = schema.execute_sync(
+        _CREATE_BOOK,
+        variable_values={
+            "d": {
+                "title": "Dune",
+                "shelfId": global_id_for(ShelfT, shelf.pk),
+                "genres": [global_id_for(GenreT, visible.pk), global_id_for(GenreT, hidden.pk)],
+            },
+        },
+    )
+    assert res.errors is None, res.errors
+    payload = res.data["createBook"]
+    assert payload["node"] is None
+    assert [e["field"] for e in payload["errors"]] == ["genres"]
+    assert not library_models.Book.objects.filter(title="Dune").exists()
+
+
+@pytest.mark.django_db
+def test_m2m_explicit_null_is_field_error():
+    """An explicit ``null`` M2M value -> ``FieldError`` on the M2M field, not a resolver crash (feedback P2).
+
+    The generated optional M2M field is ``list[<id>] | None``, so a client can send
+    ``genres: null``. ``null`` is not a valid replace-set (the contract is
+    replace/clear/omit - clear is ``[]``), so it is a field-keyed error rather than
+    iterating ``None`` into a ``TypeError``.
+    """
+    schema, (_GenreT, ShelfT, _BookT) = _build_book_schema()
+    shelf = _make_branch_shelf()
+    res = schema.execute_sync(
+        _CREATE_BOOK,
+        variable_values={
+            "d": {"title": "Dune", "shelfId": global_id_for(ShelfT, shelf.pk), "genres": None},
+        },
+    )
+    assert res.errors is None, res.errors
+    payload = res.data["createBook"]
+    assert payload["node"] is None
+    assert [e["field"] for e in payload["errors"]] == ["genres"]
+    assert not library_models.Book.objects.filter(title="Dune").exists()
+
+
+@pytest.mark.django_db
+def test_m2m_wrong_type_id_is_field_error():
+    """A wrong-type ``GlobalID`` anywhere in the M2M list -> ``FieldError`` on the M2M field (AR-H4).
+
+    A ``Shelf`` id passed where a ``Genre`` id is expected is type-checked against
+    the M2M target (``Genre``) and rejected as a ``FieldError`` on ``genres``,
+    before the visibility / assignment steps.
+    """
+    schema, (_GenreT, ShelfT, _BookT) = _build_book_schema()
+    shelf = _make_branch_shelf()
+    res = schema.execute_sync(
+        _CREATE_BOOK,
+        variable_values={
+            "d": {
+                "title": "Dune",
+                "shelfId": global_id_for(ShelfT, shelf.pk),
+                "genres": [global_id_for(ShelfT, shelf.pk)],  # a Shelf id, not a Genre id
+            },
+        },
+    )
+    assert res.errors is None, res.errors
+    payload = res.data["createBook"]
+    assert payload["node"] is None
+    assert [e["field"] for e in payload["errors"]] == ["genres"]
+    assert not library_models.Book.objects.filter(title="Dune").exists()
 
 
 # ---------------------------------------------------------------------------

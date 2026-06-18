@@ -28,8 +28,10 @@ import pytest
 import strawberry
 from apps.library import models as library_models
 from apps.products import models as product_models
+from apps.scalars import models as scalars_models
 from asgiref.sync import sync_to_async
 from django.db import IntegrityError
+from django.utils import timezone
 from strawberry import relay
 
 from django_strawberry_framework import (
@@ -1316,6 +1318,112 @@ def test_create_raw_pk_m2m_existing_id_succeeds():
     assert res.data["createBook"]["errors"] == []
     book = library_models.Book.objects.get(title="Valid")
     assert set(book.genres.values_list("pk", flat=True)) == {genre.pk}
+
+
+# ---------------------------------------------------------------------------
+# Create-validation parity with Model.objects.create (feedback - empty-value
+# defaults #11) and naive-datetime tz-coercion (feedback #15).
+#
+# ``ScalarSpecimen`` (scalars app) has ``payload = JSONField(default=dict)``
+# (``blank=False``) and ``occurred_at = DateTimeField()``. Neither is reachable
+# via a live mutation (the scalars app exposes no write surface), so these are
+# package tests over the real model. The mutation is narrowed to the non-BigInt
+# scalar columns so the schema builds without the scalar_map config.
+# ---------------------------------------------------------------------------
+
+_SPEC_UUID = "12345678-1234-5678-1234-567812345678"
+
+
+def _build_scalar_specimen_schema():
+    """Declare a ScalarSpecimen primary + a create mutation; return (schema, CreateSpec)."""
+
+    class SpecT(DjangoType, relay.Node):
+        class Meta:
+            model = scalars_models.ScalarSpecimen
+            fields = ("id", "label")
+            primary = True
+
+    class CreateSpec(DjangoMutation):
+        class Meta:
+            model = scalars_models.ScalarSpecimen
+            operation = "create"
+            fields = (
+                "label",
+                "occurred_on",
+                "occurred_at",
+                "occurred_time",
+                "external_id",
+                "payload",
+            )
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        create_spec = DjangoMutationField(CreateSpec)
+
+    finalize_django_types()
+    return _schema(Mutation), CreateSpec
+
+
+@pytest.mark.django_db
+def test_create_omitting_empty_value_default_field_succeeds():
+    """Omitting a ``JSONField(default=dict)`` (blank=False) on create succeeds (feedback #11).
+
+    The field is optional in the input (it has a default), so a client may omit it.
+    Before the fix, ``full_clean`` validated the model's own empty default (``{}`` is
+    in Django's ``empty_values``) and rejected it ("This field cannot be blank") -
+    stricter than ``Model.objects.create()``, which applies the default unvalidated.
+    Create now excludes unprovided fields from ``full_clean``, so the omission writes
+    the default cleanly.
+    """
+    schema, CreateSpec = _build_scalar_specimen_schema()
+    input_name = CreateSpec._input_class.__name__
+    res = schema.execute_sync(
+        f"mutation($d: {input_name}!){{ createSpec(data:$d){{ node{{ id }} errors{{ field messages }} }} }}",
+        variable_values={
+            "d": {
+                "label": "spec-omit-payload",
+                "occurredOn": "2024-01-01",
+                "occurredAt": "2024-01-01T12:00:00+00:00",
+                "occurredTime": "12:00:00",
+                "externalId": _SPEC_UUID,
+            },
+        },
+    )
+    assert res.errors is None, res.errors
+    assert res.data["createSpec"]["errors"] == []
+    assert res.data["createSpec"]["node"] is not None
+    assert scalars_models.ScalarSpecimen.objects.get(label="spec-omit-payload").payload == {}
+
+
+@pytest.mark.django_db
+def test_create_naive_datetime_input_is_made_timezone_aware():
+    """A naive datetime input is coerced to an aware datetime on create (feedback #15).
+
+    Under ``USE_TZ=True`` a naive datetime would trigger Django's naive-datetime
+    ``RuntimeWarning`` at save - which this suite's ``-W error`` config escalates to a
+    top-level error. The decode step makes a naive datetime aware (like DRF), so the
+    create succeeds warning-free and stores an aware value. (A regression would
+    surface as the escalated warning failing this test.)
+    """
+    schema, CreateSpec = _build_scalar_specimen_schema()
+    input_name = CreateSpec._input_class.__name__
+    res = schema.execute_sync(
+        f"mutation($d: {input_name}!){{ createSpec(data:$d){{ node{{ id }} errors{{ field messages }} }} }}",
+        variable_values={
+            "d": {
+                "label": "spec-naive-dt",
+                "occurredOn": "2024-01-01",
+                "occurredAt": "2024-01-01T12:00:00",  # naive: no offset
+                "occurredTime": "12:00:00",
+                "externalId": _SPEC_UUID,
+            },
+        },
+    )
+    assert res.errors is None, res.errors
+    assert res.data["createSpec"]["errors"] == []
+    row = scalars_models.ScalarSpecimen.objects.get(label="spec-naive-dt")
+    assert timezone.is_aware(row.occurred_at)
 
 
 # ---------------------------------------------------------------------------

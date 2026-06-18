@@ -383,3 +383,91 @@ def test_permission_classes_override_deny_blocks_permitted_caller():
     )
     assert res.errors is not None
     assert not product_models.Item.objects.filter(name="Nope").exists()
+
+
+@pytest.mark.django_db
+def test_async_has_permission_is_rejected_not_bypassed():
+    """An async ``has_permission`` raises SyncMisuseError, never a silent allow (feedback - async bypass).
+
+    A coroutine is truthy, so a naive ``if not has_permission(...)`` would treat an
+    async deny-check as ALLOW - an authorization bypass. The sync pipeline cannot
+    await the coroutine, so it is closed and raised as a ``SyncMisuseError`` (surfacing
+    as a top-level GraphQL error), and crucially NO row is written: the deny is
+    honored, not bypassed.
+    """
+
+    class AsyncDeny:
+        async def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            return False
+
+    schema, (CategoryT, _ItemT) = _build_auth_schema(create_permission_classes=[AsyncDeny])
+    cat = product_models.Category.objects.create(name="Cat-asyncdeny")
+    res = _execute(
+        schema,
+        _CREATE_Q,
+        AnonymousUser(),
+        {"d": {"name": "AsyncBlocked", "categoryId": global_id_for(CategoryT, cat.pk)}},
+    )
+    assert res.errors is not None
+    assert "coroutine" in res.errors[0].message.lower()
+    assert not product_models.Item.objects.filter(name="AsyncBlocked").exists()
+
+
+@pytest.mark.django_db
+def test_async_check_permission_override_is_rejected_not_bypassed():
+    """An async ``check_permission`` override raises SyncMisuseError, not a silent allow (feedback).
+
+    The override returns a coroutine; ``_authorize_or_raise`` closes it and raises
+    ``SyncMisuseError`` rather than treating the truthy coroutine as authorized. No
+    row is written.
+    """
+
+    class CategoryT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name")
+            primary = True
+
+    class ItemT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name")
+            primary = True
+
+    class AsyncCheckCreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+
+        async def check_permission(
+            self,
+            info,
+            operation,
+            data,
+            instance=None,
+        ):
+            return False
+
+    @strawberry.type
+    class Mutation:
+        create_item = DjangoMutationField(AsyncCheckCreateItem)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+    cat = product_models.Category.objects.create(name="Cat-asynccheck")
+    res = _execute(
+        schema,
+        _CREATE_Q,
+        AnonymousUser(),
+        {"d": {"name": "AsyncCheckBlocked", "categoryId": global_id_for(CategoryT, cat.pk)}},
+    )
+    assert res.errors is not None
+    assert "coroutine" in res.errors[0].message.lower()
+    assert not product_models.Item.objects.filter(name="AsyncCheckBlocked").exists()

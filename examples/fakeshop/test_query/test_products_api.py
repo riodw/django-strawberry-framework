@@ -356,6 +356,35 @@ def test_create_category_surrogate_in_nonunique_description_is_field_error_no_cr
 
 
 @pytest.mark.django_db(transaction=True)
+def test_create_category_explicit_null_on_nonnullable_description_is_field_error():
+    """An explicit ``null`` on the non-nullable ``description`` -> ``FieldError``, not a vague ``__all__`` (feedback #12).
+
+    ``Category.description`` is ``blank=True, null=False``. An explicit ``null`` slips
+    past ``full_clean`` (Django skips a blank-allowed field whose value is an empty
+    value) and would otherwise hit a NOT NULL ``IntegrityError`` at ``save()``,
+    surfacing as the generic ``"__all__"`` "A database constraint was violated." with
+    no field attribution. It is now rejected at decode as a field-keyed ``FieldError``
+    on ``description`` before any write; no row is created.
+    """
+    create_users(1)
+    client = _login_with_perm("view_category_1", "add_category")
+    before = models.Category.objects.count()
+
+    response = _post_graphql(
+        _CREATE_CATEGORY,
+        client=client,
+        variables={"d": {"name": "zzz_live_null_desc", "description": None}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createCategory"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["description"]
+    assert models.Category.objects.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
 def test_create_item_unique_constraint_envelope_uses_all_sentinel():
     """A duplicate ``(category, name)`` create returns a ``"__all__"``-keyed ``FieldError``.
 

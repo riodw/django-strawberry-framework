@@ -66,13 +66,17 @@ Slice 4, NOT this slice.
 
 from __future__ import annotations
 
+import datetime
+import inspect
 from enum import Enum
 from typing import Any
 
 import strawberry
 from asgiref.sync import sync_to_async
+from django.conf import settings
 from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 from graphql import GraphQLError
 from strawberry import relay
 
@@ -83,7 +87,7 @@ from ..optimizer.extension import (
 from ..registry import registry
 from ..relay import GlobalIDDecode, decode_model_global_id
 from ..utils.inputs import graphql_camel_name
-from ..utils.querysets import apply_type_visibility_sync, initial_queryset
+from ..utils.querysets import SyncMisuseError, apply_type_visibility_sync, initial_queryset
 from .inputs import NON_FIELD_ERROR_KEY, FieldError, payload_object_slot
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
@@ -96,6 +100,20 @@ _MUTATION_ASYNC_RECOURSE = (
     "A DjangoMutation runs its ORM pipeline synchronously (under one "
     "sync_to_async call on the async surface), so it cannot await an async "
     "get_queryset hook; redefine the target type's get_queryset as a sync method."
+)
+
+# The recourse appended to a ``SyncMisuseError`` raised when a permission hook
+# (``check_permission`` / a ``permission_classes`` entry's ``has_permission``)
+# returns a coroutine. Write authorization runs synchronously in the same sync
+# pipeline (spec-036 Decision 15), so an async permission hook can never be
+# awaited here - and silently treating its truthy coroutine as "allow" is an
+# authorization BYPASS (feedback - async permission bypass). It is rejected
+# loud, the same discipline ``apply_type_visibility_sync`` applies to an async
+# ``get_queryset``.
+_PERMISSION_ASYNC_RECOURSE = (
+    "A DjangoMutation runs its permission check synchronously, so it cannot await "
+    "an async permission hook; redefine has_permission / check_permission as a sync "
+    "method returning a bool."
 )
 
 
@@ -159,12 +177,60 @@ def _decode_relations(
             scalar_and_fk_attrs[python_name] = pk
             continue
 
+        null_error = _explicit_null_error(model, python_name, graphql_name, value)
+        if null_error is not None:
+            return {}, [], null_error
         text_error = _unencodable_text_error(graphql_name, value)
         if text_error is not None:
             return {}, [], text_error
-        scalar_and_fk_attrs[python_name] = _raw_choice_value(value)
+        scalar_and_fk_attrs[python_name] = _make_aware_if_naive(_raw_choice_value(value))
 
     return scalar_and_fk_attrs, m2m_assignments, None
+
+
+def _explicit_null_error(
+    model: type,
+    python_name: str,
+    field_name: str,
+    value: Any,
+) -> FieldError | None:
+    """Reject an explicit ``null`` on a non-nullable scalar column (feedback - explicit null).
+
+    A provided ``None`` (``UNSET`` is already stripped) on a ``null=False`` column is
+    a problem ``full_clean`` does NOT reliably catch: Django's ``clean_fields`` SKIPS a
+    ``blank=True`` field whose value is an empty value, and ``None`` is an empty value,
+    so a ``blank=True, null=False`` column (e.g. a ``TextField(blank=True)``) slips past
+    validation and only fails at ``save()`` as a NOT NULL ``IntegrityError`` - surfacing
+    as the generic ``"__all__"`` "A database constraint was violated." with no field
+    attribution, after a write was attempted. Reject it at decode as a field-keyed
+    ``FieldError`` so the client learns WHICH field, before any DB work. A ``null=True``
+    column treats ``None`` as a valid clear and is left alone; a non-scalar attr (FK /
+    M2M) is handled by its own branch before this point, so ``python_name`` here is
+    always a concrete scalar column of ``model``.
+    """
+    if value is not None:
+        return None
+    if model._meta.get_field(python_name).null:
+        return None
+    return FieldError(field=field_name, messages=["This field cannot be null."])
+
+
+def _make_aware_if_naive(value: Any) -> Any:
+    """Make a naive ``datetime`` input timezone-aware under ``USE_TZ`` (feedback - naive datetime).
+
+    Strawberry's ``DateTime`` scalar parses a naive ISO string into a naive
+    ``datetime``. Under ``USE_TZ=True`` Django emits a naive-datetime
+    ``RuntimeWarning`` at ``save()`` - which a ``-W error`` test config escalates to a
+    top-level GraphQL error, and which otherwise silently stores an ambiguous
+    wall-clock value interpreted as the default timezone. Coerce a naive ``datetime``
+    to the current timezone here (what DRF's ``DateTimeField`` does), so the write is
+    unambiguous and warning-free. A ``date`` / ``time`` value is not a ``datetime``
+    instance (``date`` is the parent, not the child), and an already-aware ``datetime``
+    is left unchanged.
+    """
+    if settings.USE_TZ and isinstance(value, datetime.datetime) and timezone.is_naive(value):
+        return timezone.make_aware(value)
+    return value
 
 
 def _unencodable_text_error(field_name: str, value: Any) -> FieldError | None:
@@ -746,8 +812,12 @@ def _validate_save_assign_refetch_payload(
     ``IntegrityError`` into the envelope), M2M assignment, the optimizer-planned
     re-fetch by pk, and the success payload. Single-sourcing it here means a future
     change to write finalization, save-error mapping, M2M timing, or the post-write
-    re-fetch is made ONCE rather than patched in both branches. ``exclude`` is
-    ``None`` for create (validate all fields) and the AR-H2-aware list for update.
+    re-fetch is made ONCE rather than patched in both branches. ``exclude`` is the
+    AR-H2-aware unprovided-field list for BOTH create and update: create excludes
+    unprovided fields so their model defaults are not validated (mirroring
+    ``Model.objects.create()``), update excludes unprovided fields so an unsent
+    column keeps its stored value - both keep validating any unprovided field
+    co-participating in a unique constraint with a provided one.
     """
     error_payload = _full_clean_or_payload(
         instance,
@@ -776,7 +846,20 @@ def _run_create(
     slot: str,
     payload_cls: type,
 ) -> Any:
-    """The ``create`` branch: authorize -> build -> [validate -> save -> M2M -> re-fetch -> payload]."""
+    """The ``create`` branch: authorize -> build -> [validate -> save -> M2M -> re-fetch -> payload].
+
+    ``full_clean`` excludes the fields the input did NOT provide (the AR-H2-aware
+    set, minus any unprovided field co-participating in a unique constraint with a
+    provided field). An unprovided field gets its MODEL default, which
+    ``Model.objects.create()`` applies WITHOUT validation; validating it here is
+    stricter than the contract and rejects a legitimate omission - e.g. a
+    ``JSONField(default=dict)`` (``blank=False``) fails ``full_clean`` ("cannot be
+    blank") on its own empty default when omitted (feedback - empty-value defaults).
+    Excluding unprovided fields mirrors ``create()`` while still validating every
+    PROVIDED value and every uniqueness constraint a provided field touches. A
+    genuinely required field (no default, ``null=False``, ``blank=False``) is
+    input-required, so it can never be unprovided here.
+    """
     _authorize_or_raise(mutation_cls, info, "create", data, instance=None)
 
     scalar_and_fk_attrs, m2m_assignments, decode_error = _decode_relations(model, data, info)
@@ -784,9 +867,11 @@ def _run_create(
         return _build_payload(payload_cls, slot, None, [decode_error])
 
     instance = model(**scalar_and_fk_attrs)
+    provided = _provided_attr_names(model, scalar_and_fk_attrs, m2m_assignments)
+    exclude = _unprovided_exclude(model, provided)
     return _validate_save_assign_refetch_payload(
         instance,
-        exclude=None,
+        exclude=exclude,
         m2m_assignments=m2m_assignments,
         primary_type=primary_type,
         info=info,
@@ -889,8 +974,23 @@ def _authorize_or_raise(
     field-keyed validation envelope - AR-H3 / Decision 15). The mutation instance
     is constructed once so an object-level ``check_permission`` override can hold
     per-request state.
+
+    A coroutine return - an ``async def check_permission`` override - is NOT
+    silently treated as "allow": a coroutine is truthy, so ``if not coroutine``
+    would never deny, letting an async deny-check pass (an authorization bypass,
+    feedback). It is closed and raised as a ``SyncMisuseError`` (the async hook
+    can never be awaited in this sync pipeline), mirroring ``get_queryset``'s
+    discipline. The async-``has_permission`` case is rejected one level down, in
+    ``check_permission`` itself.
     """
-    if not mutation_cls().check_permission(info, operation, data, instance):
+    allowed = mutation_cls().check_permission(info, operation, data, instance)
+    if inspect.iscoroutine(allowed):
+        allowed.close()
+        raise SyncMisuseError(
+            f"{mutation_cls.__name__}.check_permission returned a coroutine in a sync "
+            f"mutation context. {_PERMISSION_ASYNC_RECOURSE}",
+        )
+    if not allowed:
         raise GraphQLError(
             f"Not authorized to {operation} {mutation_cls._primary_type.__name__}.",
         )

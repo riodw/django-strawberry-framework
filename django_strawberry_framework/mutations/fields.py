@@ -59,7 +59,6 @@ from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import ConfigurationError
 from .inputs import (
-    CREATE,
     INPUTS_MODULE_PATH,
     editable_input_fields,
     mutation_input_type_name,
@@ -96,19 +95,22 @@ def _validate_mutation_target(mutation_cls: Any) -> None:
 def _input_type_name(meta: Any) -> str:
     """Return the generated input class name for a create / update mutation (spec-036 Decision 14).
 
-    Mirrors the bind's name choice (``sets.py::_materialize_input_for``): a
-    consumer ``input_class`` / ``partial_input_class`` materializes under its own
-    ``__name__``; otherwise the generated name is
-    ``mutation_input_type_name(...)`` - the canonical ``<Model>Input`` /
-    ``<Model>PartialInput`` for the full shape, or a deterministic shape-derived
-    name for a narrowed shape. Computed at construction from the same selectors
-    the generator uses so the lazy ``data:`` ref names the exact class the bind
+    Mirrors the bind's name choice (``sets.py::_materialize_input_for`` /
+    ``_materialize_merged_input``): the input class - generated OR consumer-merged -
+    materializes under the **canonical shape name** ``mutation_input_type_name(...)``
+    (the ``<Model>Input`` / ``<Model>PartialInput`` for the full shape, or a
+    deterministic shape-derived name for a narrowed shape). A consumer
+    ``input_class`` / ``partial_input_class`` is a representation override that does
+    NOT change the effective field set, so the merged class takes the SAME canonical
+    name (``_materialize_merged_input`` names + materializes the merge under
+    ``shape.type_name``, NOT the consumer class's ``__name__``) - the lazy ``data:``
+    ref must therefore name the canonical shape, never ``consumer_input.__name__``
+    (which is never a module global, so a stale ref there fails the
+    ``strawberry.lazy`` resolve at schema build). Computed at construction from the
+    same selectors the generator uses so the ref names the exact class the bind
     materializes.
     """
     operation_kind = _OPERATION_INPUT_KIND[meta.operation]
-    consumer_input = meta.input_class if operation_kind == CREATE else meta.partial_input_class
-    if consumer_input is not None:
-        return consumer_input.__name__
     effective_field_names = tuple(
         field.name
         for field in editable_input_fields(meta.model, fields=meta.fields, exclude=meta.exclude)

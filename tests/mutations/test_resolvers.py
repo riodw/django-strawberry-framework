@@ -103,14 +103,34 @@ def _schema(mutation_type: type) -> strawberry.Schema:
 # ---------------------------------------------------------------------------
 
 
-def _build_item_schema(*, item_get_queryset=None):
-    """Declare Item/Category primaries + create/update/delete mutations; return (schema, types)."""
+def _build_item_schema(
+    *,
+    item_get_queryset=None,
+    category_get_queryset=None,
+    input_cls=None,
+    partial_input_cls=None,
+):
+    """Declare Item/Category primaries + create/update/delete mutations; return (schema, types).
 
-    class CategoryT(DjangoType, relay.Node):
-        class Meta:
-            model = product_models.Category
-            fields = ("id", "name")
-            primary = True
+    ``item_get_queryset`` injects a visibility hook on the ``Item`` primary type;
+    ``category_get_queryset`` does the same on the ``Category`` primary type so the FK
+    relation-visibility check (feedback P1) can be driven. Optional ``input_cls`` /
+    ``partial_input_cls`` thread a consumer ``Meta.input_class`` /
+    ``Meta.partial_input_class`` onto the create / update mutation so the CR-2 merge is
+    exercised end-to-end; omitted, the generated inputs are used. One builder for all
+    products-mutation resolver tests (DRY-4).
+    """
+
+    category_body: dict = {
+        "Meta": type(
+            "Meta",
+            (),
+            {"model": product_models.Category, "fields": ("id", "name"), "primary": True},
+        ),
+    }
+    if category_get_queryset is not None:
+        category_body["get_queryset"] = category_get_queryset
+    CategoryT = type("CategoryT", (DjangoType, relay.Node), category_body)
 
     item_meta_attrs = {
         "model": product_models.Item,
@@ -122,23 +142,29 @@ def _build_item_schema(*, item_get_queryset=None):
         item_body["get_queryset"] = item_get_queryset
     ItemT = type("ItemT", (DjangoType, relay.Node), item_body)
 
-    class CreateItem(DjangoMutation):
-        class Meta:
-            model = product_models.Item
-            operation = "create"
-            permission_classes = [_AllowAll]
+    create_meta = {
+        "model": product_models.Item,
+        "operation": "create",
+        "permission_classes": [_AllowAll],
+    }
+    if input_cls is not None:
+        create_meta["input_class"] = input_cls
+    update_meta = {
+        "model": product_models.Item,
+        "operation": "update",
+        "permission_classes": [_AllowAll],
+    }
+    if partial_input_cls is not None:
+        update_meta["partial_input_class"] = partial_input_cls
+    delete_meta = {
+        "model": product_models.Item,
+        "operation": "delete",
+        "permission_classes": [_AllowAll],
+    }
 
-    class UpdateItem(DjangoMutation):
-        class Meta:
-            model = product_models.Item
-            operation = "update"
-            permission_classes = [_AllowAll]
-
-    class DeleteItem(DjangoMutation):
-        class Meta:
-            model = product_models.Item
-            operation = "delete"
-            permission_classes = [_AllowAll]
+    CreateItem = type("CreateItem", (DjangoMutation,), {"Meta": type("Meta", (), create_meta)})
+    UpdateItem = type("UpdateItem", (DjangoMutation,), {"Meta": type("Meta", (), update_meta)})
+    DeleteItem = type("DeleteItem", (DjangoMutation,), {"Meta": type("Meta", (), delete_meta)})
 
     @strawberry.type
     class Mutation:
@@ -148,6 +174,21 @@ def _build_item_schema(*, item_get_queryset=None):
 
     finalize_django_types()
     return _schema(Mutation), (CategoryT, ItemT)
+
+
+def assert_mutation_field_error(result, payload_key, field):
+    """Assert the common in-band mutation error envelope (DRY-4).
+
+    Pins the shape every in-band failure test shares: no top-level GraphQL errors
+    (the failure is in-band), a null object slot, and exactly one ``FieldError`` on
+    ``field``. Returns the payload so a caller can add test-specific assertions
+    (e.g. "no row was written"); those DB side-effect checks stay inline.
+    """
+    assert result.errors is None, result.errors
+    payload = result.data[payload_key]
+    assert payload["node"] is None
+    assert [e["field"] for e in payload["errors"]] == [field], payload["errors"]
+    return payload
 
 
 _CREATE = (
@@ -242,10 +283,7 @@ def test_full_clean_validation_error_yields_null_object_envelope():
         _CREATE,
         variable_values={"d": {"name": "", "categoryId": global_id_for(CategoryT, cat.pk)}},
     )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["name"]
+    assert_mutation_field_error(res, "createItem", "name")
 
 
 @pytest.mark.django_db
@@ -313,13 +351,20 @@ def test_coerce_lookup_id_rejects_non_globalid():
     against the target model, and a malformed string cannot decode at all, so both
     are rejected as a ``FieldError`` on ``id`` BEFORE any pk lookup - never coerced
     to a bare pk that would skip the AR-H4 type guard or raise a Django coercion
-    error at ``.get(pk=...)`` (feedback #1). ``decode_global_id`` rejects an
-    undecodable id before the target-model dereference, so ``target_type=None`` is
-    safe here. The end-to-end reachable forms are pinned live; this is the unit pin
-    of the no-passthrough contract.
+    error at ``.get(pk=...)`` (feedback #1). ``_coerce_lookup_id`` is always called
+    with the mutation's resolved primary type, so this unit pin passes a real bound
+    ``ItemT`` (the shared ``decode_model_global_id`` reads ``target_type``'s model
+    up front); decode fails on the malformed input with no pk lookup or DB read.
     """
+
+    class ItemT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name")
+            primary = True
+
     for bad in ("5", "not-a-global-id", 5):
-        node_id, error = resolvers._coerce_lookup_id(bad, None)
+        node_id, error = resolvers._coerce_lookup_id(bad, ItemT)
         assert node_id is None
         assert error is not None and error.field == "id"
 
@@ -362,10 +407,7 @@ def test_wrong_type_globalid_yields_field_error_no_cross_model_lookup():
         _CREATE,
         variable_values={"d": {"name": "New", "categoryId": wrong_gid}},
     )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"] is None
-    assert payload["errors"][0]["field"] == "categoryId"
+    assert_mutation_field_error(res, "createItem", "categoryId")
     # No cross-model coercion happened: no second Item was created under the
     # (collided) Category pk path.
     assert product_models.Item.objects.filter(name="New").count() == 0
@@ -377,9 +419,10 @@ def test_relation_unresolvable_type_global_id_yields_field_error():
 
     Distinct from the wrong-MODEL case (which decodes successfully then mismatches):
     here ``decode_global_id`` itself raises (the ``type_name`` resolves to no
-    installed / registered Relay-Node type), so ``_wrong_type_field_error`` maps the
-    decode failure to a ``FieldError`` on ``categoryId`` - the uniformly-field-keyed
-    malformed-relation-id branch, never a top-level error from inside the resolver.
+    installed / registered Relay-Node type), so ``decode_model_global_id`` returns
+    the ``DECODE_FAILED`` status and ``_decode_relation_id_set`` maps it to a
+    ``FieldError`` on ``categoryId`` - the uniformly-field-keyed malformed-relation-id
+    branch, never a top-level error from inside the resolver.
     """
     schema, (_CategoryT, _ItemT) = _build_item_schema()
     bogus = str(relay.GlobalID(type_name="nope.nonexistent", node_id="1"))
@@ -387,10 +430,7 @@ def test_relation_unresolvable_type_global_id_yields_field_error():
         _CREATE,
         variable_values={"d": {"name": "X", "categoryId": bogus}},
     )
-    assert res.errors is None, res.errors
-    payload = res.data["createItem"]
-    assert payload["node"] is None
-    assert payload["errors"][0]["field"] == "categoryId"
+    assert_mutation_field_error(res, "createItem", "categoryId")
     assert product_models.Item.objects.filter(name="X").count() == 0
 
 
@@ -409,10 +449,8 @@ def test_update_uncoercible_pk_in_wellformed_id_is_not_found_no_crash():
     schema, (_CategoryT, ItemT) = _build_item_schema()
     bad_id = global_id_for(ItemT, "abc")  # well-formed ItemT id, non-numeric node_id
     res = schema.execute_sync(_UPDATE, variable_values={"id": bad_id, "d": {"name": "X"}})
-    assert res.errors is None, res.errors  # NOT a top-level GraphQLError (CR-1)
-    payload = res.data["updateItem"]
-    assert payload["node"] is None
-    assert payload["errors"][0]["field"] == "id"
+    # NOT a top-level GraphQLError (CR-1) - an in-band not-found FieldError on ``id``.
+    assert_mutation_field_error(res, "updateItem", "id")
 
 
 @pytest.mark.django_db
@@ -431,11 +469,48 @@ def test_create_relation_uncoercible_pk_is_field_error_no_crash():
         _CREATE,
         variable_values={"d": {"name": "X", "categoryId": bad_cat}},
     )
-    assert res.errors is None, res.errors  # NOT a top-level GraphQLError (CR-1)
-    payload = res.data["createItem"]
-    assert payload["node"] is None
-    assert payload["errors"][0]["field"] == "categoryId"
+    # NOT a top-level GraphQLError (CR-1) - an in-band relation FieldError.
+    assert_mutation_field_error(res, "createItem", "categoryId")
     assert product_models.Item.objects.filter(name="X").count() == 0
+
+
+@pytest.mark.django_db
+def test_globalid_relation_override_flows_through_visibility_contract():
+    """A ``GlobalID`` relation override is still relation-visibility-checked (AR-M2 / Decision 10).
+
+    The bind-time type-lock (``sets.py::_validate_relation_override_types``) forces a
+    relation override to keep the generated ``relay.GlobalID`` id type precisely so the
+    override CANNOT bypass the AR-H4 type-check / Decision-10 visibility contract a
+    raw-pk override would have skipped. This pins the end-to-end guarantee: a
+    ``createItem`` whose ``categoryId`` names a ``Category`` hidden by
+    ``Category.get_queryset`` is a ``FieldError`` on ``categoryId`` (hidden
+    indistinguishable from missing, no existence leak) - even though ``categoryId``
+    came from a consumer ``input_class`` override, not the generated input. A raw-pk
+    override would have been passed through unchecked and silently attached the
+    unseeable row; the type-lock is what guarantees this path is reached.
+    """
+
+    @classmethod
+    def _hide_private(cls, queryset, info):
+        return queryset.filter(is_private=False)
+
+    @strawberry.input
+    class GidItemInput:
+        category_id: relay.GlobalID = strawberry.field(description="custom category ref")
+
+    schema, (CategoryT, _ItemT) = _build_item_schema(
+        category_get_queryset=_hide_private,
+        input_cls=GidItemInput,
+    )
+    hidden = product_models.Category.objects.create(name=_category_name(), is_private=True)
+    res = schema.execute_sync(
+        _CREATE,
+        variable_values={
+            "d": {"name": "New", "categoryId": global_id_for(CategoryT, hidden.pk)},
+        },
+    )
+    assert_mutation_field_error(res, "createItem", "categoryId")
+    assert product_models.Item.objects.filter(name="New").count() == 0
 
 
 @pytest.mark.django_db
@@ -453,10 +528,7 @@ def test_hidden_row_update_is_not_found_no_existence_leak():
         _UPDATE,
         variable_values={"id": _item_gid(ItemT, hidden.pk), "d": {"name": "Leak"}},
     )
-    assert res.errors is None, res.errors
-    payload = res.data["updateItem"]
-    assert payload["node"] is None
-    assert payload["errors"][0]["field"] == "id"
+    assert_mutation_field_error(res, "updateItem", "id")
     # The hidden row was not mutated.
     hidden.refresh_from_db()
     assert hidden.name == "Secret"
@@ -922,10 +994,7 @@ def test_m2m_hidden_related_id_is_field_error():
             },
         },
     )
-    assert res.errors is None, res.errors
-    payload = res.data["createBook"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["genres"]
+    assert_mutation_field_error(res, "createBook", "genres")
     assert not library_models.Book.objects.filter(title="Dune").exists()
 
 
@@ -946,10 +1015,7 @@ def test_m2m_explicit_null_is_field_error():
             "d": {"title": "Dune", "shelfId": global_id_for(ShelfT, shelf.pk), "genres": None},
         },
     )
-    assert res.errors is None, res.errors
-    payload = res.data["createBook"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["genres"]
+    assert_mutation_field_error(res, "createBook", "genres")
     assert not library_models.Book.objects.filter(title="Dune").exists()
 
 
@@ -973,10 +1039,7 @@ def test_m2m_wrong_type_id_is_field_error():
             },
         },
     )
-    assert res.errors is None, res.errors
-    payload = res.data["createBook"]
-    assert payload["node"] is None
-    assert [e["field"] for e in payload["errors"]] == ["genres"]
+    assert_mutation_field_error(res, "createBook", "genres")
     assert not library_models.Book.objects.filter(title="Dune").exists()
 
 
@@ -1014,53 +1077,6 @@ def test_m2m_uncoercible_pk_id_is_field_error_no_crash():
 # ---------------------------------------------------------------------------
 
 
-def _build_item_schema_with_input_class(*, input_cls=None, partial_input_cls=None):
-    """Declare Item/Category primaries + a create/update mutation using a consumer input.
-
-    Mirrors ``_build_item_schema`` but threads a consumer ``Meta.input_class`` /
-    ``Meta.partial_input_class`` so the merge (CR-2) is exercised end-to-end through
-    the bind + schema execution.
-    """
-
-    class CategoryT(DjangoType, relay.Node):
-        class Meta:
-            model = product_models.Category
-            fields = ("id", "name")
-            primary = True
-
-    class ItemT(DjangoType, relay.Node):
-        class Meta:
-            model = product_models.Item
-            fields = ("id", "name", "category")
-            primary = True
-
-    create_meta = {
-        "model": product_models.Item,
-        "operation": "create",
-        "permission_classes": [_AllowAll],
-    }
-    if input_cls is not None:
-        create_meta["input_class"] = input_cls
-    update_meta = {
-        "model": product_models.Item,
-        "operation": "update",
-        "permission_classes": [_AllowAll],
-    }
-    if partial_input_cls is not None:
-        update_meta["partial_input_class"] = partial_input_cls
-
-    CreateItem = type("CreateItem", (DjangoMutation,), {"Meta": type("Meta", (), create_meta)})
-    UpdateItem = type("UpdateItem", (DjangoMutation,), {"Meta": type("Meta", (), update_meta)})
-
-    @strawberry.type
-    class Mutation:
-        create_item = DjangoMutationField(CreateItem)
-        update_item = DjangoMutationField(UpdateItem)
-
-    finalize_django_types()
-    return _schema(Mutation), (CategoryT, ItemT)
-
-
 @pytest.mark.django_db
 def test_create_through_merged_input_class_accepts_generated_remainder():
     """A partial consumer ``input_class`` still accepts the generated ``categoryId`` and writes (CR-2).
@@ -1075,7 +1091,7 @@ def test_create_through_merged_input_class_accepts_generated_remainder():
     class CustomItemInput:
         name: str = strawberry.field(description="A custom-described name")
 
-    schema, (CategoryT, _ItemT) = _build_item_schema_with_input_class(input_cls=CustomItemInput)
+    schema, (CategoryT, _ItemT) = _build_item_schema(input_cls=CustomItemInput)
     cat = product_models.Category.objects.create(name=_category_name())
     res = schema.execute_sync(
         _CREATE,
@@ -1096,9 +1112,7 @@ def test_update_through_merged_partial_input_class_accepts_generated_remainder()
     class CustomItemPartial:
         name: str | None = strawberry.field(default=strawberry.UNSET, description="custom partial")
 
-    schema, (_CategoryT, ItemT) = _build_item_schema_with_input_class(
-        partial_input_cls=CustomItemPartial,
-    )
+    schema, (_CategoryT, ItemT) = _build_item_schema(partial_input_cls=CustomItemPartial)
     cat = product_models.Category.objects.create(name=_category_name())
     item = product_models.Item.objects.create(name="Old", category=cat)
     res = schema.execute_sync(
@@ -1208,7 +1222,7 @@ def test_relation_field_index_excludes_generic_foreign_key():
     """``_relation_field_index`` does not index a ``GenericForeignKey`` as a FK (spec-036 L3-1).
 
     A GFK reports ``is_relation=True`` but ``column=None`` / ``related_model=None``,
-    so it must never enter ``fk_by_attr`` (where ``_wrong_type_field_error`` would
+    so it must never enter ``fk_by_attr`` (where ``_decode_relation_id_set`` would
     later compare a decoded model against ``related_model=None``). The real
     ``content_type`` FK is still indexed.
     """

@@ -545,6 +545,90 @@ def test_bind_merges_consumer_partial_input_class_for_update():
     assert fields["name"].description == "custom partial"  # consumer field honored
 
 
+def test_bind_rejects_raw_pk_relation_override_for_relay_target():
+    """A raw-pk relation override for a Relay-Node target raises at bind (AR-M2 / Decision 10).
+
+    ``Category`` has a primary Relay-Node type, so the generated ``category_id`` input
+    is a ``relay.GlobalID`` that is type-checked (AR-H4) AND visibility-checked through
+    ``Category``'s ``get_queryset`` (Decision 10 / feedback P1) at decode. A consumer
+    ``input_class`` declaring ``category_id: int`` (a raw pk) would, at decode, be seen
+    as a non-``GlobalID`` value and passed through as a raw pk - bypassing both checks
+    and letting a permitted writer attach a ``Category`` row they could not *see*. The
+    bind rejects it fail-loud (the AR-M2 posture).
+
+    Enforced at finalization, not class creation: whether ``Category`` has a primary
+    Relay-Node type is a ``registry.get`` lookup only reliably populated at the
+    phase-2.5 bind (``_validate_input_class`` name-checks at class creation but cannot
+    know the id type then - it passes ``related_primary_type=None``).
+    """
+    _declare_products_primaries()
+
+    @strawberry.input
+    class RawPkItemInput:
+        name: str
+        category_id: int  # raw pk: would bypass the GlobalID type/visibility contract
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            input_class = RawPkItemInput
+
+    with pytest.raises(ConfigurationError, match="non-GlobalID id type"):
+        finalize_django_types()
+
+
+def test_bind_rejects_raw_pk_relation_override_on_partial_input():
+    """The type-lock applies to ``partial_input_class`` (update) too (AR-M2 / Decision 10)."""
+    _declare_products_primaries()
+
+    @strawberry.input
+    class RawPkItemPartial:
+        category_id: int | None = strawberry.field(default=strawberry.UNSET)
+
+    class UpdateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "update"
+            partial_input_class = RawPkItemPartial
+
+    with pytest.raises(ConfigurationError, match="non-GlobalID id type"):
+        finalize_django_types()
+
+
+def test_bind_accepts_globalid_relation_override_for_relay_target():
+    """A relation override that keeps the generated ``GlobalID`` id type binds clean (AR-M2).
+
+    The contract-compliant form: the consumer customizes the relation field's
+    representation (here a description) while keeping the ``relay.GlobalID`` id type, so
+    the AR-H4 type-check and the Decision-10 visibility contract still ride the merged
+    field. The merge honors the consumer's field, and the generator fills the remainder.
+    """
+    from django_strawberry_framework.mutations.inputs import _materialized_names
+
+    _declare_products_primaries()
+
+    @strawberry.input
+    class GidItemInput:
+        category_id: strawberry.relay.GlobalID = strawberry.field(
+            description="custom category ref",
+        )
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            input_class = GidItemInput
+
+    finalize_django_types()
+
+    merged = _materialized_names["ItemInput"]
+    assert CreateItem._input_class is merged
+    fields = {f.python_name: f for f in merged.__strawberry_definition__.fields}
+    assert fields["category_id"].description == "custom category ref"  # consumer field honored
+    assert "name" in fields  # generator filled the rest
+
+
 def test_bind_dedupes_identical_full_shapes():
     """Two create mutations over the same model with the full shape share one ``ItemInput``."""
     _declare_products_primaries()

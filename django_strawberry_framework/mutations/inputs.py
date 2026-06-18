@@ -36,7 +36,7 @@ symmetric by construction (spec-036 Decision 6).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
 import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS
@@ -339,6 +339,74 @@ def mutation_input_type_name(
     return f"{base}{token}{suffix}"
 
 
+class MutationInputShape(NamedTuple):
+    """The single derived identity of a generated input shape (spec-036 Decision 6 / DRY-1).
+
+    Bundles every value that derives from the shape identity tuple ``(model,
+    operation_kind, frozenset(effective field names))`` so the generator, the
+    bind cache, and the merge path all read ONE computation instead of each
+    re-walking ``editable_input_fields`` and reassembling the name / key
+    independently (the DRY-1 drift point: a divergent re-spelling could make the
+    bind cache key disagree with the generated type name).
+
+    - ``selected`` - the selected editable ``models.Field`` objects (narrowed by
+      ``fields`` / ``exclude``), in declaration order, the generator emits from.
+    - ``full_field_names`` - the model's COMPLETE editable field-name set (the
+      canonical-vs-narrowed comparison basis for the name).
+    - ``effective_field_names`` - ``frozenset`` of the selected names (the
+      identity component + cache-key component).
+    - ``type_name`` - the generated GraphQL/class name (canonical ``<Model>Input``
+      for the full shape, deterministic shape-derived name when narrowed).
+    - ``cache_key`` - ``(model, operation_kind, effective_field_names)``, the
+      ``_shape_build_cache`` key the bind dedupes identical shapes on.
+    """
+
+    model: type[models.Model]
+    operation_kind: str
+    selected: tuple[models.Field, ...]
+    full_field_names: tuple[str, ...]
+    effective_field_names: frozenset[str]
+    type_name: str
+    cache_key: tuple[Any, ...]
+
+
+def mutation_input_shape(
+    model: type[models.Model],
+    operation_kind: str,
+    *,
+    fields: tuple[str, ...] | None = None,
+    exclude: tuple[str, ...] | None = None,
+) -> MutationInputShape:
+    """Compute the one shape descriptor the generator + bind + merge all consume (DRY-1).
+
+    Single-sources the editable-field walk (``editable_input_fields`` for the
+    selected set AND the full set), the effective-name frozenset, the generated
+    ``type_name`` (via ``mutation_input_type_name``), and the
+    ``_shape_build_cache`` key. ``build_mutation_input`` calls this for its
+    selected fields + name; ``mutations/sets.py``'s bind calls it for the cache key
+    and the merged-input name - so the name, the key, and the spec identity tuple
+    can never drift apart.
+    """
+    selected = tuple(editable_input_fields(model, fields=fields, exclude=exclude))
+    full_field_names = tuple(field.name for field in editable_input_fields(model))
+    effective_field_names = frozenset(field.name for field in selected)
+    type_name = mutation_input_type_name(
+        model,
+        operation_kind,
+        tuple(field.name for field in selected),
+        full_field_names=full_field_names,
+    )
+    return MutationInputShape(
+        model=model,
+        operation_kind=operation_kind,
+        selected=selected,
+        full_field_names=full_field_names,
+        effective_field_names=effective_field_names,
+        type_name=type_name,
+        cache_key=(model, operation_kind, effective_field_names),
+    )
+
+
 def build_mutation_input(
     model: type[models.Model],
     *,
@@ -347,6 +415,7 @@ def build_mutation_input(
     fields: tuple[str, ...] | None = None,
     exclude: tuple[str, ...] | None = None,
     overrides: frozenset[str] | None = None,
+    shape: MutationInputShape | None = None,
 ) -> type:
     """Build the ``<Model>Input`` / ``<Model>PartialInput`` ``@strawberry.input`` class.
 
@@ -362,20 +431,22 @@ def build_mutation_input(
     honored, not clobbered. In Slice 1 the seam is exercised directly; Slice 2
     wires it from ``Meta.input_class``.
 
+    ``shape`` is the precomputed ``MutationInputShape`` (DRY-1): the bind passes
+    the one it already computed for the cache key so the selected fields + type
+    name are not re-walked; a direct caller omits it and it is derived from
+    ``(model, operation_kind, fields, exclude)``. Either way the selected set and
+    the generated name come from the SAME ``mutation_input_shape`` computation.
+
     Returns an UNMATERIALIZED ``@strawberry.input`` class. Slice 2's phase-2.5
     bind calls ``materialize_mutation_input_class`` to pin it as a module global.
     """
     del primary_type  # reserved: relation-id strategy resolves the RELATED primary itself.
     is_create = operation_kind == CREATE
-    selected = editable_input_fields(model, fields=fields, exclude=exclude)
+    if shape is None:
+        shape = mutation_input_shape(model, operation_kind, fields=fields, exclude=exclude)
+    selected = shape.selected
+    type_name = shape.type_name
     overrides = overrides or frozenset()
-
-    type_name = mutation_input_type_name(
-        model,
-        operation_kind,
-        tuple(field.name for field in selected),
-        full_field_names=tuple(field.name for field in editable_input_fields(model)),
-    )
 
     triples: list[tuple[str, Any, dict[str, Any]]] = []
     for field in selected:

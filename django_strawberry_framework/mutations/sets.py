@@ -43,6 +43,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import strawberry
+
 from ..exceptions import ConfigurationError
 from ..registry import registry
 from .inputs import (
@@ -555,10 +557,12 @@ def _materialize_input_for(meta: _ValidatedMutationMeta, primary_type: type) -> 
     ``create`` builds the ``<Model>Input`` (``CREATE`` kind); ``update`` builds the
     ``<Model>PartialInput`` (``PARTIAL`` kind); ``delete`` is ``id:``-only and
     needs no input (spec-036 Decision 14). A consumer ``input_class`` /
-    ``partial_input_class`` substitutes for the generated one (already validated
-    at class creation); its field names are passed to ``build_mutation_input`` as
-    ``overrides`` so the generated columns it supplies are skipped (the spec-010
-    relation-override contract).
+    ``partial_input_class`` is **merged** with the generated input, NOT a wholesale
+    replacement (the spec-010 relation-override contract, spec-036 DoD line 51 /
+    line 336 / AR-M2): the consumer declares the field(s) it wants to customize
+    (using the generated naming scheme - validated at class creation), the
+    generator fills the rest of the editable shape, and the consumer's fields are
+    honored, never clobbered. See ``_materialize_merged_input``.
 
     Identical generated shapes dedupe to one class object: the shape identity is
     ``(model, operation kind, frozenset(effective field names))`` (spec-036
@@ -566,9 +570,10 @@ def _materialize_input_for(meta: _ValidatedMutationMeta, primary_type: type) -> 
     ``_shape_build_cache``; a later mutation with the identical shape reuses that
     cached object, so ``materialize_mutation_input_class`` sees the SAME class
     twice and dedupes idempotently (rather than a fresh, name-colliding object). A
-    consumer ``input_class`` is materialized under its consumer-chosen name, so a
-    clash with a different shape's name still raises the AR-M6 custom-input
-    collision.
+    consumer-merged input is materialized under the SAME canonical shape name (it
+    customizes representations of existing columns, it does not change the field
+    set), so two mutations resolving the same shape to two DIFFERENT representations
+    still raise the AR-M6 collision.
     """
     operation_kind = _OPERATION_INPUT_KIND.get(meta.operation)
     if operation_kind is None:
@@ -576,11 +581,7 @@ def _materialize_input_for(meta: _ValidatedMutationMeta, primary_type: type) -> 
 
     consumer_input = meta.input_class if operation_kind == CREATE else meta.partial_input_class
     if consumer_input is not None:
-        # A fully consumer-authored input replaces the generated one entirely; the
-        # bind materializes the consumer class under its own name so the lazy ref
-        # resolves and the AR-M6 collision check still covers it.
-        materialize_mutation_input_class(consumer_input.__name__, consumer_input)
-        return consumer_input
+        return _materialize_merged_input(meta, primary_type, operation_kind, consumer_input)
 
     # Key the cache on the EFFECTIVE field set, not the raw ``(fields, exclude)``
     # declaration: the generated name and the spec's type identity are derived
@@ -607,6 +608,56 @@ def _materialize_input_for(meta: _ValidatedMutationMeta, primary_type: type) -> 
         _shape_build_cache[shape_key] = input_cls
     materialize_mutation_input_class(input_cls.__name__, input_cls)
     return input_cls
+
+
+def _materialize_merged_input(
+    meta: _ValidatedMutationMeta,
+    primary_type: type,
+    operation_kind: str,
+    consumer_input: type,
+) -> type:
+    """Merge a consumer ``input_class`` with the generated remainder (spec-010 / AR-M2).
+
+    The consumer-authored ``@strawberry.input`` declares only the field(s) it
+    customizes (a custom scalar, validator, alias, description), using the
+    generated naming scheme (``_validate_input_class`` already pinned ``supplied
+    expected``). Those python-attr names are passed to ``build_mutation_input`` as
+    ``overrides`` so the generator emits every OTHER editable column and SKIPS the
+    consumer-authored ones - the generated remainder. The two are combined by
+    **class inheritance** (``strawberry.input(type(name, (consumer, remainder),
+    {}))``): Strawberry collects the union of both bases' fields, the consumer base
+    takes MRO precedence, and the consumer's field definitions are preserved
+    EXACTLY (annotation, default / required-ness, ``name=`` alias, description,
+    directives) rather than reconstructed from triples. Because ``overrides``
+    guarantees the two field sets are disjoint, there is no duplicate-field clash.
+
+    The merged class is named + materialized under the **canonical shape name**
+    (``remainder.__name__`` - ``build_mutation_input`` derives it from the full
+    selected field set, which still includes the overridden columns, so it is the
+    same ``<Model>Input`` / shape-derived name the all-generated path would use):
+    the consumer customizes representations of existing columns, it does NOT change
+    the shape identity ``(model, operation kind, frozenset(effective names))``. A
+    merged input is therefore NOT cached in ``_shape_build_cache`` (it is
+    mutation-specific), and if two mutations resolve the same shape to two
+    different representations they collide on that name and raise the AR-M6
+    ``ConfigurationError`` at ``materialize_mutation_input_class`` - the same
+    fail-loud the all-generated collision uses.
+    """
+    consumer_attrs = frozenset(
+        field.python_name for field in consumer_input.__strawberry_definition__.fields
+    )
+    remainder = build_mutation_input(
+        meta.model,
+        operation_kind=operation_kind,
+        primary_type=primary_type,
+        fields=meta.fields,
+        exclude=meta.exclude,
+        overrides=consumer_attrs,
+    )
+    shape_name = remainder.__name__
+    merged = strawberry.input(type(shape_name, (consumer_input, remainder), {}))
+    materialize_mutation_input_class(shape_name, merged)
+    return merged
 
 
 def _bind_mutation(mutation_cls: type) -> None:

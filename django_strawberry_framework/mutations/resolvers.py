@@ -20,13 +20,18 @@ and the load-bearing invariants this module owns:
   Decision 10 / feedback P1): a row the caller cannot see is the SAME field-keyed
   ``FieldError`` (hidden and missing indistinguishable, no existence leak), never
   silently attached. Applies to FK, OneToOne, and each M2M id (the M2M set is
-  checked in one query).
+  checked in one query). A well-formed id whose ``node_id`` is not a valid pk
+  literal for the related column is coerced to "not found" (the same
+  ``FieldError``) via ``_coerce_pk_or_none`` before the query, never a raw Django
+  ``ValueError`` (feedback CR-1).
 - **``update`` / ``delete`` locate runs through the target type's
   ``get_queryset`` for visibility only** (spec-036 Decision 10): a hidden row is
   not-found, indistinguishable from a genuinely missing row (no existence leak).
   The top-level ``id:`` is itself decoded + type-checked against the mutation's
   target model BEFORE the lookup (a malformed / unresolvable / wrong-model id is
-  a ``FieldError`` on ``id``, never coerced to a bare pk - feedback finding-#1).
+  a ``FieldError`` on ``id``, never coerced to a bare pk - feedback finding-#1),
+  and its ``node_id`` is coerced through the target pk field so an uncoercible
+  literal is not-found, never a raw Django ``ValueError`` (feedback CR-1).
 - **Write authorization is a separate seam** (spec-036 Decision 15): the pipeline
   calls the mutation's ``check_permission`` (which delegates to
   ``Meta.permission_classes``) and maps a ``False`` return to a top-level
@@ -75,6 +80,7 @@ from ..optimizer.extension import (
     mutation_payload_child_selections,
 )
 from ..registry import registry
+from ..relay import _coerce_pk_or_none
 from ..types.relay import decode_global_id
 from ..utils.inputs import graphql_camel_name
 from ..utils.querysets import apply_type_visibility_sync, initial_queryset
@@ -364,16 +370,32 @@ def _relation_visibility_error(
     one-element list, M2M the whole set (verified in one ``pk__in`` query). An
     ``async def get_queryset`` met here raises ``SyncMisuseError`` (the same sync
     discipline as the locate path).
+
+    ``decode_global_id`` validates payload SHAPE only, so a well-formed id can
+    still carry a ``node_id`` that is not a valid value for the related model's pk
+    column (e.g. ``"abc"`` for an integer pk). Each id is therefore coerced through
+    the related primary's pk field via ``_coerce_pk_or_none`` (the SAME single
+    source the node field uses) BEFORE the ``pk__in`` query: an uncoercible literal
+    is the uniform ``_relation_error`` (identifies no row - "not found", exactly
+    like the node field returns ``null``), never the raw Django ``ValueError``
+    (``"Field 'id' expected a number..."``) that would leak the pk column type and
+    surface as a top-level ``GraphQLError`` (feedback CR-1).
     """
     related_type = registry.get(related_model)
+    coerced_pks: list[Any] = []
+    for pk in pks:
+        coerced = _coerce_pk_or_none(related_type, pk)
+        if coerced is None:
+            return _relation_error(field_name)
+        coerced_pks.append(coerced)
     queryset = apply_type_visibility_sync(
         related_type,
         initial_queryset(related_type),
         info,
         _MUTATION_ASYNC_RECOURSE,
     )
-    visible = {str(pk) for pk in queryset.filter(pk__in=pks).values_list("pk", flat=True)}
-    if not {str(pk) for pk in pks} <= visible:
+    visible = {str(pk) for pk in queryset.filter(pk__in=coerced_pks).values_list("pk", flat=True)}
+    if not {str(pk) for pk in coerced_pks} <= visible:
         return _relation_error(field_name)
     return None
 
@@ -508,22 +530,29 @@ def _validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
     return [FieldError(field=NON_FIELD_ERROR_KEY, messages=list(exc.messages))]
 
 
-def _integrity_error_field_errors(model: type, provided_attrs: set[str]) -> list[FieldError]:
-    """Map a save-time ``IntegrityError`` race to the constraint fields (spec-036 Major-2).
+def _integrity_error_field_errors() -> list[FieldError]:
+    """Map a save-time ``IntegrityError`` to the ``"__all__"`` envelope (spec-036 Major-2).
 
-    A ``UniqueConstraint`` race that beat ``full_clean()``'s
-    ``validate_constraints()`` surfaces at ``save()`` as a backend-specific
-    ``IntegrityError`` with no clean field mapping. As a documented best-effort
-    fallback (not the normal unique path - covered by a mocked-``save()`` test),
-    the pipeline keys it to the ``"__all__"`` sentinel: the race is a constraint
-    violation, and the sentinel is the same model-level bucket
-    ``validate_constraints()`` would have used for a multi-field constraint.
+    The normal ``UniqueConstraint`` path is caught earlier by ``full_clean()``'s
+    ``validate_constraints()`` as a ``ValidationError`` with a clean field mapping
+    (Major-2). What reaches HERE is the residual: a constraint violation that beat
+    ``validate_constraints()`` - a ``UniqueConstraint`` race, but also a ``NOT
+    NULL`` / FK / ``CHECK`` ``IntegrityError`` that ``full_clean`` did not catch on
+    the normal path. The catch is ``except IntegrityError`` (broad), so the message
+    is the **honest superset** "A database constraint was violated." rather than
+    over-claiming "uniqueness" for a violation that may not be a uniqueness one
+    (feedback CR-3). As a documented best-effort fallback (covered by a
+    mocked-``save()`` test, not a real race), it keys to the ``"__all__"`` sentinel
+    - the same model-level bucket ``validate_constraints()`` uses for a multi-field
+    constraint. The decoded field set is intentionally not consulted: ``save()``'s
+    ``IntegrityError`` carries no reliable cross-backend field mapping, so a
+    per-field attribution would be guesswork (feedback CR-3 - dropped the unused
+    ``model`` / ``provided_attrs`` params rather than feign a refinement).
     """
-    del model, provided_attrs  # reserved for a future per-constraint refinement.
     return [
         FieldError(
             field=NON_FIELD_ERROR_KEY,
-            messages=["A uniqueness constraint was violated."],
+            messages=["A database constraint was violated."],
         ),
     ]
 
@@ -665,7 +694,7 @@ def _run_create(
     if error_payload is not None:
         return error_payload
 
-    write_error = _save_or_field_errors(instance, model, set(scalar_and_fk_attrs))
+    write_error = _save_or_field_errors(instance)
     if write_error is not None:
         return _build_payload(payload_cls, slot, None, write_error)
     _assign_m2m(instance, m2m_assignments)
@@ -712,7 +741,7 @@ def _run_update(
     if error_payload is not None:
         return error_payload
 
-    write_error = _save_or_field_errors(instance, model, provided)
+    write_error = _save_or_field_errors(instance)
     if write_error is not None:
         return _build_payload(payload_cls, slot, None, write_error)
     _assign_m2m(instance, m2m_assignments)
@@ -804,16 +833,12 @@ def _full_clean_or_payload(
     return None
 
 
-def _save_or_field_errors(
-    instance: Any,
-    model: type,
-    provided_attrs: set[str],
-) -> list[FieldError] | None:
+def _save_or_field_errors(instance: Any) -> list[FieldError] | None:
     """``save()`` the instance; map a race ``IntegrityError`` to the envelope else ``None`` (Major-2)."""
     try:
         instance.save()
     except IntegrityError:
-        return _integrity_error_field_errors(model, provided_attrs)
+        return _integrity_error_field_errors()
     return None
 
 
@@ -836,9 +861,15 @@ def _coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | Non
     never silently coerced to a bare pk that would target the same-pk row of the
     right model (feedback #1, including the malformed-string Django-coercion leak:
     a raw / malformed string never reaches ``.get(pk=...)``). A valid right-type
-    ``GlobalID`` yields its ``node_id``.
+    ``GlobalID`` then has its ``node_id`` coerced through the target's pk field via
+    ``_coerce_pk_or_none`` (the SAME single source the node field uses): a
+    well-formed id whose ``node_id`` is not a valid pk literal (e.g. ``"abc"`` for
+    an integer pk) is the not-found ``FieldError`` on ``id`` - identifies no row,
+    exactly like the node field returns ``null`` - never the raw Django
+    ``ValueError`` (``"Field 'id' expected a number..."``) that would leak the pk
+    column type and surface as a top-level ``GraphQLError`` (feedback CR-1).
 
-    Returns ``(node_id, None)`` on success or ``(None, FieldError)`` otherwise.
+    Returns ``(pk, None)`` on success or ``(None, FieldError)`` otherwise.
     """
     try:
         resolved_type, node_id = decode_global_id(id)
@@ -847,7 +878,10 @@ def _coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | Non
     target_model = target_type.__django_strawberry_definition__.model
     if resolved_type.__django_strawberry_definition__.model is not target_model:
         return None, _invalid_lookup_id_error()
-    return node_id, None
+    pk = _coerce_pk_or_none(resolved_type, node_id)
+    if pk is None:
+        return None, _not_found_error()
+    return pk, None
 
 
 def _not_found_error() -> FieldError:

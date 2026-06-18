@@ -299,14 +299,25 @@ def _scalar_input_annotation(field: models.Field, type_name: str) -> Any:
 
 
 def _pascalize_token(name: str) -> str:
-    """PascalCase a single field name for the shape-derived input-name suffix.
+    """Encode one field name as a single ``[A-Z][a-z0-9]*`` token for the input-name suffix.
 
-    Not ``utils/strings.py::pascal_case`` because that collapses underscores
-    across the WHOLE name; here each field name is one token whose interior
-    underscores must survive as case boundaries so distinct field sets never
-    collide (``is_private`` -> ``IsPrivate``).
+    A single leading capital with a fully-lowercased tail and underscores removed
+    (``is_private`` -> ``Isprivate``, ``category`` -> ``Category``). This shape is
+    load-bearing for the bare-concatenation suffix in ``mutation_input_type_name``:
+    because each token has NO interior capital and NO underscore, the concatenation
+    of tokens is uniquely decomposable at uppercase boundaries, so distinct field
+    sets never collide on one generated name.
+
+    Not ``utils/strings.py::pascal_case`` (which collapses underscores across the
+    whole name) and deliberately NOT the per-segment-capitalize form ``IsPrivate``:
+    an interior capital would make ``IsPrivate`` ambiguously re-decompose as the two
+    fields ``is`` + ``private``, which is the exact collision this guards against
+    (``("a_b", "c")`` -> ``AbC`` vs ``("a", "b_c")`` -> ``ABc``, distinct). It also
+    stays underscore-free so Strawberry's GraphQL name converter leaves a
+    PascalCase class name unchanged (an underscore would be mangled into a lowercased
+    segment tail in the GraphQL type name).
     """
-    return "".join(part.capitalize() for part in name.split("_") if part)
+    return name.replace("_", "").capitalize()
 
 
 def mutation_input_type_name(
@@ -325,9 +336,15 @@ def mutation_input_type_name(
     materialize ledger) while a different shape produces a different name.
 
     Identity is ``(model, operation_kind, frozenset(effective_field_names))``.
-    The narrowed-shape suffix is a sorted-token join of the effective field
-    names (deterministic, readable, and unique per field set). The full shape is
-    detected by comparing the effective set against ``full_field_names`` (the
+    The narrowed-shape suffix is the sorted-field-name tokens concatenated, each
+    token a single-leading-capital ``[A-Z][a-z0-9]*`` form (``_pascalize_token``).
+    That token shape makes the bare concatenation INJECTIVE per field set: with no
+    interior capital and no underscore in any token, the concatenation decomposes
+    uniquely at uppercase boundaries, so ``("a_b", "c")`` -> ``AbC`` and
+    ``("a", "b_c")`` -> ``ABc`` produce DISTINCT names (the per-segment-capitalize
+    form would collapse both onto ``ABC``, colliding on the generated GraphQL type
+    name and tripping the AR-M6 distinct-shape raise at materialize). The full shape
+    is detected by comparing the effective set against ``full_field_names`` (the
     complete editable set for the model), so a ``Meta.fields`` that happens to
     name every editable column still resolves to the canonical name.
     """
@@ -498,6 +515,23 @@ def build_mutation_input(
             field_kwargs["default"] = strawberry.UNSET
         triples.append((python_attr, annotation, field_kwargs))
 
+    if not triples and not overrides:
+        # An empty effective field set (``Meta.fields = ()``, an ``exclude`` that
+        # drops every editable column, or a model with no editable columns) would
+        # build an empty ``@strawberry.input``, which Strawberry rejects only at
+        # ``Schema(...)`` build with a raw ``ValueError: Input Object type
+        # <Name> must define one or more fields.`` Fail loud here as a framework
+        # ``ConfigurationError`` naming the mutation's model, before the schema
+        # build (spec-036 - empty input must fail at the framework boundary). A
+        # consumer ``input_class`` supplying field(s) keeps ``overrides`` non-empty,
+        # so a merged input whose generated remainder is empty is NOT rejected.
+        kind = "create" if operation_kind == CREATE else "update"
+        raise ConfigurationError(
+            f"DjangoMutation {kind} input for {model.__name__} has no fields; "
+            "Meta.fields / Meta.exclude narrowed the editable column set to empty "
+            "(or the model declares no editable columns). A mutation input must "
+            "define at least one field.",
+        )
     return build_strawberry_input_class(type_name, triples)
 
 

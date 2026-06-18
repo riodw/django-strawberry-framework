@@ -66,6 +66,7 @@ Slice 4, NOT this slice.
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any
 
 import strawberry
@@ -158,9 +159,26 @@ def _decode_relations(
             scalar_and_fk_attrs[python_name] = pk
             continue
 
-        scalar_and_fk_attrs[python_name] = value
+        scalar_and_fk_attrs[python_name] = _raw_choice_value(value)
 
     return scalar_and_fk_attrs, m2m_assignments, None
+
+
+def _raw_choice_value(value: Any) -> Any:
+    """Unwrap a choice-enum member to its raw Django choice value (spec-036 Decision 6).
+
+    A ``choices`` column resolves to the SAME generated Strawberry ``Enum`` on the
+    read ``DjangoType`` and the write input (the symmetric wire contract), so the
+    client's enum value arrives here as the ENUM MEMBER (e.g.
+    ``BookCirculationStatusEnum.available``), not the raw string. The member's
+    ``.value`` IS the Django choice value (``convert_choices_to_enum`` maps each
+    member to its choice value), so setting the member directly onto the model
+    would make ``full_clean()`` reject a perfectly valid choice (the member is not
+    ``== "available"``). Unwrapping to ``.value`` feeds Django the raw choice value
+    it stores and validates against. A non-enum scalar is passed through unchanged;
+    an explicit ``None`` (a provided null) stays ``None``.
+    """
+    return value.value if isinstance(value, Enum) else value
 
 
 def _relation_field_index(model: type) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -235,6 +253,15 @@ def _decode_relation_id_set(
     indistinguishable (no existence leak). A list is homogeneously typed (all
     ``GlobalID`` for a Relay target, all raw pk otherwise), so ``needs_visibility``
     is all-or-nothing and the whole coerced set is checked together.
+
+    A raw-pk **M2M** set carries no ``GlobalID`` visibility contract, but it is
+    still assigned post-save via ``instance.<m2m>.set(pks)``, which writes
+    through-table rows for WHATEVER pks it is handed - a nonexistent pk produces a
+    dangling through row (an invalid FK SQLite flags at teardown) and a false
+    "success" (feedback - raw-pk M2M accepts nonexistent ids). So a raw-pk M2M set
+    is existence-checked in one query before the assignment. A raw-pk FK needs no
+    such check: ``full_clean()`` validates FK existence against the column before
+    ``save()``; M2M is the only relation written outside ``full_clean``.
     """
     expected_model = relation_field.related_model
     pks: list[Any] = []
@@ -250,6 +277,10 @@ def _decode_relation_id_set(
         needs_visibility = True
     if needs_visibility:
         error = _relation_visibility_error(field_name, pks, expected_model, info)
+        if error is not None:
+            return [], error
+    elif pks and getattr(relation_field, "many_to_many", False):
+        error = _relation_existence_error(field_name, pks, expected_model)
         if error is not None:
             return [], error
     return pks, None
@@ -361,6 +392,34 @@ def _relation_visibility_error(
     )
     visible = {str(pk) for pk in queryset.filter(pk__in=pks).values_list("pk", flat=True)}
     if not {str(pk) for pk in pks} <= visible:
+        return _relation_error(field_name)
+    return None
+
+
+def _relation_existence_error(
+    field_name: str,
+    pks: list[Any],
+    related_model: type,
+) -> FieldError | None:
+    """Confirm every raw-pk M2M member exists before the post-save ``.set(...)`` (feedback).
+
+    The raw-pk counterpart to ``_relation_visibility_error``: a non-Relay-Node M2M
+    target has no ``GlobalID`` visibility contract, but ``instance.<m2m>.set(pks)``
+    writes a through-table row for any pk it is given, so a nonexistent pk would
+    create a dangling FK row and return a false success. This confirms existence in
+    one query against the target model's **default manager** (existence only, NOT
+    the visibility ``get_queryset`` - a raw-pk relation carries no visibility
+    contract). A missing member is the uniform ``_relation_error`` on
+    ``field_name``, the same field-keyed envelope the GlobalID path returns, so the
+    whole write rolls back inside the transaction rather than persisting a dangling
+    row. Used only for raw-pk M2M; the GlobalID path's visibility query already
+    confirms existence (a hidden / missing pk is absent from the visible set).
+    """
+    existing = {
+        str(pk)
+        for pk in related_model._default_manager.filter(pk__in=pks).values_list("pk", flat=True)
+    }
+    if not {str(pk) for pk in pks} <= existing:
         return _relation_error(field_name)
     return None
 

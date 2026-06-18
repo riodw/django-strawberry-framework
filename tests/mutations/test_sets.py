@@ -33,8 +33,10 @@ import sys
 
 import pytest
 import strawberry
+from apps.library import models as library_models
 from apps.products import models as product_models
 from django.db import models
+from strawberry import relay
 
 import django_strawberry_framework
 from django_strawberry_framework import (
@@ -135,6 +137,63 @@ def test_meta_fields_and_exclude_both_raises():
                 operation = "create"
                 fields = ("name",)
                 exclude = ("description",)
+
+
+def test_meta_duplicate_fields_raises():
+    """A repeated name in ``Meta.fields`` raises at class creation (feedback - bug 9).
+
+    ``("name", "name", "category")`` would otherwise collapse silently when the
+    effective field set is taken as a ``frozenset``, masking the malformed
+    declaration. ``_normalize_field_sequence`` rejects it fail-loud naming the
+    repeated field.
+    """
+    with pytest.raises(ConfigurationError, match="duplicate field name"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                fields = ("name", "name", "category")
+
+
+def test_meta_duplicate_exclude_raises():
+    """A repeated name in ``Meta.exclude`` is rejected the same way, naming ``exclude``."""
+    with pytest.raises(ConfigurationError, match="Meta.exclude declares duplicate"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                exclude = ("description", "description")
+
+
+def test_meta_delete_with_fields_raises():
+    """``operation="delete"`` with ``Meta.fields`` raises at class creation (feedback - bug 7).
+
+    A delete is id-only and materializes NO input, so it never runs the
+    ``editable_input_fields`` walk that would otherwise catch an unknown field
+    name - a typo'd ``fields`` would finalize silently. Because ``fields`` /
+    ``exclude`` have no effect on a delete at all, declaring them is rejected
+    outright regardless of whether the names are valid.
+    """
+    with pytest.raises(ConfigurationError, match="id-only and takes no input"):
+
+        class DeleteItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "delete"
+                fields = ("definitely_not_a_field",)
+
+
+def test_meta_delete_with_exclude_raises():
+    """The same rejection applies to ``Meta.exclude`` on a delete operation."""
+    with pytest.raises(ConfigurationError, match="id-only and takes no input"):
+
+        class DeleteItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "delete"
+                exclude = ("name",)
 
 
 def test_meta_input_class_not_strawberry_input_raises():
@@ -574,7 +633,7 @@ def test_bind_rejects_raw_pk_relation_override_for_relay_target():
             operation = "create"
             input_class = RawPkItemInput
 
-    with pytest.raises(ConfigurationError, match="non-GlobalID id type"):
+    with pytest.raises(ConfigurationError, match="diverges from the generated input"):
         finalize_django_types()
 
 
@@ -592,7 +651,7 @@ def test_bind_rejects_raw_pk_relation_override_on_partial_input():
             operation = "update"
             partial_input_class = RawPkItemPartial
 
-    with pytest.raises(ConfigurationError, match="non-GlobalID id type"):
+    with pytest.raises(ConfigurationError, match="diverges from the generated input"):
         finalize_django_types()
 
 
@@ -627,6 +686,140 @@ def test_bind_accepts_globalid_relation_override_for_relay_target():
     fields = {f.python_name: f for f in merged.__strawberry_definition__.fields}
     assert fields["category_id"].description == "custom category ref"  # consumer field honored
     assert "name" in fields  # generator filled the rest
+
+
+def _declare_book_m2m_primaries():
+    """Register Relay-Node primaries for ``Genre`` / ``Shelf`` / ``Book`` (Book has a real M2M).
+
+    The M2M analogue of ``_declare_products_primaries``: ``Book.genres`` is a forward
+    M2M to ``Genre`` (a Relay-Node primary), so the generated relation input is
+    ``list[relay.GlobalID]`` - the shape an override must keep.
+    """
+
+    class GenreT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Genre
+            fields = ("id", "name")
+            primary = True
+
+    class ShelfT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+            primary = True
+
+    class BookT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Book
+            fields = ("id", "title", "genres")
+            primary = True
+
+    return GenreT, ShelfT, BookT
+
+
+def test_bind_rejects_m2m_relation_override_as_scalar_globalid():
+    """An M2M override declared as a SCALAR ``relay.GlobalID`` raises at bind (feedback - bug 1/2).
+
+    ``Book.genres`` generates ``list[relay.GlobalID]``; a consumer ``genres:
+    relay.GlobalID`` keeps the GlobalID core but loses the list container, so the
+    resolver would mis-handle the scalar (the M2M decode iterates a list). The core-
+    only type-lock missed this - the shape-aware lock catches the list-depth mismatch.
+    """
+    _declare_book_m2m_primaries()
+
+    @strawberry.input
+    class BadBookInput:
+        genres: relay.GlobalID
+
+    class CreateBook(DjangoMutation):
+        class Meta:
+            model = library_models.Book
+            operation = "create"
+            fields = ("title", "shelf", "genres")
+            input_class = BadBookInput
+
+    with pytest.raises(ConfigurationError, match="diverges from the generated input"):
+        finalize_django_types()
+
+
+def test_bind_rejects_m2m_relation_override_as_nested_globalid_list():
+    """An M2M override declared as a NESTED ``list[list[relay.GlobalID]]`` raises at bind.
+
+    The nested-list shape has the GlobalID core but list depth 2 vs the generated
+    depth 1; the inner lists are not ``relay.GlobalID`` instances, so each would be
+    passed through as a raw pk into ``.set(...)`` - a top-level ORM error at runtime.
+    The shape-lock rejects the depth mismatch at the bind.
+    """
+    _declare_book_m2m_primaries()
+
+    @strawberry.input
+    class BadBookInput:
+        genres: list[list[relay.GlobalID]]
+
+    class CreateBook(DjangoMutation):
+        class Meta:
+            model = library_models.Book
+            operation = "create"
+            fields = ("title", "shelf", "genres")
+            input_class = BadBookInput
+
+    with pytest.raises(ConfigurationError, match="diverges from the generated input"):
+        finalize_django_types()
+
+
+def test_bind_rejects_fk_relation_override_as_globalid_list():
+    """A forward-FK override declared as a ``list[relay.GlobalID]`` raises at bind (bug 1/2).
+
+    ``Item.category`` generates a SCALAR ``relay.GlobalID``; a ``category_id:
+    list[relay.GlobalID]`` has the GlobalID core but list depth 1 vs the generated 0.
+    At runtime the list would be stored as the ``category_id`` attr and Django would
+    raise against the scalar FK column under the MODEL field name (``category``), not
+    the ``categoryId`` input field. The shape-lock rejects it at the bind.
+    """
+    _declare_products_primaries()
+
+    @strawberry.input
+    class BadItemInput:
+        category_id: list[relay.GlobalID]
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            input_class = BadItemInput
+
+    with pytest.raises(ConfigurationError, match="diverges from the generated input"):
+        finalize_django_types()
+
+
+def test_bind_accepts_m2m_relation_override_as_globalid_list():
+    """The contract-compliant M2M override - ``list[relay.GlobalID]`` - binds clean (positive control).
+
+    Proves the shape-lock does not over-reject: an override that keeps BOTH the
+    ``relay.GlobalID`` core AND the one-level ``list`` container (here adding a
+    description) is honored, and the generator fills the remainder.
+    """
+    from django_strawberry_framework.mutations.inputs import _materialized_names
+
+    _declare_book_m2m_primaries()
+
+    @strawberry.input
+    class GidBookInput:
+        genres: list[relay.GlobalID] = strawberry.field(description="custom genres ref")
+
+    class CreateBook(DjangoMutation):
+        class Meta:
+            model = library_models.Book
+            operation = "create"
+            fields = ("title", "shelf", "genres")
+            input_class = GidBookInput
+
+    finalize_django_types()
+
+    merged = _materialized_names[CreateBook._input_class.__name__]
+    fields = {f.python_name: f for f in merged.__strawberry_definition__.fields}
+    assert fields["genres"].description == "custom genres ref"  # consumer field honored
+    assert "shelf_id" in fields  # generator filled the FK remainder
 
 
 def test_bind_dedupes_identical_full_shapes():

@@ -78,13 +78,16 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
     wrapper-less alternative (``info.context`` *is* a bare ``HttpRequest`` -- the
     Django test-client default) is also accepted so consumers work without
     bespoke wiring. Any other shape raises ``ConfigurationError`` naming
-    ``family_label`` (``FilterSet`` / ``OrderSet``) so the consumer sees which
-    sidecar's ``apply`` failed.
+    ``family_label`` (``FilterSet`` / ``OrderSet`` / ``DjangoMutation``) so the
+    consumer sees which surface failed. The message is **family-neutral** (no
+    ``.apply`` suffix): the helper is shared by the filter / order ``apply`` seam
+    AND the mutation ``check_permission`` seam, which has no ``.apply`` method, so
+    hard-coding ``.apply`` would mis-describe the mutation caller (feedback CR-5).
     """
     context = getattr(info, "context", None)
     if context is None:
         raise ConfigurationError(
-            f"{family_label}.apply requires `info.context`; received `info` without a context.",
+            f"{family_label} requires `info.context`; received `info` without a context.",
         )
     request = getattr(context, "request", None)
     if request is not None:
@@ -92,7 +95,7 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
     if isinstance(context, HttpRequest):
         return context
     raise ConfigurationError(
-        f"{family_label}.apply could not resolve a Django HttpRequest from `info.context` "
+        f"{family_label} could not resolve a Django HttpRequest from `info.context` "
         f"(got {type(context).__name__}). Expected `info.context.request` or a bare HttpRequest.",
     )
 

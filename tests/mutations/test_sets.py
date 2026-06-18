@@ -483,6 +483,68 @@ def test_bind_materializes_input_and_payload_globals():
     assert UpdateItem._primary_type is not None
 
 
+def test_bind_merges_consumer_input_class_with_generated_remainder():
+    """A consumer ``input_class`` overriding ONE field is MERGED, not a wholesale replace (CR-2).
+
+    The spec-010 relation-override contract (DoD line 51 / line 336, AR-M2): the
+    consumer declares only the field it customizes; the generator fills the rest of
+    the editable shape, and the consumer's field is honored, not clobbered. A
+    partial consumer input must therefore yield the FULL shape - both the
+    consumer's ``name`` (with its custom description preserved) AND the generated
+    ``category_id`` - under the canonical ``ItemInput`` name, never just ``name``.
+    """
+    from django_strawberry_framework.mutations.inputs import _materialized_names
+
+    _declare_products_primaries()
+
+    @strawberry.input
+    class CustomItemInput:
+        # Override ONLY ``name`` (custom description); everything else is generated.
+        name: str = strawberry.field(description="A custom-described name")
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            input_class = CustomItemInput
+
+    finalize_django_types()
+
+    merged = _materialized_names["ItemInput"]
+    assert CreateItem._input_class is merged
+    fields = {f.python_name: f for f in merged.__strawberry_definition__.fields}
+    # Generated remainder filled in (the partial-replacement bug would drop these).
+    assert "category_id" in fields
+    assert "is_private" in fields
+    # Consumer field honored, not clobbered (its description survives the merge).
+    assert fields["name"].description == "A custom-described name"
+
+
+def test_bind_merges_consumer_partial_input_class_for_update():
+    """A consumer ``partial_input_class`` is likewise merged on the update side (CR-2)."""
+    from django_strawberry_framework.mutations.inputs import _materialized_names
+
+    _declare_products_primaries()
+
+    @strawberry.input
+    class CustomItemPartial:
+        name: str | None = strawberry.field(default=strawberry.UNSET, description="custom partial")
+
+    class UpdateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "update"
+            partial_input_class = CustomItemPartial
+
+    finalize_django_types()
+
+    merged = _materialized_names["ItemPartialInput"]
+    assert UpdateItem._input_class is merged
+    fields = {f.python_name: f for f in merged.__strawberry_definition__.fields}
+    assert "category_id" in fields  # generator filled the rest
+    assert fields["name"].description == "custom partial"  # consumer field honored
+
+
 def test_bind_dedupes_identical_full_shapes():
     """Two create mutations over the same model with the full shape share one ``ItemInput``."""
     _declare_products_primaries()
@@ -568,28 +630,32 @@ def test_bind_dedupes_fields_with_complementary_exclude():
     assert CreateViaFields._input_class.__name__ != "ItemInput"
 
 
-def test_bind_duplicate_input_name_distinct_shapes_raises():
-    """Two distinct input shapes claiming one generated name raise at finalize (AR-M6, input).
+def test_bind_merged_and_generated_same_shape_distinct_representations_raise():
+    """Two representations of one input shape claiming the canonical name raise (AR-M6 / CR-2).
 
-    A custom ``input_class`` named ``ItemInput`` (a ``@strawberry.input`` over the
-    ``Category`` scheme) collides with ``Item``'s generated canonical ``ItemInput``:
-    two DISTINCT classes materialize under one name, so the input ledger's
-    collision check fires through the bind - the end-to-end AR-M6 input trigger
-    Slice 1 pinned only in isolation.
+    Under the merge contract a consumer ``input_class`` is materialized under the
+    canonical SHAPE name (``ItemInput``) - the consumer's Python class name is
+    irrelevant, it customizes representations of existing columns, not the shape.
+    So two ``Item`` create mutations that resolve the same ``ItemInput`` shape to
+    two DIFFERENT representations - one consumer-customized, one plain generated -
+    claim one name with two distinct class objects, and the input ledger's
+    collision check fires at finalize (the end-to-end AR-M6 input trigger under
+    the merge realization; a consumer class name can no longer dodge or forge a
+    collision).
     """
     _declare_products_primaries()
 
     @strawberry.input
-    class ItemInput:  # deliberately collides with Item's generated ``ItemInput``
-        name: str
+    class CustomItemInput:
+        name: str = strawberry.field(description="custom")
 
-    class CreateCategory(DjangoMutation):
+    class CreateItemCustom(DjangoMutation):
         class Meta:
-            model = product_models.Category
+            model = product_models.Item
             operation = "create"
-            input_class = ItemInput
+            input_class = CustomItemInput
 
-    class CreateItem(DjangoMutation):
+    class CreateItemPlain(DjangoMutation):
         class Meta:
             model = product_models.Item
             operation = "create"

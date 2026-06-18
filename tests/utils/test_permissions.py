@@ -45,11 +45,11 @@ def test_request_from_info_resolves_and_names_family(family_label):
     assert request_from_info(info_bare, family_label=family_label) is request
 
     info_no_ctx = type("Info", (), {"context": None})()
-    with pytest.raises(ConfigurationError, match=f"{family_label}.apply requires"):
+    with pytest.raises(ConfigurationError, match=f"{family_label} requires"):
         request_from_info(info_no_ctx, family_label=family_label)
 
     info_bad = type("Info", (), {"context": object()})()
-    with pytest.raises(ConfigurationError, match=f"{family_label}.apply could not resolve"):
+    with pytest.raises(ConfigurationError, match=f"{family_label} could not resolve"):
         request_from_info(info_bad, family_label=family_label)
 
 

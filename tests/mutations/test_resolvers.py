@@ -344,6 +344,9 @@ def test_integrity_error_race_fallback_via_mocked_save():
     payload = res.data["createItem"]
     assert payload["node"] is None
     assert payload["errors"][0]["field"] == NON_FIELD_ERROR_KEY
+    # The catch is broad (``except IntegrityError``), so the message is the honest
+    # superset, not an over-claimed "uniqueness" (feedback CR-3).
+    assert payload["errors"][0]["messages"] == ["A database constraint was violated."]
 
 
 @pytest.mark.django_db
@@ -385,6 +388,50 @@ def test_relation_unresolvable_type_global_id_yields_field_error():
         variable_values={"d": {"name": "X", "categoryId": bogus}},
     )
     assert res.errors is None, res.errors
+    payload = res.data["createItem"]
+    assert payload["node"] is None
+    assert payload["errors"][0]["field"] == "categoryId"
+    assert product_models.Item.objects.filter(name="X").count() == 0
+
+
+@pytest.mark.django_db
+def test_update_uncoercible_pk_in_wellformed_id_is_not_found_no_crash():
+    """A well-formed ``id:`` whose ``node_id`` is not a valid pk literal -> not-found, no crash (CR-1).
+
+    ``decode_global_id`` validates payload SHAPE only, so a right-type ``ItemT``
+    GlobalID can still carry ``node_id="abc"`` for an integer pk. Before CR-1 that
+    bare ``"abc"`` reached ``.get(pk="abc")`` and Django raised a top-level
+    ``ValueError`` (``"Field 'id' expected a number..."``) leaking the pk column
+    type. Now it is coerced through the pk field and treated as not-found - a
+    ``FieldError`` on ``id``, exactly like a missing/hidden row - never a top-level
+    error.
+    """
+    schema, (_CategoryT, ItemT) = _build_item_schema()
+    bad_id = global_id_for(ItemT, "abc")  # well-formed ItemT id, non-numeric node_id
+    res = schema.execute_sync(_UPDATE, variable_values={"id": bad_id, "d": {"name": "X"}})
+    assert res.errors is None, res.errors  # NOT a top-level GraphQLError (CR-1)
+    payload = res.data["updateItem"]
+    assert payload["node"] is None
+    assert payload["errors"][0]["field"] == "id"
+
+
+@pytest.mark.django_db
+def test_create_relation_uncoercible_pk_is_field_error_no_crash():
+    """A right-type relation ``GlobalID`` with an uncoercible ``node_id`` -> ``FieldError`` (CR-1).
+
+    A ``CategoryT`` GlobalID carrying ``node_id="abc"`` passes the AR-H4 type check
+    (it IS a Category id) but ``"abc"`` is not a valid integer pk. Before CR-1 it
+    reached ``filter(pk__in=["abc"])`` and raised a top-level ``ValueError``; now it
+    is coerced and mapped to the uniform relation ``FieldError`` on ``categoryId``
+    (identifies no row - "not found"), never a crash. No row is written.
+    """
+    schema, (CategoryT, _ItemT) = _build_item_schema()
+    bad_cat = global_id_for(CategoryT, "abc")
+    res = schema.execute_sync(
+        _CREATE,
+        variable_values={"d": {"name": "X", "categoryId": bad_cat}},
+    )
+    assert res.errors is None, res.errors  # NOT a top-level GraphQLError (CR-1)
     payload = res.data["createItem"]
     assert payload["node"] is None
     assert payload["errors"][0]["field"] == "categoryId"
@@ -931,6 +978,137 @@ def test_m2m_wrong_type_id_is_field_error():
     assert payload["node"] is None
     assert [e["field"] for e in payload["errors"]] == ["genres"]
     assert not library_models.Book.objects.filter(title="Dune").exists()
+
+
+@pytest.mark.django_db
+def test_m2m_uncoercible_pk_id_is_field_error_no_crash():
+    """A right-type M2M id with an uncoercible ``node_id`` -> ``FieldError`` on the M2M field (CR-1).
+
+    A ``GenreT`` GlobalID carrying ``node_id="abc"`` is a valid Genre id by type but
+    ``"abc"`` is not a valid integer pk. The whole-set visibility query coerces each
+    id through the related pk field first, so the uncoercible literal is the uniform
+    relation ``FieldError`` on ``genres`` (not found), never the top-level
+    ``ValueError`` that ``filter(pk__in=["abc"])`` would raise. No book is written.
+    """
+    schema, (GenreT, ShelfT, _BookT) = _build_book_schema()
+    shelf = _make_branch_shelf()
+    res = schema.execute_sync(
+        _CREATE_BOOK,
+        variable_values={
+            "d": {
+                "title": "Dune",
+                "shelfId": global_id_for(ShelfT, shelf.pk),
+                "genres": [global_id_for(GenreT, "abc")],  # right type, uncoercible pk
+            },
+        },
+    )
+    assert res.errors is None, res.errors  # NOT a top-level GraphQLError (CR-1)
+    payload = res.data["createBook"]
+    assert payload["node"] is None
+    assert [e["field"] for e in payload["errors"]] == ["genres"]
+    assert not library_models.Book.objects.filter(title="Dune").exists()
+
+
+# ---------------------------------------------------------------------------
+# Consumer input_class MERGE (spec-010 relation-override / AR-M2 / CR-2)
+# ---------------------------------------------------------------------------
+
+
+def _build_item_schema_with_input_class(*, input_cls=None, partial_input_cls=None):
+    """Declare Item/Category primaries + a create/update mutation using a consumer input.
+
+    Mirrors ``_build_item_schema`` but threads a consumer ``Meta.input_class`` /
+    ``Meta.partial_input_class`` so the merge (CR-2) is exercised end-to-end through
+    the bind + schema execution.
+    """
+
+    class CategoryT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name")
+            primary = True
+
+    class ItemT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name", "category")
+            primary = True
+
+    create_meta = {
+        "model": product_models.Item,
+        "operation": "create",
+        "permission_classes": [_AllowAll],
+    }
+    if input_cls is not None:
+        create_meta["input_class"] = input_cls
+    update_meta = {
+        "model": product_models.Item,
+        "operation": "update",
+        "permission_classes": [_AllowAll],
+    }
+    if partial_input_cls is not None:
+        update_meta["partial_input_class"] = partial_input_cls
+
+    CreateItem = type("CreateItem", (DjangoMutation,), {"Meta": type("Meta", (), create_meta)})
+    UpdateItem = type("UpdateItem", (DjangoMutation,), {"Meta": type("Meta", (), update_meta)})
+
+    @strawberry.type
+    class Mutation:
+        create_item = DjangoMutationField(CreateItem)
+        update_item = DjangoMutationField(UpdateItem)
+
+    finalize_django_types()
+    return _schema(Mutation), (CategoryT, ItemT)
+
+
+@pytest.mark.django_db
+def test_create_through_merged_input_class_accepts_generated_remainder():
+    """A partial consumer ``input_class`` still accepts the generated ``categoryId`` and writes (CR-2).
+
+    The merge fills the generated remainder, so a create supplying BOTH the
+    consumer-customized ``name`` and the generated ``categoryId`` succeeds. Under
+    the old wholesale-replacement behavior the partial input lacked ``categoryId``
+    and this would fail schema validation.
+    """
+
+    @strawberry.input
+    class CustomItemInput:
+        name: str = strawberry.field(description="A custom-described name")
+
+    schema, (CategoryT, _ItemT) = _build_item_schema_with_input_class(input_cls=CustomItemInput)
+    cat = product_models.Category.objects.create(name=_category_name())
+    res = schema.execute_sync(
+        _CREATE,
+        variable_values={"d": {"name": "Widget", "categoryId": global_id_for(CategoryT, cat.pk)}},
+    )
+    assert res.errors is None, res.errors
+    payload = res.data["createItem"]
+    assert payload["node"]["name"] == "Widget"
+    assert payload["node"]["category"]["name"] == cat.name
+    assert product_models.Item.objects.filter(name="Widget", category=cat).exists()
+
+
+@pytest.mark.django_db
+def test_update_through_merged_partial_input_class_accepts_generated_remainder():
+    """A partial consumer ``partial_input_class`` still accepts the generated fields and updates (CR-2)."""
+
+    @strawberry.input
+    class CustomItemPartial:
+        name: str | None = strawberry.field(default=strawberry.UNSET, description="custom partial")
+
+    schema, (_CategoryT, ItemT) = _build_item_schema_with_input_class(
+        partial_input_cls=CustomItemPartial,
+    )
+    cat = product_models.Category.objects.create(name=_category_name())
+    item = product_models.Item.objects.create(name="Old", category=cat)
+    res = schema.execute_sync(
+        _UPDATE,
+        variable_values={"id": _item_gid(ItemT, item.pk), "d": {"name": "New"}},
+    )
+    assert res.errors is None, res.errors
+    assert res.data["updateItem"]["node"]["name"] == "New"
+    item.refresh_from_db()
+    assert item.name == "New"
 
 
 # ---------------------------------------------------------------------------

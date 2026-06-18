@@ -41,6 +41,7 @@ declared in this slice is inert: registered + bound at finalize, never resolved.
 
 from __future__ import annotations
 
+import inspect
 from typing import TYPE_CHECKING, Any, get_args, get_origin
 
 import strawberry
@@ -49,6 +50,7 @@ from strawberry.types.base import StrawberryList
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
+from ..utils.querysets import SyncMisuseError
 from .inputs import (
     CREATE,
     PARTIAL,
@@ -532,16 +534,34 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         ``update`` / ``delete``). Slice 2 ships only the default method body + the
         ``permission_classes`` default assignment; the resolver that raises on
         denial is Slice 3.
+
+        An ``async def has_permission`` entry returns a coroutine, which is truthy:
+        a naive ``if not has_permission(...)`` would never deny it, so an async
+        deny-check would be silently treated as ALLOW - an authorization bypass
+        (feedback). The pipeline is synchronous (Decision 15), so the coroutine can
+        never be awaited here; it is closed and raised as a ``SyncMisuseError``,
+        the same discipline ``apply_type_visibility_sync`` applies to an async
+        ``get_queryset``. (An async ``check_permission`` override is caught by the
+        resolver's ``_authorize_or_raise`` one level up.)
         """
         meta = type(self)._mutation_meta
         for permission_class in meta.permission_classes:
-            if not permission_class().has_permission(
+            allowed = permission_class().has_permission(
                 info,
                 type(self),
                 operation,
                 data,
                 instance,
-            ):
+            )
+            if inspect.iscoroutine(allowed):
+                allowed.close()
+                raise SyncMisuseError(
+                    f"{permission_class.__name__}.has_permission returned a coroutine in a "
+                    "sync mutation context. A DjangoMutation runs its permission check "
+                    "synchronously, so it cannot await an async permission hook; redefine "
+                    "has_permission / check_permission as a sync method returning a bool.",
+                )
+            if not allowed:
                 return False
         return True
 

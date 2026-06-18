@@ -26,6 +26,14 @@ Please include:
 
 You can expect an initial response within **7 days**. We will work with you to validate the issue, prepare a fix, and coordinate a disclosure timeline.
 
+## Deployment hardening
+
+### Mask resolver errors in production
+
+graphql-core returns the `str()` of any unhandled resolver exception in the response's top-level `errors[].message`, schema-wide — this is standard GraphQL behavior, not specific to this package. The framework's own write-authorization path raises a controlled `GraphQLError("Not authorized to <op> <Type>.")` that reveals nothing the client did not already send, but a **consumer-supplied** hook (a `get_queryset`, a `check_permission` / `permission_classes` `has_permission`, a custom resolver) that raises will surface its exception message to the client.
+
+In production, configure Strawberry's error masking so resolver/permission exception messages are not returned to clients — for example the `MaskErrors` schema extension, or a `Schema.process_errors` override. This is the GraphQL equivalent of running Django with `DEBUG=False`, and applies to any GraphQL deployment regardless of this package.
+
 ## Disclosure
 
 Once a fix is available we will publish a release and a corresponding GitHub Security Advisory. Reporters will be credited unless they request otherwise.

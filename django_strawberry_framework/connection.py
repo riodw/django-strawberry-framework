@@ -765,6 +765,33 @@ def _guard_sidecar_input_against_non_queryset(source: Any, *, has_sidecar_input:
         )
 
 
+def _guard_source_not_pre_sliced(source: models.QuerySet) -> None:
+    """Raise ``GraphQLError`` when the connection resolver returns an already-sliced QuerySet.
+
+    A ``DjangoConnectionField`` owns pagination: ``_finalize_queryset`` appends a
+    deterministic total order and then Strawberry's ``ListConnection`` slices the
+    QuerySet to the requested cursor window. Both are illegal on a QuerySet the
+    resolver already sliced (``Category.objects.all()[:5]``) - Django forbids
+    reordering or re-slicing a sliced query (``Cannot reorder a query once a slice
+    has been taken``). Left unguarded the pipeline's ``order_by`` leaked that as a
+    raw ``TypeError`` at the GraphQL boundary; this converts it to a clear,
+    actionable ``GraphQLError`` naming the cause and the fix. Fires regardless of
+    ``filter:`` / ``orderBy:`` input (the connection reorders and slices on every
+    request), symmetric with ``_guard_sidecar_input_against_non_queryset``: a
+    structural misuse of the connection ``resolver=`` contract surfaces as a
+    package error, never a leaked Django internal.
+    """
+    if source.query.is_sliced:
+        raise GraphQLError(
+            "A connection resolver returned an already-sliced QuerySet (e.g. "
+            "`qs[:10]`). A connection field manages its own ordering and cursor "
+            "pagination, and Django forbids reordering or re-slicing a sliced "
+            "query, so an already-sliced source cannot be paginated. Return an "
+            "unsliced QuerySet (or a Manager) and let the connection's `first` / "
+            "`last` / `before` / `after` arguments paginate it.",
+        )
+
+
 def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> models.QuerySet:
     """Apply the color-agnostic pipeline tail: deterministic total order, then optimizer plan.
 
@@ -820,12 +847,14 @@ def _prepare_pipeline_source(
     a ``Manager`` is coerced to its ``QuerySet``; a non-queryset iterable passes
     the ``filter:`` / ``orderBy:`` guard here and is returned with
     ``is_queryset=False`` so the caller short-circuits and returns it unchanged.
-    Returns ``(source, is_queryset)`` rather than returning early itself so the
-    sync and async pipelines keep their colored steps (the
+    A QuerySet passes the pre-sliced guard (the connection reorders and slices it,
+    both illegal on an already-sliced query) before flowing into the colored
+    steps. Returns ``(source, is_queryset)`` rather than returning early itself so
+    the sync and async pipelines keep their colored steps (the
     ``apply_type_visibility_*`` calls) explicit, never hidden behind a maybe-await
     abstraction. The ``Manager`` -> ``QuerySet`` coercion + is-queryset decision
     is the shared ``utils/querysets.py::normalize_query_source`` contract; only
-    the connection's GraphQL-specific non-queryset error stays local here.
+    the connection's GraphQL-specific guards stay local here.
     """
     source, is_queryset = normalize_query_source(source)
     if not is_queryset:
@@ -837,6 +866,7 @@ def _prepare_pipeline_source(
             ),
         )
         return source, False
+    _guard_source_not_pre_sliced(source)
     return source, True
 
 

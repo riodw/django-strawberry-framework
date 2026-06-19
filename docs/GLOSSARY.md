@@ -19,6 +19,20 @@ Companion files:
 
 Current package version: `0.0.10`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
+<!-- TODO(spec-037 Slice 4): promote the file/upload glossary surface.
+Pseudo-code:
+- Move current package version to 0.0.11.
+- Add Upload, DjangoFileType, and DjangoImageType to Public exports and mark
+  their Index rows shipped.
+- Rewrite DjangoFileType / DjangoImageType entries with output subfields,
+  nullable storage-backed properties, and empty-file null behavior.
+- Rewrite Scalar field conversion so read output uses FIELD_OUTPUT_TYPE_MAP,
+  filters/scalar inputs stay str, and mutation inputs use Upload.
+- Add the file/image breaking-wire-format row to Specialized scalar conversions.
+- Remove strawberry_config's "next: Upload" wording because Upload is built in
+  and not part of the package scalar_map.
+-->
+
 ## Public exports
 
 Symbols re-exported from `django_strawberry_framework`:

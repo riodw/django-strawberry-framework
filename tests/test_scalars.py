@@ -11,6 +11,14 @@ integration tests pin the post-migration ``BigInt`` round trip end-to-end
 ``test_bigint_parses_decimal_string_via_strawberry_config_schema``).
 """
 
+# TODO(spec-037 Slice 2): add Upload scalar tests here.
+# Pseudo-code:
+# - import Upload from django_strawberry_framework and assert it is Strawberry's
+#   built-in scalar object, not a package-defined NewType.
+# - assert strawberry_config().scalar_map contains BigInt but not Upload.
+# - build one schema with strawberry_config() and one with plain StrawberryConfig;
+#   both should accept an Upload-annotated field because Strawberry registers it.
+
 import subprocess
 import sys
 from decimal import Decimal

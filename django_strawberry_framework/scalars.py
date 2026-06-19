@@ -21,6 +21,15 @@ import strawberry
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types.scalar import ScalarDefinition
 
+# TODO(spec-037 Slice 2): re-export Strawberry's built-in Upload scalar here.
+# Pseudo-code:
+# - from strawberry.file_uploads.scalars import Upload, UploadDefinition
+# - expose both from this module, but add only Upload to the package root.
+# - do not put Upload in _PACKAGE_SCALAR_MAP; Strawberry's default scalar registry
+#   already owns it, unlike this package's BigInt NewType.
+# - replace the stale TODO-ALPHA-035 docstring reference above with
+#   TODO-ALPHA-037-0.0.11 when the re-export lands.
+
 # Plain ASCII decimal, optional ASCII minus for non-zero values, no leading
 # zeroes except "0" itself. Rejects underscores (PEP 515), plus signs, Unicode
 # decimal digits, hex / octal / scientific notation, and whitespace.

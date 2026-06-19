@@ -95,6 +95,14 @@ For the current capability snapshot — what the package can actually do in the 
 A quick summary:
 
 **Shipped today** (`0.0.10`):
+<!-- TODO(spec-037 Slice 4): update this capability snapshot after implementation.
+Pseudo-code:
+- Change the shipped version/status language to 0.0.11.
+- Move the Upload scalar plus generated FileField/ImageField mutation-input typing
+  out of "Coming next" and into the shipped mutation/scalar bullets.
+- Word it as scalar/generated typing only; do not imply the future multipart
+  TestClient ergonomics have shipped.
+-->
 - `DjangoType` — model-backed Strawberry types via `class Meta`
 - scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, file/image, choice enums)
 - specialized scalar conversions (`BigIntegerField` / `PositiveBigIntegerField` → `BigInt`, `JSONField` → `JSON`, PostgreSQL `ArrayField` → `list[T]`, PostgreSQL `HStoreField` → `JSON`)

@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-06-17
+Last refreshed: 2026-06-19
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -81,15 +81,15 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**62.1% complete** toward `1.0.0` - 36 of 58 cards done (64.5% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**63.8% complete** toward `1.0.0` - 37 of 58 cards done (65.7% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 36/44 (81.8%) | 82.2% |
+| Alpha (pre-0.1.0) | 37/44 (84.1%) | 83.7% |
 | Beta (pre-1.0.0) | 0/13 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
-To complete the Alpha (pre-0.1.0) milestone: **81.8%**.
+To complete the Alpha (pre-0.1.0) milestone: **84.1%**.
 
 ## Board columns
 
@@ -97,6 +97,7 @@ To complete the Alpha (pre-0.1.0) milestone: **81.8%**.
 
 | Card | Spec file |
 | --- | --- |
+| `DONE-037-0.0.11` - Upload scalar and file / image field mapping | [spec-037-upload_file_image_mapping-0_0_11.md](docs/spec-037-upload_file_image_mapping-0_0_11.md) |
 | `DONE-036-0.0.11` - Mutations + auto-generated Input types | [spec-036-mutations-0_0_11.md](docs/SPECS/spec-036-mutations-0_0_11.md) |
 | `DONE-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | [spec-035-optimizer_hardening-0_0_10.md](docs/SPECS/spec-035-optimizer_hardening-0_0_10.md) |
 | `DONE-034-0.0.10` - Permissions subsystem | [spec-034-permissions-0_0_10.md](docs/SPECS/spec-034-permissions-0_0_10.md) |
@@ -137,59 +138,6 @@ To complete the Alpha (pre-0.1.0) milestone: **81.8%**.
 ## In progress
 
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
-
-<a id="upload_scalar_and_file_image_field_mapping"></a>
-### [TODO-ALPHA-037-0.0.11 - Upload scalar and file / image field mapping](KANBAN.html#upload_scalar_and_file_image_field_mapping)
-
-- Priority: Medium
-- Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
-- Status: In progress
-- Relative size: S
-- Labels: `converters`, `mutations`, `scalars`, `uploads`
-- Spec: [spec-037-upload_file_image_mapping-0_0_11.md](docs/spec-037-upload_file_image_mapping-0_0_11.md)
-
-#### Predicted files
-
-- `django_strawberry_framework/mutations/` (planned)
-- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
-- [`tests/types/test_converters.py`](tests/types/test_converters.py)
-
-#### Planning note
-
-planned
-
-#### Definition of done
-
-- [ ] Scalar conversion in `types/converters.py` returns `DjangoFileType` / `DjangoImageType` (or local equivalents) for `FileField` / `ImageField`.
-- [ ] Mutation input-type generation (`DONE-036-0.0.11`) maps the same fields to Strawberry's `Upload` scalar.
-- [ ] Synthetic-model tests cover both read and write paths.
-- [ ] `docs/GLOSSARY.md` documents the conversion table change.
-
-#### Files likely touched
-
-- `django_strawberry_framework/types/converters.py`
-- `django_strawberry_framework/mutations/` (input mapping)
-- `tests/types/test_converters.py`
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py` — output mappings `files.FileField: DjangoFileType`, `files.ImageField: DjangoImageType`; input mappings `files.FileField: Upload`, `files.ImageField: Upload`.
-
-#### Why it matters
-
-- `strawberry-graphql-django` maps `FileField` / `ImageField` to `Upload` on the input side and to `DjangoFileType` / `DjangoImageType` (with `name` / `path` / `size` / `url`) on the output side. Without it, every consumer that touches user uploads has to hand-roll the mapping.
-
-#### Other
-
-- strawberry-graphql-django maps `FileField` / `ImageField` to `Upload` (input) and file/image output types.
-- pairs with `DONE-036-0.0.11` for the write side.
-- bounded converter-table addition: `FileField` / `ImageField` → file/image output types on read, `Upload` on the input side. Touches `converters.py` + mutation input mapping + tests. Pairs with 028.
-
-#### Card references
-
-- Related: Mutation input-type generation (`DONE-036-0.0.11`) maps the same fields to Strawberry's `Upload` scalar. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
-- Related: pairs with `DONE-036-0.0.11` for the write side. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
 
 ## To Do - Alpha (0.1.0)
 
@@ -484,14 +432,14 @@ planned
 
 #### Dependencies
 
-- `TODO-ALPHA-037-0.0.11` - Upload scalar and file / image field mapping
+- `DONE-037-0.0.11` - Upload scalar and file / image field mapping
 
 #### Definition of done
 
 - [ ] Implement `django_strawberry_framework/testing/client.py` exposing `TestClient` / `AsyncTestClient` (per the inheritance shape pinned above) plus a `GraphQLTestMixin` and two concrete `(Mixin, TestCase)` / `(Mixin, TransactionTestCase)` combinations for the unittest crowd.
 - [ ] Mixin carries `assertResponseNoErrors` / `assertResponseHasErrors` helpers (or the equivalent named for the chosen `.query()` return type).
 - [ ] Project-wide endpoint settings key (working name `GRAPHQL_TESTING_ENDPOINT`, final name pinned during implementation) under `DJANGO_STRAWBERRY_FRAMEWORK`, with constructor / per-call override.
-- [ ] Multipart file-upload support on `request()` so consumers can drive `Upload`-scalar mutations from the same helper once `TODO-ALPHA-037-0.0.11` ships.
+- [ ] Multipart file-upload support on `request()` so consumers can drive `Upload`-scalar mutations from the same helper once `DONE-037-0.0.11` ships.
 - [ ] Live HTTP tests under `examples/fakeshop/test_query/` switch to the helper.
 - [ ] Tests under `tests/testing/test_client.py`.
 
@@ -507,7 +455,7 @@ planned
 - **`.query()` return type — decide before writing the spec**: strawberry-django returns a typed `Response` dataclass (`data` / `errors` / `extensions`); graphene-django's `GraphQLTestMixin.query` returns a raw Django `HttpResponse` paired with `assertResponseNoErrors` / `assertResponseHasErrors` helpers that parse the body. The two flavors are not interchangeable — pick one and pin it (the typed-dataclass shape is the more DRF-shaped choice and composes better with future typed-error work).
 - **Async**: strawberry-django's `AsyncTestClient` subclasses `TestClient` (not `BaseGraphQLTestClient` directly), takes a `django.test.client.AsyncClient`, and only overrides `.query()` + `.login()`. The sync `request()` is reused via `cast("Awaitable", ...)`. Our equivalent ports the same inheritance shape (or picks a flatter alternative explicitly in the spec).
 - **Endpoint resolution**: project-wide default reads from `DJANGO_STRAWBERRY_FRAMEWORK["GRAPHQL_TESTING_ENDPOINT"]` (mirrors graphene's `TESTING_ENDPOINT` knob; final settings-key name pinned during implementation), with a per-instance / per-call override identical to strawberry-django's `path` constructor argument and graphene-django's `graphql_url` per-call argument.
-- **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `TODO-ALPHA-037-0.0.11` (Upload scalar) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls.
+- **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `DONE-037-0.0.11` (Upload scalar) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls.
 - **Strawberry base-class reuse — decide before writing the spec**: subclass `strawberry.test.BaseGraphQLTestClient` (less code, couples our `.query()` / `.mutate()` shape to upstream Strawberry's choices) vs. roll our own base (more code, full control over the public surface). The strawberry-django decision was to subclass; the package's DRF-first stance argues for considering the from-scratch alternative.
 
 #### Why it matters
@@ -518,7 +466,7 @@ planned
 
 #### Dependencies
 
-- `TODO-ALPHA-037-0.0.11` (Upload scalar) — the file-upload helper path lights up once Upload-scalar inputs exist; the helper itself ships without it but gains a tested path here.
+- `DONE-037-0.0.11` (Upload scalar) — the file-upload helper path lights up once Upload-scalar inputs exist; the helper itself ships without it but gains a tested path here.
 
 #### Other
 
@@ -528,9 +476,9 @@ planned
 
 #### Card references
 
-- Dependency: `TODO-ALPHA-037-0.0.11` (Upload scalar) — the file-upload helper path lights up once Upload-scalar inputs exist; the helper itself ships without it but gains a tested path here. -> `TODO-ALPHA-037-0.0.11` - Upload scalar and file / image field mapping
-- Related: Multipart file-upload support on `request()` so consumers can drive `Upload`-scalar mutations from the same helper once `TODO-ALPHA-037-0.0.11` ships. -> `TODO-ALPHA-037-0.0.11` - Upload scalar and file / image field mapping
-- Related: **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `TODO-ALPHA-037-0.0.11` (Upload scalar) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls. -> `TODO-ALPHA-037-0.0.11` - Upload scalar and file / image field mapping
+- Dependency: `DONE-037-0.0.11` (Upload scalar) — the file-upload helper path lights up once Upload-scalar inputs exist; the helper itself ships without it but gains a tested path here. -> `DONE-037-0.0.11` - Upload scalar and file / image field mapping
+- Related: Multipart file-upload support on `request()` so consumers can drive `Upload`-scalar mutations from the same helper once `DONE-037-0.0.11` ships. -> `DONE-037-0.0.11` - Upload scalar and file / image field mapping
+- Related: **File-upload coupling**: strawberry-django's `request()` switches to `format="multipart"` when `files=` is provided. Our helper must do the same so live HTTP tests for `DONE-037-0.0.11` (Upload scalar) can exercise multipart uploads through the helper rather than dropping back to raw `client.post(...)` calls. -> `DONE-037-0.0.11` - Upload scalar and file / image field mapping
 
 <a id="response_extensions_debug_middleware"></a>
 ### [TODO-ALPHA-044-0.0.14 - Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
@@ -1327,6 +1275,84 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
+<a id="upload_scalar_and_file_image_field_mapping"></a>
+### [DONE-037-0.0.11 - Upload scalar and file / image field mapping](KANBAN.html#upload_scalar_and_file_image_field_mapping)
+
+- Priority: Medium
+- Parity: 🍓 strawberry-graphql-django (Required)
+- Severity: Medium
+- Status: In progress
+- Relative size: S
+- Labels: `converters`, `mutations`, `scalars`, `uploads`
+- Spec: [spec-037-upload_file_image_mapping-0_0_11.md](docs/spec-037-upload_file_image_mapping-0_0_11.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
+| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
+| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | shipped (`0.0.11`) |
+| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
+| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
+| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
+| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
+| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
+| [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) | shipped (`0.0.11`) |
+| [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
+| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
+| [`Meta.nullable_overrides`](docs/GLOSSARY.md#metanullable_overrides) | shipped (`0.0.9`) |
+| [`Meta.required_overrides`](docs/GLOSSARY.md#metarequired_overrides) | shipped (`0.0.9`) |
+| [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+
+#### Package files
+
+- `django_strawberry_framework/mutations/` (historical)
+- [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
+- [`tests/types/test_converters.py`](tests/types/test_converters.py)
+
+#### Planning note
+
+planned
+
+#### Definition of done
+
+- [x] Scalar conversion in `types/converters.py` returns `DjangoFileType` / `DjangoImageType` (or local equivalents) for `FileField` / `ImageField`.
+- [x] Mutation input-type generation (`DONE-036-0.0.11`) maps the same fields to Strawberry's `Upload` scalar.
+- [x] Synthetic-model tests cover both read and write paths.
+- [x] `docs/GLOSSARY.md` documents the conversion table change.
+
+#### Files likely touched
+
+- `django_strawberry_framework/types/converters.py`
+- `django_strawberry_framework/mutations/` (input mapping)
+- `tests/types/test_converters.py`
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/fields/types.py` — output mappings `files.FileField: DjangoFileType`, `files.ImageField: DjangoImageType`; input mappings `files.FileField: Upload`, `files.ImageField: Upload`.
+
+#### Why it matters
+
+- `strawberry-graphql-django` maps `FileField` / `ImageField` to `Upload` on the input side and to `DjangoFileType` / `DjangoImageType` (with `name` / `path` / `size` / `url`) on the output side. Without it, every consumer that touches user uploads has to hand-roll the mapping.
+
+#### Other
+
+- strawberry-graphql-django maps `FileField` / `ImageField` to `Upload` (input) and file/image output types.
+- pairs with `DONE-036-0.0.11` for the write side.
+- bounded converter-table addition: `FileField` / `ImageField` → file/image output types on read, `Upload` on the input side. Touches `converters.py` + mutation input mapping + tests. Pairs with `DONE-036-0.0.11`.
+
+#### Card references
+
+- Related: Mutation input-type generation (`DONE-036-0.0.11`) maps the same fields to Strawberry's `Upload` scalar. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+- Related: pairs with `DONE-036-0.0.11` for the write side. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+
 <a id="mutations_auto_generated_input_types"></a>
 ### [DONE-036-0.0.11 - Mutations + auto-generated Input types](KANBAN.html#mutations_auto_generated_input_types)
 
@@ -1370,9 +1396,9 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
 | [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [`auto`-typed annotations](docs/GLOSSARY.md#auto-typed-annotations) | shipped (`0.0.9`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | planned for `0.0.11` |
-| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | planned for `0.0.11` |
-| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | planned for `0.0.11` |
+| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
+| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | shipped (`0.0.11`) |
+| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
 | [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | planned for `0.0.12` |
 | [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | planned for `0.0.12` |
 | [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | planned for `0.0.13` |
@@ -2592,9 +2618,9 @@ shipped
 | [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
 | [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | planned for `0.0.11` |
-| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | planned for `0.0.11` |
-| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | planned for `0.0.11` |
+| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
+| [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | shipped (`0.0.11`) |
+| [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
@@ -3017,7 +3043,7 @@ shipped
 | [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
 | [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | planned for `0.0.11` |
+| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
 
 #### Package files
 

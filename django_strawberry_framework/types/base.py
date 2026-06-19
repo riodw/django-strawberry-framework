@@ -55,7 +55,7 @@ from ..optimizer.hints import OptimizerHint
 from ..registry import registry
 from ..utils.strings import snake_case
 from ..utils.typing import is_async_callable
-from .converters import convert_scalar
+from .converters import convert_field_output
 from .definition import DjangoTypeDefinition
 from .relations import PendingRelation, PendingRelationAnnotation
 from .relay import install_is_type_of
@@ -1627,15 +1627,16 @@ def _build_annotations(
                 force_nullable = False
             else:
                 force_nullable = None
-            # TODO(spec-037 Slice 1): preserve this override tri-state while
-            # adding file/image output-object nullability.
-            # Pseudo-code:
-            # - convert_scalar() should see force_nullable exactly as computed.
-            # - for FileField / ImageField, force_nullable=None means nullable
-            #   when field.null OR field.blank; force_nullable=True/False wins.
-            # - consumer_authored_fields already skipped above, so a consumer
-            #   `attachment: str` override receives no generated object type.
-            annotations[field.name] = convert_scalar(
+            # ``convert_field_output`` owns the file/image branch: it routes a
+            # FileField / ImageField to the structured DjangoFileType /
+            # DjangoImageType output object (widened to ``| None`` on the
+            # ``blank``-aware nullability) and delegates every other column to
+            # ``convert_scalar`` unchanged. The ``force_nullable`` tri-state
+            # computed above is threaded through exactly as before; a consumer
+            # ``attachment: str`` override is already skipped by the
+            # ``consumer_authored_fields`` short-circuit above, so it receives
+            # no generated object type (spec-037 Decision 3 / Decision 4).
+            annotations[field.name] = convert_field_output(
                 field,
                 cls.__name__,
                 force_nullable=force_nullable,

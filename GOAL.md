@@ -508,14 +508,7 @@ The project hits the goal when a Django developer can:
 3. **Add nested filtering / ordering / aggregation / search** without hand-built input or output types.
 4. **Enforce row, field, and cascade permissions declaratively** — the same hook covers reads and writes.
 5. **Rely on automatic ORM optimization** — nested GraphQL selections get the right `select_related` / `prefetch_related` / `only()` plan from one selection-tree walk that cooperates with consumer-shaped querysets.
-<!-- TODO(spec-037 Slice 4): update criterion 6 after Upload lands.
-Pseudo-code:
-- Say the Upload/FileField/ImageField part ships for generated DjangoMutation
-  inputs in 0.0.11.
-- Keep ModelForm and ModelSerializer mutation flavors described as future work.
-- Do not imply multipart TestClient ergonomics are part of this card.
--->
-6. **Write mutations declaratively from `ModelForm`, `ModelSerializer`, or auto-generated `Input` types** — one shared `errors: list[FieldError]` envelope across every flavor, plus `Upload` scalar for `FileField` / `ImageField`.
+6. **Write mutations declaratively from `ModelForm`, `ModelSerializer`, or auto-generated `Input` types** — one shared `errors: list[FieldError]` envelope across every flavor, plus `Upload` scalar for `FileField` / `ImageField`. The auto-generated `Input`-type flavor — including the `Upload` scalar and the `FileField` / `ImageField` → `Upload` mutation-input mapping — ships for generated `DjangoMutation` inputs in `0.0.11`; the `ModelForm` (`0.0.12`) and `ModelSerializer` (`0.0.13`) flavors still land later.
 7. **Migrate from `graphene-django`, `strawberry-graphql-django`, `django-graphene-filters`, or DRF + `django-filter`** without bringing the source package along — the `Meta` mental model carries over; only the import line changes.
 
 The project misses the goal if users must routinely hand-build the same schema machinery the package is supposed to generate.

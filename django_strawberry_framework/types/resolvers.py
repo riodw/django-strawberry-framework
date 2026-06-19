@@ -48,6 +48,7 @@ from ..optimizer.field_meta import FieldMeta
 from ..optimizer.plans import resolver_key, runtime_path_from_info
 from ..registry import registry
 from ..utils.relations import instance_accessor, is_many_side_relation_kind
+from .converters import _field_output_type_for
 
 # Module-level immutable sentinel for the "no elisions registered" branch so
 # the forward-resolver dispatch does not allocate a fresh empty set per call.
@@ -265,14 +266,6 @@ def _name_resolver(resolver: Callable[..., Any], field_name: str) -> Callable[..
     return resolver
 
 
-# TODO(spec-037 Slice 1): add file-column parent resolvers beside relation resolvers.
-# Pseudo-code:
-# - _make_file_resolver(field): read getattr(root, field.name), return None when
-#   the FieldFile is falsy, otherwise return the bound FieldFile for subfield
-#   resolvers on DjangoFileType / DjangoImageType.
-# - _attach_file_resolvers(cls, fields, skip_field_names): skip relations, skip
-#   consumer-authored fields, and attach only fields present in FIELD_OUTPUT_TYPE_MAP.
-# - name each resolver resolve_<field> through _name_resolver for trace stability.
 def _field_meta_for_resolver(field: Any, parent_type: type | None) -> FieldMeta:
     """Return registered ``FieldMeta`` for ``field`` when the parent type exposes it.
 
@@ -438,7 +431,60 @@ def _attach_relation_resolvers(
         setattr(cls, field.name, strawberry.field(resolver=resolver))
 
 
-# TODO(spec-037 Slice 1): expose _attach_file_resolvers from this module and call
-# it from finalize_django_types() in the same Phase 2 window as relation resolvers.
-# The subfield storage guard remains on DjangoFileType / DjangoImageType; the
-# parent resolver owns only empty-file object nullability.
+def _make_file_resolver(field: Any) -> Any:
+    """Generate the parent resolver for a ``FileField`` / ``ImageField`` column.
+
+    Object nullability ONLY (spec-037 Decision 4): a Django file column's
+    attribute is a ``FieldFile`` descriptor that is falsy when no file is
+    attached, so the resolver returns ``None`` for an empty / falsy
+    ``FieldFile`` and otherwise the bound ``FieldFile`` itself. Strawberry then
+    resolves each selected subfield off that ``FieldFile`` through
+    ``DjangoFileType`` / ``DjangoImageType``'s own resolver-backed fields, whose
+    per-subfield ``_safe_file_attr`` guard owns storage-failure degradation.
+    This resolver does NOT touch any subfield and carries NO ``try/except`` --
+    the storage-property accesses that raise happen later, in Strawberry's
+    per-subfield resolution, outside this resolver's reach.
+
+    Stamped via ``_name_resolver`` for trace stability, and takes ``(root,
+    info)`` to match the relation-resolver signature even though ``info`` is
+    unused (Strawberry injects it).
+    """
+    field_name = field.name
+
+    def file_resolver(root: Any, info: Info) -> Any:  # noqa: ARG001 - info injected by Strawberry, unused here.
+        value = getattr(root, field_name)
+        return value if value else None
+
+    return _name_resolver(file_resolver, field_name)
+
+
+def _attach_file_resolvers(
+    cls: type,
+    fields: tuple[Any, ...],
+    *,
+    skip_field_names: frozenset[str] = frozenset(),
+) -> None:
+    """Attach a parent resolver per file/image column in the pre-selected ``fields``.
+
+    The structural twin of ``_attach_relation_resolvers``, called from the same
+    ``finalize_django_types()`` Phase-2 window: iterate the definition's
+    ``selected_fields``, skip relations and skipped names, and attach a
+    generated parent resolver to any column resolving via
+    ``FIELD_OUTPUT_TYPE_MAP``.
+
+    ``skip_field_names`` is ``DjangoTypeDefinition.consumer_authored_fields`` --
+    deliberately BROADER than the relation pass's
+    ``consumer_assigned_relation_fields`` (assigned overrides only). A consumer
+    annotation-only override such as ``attachment: str`` keeps the legacy ``str``
+    shape (already honored by ``_build_annotations``) and must also receive NO
+    generated file resolver here; skipping only assigned ``strawberry.field``
+    overrides would silently clobber an annotation opt-out (spec-037 Decision 3).
+    """
+    for field in fields:
+        if field.is_relation:
+            continue
+        if field.name in skip_field_names:
+            continue
+        if _field_output_type_for(field) is None:
+            continue
+        setattr(cls, field.name, strawberry.field(resolver=_make_file_resolver(field)))

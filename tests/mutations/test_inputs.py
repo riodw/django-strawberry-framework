@@ -11,15 +11,19 @@ Covers the spec-036 Slice 1 generation substrate
 - ``mutation_input_type_name`` stable full-shape names + shape-derived narrowed
   names, with dedupe + the distinct-shape collision ``ConfigurationError`` via
   ``materialize_mutation_input_class``;
-- the ``Upload`` staged-seam ``NotImplementedError`` for file/image columns;
+- the ``FileField`` / ``ImageField`` -> ``Upload`` input mapping (required /
+  optional shapes, ``| None`` widening, ``Meta.fields`` / ``Meta.exclude``
+  narrowing, and the lifted spec-036 CR-6 merge-override carve-out)
+  (TODO-ALPHA-037-0.0.11);
 - ``FieldError`` / ``build_payload_type`` envelope shape + the ``node`` / ``result``
   slot;
 - the ``FieldError`` public export.
 
 System-under-test is the generator itself, run against the realistic products
 ``Item`` / ``Category`` FK fixtures plus minimal package-local fixture models for
-the M2M, non-Relay-target, and ``FileField`` shapes products does not carry
-(spec-036 Slice 1 test plan; products is every-Relay and has no M2M / file field).
+the M2M, non-Relay-target, and ``FileField`` / ``ImageField`` shapes products does
+not carry (spec-036 Slice 1 test plan; products is every-Relay and has no M2M /
+file field).
 """
 
 from __future__ import annotations
@@ -54,6 +58,7 @@ from django_strawberry_framework.mutations.inputs import (
     payload_object_slot,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.scalars import Upload
 
 
 @pytest.fixture(autouse=True)
@@ -528,20 +533,14 @@ def test_distinct_shapes_colliding_on_one_name_raise_configuration_error():
 # Upload mapping (TODO-ALPHA-037-0.0.11) - FileField/ImageField become Upload
 # ---------------------------------------------------------------------------
 
-# TODO(spec-037 Slice 2): replace the staged NotImplementedError tests below
-# with positive generated-input tests.
-# Pseudo-code:
-# - FileField/ImageField create inputs use Upload, required only when
-#   input_field_required(field) is true.
-# - blank=True/null=True fields and every partial input widen to Upload | None
-#   with default UNSET.
-# - Meta.fields / Meta.exclude include and exclude file fields by model name.
-# - custom input_class / partial_input_class fields override the generated upload
-#   field now that the CR-6 file-column exception is lifted.
 
+def test_required_file_field_maps_to_upload():
+    """A plain required ``FileField`` create input maps to ``Upload`` and is NOT optional.
 
-def test_file_field_raises_not_implemented_error():
-    """A ``FileField`` reaching the generator fails loud (the 037 staged seam)."""
+    The python attr is the model field name (``attachment``), never
+    ``attachment_id`` (that is the FK relation scheme); a file/image column is a
+    SCALAR input.
+    """
 
     class HasFile(models.Model):
         attachment = models.FileField()
@@ -554,12 +553,16 @@ def test_file_field_raises_not_implemented_error():
             model = HasFile
             fields = ("id",)
 
-    with pytest.raises(NotImplementedError, match="TODO-ALPHA-037-0.0.11"):
-        build_mutation_input(HasFile, operation_kind=CREATE, primary_type=HasFileType)
+    cls = build_mutation_input(HasFile, operation_kind=CREATE, primary_type=HasFileType)
+    fields = _field_map(cls)
+    assert "attachment" in fields
+    assert "attachment_id" not in fields
+    assert not _is_optional(fields["attachment"])
+    assert _inner_type(fields["attachment"]) is Upload
 
 
-def test_image_field_raises_not_implemented_error():
-    """An ``ImageField`` reaching the generator fails loud (the 037 staged seam)."""
+def test_required_image_field_maps_to_upload():
+    """A plain required ``ImageField`` create input maps to ``Upload`` and is required."""
 
     class HasImage(models.Model):
         avatar = models.ImageField()
@@ -572,8 +575,174 @@ def test_image_field_raises_not_implemented_error():
             model = HasImage
             fields = ("id",)
 
-    with pytest.raises(NotImplementedError, match="Upload"):
-        build_mutation_input(HasImage, operation_kind=CREATE, primary_type=HasImageType)
+    cls = build_mutation_input(HasImage, operation_kind=CREATE, primary_type=HasImageType)
+    fields = _field_map(cls)
+    assert not _is_optional(fields["avatar"])
+    assert _inner_type(fields["avatar"]) is Upload
+
+
+def test_file_field_camel_cases_graphql_name():
+    """A multi-word file column camel-cases its GraphQL alias like any scalar input."""
+
+    class HasArt(models.Model):
+        cover_art = models.FileField()
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class HasArtType(DjangoType, relay.Node):
+        class Meta:
+            model = HasArt
+            fields = ("id",)
+
+    cls = build_mutation_input(HasArt, operation_kind=CREATE, primary_type=HasArtType)
+    fields = _field_map(cls)
+    assert _inner_type(fields["cover_art"]) is Upload
+    assert fields["cover_art"].graphql_name == "coverArt"
+
+
+def test_blank_file_field_widens_to_upload_optional():
+    """A ``blank=True`` file column is optional + ``UNSET``-defaulted with inner ``Upload``.
+
+    ``blank`` is the ``input_field_required`` ``not field.blank`` branch.
+    """
+
+    class HasBlankFile(models.Model):
+        attachment = models.FileField(blank=True)
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class HasBlankFileType(DjangoType, relay.Node):
+        class Meta:
+            model = HasBlankFile
+            fields = ("id",)
+
+    cls = build_mutation_input(HasBlankFile, operation_kind=CREATE, primary_type=HasBlankFileType)
+    fields = _field_map(cls)
+    assert _is_optional(fields["attachment"])
+    assert fields["attachment"].default is UNSET
+    assert _inner_type(fields["attachment"]) is Upload
+
+
+def test_null_file_field_widens_to_upload_optional():
+    """A ``null=True`` file column is optional + ``UNSET``-defaulted with inner ``Upload``.
+
+    ``null`` is the ``input_field_required`` ``field.null`` branch (distinct from
+    the ``blank`` branch above), so both requiredness paths are pinned.
+    """
+
+    class HasNullFile(models.Model):
+        attachment = models.FileField(null=True)
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class HasNullFileType(DjangoType, relay.Node):
+        class Meta:
+            model = HasNullFile
+            fields = ("id",)
+
+    cls = build_mutation_input(HasNullFile, operation_kind=CREATE, primary_type=HasNullFileType)
+    fields = _field_map(cls)
+    assert _is_optional(fields["attachment"])
+    assert fields["attachment"].default is UNSET
+    assert _inner_type(fields["attachment"]) is Upload
+
+
+def test_partial_input_file_field_always_optional_upload():
+    """Every partial input file column is optional + ``UNSET``-defaulted, even when required-on-create."""
+
+    class HasFile(models.Model):
+        attachment = models.FileField()  # required on create
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class HasFileType(DjangoType, relay.Node):
+        class Meta:
+            model = HasFile
+            fields = ("id",)
+
+    cls = build_mutation_input(HasFile, operation_kind=PARTIAL, primary_type=HasFileType)
+    fields = _field_map(cls)
+    assert _is_optional(fields["attachment"])
+    assert fields["attachment"].default is UNSET
+    assert _inner_type(fields["attachment"]) is Upload
+
+
+def test_file_field_narrowed_by_meta_fields_and_exclude():
+    """A file column is included / excluded by model field name via ``fields`` / ``exclude``."""
+
+    class HasFileAndName(models.Model):
+        name = models.TextField()
+        attachment = models.FileField()
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class HasFileAndNameType(DjangoType, relay.Node):
+        class Meta:
+            model = HasFileAndName
+            fields = ("id",)
+
+    # ``fields`` dropping the file column drops it from the input.
+    only_name = build_mutation_input(
+        HasFileAndName,
+        operation_kind=CREATE,
+        primary_type=HasFileAndNameType,
+        fields=("name",),
+    )
+    assert "attachment" not in _field_map(only_name)
+
+    # ``fields`` naming the file column keeps it as ``Upload``.
+    with_file = build_mutation_input(
+        HasFileAndName,
+        operation_kind=CREATE,
+        primary_type=HasFileAndNameType,
+        fields=("name", "attachment"),
+    )
+    assert _inner_type(_field_map(with_file)["attachment"]) is Upload
+
+    # ``exclude`` of the file column drops it too.
+    excluded = build_mutation_input(
+        HasFileAndName,
+        operation_kind=CREATE,
+        primary_type=HasFileAndNameType,
+        exclude=("attachment",),
+    )
+    assert "attachment" not in _field_map(excluded)
+
+
+def test_file_field_consumer_override_skips_generated_upload_field():
+    """A file column in ``overrides`` is SKIPPED, lifting the spec-036 CR-6 carve-out.
+
+    The old staged ``NotImplementedError`` ran BEFORE the override skip, so a file
+    column could not participate in the ``Meta.input_class`` merge override. Now it
+    does, exactly like a scalar - this is the load-bearing carve-out-lift assertion.
+    """
+
+    class HasFileAndName(models.Model):
+        name = models.TextField()
+        attachment = models.FileField()
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class HasFileAndNameType(DjangoType, relay.Node):
+        class Meta:
+            model = HasFileAndName
+            fields = ("id",)
+
+    cls = build_mutation_input(
+        HasFileAndName,
+        operation_kind=CREATE,
+        primary_type=HasFileAndNameType,
+        overrides=frozenset({"attachment"}),
+    )
+    fields = _field_map(cls)
+    assert "attachment" not in fields  # overridden -> skipped, not clobbered
+    assert "name" in fields  # the non-overridden column still generates
 
 
 # ---------------------------------------------------------------------------

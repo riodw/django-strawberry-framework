@@ -45,6 +45,7 @@ from strawberry import relay
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
+from ..scalars import Upload
 from ..types.converters import convert_scalar, scalar_for_field
 from ..types.relay import implements_relay_node
 from ..utils.inputs import (
@@ -292,8 +293,9 @@ def _scalar_input_annotation(field: models.Field, type_name: str) -> Any:
     (a symmetric wire contract), with ``force_nullable=False`` suppressing the
     column's own ``field.null`` widening so the GENERATOR owns nullability via
     the required/optional rule (spec-036 Decision 6; the documented
-    ``force_nullable`` tri-state use). The ``FileField`` / ``ImageField`` Upload
-    seam is handled by the caller before this runs.
+    ``force_nullable`` tri-state use). A ``FileField`` / ``ImageField`` never
+    reaches this helper: the caller maps it to the ``Upload`` scalar in its own
+    branch (TODO-ALPHA-037-0.0.11).
     """
     return convert_scalar(field, type_name, force_nullable=False)
 
@@ -445,8 +447,10 @@ def build_mutation_input(
     ``overrides`` names python attrs a consumer ``input_class`` supplies
     (spec-036 relation-override / spec-010 contract): a column whose generated
     python attr is in ``overrides`` is SKIPPED so the consumer-authored field is
-    honored, not clobbered. In Slice 1 the seam is exercised directly; Slice 2
-    wires it from ``Meta.input_class``.
+    honored, not clobbered. ``mutations/sets.py`` wires it from
+    ``Meta.input_class`` / ``Meta.partial_input_class``; a direct caller may pass
+    it explicitly. File/image columns now participate in this skip like any
+    scalar (TODO-ALPHA-037-0.0.11 lifted the spec-036 CR-6 carve-out).
 
     ``shape`` is the precomputed ``MutationInputShape`` (DRY-1): the bind passes
     the one it already computed for the cache key so the selected fields + type
@@ -472,28 +476,21 @@ def build_mutation_input(
                 field,
                 related_primary_type=registry.get(field.related_model),
             )
+        elif isinstance(field, (models.FileField, models.ImageField)):
+            # A ``FileField`` / ``ImageField`` maps to Strawberry's ``Upload``
+            # scalar (TODO-ALPHA-037-0.0.11), NOT the read-side ``str`` (``SCALAR_MAP``
+            # stays ``str`` for the filter-input path only). A file/image column is a
+            # SCALAR input, so the python attr is the plain field name (never
+            # ``<name>_id`` - that is the FK relation scheme). The triple falls
+            # through to the SAME override-skip / requiredness / ``| None``-widening
+            # machinery the scalar branch uses below, which lifts the spec-036 CR-6
+            # carve-out (the old ``NotImplementedError`` preceded the override skip,
+            # so file columns could not participate in the ``Meta.input_class`` merge
+            # override; now they do, like any scalar).
+            python_attr = field.name
+            graphql_name = graphql_camel_name(python_attr)
+            annotation = Upload
         else:
-            # Upload staged seam (TODO-ALPHA-037-0.0.11). A ``FileField`` /
-            # ``ImageField`` reaching the write generator MUST fail loud rather
-            # than silently emit ``str``: ``SCALAR_MAP`` stays ``str`` for filter
-            # inputs, but mutation inputs become Strawberry ``Upload`` in 037.
-            # TODO(spec-037 Slice 2): replace this raise with Upload mapping.
-            # Pseudo-code:
-            # - if field is FileField/ImageField, set python_attr = field.name,
-            #   graphql_name = graphql_camel_name(field.name), annotation = Upload.
-            # - leave requiredness to the existing input_field_required() branch;
-            #   optional fields and all partial inputs widen to Upload | None.
-            # - perform the python_attr in overrides skip after assigning the attr,
-            #   so Meta.input_class / Meta.partial_input_class overrides are honored.
-            # - never use attachment_id naming; file/image columns are scalar inputs.
-            if isinstance(field, (models.FileField, models.ImageField)):
-                raise NotImplementedError(
-                    f"{model.__name__}.{field.name} is a "
-                    f"{type(field).__name__}; mapping file/image columns to the "
-                    "Upload scalar on the mutation input side is TODO-ALPHA-037-0.0.11 "
-                    "(spec-036 Slice 1 staged seam). Until that card ships, exclude "
-                    "this column via Meta.exclude.",
-                )
             python_attr = field.name
             graphql_name = graphql_camel_name(python_attr)
             annotation = _scalar_input_annotation(field, type_name)

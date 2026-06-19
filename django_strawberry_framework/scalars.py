@@ -1,6 +1,10 @@
 """Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 
-Today: ``BigInt``. Future scalars (e.g. ``Upload`` per TODO-ALPHA-035-0.0.11) land here.
+Today: ``BigInt`` (a package-custom scalar) and ``Upload`` (re-exported from
+Strawberry's built-in ``strawberry.file_uploads.scalars`` per
+TODO-ALPHA-037-0.0.11). Unlike ``BigInt``, ``Upload`` is NOT registered in
+``_PACKAGE_SCALAR_MAP``: Strawberry's built-in ``DEFAULT_SCALAR_REGISTRY``
+already owns it, so an ``Upload``-annotated field resolves in any schema.
 
 ``BigInt`` is a JSON-safe scalar typically used to map Django's 64-bit
 integer fields (``BigIntegerField``, ``PositiveBigIntegerField``). It is
@@ -18,17 +22,22 @@ from collections.abc import Mapping
 from typing import Any, NewType
 
 import strawberry
+from strawberry.file_uploads.scalars import Upload, UploadDefinition
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types.scalar import ScalarDefinition
 
-# TODO(spec-037 Slice 2): re-export Strawberry's built-in Upload scalar here.
-# Pseudo-code:
-# - from strawberry.file_uploads.scalars import Upload, UploadDefinition
-# - expose both from this module, but add only Upload to the package root.
-# - do not put Upload in _PACKAGE_SCALAR_MAP; Strawberry's default scalar registry
-#   already owns it, unlike this package's BigInt NewType.
-# - replace the stale TODO-ALPHA-035 docstring reference above with
-#   TODO-ALPHA-037-0.0.11 when the re-export lands.
+# Re-export Strawberry's built-in ``Upload`` scalar (and its ``UploadDefinition``)
+# as the package's public upload scalar (TODO-ALPHA-037-0.0.11). ``Upload`` is a
+# ``NewType("Upload", bytes)`` already present in Strawberry's
+# ``DEFAULT_SCALAR_REGISTRY``, so it resolves in every schema with NO
+# ``_PACKAGE_SCALAR_MAP`` entry - the deliberate contrast with the package-custom
+# ``BigInt`` (which IS absent from the default registry and so must be mapped).
+__all__ = [
+    "BigInt",
+    "Upload",
+    "UploadDefinition",
+    "strawberry_config",
+]
 
 # Plain ASCII decimal, optional ASCII minus for non-zero values, no leading
 # zeroes except "0" itself. Rejects underscores (PEP 515), plus signs, Unicode

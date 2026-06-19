@@ -94,17 +94,9 @@ For the current capability snapshot — what the package can actually do in the 
 
 A quick summary:
 
-**Shipped today** (`0.0.10`):
-<!-- TODO(spec-037 Slice 4): update this capability snapshot after implementation.
-Pseudo-code:
-- Change the shipped version/status language to 0.0.11.
-- Move the Upload scalar plus generated FileField/ImageField mutation-input typing
-  out of "Coming next" and into the shipped mutation/scalar bullets.
-- Word it as scalar/generated typing only; do not imply the future multipart
-  TestClient ergonomics have shipped.
--->
+**Shipped today** (`0.0.11`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`
-- scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, file/image, choice enums)
+- scalar conversion (text, integer, boolean, float, decimal, date/time, UUID, binary, choice enums; file/image read output as the structured `DjangoFileType` / `DjangoImageType` objects, with the filter / scalar-input value staying `str`)
 - specialized scalar conversions (`BigIntegerField` / `PositiveBigIntegerField` → `BigInt`, `JSONField` → `JSON`, PostgreSQL `ArrayField` → `list[T]`, PostgreSQL `HStoreField` → `JSON`)
 - relation conversion (forward / reverse FK, forward / reverse OneToOne, forward / reverse M2M)
 - `Meta.interfaces = (relay.Node,)` for Relay-node-shaped types with `id: GlobalID!`
@@ -129,9 +121,9 @@ Pseudo-code:
 - `manage.py inspect_django_type` (new in `0.0.9`) — diagnostic command printing a finalized `DjangoType`'s per-field GraphQL resolution table (Django field → resolved GraphQL type → nullability → converter row). Dispatches the positional arg by shape (dotted path vs unique bare-name registry lookup) and accepts `--schema <selector>` to register + finalize on a cold CLI process. See [`GLOSSARY.md#schema-introspection-management-command`][glossary-inspect-django-type].
 - `apply_cascade_permissions` / `aapply_cascade_permissions` (new in `0.0.10`) — cascade-permissions subsystem: one call inside a type's `get_queryset` cascades that type's visibility across its single-column forward FK / OneToOne edges, dropping parent rows whose targets a target type's own `get_queryset` hides. Four invariants (`ContextVar` cycle guard, single-column forward scope, nullable-FK preservation, caller-alias pinning), loud `fields=` validation, a sync + `sync_to_async` async pair, and zero added query round-trips (the `__in` subqueries compile into the caller's single `SELECT`); composes with the shipped `check_<field>_permission` gates, connections, node refetch, and list fields through their existing seams. Exported from the package root. See [`GLOSSARY.md#apply_cascade_permissions`][glossary-apply-cascade-permissions].
 - mutations + auto-generated `Input` types (new in `0.0.11`) — the package's write side: a `DjangoMutation` base configured through a nested `class Meta` (`model` + `operation` ∈ `{"create", "update", "delete"}`, the DRF shape, not Strawberry decorators), exposed on the schema's `Mutation` type through the `DjangoMutationField` factory (the write-side sibling of `DjangoConnectionField`). Auto-generated `<Model>Input` (each editable field required only when it has no usable Django `default` / `blank` / `null`, else optional) / `<Model>PartialInput` (all-optional) derive from `Meta.model` reusing the read-side scalar / relation converters (forward FK / OneToOne → `<field>_id`, M2M → `list[id]`); the shared `FieldError` envelope (`field` + `messages`) surfaces `full_clean()` validation through a `<Name>Payload` carrying the mutated object in a uniform `node` / `result` slot plus `errors: list[FieldError]!`. Write authorization is a separate, DRF-shaped contract — `Meta.permission_classes` (default `[DjangoModelPermission]`, the Django `add` / `change` / `delete` model perms) plus an overridable `check_permission` — kept distinct from `get_queryset` visibility (can-view ≠ can-write). `update` / `delete` lookups run through the target type's `get_queryset` (a hidden row is not-found, no existence leak); the post-write row is re-fetched and optimizer-planned (`select_related` / `prefetch_related`, no `.only()` under the mutation operation). Sync + async. `DjangoMutation` / `DjangoMutationField` / `FieldError` / `DjangoModelPermission` are exported from the package root. See [`GLOSSARY.md#djangomutation`][glossary-djangomutation].
+- `Upload` scalar + file/image field mapping (new in `0.0.11`) — the `Upload` scalar (Strawberry's built-in, re-exported from the package root) and the generated `DjangoMutation` input mapping of `FileField` / `ImageField` editable columns → `Upload` (required per the shipped per-field rule, `Upload | None` on `blank` / `null`); on the read side, `FileField` / `ImageField` columns convert to the structured `DjangoFileType` / `DjangoImageType` output objects (`name` non-null; `path` / `size` / `url`, plus image `width` / `height`, nullable and storage-safe) via the new `FIELD_OUTPUT_TYPE_MAP`. This is the scalar and generated mutation-field typing — not full multipart HTTP upload ergonomics, which await the `0.0.14` `TestClient`. `Upload` / `DjangoFileType` / `DjangoImageType` are exported from the package root. See [`GLOSSARY.md#upload-scalar`][glossary-upload-scalar].
 
-**Coming next — remaining alpha (`0.0.11` → `0.0.14`):**
-- `0.0.11` — the `Upload` scalar + file/image field mapping (the sibling write-side card; mutations + auto-generated `Input` types already shipped above)
+**Coming next — remaining alpha (`0.0.12` → `0.0.14`):**
 - `0.0.12` — form-based mutations (Django Forms / ModelForms)
 - `0.0.13` — DRF serializer mutations (`SerializerMutation`) and auth mutations (`login` / `logout` / `register`)
 - `0.0.14` — Channels ASGI router, debug-toolbar middleware, test-client helper, response-extensions debug middleware
@@ -293,6 +285,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-plan-cache]: GLOSSARY.md#plan-cache
 [glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
 [glossary-schema-export-management-command]: GLOSSARY.md#schema-export-management-command
+[glossary-upload-scalar]: GLOSSARY.md#upload-scalar
 
 <!-- docs/SPECS/ -->
 

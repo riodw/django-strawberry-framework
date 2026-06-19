@@ -18,15 +18,6 @@ Coverage knock-ons: these tests exercise ``convert_scalar``'s ``null``
 widening branch and ``registry.register_enum`` / ``get_enum``.
 """
 
-# TODO(spec-037 Slice 1): add synthetic FileField/ImageField converter coverage here.
-# Pseudo-code:
-# - build unmanaged models with FileField, ImageField, blank=True, and null=True.
-# - assert convert_scalar() returns DjangoFileType / DjangoImageType from
-#   FIELD_OUTPUT_TYPE_MAP while scalar_for_field() still returns str.
-# - assert ImageField subclasses resolve to DjangoImageType before FileField.
-# - assert nullable_overrides / required_overrides still win over blank/null.
-# - assert a FilterSet over a FileField still generates a scalar string input.
-
 import enum
 import itertools
 
@@ -44,9 +35,16 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types import converters
 from django_strawberry_framework.types.converters import (
+    FIELD_OUTPUT_TYPE_MAP,
+    SCALAR_MAP,
+    DjangoFileType,
+    DjangoImageType,
+    _field_output_type_for,
     _sanitize_member_name,
     convert_choices_to_enum,
+    convert_field_output,
     convert_scalar,
+    scalar_for_field,
 )
 
 _app_label_counter = itertools.count(1)
@@ -1671,3 +1669,164 @@ def test_convert_scalar_force_nullable_on_hstore_field(monkeypatch):
     nullable_field = _HStoreOwner._meta.get_field("nullable_data")
     narrowed = convert_scalar(nullable_field, "OwnerType", force_nullable=False)
     assert narrowed is strawberry.scalars.JSON
+
+
+# ---------------------------------------------------------------------------
+# File / image read-output mapping (spec-037 Slice 1, Decision 3 / Decision 4)
+# ---------------------------------------------------------------------------
+
+
+class _SubImageField(models.ImageField):
+    """A consumer ``ImageField`` subclass, to pin the MRO precedence walk."""
+
+
+def test_convert_field_output_filefield_to_djangofiletype():
+    """A ``FileField`` resolves to ``DjangoFileType`` via ``FIELD_OUTPUT_TYPE_MAP``."""
+
+    class _FileOwner(models.Model):
+        attachment = models.FileField()
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_filefield_output")
+
+    field = _FileOwner._meta.get_field("attachment")
+    assert convert_field_output(field, "OwnerType") is DjangoFileType
+    assert _field_output_type_for(field) is DjangoFileType
+
+
+def test_convert_field_output_imagefield_to_djangoimagetype():
+    """An ``ImageField`` resolves to ``DjangoImageType`` via ``FIELD_OUTPUT_TYPE_MAP``."""
+
+    class _ImageOwner(models.Model):
+        preview = models.ImageField()
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_imagefield_output")
+
+    field = _ImageOwner._meta.get_field("preview")
+    assert convert_field_output(field, "OwnerType") is DjangoImageType
+
+
+def test_field_output_map_mro_precedence_image_subclass_wins():
+    """An ``ImageField`` subclass resolves to ``DjangoImageType``, never ``DjangoFileType``.
+
+    ``ImageField`` is a ``FileField`` subclass, so the MRO walk must hit the
+    ``ImageField`` row before the ``FileField`` row (the same precedence as
+    ``PositiveBigIntegerField`` -> ``BigInt`` before ``IntegerField``).
+    """
+
+    class _SubImageOwner(models.Model):
+        preview = _SubImageField()
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_subimage_mro")
+
+    field = _SubImageOwner._meta.get_field("preview")
+    assert _field_output_type_for(field) is DjangoImageType
+    assert convert_field_output(field, "OwnerType") is DjangoImageType
+
+
+def test_convert_field_output_blank_and_null_widen_to_optional():
+    """``blank=True`` OR ``null=True`` widens the object to ``<object> | None``.
+
+    A plain required (no blank / no null) file column returns the bare object.
+    """
+
+    class _NullabilityOwner(models.Model):
+        required = models.FileField()
+        blank_file = models.FileField(blank=True)
+        null_file = models.FileField(null=True)
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_file_nullability")
+
+    required = _NullabilityOwner._meta.get_field("required")
+    blank_file = _NullabilityOwner._meta.get_field("blank_file")
+    null_file = _NullabilityOwner._meta.get_field("null_file")
+
+    assert convert_field_output(required, "OwnerType") is DjangoFileType
+    assert convert_field_output(blank_file, "OwnerType") == (DjangoFileType | None)
+    assert convert_field_output(null_file, "OwnerType") == (DjangoFileType | None)
+
+
+def test_convert_field_output_force_nullable_overrides_blank_null():
+    """``force_nullable`` wins over the column's ``field.null`` / ``field.blank``.
+
+    ``required_overrides`` (``force_nullable=False``) forces ``DjangoFileType``
+    even on a ``blank=True`` column; ``nullable_overrides``
+    (``force_nullable=True``) forces ``DjangoFileType | None`` even on a plain
+    required column.
+    """
+
+    class _OverrideOwner(models.Model):
+        required = models.FileField()
+        blank_file = models.FileField(blank=True)
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_file_force_nullable")
+
+    required = _OverrideOwner._meta.get_field("required")
+    blank_file = _OverrideOwner._meta.get_field("blank_file")
+
+    assert convert_field_output(required, "OwnerType", force_nullable=True) == (
+        DjangoFileType | None
+    )
+    assert convert_field_output(blank_file, "OwnerType", force_nullable=False) is DjangoFileType
+
+
+def test_convert_field_output_delegates_scalar_columns():
+    """A non-file column delegates to ``convert_scalar`` unchanged."""
+
+    class _ScalarOwner(models.Model):
+        title = models.TextField()
+        count = models.IntegerField(null=True)
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_scalar_delegation")
+
+    title = _ScalarOwner._meta.get_field("title")
+    count = _ScalarOwner._meta.get_field("count")
+    assert convert_field_output(title, "OwnerType") is str
+    assert convert_field_output(count, "OwnerType") == (int | None)
+    # The force_nullable tri-state still threads through to the scalar path.
+    assert convert_field_output(title, "OwnerType", force_nullable=True) == (str | None)
+
+
+def test_file_columns_stay_scalar_on_the_filter_input_path():
+    """P0 split: the SHARED scalar/filter-input path still sees ``str`` for a file column.
+
+    ``FIELD_OUTPUT_TYPE_MAP`` is read-output-only; ``scalar_for_field`` (the
+    lookup ``filters/inputs._scalar_from_model_field`` delegates to) walks
+    ``SCALAR_MAP`` only, so a file column resolves to a scalar ``str`` filter
+    input and no ``DjangoFileType`` / ``DjangoImageType`` output object ever
+    reaches a GraphQL input. ``SCALAR_MAP``'s file/image rows stay ``str``.
+    """
+    from django_strawberry_framework.filters.inputs import _scalar_from_model_field
+
+    class _FilterOwner(models.Model):
+        attachment = models.FileField()
+        preview = models.ImageField()
+
+        class Meta:
+            managed = False
+            app_label = _unique_app_label("test_file_filter_scalar")
+
+    attachment = _FilterOwner._meta.get_field("attachment")
+    preview = _FilterOwner._meta.get_field("preview")
+
+    # The package's filter-input scalar lookup keeps file/image columns scalar.
+    assert scalar_for_field(attachment) is str
+    assert scalar_for_field(preview) is str
+    assert _scalar_from_model_field(attachment) is str
+    assert _scalar_from_model_field(preview) is str
+    # The shared SCALAR_MAP rows are untouched by the new output map.
+    assert SCALAR_MAP[models.FileField] is str
+    assert SCALAR_MAP[models.ImageField] is str
+    assert FIELD_OUTPUT_TYPE_MAP[models.FileField] is DjangoFileType
+    assert FIELD_OUTPUT_TYPE_MAP[models.ImageField] is DjangoImageType

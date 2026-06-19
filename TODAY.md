@@ -107,15 +107,7 @@ Two rules the package enforces: `finalize_django_types()` must run **after** eve
 - `FloatField` → `float`
 - `UUIDField` → `uuid.UUID`
 - `BinaryField` → `bytes`
-<!-- TODO(spec-037 Slice 4): rewrite the file/image row after implementation.
-Pseudo-code:
-- Read output becomes DjangoFileType / DjangoImageType with nullable storage
-  subfields and empty-file object nullability.
-- Filter/scalar input remains str for stored file name/path filters.
-- Generated DjangoMutation input becomes Upload, but fakeshop products still do
-  not exercise a concrete file/image model.
--->
-- `FileField` / `ImageField` → `str`
+- `FileField` / `ImageField` → structured `DjangoFileType` / `DjangoImageType` read output (`name` non-null; `path` / `size` / `url`, plus image `width` / `height`, nullable / storage-safe; via `FIELD_OUTPUT_TYPE_MAP`; switched from `str` in `0.0.11` — breaking wire-format change). The filter / scalar-input value stays `str`; the generated `DjangoMutation` input is the `Upload` scalar
 - `JSONField` → `strawberry.scalars.JSON`
 - PostgreSQL `ArrayField` → `list[T]` (recursive through `field.base_field`; soft-registered when `django.contrib.postgres.fields` imports)
 - PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered)
@@ -330,6 +322,7 @@ These ship today but products' model shapes don't reach them; they're covered by
 - **`Meta.nullable_overrides` / `Meta.required_overrides`** (shipped `0.0.9`) — force a scalar field's GraphQL nullability independent of its Django column (`T!`→`T` or `T`→`T!`), scalar-only, validated at type creation. Products declares no override; the library app's `NullabilityOverrideBookType` exercises both directions. See [`docs/GLOSSARY.md#metanullable_overrides`][glossary-metanullable_overrides].
 - **Root `node(id:)` / `nodes(ids:)` refetch fields** (`DjangoNodeField` / `DjangoNodesField`, shipped `0.0.9`) — the single-object and batch Relay refetch entry points that [`GOAL.md`][goal]'s astronomy `Query` declares (`galaxy: GalaxyNode | None = DjangoNodeField(GalaxyNode)`). Each decodes a model-anchored `GlobalID` to its type and reruns that type's `get_queryset`; resolution is nullable by contract (a decodable id identifying no row resolves to `null` / a positional `null` hole with no existence-probing query), while an undecodable payload surfaces a `GLOBALID_INVALID` error. `nodes` batches one query per decoded type and returns results in input order, preserving duplicates and null holes. Products' `Query` is connections-only, so it declares neither yet (`TODO-BETA-051-0.1.5`). See [`docs/GLOSSARY.md#djangonodefield`][glossary-djangonodefield] / [`#djangonodesfield`][glossary-djangonodesfield].
 - **`Meta.connection` (`totalCount`)** (shipped `0.0.9`) — opts a connection into the Relay `totalCount` field, served from a `Count(1) OVER` window on the optimizer fast path. Products' connections omit it; the library app's `BookType` declares `connection = {"total_count": True}`. See [`docs/GLOSSARY.md#metaconnection`][glossary-metaconnection].
+- **`Upload` scalar + file/image mapping** (shipped `0.0.11`) — the re-exported `Upload` scalar, the structured `DjangoFileType` / `DjangoImageType` read output, and the generated `DjangoMutation` `FileField` / `ImageField` → `Upload` mutation-input mapping. No fakeshop app declares a file/image column, so products exercises none of these; synthetic-model package tests cover read, write, and storage-failure paths. A live fakeshop upload surface is deferred to `TODO-BETA-051-0.1.5`. See [`docs/GLOSSARY.md#upload-scalar`][glossary-upload-scalar] / [`#djangofiletype`][glossary-djangofiletype] / [`#djangoimagetype`][glossary-djangoimagetype].
 
 <!-- LINK DEFINITIONS -->
 
@@ -340,6 +333,8 @@ These ship today but products' model shapes don't reach them; they're covered by
 <!-- docs/ -->
 [glossary]: docs/GLOSSARY.md
 [glossary-apply-cascade-permissions]: docs/GLOSSARY.md#apply_cascade_permissions
+[glossary-djangofiletype]: docs/GLOSSARY.md#djangofiletype
+[glossary-djangoimagetype]: docs/GLOSSARY.md#djangoimagetype
 [glossary-djangomutation]: docs/GLOSSARY.md#djangomutation
 [glossary-djangonodefield]: docs/GLOSSARY.md#djangonodefield
 [glossary-djangonodesfield]: docs/GLOSSARY.md#djangonodesfield
@@ -348,6 +343,7 @@ These ship today but products' model shapes don't reach them; they're covered by
 [glossary-metaprimary]: docs/GLOSSARY.md#metaprimary
 [glossary-metarelation_shapes]: docs/GLOSSARY.md#metarelation_shapes
 [glossary-scalar-field-override-semantics]: docs/GLOSSARY.md#scalar-field-override-semantics
+[glossary-upload-scalar]: docs/GLOSSARY.md#upload-scalar
 
 <!-- docs/SPECS/ -->
 

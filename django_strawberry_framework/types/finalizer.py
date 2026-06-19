@@ -75,7 +75,7 @@ from .relay import (
     install_globalid_typename_resolver,
     install_relay_node_resolvers,
 )
-from .resolvers import _attach_relation_resolvers
+from .resolvers import _attach_file_resolvers, _attach_relation_resolvers
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from .definition import DjangoTypeDefinition
@@ -627,15 +627,20 @@ def finalize_django_types() -> None:
             definition.selected_fields,
             skip_field_names=definition.consumer_assigned_relation_fields,
         )
-        # TODO(spec-037 Slice 1): call _attach_file_resolvers here after it
-        # exists. Pseudo-code:
-        # - pass definition.selected_fields and definition.consumer_authored_fields,
-        #   not just consumer_assigned_relation_fields, so annotation-only
-        #   file/image overrides keep their legacy scalar shape.
-        # - attach before Phase 3 strawberry.type(...) freezes fields, matching
-        #   the generated relation-resolver timing.
-        # - keep interface injection order unchanged; file columns are scalar
-        #   object wrappers and do not interact with relay.Node defaults.
+        # File/image columns get a generated parent resolver in the SAME
+        # Phase-2 window (the only place resolvers attach before Phase 3
+        # ``strawberry.type(...)`` freezes the class). The skip set is the full
+        # ``consumer_authored_fields`` union -- BROADER than the relation pass's
+        # ``consumer_assigned_relation_fields`` -- so an annotation-only
+        # ``attachment: str`` override (already honored by ``_build_annotations``)
+        # also gets no generated file resolver (spec-037 Decision 3). Interface
+        # injection order below is unchanged; file columns are scalar object
+        # wrappers and do not interact with relay.Node defaults.
+        _attach_file_resolvers(
+            type_cls,
+            definition.selected_fields,
+            skip_field_names=definition.consumer_authored_fields,
+        )
 
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:

@@ -2,6 +2,26 @@
 
 Public surface:
 
+- ``convert_field_output(field, type_name)`` - the read-output entry point
+  ``types/base.py:_build_annotations`` calls for every non-relation column.
+  Routes ``FileField`` / ``ImageField`` through ``FIELD_OUTPUT_TYPE_MAP`` to
+  the structured ``DjangoFileType`` / ``DjangoImageType`` output objects
+  (widened to ``<object> | None`` on the ``blank``-aware nullability), and
+  delegates every other column to ``convert_scalar``. File/image columns are
+  read-output-only here: the lookup is kept OFF ``convert_scalar`` /
+  ``scalar_for_field`` / ``SCALAR_MAP`` so no output object can ever reach the
+  shared filter-input path (a ``FilterSet`` over a file column still yields a
+  scalar ``str`` input).
+- ``DjangoFileType`` / ``DjangoImageType`` - the structured read-output
+  objects mirroring ``strawberry-graphql-django``. ``DjangoFileType`` carries
+  ``name`` / ``path`` / ``size`` / ``url``; ``DjangoImageType`` subclasses it
+  and adds ``width`` / ``height``. Every nullable subfield delegates to the
+  shared ``_safe_file_attr`` storage guard; ``name`` is read directly.
+- ``FIELD_OUTPUT_TYPE_MAP`` - module-level ``dict[type[models.Field], type]``
+  mapping ``ImageField`` (before ``FileField`` so the MRO walk hits it first)
+  and ``FileField`` to their output object. Consulted only by
+  ``convert_field_output`` and ``resolvers._attach_file_resolvers`` (via the
+  shared ``_field_output_type_for`` MRO walk); never by ``scalar_for_field``.
 - ``convert_scalar(field, type_name)`` - scalar columns
   (``CharField`` -> ``str`` etc.). Walks ``type(field).__mro__`` against
   ``SCALAR_MAP``, then delegates to ``convert_choices_to_enum`` when
@@ -51,17 +71,96 @@ from ..registry import registry
 from ..scalars import BigInt
 from ..utils.strings import pascal_case
 
-# TODO(spec-037 Slice 1): add the read-side file/image object mapping here.
-# Pseudo-code:
-# - define _safe_file_attr(bound_file, attr) that returns None for storage-shaped
-#   ValueError / OSError / NotImplementedError, but lets suspicious path errors
-#   and real resolver bugs propagate.
-# - define resolver-backed @strawberry.type DjangoFileType with name, path, size,
-#   and url; name reads the bound file directly, nullable subfields use the guard.
-# - define DjangoImageType(DjangoFileType) with nullable width and height through
-#   the same guard.
-# - add FIELD_OUTPUT_TYPE_MAP for ImageField before FileField and have the read
-#   converter consult it before falling back to the scalar/filter map below.
+
+def _safe_file_attr(file_file: Any, attr: str) -> Any:
+    """Read ``getattr(file_file, attr)``, degrading storage failures to ``None``.
+
+    The single per-subfield guard shared by every nullable subfield resolver
+    on ``DjangoFileType`` / ``DjangoImageType`` (``path`` / ``size`` / ``url``,
+    plus ``width`` / ``height`` on images). ``file_file`` is the bound
+    ``FieldFile`` the parent resolver returned (always truthy here -- an empty
+    file resolves the whole object to ``None`` before any subfield runs).
+
+    The catch list is deliberately NARROW -- ``ValueError`` / ``OSError`` /
+    ``NotImplementedError`` -- the storage-shaped errors a non-filesystem
+    backend (S3 ``FieldFile.path`` -> ``NotImplementedError``) or a vanished
+    file (``.url`` / ``.size`` -> ``OSError`` / ``ValueError``) raises. Anything
+    else propagates: in particular ``SuspiciousFileOperation`` (a
+    ``SuspiciousOperation``, NOT a ``ValueError`` / ``OSError``) is a
+    path-traversal security signal that must surface as a top-level error, not
+    hide as a ``null`` subfield (spec-037 Decision 4). Catching a broad
+    ``Exception`` would also swallow genuine resolver bugs.
+    """
+    try:
+        return getattr(file_file, attr)
+    except (ValueError, OSError, NotImplementedError):
+        return None
+
+
+@strawberry.type
+class DjangoFileType:
+    """Structured read-output for a Django ``FileField`` (spec-037 Decision 3).
+
+    Mirrors ``strawberry-graphql-django``'s ``DjangoFileType`` field-for-field
+    so a migrating consumer's ``{ avatar { url } }`` selection ports unchanged.
+    The fields are resolver-backed (not bare annotations) because the storage
+    properties (``path`` / ``url`` / ``size``) raise on a non-filesystem
+    backend or a vanished file, and that access happens per-subfield AFTER the
+    parent resolver returns -- outside any parent ``try/except`` -- so the guard
+    must live on each subfield (spec-037 Decision 4). ``self`` IS the bound
+    ``FieldFile`` the generated parent resolver returned.
+
+    Subfield nullability deliberately diverges from upstream's all-non-null
+    shape: ``name`` is non-null (a stored string, present whenever the object
+    is non-null), while ``path`` / ``size`` / ``url`` are nullable so a storage
+    quirk on one property degrades that subfield to ``null`` rather than 500ing
+    the whole query.
+    """
+
+    @strawberry.field
+    def name(self) -> str:
+        """The stored file name. Non-null and read directly (no storage guard)."""
+        return self.name
+
+    @strawberry.field
+    def path(self) -> str | None:
+        """The absolute filesystem path, or ``None`` if storage cannot produce one."""
+        return _safe_file_attr(self, "path")
+
+    @strawberry.field
+    def size(self) -> int | None:
+        """The file size in bytes, or ``None`` if storage cannot read it."""
+        return _safe_file_attr(self, "size")
+
+    @strawberry.field
+    def url(self) -> str | None:
+        """The file URL, or ``None`` if storage cannot produce one."""
+        return _safe_file_attr(self, "url")
+
+
+@strawberry.type
+class DjangoImageType(DjangoFileType):
+    """Structured read-output for a Django ``ImageField`` (spec-037 Decision 3).
+
+    Subclasses ``DjangoFileType`` -- inheriting ``name`` / ``path`` / ``size`` /
+    ``url`` so the four shared subfields are defined once -- and adds the
+    image-only ``width`` / ``height`` dimensions through the same
+    ``_safe_file_attr`` guard. Two distinct types (rather than one flagged type
+    with an ``is_image`` check) keep dimension fields off non-image files and
+    match upstream.
+    """
+
+    @strawberry.field
+    def width(self) -> int | None:
+        """The image width in pixels, or ``None`` if storage cannot read it."""
+        return _safe_file_attr(self, "width")
+
+    @strawberry.field
+    def height(self) -> int | None:
+        """The image height in pixels, or ``None`` if storage cannot read it."""
+        return _safe_file_attr(self, "height")
+
+
 SCALAR_MAP: dict[type[models.Field], Any] = {
     models.AutoField: int,
     models.BigAutoField: int,
@@ -87,11 +186,26 @@ SCALAR_MAP: dict[type[models.Field], Any] = {
     models.TimeField: datetime.time,
     models.JSONField: strawberry.scalars.JSON,
     models.UUIDField: uuid.UUID,
-    # TODO(spec-037 Slice 1): keep these rows as str for FilterSet/scalar-input
-    # generation; DjangoFileType / DjangoImageType belong in FIELD_OUTPUT_TYPE_MAP
-    # so output object types never leak into GraphQL input objects.
+    # FileField / ImageField stay ``str`` here on purpose: SCALAR_MAP is the
+    # SHARED scalar/filter-input map (``scalar_for_field`` walks it for both the
+    # selected-field side and ``filters/inputs._scalar_from_model_field``). The
+    # structured read-output objects live in FIELD_OUTPUT_TYPE_MAP below, so a
+    # FilterSet over a file column still generates a scalar ``str`` input and no
+    # output object ever leaks into a GraphQL input (spec-037 Decision 3).
     models.FileField: str,
     models.ImageField: str,
+}
+
+# Read-output-only file/image map, kept OFF the shared SCALAR_MAP /
+# ``scalar_for_field`` filter-input path (spec-037 Decision 3). ImageField is
+# listed BEFORE FileField (a superclass) so the ``_field_output_type_for`` MRO
+# walk resolves an ``ImageField`` -- and consumer ImageField subclasses -- to
+# ``DjangoImageType`` rather than falling through to ``DjangoFileType``,
+# exactly as ``PositiveBigIntegerField`` resolves to ``BigInt`` before
+# ``IntegerField`` in SCALAR_MAP.
+FIELD_OUTPUT_TYPE_MAP: dict[type[models.Field], type] = {
+    models.ImageField: DjangoImageType,
+    models.FileField: DjangoFileType,
 }
 
 _NON_IDENT = re.compile(r"\W+", flags=re.ASCII)
@@ -230,14 +344,6 @@ def convert_scalar(
     # ArrayField / HStoreField / choice / scalar branches without per-branch
     # override logic.
     effective_null = field.null if force_nullable is None else force_nullable
-    # TODO(spec-037 Slice 1): before the generic scalar path, route FileField /
-    # ImageField through FIELD_OUTPUT_TYPE_MAP for DjangoType output only.
-    # Pseudo-code:
-    # - file_effective_null is force_nullable when the override is set;
-    #   otherwise it is bool(field.null or field.blank).
-    # - output_type = field_output_type_for_field(field) by MRO.
-    # - if output_type exists, return output_type | None when file_effective_null.
-    # - do not change scalar_for_field(), because filters still use SCALAR_MAP.
     # Sentinel-guarded ``ArrayField`` dispatch runs **before** the MRO walk
     # so a subclass-of-``models.Field`` test double does not accidentally
     # match a parent in ``SCALAR_MAP``. The recursive call into
@@ -285,6 +391,58 @@ def convert_scalar(
     if effective_null:
         py_type = py_type | None
     return py_type
+
+
+def _field_output_type_for(field: models.Field) -> type | None:
+    """Return the ``FIELD_OUTPUT_TYPE_MAP`` output object for ``field``, or ``None``.
+
+    Walks ``type(field).__mro__`` against ``FIELD_OUTPUT_TYPE_MAP`` exactly as
+    ``scalar_for_field`` walks ``SCALAR_MAP`` -- so an ``ImageField`` (and any
+    consumer ``ImageField`` subclass) resolves to ``DjangoImageType`` before
+    ``FileField`` is reached -- and returns ``None`` for a non-file column. The
+    single MRO-walk site shared by ``convert_field_output`` (this module) and
+    ``resolvers._attach_file_resolvers``, so the map walk is written once.
+    """
+    for klass in type(field).__mro__:
+        if klass in FIELD_OUTPUT_TYPE_MAP:
+            return FIELD_OUTPUT_TYPE_MAP[klass]
+    return None
+
+
+def convert_field_output(
+    field: models.Field,
+    type_name: str,
+    *,
+    force_nullable: bool | None = None,
+) -> Any:
+    """Map a non-relation Django column to its read-output annotation.
+
+    The read-output entry point ``types/base.py:_build_annotations`` calls for
+    every non-relation column (where it called ``convert_scalar`` directly
+    before spec-037). Routing, not an expansion of ``convert_scalar``:
+
+    - A ``FileField`` / ``ImageField`` resolves through ``FIELD_OUTPUT_TYPE_MAP``
+      to ``DjangoFileType`` / ``DjangoImageType``, widened to ``<object> | None``
+      on the ``blank``-aware effective nullability (spec-037 Decision 4): the
+      ``force_nullable`` override wins when set, else the object is nullable when
+      the column is ``null=True`` OR ``blank=True`` (a ``blank=True`` column
+      stores an empty file the parent resolver maps to ``None``, so the field
+      must be nullable to represent it).
+    - Every other column delegates unchanged to ``convert_scalar`` -- keeping
+      ``convert_scalar`` / ``scalar_for_field`` / ``SCALAR_MAP`` scalar-only so
+      the shared filter-input path never sees an output object.
+
+    ``force_nullable`` carries the same ``Meta.nullable_overrides`` /
+    ``Meta.required_overrides`` tri-state as ``convert_scalar``, threaded
+    through unchanged so ``_build_annotations`` swaps one call for the other.
+    """
+    output_type = _field_output_type_for(field)
+    if output_type is None:
+        return convert_scalar(field, type_name, force_nullable=force_nullable)
+    file_effective_null = (
+        bool(field.null or field.blank) if force_nullable is None else force_nullable
+    )
+    return output_type | None if file_effective_null else output_type
 
 
 def _sanitize_member_name(value: Any) -> str:

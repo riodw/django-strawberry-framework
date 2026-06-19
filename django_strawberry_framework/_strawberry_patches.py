@@ -51,6 +51,25 @@ it: the original is called unchanged and only the previously-uncaught
 ...)`` Strawberry already raises for malformed JSON. This keeps the
 patch robust to upstream changes in the body of ``parse_json``.
 
+A second gap: non-object JSON bodies
+------------------------------------
+
+The same wrapper also closes a sibling gap. ``parse_http_body`` handles
+a request body that decodes to a JSON object (a single operation) and to
+a JSON array (a batch, via ``_validate_batch_request``), but a body that
+is a valid JSON *scalar* - ``"a string"``, ``42``, ``true``, ``null`` -
+falls through both branches to ``data.get("query")`` and raises a raw
+``AttributeError`` (``'str' object has no attribute 'get'``) -> an
+unhandled ``500``. A JSON scalar is never a valid GraphQL-over-HTTP
+request body, so the wrapper rejects a parsed result that is neither a
+``dict`` nor a ``list`` with the same ``HTTPException(400, ...)``. The
+``list`` case is passed through so upstream's own batch validation keeps
+ownership of it. ``parse_json`` is the *only* producer of a
+scalar ``data`` that reaches ``parse_http_body`` (the GET
+``parse_query_params`` and ``parse_multipart`` paths always return a
+``dict``), so the one-site fix covers the sync and async views together,
+exactly as the ``UnicodeDecodeError`` widening does.
+
 Upstream status
 ---------------
 
@@ -68,6 +87,22 @@ patch can be retired once upstream broadens the catch to also cover
 ``UnicodeDecodeError`` (or ``ValueError``); the graceful no-op in
 :func:`apply` means a future fixed Strawberry needs no action here.
 
+The second gap (non-object body) is likewise unfixed in 0.317.2 and
+``main`` (checked 2026-06-19). ``parse_http_body`` still handles only the
+``list`` (batch) branch and then calls ``data.get("query")`` with no
+``isinstance(data, dict)`` guard:
+<https://github.com/strawberry-graphql/strawberry/blob/e7d4a8235a11a4c4fd2b9fa605c437c9f86e5fb7/strawberry/http/sync_base_view.py>
+(and the ``async_base_view.py`` sibling). It is tracked by the **open**
+issue #3398, "AttributeError when query passed is a list and not a dict"
+(opened 2024-02-27 against 0.219.2, no merged PR):
+<https://github.com/strawberry-graphql/strawberry/issues/3398>. The
+issue's title says *list* because at 0.219.2 a top-level list was
+unguarded too; current versions intercept lists in the batch branch, so
+the still-unhandled trigger is the JSON *scalar* case - the same
+``data.get()``-on-a-non-dict root cause, narrowed to scalars. Retire the
+scalar guard once #3398 lands an ``isinstance(data, dict)`` check (or
+equivalent) ahead of ``data.get("query")``.
+
 Re-checking whether upstream fixed this
 ---------------------------------------
 
@@ -76,35 +111,42 @@ whether this patch is still required:
 
 1. End-to-end (definitive). Disable the patches and run the live
    regression: set ``DJANGO_STRAWBERRY_FRAMEWORK =
-   {"APPLY_UPSTREAM_PATCHES": False}`` and run the fakeshop tests
-   ``test_post_invalid_utf8_json_body_returns_400_not_500`` and
-   ``test_post_raw_binary_body_returns_400_not_500``::
+   {"APPLY_UPSTREAM_PATCHES": False}`` and run the fakeshop tests for
+   both gaps - ``test_post_invalid_utf8_json_body_returns_400_not_500``
+   and ``test_post_raw_binary_body_returns_400_not_500`` (UnicodeDecodeError)
+   plus ``test_post_non_object_json_body_returns_400_not_500`` (scalar
+   body)::
 
-       uv run pytest examples/fakeshop/test_query/test_products_api.py -k "utf8 or binary"
+       uv run pytest examples/fakeshop/test_query/test_products_api.py \
+           -k "utf8 or binary or non_object"
 
-   If they still return 400 with the patch off, upstream has fixed it
-   and this module can be deleted; if they 500, the patch is still
-   needed.
+   If they still return 400 with the patch off, upstream has fixed that
+   gap; if they 500, the patch is still needed. Both gaps must be fixed
+   upstream before this module can be deleted.
 
 2. Quick probe of the *installed* version. This module captures the
-   unwrapped upstream callable, so you can exercise it directly::
+   unwrapped upstream callable, so you can exercise each gap directly::
 
        from django_strawberry_framework import _strawberry_patches as p
        from strawberry.http.base import BaseView
 
+       # Gap 1 (UnicodeDecodeError): b'{' + an invalid UTF-8 byte
        try:
-           # b'{' + an invalid UTF-8 continuation byte
            p._original_parse_json(BaseView(), bytes([0x7b, 0x80]))
        except UnicodeDecodeError:
-           print("STILL NEEDED")  # upstream catch is still too narrow
+           print("GAP 1 STILL NEEDED")  # upstream catch is still too narrow
        except Exception as exc:  # noqa: BLE001
-           # e.g. HTTPException -> upstream now returns a clean 400
-           print("RETIRABLE:", type(exc).__name__)
+           print("GAP 1 RETIRABLE:", type(exc).__name__)  # e.g. HTTPException
+
+       # Gap 2 (non-object body) lives in ``parse_http_body``, not
+       # ``parse_json`` (which just returns the scalar), so probe end-to-end
+       # via the live test above, or read the ``data.get("query")`` site in
+       # sync_base_view.py / async_base_view.py and confirm a non-dict guard
+       # now precedes it.
 
    To check a newer release without upgrading, re-read ``parse_json`` /
-   ``decode_json`` at the permalink above and confirm the ``except``
-   now covers ``UnicodeDecodeError`` (or ``ValueError``). The latest
-   published version is at
+   ``decode_json`` at the permalink above (gap 1) and ``parse_http_body``
+   (gap 2) on the current ``main``. The latest published version is at
    ``https://pypi.org/pypi/strawberry-graphql/json`` (``info.version``).
 
 Surface visibility
@@ -149,19 +191,41 @@ _missing_symbol_logged = False
 
 
 def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
-    """Wrapper around ``BaseView.parse_json`` that also catches decode errors.
+    """Wrapper around ``BaseView.parse_json`` hardening two upstream gaps.
 
-    Identical to upstream except that a ``UnicodeDecodeError`` (a
-    ``ValueError`` that upstream's ``except json.JSONDecodeError`` does
-    not catch) is translated to the same ``HTTPException(400, ...)``
-    Strawberry already raises for unparseable JSON. Every other outcome
-    - a successful parse, or any other exception - is passed through
+    1. A ``UnicodeDecodeError`` (a ``ValueError`` that upstream's
+       ``except json.JSONDecodeError`` does not catch) is translated to
+       the same ``HTTPException(400, ...)`` Strawberry already raises for
+       unparseable JSON.
+    2. A successfully-parsed body that is a top-level JSON *scalar*
+       (string / number / boolean / ``null``) is rejected with
+       ``HTTPException(400, ...)``. ``parse_http_body`` handles a JSON
+       object (a single operation) and a JSON array (a batch), but a bare
+       scalar falls through to ``data.get("query")`` and raises a raw
+       ``AttributeError`` -> ``500``. A JSON ``list`` is passed through
+       untouched so upstream's own batch validation
+       (``_validate_batch_request``) still runs and owns that path.
+
+    ``parse_json`` is the sole producer of a non-object/non-array ``data``
+    reaching ``parse_http_body`` (GET ``parse_query_params`` and
+    ``parse_multipart`` always return a ``dict``), so guarding it here
+    fixes the body path for both the sync and async views from the single
+    method they both inherit - the same one-site rationale as the
+    ``UnicodeDecodeError`` widening. Every other outcome - a successful
+    object/array parse, or any other exception - is passed through
     untouched.
     """
     try:
-        return _original_parse_json(self, data)
+        parsed = _original_parse_json(self, data)
     except UnicodeDecodeError as exc:
         raise HTTPException(400, "Unable to parse request body as JSON") from exc
+    if not isinstance(parsed, (dict, list)):
+        raise HTTPException(
+            400,
+            "The GraphQL request body must be a JSON object "
+            "(or an array of operations for a batch request).",
+        )
+    return parsed
 
 
 def _patch_is_installed() -> bool:

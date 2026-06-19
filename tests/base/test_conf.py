@@ -5,7 +5,7 @@ from types import MappingProxyType
 import pytest
 
 from django_strawberry_framework import conf
-from django_strawberry_framework.conf import Settings, reload_settings
+from django_strawberry_framework.conf import Settings, reload_settings, upstream_patches_enabled
 from django_strawberry_framework.exceptions import ConfigurationError
 
 # ---------------------------------------------------------------------------
@@ -166,3 +166,24 @@ def test_settings_normalization_attribute_error_does_not_recurse(monkeypatch):
     s = Settings()
     with pytest.raises(AttributeError, match="user_settings"):
         _ = s.SOME_KEY
+
+
+# ---------------------------------------------------------------------------
+# upstream_patches_enabled (APPLY_UPSTREAM_PATCHES toggle)
+# ---------------------------------------------------------------------------
+
+
+def test_upstream_patches_enabled_defaults_true_when_key_absent(settings):
+    """Missing key (or whole dict) -> ``True``: consumers opt out, not in."""
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
+    assert upstream_patches_enabled() is True
+
+
+def test_upstream_patches_enabled_true_when_set_true(settings):
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
+    assert upstream_patches_enabled() is True
+
+
+def test_upstream_patches_enabled_false_when_set_false(settings):
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
+    assert upstream_patches_enabled() is False

@@ -46,6 +46,12 @@ from django_strawberry_framework.exceptions import ConfigurationError
 DJANGO_SETTINGS_KEY = "DJANGO_STRAWBERRY_FRAMEWORK"
 _DISPATCH_UID = "django_strawberry_framework.conf.reload_settings"
 
+# Toggle for every defensive patch the package ships for upstream bugs
+# (see ``_django_patches`` / ``_strawberry_patches`` / ``_cross_web_patches``).
+# Opt-out: defaults to ``True`` so consumers get the fixes automatically,
+# matching the "no opt-in boilerplate" stance of the patch modules.
+APPLY_UPSTREAM_PATCHES_KEY = "APPLY_UPSTREAM_PATCHES"
+
 
 def _normalize_user_settings(value: Any) -> dict[str, Any]:
     """Validate and normalize a ``DJANGO_STRAWBERRY_FRAMEWORK`` candidate.
@@ -157,6 +163,23 @@ class Settings:
 
 
 settings = Settings(None)
+
+
+def upstream_patches_enabled() -> bool:
+    """Whether the package applies its upstream defensive patches at app load.
+
+    Reads ``DJANGO_STRAWBERRY_FRAMEWORK["APPLY_UPSTREAM_PATCHES"]``,
+    defaulting to ``True`` when the key (or the whole settings dict) is
+    absent. Set it to ``False`` to stop the framework from
+    monkey-patching its upstream dependencies (Django, Strawberry, and
+    ``cross_web``) at startup.
+
+    Read once per patch ``apply()`` (i.e. at app load). A *malformed*
+    (non-mapping) ``DJANGO_STRAWBERRY_FRAMEWORK`` value still fails loud
+    via the ``ConfigurationError`` path shared by every setting read -
+    only a missing key falls back to the default.
+    """
+    return bool(getattr(settings, APPLY_UPSTREAM_PATCHES_KEY, True))
 
 
 def reload_settings(setting: str, value: Any, **kwargs: Any) -> None:

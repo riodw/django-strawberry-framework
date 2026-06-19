@@ -2018,3 +2018,36 @@ def test_cascade_composes_with_filter_and_order_live():
         "orderBy: [{ name: ASC }]) { edges { node { name } } } }",
         {"allItems": {"edges": expected}},
     )
+
+
+# ---------------------------------------------------------------------------
+# Malformed request bodies: a non-UTF-8 body must surface as a controlled 400,
+# not an unhandled 500. Fixed by the framework's upstream patches for
+# Strawberry (`BaseView.parse_json`) and cross_web (`DjangoHTTPRequestAdapter.body`),
+# applied at app load. Without them the sync `GraphQLView` raises a raw
+# `UnicodeDecodeError` while decoding the body, before GraphQL parsing runs.
+# ---------------------------------------------------------------------------
+
+
+def _post_raw_body(body: bytes, *, client: Client | None = None):
+    """POST raw bytes to ``/graphql/`` as ``application/json`` (bypasses JSON encoding)."""
+    graphql_client = client or Client()
+    return graphql_client.post("/graphql/", data=body, content_type="application/json")
+
+
+@pytest.mark.django_db(transaction=True)
+def test_post_invalid_utf8_json_body_returns_400_not_500():
+    """An invalid-UTF-8 byte inside an otherwise-JSON body -> controlled 400."""
+    body = b'{"query":"{ __typename }","variables":{"d":"\xff\xfe\xfa"}}'
+
+    response = _post_raw_body(body)
+
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db(transaction=True)
+def test_post_raw_binary_body_returns_400_not_500():
+    """A wholly non-UTF-8 binary body -> controlled 400, never a 500."""
+    response = _post_raw_body(bytes(range(256)) * 4)
+
+    assert response.status_code == 400

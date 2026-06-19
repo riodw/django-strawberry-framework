@@ -2,7 +2,9 @@
 
 TRACKED_FILE_PATHS = (
     "django_strawberry_framework/__init__.py",
+    "django_strawberry_framework/_cross_web_patches.py",
     "django_strawberry_framework/_django_patches.py",
+    "django_strawberry_framework/_strawberry_patches.py",
     "django_strawberry_framework/apps.py",
     "django_strawberry_framework/conf.py",
     "django_strawberry_framework/connection.py",
@@ -136,6 +138,7 @@ TRACKED_FILE_PATHS = (
     "tests/test_apps.py",
     "tests/test_clean_up.py",
     "tests/test_connection.py",
+    "tests/test_cross_web_patches.py",
     "tests/test_django_patches.py",
     "tests/test_list_field.py",
     "tests/test_permissions.py",
@@ -143,6 +146,7 @@ TRACKED_FILE_PATHS = (
     "tests/test_relay_connection.py",
     "tests/test_relay_node_field.py",
     "tests/test_scalars.py",
+    "tests/test_strawberry_patches.py",
     "tests/testing/__init__.py",
     "tests/testing/test_relay.py",
     "tests/testing/test_wrap.py",

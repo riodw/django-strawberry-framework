@@ -7,7 +7,11 @@ The patches are applied once from the package's
 them automatically by having ``"django_strawberry_framework"`` in
 ``INSTALLED_APPS`` - no opt-in boilerplate (no ``conftest.py``
 workaround, no test-case base class to inherit) is required on the
-consumer side.
+consumer side. Like every patch the package ships, it is gated by the
+``APPLY_UPSTREAM_PATCHES`` setting (default on); a consumer who wants
+the package to apply no patches at all sets
+``DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}``. See
+:func:`django_strawberry_framework.conf.upstream_patches_enabled`.
 
 Currently implemented
 ---------------------
@@ -105,6 +109,7 @@ from django.db import connections
 from django.test.testcases import SimpleTestCase
 
 from . import logger
+from .conf import upstream_patches_enabled
 
 try:
     from django.test.testcases import _DatabaseFailure
@@ -192,6 +197,10 @@ def _patch_is_installed() -> bool:
 def apply() -> None:
     """Apply every Django defensive patch shipped by the package.
 
+    Gated by the ``APPLY_UPSTREAM_PATCHES`` setting (default on):
+    returns immediately, before logging or touching ``SimpleTestCase``,
+    when a consumer set it to ``False``.
+
     Idempotent and self-healing: re-entrant calls are no-ops when the
     patch is still installed, and re-install the patch if a third
     party reverted the class attribute since the prior call. Called
@@ -213,6 +222,8 @@ def apply() -> None:
     break the private symbol.
     """
     global _missing_symbol_logged
+    if not upstream_patches_enabled():
+        return
     if _DatabaseFailure is None:
         if not _missing_symbol_logged:
             logger.info(

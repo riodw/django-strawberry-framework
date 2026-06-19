@@ -1,16 +1,23 @@
-"""Tests for the Strawberry non-UTF-8 request-body patch.
+"""Tests for the Strawberry request-body patch.
 
 System-under-test: :mod:`django_strawberry_framework._strawberry_patches`,
 applied at app-load time by
 :meth:`django_strawberry_framework.apps.DjangoStrawberryFrameworkConfig.ready`.
 
-The patch widens :meth:`strawberry.http.base.BaseView.parse_json` to
-translate ``UnicodeDecodeError`` (raised by ``json.loads`` on a
-non-UTF-8 body) into the same ``HTTPException(400, ...)`` Strawberry
-already raises for malformed JSON. Without it, a non-UTF-8 request body
-surfaces as an unhandled ``500`` because ``UnicodeDecodeError`` is a
-``ValueError``, not a ``json.JSONDecodeError``, and escapes upstream's
-``except``.
+The patch wraps :meth:`strawberry.http.base.BaseView.parse_json` to close
+two upstream gaps that otherwise surface as unhandled ``500``s:
+
+1. A ``UnicodeDecodeError`` (raised by ``json.loads`` on a non-UTF-8
+   body) is translated into the same ``HTTPException(400, ...)``
+   Strawberry already raises for malformed JSON. Without it the
+   non-UTF-8 body escapes upstream's ``except json.JSONDecodeError``
+   (``UnicodeDecodeError`` is a ``ValueError``, not a ``JSONDecodeError``).
+2. A body that parses to a top-level JSON *scalar* (string / number /
+   boolean / ``null``) is rejected with ``HTTPException(400, ...)``.
+   Upstream's ``parse_http_body`` handles a JSON object and a JSON array
+   (batch) but lets a scalar fall through to ``data.get("query")`` ->
+   raw ``AttributeError`` -> ``500``. A JSON ``list`` is passed through so
+   upstream's batch validation keeps ownership of it.
 """
 
 from unittest import mock
@@ -72,6 +79,39 @@ def test_patched_parse_json_passes_through_malformed_json_as_400():
     with pytest.raises(HTTPException) as excinfo:
         patches._patched_parse_json(BaseView(), "{not valid json")
     assert excinfo.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '"a string"',
+        "42",
+        "3.14",
+        "true",
+        "false",
+        "null",
+    ],
+)
+def test_patched_parse_json_rejects_non_object_body_as_400(body):
+    """A valid-JSON scalar body -> ``HTTPException(400)``, not a passed-through scalar.
+
+    Without the guard the scalar reaches ``parse_http_body``'s
+    ``data.get("query")`` and raises a raw ``AttributeError`` -> ``500``.
+    """
+    with pytest.raises(HTTPException) as excinfo:
+        patches._patched_parse_json(BaseView(), body)
+    assert excinfo.value.status_code == 400
+
+
+def test_patched_parse_json_passes_through_list_for_batch_handling():
+    """A JSON array passes through unchanged so upstream's batch validation owns it.
+
+    The guard rejects scalars but must NOT intercept a ``list`` - upstream's
+    ``_validate_batch_request`` is the path that accepts or rejects a batch.
+    """
+    assert patches._patched_parse_json(BaseView(), '[{"query": "{ x }"}]') == [
+        {"query": "{ x }"},
+    ]
 
 
 def test_patch_is_installed_false_when_base_view_symbol_missing():

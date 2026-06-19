@@ -2051,3 +2051,28 @@ def test_post_raw_binary_body_returns_400_not_500():
     response = _post_raw_body(bytes(range(256)) * 4)
 
     assert response.status_code == 400
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b'"just a string"', id="json-string"),
+        pytest.param(b"42", id="json-number"),
+        pytest.param(b"true", id="json-boolean"),
+        pytest.param(b"null", id="json-null"),
+    ],
+)
+def test_post_non_object_json_body_returns_400_not_500(body):
+    """A valid-JSON-but-non-object body (scalar / null) -> controlled 400, never a 500.
+
+    Strawberry's `parse_http_body` handles a JSON object (a single operation) and
+    a JSON array (a batch), but lets a bare scalar fall through to
+    `data.get("query")`, raising a raw `AttributeError` -> 500. The framework's
+    Strawberry patch rejects a parsed body that is neither object nor array as a
+    400. A JSON *array* body is deliberately excluded here - that is upstream's
+    batch path, which the patch passes through untouched.
+    """
+    response = _post_raw_body(body)
+
+    assert response.status_code == 400

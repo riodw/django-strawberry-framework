@@ -97,7 +97,7 @@ To complete the Alpha (pre-0.1.0) milestone: **81.8%**.
 
 | Card | Spec file |
 | --- | --- |
-| `DONE-036-0.0.11` - Mutations + auto-generated Input types | [spec-036-mutations-0_0_11.md](docs/spec-036-mutations-0_0_11.md) |
+| `DONE-036-0.0.11` - Mutations + auto-generated Input types | [spec-036-mutations-0_0_11.md](docs/SPECS/spec-036-mutations-0_0_11.md) |
 | `DONE-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | [spec-035-optimizer_hardening-0_0_10.md](docs/SPECS/spec-035-optimizer_hardening-0_0_10.md) |
 | `DONE-034-0.0.10` - Permissions subsystem | [spec-034-permissions-0_0_10.md](docs/SPECS/spec-034-permissions-0_0_10.md) |
 | `DONE-033-0.0.9` - Connection-aware optimizer planning | [spec-033-connection_optimizer-0_0_9.md](docs/SPECS/spec-033-connection_optimizer-0_0_9.md) |
@@ -147,6 +147,7 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 - Status: In progress
 - Relative size: S
 - Labels: `converters`, `mutations`, `scalars`, `uploads`
+- Spec: [spec-037-upload_file_image_mapping-0_0_11.md](docs/spec-037-upload_file_image_mapping-0_0_11.md)
 
 #### Predicted files
 
@@ -1335,7 +1336,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Status: In progress
 - Relative size: XL
 - Labels: `graphql-api`, `mutations`, `permissions`, `public-api`
-- Spec: [spec-036-mutations-0_0_11.md](docs/spec-036-mutations-0_0_11.md)
+- Spec: [spec-036-mutations-0_0_11.md](docs/SPECS/spec-036-mutations-0_0_11.md)
 
 #### Glossary terms
 

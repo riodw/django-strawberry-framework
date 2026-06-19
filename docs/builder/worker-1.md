@@ -104,9 +104,10 @@ After Worker 3 has accepted the slice:
 4. Check the slice against prior accepted slices for new duplication, repeated literals, or inconsistent helper shape.
 5. Run the focused existing tests relevant to the slice when the plan calls for it. Never with `--cov*` flags — coverage is the maintainer's gate, not yours.
 6. Do not inspect line coverage; only record whether the existing tests run for this gate pass. If you find yourself wanting to know which lines are uncovered, the answer is to compare the spec's decisions against the diff and test file by reading, not by running coverage.
-7. Reconcile the spec if needed.
-8. Set artifact status to `final-accepted` or `revision-needed`.
-9. Append a short memory entry.
+7. **For a doc-wrap or final in-spec slice, sweep the tree for this build's staged anchors** (`grep -rn 'TODO(spec-<NNN>' .`): an anchor whose work this slice shipped must be removed in this slice; one naming a still-open slice may remain. An anchor in a file the spec's `## Slice checklist` / `## Doc updates` lists omitted is still a real undischarged obligation (AGENTS.md's "shipped behavior folds into `docs/TREE.md` … and the staged anchor is removed in the same change"). Set `revision-needed` rather than letting it survive to the integration-pass backstop (BUILD.md "Cross-slice integration pass" step 6).
+8. Reconcile the spec if needed.
+9. Set artifact status to `final-accepted` or `revision-needed`.
+10. Append a short memory entry.
 
 If DRY opportunities remain, do not accept the slice. Record the finding and set `revision-needed`.
 

@@ -81,11 +81,11 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**63.8% complete** toward `1.0.0` - 37 of 58 cards done (65.7% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**63.8% complete** toward `1.0.0` - 37 of 58 cards done (65.9% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 37/44 (84.1%) | 83.7% |
+| Alpha (pre-0.1.0) | 37/44 (84.1%) | 83.8% |
 | Beta (pre-1.0.0) | 0/13 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
@@ -1282,7 +1282,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Parity: 🍓 strawberry-graphql-django (Required)
 - Severity: Medium
 - Status: In progress
-- Relative size: S
+- Relative size: M
 - Labels: `converters`, `mutations`, `scalars`, `uploads`
 - Spec: [spec-037-upload_file_image_mapping-0_0_11.md](docs/spec-037-upload_file_image_mapping-0_0_11.md)
 

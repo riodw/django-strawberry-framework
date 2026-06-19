@@ -535,6 +535,7 @@ Before writing `bld-integration.md`, Worker 1 must:
 3. Compare the **Repeated string literals** sections across every shadow overview. A literal that appears in two or more files is a cross-slice DRY candidate; record it in the integration artifact.
 4. Compare the **Imports** sections across every shadow overview to confirm one-way dependency direction and spot any sibling that has started importing from outside the documented boundary.
 5. Walk every accepted slice artifact's `What looks solid` and `DRY findings` sections to catch any deferred follow-up that should land in this pass.
+6. **Sweep the whole tree for staged anchors naming this build's spec:** `grep -rn 'TODO(spec-<NNN>' .`. Every pre-placed `TODO(spec-<NNN> Slice <M>)` anchor must be discharged by the build's end — the work it names has landed **and** the anchor was removed in the slice that shipped that work. `AGENTS.md`'s "shipped behavior folds into `docs/TREE.md` … and the staged anchor is removed in the same change that ships the slice" is standing authority even when the file carrying the anchor was omitted from the spec's `## Slice checklist` or `## Doc updates` lists — a slice checklist that forgets a staged-anchor file does not waive the obligation. Record any still-present anchor as a finding and route it to the owning slice (re-loop) before the build closes.
 
 The integration pass itself checks:
 

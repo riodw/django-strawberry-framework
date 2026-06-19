@@ -1094,6 +1094,7 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 - [ ] Idempotency cache entries are scoped by mutation class, key value, authenticated principal or anonymous scope, and operation arguments so unrelated calls do not collide.
 - [ ] Tests cover successful replay, validation failure retry, exception rollback, TTL expiration, cache backend errors failing loudly, and sync/async mutation paths where supported.
 - [ ] Live `/graphql/` coverage exercises a real fakeshop mutation twice with the same idempotency key and proves the second response does not double-write.
+- [ ] Remove the `xfail(strict=True)` marker on `test_update_does_not_commit_when_response_completion_fails` in `examples/fakeshop/test_query/test_mutation_atomicity.py` once this card lands: that committed regression pins that a mutation whose GraphQL response completion fails after the write has committed - e.g. a corrupt related non-nullable field hydrates to `None` and trips 'Cannot return null for non-nullable field' - must roll back rather than commit a partial change. It `xfail`s today because the resolver's `transaction.atomic()` ends when the resolver returns, before graphql-core completes the payload; this card's fix (extending the transaction boundary to span response completion) makes it XPASS, and `strict=True` then turns the suite red until the marker is removed.
 
 #### Foundation-slice seam
 

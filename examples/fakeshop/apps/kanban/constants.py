@@ -89,6 +89,7 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/test_query/test_kanban_api.py",
     "examples/fakeshop/test_query/test_library_api.py",
     "examples/fakeshop/test_query/test_multi_db.py",
+    "examples/fakeshop/test_query/test_mutation_atomicity.py",
     "examples/fakeshop/test_query/test_products_api.py",
     "examples/fakeshop/test_query/test_scalars_api.py",
     "examples/fakeshop/test_query/test_scalars_filter_api.py",

@@ -1,12 +1,12 @@
 term,anchor,notes
 DjangoType,djangotype,Read-side host for generated file/image fields.
-Scalar field conversion,scalar-field-conversion,Converter table changes for FileField/ImageField output.
+Scalar field conversion,scalar-field-conversion,Shared scalar/filter map; file READ output moves to FIELD_OUTPUT_TYPE_MAP while SCALAR_MAP file rows stay str.
 Specialized scalar conversions,specialized-scalar-conversions,Context for non-plain scalar/object mappings.
 DjangoFileType,djangofiletype,New output object for FileField.
 DjangoImageType,djangoimagetype,New output object for ImageField.
 Upload scalar,upload-scalar,Write-side file/image input scalar.
-strawberry_config,strawberry_config,Registers Upload through package scalar map.
-BigInt scalar,bigint-scalar,Existing package scalar sharing registration path with Upload.
+strawberry_config,strawberry_config,Binds package-custom scalars (BigInt); Upload needs no entry — it is a Strawberry built-in.
+BigInt scalar,bigint-scalar,Package-custom scalar that DOES need _PACKAGE_SCALAR_MAP — the contrast with built-in Upload.
 DjangoMutation,djangomutation,Mutation base whose input generator receives Upload.
 DjangoMutationField,djangomutationfield,Schema field factory exposing generated upload inputs.
 Input type generation,input-type-generation,Generated mutation input mapping for FileField/ImageField.
@@ -18,3 +18,4 @@ Meta.required_overrides,metarequired_overrides,Required override interaction for
 Scalar field override semantics,scalar-field-override-semantics,Consumer-authored fields bypass generated file mapping.
 ConfigurationError,configurationerror,Fail-loud contract for invalid generated shapes.
 TestClient,testclient,Future multipart helper explicitly out of scope.
+FilterSet,filterset,Shares SCALAR_MAP/scalar_for_field; must NOT receive the file output objects (the P0 split).

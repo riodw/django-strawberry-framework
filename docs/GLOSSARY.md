@@ -17,21 +17,7 @@ Companion files:
 - `alpha constraint` — current behavior that works but is intentionally narrower than the eventual API.
 - `post-1.0.0` — strategic differentiation tracked in [`../BACKLOG.md`][backlog], not on the roadmap to `1.0.0`.
 
-Current package version: `0.0.10`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
-
-<!-- TODO(spec-037 Slice 4): promote the file/upload glossary surface.
-Pseudo-code:
-- Move current package version to 0.0.11.
-- Add Upload, DjangoFileType, and DjangoImageType to Public exports and mark
-  their Index rows shipped.
-- Rewrite DjangoFileType / DjangoImageType entries with output subfields,
-  nullable storage-backed properties, and empty-file null behavior.
-- Rewrite Scalar field conversion so read output uses FIELD_OUTPUT_TYPE_MAP,
-  filters/scalar inputs stay str, and mutation inputs use Upload.
-- Add the file/image breaking-wire-format row to Specialized scalar conversions.
-- Remove strawberry_config's "next: Upload" wording because Upload is built in
-  and not part of the package scalar_map.
--->
+Current package version: `0.0.11`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
 ## Public exports
 
@@ -40,6 +26,8 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`BigInt`](#bigint-scalar) — JSON-safe scalar for 64-bit integer fields.
 - [`DjangoConnection`](#djangoconnection) — generic Relay connection return-type alias (`DjangoConnection[T]`).
 - [`DjangoConnectionField`](#djangoconnectionfield) — Relay connection field factory over a Relay-Node-shaped `DjangoType`.
+- [`DjangoFileType`](#djangofiletype) — structured read-output object for a `FileField` column (`name` / `path` / `size` / `url`).
+- [`DjangoImageType`](#djangoimagetype) — structured read-output object for an `ImageField` column (`DjangoFileType` fields plus `width` / `height`).
 - [`DjangoListField`](#djangolistfield) — non-Relay `list[T]` factory function for root Query fields.
 - [`DjangoModelPermission`](#djangomodelpermission) — default write-authorization class (Django `add` / `change` / `delete` model perms) for `Meta.permission_classes`.
 - [`DjangoMutation`](#djangomutation) — model-driven create / update / delete mutation base configured through a nested `class Meta`.
@@ -51,6 +39,7 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`FieldError`](#fielderror-envelope) — public typed validation-error type (`field` + `messages`) in the shared mutation-payload envelope.
 - [`OptimizerHint`](#optimizerhint) — typed wrapper for per-relation optimizer overrides.
 - [`SyncMisuseError`](#syncmisuseerror) — typed marker for sync resolver paths that receive an async `get_queryset` coroutine.
+- [`Upload`](#upload-scalar) — re-exported Strawberry built-in scalar for `FileField` / `ImageField` mutation inputs.
 - [`apply_cascade_permissions`](#apply_cascade_permissions) — cascade a type's `get_queryset` visibility through its single-column forward FK / OneToOne edges (sync).
 - [`aapply_cascade_permissions`](#apply_cascade_permissions) — async twin of `apply_cascade_permissions` (`sync_to_async` wrap); shares the entry.
 - [`finalize_django_types`](#finalize_django_types) — synchronization point that resolves pending relations and applies `strawberry.type` decoration.
@@ -83,10 +72,10 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Django `AppConfig`](#django-appconfig) | shipped (`0.0.7`) |
 | [`DjangoConnection`](#djangoconnection) | shipped (`0.0.9`) |
 | [`DjangoConnectionField`](#djangoconnectionfield) | shipped (`0.0.9`) |
-| [`DjangoFileType`](#djangofiletype) | planned for `0.0.11` |
+| [`DjangoFileType`](#djangofiletype) | shipped (`0.0.11`) |
 | [`DjangoFormMutation`](#djangoformmutation) | planned for `0.0.12` |
 | [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) | planned for `0.0.14` |
-| [`DjangoImageType`](#djangoimagetype) | planned for `0.0.11` |
+| [`DjangoImageType`](#djangoimagetype) | shipped (`0.0.11`) |
 | [`DjangoListField`](#djangolistfield) | shipped (`0.0.7`) |
 | [`DjangoModelFormMutation`](#djangomodelformmutation) | planned for `0.0.12` |
 | [`DjangoModelPermission`](#djangomodelpermission) | shipped (`0.0.11`) |
@@ -154,7 +143,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`SyncMisuseError`](#syncmisuseerror) | shipped (`0.0.5`) |
 | [`TestClient`](#testclient) | planned for `0.0.14` |
 | [Django Trac #37064 hardening](#django-trac-37064-hardening) | shipped (`0.0.7`) |
-| [`Upload` scalar](#upload-scalar) | planned for `0.0.11` |
+| [`Upload` scalar](#upload-scalar) | shipped (`0.0.11`) |
 | [Cross-subsystem invariants](#cross-subsystem-invariants) | planned for 1.0.0 |
 | [`auto`-typed annotations](#auto-typed-annotations) | shipped (`0.0.9`) |
 
@@ -340,9 +329,9 @@ The field owns its own optimizer cooperation point (the plan-application logic e
 
 ## `DjangoFileType`
 
-**Status:** planned for `0.0.11`.
+**Status:** shipped (`0.0.11`).
 
-Output type for `FileField` carrying `name` / `path` / `size` / `url`. Paired with the [`Upload` scalar](#upload-scalar) on the input side.
+Resolver-backed output object for a `FileField` column, carrying `name` (non-null), `path` / `size` / `url` (nullable, storage-safe). The `path` / `size` / `url` subfields delegate to the shared `_safe_file_attr` guard, which degrades to `null` on the storage-shaped errors a non-filesystem backend or a vanished file raises (`ValueError` / `OSError` / `NotImplementedError`); `SuspiciousFileOperation` is deliberately **not** swallowed (it propagates as a path-traversal security signal). An empty / absent file resolves the **whole object** to `null`, never a `FieldFile.url` exception. Mapped on **read** via the new `FIELD_OUTPUT_TYPE_MAP` (kept off the shared [`SCALAR_MAP`](#scalar-field-conversion) / filter-input path, so no output object reaches a [`FilterSet`](#filterset) input). A consumer `attachment: str` annotation override bypasses it and keeps the legacy `str` (name / URL) shape per [Scalar field override semantics](#scalar-field-override-semantics). Paired with the [`Upload` scalar](#upload-scalar) on the input side.
 
 **See also:** [`Upload` scalar](#upload-scalar) · [`DjangoImageType`](#djangoimagetype).
 
@@ -362,9 +351,9 @@ A Channels `ProtocolTypeRouter`-wrapping helper for consumers using Channels. So
 
 ## `DjangoImageType`
 
-**Status:** planned for `0.0.11`.
+**Status:** shipped (`0.0.11`).
 
-Output type for `ImageField` carrying `name` / `path` / `size` / `url` plus image dimensions where Pillow is available.
+Subclasses [`DjangoFileType`](#djangofiletype) and adds nullable `width` / `height` image dimensions, resolved through the same `_safe_file_attr` guard so a missing / corrupt image or a backend that cannot read dimensions degrades them to `null`. An `ImageField` column resolves here (not `DjangoFileType`) via the `FIELD_OUTPUT_TYPE_MAP` MRO precedence — the `ImageField` row precedes the `FileField` row, so the `ImageField` subclass matches its own row first.
 
 **See also:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype).
 
@@ -1193,7 +1182,7 @@ Shipped scalar support:
 - date / datetime / time fields → Python-native time types (note: ``DurationField`` is intentionally absent from the default map because Strawberry has no first-party scalar for ``datetime.timedelta``; register a custom scalar via ``SCALAR_MAP[DurationField] = MyDurationScalar``)
 - UUID fields → `uuid.UUID`
 - ``BinaryField`` is intentionally absent from the default map (no first-party Strawberry scalar for ``bytes``); the conventional plug is ``SCALAR_MAP[BinaryField] = strawberry.scalars.Base64``
-- file and image fields → string path / URL values
+- file and image fields → a three-way split: on **read**, a `FileField` / `ImageField` column converts to a structured [`DjangoFileType`](#djangofiletype) / [`DjangoImageType`](#djangoimagetype) output object (via the new `FIELD_OUTPUT_TYPE_MAP`, kept off this shared map); the **filter / scalar-input** value stays `str` (the `FileField` / `ImageField` rows in `SCALAR_MAP` are unchanged); the **mutation input** is the [`Upload`](#upload-scalar) scalar
 - `JSONField` → `strawberry.scalars.JSON`
 - PostgreSQL `ArrayField` → typed `list[T]` (recursive through `field.base_field`; soft-registered, only when `django.contrib.postgres.fields` imports successfully; nested `ArrayField` and outer `choices` rejected with [`ConfigurationError`](#configurationerror))
 - PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered, only when `django.contrib.postgres.fields` imports successfully; outer `choices` rejected with [`ConfigurationError`](#configurationerror))
@@ -1269,6 +1258,7 @@ Adds these mappings to [Scalar field conversion](#scalar-field-conversion):
 - `JSONField` → `strawberry.scalars.JSON`
 - PostgreSQL `ArrayField` → typed `list[T]` (recursive through `field.base_field`)
 - PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered, only when `django.contrib.postgres.fields` imports successfully)
+- `FileField` / `ImageField` read output → structured [`DjangoFileType`](#djangofiletype) / [`DjangoImageType`](#djangoimagetype) objects (switched from `str` in `0.0.11` — breaking wire-format change, parallel to the `PositiveBigIntegerField` → `BigInt` `0.0.6` precedent; opt out per field with an `attachment: str` annotation override). The filter / scalar-input value stays `str`; the mutation input is the [`Upload`](#upload-scalar) scalar
 
 **See also:** [Scalar field conversion](#scalar-field-conversion) · [`BigInt` scalar](#bigint-scalar).
 
@@ -1276,7 +1266,7 @@ Adds these mappings to [Scalar field conversion](#scalar-field-conversion):
 
 **Status:** shipped (`0.0.7`).
 
-Factory returning a [`StrawberryConfig`](https://strawberry.rocks) pre-populated with the package's `scalar_map` — the registration path consumers use to bind package-defined scalars (today: [`BigInt`](#bigint-scalar); next: [`Upload`](#upload-scalar) in `0.0.11`) into their `strawberry.Schema(...)` call.
+Factory returning a [`StrawberryConfig`](https://strawberry.rocks) pre-populated with the package's `scalar_map` — the registration path consumers use to bind package-defined scalars (today: [`BigInt`](#bigint-scalar)) into their `strawberry.Schema(...)` call.
 
 ```python
 from django_strawberry_framework import strawberry_config
@@ -1366,9 +1356,9 @@ Pairs with [`safe_wrap_connection_method`](#safe_wrap_connection_method) (the wr
 
 ## `Upload` scalar
 
-**Status:** planned for `0.0.11`.
+**Status:** shipped (`0.0.11`).
 
-Strawberry `Upload` scalar mapping for `FileField` / `ImageField` on mutation inputs. Paired with [`DjangoFileType`](#djangofiletype) / [`DjangoImageType`](#djangoimagetype) on the output side.
+Strawberry's built-in `Upload` scalar (`NewType("Upload", bytes)`), **re-exported** from the package root (`from django_strawberry_framework import Upload`). It needs **no** `_PACKAGE_SCALAR_MAP` entry because it already resolves through Strawberry's built-in `DEFAULT_SCALAR_REGISTRY` — the deliberate contrast with the package-custom [`BigInt`](#bigint-scalar) scalar, which is absent from the default registry and must be bound through [`strawberry_config`](#strawberry_config). Generated [`DjangoMutation`](#djangomutation) `Input` / `PartialInput` types map a `FileField` / `ImageField` editable column to `Upload` (required per the shipped per-field rule — a `blank=False` / `null=False` / no-default file column is required in the create `Input`, optional otherwise and in `PartialInput`; widened to `Upload | None` on `blank` / `null`). Paired with [`DjangoFileType`](#djangofiletype) / [`DjangoImageType`](#djangoimagetype) on the output side.
 
 **See also:** [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype) · [`DjangoMutation`](#djangomutation).
 

@@ -387,7 +387,7 @@ def test_orderset_request_from_info_raises_on_unrecognized_context_shape():
     info = SimpleNamespace(context=_PlainCtx())
     with pytest.raises(ConfigurationError) as exc_info:
         OrderSet._request_from_info(info)
-    assert "OrderSet.apply" in str(exc_info.value)
+    assert "OrderSet could not resolve" in str(exc_info.value)
 
 
 def test_orderset_request_from_info_raises_when_info_context_is_none():

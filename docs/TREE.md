@@ -201,14 +201,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── py.typed
 ├── registry.py                   # Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
-├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
-<!-- TODO(spec-037 Slice 4): update tree summaries after Upload/file-image mapping lands.
-Pseudo-code:
-- scalars.py mentions Upload re-export while strawberry_config remains BigInt-only.
-- types/converters.py mentions DjangoFileType / DjangoImageType and FIELD_OUTPUT_TYPE_MAP.
-- types/resolvers.py mentions generated file-column parent resolvers.
-- tests summaries mention Upload, file/image converter, and resolver coverage.
--->
+├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory; also re-exports Strawberry's built-in ``Upload`` (``strawberry_config()`` stays ``BigInt``-only - ``Upload`` needs no ``_PACKAGE_SCALAR_MAP`` entry).
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared across the FilterSet / OrderSet / AggregateSet family.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 │   ├── base.py                   # Filter primitives + ``RelatedFilter``.
@@ -237,12 +230,12 @@ Pseudo-code:
 │   └── relay.py                  # Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
 ├── types/    # Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
 │   ├── base.py                   # ``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
-│   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types.
+│   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types; defines the ``DjangoFileType`` / ``DjangoImageType`` read-output objects, the ``_safe_file_attr`` storage guard, the ``FIELD_OUTPUT_TYPE_MAP`` read-output map, and ``convert_field_output`` (filter-input ``SCALAR_MAP`` stays ``str``).
 │   ├── definition.py             # ``DjangoTypeDefinition`` - canonical metadata for collected ``DjangoType`` classes.
 │   ├── finalizer.py              # ``finalize_django_types()`` - the once-only finalization gate for collected ``DjangoType`` classes.
 │   ├── relations.py              # Pending relation records for definition-order-independent ``DjangoType`` finalization.
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
-│   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations.
+│   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations; also attaches file-column resolvers (``_attach_file_resolvers``) for columns resolving via ``FIELD_OUTPUT_TYPE_MAP``.
 └── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, and type unwrapping.
     ├── connections.py            # Connection planner/resolver shared contracts: window bounds + sidecar kwargs.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
@@ -312,12 +305,12 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   └── relay.py                  # Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
 ├── types/    # Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
 │   ├── base.py                   # ``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
-│   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types.
+│   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types; defines the ``DjangoFileType`` / ``DjangoImageType`` read-output objects, the ``_safe_file_attr`` storage guard, the ``FIELD_OUTPUT_TYPE_MAP`` read-output map, and ``convert_field_output`` (filter-input ``SCALAR_MAP`` stays ``str``).
 │   ├── definition.py             # ``DjangoTypeDefinition`` - canonical metadata for collected ``DjangoType`` classes.
 │   ├── finalizer.py              # ``finalize_django_types()`` - the once-only finalization gate for collected ``DjangoType`` classes.
 │   ├── relations.py              # Pending relation records for definition-order-independent ``DjangoType`` finalization.
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
-│   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations.
+│   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations; also attaches file-column resolvers (``_attach_file_resolvers``) for columns resolving via ``FIELD_OUTPUT_TYPE_MAP``.
 └── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, and type unwrapping.
     ├── connections.py            # Connection planner/resolver shared contracts: window bounds + sidecar kwargs.
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
@@ -352,7 +345,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 ├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
 ├── test_relay_connection.py      # Relation-as-Connection tests for cursor conformance and Relay field upgrades.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
-├── test_scalars.py               # Scalar tests for BigInt and the framework StrawberryConfig helper.
+├── test_scalars.py               # Scalar tests for BigInt, the framework StrawberryConfig helper, and the re-exported Upload scalar (built-in default-registry resolution).
 ├── base/    # Frozen base tests for package configuration and version sanity.
 │   ├── test_conf.py              # Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK.
 │   └── test_init.py              # Package init tests for version metadata and public exports.
@@ -389,14 +382,14 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.
 ├── types/    # Package tests for the DjangoType subsystem.
 │   ├── test_base.py              # DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
-│   ├── test_converters.py        # Converter tests for scalar mapping, choice enums, and relation annotations.
+│   ├── test_converters.py        # Converter tests for scalar mapping, choice enums, relation annotations, and file/image read-output conversion (convert_field_output / FIELD_OUTPUT_TYPE_MAP / DjangoFileType / DjangoImageType).
 │   ├── test_definition_order.py  # Acceptance tests for definition-order-independent DjangoType relation finalization.
 │   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
 │   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related_target_for relation lookup.
 │   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
 │   ├── test_relations.py         # PendingRelation tests for identity hashing and dataclass field contracts.
 │   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
-│   ├── test_resolvers.py         # Relation resolver tests for Django relation managers and optimizer hand-off.
+│   ├── test_resolvers.py         # Relation resolver tests for Django relation managers and optimizer hand-off, plus file/image output resolvers (subfield reads and the empty-file parent-null guard).
 │   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.
 │       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
@@ -486,7 +479,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 ├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
 ├── test_relay_connection.py      # Relation-as-Connection tests for cursor conformance and Relay field upgrades.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
-├── test_scalars.py               # Scalar tests for BigInt and the framework StrawberryConfig helper.
+├── test_scalars.py               # Scalar tests for BigInt, the framework StrawberryConfig helper, and the re-exported Upload scalar (built-in default-registry resolution).
 ├── base/    # Frozen base tests for package configuration and version sanity.
 │   ├── test_conf.py              # Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK.
 │   └── test_init.py              # Package init tests for version metadata and public exports.
@@ -529,14 +522,14 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.
 ├── types/    # Package tests for the DjangoType subsystem.
 │   ├── test_base.py              # DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
-│   ├── test_converters.py        # Converter tests for scalar mapping, choice enums, and relation annotations.
+│   ├── test_converters.py        # Converter tests for scalar mapping, choice enums, relation annotations, and file/image read-output conversion (convert_field_output / FIELD_OUTPUT_TYPE_MAP / DjangoFileType / DjangoImageType).
 │   ├── test_definition_order.py  # Acceptance tests for definition-order-independent DjangoType relation finalization.
 │   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
 │   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related_target_for relation lookup.
 │   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
 │   ├── test_relations.py         # PendingRelation tests for identity hashing and dataclass field contracts.
 │   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
-│   ├── test_resolvers.py         # Relation resolver tests for Django relation managers and optimizer hand-off.
+│   ├── test_resolvers.py         # Relation resolver tests for Django relation managers and optimizer hand-off, plus file/image output resolvers (subfield reads and the empty-file parent-null guard).
 │   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.
 │       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.

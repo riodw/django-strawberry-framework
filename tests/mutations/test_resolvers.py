@@ -18,15 +18,6 @@ these tests pin the *resolver*, not the write-auth seam (that is
 ``test_permissions.py``).
 """
 
-# TODO(spec-037 Slice 2): add file upload assignment tests here.
-# Pseudo-code:
-# - declare a package-local model with FileField/ImageField over tmp_path storage.
-# - create through DjangoMutation with a SimpleUploadedFile and assert the saved
-#   FieldFile has the expected name/content through the generic model(**attrs) path.
-# - partial update with UNSET leaves the stored file unchanged.
-# - partial update with a new upload replaces it through the generic setattr path.
-# - validation failure, such as bad image content for ImageField, returns FieldError.
-
 from __future__ import annotations
 
 import itertools
@@ -39,7 +30,11 @@ from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.scalars import models as scalars_models
 from asgiref.sync import sync_to_async
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
+from django.db import connection as db_connection
+from django.db import models as djmodels
+from django.test import override_settings
 from django.utils import timezone
 from strawberry import relay
 
@@ -1622,3 +1617,228 @@ def test_relation_field_index_excludes_generic_foreign_key():
     fk_by_attr, _m2m_by_name = resolvers._relation_field_index(library_models.TaggedItem)
     assert "content_object_id" not in fk_by_attr
     assert "content_type_id" in fk_by_attr
+
+
+# ---------------------------------------------------------------------------
+# File upload assignment (TODO-ALPHA-037-0.0.11) - the verify-first contract
+# ---------------------------------------------------------------------------
+#
+# These tests PROVE the shipped generic scalar-assignment path carries an
+# uploaded file: ``model(**scalar_and_fk_attrs)`` (create) and the ``setattr``
+# loop (update) feed Django's ``FileField`` descriptor a ``SimpleUploadedFile``
+# directly, so NO file-specific resolver branch is needed (spec-037 Decision 6).
+# The schema is built WITHOUT ``config=strawberry_config()`` via the existing
+# ``_schema`` helper: ``Upload`` still resolves because it rides Strawberry's
+# built-in ``DEFAULT_SCALAR_REGISTRY`` (Decision 5), which is itself corroborating
+# evidence. The synthetic model uses ``app_label="products"`` (installed) +
+# ``managed=False`` + ``schema_editor`` + ``override_settings(MEDIA_ROOT=tmp_path)``,
+# mirroring Slice 1's ``tests/types/test_resolvers.py`` shape.
+
+_asset_model_counter = itertools.count(1)
+
+
+def _make_asset_model():
+    """Return a synthetic ``managed=False`` model with a required ``FileField`` + a name.
+
+    ``app_label="products"`` (an INSTALLED app) so the table can be created with
+    ``schema_editor``; ``attachment`` is required (no blank / no null) so the
+    create input is ``Upload!`` and the explicit-``null`` guard fires on update.
+    The model NAME is uniquified per call so Django's app registry does not warn on
+    re-register.
+    """
+    suffix = next(_asset_model_counter)
+    meta = type("Meta", (), {"app_label": "products", "managed": False})
+    return type(
+        f"MutAsset{suffix}",
+        (djmodels.Model,),
+        {
+            "__module__": __name__,
+            "name": djmodels.TextField(),
+            "attachment": djmodels.FileField(upload_to="files/"),
+            "Meta": meta,
+        },
+    )
+
+
+def _build_asset_schema(model):
+    """Declare an Asset primary (Relay-Node) + create/update mutations; return (schema, AssetT, queries).
+
+    Mirrors ``_build_item_schema`` but over the synthetic file model. The primary
+    type inherits ``relay.Node`` so the update ``id:`` GlobalID path works. The
+    create / update query strings are built from the model's generated input type
+    names (``<Model>Input`` / ``<Model>PartialInput``), since the model name is
+    uniquified per call.
+    """
+    asset_meta = {"model": model, "fields": ("id", "name", "attachment"), "primary": True}
+    AssetT = type("AssetT", (DjangoType, relay.Node), {"Meta": type("Meta", (), asset_meta)})
+
+    create_meta = {"model": model, "operation": "create", "permission_classes": [_AllowAll]}
+    update_meta = {"model": model, "operation": "update", "permission_classes": [_AllowAll]}
+    CreateAsset = type("CreateAsset", (DjangoMutation,), {"Meta": type("Meta", (), create_meta)})
+    UpdateAsset = type("UpdateAsset", (DjangoMutation,), {"Meta": type("Meta", (), update_meta)})
+
+    @strawberry.type
+    class Mutation:
+        create_asset = DjangoMutationField(CreateAsset)
+        update_asset = DjangoMutationField(UpdateAsset)
+
+    finalize_django_types()
+    create_query = (
+        f"mutation($d: {model.__name__}Input!){{ createAsset(data:$d){{ "
+        "node{ id name } errors{ field messages } } }"
+    )
+    update_query = (
+        f"mutation($id: ID!, $d: {model.__name__}PartialInput!){{ "
+        "updateAsset(id:$id, data:$d){ node{ id name } errors{ field messages } } }"
+    )
+    return _schema(Mutation), AssetT, create_query, update_query
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_assigns_uploaded_file_through_generic_path(tmp_path):
+    """A create with a ``SimpleUploadedFile`` writes the row + the saved file (verify-first).
+
+    PROVES the generic ``model(**scalar_and_fk_attrs)`` path carries the upload: no
+    file-specific resolver branch exists, yet the saved ``FieldFile`` holds the
+    uploaded name + content.
+    """
+    model = _make_asset_model()
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(model)
+    try:
+        with override_settings(MEDIA_ROOT=str(tmp_path)):
+            schema, _AssetT, create_query, _update_query = _build_asset_schema(model)
+            upload = SimpleUploadedFile("doc.txt", b"hello bytes")
+            res = schema.execute_sync(
+                create_query,
+                variable_values={"d": {"name": "A", "attachment": upload}},
+            )
+            assert res.errors is None, res.errors
+            payload = res.data["createAsset"]
+            assert payload["errors"] == []
+            assert payload["node"]["name"] == "A"
+            row = model.objects.get(name="A")
+            assert row.attachment.name.endswith("doc.txt")
+            with row.attachment.open("rb") as fh:
+                assert fh.read() == b"hello bytes"
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_partial_update_omitting_file_leaves_stored_file_unchanged(tmp_path):
+    """A partial update that omits the file field leaves the stored ``FieldFile`` byte-identical.
+
+    ``UNSET`` is stripped in ``_decode_relations`` before the ``setattr`` loop, so
+    the stored file never reaches a re-assignment.
+    """
+    model = _make_asset_model()
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(model)
+    try:
+        with override_settings(MEDIA_ROOT=str(tmp_path)):
+            schema, AssetT, _create_query, update_query = _build_asset_schema(model)
+            row = model()
+            row.name = "Old"
+            row.attachment.save(
+                "orig.txt",
+                SimpleUploadedFile("orig.txt", b"original"),
+                save=False,
+            )
+            row.save()
+            original_name = row.attachment.name
+
+            res = schema.execute_sync(
+                update_query,
+                variable_values={"id": global_id_for(AssetT, row.pk), "d": {"name": "New"}},
+            )
+            assert res.errors is None, res.errors
+            assert res.data["updateAsset"]["node"]["name"] == "New"
+            row.refresh_from_db()
+            assert row.name == "New"
+            assert row.attachment.name == original_name  # unprovided -> unchanged
+            with row.attachment.open("rb") as fh:
+                assert fh.read() == b"original"
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_partial_update_with_new_upload_replaces_file_through_setattr_path(tmp_path):
+    """A partial update providing a new ``SimpleUploadedFile`` replaces the stored file.
+
+    PROVES the generic ``setattr(instance, attr, value)`` update loop carries the
+    upload - again with no file-specific branch.
+    """
+    model = _make_asset_model()
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(model)
+    try:
+        with override_settings(MEDIA_ROOT=str(tmp_path)):
+            schema, AssetT, _create_query, update_query = _build_asset_schema(model)
+            row = model()
+            row.name = "Old"
+            row.attachment.save(
+                "orig.txt",
+                SimpleUploadedFile("orig.txt", b"original"),
+                save=False,
+            )
+            row.save()
+
+            new_upload = SimpleUploadedFile("replacement.txt", b"replaced bytes")
+            res = schema.execute_sync(
+                update_query,
+                variable_values={
+                    "id": global_id_for(AssetT, row.pk),
+                    "d": {"attachment": new_upload},
+                },
+            )
+            assert res.errors is None, res.errors
+            assert res.data["updateAsset"]["errors"] == []
+            row.refresh_from_db()
+            assert row.attachment.name.endswith("replacement.txt")
+            with row.attachment.open("rb") as fh:
+                assert fh.read() == b"replaced bytes"
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_explicit_null_on_non_nullable_file_column_is_field_error(tmp_path):
+    """Explicit ``null`` for a ``null=False`` file column -> field-keyed ``FieldError``.
+
+    The shipped ``_explicit_null_error`` guard rejects a provided ``None`` on a
+    ``null=False`` scalar column before any DB work; a file column is a scalar
+    input, so it reaches the guard for free (no file-specific code). Omittable is
+    not nullable - this is NOT a silent clear (clearing stays a Risks item).
+    """
+    model = _make_asset_model()
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(model)
+    try:
+        with override_settings(MEDIA_ROOT=str(tmp_path)):
+            schema, AssetT, _create_query, update_query = _build_asset_schema(model)
+            row = model()
+            row.name = "Keep"
+            row.attachment.save(
+                "orig.txt",
+                SimpleUploadedFile("orig.txt", b"original"),
+                save=False,
+            )
+            row.save()
+
+            res = schema.execute_sync(
+                update_query,
+                variable_values={"id": global_id_for(AssetT, row.pk), "d": {"attachment": None}},
+            )
+            assert_mutation_field_error(res, "updateAsset", "attachment")
+            # The stored file is untouched (the error fired before any write).
+            row.refresh_from_db()
+            with row.attachment.open("rb") as fh:
+                assert fh.read() == b"original"
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(model)

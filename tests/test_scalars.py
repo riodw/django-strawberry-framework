@@ -11,14 +11,6 @@ integration tests pin the post-migration ``BigInt`` round trip end-to-end
 ``test_bigint_parses_decimal_string_via_strawberry_config_schema``).
 """
 
-# TODO(spec-037 Slice 2): add Upload scalar tests here.
-# Pseudo-code:
-# - import Upload from django_strawberry_framework and assert it is Strawberry's
-#   built-in scalar object, not a package-defined NewType.
-# - assert strawberry_config().scalar_map contains BigInt but not Upload.
-# - build one schema with strawberry_config() and one with plain StrawberryConfig;
-#   both should accept an Upload-annotated field because Strawberry registers it.
-
 import subprocess
 import sys
 from decimal import Decimal
@@ -26,11 +18,12 @@ from typing import NewType
 
 import pytest
 import strawberry
+import strawberry.file_uploads.scalars
 from strawberry.schema.config import StrawberryConfig
 from strawberry.types.scalar import ScalarDefinition
 
 from django_strawberry_framework import BigInt, strawberry_config
-from django_strawberry_framework.scalars import _parse_bigint, _serialize_bigint
+from django_strawberry_framework.scalars import Upload, _parse_bigint, _serialize_bigint
 
 # ---------------------------------------------------------------------------
 # Strict serializer - positive cases
@@ -441,3 +434,56 @@ def test_bigint_parses_decimal_string_via_strawberry_config_schema():
     result = schema.execute_sync('{ echo(value: "9223372036854775807") }')
     assert result.errors is None
     assert result.data == {"echo": "9223372036854775807"}
+
+
+# ---------------------------------------------------------------------------
+# Upload scalar - re-export + default-registry resolution (spec-037 Decision 5)
+# ---------------------------------------------------------------------------
+
+
+def test_upload_is_strawberry_builtin_re_export_not_a_wrapper():
+    """``Upload`` is Strawberry's built-in scalar object, re-exported, not a package wrapper."""
+    assert Upload is strawberry.file_uploads.scalars.Upload
+
+
+def test_upload_is_importable_from_top_level_scalars_module():
+    """``Upload`` is importable from ``django_strawberry_framework.scalars`` (root export is Slice 3)."""
+    from django_strawberry_framework.scalars import Upload as UploadFromScalars
+
+    assert UploadFromScalars is strawberry.file_uploads.scalars.Upload
+
+
+def test_strawberry_config_scalar_map_excludes_upload():
+    """The package ``scalar_map`` carries ``BigInt`` but NOT ``Upload`` (Decision 5).
+
+    ``Upload`` is absent from ``_PACKAGE_SCALAR_MAP`` because Strawberry's built-in
+    ``DEFAULT_SCALAR_REGISTRY`` already owns it; only the package-custom ``BigInt``
+    (absent from that registry) needs a map entry.
+    """
+    scalar_map = strawberry_config().scalar_map
+    assert BigInt in scalar_map
+    assert Upload not in scalar_map
+
+
+@strawberry.type
+class _UploadQuery:
+    @strawberry.field
+    def echo_name(self, file: Upload) -> str:
+        """A trivial ``Upload``-typed argument forcing the scalar into the schema."""
+        return getattr(file, "name", "")
+
+
+def test_upload_field_resolves_under_strawberry_config_schema():
+    """An ``Upload``-typed field builds + appears in the SDL under ``strawberry_config()``."""
+    schema = strawberry.Schema(query=_UploadQuery, config=strawberry_config())
+    assert "scalar Upload" in str(schema)
+
+
+def test_upload_field_resolves_under_plain_strawberry_config():
+    """An ``Upload``-typed field builds + appears in the SDL under a plain ``StrawberryConfig``.
+
+    This is the load-bearing Decision-5 pin: ``Upload`` rides Strawberry's
+    ``DEFAULT_SCALAR_REGISTRY``, so it resolves with NO package config / scalar map.
+    """
+    schema = strawberry.Schema(query=_UploadQuery, config=StrawberryConfig())
+    assert "scalar Upload" in str(schema)

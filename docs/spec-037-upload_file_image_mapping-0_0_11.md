@@ -35,8 +35,11 @@ and so deferred), this card is the **last** `0.0.11` card — `036` is already
 [`tests/base/test_init.py::test_version`][test-base-init] bump that `036`
 deferred to the joint cut **lands here**.
 
-Status: **DRAFT** — authored for `TODO-ALPHA-037-0.0.11` via the
-[`docs/SPECS/NEXT.md`][next] flow; implementation not yet started. Slices: Slice
+Status: **IN PROGRESS** — authored for `TODO-ALPHA-037-0.0.11` via the
+[`docs/SPECS/NEXT.md`][next] flow; **all four slices final-accepted** (the
+in-spec build is complete; the cross-slice integration pass + final gate still
+follow). The `docs/TREE.md` summary anchor that blocked Slice 4 was discharged
+(summaries updated, anchor removed); see the Slice 4 build artifact. Slices: Slice
 1 (**read-side output objects** — `DjangoFileType` / `DjangoImageType`, the two
 `SCALAR_MAP` rows, and the empty-file resolver guard;
 [Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)
@@ -312,9 +315,14 @@ version-cut only.
   - [ ] Package coverage: [`tests/types/test_converters.py`][test-types] (the
     card's named test file) — `FileField` → `DjangoFileType`, `ImageField` →
     `DjangoImageType` via `FIELD_OUTPUT_TYPE_MAP`, MRO precedence, `blank` /
-    `null` → `| None`, `force_nullable` compose, **and** a
-    [`FilterSet`][glossary-filterset] over a synthetic `FileField` still yields a
-    scalar (`str`) filter input, never `DjangoFileType` (the P0 split);
+    `null` → `| None`, `force_nullable` compose, **and** the package's
+    filter-input scalar lookup over a synthetic `FileField` / `ImageField` still
+    yields a scalar (`str`) — `scalar_for_field` /
+    [`filters/inputs.py`][filters-inputs] `_scalar_from_model_field` both return
+    `str`, and the [`SCALAR_MAP`][types-converters] rows stay `str` — never
+    `DjangoFileType` (the P0 split; this pins the package's own delegation path
+    because django_filter's auto `Meta.fields` filter for a bare `FileField`
+    raises before package code runs);
     [`tests/types/test_resolvers.py`][test-types] — the empty-file → `None`
     parent guard, the populated-`FieldFile` pass-through, and **per-subfield
     isolation** (a failing `path` returns `null` while `url` / `name` still
@@ -945,9 +953,15 @@ Alternatives considered (and rejected):
 - **Put the object types directly in `SCALAR_MAP`.** Rejected (the P0 finding):
   a [`FilterSet`][glossary-filterset] over a file column would emit an output
   object as a filter input — an invalid schema. The read-output map keeps the
-  read change off the shared scalar/filter path; a package test pins
-  `FilterSet.Meta.fields` over a synthetic `FileField` to a scalar input so this
-  cannot regress silently.
+  read change off the shared scalar/filter path; a package test pins the
+  filter-input scalar lookup over a synthetic `FileField` / `ImageField` to a
+  scalar `str` (`scalar_for_field` and `_scalar_from_model_field` both return
+  `str`, `SCALAR_MAP` rows untouched) so this cannot regress silently. (The test
+  pins the delegation path the FilterSet input generator uses rather than a full
+  `FilterSet.Meta.fields` materialization, because django_filter raises an
+  `AssertionError` on an auto-generated bare-`FileField` filter — an
+  unrecognized field type — before any package code runs; the scalar-lookup pin
+  is equally distinguishing.)
 - **Reject file/image filters with `ConfigurationError` and route reads through
   a renamed converter.** Considered: cleaner once file filtering has a
   deliberate contract, but it is a behavior change for any consumer filtering on
@@ -1499,7 +1513,14 @@ authorized.
   that same criterion still land later; [`TODAY.md`][today] rewrites the
   scalar-conversion table's `FileField` / `ImageField` → `str` row to the
   structured output objects and notes upload mutation inputs as a package
-  capability not exercised by products; [`CHANGELOG.md`][changelog] carries the
+  capability not exercised by products; [`docs/TREE.md`][tree] updates the
+  `scalars.py` / `types/converters.py` / `types/resolvers.py` (and the matching
+  test) summary lines for the shipped Upload re-export /
+  `DjangoFileType` / `DjangoImageType` / `FIELD_OUTPUT_TYPE_MAP` /
+  file-column resolvers, **discharging the pre-placed `TODO(spec-037 Slice 4)`
+  source-site anchor there** ([`AGENTS.md`][agents] folds shipped behavior into
+  `docs/TREE.md` and removes the staged anchor in the slice that ships it);
+  [`CHANGELOG.md`][changelog] carries the
   `[Unreleased]` → `0.0.11` bullets **only when the Slice 4 maintainer prompt
   explicitly requests it**.
 - **Slice 4 — card wrap**: [`KANBAN.md`][kanban] moves

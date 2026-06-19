@@ -1,9 +1,7 @@
 # https://packaging.python.org/en/latest/guides/writing-pyproject-toml/
 [project]
 name = "django-strawberry-framework"
-# TODO(spec-037 Slice 4): bump to 0.0.11 with django_strawberry_framework/__init__.py,
-# tests/base/test_init.py, docs/GLOSSARY.md, and uv.lock in the final release cut.
-version = "0.0.10"
+version = "0.0.11"
 description = "A DRF-inspired Django integration framework for Strawberry GraphQL — filtering, ordering, aggregation, and permissions"
 readme = "README.md"
 license = "MIT"
@@ -42,6 +40,7 @@ Issues = "https://github.com/riodw/django-strawberry-framework/issues"
 [dependency-groups]
 dev = [
     "faker>=33.0.0",
+    "pillow>=10.0.0",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.0.0",
     "pytest-cov>=7.0.0",

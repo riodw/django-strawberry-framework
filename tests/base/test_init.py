@@ -1,21 +1,22 @@
 """Package init tests for version metadata and public exports."""
 
-# TODO(spec-037 Slice 3/4): pin the public file/upload exports and version cut.
-# Pseudo-code:
-# - assert __all__ includes Upload, DjangoFileType, and DjangoImageType.
-# - assert importing those names from django_strawberry_framework succeeds.
-# - update test_version to 0.0.11 only with pyproject.toml, __init__.__version__,
-#   uv.lock, and docs/GLOSSARY.md aligned.
-
 import logging
 
 import django_strawberry_framework
-from django_strawberry_framework import __version__, logger
+from django_strawberry_framework import (
+    DjangoFileType,
+    DjangoImageType,
+    Upload,
+    __version__,
+    logger,
+)
 from django_strawberry_framework.optimizer import logger as optimizer_logger
+from django_strawberry_framework.scalars import Upload as ScalarsUpload
+from django_strawberry_framework.types import converters
 
 
 def test_version():
-    assert __version__ == "0.0.10"
+    assert __version__ == "0.0.11"
 
 
 def test_logger_name_is_django_strawberry_framework():
@@ -39,14 +40,18 @@ def test_public_api_surface_is_pinned():
     # re-export of an internal name) shows up at test time. New public
     # names only land when a future spec adds them; version changes are
     # maintainer-commanded and do not imply public-surface widening.
-    # The four-symbol mutation surface is complete: ``FieldError`` (Slice 1),
-    # ``DjangoMutation`` + ``DjangoModelPermission`` (Slice 2), and
-    # ``DjangoMutationField`` (Slice 3). ``test_version`` is untouched because the
-    # joint 0.0.11 cut owns the version assertion.
+    # The four-symbol mutation surface (spec-036) is complete: ``FieldError``,
+    # ``DjangoMutation`` + ``DjangoModelPermission``, and ``DjangoMutationField``.
+    # spec-037 Slice 3 adds the three file/upload symbols: ``Upload`` (the
+    # re-exported Strawberry scalar) plus ``DjangoFileType`` / ``DjangoImageType``
+    # (the structured read-output objects). The joint 0.0.11 cut (Slice 4,
+    # Decision 10) owns ``test_version``, asserted at ``0.0.11`` above.
     assert django_strawberry_framework.__all__ == (
         "BigInt",
         "DjangoConnection",
         "DjangoConnectionField",
+        "DjangoFileType",
+        "DjangoImageType",
         "DjangoListField",
         "DjangoModelPermission",
         "DjangoMutation",
@@ -58,6 +63,7 @@ def test_public_api_surface_is_pinned():
         "FieldError",
         "OptimizerHint",
         "SyncMisuseError",
+        "Upload",
         "__version__",
         "aapply_cascade_permissions",
         "apply_cascade_permissions",
@@ -65,3 +71,15 @@ def test_public_api_surface_is_pinned():
         "finalize_django_types",
         "strawberry_config",
     )
+
+
+def test_file_upload_exports_resolve_to_their_source_definitions():
+    # The three spec-037 Slice 3 root exports are re-exports, not new
+    # definitions: ``Upload`` rides through ``.scalars`` (which itself
+    # re-exports Strawberry's built-in), and the two output objects are the
+    # exact ``types.converters`` classes. Pin the re-export IDENTITY so a stray
+    # parallel definition (or a wrong canonical import site) is caught, not just
+    # ``__all__`` membership.
+    assert Upload is ScalarsUpload
+    assert DjangoFileType is converters.DjangoFileType
+    assert DjangoImageType is converters.DjangoImageType

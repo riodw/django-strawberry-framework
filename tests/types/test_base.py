@@ -23,13 +23,6 @@ test focused on the behaviour under examination. ``CATEGORY_SCALAR_FIELDS``
 captures the scalar-only field list used in those updated tests.
 """
 
-# TODO(spec-037 Slice 1): add consumer-authored file/image override coverage here.
-# Pseudo-code:
-# - declare a DjangoType over a synthetic FileField with `attachment: str`.
-# - finalize and assert the generated annotation remains str, not DjangoFileType.
-# - assert no generated file resolver is installed for consumer_authored_fields.
-# - repeat with an assigned strawberry.field resolver to pin both override paths.
-
 import datetime
 import functools
 import itertools
@@ -1804,3 +1797,96 @@ def test_override_redundant_is_no_op():
 
     assert override_type.__annotations__["note"] == (str | None)
     assert override_type.__annotations__["text_value"] is str
+
+
+# ---------------------------------------------------------------------------
+# Consumer file/image override (spec-037 Slice 1, Decision 3)
+# ---------------------------------------------------------------------------
+
+
+def _make_file_override_model():
+    """Return a synthetic model carrying a single ``FileField`` column."""
+
+    class _FileOverrideOwner(models.Model):
+        attachment = models.FileField()
+
+        class Meta:
+            managed = False
+            app_label = _unique_override_app_label()
+
+    return _FileOverrideOwner
+
+
+def test_consumer_annotation_override_on_file_column_keeps_str_and_no_resolver():
+    """A consumer ``attachment: str`` keeps the legacy ``str`` shape and gets no file resolver.
+
+    The annotation-only override lands in ``consumer_authored_fields``, so
+    ``_build_annotations`` leaves the ``str`` annotation alone (no
+    ``DjangoFileType``) AND ``_attach_file_resolvers`` -- keyed on the broader
+    ``consumer_authored_fields`` union -- attaches no generated parent resolver
+    for the column (spec-037 Decision 3). A generated file column would leave a
+    ``resolve_attachment`` function in ``__dict__`` (see the no-override case);
+    the overridden column leaves none.
+    """
+    model = _make_file_override_model()
+    override_type = _make_file_override_model_type(
+        model,
+        namespace={"__annotations__": {"attachment": str}},
+    )
+    finalize_django_types()
+
+    # Annotation stays ``str``, never widened to ``DjangoFileType``.
+    assert override_type.__annotations__["attachment"] is str
+    # No generated file parent resolver was attached for the overridden column
+    # (a generated column leaves a ``resolve_attachment`` function in __dict__).
+    assert "attachment" not in override_type.__dict__
+
+
+def test_no_override_file_column_gets_generated_resolver():
+    """Without an override, the file column DOES get a generated ``resolve_attachment``.
+
+    The control case for the override test above: it pins that the absence of a
+    generated resolver in the override case is the override's doing, not a
+    blanket no-attach (spec-037 Decision 3).
+    """
+    model = _make_file_override_model()
+    generated_type = _make_file_override_model_type(model)
+    finalize_django_types()
+
+    attr = generated_type.__dict__.get("attachment")
+    assert callable(attr)
+    assert attr.__name__ == "resolve_attachment"
+
+
+def test_consumer_assigned_field_resolver_on_file_column_is_not_clobbered():
+    """A consumer-assigned ``strawberry.field(resolver=...)`` on a file column survives.
+
+    The assigned-override path also lands in ``consumer_authored_fields``, so the
+    generated file resolver must not replace the consumer's own resolver.
+    ``strawberry.type(...)`` unwraps the assigned ``StrawberryField`` back to the
+    consumer's bare resolver function in ``__dict__`` at finalize, so the
+    distinguishing assertion is that the surviving function is the consumer's
+    (named ``attachment_resolver``), NOT the generated ``resolve_attachment``
+    (spec-037 Decision 3).
+    """
+
+    def attachment_resolver(self) -> str:
+        return "consumer-owned"
+
+    model = _make_file_override_model()
+    consumer_field = strawberry.field(resolver=attachment_resolver)
+    override_type = _make_file_override_model_type(
+        model,
+        namespace={"attachment": consumer_field},
+    )
+    finalize_django_types()
+
+    attr = override_type.__dict__.get("attachment")
+    assert callable(attr)
+    assert attr.__name__ == "attachment_resolver"
+
+
+def _make_file_override_model_type(model, *, namespace=None):
+    """Build an ``OverrideType`` over ``model`` selecting only ``id`` + ``attachment``."""
+    meta_cls = type("Meta", (), {"model": model, "fields": ("id", "attachment")})
+    return type("OverrideType", (DjangoType,), {"Meta": meta_cls, **(namespace or {})})

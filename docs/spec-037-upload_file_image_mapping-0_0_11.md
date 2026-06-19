@@ -18,11 +18,15 @@ Required [`strawberry-graphql-django`][upstream-field-types] parity item (the
 card's own 🍓 Required tag): upstream's `field_type_map` maps `files.FileField` →
 `DjangoFileType`, `files.ImageField` → `DjangoImageType`, and both → `Upload` in
 `input_field_type_map`, and without this every consumer touching user uploads
-hand-rolls the mapping. The scalar registration reuses the shipped
-[`BigInt`][glossary-bigint-scalar] /
-[`strawberry_config`][glossary-strawberry-config] path verbatim — `Upload` is a
-`NewType("Upload", bytes)` + a `ScalarDefinition`, structurally identical to
-`BigInt`. **Version boundary** (see
+hand-rolls the mapping. `Upload` itself needs no registration: it is a Strawberry built-in
+(`NewType("Upload", bytes)` + a `ScalarDefinition`) that Strawberry already
+registers in its built-in `DEFAULT_SCALAR_REGISTRY`, so an `Upload`-annotated
+field resolves in any schema — the public-surface change is **re-exporting**
+`Upload` from the package root. This is the contrast with the package-custom
+[`BigInt`][glossary-bigint-scalar] scalar, which is absent from the default
+registry and must be bound through
+[`strawberry_config`][glossary-strawberry-config].
+**Version boundary** (see
 [Decision 10](#decision-10--this-card-owns-the-final-0011-version-bump)): unlike
 [`spec-036`][spec-036] (which shared its patch line with an unstarted sibling
 and so deferred), this card is the **last** `0.0.11` card — `036` is already
@@ -38,10 +42,10 @@ Status: **DRAFT** — authored for `TODO-ALPHA-037-0.0.11` via the
 [Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)
 /
 [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)),
-Slice 2 (**write-side `Upload` input** — the `Upload` scalar registration in
+Slice 2 (**write-side `Upload` input** — the `Upload` re-export in
 [`scalars.py`][scalars] and the [`mutations/inputs.py`][mutations-inputs]
 seam-to-`Upload` swap plus the write-resolver file assignment;
-[Decision 5](#decision-5--upload-scalar-registration-mirrors-the-bigint-precedent)
+[Decision 5](#decision-5--re-export-upload-rather-than-register-it)
 /
 [Decision 6](#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload)),
 Slice 3 (**public exports + coverage hardening** — `Upload` / `DjangoFileType` /
@@ -67,8 +71,9 @@ generator", realized as the [`mutations/inputs.py`][mutations-inputs]
 the canonical voice / depth / section-layout reference);
 [`spec-025-scalar_map_helper-0_0_7.md`][spec-025] (the
 [`strawberry_config`][glossary-strawberry-config] / `_PACKAGE_SCALAR_MAP`
-registration path `Upload` rides — its Decision 3 redefined `BigInt` as a bare
-`NewType` + `ScalarDefinition`, the exact shape `Upload` already has upstream);
+registration path — its Decision 3 redefined `BigInt` as a bare
+`NewType` + `ScalarDefinition`, the exact structural shape `Upload` already has,
+though `Upload` is a built-in that needs no such registration);
 [`spec-017-deferred_scalars-0_0_6.md`][spec-017] (the converter-table-addition
 precedent — it added `BigInt` / `JSON` / `ArrayField` / `HStoreField` to
 [`SCALAR_MAP`][types-converters], the same table this card extends, and
@@ -82,9 +87,10 @@ scalar-conversion coverage posture); and
 [`DjangoFileType`][glossary-djangofiletype], and
 [`DjangoImageType`][glossary-djangoimagetype] as `planned for 0.0.11`; Slice 4
 promotes all three to `shipped (0.0.11)`, rewrites the
-[Scalar field conversion][glossary-scalar-field-conversion] /
-[Specialized scalar conversions][glossary-specialized-scalar-conversions]
-file/image rows, and moves the package-version line to `0.0.11`.
+[Scalar field conversion][glossary-scalar-field-conversion] file/image row (and
+adds a file/image row to
+[Specialized scalar conversions][glossary-specialized-scalar-conversions]), and
+moves the package-version line to `0.0.11`.
 
 Revision history (kept inline so the spec is self-contained):
 
@@ -105,9 +111,10 @@ Revision history (kept inline so the spec is self-contained):
   file degrades to `null` rather than a GraphQL 500, and the `blank`-or-`null`
   object nullability
   ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability));
-  the `Upload` scalar registration as a one-entry `_PACKAGE_SCALAR_MAP`
-  extension mirroring [`BigInt`][glossary-bigint-scalar]
-  ([Decision 5](#decision-5--upload-scalar-registration-mirrors-the-bigint-precedent));
+  the `Upload` re-export from the package root — no `_PACKAGE_SCALAR_MAP` entry,
+  since `Upload` is already in Strawberry's built-in scalar registry (the
+  contrast with the package-custom [`BigInt`][glossary-bigint-scalar])
+  ([Decision 5](#decision-5--re-export-upload-rather-than-register-it));
   the write-side seam-to-`Upload` swap and the write-resolver file assignment,
   lifting the `036` file-column merge-override exception
   ([Decision 6](#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload));
@@ -149,19 +156,25 @@ vocabulary used throughout the spec:
   realize both.
 - [Scalar field conversion][glossary-scalar-field-conversion] /
   [Specialized scalar conversions][glossary-specialized-scalar-conversions] —
-  the converter table this card extends. Today both list `FileField` /
-  `ImageField` → `str` (string path / URL); this card rewrites those two rows to
-  the structured output objects and documents the
+  the converter tables this card touches. Today the
+  [Scalar field conversion][glossary-scalar-field-conversion] table lists
+  `FileField` / `ImageField` → `str` (string path / URL); this card updates that
+  row to reflect the split — **read** output → the structured objects (via the
+  new `FIELD_OUTPUT_TYPE_MAP`), while the **filter / scalar-input** value stays
+  `str` in `SCALAR_MAP` — and adds a file/image row to
+  [Specialized scalar conversions][glossary-specialized-scalar-conversions]
+  (which has none today), documenting the
   [breaking wire-format change][glossary-specialized-scalar-conversions]
   ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)).
 - [`BigInt` scalar][glossary-bigint-scalar] /
-  [`strawberry_config`][glossary-strawberry-config] — the scalar-registration
-  precedent and path. `Upload` registers exactly as `BigInt` does: a package
-  scalar added to `_PACKAGE_SCALAR_MAP` and bound through the
-  [`strawberry_config`][glossary-strawberry-config] factory
-  ([Decision 5](#decision-5--upload-scalar-registration-mirrors-the-bigint-precedent)).
-  The glossary's `strawberry_config` entry already anticipates `Upload` landing
-  here.
+  [`strawberry_config`][glossary-strawberry-config] — the precedent for
+  root-exporting a package scalar. Unlike `BigInt` (a package-custom scalar
+  bound through the [`strawberry_config`][glossary-strawberry-config] factory),
+  `Upload` is already in Strawberry's built-in `DEFAULT_SCALAR_REGISTRY`, so it
+  needs no `_PACKAGE_SCALAR_MAP` entry — only a re-export
+  ([Decision 5](#decision-5--re-export-upload-rather-than-register-it)). The
+  glossary's `strawberry_config` entry's stray "next: `Upload`" mention is
+  removed in Slice 4.
 - [`DjangoMutation`][glossary-djangomutation] /
   [Input type generation][glossary-input-type-generation] /
   [`DjangoMutationField`][glossary-djangomutationfield] /
@@ -229,7 +242,7 @@ Project conventions to follow:
   canonical group headers).
 - [`CONTRIBUTING.md`][contributing] — the 100% coverage target
   (`fail_under = 100`); every converter branch, the read resolver's empty-file /
-  storage-failure guard, the `Upload` registration, and the write-input mapping
+  storage-failure guard, the `Upload` re-export, and the write-input mapping
   earn coverage in the package test trees.
 - [`docs/TREE.md`][tree] — the conversion-table rows the package documents; this
   card touches [`types/converters.py`][types-converters] (read),
@@ -248,30 +261,37 @@ the `0.0.11` cut (Slice 4).** Slices 1–2 are independent (read vs write module
 and can land in either order; Slice 3 depends on both; Slice 4 is doc +
 version-cut only.
 
-- [ ] Slice 1: read-side output objects + the `SCALAR_MAP` change + the
-  empty-file resolver (per
+- [ ] Slice 1: read-side output objects + the `FIELD_OUTPUT_TYPE_MAP` read map +
+  the file-column resolver (per
   [Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)
   /
   [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability))
   - [ ] [`types/converters.py`][types-converters]: define `DjangoFileType`
-    (`@strawberry.type` with `name: str`, `path: str | None`,
-    `size: int | None`, `url: str | None`) and `DjangoImageType(DjangoFileType)`
-    (adds `width: int | None`, `height: int | None`); rewrite the two
-    [`SCALAR_MAP`][types-converters] rows `FileField: str` → `DjangoFileType`
-    and `ImageField: str` → `DjangoImageType`. The MRO walk keeps an
-    `ImageField` (a `FileField` subclass) resolving to `DjangoImageType` because
-    its own row precedes the `FileField` row.
+    (`@strawberry.type` with **resolver-backed** fields `name: str`,
+    `path: str | None`, `size: int | None`, `url: str | None`) and
+    `DjangoImageType(DjangoFileType)` (adds `width: int | None`,
+    `height: int | None`), each subfield delegating to a shared `_safe_file_attr`
+    guard ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)).
+    Add a new `FIELD_OUTPUT_TYPE_MAP` (`models.FileField → DjangoFileType`,
+    `models.ImageField → DjangoImageType`) that the **read** converter consults;
+    **leave** [`SCALAR_MAP`][types-converters]'s `FileField: str` /
+    `ImageField: str` rows in place so the shared filter-input path is
+    unaffected ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)).
+    The new map's MRO walk keeps an `ImageField` (a `FileField` subclass)
+    resolving to `DjangoImageType` because its own row precedes the `FileField`
+    row.
   - [ ] [`types/base.py`][types-base] / [`types/resolvers.py`][types-resolvers]:
-    a generated **file-column read resolver** for any column resolving to
-    `DjangoFileType` / `DjangoImageType` — returns `None` for an empty / falsy
-    `FieldFile` (`not value`) and otherwise the bound `FieldFile`, whose `name`
-    / `path` / `size` / `url` (and `width` / `height` for images) Strawberry
-    reads, with a **narrow per-subfield exception guard** (`ValueError` /
-    `OSError` / storage `NotImplementedError` → `None`) so a non-filesystem
-    `path` or a vanished file degrades to a `null` subfield, not a 500; the
-    standing consumer-override short-circuit
-    ([Scalar field override semantics][glossary-scalar-field-override-semantics])
-    is preserved.
+    attach a generated **file-column read resolver** in the same finalizer phase
+    as the relation resolvers, for any column resolving via
+    `FIELD_OUTPUT_TYPE_MAP` — it returns `None` for an empty / falsy `FieldFile`
+    (`not value`) and otherwise the bound `FieldFile` (**object nullability
+    only**). The per-subfield exception guard lives on `DjangoFileType` /
+    `DjangoImageType`'s own resolvers, **not** here
+    ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)).
+    The attachment **skips `definition.consumer_authored_fields`** (annotation
+    *and* assigned-`strawberry.field` overrides), so a consumer `attachment: str`
+    keeps the legacy `str` shape and gets no generated resolver or object type
+    ([Scalar field override semantics][glossary-scalar-field-override-semantics]).
   - [ ] Output object nullability: a file column widens to
     `DjangoFileType | None` when the column is `null=True` **or** `blank=True`
     (an absent file is representable for a blank column), composing with the
@@ -280,21 +300,25 @@ version-cut only.
     `force_nullable` tri-state.
   - [ ] Package coverage: [`tests/types/test_converters.py`][test-types] (the
     card's named test file) — `FileField` → `DjangoFileType`, `ImageField` →
-    `DjangoImageType`, MRO precedence, `blank` / `null` → `| None`,
-    `force_nullable` compose; [`tests/types/test_resolvers.py`][test-types] —
-    the empty-file → `None` guard, the populated-`FieldFile` pass-through
-    (subfields resolve), and a storage-property failure degrading to a `null`
-    subfield; [`tests/types/test_base.py`][test-types] — the consumer-annotation
-    override (`avatar: str`) still wins.
-- [ ] Slice 2: write-side `Upload` input + the scalar registration (per
-  [Decision 5](#decision-5--upload-scalar-registration-mirrors-the-bigint-precedent)
+    `DjangoImageType` via `FIELD_OUTPUT_TYPE_MAP`, MRO precedence, `blank` /
+    `null` → `| None`, `force_nullable` compose, **and** a
+    [`FilterSet`][glossary-filterset] over a synthetic `FileField` still yields a
+    scalar (`str`) filter input, never `DjangoFileType` (the P0 split);
+    [`tests/types/test_resolvers.py`][test-types] — the empty-file → `None`
+    parent guard, the populated-`FieldFile` pass-through, and **per-subfield
+    isolation** (a failing `path` returns `null` while `url` / `name` still
+    resolve, each selected one subfield at a time);
+    [`tests/types/test_base.py`][test-types] — the consumer-annotation override
+    (`avatar: str`) gets no generated resolver or object type.
+- [ ] Slice 2: write-side `Upload` input + the `Upload` re-export (per
+  [Decision 5](#decision-5--re-export-upload-rather-than-register-it)
   /
   [Decision 6](#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload))
-  - [ ] [`scalars.py`][scalars]: re-export `Upload` and its `UploadDefinition`
-    from `strawberry.file_uploads.scalars`, and add `Upload: UploadDefinition`
-    to `_PACKAGE_SCALAR_MAP` so the
-    [`strawberry_config`][glossary-strawberry-config] factory binds it — the
-    one-entry extension of the [`BigInt`][glossary-bigint-scalar] precedent; fix
+  - [ ] [`scalars.py`][scalars]: re-export `Upload` (and `UploadDefinition`)
+    from `strawberry.file_uploads.scalars` for the public surface. **Do not**
+    add it to `_PACKAGE_SCALAR_MAP` — `Upload` already resolves via Strawberry's
+    built-in `DEFAULT_SCALAR_REGISTRY`
+    ([Decision 5](#decision-5--re-export-upload-rather-than-register-it)); fix
     the stale `TODO-ALPHA-035-0.0.11` reference in the module docstring to
     `TODO-ALPHA-037-0.0.11`.
   - [ ] [`mutations/inputs.py`][mutations-inputs]: remove the staged seam at
@@ -309,15 +333,21 @@ version-cut only.
     file columns now participate in the
     [`Meta.input_class`][glossary-input-type-generation] merge override like any
     scalar.
-  - [ ] [`mutations/resolvers.py`][mutations-resolvers]: the write pipeline
-    assigns a provided `Upload` value to the model's file field before
-    `full_clean()` / `save()` — a provided `UNSET` leaves the file unchanged on
-    partial update; clearing via explicit `null` is governed by the shipped
-    pipeline's nullable-scalar handling and is a
-    [Risks](#risks-and-open-questions) item, not promised here.
-  - [ ] Package coverage: [`tests/test_scalars.py`][test-scalars] — `Upload` is
-    registered in `strawberry_config()`'s scalar map and resolves, and an
-    `extra_scalar_map={Upload: ...}` collision raises the existing `ValueError`;
+  - [ ] [`mutations/resolvers.py`][mutations-resolvers]: **verify** the existing
+    scalar assignment path already handles an uploaded file — the shipped
+    pipeline passes scalar attrs into `model(**attrs)` (create) and `setattr`
+    (update) before `full_clean()` / `save()`, and Django's `FileField`
+    descriptor accepts an `UploadedFile` directly, so a file column likely needs
+    **no** dedicated branch. Add a file-specific branch only if a test proves the
+    generic scalar path fails ([Decision 6](#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload)).
+    A provided `UNSET` leaves the file unchanged on partial update; clearing via
+    explicit `null` is a [Risks](#risks-and-open-questions) item, not promised
+    here.
+  - [ ] Package coverage: [`tests/test_scalars.py`][test-scalars] — an
+    `Upload`-annotated field resolves through a schema built with
+    `strawberry_config()` **and** through a plain `StrawberryConfig` (proving
+    `Upload` rides Strawberry's default registry, not the package map); the
+    existing `BigInt` collision test is untouched;
     [`tests/mutations/test_inputs.py`][test-mutations] — replace the
     staged-`NotImplementedError` tests with positive `FileField` / `ImageField`
     → `Upload` required/optional shapes, `| None` widening, and the lifted CR-6
@@ -349,17 +379,22 @@ version-cut only.
     [`Upload` scalar][glossary-upload-scalar] /
     [`DjangoFileType`][glossary-djangofiletype] /
     [`DjangoImageType`][glossary-djangoimagetype] to `shipped (0.0.11)`; rewrite
-    the [Scalar field conversion][glossary-scalar-field-conversion] /
+    the [Scalar field conversion][glossary-scalar-field-conversion] file/image
+    row and **add** a file/image row to
     [Specialized scalar conversions][glossary-specialized-scalar-conversions]
-    file/image rows; add the three to **Public exports** + the **Index** + the
-    **File / image uploads** browse-by-category row; record the read-side
-    breaking-wire-format change; flip the
-    [`strawberry_config`][glossary-strawberry-config] entry's "next: `Upload`"
-    to "`BigInt` + `Upload`"), [`docs/README.md`][docs-readme] /
-    [`README.md`][readme] (move the `Upload` scalar + file/image mapping from
-    "Coming next (`0.0.11`)" to "Shipped today", and the README **Status** line
-    from `0.0.10` to `0.0.11`), [`GOAL.md`][goal] (success-criterion 6's
-    `Upload` reference now ships), [`TODAY.md`][today] (rewrite the
+    (which has none today); add the three to **Public exports** + the **Index** +
+    the **File / image uploads** browse-by-category row; record the read-side
+    breaking-wire-format change; remove the
+    [`strawberry_config`][glossary-strawberry-config] entry's stray "next:
+    `Upload`" mention), [`docs/README.md`][docs-readme] /
+    [`README.md`][readme] (move the `Upload` scalar + generated file/image field
+    typing from "Coming next (`0.0.11`)" to "Shipped today" — wording the
+    *scalar and generated mutation-field typing*, **not** full multipart HTTP
+    upload ergonomics, which await the `0.0.14` [`TestClient`][glossary-testclient]
+    — and the README **Status** line from `0.0.10` to `0.0.11`), [`GOAL.md`][goal]
+    (note that criterion 6's `Upload` / `FileField` / `ImageField` part ships for
+    generated `DjangoMutation` inputs — the `ModelForm` / `ModelSerializer`
+    flavors in that same criterion still land later), [`TODAY.md`][today] (rewrite the
     scalar-conversion table's `FileField` / `ImageField` → `str` row to the
     structured output objects and note upload mutation inputs as a package
     capability not exercised by products), [`CHANGELOG.md`][changelog] (only if
@@ -388,18 +423,23 @@ incompletely:
   [`DjangoMutation`][glossary-djangomutation] shipped, the seam is now the
   blocker: any model with an editable file/image column cannot use generated
   mutation inputs unless the consumer excludes the column.
-- The schema-config helper already has the right shape.
-  [`strawberry_config`][glossary-strawberry-config] registers
-  [`BigInt`][glossary-bigint-scalar]; Strawberry's `Upload` is a scalar
-  definition of the same `NewType` + `ScalarDefinition` shape and should join
-  the same `_PACKAGE_SCALAR_MAP` path, not a new settings or decorator path.
+- `Upload` already resolves, but the package does not expose it. Strawberry
+  registers `Upload` in its built-in `DEFAULT_SCALAR_REGISTRY`, so an
+  `Upload`-annotated field resolves without any package registration; the only
+  public-surface gap is that the package does not re-export `Upload` for
+  consumers hand-writing upload fields (in contrast to
+  [`BigInt`][glossary-bigint-scalar], a package-custom scalar that does need
+  [`strawberry_config`][glossary-strawberry-config]).
 
 The card matters because upload fields are ordinary Django model fields. A
 package that claims DRF-shaped model-to-GraphQL generation cannot require every
 user-upload model to hand-roll both output object fields and mutation input
 scalars. This is a Required `strawberry-graphql-django` parity item,
-foundational by the [`START.md`][start] "do both libraries provide it?" test
-(both upstreams map file/image fields).
+foundational by the [`START.md`][start] "do both libraries provide it?" test —
+both upstreams map file/image fields, but only `strawberry-graphql-django` ships
+the structured output object; `graphene-django` maps `FileField` to a bare
+`String` (the weaker form this card does not copy), so the rich file/image shape
+is a `strawberry-graphql-django` borrow, not a Graphene one.
 
 ## Current state
 
@@ -413,7 +453,11 @@ A true description of the repo as this spec is authored:
   `Meta.nullable_overrides` / `Meta.required_overrides` `force_nullable`
   tri-state). There is **no** `DjangoFileType` / `DjangoImageType` symbol and no
   file-column read resolver — a file column rides Strawberry's default attribute
-  resolver and serializes via `str(FieldFile)`.
+  resolver and serializes via `str(FieldFile)`. Critically,
+  [`filters/inputs.py`][filters-inputs]'s `_scalar_from_model_field` walks the
+  **same** `scalar_for_field` / [`SCALAR_MAP`][types-converters], so `SCALAR_MAP`
+  is the shared scalar/filter-input map — the read change cannot simply rewrite
+  its rows ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)).
 - **The write generator refuses file columns.**
   [`mutations/inputs.py`][mutations-inputs] #"Upload staged seam
   (TODO-ALPHA-037-0.0.11)" raises `NotImplementedError` for a `FileField` /
@@ -422,12 +466,14 @@ A true description of the repo as this spec is authored:
   behavior. The `036` review (CR-6) pinned that file columns are "the one
   exception to the merge override" precisely because this `NotImplementedError`
   precedes the `Meta.input_class` override skip — an exception this card lifts.
-- **`Upload` is not registered.** [`scalars.py`][scalars] holds `BigInt` (a
+- **`Upload` is not re-exported.** [`scalars.py`][scalars] holds `BigInt` (a
   `NewType("BigInt", int)` + a `ScalarDefinition`) and
-  `_PACKAGE_SCALAR_MAP = {BigInt: _BIGINT_SCALAR_DEFINITION}`; `Upload` is
-  absent. Strawberry ships `Upload = NewType("Upload", bytes)` +
-  `UploadDefinition` at `strawberry.file_uploads.scalars` — structurally
-  identical to `BigInt`, so it is a one-line `_PACKAGE_SCALAR_MAP` addition. The
+  `_PACKAGE_SCALAR_MAP = {BigInt: _BIGINT_SCALAR_DEFINITION}`. Strawberry already
+  ships `Upload = NewType("Upload", bytes)` + `UploadDefinition` at
+  `strawberry.file_uploads.scalars` **and** registers it in
+  `DEFAULT_SCALAR_REGISTRY`, so `Upload` already resolves in every schema — the
+  package simply does not re-export it (unlike `BigInt`, which is absent from the
+  default registry and so needs its `_PACKAGE_SCALAR_MAP` entry). The
   module docstring's "Future scalars (e.g. `Upload` per TODO-ALPHA-035-0.0.11)"
   carries a **stale card number** (`035` is the optimizer-hardening card; the
   real owner is this card, `037`).
@@ -453,27 +499,29 @@ A true description of the repo as this spec is authored:
 
 ## Goals
 
-1. **Expose file/image output as structured objects.**
-   [`SCALAR_MAP`][types-converters] returns
-   [`DjangoFileType`][glossary-djangofiletype] /
-   [`DjangoImageType`][glossary-djangoimagetype] (mirroring
-   [`strawberry-graphql-django`][upstream-field-types]) so a client gets `name`
-   / `path` / `size` / `url` (+ `width` / `height`) in one selection
+1. **Expose file/image output as structured objects.** The read converter
+   returns [`DjangoFileType`][glossary-djangofiletype] /
+   [`DjangoImageType`][glossary-djangoimagetype] via a new `FIELD_OUTPUT_TYPE_MAP`
+   (kept off the shared `SCALAR_MAP` / filter-input path), mirroring
+   [`strawberry-graphql-django`][upstream-field-types], so a client gets `name` /
+   `path` / `size` / `url` (+ `width` / `height`) in one selection
    ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)).
 2. **Handle empty / unreadable files deliberately.** An absent file resolves to
-   `null` (the whole object); a storage property that cannot be produced
-   degrades to a `null` subfield — never a `FieldFile.url` / `.path` exception
-   surfacing as a GraphQL 500
+   `null` (the whole object); a storage property that cannot be produced degrades
+   to a `null` subfield (guarded on the subfield resolver, not the parent) — never
+   a `FieldFile.url` / `.path` exception surfacing as a GraphQL 500
    ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)).
-3. **Register `Upload` through the package config factory.** `Upload` lands in
-   `_PACKAGE_SCALAR_MAP` and binds via
-   [`strawberry_config`][glossary-strawberry-config], the same path
-   [`BigInt`][glossary-bigint-scalar] uses
-   ([Decision 5](#decision-5--upload-scalar-registration-mirrors-the-bigint-precedent)).
+3. **Re-export `Upload` from the package root.** `Upload` already resolves via
+   Strawberry's built-in `DEFAULT_SCALAR_REGISTRY`, so the package exposes it as
+   a public symbol (for consumer-authored upload fields) rather than registering
+   it in `_PACKAGE_SCALAR_MAP` — the contrast with the package-custom
+   [`BigInt`][glossary-bigint-scalar] scalar
+   ([Decision 5](#decision-5--re-export-upload-rather-than-register-it)).
 4. **Map `FileField` / `ImageField` to `Upload` on the mutation input side.**
    The [`spec-036`][spec-036] staged seam becomes a real `Upload`-typed input
-   field, required per the shipped per-field rule, and the write resolver
-   assigns the uploaded file
+   field, required per the shipped per-field rule, and the existing write
+   pipeline's scalar-assignment path carries the uploaded file (verified, not a
+   new file branch)
    ([Decision 6](#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload)).
 5. **Keep read and write contracts distinct.** Output is an object type; input
    is `Upload`; neither side leaks the other's representation.
@@ -529,10 +577,10 @@ Strawberry output object because the engine is Strawberry.
 
 | Upstream | `django-strawberry-framework` | Status |
 | --- | --- | --- |
-| [`strawberry_django.fields.types.DjangoFileType`][upstream-field-types] (`name` / `path` / `size` / `url`) | [`DjangoFileType`][glossary-djangofiletype] public output type; `models.FileField` converter row ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)) | this card — required parity |
-| [`strawberry_django.fields.types.DjangoImageType`][upstream-field-types] (file fields + dimensions) | [`DjangoImageType`][glossary-djangoimagetype] public output type; `models.ImageField` converter row ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)) | this card — required parity (subfields widened nullable, [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)) |
+| [`strawberry_django.fields.types.DjangoFileType`][upstream-field-types] (`name` / `path` / `size` / `url`) | [`DjangoFileType`][glossary-djangofiletype] public output type; `FIELD_OUTPUT_TYPE_MAP[models.FileField]` read row ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)) | this card — required parity |
+| [`strawberry_django.fields.types.DjangoImageType`][upstream-field-types] (file fields + dimensions) | [`DjangoImageType`][glossary-djangoimagetype] public output type; `FIELD_OUTPUT_TYPE_MAP[models.ImageField]` read row ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)) | this card — required parity (subfields widened nullable, field-level guard, [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)) |
 | [`strawberry_django` `input_field_type_map` maps file/image → `Upload`][upstream-field-types] | the [`mutations/inputs.py`][mutations-inputs] generator maps both to [`Upload`][glossary-upload-scalar] ([Decision 6](#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload)) | this card — required parity |
-| `strawberry.file_uploads.scalars.Upload` | re-exported and registered in `_PACKAGE_SCALAR_MAP` via [`strawberry_config`][glossary-strawberry-config] ([Decision 5](#decision-5--upload-scalar-registration-mirrors-the-bigint-precedent)) | this card — adopt upstream scalar, register through the package path |
+| `strawberry.file_uploads.scalars.Upload` | re-exported from the package root; resolves via Strawberry's built-in default registry — no `_PACKAGE_SCALAR_MAP` entry ([Decision 5](#decision-5--re-export-upload-rather-than-register-it)) | this card — adopt upstream scalar; like upstream, rely on the built-in registry |
 | `graphene_django.converter.convert_field_to_string` for `FileField` | rejected as too weak for this package's Strawberry output shape | deliberately not borrowed |
 
 ### From `strawberry-graphql-django` — borrow the output shapes and the input mapping
@@ -567,7 +615,7 @@ Strawberry output object because the engine is Strawberry.
   `Upload` (`strawberry.file_uploads.scalars`); re-using it keeps multipart
   parsing on the engine and avoids a parallel scalar incompatible with the
   built-in multipart conventions
-  ([Decision 5](#decision-5--upload-scalar-registration-mirrors-the-bigint-precedent)).
+  ([Decision 5](#decision-5--re-export-upload-rather-than-register-it)).
 - **`graphene-django`'s `FileField` → `String` output.** Rejected: too weak; it
   matches the old `spec-001` simplification this card replaces.
 - **Storage-backend abstraction / signed-URL generation.** Out of scope
@@ -689,9 +737,10 @@ The same per-field requiredness rule applies (a create-input field is required
 only when the model field has no usable `default`, is not `null=True`, and is
 not `blank=True`); partial inputs are all-optional `UNSET`. A provided upload is
 assigned through Django's normal model-field path before `full_clean()` /
-`save()`; an omitted upload on update leaves the current file untouched. Binding
-`Upload` requires the package config factory (the same call `BigInt` already
-needs):
+`save()`; an omitted upload on update leaves the current file untouched. The
+schema uses the package's standard `strawberry_config()` (required by `BigInt`);
+`Upload` itself needs no special binding — Strawberry resolves it from its
+built-in default scalar registry:
 
 ```python
 schema = strawberry.Schema(query=Query, mutation=Mutation, config=strawberry_config())
@@ -715,10 +764,6 @@ schema = strawberry.Schema(query=Query, mutation=Mutation, config=strawberry_con
   ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability))
   — not a top-level error and not a swallowed resolver bug (the catch list is
   `ValueError` / `OSError` / storage `NotImplementedError`).
-- An `extra_scalar_map={Upload: ...}` collision passed to `strawberry_config()`
-  raises the existing `ValueError`, now naming `Upload` — consistent with the
-  `BigInt` collision contract.
-
 ## Architectural decisions
 
 ### Decision 1 — Spec filename and canonical naming
@@ -746,7 +791,7 @@ Alternatives considered (and rejected):
 ### Decision 2 — Card-scope boundary: file/image conversion only, not transport or storage abstraction
 
 This card ships three tightly related artifacts: (1) `FileField` / `ImageField`
-output object types; (2) `Upload` scalar registration and mutation input
+output object types; (2) the `Upload` re-export and mutation input
 mapping; (3) the version/doc wrap for the now-complete `0.0.11` patch. It does
 **not** ship multipart test helpers, an example upload app, remote-storage
 policies, image processing, or nested upload writes — each named in
@@ -774,50 +819,90 @@ Alternatives considered (and rejected):
 ### Decision 3 — Read-side output types: `DjangoFileType` / `DjangoImageType` mirroring upstream
 
 [`types/converters.py`][types-converters] defines two `@strawberry.type` output
-types and rewrites the two [`SCALAR_MAP`][types-converters] rows:
+types and a **new read-output field-type map**, kept separate from
+[`SCALAR_MAP`][types-converters]:
 
 - `DjangoFileType` — `name`, `path`, `size`, `url` (the four fields
-  [`strawberry-graphql-django`][upstream-field-types] ships).
+  [`strawberry-graphql-django`][upstream-field-types] ships), as
+  **resolver-backed** Strawberry fields (Decision 4 explains why the subfields
+  are resolvers, not bare annotations).
 - `DjangoImageType(DjangoFileType)` — adds `width`, `height`.
-- `SCALAR_MAP[models.FileField] = DjangoFileType`;
-  `SCALAR_MAP[models.ImageField] = DjangoImageType`.
+- `FIELD_OUTPUT_TYPE_MAP[models.FileField] = DjangoFileType`;
+  `FIELD_OUTPUT_TYPE_MAP[models.ImageField] = DjangoImageType` — a new
+  module-level map the **read** converter consults; *not* a `SCALAR_MAP` row.
 
-`ImageField` is a `FileField` subclass, so lookup order matters:
-`scalar_for_field`'s MRO walk tests `type(field).__mro__` against `SCALAR_MAP`
-in MRO order, and `ImageField` appears in its own MRO *before* `FileField`, so
-an `ImageField` (and a consumer `ImageField` subclass) resolves to
-`DjangoImageType`, never falling through to `DjangoFileType`. Both rows are
-explicit, as today's two `str` rows are.
+**Why a separate map, not a `SCALAR_MAP` rewrite.**
+[`SCALAR_MAP`][types-converters] is shared: the read path
+([`convert_scalar`][types-converters]) *and* the **filter-input** path
+([`filters/inputs.py`][filters-inputs] `_scalar_from_model_field`, which
+delegates to [`scalar_for_field`][types-converters]) both walk it. If
+`SCALAR_MAP[models.FileField]` returned `DjangoFileType`, a
+[`FilterSet`][glossary-filterset] over a file column would generate a GraphQL
+**input** field typed as an **output** object — an invalid schema shape and a
+regression outside this card's surface. So the read converter gains a
+`FIELD_OUTPUT_TYPE_MAP` MRO lookup it consults *before* `SCALAR_MAP` for a
+file/image column; `SCALAR_MAP[models.FileField]` / `[models.ImageField]` stay
+`str`, so filter-input generation keeps calling `scalar_for_field`, still sees
+`str`, and never produces an output-typed input (a file column still filters as
+a scalar string, unchanged).
 
-The converter-row change alone is insufficient: a Django model attribute for a
-file column returns a falsy `FieldFile` / `ImageFieldFile` descriptor even when
-no file is attached, and accessing `url` / `path` / `size` on an empty
-descriptor raises. So this card adds a small generated **file-column read
-resolver** (wired in [`types/base.py`][types-base], bodied in
-[`types/resolvers.py`][types-resolvers] alongside the relation resolvers):
-`return None if not value else value`, then Strawberry resolves the subfields
-off the `FieldFile`. Consumer-authored annotations / `strawberry.field`
-assignments still win (the standing override short-circuit,
-[Scalar field override semantics][glossary-scalar-field-override-semantics]);
-the generated resolver is attached only to auto-synthesized file/image fields.
+`ImageField` is a `FileField` subclass, so lookup order matters in the new map
+exactly as in `SCALAR_MAP`: the MRO walk tests `type(field).__mro__` and
+`ImageField` appears in its own MRO *before* `FileField`, so an `ImageField`
+(and a consumer `ImageField` subclass) resolves to `DjangoImageType`, never
+falling through to `DjangoFileType`.
 
-Changing `FileField` / `ImageField` from `str` to an object type is a **breaking
-wire-format change** — parallel to the
+The map lookup alone is insufficient: a Django model attribute for a file column
+returns a falsy `FieldFile` / `ImageFieldFile` descriptor even when no file is
+attached, and accessing `url` / `path` / `size` on it raises. So this card adds
+a generated **file-column read resolver**, attached at `DjangoType`
+finalization in the **same phase as the relation resolvers**
+([`types/resolvers.py`][types-resolvers], wired from [`types/base.py`][types-base]).
+The parent resolver does object nullability only — `return None if not value
+else value` — and Strawberry then resolves the subfields off the returned
+`FieldFile` through `DjangoFileType`'s own **resolver-backed** fields (the
+per-subfield guard, [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)).
+The attachment **skips `definition.consumer_authored_fields`** (the same
+override union the relation resolvers and `_build_annotations` honor — stored on
+[`DjangoTypeDefinition`][types-base]), so a consumer annotation *or*
+`strawberry.field` for a file column — e.g. `attachment: str`
+([Scalar field override semantics][glossary-scalar-field-override-semantics]) —
+keeps the legacy `str` shape and receives **no** generated resolver and no
+object type. Skipping only assigned `strawberry.field(...)` overrides (not
+annotation-only ones) would silently clobber an annotation opt-out, so the skip
+keys on the full `consumer_authored_fields` union, not on the assignment alone.
+
+Changing `FileField` / `ImageField` **read** output from `str` to an object
+type is a **breaking wire-format change** — parallel to the
 [`PositiveBigIntegerField → BigInt`][glossary-specialized-scalar-conversions]
 (`0.0.6`) and model-anchored `GlobalID` (`0.0.9`) precedents — acceptable
 pre-`1.0.0`, recorded in the glossary, with the consumer-annotation override
 (`attachment: str`,
 [Scalar field override semantics][glossary-scalar-field-override-semantics]) as
-the one-line opt-out. No in-repo example breaks (no fakeshop model uses a file
-column).
+the one-line opt-out. The **filter** input shape for a file column is unchanged
+(still scalar `str`), so no filter schema breaks. No in-repo example breaks (no
+fakeshop model uses a file column).
 
 Justification: structured output is the read-side parity goal and the lossy
 `str` was always a placeholder; mirroring upstream's field names lets a
 migrating consumer's selection port unchanged. Two distinct types keep dimension
-fields off non-image files.
+fields off non-image files. A separate output map keeps the read change off the
+shared scalar/filter surface.
 
 Alternatives considered (and rejected):
 
+- **Put the object types directly in `SCALAR_MAP`.** Rejected (the P0 finding):
+  a [`FilterSet`][glossary-filterset] over a file column would emit an output
+  object as a filter input — an invalid schema. The read-output map keeps the
+  read change off the shared scalar/filter path; a package test pins
+  `FilterSet.Meta.fields` over a synthetic `FileField` to a scalar input so this
+  cannot regress silently.
+- **Reject file/image filters with `ConfigurationError` and route reads through
+  a renamed converter.** Considered: cleaner once file filtering has a
+  deliberate contract, but it is a behavior change for any consumer filtering on
+  a file column's stored name today. Deferred — file columns keep their scalar
+  `str` filter mapping until a file-filter contract is designed
+  ([Risks](#risks-and-open-questions)).
 - **Leave output as `str` and ship only `Upload`.** Rejected: fails the
   read-side DoD and leaves consumers hand-rolling file metadata.
 - **Map output to `str | None` but document custom resolvers for metadata.**
@@ -831,41 +916,69 @@ Alternatives considered (and rejected):
 
 ### Decision 4 — Read-side resolution: empty file as `null` and storage-safe subfield nullability
 
-Two nullability rules layer on the
-[Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)
-mapping:
+Two layers, at two different levels:
 
-- **Object-field nullability** widens to `DjangoFileType | None` when the column
-  is `null=True` **or** `blank=True` — not just `field.null`. A `blank=True`
-  file column stores `""` (an empty `FieldFile`) for "no file", which the
-  resolver maps to `None`, so the GraphQL field must be nullable to represent
-  it. This composes with the
-  [`Meta.nullable_overrides`][glossary-metanullable-overrides] /
+- **Object-field nullability (parent level).** A file column widens to
+  `DjangoFileType | None` when the column is `null=True` **or** `blank=True` —
+  not just `field.null`. A `blank=True` file column stores `""` (an empty
+  `FieldFile`) for "no file", which the generated parent resolver
+  ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream))
+  maps to `None`, so the GraphQL field must be nullable to represent it. This
+  composes with the [`Meta.nullable_overrides`][glossary-metanullable-overrides] /
   [`Meta.required_overrides`][glossary-metarequired-overrides] `force_nullable`
   tri-state — `required_overrides` can force `DjangoFileType!` when the consumer
   guarantees a file is always present (the "contract, not data" caveat the
   override entry documents).
-- **Subfield nullability** makes `path` / `size` / `url` (and `width` / `height`
-  on images) **nullable**, while `name` stays non-null. This is a deliberate
-  divergence from upstream's all-non-null `path: str`: a non-filesystem storage
-  backend (S3) raises `NotImplementedError` from `FieldFile.path`, and a file
-  deleted out from under the row raises on `.url` / `.size`. Rather than 500 the
-  whole request, the read resolver guards each storage-touching subfield with a
-  **narrow** exception catch (`ValueError` / `OSError` / storage
-  `NotImplementedError` → `None`); a present file with healthy storage resolves
-  every subfield normally.
+- **Subfield nullability (field level).** `path` / `size` / `url` (and `width` /
+  `height` on images) are **nullable**, while `name` stays non-null — a
+  deliberate divergence from upstream's all-non-null `path: str`.
 
-Justification: a file field with no file must resolve to `null`, not raise; and
-a storage quirk on one property must not take down the query. The narrow catch
-list keeps the guard from swallowing genuine resolver bugs. `name` is reliably
+**The guard must live on the subfields, not the parent resolver.** The parent
+resolver returns the bound `FieldFile`; Strawberry then resolves each *selected*
+subfield by `getattr(file_file, "path" | "url" | …)` **after** and **outside**
+the parent resolver — and those property accesses are exactly what raise on a
+non-filesystem backend (S3 `FieldFile.path` → `NotImplementedError`) or a
+vanished file (`.url` / `.size` → `OSError` / `ValueError`). A `try/except` in
+the parent resolver cannot reach them. So `DjangoFileType` / `DjangoImageType`
+are defined with **resolver-backed** fields, each delegating to a shared
+`_safe_file_attr(file_file, attr)` helper that performs the **narrow** catch
+(`ValueError` / `OSError` / storage `NotImplementedError` → `None`). The parent
+resolver decides only object nullability (`not value` → `None`); each subfield
+owns its own guard, so selecting only `{ url }`, only `{ path }`, or several
+subfields each degrade **independently**. `name` is read without the guard (a
+stored string, always present whenever the object is non-null).
+
+**Django path-safety exceptions are *not* silently nulled.** A corrupt or
+hostile stored name can make storage raise
+`django.core.exceptions.SuspiciousFileOperation` — a `SuspiciousOperation`
+subclass, **not** a `ValueError` / `OSError`, so the narrow catch does not cover
+it. `_safe_file_attr` deliberately does **not** catch it: a path-traversal /
+escaped-name condition is a security signal that should surface as a top-level
+error, not hide as a `null` subfield. This is an intentional decision, not an
+accidental gap. Fallback: if operators prefer graceful degradation over
+visibility, `SuspiciousFileOperation` can be added to the helper's catch set,
+but the default is to let it propagate
+([Risks](#risks-and-open-questions)).
+
+Justification: a file field with no file must resolve to `null`, not raise; a
+storage quirk on one property must not take down the query; and the guard must
+sit where the raising access happens (the subfield), which the parent resolver
+cannot reach. The narrow catch list keeps the guard from swallowing genuine
+resolver bugs and from masking security-relevant path errors. `name` is reliably
 present whenever the object exists (the object is `null` for an absent file), so
 it stays non-null.
 
 Alternatives considered (and rejected):
 
-- **No resolver; rely on Strawberry's default attribute access.** Rejected: an
-  empty `FieldFile` is returned but raises on `.url` / `.size`, so a blank file
-  column would 500 on selection.
+- **Guard only in the parent resolver (return the `FieldFile`, catch there).**
+  Rejected (the P0 finding): subfield property access happens later, in
+  Strawberry's default per-field resolution, outside the parent's `try/except`;
+  a blank or vanished-file selection of `{ url }` would still 500. The guard
+  must be at the field level.
+- **A wrapper object whose properties perform the catch.** Considered and
+  equivalent; resolver-backed `@strawberry.field`s on the two types are the
+  chosen shape because they keep the guard in the type definition and need no
+  extra wrapper class. Either satisfies the field-level requirement.
 - **Match upstream's all-non-null subfields and document the `path` caveat.**
   Rejected: it leaves a latent 500 on non-filesystem storage / vanished files;
   the nullable-subfield contract is the safer engineering choice and the SDL
@@ -874,40 +987,52 @@ Alternatives considered (and rejected):
   `blank=True, null=False` file column (Django's common shape) would render
   non-null while the resolver returns `None` — a guaranteed non-null violation;
   `blank` must widen too.
-- **Catch a broad `Exception` in the subfield guard.** Rejected: it would hide
-  real bugs; the catch list is narrowed to storage-shaped errors.
+- **Catch a broad `Exception` (or fold `SuspiciousFileOperation` into the
+  guard) by default.** Rejected: it would hide real bugs and mask path-traversal
+  signals; the catch list is narrowed to storage-shaped errors.
 
-### Decision 5 — `Upload` scalar registration mirrors the `BigInt` precedent
+### Decision 5 — Re-export `Upload` rather than register it
 
-[`scalars.py`][scalars] re-exports `Upload` (and `UploadDefinition`) from
-`strawberry.file_uploads.scalars` and adds `Upload: UploadDefinition` to
-`_PACKAGE_SCALAR_MAP`, so the [`strawberry_config`][glossary-strawberry-config]
-factory binds it into every consumer schema exactly as it binds
-[`BigInt`][glossary-bigint-scalar]. Strawberry's `Upload` is
-`NewType("Upload", bytes)` paired with a `scalar(...)` `ScalarDefinition` —
-byte-for-byte the same shape as `BigInt = NewType("BigInt", int)` +
-`_BIGINT_SCALAR_DEFINITION`, so it **is** a `scalar_map` entry, not an
-already-resolvable annotation: without the map entry an `Upload`-annotated field
-would not resolve to the scalar.
+`Upload` is a Strawberry **built-in**: Strawberry registers
+`Upload: UploadDefinition` in its `DEFAULT_SCALAR_REGISTRY`, and the schema
+converter seeds that registry into every schema (`{**DEFAULT_SCALAR_REGISTRY}`)
+*before* merging any package `scalar_map`. So an `Upload`-annotated field
+resolves in **any** schema — with or without
+[`strawberry_config`][glossary-strawberry-config].
+[`scalars.py`][scalars] (and the package root, [`__init__.py`][init]) therefore
+only **re-export** `Upload` (and `UploadDefinition`) from
+`strawberry.file_uploads.scalars` for the public surface; the package adds **no**
+`_PACKAGE_SCALAR_MAP` entry for it.
 
-Justification: [`spec-025`][spec-025] Decision 3 established the `NewType` +
-`ScalarDefinition` registration pattern, and the `strawberry_config` glossary
-entry already names `Upload` as the next scalar to land here; `Upload` slots in
-with one map entry and no new machinery. Re-using Strawberry's scalar keeps
+This is the deliberate contrast with [`BigInt`][glossary-bigint-scalar]:
+`BigInt = NewType("BigInt", int)` is a package-custom scalar **absent** from
+`DEFAULT_SCALAR_REGISTRY`, so it genuinely needs its `_PACKAGE_SCALAR_MAP` entry
+to resolve. `Upload` shares BigInt's structural shape (a `NewType` paired with a
+`scalar(...)` `ScalarDefinition`) but **not** its registration need — it is
+already a pre-registered scalar.
+
+Justification: registering `Upload` in `_PACKAGE_SCALAR_MAP` would be redundant
+(it already resolves) and misleading (it would imply a binding requirement that
+does not exist). [`strawberry-graphql-django`][upstream-field-types] takes
+exactly this approach — its `input_field_type_map` maps `FileField` /
+`ImageField` to the bare `Upload` `NewType` with no custom scalar registration,
+relying on the built-in registry. Re-using Strawberry's scalar also keeps
 multipart-request parsing on the engine.
 
 Alternatives considered (and rejected):
 
-- **Ask consumers to import Strawberry's `Upload` and pass an
-  `extra_scalar_map`.** Rejected: generated inputs reference `Upload`; the
-  package must register its own generated scalar dependencies.
+- **Add `Upload` to `_PACKAGE_SCALAR_MAP` for symmetry with `BigInt`.**
+  Rejected: redundant (the default registry already resolves it) and
+  misleading; it would also manufacture an `extra_scalar_map={Upload: ...}`
+  collision contract for a scalar the package does not own.
 - **Define a wrapper `NewType` instead of re-exporting Strawberry's `Upload`.**
   Rejected: a second upload scalar would be incompatible with the engine's
   built-in multipart conventions and force clients to special-case it.
-- **Skip the `_PACKAGE_SCALAR_MAP` entry and rely on auto-registration.**
-  Rejected: `Upload` is a `NewType`, not a pre-registered scalar — the map entry
-  binds the `NewType` to its `ScalarDefinition` (the same reason `BigInt` must
-  be in the map).
+- **Do not export `Upload` at all; let consumers import it from Strawberry.**
+  Rejected: generated inputs reference `Upload`, and a consumer hand-writing an
+  upload field should reach for it at the package root alongside
+  [`BigInt`][glossary-bigint-scalar] — re-export is the public-surface
+  convenience ([Decision 7](#decision-7--public-surface-three-net-new-root-exported-symbols)).
 
 ### Decision 6 — Write-side input mapping: the mutation seam becomes `Upload`
 
@@ -922,9 +1047,13 @@ File/image fields are **scalar** input fields for naming: the Python attribute
 is the model field name (`attachment`, not `attachment_id`), and the GraphQL
 name follows the normal camel-case converter. The generator continues to own
 requiredness, `UNSET`, partial-update omission, `Meta.fields` / `Meta.exclude`
-narrowing, and custom-input merge. The write resolver
-([`mutations/resolvers.py`][mutations-resolvers]) assigns a provided `Upload` to
-the model file attribute before `full_clean()` / `save()`.
+narrowing, and custom-input merge. **On the write side, no new resolver code is
+presumed:** the shipped pipeline already passes scalar attrs into `model(**attrs)`
+(create) / `setattr` (update) before `full_clean()` / `save()`, and Django's
+`FileField` descriptor accepts an `UploadedFile` directly — so a file column
+flows through the generic scalar-assignment path. Slice 2 *verifies* this with a
+test and adds a file-specific branch in [`mutations/resolvers.py`][mutations-resolvers]
+only if that test proves the generic path fails.
 
 **The `036` file-column merge-override exception is lifted.**
 [`spec-036`][spec-036] CR-6 pinned that file columns were "the one exception to
@@ -949,6 +1078,11 @@ Alternatives considered (and rejected):
   core package should know the mapping.
 - **Represent uploads as `str` paths.** Rejected: unsafe and not a GraphQL
   upload contract; the client sends multipart upload values, not server paths.
+- **Add a dedicated file-assignment branch in the write resolver up front.**
+  Rejected by default (the P2 finding): the existing scalar `setattr` /
+  `model(**attrs)` path already assigns an `UploadedFile`, so a branch is added
+  only if a test proves the generic path fails — avoiding a divergent write path
+  for files.
 
 ### Decision 7 — Public surface: three net-new root-exported symbols
 
@@ -966,6 +1100,10 @@ field types a consumer names in custom resolvers / `strawberry.field`
 annotations; all belong at the root alongside [`BigInt`][glossary-bigint-scalar]
 / [`DjangoType`][glossary-djangotype], parallel to how
 [`BigInt`][glossary-bigint-scalar] ([`spec-017`][spec-017]) is root-exported.
+These are **framework-provided generated / helper output types**, not a new
+consumer-authored decorator API — they stay within the package's `class
+Meta`-driven, DRF-first posture ([`GOAL.md`][goal]) and add no decorator-first
+consumer surface.
 
 Alternatives considered (and rejected):
 
@@ -1000,7 +1138,7 @@ would be example-app churn, not a real acceptance path. Therefore:
 - converter and generated-output behavior live in [`tests/types/`][test-types];
 - generated mutation input behavior lives in
   [`tests/mutations/`][test-mutations];
-- scalar registration and root-export pins live in
+- scalar registration / resolution and root-export pins live in
   [`tests/test_scalars.py`][test-scalars] /
   [`tests/base/test_init.py`][test-base-init];
 - live `/graphql/` tests are added **only** if implementation naturally exposes
@@ -1069,19 +1207,20 @@ on both; Slice 4 is doc + version-cut only. Line deltas are planning estimates.
 
 | Slice | Files touched | New / changed tests | Approx. delta |
 | --- | --- | --- | --- |
-| 1 — read output objects + `SCALAR_MAP` + empty-file/storage resolver | [`types/converters.py`][types-converters] (`DjangoFileType` / `DjangoImageType` + two rows), [`types/base.py`][types-base] (resolver wiring + `blank`-aware nullability), [`types/resolvers.py`][types-resolvers] (empty-file + narrow storage guard) | [`tests/types/test_converters.py`][test-types] (~10) + [`tests/types/test_resolvers.py`][test-types] (~6 — empty→null, populated subfields, storage-failure→null subfield, image dims) + [`tests/types/test_base.py`][test-types] (~2 — `attachment: str` override) | `+170 / -10` |
-| 2 — `Upload` scalar + mutation input + file assignment | [`scalars.py`][scalars] (re-export + `_PACKAGE_SCALAR_MAP` + docstring fix), [`mutations/inputs.py`][mutations-inputs] (seam → `Upload`), [`mutations/resolvers.py`][mutations-resolvers] (file assignment) | [`tests/test_scalars.py`][test-scalars] (~3) + [`tests/mutations/test_inputs.py`][test-mutations] (~6 — file→`Upload` required/optional, `| None`, lifted CR-6) + [`tests/mutations/test_resolvers.py`][test-mutations] (~5 — create/partial assignment, no `NotImplementedError`) | `+130 / -40` |
+| 1 — read output objects + `FIELD_OUTPUT_TYPE_MAP` + file-column resolver | [`types/converters.py`][types-converters] (resolver-backed `DjangoFileType` / `DjangoImageType` + `_safe_file_attr` + new `FIELD_OUTPUT_TYPE_MAP`; `SCALAR_MAP` file rows unchanged), [`types/base.py`][types-base] (resolver wiring + `blank`-aware nullability + `consumer_authored_fields` skip), [`types/resolvers.py`][types-resolvers] (parent empty-file resolver) | [`tests/types/test_converters.py`][test-types] (~11 — incl. `FilterSet` over `FileField` stays scalar) + [`tests/types/test_resolvers.py`][test-types] (~8 — empty→null, populated subfields, per-subfield isolation, image dims) + [`tests/types/test_base.py`][test-types] (~2 — `attachment: str` gets no resolver) | `+190 / -10` |
+| 2 — `Upload` re-export + mutation input (+ verify write path) | [`scalars.py`][scalars] (re-export + docstring fix), [`mutations/inputs.py`][mutations-inputs] (seam → `Upload`), [`mutations/resolvers.py`][mutations-resolvers] (verify generic scalar path; branch only if a test proves a gap) | [`tests/test_scalars.py`][test-scalars] (~3 — incl. resolves with/without `strawberry_config()`) + [`tests/mutations/test_inputs.py`][test-mutations] (~6 — file→`Upload` required/optional, `| None`, lifted CR-6) + [`tests/mutations/test_resolvers.py`][test-mutations] (~5 — create/partial via the generic path, no `NotImplementedError`) | `+110 / -40` |
 | 3 — public exports + coverage hardening | [`__init__.py`][init] (3 exports + `__all__`) | [`tests/base/test_init.py`][test-base-init] (~3 exports) + storage/null/dimension hardening | `+50 / -0` |
 | 4 — docs + `0.0.11` version cut + card wrap | [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], [`README.md`][readme], [`GOAL.md`][goal], [`TODAY.md`][today], [`CHANGELOG.md`][changelog], [`KANBAN.md`][kanban], version files ([`pyproject.toml`][pyproject], [`__init__.py`][init], [`tests/base/test_init.py`][test-base-init]) | `test_version` → `0.0.11` | `+90 / -45` |
 
-Total expected delta: ~`+440 / -95` — an S–M cut (the version cut and
-storage-safe resolver add a little over the bare table change), matching the
-card's relative size. Staged `spec-036` TODO anchors naming the upload seam are
-removed in the change that ships Slice 2; the [`scalars.py`][scalars]
-docstring's stale `TODO-ALPHA-035-0.0.11` reference is corrected in the same
-slice. New source comments should be minimal — only the empty-file /
-storage-failure resolver guard and the nullable-subfield rationale need
-explanatory comments.
+Total expected delta: ~`+460 / -95` — an S–M cut (the version cut, the
+`FIELD_OUTPUT_TYPE_MAP` split, and the field-level subfield guard add a little
+over the bare table change), matching the card's relative size. Staged
+`spec-036` TODO anchors naming the upload seam are removed in the change that
+ships Slice 2; the [`scalars.py`][scalars] docstring's stale
+`TODO-ALPHA-035-0.0.11` reference is corrected in the same slice. New source
+comments should be minimal — only the `FIELD_OUTPUT_TYPE_MAP` / `SCALAR_MAP`
+split rationale, the field-level `_safe_file_attr` guard, and the
+nullable-subfield rationale need explanatory comments.
 
 ## Edge cases and constraints
 
@@ -1100,19 +1239,35 @@ explanatory comments.
   failure.
 - **Missing file in storage.** `size` / `url` / `width` / `height` are nullable
   so a storage lookup failure degrades to a `null` subfield via the narrow catch
-  (`ValueError` / `OSError` / storage `NotImplementedError`) rather than a 500.
+  (`ValueError` / `OSError` / storage `NotImplementedError`) on each subfield
+  resolver rather than a 500.
+- **Path-safety errors are not nulled.**
+  `django.core.exceptions.SuspiciousFileOperation` from a corrupt / hostile
+  stored name is **not** caught by `_safe_file_attr` (it is a
+  `SuspiciousOperation`, not a `ValueError` / `OSError`); it propagates as a
+  top-level error for security visibility, by design
+  ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)).
 - **Image dimensions without Pillow / corrupt image files.** `width` / `height`
   are nullable and are not forced to validate the image during schema
   resolution.
-- **Consumer scalar override.** A consumer annotation / `strawberry.field` on a
-  file/image column bypasses generated output conversion and the generated
-  empty-file resolver, exactly like every other scalar override; on the write
-  side, a consumer `Meta.input_class` field for a file column is now honored via
-  the merge override (lifted CR-6 exception,
+- **Consumer scalar override.** A consumer annotation *or* `strawberry.field` on
+  a file/image column lands in `consumer_authored_fields`, which the file-resolver
+  attachment skips — so `attachment: str` bypasses both the `FIELD_OUTPUT_TYPE_MAP`
+  output mapping and the generated resolver, exactly like every other scalar
+  override; on the write side, a consumer `Meta.input_class` field for a file
+  column is now honored via the merge override (lifted CR-6 exception,
   [Decision 6](#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload)).
-- **MRO precedence (`ImageField` is a `FileField`).** Both rows are explicit;
-  the MRO walk hits `ImageField`'s own row before `FileField`, so an
-  `ImageField` (and a consumer subclass) resolves to `DjangoImageType`.
+- **MRO precedence (`ImageField` is a `FileField`).** Both `FIELD_OUTPUT_TYPE_MAP`
+  rows are explicit; the MRO walk hits `ImageField`'s own row before `FileField`,
+  so an `ImageField` (and a consumer subclass) resolves to `DjangoImageType`.
+- **File-column filter input.** A [`FilterSet`][glossary-filterset] over a file
+  column still generates a **scalar** (`str`) filter input: the output-object
+  mapping lives in `FIELD_OUTPUT_TYPE_MAP` (consulted only by the read converter),
+  while filter inputs keep walking `SCALAR_MAP` via `scalar_for_field`, so no
+  output type leaks into a filter input. The semantics are filtering the **stored
+  file name / path string**, not the file metadata (`url` / `size` / `width` /
+  `height`) — those object subfields are read-only output, never filter inputs
+  ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)).
 - **Mutation partial update.** Omitted upload fields stay `UNSET` and leave the
   stored file unchanged; a provided upload replaces the file through Django's
   normal assignment path. Clearing with `null` is not guaranteed by this card
@@ -1122,14 +1277,11 @@ explanatory comments.
   test-client helper; consumers use Strawberry/Django's existing multipart
   request handling until the `0.0.14` [`TestClient`][glossary-testclient] helper
   lands.
-- **`Upload` requires the config factory.** A schema that does not pass
-  `config=strawberry_config()` will not resolve `Upload` (a `NewType` needs its
-  `scalar_map` entry) — the same constraint [`BigInt`][glossary-bigint-scalar]
-  carries.
-- **`Upload` scalar collision.** A consumer passing
-  `extra_scalar_map={Upload: ...}` to `strawberry_config()` gets the existing
-  collision `ValueError`, now naming `Upload` — consistent with the `BigInt`
-  collision contract.
+- **`Upload` resolves without extra config.** `Upload` is in Strawberry's
+  built-in `DEFAULT_SCALAR_REGISTRY`, so an `Upload`-annotated field resolves in
+  any schema, with or without `config=strawberry_config()`. The config factory
+  is still required by the package-custom [`BigInt`][glossary-bigint-scalar]
+  scalar, which is absent from the default registry.
 - **No `DjangoType` `Meta` key added.** [`DEFERRED_META_KEYS`][types-base] /
   `ALLOWED_META_KEYS` are byte-unchanged; the conversion is automatic from the
   column type.
@@ -1141,18 +1293,23 @@ Test placement follows the [`AGENTS.md`][agents] mirror rule; coverage uses
 over a `tmp_path` storage), with no live fakeshop surface
 ([Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models)).
 
-- **Converter tests** ([`tests/types/test_converters.py`][test-types]):
-  `FileField` → `DjangoFileType`, `ImageField` → `DjangoImageType`, MRO
-  precedence (incl. a consumer `ImageField` subclass), `null=True` /
-  `blank=True` widen the object field, `Meta.nullable_overrides` /
-  `Meta.required_overrides` still win, `Meta.exclude` remains the opt-out.
+- **Converter / map tests** ([`tests/types/test_converters.py`][test-types]):
+  `FileField` → `DjangoFileType`, `ImageField` → `DjangoImageType` via
+  `FIELD_OUTPUT_TYPE_MAP`, MRO precedence (incl. a consumer `ImageField`
+  subclass), `null=True` / `blank=True` widen the object field,
+  `Meta.nullable_overrides` / `Meta.required_overrides` still win, `Meta.exclude`
+  remains the opt-out; **and a [`FilterSet`][glossary-filterset] over a synthetic
+  `FileField` still produces a scalar (`str`) filter input, never
+  `DjangoFileType`** (the P0 split regression guard).
 - **Generated output resolver tests**
   ([`tests/types/test_resolvers.py`][test-types]): a synthetic model with
   non-empty file/image values resolves `name` / `path` / `size` / `url` (+
   `width` / `height`) through schema execution; an empty file resolves the
-  object as `null`; a storage-property failure degrades to a `null` subfield
-  (not an uncaught exception); the consumer-annotation override
-  (`attachment: str`) bypasses the converter and resolver.
+  object as `null`; **per-subfield isolation** — a failing `path` returns `null`
+  while `url` / `name` still resolve, selecting one subfield at a time (each
+  subfield resolver guards independently, not the parent); the
+  consumer-annotation override (`attachment: str`) receives **no** generated
+  resolver or object type (the attachment skips `consumer_authored_fields`).
 - **Mutation input tests** ([`tests/mutations/test_inputs.py`][test-mutations]):
   replace the staged `NotImplementedError` tests with positive `Upload`
   annotation tests for create and partial inputs; requiredness follows `default`
@@ -1161,12 +1318,16 @@ over a `tmp_path` storage), with no live fakeshop surface
   generated field name (lifted CR-6).
 - **Mutation resolver tests**
   ([`tests/mutations/test_resolvers.py`][test-mutations]): a provided `Upload`
-  is assigned on create; an `UNSET` leaves the file unchanged on partial update;
-  the previously-`NotImplementedError` path now succeeds.
+  is assigned on create **through the existing generic scalar path** (verifying
+  no dedicated file branch is needed — or pinning one if a gap is found); an
+  `UNSET` leaves the file unchanged on partial update; the
+  previously-`NotImplementedError` path now succeeds.
 - **Scalar config tests** ([`tests/test_scalars.py`][test-scalars]):
-  `strawberry_config()` includes both `BigInt` and `Upload`; an
-  `extra_scalar_map` collision with `Upload` raises the existing `ValueError`;
-  every call returns a fresh scalar-map dict.
+  `strawberry_config()` includes `BigInt` (`Upload` is **not** a package
+  `scalar_map` key); an `Upload`-annotated field resolves through both a
+  `strawberry_config()` schema and a plain `StrawberryConfig` schema; the
+  existing `BigInt` `extra_scalar_map` collision `ValueError` is unchanged; every
+  call returns a fresh scalar-map dict.
 - **Public export / version tests**
   ([`tests/base/test_init.py`][test-base-init]): `__all__` includes
   `DjangoFileType` / `DjangoImageType` / `Upload`; `test_version` moves to
@@ -1199,22 +1360,30 @@ authorized.
   [`DjangoFileType`][glossary-djangofiletype] /
   [`DjangoImageType`][glossary-djangoimagetype] to `shipped (0.0.11)` (updating
   each body to the shipped contract — the output fields, the `Upload`
-  registration, the empty-file → null resolution, the nullable-subfield
-  rationale); rewrite the `FileField` / `ImageField` rows in
-  [Scalar field conversion][glossary-scalar-field-conversion] /
-  [Specialized scalar conversions][glossary-specialized-scalar-conversions] from
-  "→ `str`" to the structured output objects (read) / `Upload` (mutation input),
-  recording the read-side **breaking wire-format change** alongside the
+  re-export, the empty-file → null resolution, the nullable-subfield
+  rationale); document the new `FIELD_OUTPUT_TYPE_MAP` (read-output map) and
+  update the `FileField` / `ImageField` line in
+  [Scalar field conversion][glossary-scalar-field-conversion] to make the split
+  explicit — **read** output is now `DjangoFileType` / `DjangoImageType` (via
+  `FIELD_OUTPUT_TYPE_MAP`), the **filter / scalar-input** value stays `str` in
+  `SCALAR_MAP`, and the **mutation input** is `Upload`; **add** a file/image row
+  to [Specialized scalar conversions][glossary-specialized-scalar-conversions]
+  (which has none today), recording the read-side **breaking wire-format
+  change** alongside the
   [`PositiveBigIntegerField → BigInt`][glossary-specialized-scalar-conversions]
   precedent; add the three symbols to **Public exports** and update the
-  **Index** + **File / image uploads** browse-by-category row; flip the
-  [`strawberry_config`][glossary-strawberry-config] entry's "next: `Upload`" to
-  "`BigInt` + `Upload`".
+  **Index** + **File / image uploads** browse-by-category row; remove the
+  [`strawberry_config`][glossary-strawberry-config] entry's stray "next:
+  `Upload`" mention (leaving only `BigInt`).
 - **Slice 4 — package docs**: [`docs/README.md`][docs-readme] /
-  [`README.md`][readme] move the `Upload` scalar + file/image mapping from
-  "Coming next (`0.0.11`)" to "Shipped today" and move the README **Status**
-  line from `0.0.10` to `0.0.11`; [`GOAL.md`][goal] success-criterion 6's
-  `Upload` reference now ships; [`TODAY.md`][today] rewrites the
+  [`README.md`][readme] move the `Upload` scalar + generated file/image field
+  typing from "Coming next (`0.0.11`)" to "Shipped today" — wording the **scalar
+  and generated mutation-field typing**, not full multipart HTTP upload
+  ergonomics (those await the `0.0.14` [`TestClient`][glossary-testclient]) — and
+  move the README **Status** line from `0.0.10` to `0.0.11`; [`GOAL.md`][goal] —
+  criterion 6's `Upload` / `FileField` / `ImageField` part ships for generated
+  `DjangoMutation` inputs, while the `ModelForm` / `ModelSerializer` flavors in
+  that same criterion still land later; [`TODAY.md`][today] rewrites the
   scalar-conversion table's `FileField` / `ImageField` → `str` row to the
   structured output objects and notes upload mutation inputs as a package
   capability not exercised by products; [`CHANGELOG.md`][changelog] carries the
@@ -1257,6 +1426,23 @@ implementation reveals it is wrong.
   the file fields on `DjangoImageType` and record dimensions as a follow-up if
   the implementation would need heavy Pillow/storage coupling — use only if
   tests prove dimensions are not robust.
+- **File-column filtering contract.** Preferred answer
+  ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream)):
+  file columns keep their scalar `str` filter mapping in `SCALAR_MAP` (no
+  regression) — i.e. filtering the stored **name / path string**, not file
+  metadata (`url` / `size` / `width` / `height`) — and the read-output objects
+  live in a separate `FIELD_OUTPUT_TYPE_MAP`, so no output type leaks into a
+  [`FilterSet`][glossary-filterset] input. Fallback: if string-filtering a file
+  column proves meaningless, reject file/image filters with a
+  [`ConfigurationError`][glossary-configurationerror] once a deliberate
+  file-filter contract is designed — a follow-up, not this card.
+- **Path-safety exception policy.** Preferred answer
+  ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)):
+  `SuspiciousFileOperation` is **not** folded into the `_safe_file_attr`
+  degrade-to-`null` catch; it propagates as a top-level error so a
+  path-traversal / hostile-name condition stays visible. Fallback: if operators
+  prefer graceful degradation, add it to the catch set — but the default is
+  visibility.
 - **Card conflict — stale `"Pairs with 028"` note.** The card's "Other" section
   says "Pairs with 028", but `028` is the
   [ordering subsystem][glossary-orderset] (`DONE-028-0.0.8`), unrelated to
@@ -1316,30 +1502,36 @@ the [`docs/SPECS/NEXT.md`][next] flow adds.
 **Slice 1 — read output objects**
 
 2. [`types/converters.py`][types-converters] defines `DjangoFileType` (`name`
-   non-null; `path` / `size` / `url` nullable) and
-   `DjangoImageType(DjangoFileType)` (+ nullable `width` / `height`) and maps
-   [`SCALAR_MAP`][types-converters] `FileField` → `DjangoFileType` /
-   `ImageField` → `DjangoImageType`
+   non-null; `path` / `size` / `url` nullable, **resolver-backed**) and
+   `DjangoImageType(DjangoFileType)` (+ nullable `width` / `height`) and adds a
+   new `FIELD_OUTPUT_TYPE_MAP` (`FileField` → `DjangoFileType`, `ImageField` →
+   `DjangoImageType`) the **read** converter consults, **leaving** the shared
+   [`SCALAR_MAP`][types-converters] file rows as `str` so filter inputs are
+   unaffected
    ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream));
    a file column resolves to `DjangoFileType | None` on `blank` / `null`, the
-   generated resolver returns `None` for an empty `FieldFile`, and
-   storage-property failures degrade to `null` subfields via the narrow catch
+   parent resolver returns `None` for an empty `FieldFile`, and each subfield's
+   own `_safe_file_attr` guard degrades storage failures to `null`
    ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability));
-   the consumer-annotation override still wins.
+   the file-resolver attachment skips `consumer_authored_fields` so a consumer
+   `attachment: str` override still wins (no resolver, no object type), and a
+   package test pins that a `FilterSet` over a `FileField` yields a scalar filter
+   input, not `DjangoFileType`.
 
 **Slice 2 — write `Upload` input**
 
-3. [`scalars.py`][scalars] re-exports `Upload` and registers it in
-   `_PACKAGE_SCALAR_MAP` so [`strawberry_config`][glossary-strawberry-config]
-   binds it
-   ([Decision 5](#decision-5--upload-scalar-registration-mirrors-the-bigint-precedent));
+3. [`scalars.py`][scalars] re-exports `Upload` (no `_PACKAGE_SCALAR_MAP` entry —
+   `Upload` already resolves via Strawberry's built-in `DEFAULT_SCALAR_REGISTRY`)
+   ([Decision 5](#decision-5--re-export-upload-rather-than-register-it));
    [`mutations/inputs.py`][mutations-inputs] maps `FileField` / `ImageField` to
    `Upload` (required per the shipped per-field rule, `| None` on `blank` /
    `null`), the `NotImplementedError` seam and its tests are removed, and file
    columns participate in the
    [`Meta.input_class`][glossary-input-type-generation] merge override (CR-6
-   exception lifted); [`mutations/resolvers.py`][mutations-resolvers] assigns
-   the uploaded file before `full_clean()` / `save()`
+   exception lifted); the existing generic scalar-assignment path in
+   [`mutations/resolvers.py`][mutations-resolvers] is verified to assign the
+   uploaded file before `full_clean()` / `save()` (a dedicated file branch is
+   added only if a test proves the generic path fails)
    ([Decision 6](#decision-6--write-side-input-mapping-the-mutation-seam-becomes-upload)).
 
 **Slice 3 — public exports + coverage**
@@ -1349,7 +1541,7 @@ the [`docs/SPECS/NEXT.md`][next] flow adds.
    ([Decision 7](#decision-7--public-surface-three-net-new-root-exported-symbols));
    [`tests/base/test_init.py`][test-base-init] pins them; synthetic-model tests
    cover the read converter / resolver (incl. storage-failure → null subfield),
-   the `Upload` registration, and the write mapping
+   the `Upload` re-export and resolution, and the write mapping
    ([Decision 9](#decision-9--test-placement-package-tests-own-synthetic-fileimage-models)).
 
 **Cross-cutting — no regression**
@@ -1364,14 +1556,17 @@ the [`docs/SPECS/NEXT.md`][next] flow adds.
    [`Upload` scalar][glossary-upload-scalar] /
    [`DjangoFileType`][glossary-djangofiletype] /
    [`DjangoImageType`][glossary-djangoimagetype] to `shipped (0.0.11)`, rewrites
-   the [Scalar field conversion][glossary-scalar-field-conversion] /
-   [Specialized scalar conversions][glossary-specialized-scalar-conversions]
-   file/image rows, adds the three to Public exports, records the read-side
+   the [Scalar field conversion][glossary-scalar-field-conversion] file/image
+   row and adds a file/image row to
+   [Specialized scalar conversions][glossary-specialized-scalar-conversions],
+   adds the three to Public exports, records the read-side
    breaking-wire-format change, and moves the package-version line to `0.0.11`;
    [`docs/README.md`][docs-readme] / [`README.md`][readme] move the `Upload`
-   scalar to "Shipped today" and the Status to `0.0.11`; [`GOAL.md`][goal] /
-   [`TODAY.md`][today] reflect the shipped upload capability and the rewritten
-   scalar table; [`CHANGELOG.md`][changelog] carries the bullets **only when the
+   scalar **and generated mutation-field typing** (not full multipart HTTP upload
+   ergonomics, which await the `0.0.14` [`TestClient`][glossary-testclient]) to
+   "Shipped today" and the Status to `0.0.11`; [`GOAL.md`][goal] /
+   [`TODAY.md`][today] reflect that scalar + generated-typing capability and the
+   rewritten scalar table; [`CHANGELOG.md`][changelog] carries the bullets **only when the
    Slice 4 maintainer prompt explicitly requests the edit**;
    [`KANBAN.md`][kanban] records the card `DONE-NNN-0.0.11` with the `SpecDoc`
    reference at the canonical card spec (kanban DB + re-render).
@@ -1411,6 +1606,7 @@ the [`docs/SPECS/NEXT.md`][next] flow adds.
 [glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
 [glossary-djangotype]: GLOSSARY.md#djangotype
 [glossary-fielderror-envelope]: GLOSSARY.md#fielderror-envelope
+[glossary-filterset]: GLOSSARY.md#filterset
 [glossary-input-type-generation]: GLOSSARY.md#input-type-generation
 [glossary-metaexclude]: GLOSSARY.md#metaexclude
 [glossary-metafields]: GLOSSARY.md#metafields
@@ -1439,6 +1635,7 @@ the [`docs/SPECS/NEXT.md`][next] flow adds.
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
+[filters-inputs]: ../django_strawberry_framework/filters/inputs.py
 [init]: ../django_strawberry_framework/__init__.py
 [mutations-inputs]: ../django_strawberry_framework/mutations/inputs.py
 [mutations-resolvers]: ../django_strawberry_framework/mutations/resolvers.py

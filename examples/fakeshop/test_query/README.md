@@ -12,7 +12,7 @@ Use the sibling [`../tests/`][tests-dir] directory for tests that exercise schem
 
 Sibling live suites now cover the other fakeshop apps: `test_products_api.py`, `test_scalars_filter_api.py`, `test_kanban_api.py`, and `test_glossary_api.py` — exercising the `FilterSet` / `OrderSet` surfaces (`filter:` / `orderBy:`) wired across every app.
 
-The project schema lives at `../config/schema.py`. It imports each app's `Query`, composes them into the top-level `Query`, calls `finalize_django_types()`, then constructs `strawberry.Schema(query=Query, extensions=[lambda: _optimizer])` over a module-level `_optimizer = DjangoOptimizerExtension()` singleton.
+The project schema lives at `../config/schema.py`. It imports each app's `Query` (and the `products` app's `Mutation`), composes them into the top-level `Query` and `Mutation`, calls `finalize_django_types()`, then constructs `strawberry.Schema(query=Query, mutation=Mutation, config=strawberry_config(), extensions=[lambda: _optimizer])` over a module-level `_optimizer = DjangoOptimizerExtension()` singleton.
 
 HTTP tests in this directory should follow the `_reload_project_schema_for_acceptance_tests` fixture pattern from `test_library_api.py`: clear the global registry, reload `apps.<app>.schema` modules, reload `config.schema`, then reload `config.urls` and clear URL caches. Package tests under `../../../tests/` clear the same global registry for isolation; without the reload pattern, cached example-schema modules can hold stale `DjangoType` classes.
 

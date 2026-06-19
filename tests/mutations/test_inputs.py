@@ -525,8 +525,19 @@ def test_distinct_shapes_colliding_on_one_name_raise_configuration_error():
 
 
 # ---------------------------------------------------------------------------
-# Upload staged seam (TODO-ALPHA-037-0.0.11) - fail loud, never silent str
+# Upload mapping (TODO-ALPHA-037-0.0.11) - FileField/ImageField become Upload
 # ---------------------------------------------------------------------------
+
+# TODO(spec-037 Slice 2): replace the staged NotImplementedError tests below
+# with positive generated-input tests.
+# Pseudo-code:
+# - FileField/ImageField create inputs use Upload, required only when
+#   input_field_required(field) is true.
+# - blank=True/null=True fields and every partial input widen to Upload | None
+#   with default UNSET.
+# - Meta.fields / Meta.exclude include and exclude file fields by model name.
+# - custom input_class / partial_input_class fields override the generated upload
+#   field now that the CR-6 file-column exception is lifted.
 
 
 def test_file_field_raises_not_implemented_error():

@@ -910,6 +910,10 @@ def _run_create(
     if decode_error is not None:
         return _build_payload(payload_cls, slot, None, [decode_error])
 
+    # TODO(spec-037 Slice 2): verify uploaded files flow through this existing
+    # scalar path. Pseudo-code test target: SimpleUploadedFile in attrs should be
+    # accepted by model(**attrs), full_clean(), save(), and later FieldFile reads.
+    # Add a dedicated file branch only if that production path fails under test.
     instance = model(**scalar_and_fk_attrs)
     provided = _provided_attr_names(model, scalar_and_fk_attrs, m2m_assignments)
     exclude = _unprovided_exclude(model, provided)
@@ -948,6 +952,10 @@ def _run_update(
     if decode_error is not None:
         return _build_payload(payload_cls, slot, None, [decode_error])
 
+    # TODO(spec-037 Slice 2): verify partial-update upload replacement also uses
+    # the generic setattr path, while UNSET is stripped before this loop and leaves
+    # the stored file unchanged. Explicit null clearing stays outside 037 unless
+    # the existing nullable-field pipeline already handles it consistently.
     for attr, value in scalar_and_fk_attrs.items():
         setattr(instance, attr, value)
 

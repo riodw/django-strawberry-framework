@@ -1,5 +1,12 @@
 """Package init tests for version metadata and public exports."""
 
+# TODO(spec-037 Slice 3/4): pin the public file/upload exports and version cut.
+# Pseudo-code:
+# - assert __all__ includes Upload, DjangoFileType, and DjangoImageType.
+# - assert importing those names from django_strawberry_framework succeeds.
+# - update test_version to 0.0.11 only with pyproject.toml, __init__.__version__,
+#   uv.lock, and docs/GLOSSARY.md aligned.
+
 import logging
 
 import django_strawberry_framework

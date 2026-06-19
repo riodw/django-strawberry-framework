@@ -1,171 +1,178 @@
-# Review feedback: spec-037 upload/file image mapping
+# Critical review: spec-037 upload/file image mapping
 
 Review target: [`docs/spec-037-upload_file_image_mapping-0_0_11.md`][spec-037].
 
-Verdict: **do not implement the spec exactly as written yet.** The broad product
-direction is right: structured read objects for file/image fields, `Upload` on
-generated mutation inputs, no new consumer `Meta` key, and no fakeshop app churn.
-The spec also correctly identifies the current repo state: read conversion still
-maps file/image fields to `str`, the mutation input seam still raises for
-file/image columns, `Upload` is not package-exported, and the patch version still
-needs the final `0.0.11` cut.
+Verdict: **revise before production implementation.** The updated spec has
+absorbed the earlier major architecture concerns: it preserves `SCALAR_MAP` for
+filter/scalar inputs, introduces a separate read-output map, puts the storage
+guard on file-object subfields, treats `Upload` as Strawberry-owned rather than
+package-registered, and avoids a new setting. Those are the right directions.
 
-The blockers are integration details. As written, the spec can leak output types
-into filter inputs, cannot actually enforce its promised per-subfield storage
-guard, and overstates the `Upload` scalar registration requirement.
+The remaining issues are narrower but still worth fixing before code lands.
+Most are contract-precision problems: where the resolver hook actually belongs,
+what model-driven mutations can honestly validate, how optional upload nulls
+behave, and how synthetic file/image tests can be implemented without accidental
+dependency or database churn.
 
 ## Findings
 
-### P0 - `SCALAR_MAP` cannot safely become an output-object map without a filter-input split
+### P1 - `convert_scalar` becoming object-output aware blurs an existing abstraction
 
-The spec says to rewrite `SCALAR_MAP` from `FileField: str` /
-`ImageField: str` to `DjangoFileType` / `DjangoImageType`. That is unsafe with
-the current architecture because [`types.converters.scalar_for_field`][types-converters]
-is shared by read-side `convert_scalar` **and** filter input conversion through
-[`filters.inputs._scalar_from_model_field`][filters-inputs]. If `SCALAR_MAP`
-starts returning `DjangoFileType` for a `FileField`, a `FilterSet` over a file
-column can generate a GraphQL input field typed as an output object. That is an
-invalid schema shape and a regression outside the stated file-output surface.
+The spec keeps `SCALAR_MAP` scalar-only, but still says the read converter should
+consult `FIELD_OUTPUT_TYPE_MAP` inside the same converter path that today is
+named and documented as `convert_scalar`. That avoids the filter-input P0, but
+it leaves a smaller architecture debt: a function named `convert_scalar` would
+return `DjangoFileType` / `DjangoImageType`, which are output object types, not
+scalars.
 
-Recommended spec update: split the concepts before implementation. Keep a true
-scalar map for scalar-valued inputs/filters and add a read-output field-type map
-for object-valued file/image outputs, or add an explicit filter-side file/image
-policy. The higher-quality fix is a small architectural split: `convert_scalar`
-or a renamed read converter can consult a `FIELD_OUTPUT_TYPE_MAP` for
-`FileField` / `ImageField`, while filter inputs continue to use scalar values
-or fail loudly with a `ConfigurationError` for file filters until file filtering
-has a deliberate contract. Add package tests for `FilterSet.Meta.fields` over a
-synthetic `FileField` so this does not regress silently.
+Recommended spec update: introduce a tiny read-side wrapper such as
+`convert_field_output(field, type_name, *, force_nullable=None)` and call that
+from `types/base.py::_build_annotations`. It can check `FIELD_OUTPUT_TYPE_MAP`
+first, then delegate to `convert_scalar` for true scalar columns. Keep
+`scalar_for_field` and `convert_scalar` scalar-shaped. This preserves the new
+split without teaching future maintainers that "scalar conversion" may emit an
+object type.
 
-### P0 - The promised per-subfield storage guard is not implementable by the parent resolver alone
+### P1 - The implementation plan omits the actual finalizer wiring file
 
-The spec says the generated file-column resolver returns `None` for an empty
-`FieldFile` and otherwise returns the bound `FieldFile`, after which Strawberry
-reads `name` / `path` / `size` / `url` / dimensions from it. That only solves
-the empty-object case. It does **not** guard subfield access: Strawberry's
-default resolver will still touch `FieldFile.path`, `.size`, `.url`, `.width`,
-or `.height` later, outside the parent resolver, and those property accesses can
-raise.
+The prose says file-column resolvers attach "in the same finalizer phase as the
+relation resolvers," but the slice file list names `types/base.py` and
+`types/resolvers.py`, not `types/finalizer.py`. In the current architecture,
+`finalize_django_types()` is the only place relation resolvers are attached
+before `strawberry.type(...)` freezes the class.
 
-Recommended spec update: make the subfield safety mechanism explicit. Either
-define `DjangoFileType` / `DjangoImageType` with resolver-backed Strawberry
-fields that call a shared `_safe_file_attr(root, attr)` helper, or have the
-parent resolver return a wrapper object whose properties perform the narrow
-catch. The parent resolver should only decide object nullability (`not value`
-→ `None`); the subfield resolver/wrapper should own `ValueError` / `OSError` /
-storage `NotImplementedError` handling. Add tests that select only `url`,
-only `path`, and multiple subfields, because each subfield must be guarded
-independently.
+Recommended spec update: list [`types/finalizer.py`][types-finalizer] explicitly
+in Slice 1. The finalizer call should pass
+`definition.consumer_authored_fields`, not only
+`definition.consumer_assigned_relation_fields`, so annotation-only overrides like
+`attachment: str` are not clobbered.
 
-### P1 - The `Upload` scalar registration rationale is inaccurate for the installed Strawberry version
+### P1 - The spec over-promises model-level `ImageField` validation
 
-The spec repeatedly says `Upload` is structurally identical to `BigInt` and
-therefore must be added to `_PACKAGE_SCALAR_MAP`; it also says schemas without
-`config=strawberry_config()` will not resolve `Upload`. I verified the installed
-Strawberry package builds a schema containing `Upload` **without** the package
-config factory. That makes the BigInt analogy too strong: `BigInt` is a
-package-defined scalar that needs package registration; `Upload` is a
-Strawberry-provided scalar that Strawberry already knows how to expose.
+The error-shape section says a `full_clean()` failure such as an `ImageField`
+validator rejecting a non-image upload should become a `FieldError`. That is not
+a safe model-driven promise. Django model `ImageField` does not provide the same
+content validation as `forms.ImageField`; model `full_clean()` mainly runs model
+field validation, custom validators, and constraints. The form/serializer cards
+are the natural home for file-content validation.
 
-Recommended spec update: choose one contract and document it accurately. My
-recommendation is to re-export Strawberry's `Upload` from the package root but
-not claim package scalar-map registration is required. If the implementation
-still adds `Upload` to `_PACKAGE_SCALAR_MAP` for consistency, describe it as a
-package-pinning/centralization choice, not a resolver requirement, and be aware
-that it creates a new collision case for `extra_scalar_map={Upload: ...}` that
-does not exist today. Tests should pin the actual desired behavior, including
-whether a generated upload schema works without `strawberry_config()`.
+Recommended spec update: reword the example. Promise that model validation
+errors and custom validators surface through `FieldError`, but do not claim
+generated `DjangoMutation` rejects arbitrary non-image bytes unless the model
+declares a validator that does so. Move rich upload/content validation language
+to the future `DjangoFormMutation` / serializer specs.
 
-### P1 - The consumer override escape hatch needs exact resolver-skip wiring
+### P1 - Image dimension support needs a dependency/test strategy
 
-The spec promises that a consumer annotation like `attachment: str` bypasses the
-generated file mapping and the generated empty-file resolver. That is the right
-contract, but the implementation plan only says "wired in `types/base.py` /
-`types/resolvers.py`" and does not name the finalizer skip source. The registry
-already stores `DjangoTypeDefinition.consumer_authored_fields`; the file
-resolver attachment must skip those names, not only assigned
-`strawberry.field(...)` overrides. Otherwise an annotation-only opt-out can be
-silently clobbered by a generated resolver.
+The spec requires `DjangoImageType.width` / `height` and tests around image
+dimensions, but this project currently does not declare Pillow in runtime or dev
+dependencies. That matters because real image-dimension behavior depends on
+Django's image stack and the Pillow-backed image file path.
 
-Recommended spec update: add a concrete finalizer step: attach generated
-file-field resolvers in the same phase as relation resolvers, but skip
-`definition.consumer_authored_fields` for scalar file/image fields. Add a test
-where `attachment: str` is selected via `Meta.fields` and no generated resolver
-or object type is installed for that field.
+Recommended spec update: choose one path before implementation:
 
-### P2 - The storage exception list should explicitly account for Django storage/path safety errors
+- add Pillow as a dev/test dependency and use a tiny valid in-memory image in
+  tests; or
+- keep production fields nullable and unit-test the resolver logic with a
+  lightweight object exposing `width` / `height`, leaving real image parsing out
+  of scope.
 
-The current catch list names `ValueError` / `OSError` / storage
-`NotImplementedError`. That covers common empty/missing-file paths, but
-filesystem-backed storage can also raise Django path-safety exceptions such as
-`SuspiciousFileOperation` for corrupted or hostile stored names. The spec's own
-goal is "corrupt/vanished rows degrade to nullable subfields, not GraphQL 500s";
-the exception policy should explicitly decide whether those Django storage
-exceptions degrade to `null` or remain top-level errors.
+Do not write tests that silently skip dimension coverage when Pillow is absent;
+with `fail_under = 100`, skipped branches can hide missing behavior.
 
-Recommended spec update: add a small "safe storage exceptions" helper or named
-tuple in the spec and tests, and include a corrupted-name/path-traversal case.
-If the decision is to let `SuspiciousFileOperation` propagate for security
-visibility, document that exception as intentional rather than leaving it as an
-accidental gap.
+### P2 - Optional upload fields need explicit-null semantics stated
 
-### P2 - The write-resolver production change may already be satisfied by the existing scalar path
+The spec says file/image inputs widen to `Upload | None` on `blank` / `null` and
+all partial inputs are optional. That matches the existing generator pattern:
+optional means the field may be omitted (`UNSET`). But in the current resolver
+pipeline, an explicit `null` for a `null=False` scalar column is still an input
+error, even if the field is optional because `blank=True` or has a default.
 
-The spec says [`mutations.resolvers`][mutations-resolvers] must assign a
-provided `Upload` before `full_clean()` / `save()`. The existing create/update
-pipeline already passes scalar attributes into `model(**attrs)` and
-`setattr(instance, attr, value)` before validation. That likely handles
-`UploadedFile` values without a dedicated file branch. A new special case should
-only be added if tests prove the existing scalar assignment path fails.
+Recommended spec update: separate "omittable" from "nullable." For
+`blank=True, null=False` file columns, generated GraphQL may accept `null`
+because the optional-input machinery widens the annotation, but the resolver
+should return a field error for explicit `null` unless the existing pipeline is
+changed to coerce file clears to `""`. The spec currently hints that clearing is
+out of scope; make that a concrete contract in Decision 6 and the test plan.
 
-Recommended spec update: reword Slice 2 from "add file assignment code" to
-"verify the existing scalar assignment path handles `UploadedFile`; add a file
-branch only for a tested gap." This keeps the implementation smaller and avoids
-inventing a divergent write path for files.
+### P2 - Synthetic-model tests need a concrete table/storage fixture plan
 
-### P2 - Test plan is missing the highest-risk regression points
+The spec says package tests should use synthetic models with `FileField` /
+`ImageField` and `tmp_path` storage. Converter-only tests can use unmanaged
+models without tables, but resolver and mutation tests need real rows and real
+storage side effects. The repo already has a pattern for this:
+`managed = False` models plus `connection.schema_editor().create_model(...)`.
 
-The planned tests cover many direct file/image cases, but they miss the two
-riskiest integration seams:
+Recommended spec update: add the fixture shape explicitly. Use a unique
+`app_label`, `managed = False`, manual `schema_editor` create/delete, and
+`override_settings(MEDIA_ROOT=tmp_path)` or a field-level temp storage. This
+keeps the tests local to `tests/` without migrations or fakeshop app churn.
 
-- filter input generation for a model `FileField` after the output-type mapping
-  change;
-- `Upload` behavior with and without `strawberry_config()`, so the docs do not
-  assert a false config requirement.
+### P2 - Storage-backed subfields can be expensive at list scale
 
-Recommended spec update: add these to the Slice 1 / Slice 2 test plan. Also add
-one override test that confirms `attachment: str` does not receive the generated
-file resolver, and one subfield-isolation test where `path` fails but `url` or
-`name` still resolves.
+The resolver-backed `path` / `size` / `url` fields are selection-gated, which is
+good. Still, `size` and sometimes `url` can hit remote storage per row. The
+optimizer cannot prefetch object-store metadata, and file columns are correctly
+not relation-planned.
 
-### P3 - The companion glossary CSV probably needs a few implementation terms
+Recommended spec update: document this as a read-side performance caveat. The
+contract should be: selecting metadata asks Django storage for metadata per
+selected object/subfield; the framework guards storage-shaped failures, but it
+does not cache or batch storage calls in this card.
 
-The spec uses `FieldFile`, `ImageFieldFile`, `SCALAR_MAP`, and `FilterSet` as
-load-bearing implementation concepts, but the companion CSV only lists the
-higher-level public concepts. A new developer implementing this card would need
-the `FieldFile` and shared-converter/filter interaction vocabulary in front of
-them.
+### P2 - The settings-anchor question is not a spec-037 issue, but the rule should be explicit
 
-Recommended spec update: add glossary coverage or at least CSV rows for
-`FieldFile`, `SCALAR_MAP`, and `FilterSet` if those entries exist or are being
-introduced. If `SCALAR_MAP` is split per the P0 finding, name the new output map
-in the glossary/CSV as well.
+The current 037 spec adds **no** setting and explicitly rejects a new setting
+key. The setting-read concern instead matches the existing
+`RELAY_GLOBALID_STRATEGY` design in [`types/relay.py`][types-relay]. That code
+reads the setting during finalization, validates it with the same validator as
+`Meta.globalid_strategy`, stamps `definition.effective_globalid_strategy`, and
+does not re-read it per query. Under that shape, there is no meaningful query
+runtime overhead, no repeated validation during execution, and no new request
+thread-safety concern beyond the existing `conf.Settings` lazy-load contract.
 
-## Proposed spec corrections before implementation
+The architectural line should be kept:
 
-1. Replace the blanket "`SCALAR_MAP` rows become object types" instruction with
-   an explicit read-output map vs scalar-input map design, or explicitly reject
-   file/image filters with tests.
-2. Define the subfield guard mechanism at the `DjangoFileType` /
-   `DjangoImageType` field level, not only at the parent model-field resolver.
-3. Correct the `Upload` registration section: Strawberry already resolves
-   `Upload`; package registration is optional policy, not a technical
-   requirement like `BigInt`.
-4. Specify finalizer resolver attachment and skip behavior using
-   `DjangoTypeDefinition.consumer_authored_fields`.
-5. Add tests for filter generation, no-config upload schema behavior, subfield
-   failure isolation, annotation-only override bypass, and the chosen
-   Django-storage exception policy.
+- [`conf.py`][conf] owns top-level settings-dict normalization and reload wiring.
+- Domain modules own key-specific validation when validation needs local domain
+  concepts and would otherwise create import cycles.
+- Any setting that affects request behavior must be resolved/stamped at schema
+  build/finalization time, not read repeatedly inside resolvers.
+
+Recommended spec update: if a future spec mentions a settings read in
+`types/relay.py`, state "finalization-time read and stamp" explicitly. If it
+means query-time lazy evaluation, move the validation/stamping earlier; do not
+validate settings during each query.
+
+### P3 - Documentation DoD should avoid implying multipart support
+
+The doc-update section mostly gets this right, but several completion bullets
+still say "upload capability" broadly. Because multipart HTTP ergonomics belong
+to the future `TestClient` card, the docs should consistently say this card
+ships the scalar symbol and generated mutation field typing, not the test client
+or a new fakeshop upload endpoint.
+
+Recommended spec update: mirror the precise wording already present in the
+better doc-update paragraph: "Upload scalar and generated file/image
+mutation-field typing; full multipart HTTP test-client ergonomics remain
+0.0.14."
+
+## Proposed Spec Edits
+
+1. Add a read-output conversion helper name rather than expanding
+   `convert_scalar` to emit object types.
+2. Add `types/finalizer.py` to Slice 1 files touched and specify the exact
+   `consumer_authored_fields` skip.
+3. Replace the non-image-upload validation example with a custom-validator or
+   model-validation example.
+4. Decide and document how image-dimension tests work without an implicit Pillow
+   dependency.
+5. State explicit-null behavior for optional upload fields, especially
+   `blank=True, null=False`.
+6. Specify the synthetic-model DB/storage fixture pattern.
+7. Add the storage-metadata performance caveat.
+8. Keep settings validation stamped at finalization; do not introduce query-time
+   setting validation.
 
 <!-- LINK DEFINITIONS -->
 
@@ -179,9 +186,9 @@ in the glossary/CSV as well.
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[filters-inputs]: ../django_strawberry_framework/filters/inputs.py
-[mutations-resolvers]: ../django_strawberry_framework/mutations/resolvers.py
-[types-converters]: ../django_strawberry_framework/types/converters.py
+[conf]: ../django_strawberry_framework/conf.py
+[types-finalizer]: ../django_strawberry_framework/types/finalizer.py
+[types-relay]: ../django_strawberry_framework/types/relay.py
 
 <!-- tests/ -->
 

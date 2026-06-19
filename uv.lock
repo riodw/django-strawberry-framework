@@ -215,6 +215,8 @@ wheels = [
 
 [[package]]
 name = "django-strawberry-framework"
+# TODO(spec-037 Slice 4): regenerate this lock entry when the package version
+# moves to 0.0.11 with pyproject.toml and django_strawberry_framework/__init__.py.
 version = "0.0.10"
 source = { editable = "." }
 dependencies = [

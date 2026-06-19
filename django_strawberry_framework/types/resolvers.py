@@ -265,6 +265,14 @@ def _name_resolver(resolver: Callable[..., Any], field_name: str) -> Callable[..
     return resolver
 
 
+# TODO(spec-037 Slice 1): add file-column parent resolvers beside relation resolvers.
+# Pseudo-code:
+# - _make_file_resolver(field): read getattr(root, field.name), return None when
+#   the FieldFile is falsy, otherwise return the bound FieldFile for subfield
+#   resolvers on DjangoFileType / DjangoImageType.
+# - _attach_file_resolvers(cls, fields, skip_field_names): skip relations, skip
+#   consumer-authored fields, and attach only fields present in FIELD_OUTPUT_TYPE_MAP.
+# - name each resolver resolve_<field> through _name_resolver for trace stability.
 def _field_meta_for_resolver(field: Any, parent_type: type | None) -> FieldMeta:
     """Return registered ``FieldMeta`` for ``field`` when the parent type exposes it.
 
@@ -428,3 +436,9 @@ def _attach_relation_resolvers(
             continue
         resolver = _make_relation_resolver(field, parent_type=cls)
         setattr(cls, field.name, strawberry.field(resolver=resolver))
+
+
+# TODO(spec-037 Slice 1): expose _attach_file_resolvers from this module and call
+# it from finalize_django_types() in the same Phase 2 window as relation resolvers.
+# The subfield storage guard remains on DjangoFileType / DjangoImageType; the
+# parent resolver owns only empty-file object nullability.

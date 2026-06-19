@@ -107,6 +107,14 @@ Two rules the package enforces: `finalize_django_types()` must run **after** eve
 - `FloatField` → `float`
 - `UUIDField` → `uuid.UUID`
 - `BinaryField` → `bytes`
+<!-- TODO(spec-037 Slice 4): rewrite the file/image row after implementation.
+Pseudo-code:
+- Read output becomes DjangoFileType / DjangoImageType with nullable storage
+  subfields and empty-file object nullability.
+- Filter/scalar input remains str for stored file name/path filters.
+- Generated DjangoMutation input becomes Upload, but fakeshop products still do
+  not exercise a concrete file/image model.
+-->
 - `FileField` / `ImageField` → `str`
 - `JSONField` → `strawberry.scalars.JSON`
 - PostgreSQL `ArrayField` → `list[T]` (recursive through `field.base_field`; soft-registered when `django.contrib.postgres.fields` imports)

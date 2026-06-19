@@ -15,6 +15,15 @@ against synthetic ``SimpleNamespace`` fields, so the OneToOne branch can
 be exercised without a real Django OneToOne in the example schema.
 """
 
+# TODO(spec-037 Slice 1): add file/image output resolver tests here.
+# Pseudo-code:
+# - execute a schema over a synthetic model with populated FileField/ImageField
+#   values and select name/path/size/url plus width/height for images.
+# - assert an empty FieldFile resolves the parent object to null.
+# - monkeypatch one storage-backed property at a time so path can return null
+#   while url/name still resolve, proving the guard is on subfield resolvers.
+# - assert SuspiciousFileOperation is not swallowed by the nullable guard.
+
 import pytest
 import strawberry
 from apps.products.models import Category, Item

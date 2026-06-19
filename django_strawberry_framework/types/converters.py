@@ -51,6 +51,17 @@ from ..registry import registry
 from ..scalars import BigInt
 from ..utils.strings import pascal_case
 
+# TODO(spec-037 Slice 1): add the read-side file/image object mapping here.
+# Pseudo-code:
+# - define _safe_file_attr(bound_file, attr) that returns None for storage-shaped
+#   ValueError / OSError / NotImplementedError, but lets suspicious path errors
+#   and real resolver bugs propagate.
+# - define resolver-backed @strawberry.type DjangoFileType with name, path, size,
+#   and url; name reads the bound file directly, nullable subfields use the guard.
+# - define DjangoImageType(DjangoFileType) with nullable width and height through
+#   the same guard.
+# - add FIELD_OUTPUT_TYPE_MAP for ImageField before FileField and have the read
+#   converter consult it before falling back to the scalar/filter map below.
 SCALAR_MAP: dict[type[models.Field], Any] = {
     models.AutoField: int,
     models.BigAutoField: int,
@@ -76,6 +87,9 @@ SCALAR_MAP: dict[type[models.Field], Any] = {
     models.TimeField: datetime.time,
     models.JSONField: strawberry.scalars.JSON,
     models.UUIDField: uuid.UUID,
+    # TODO(spec-037 Slice 1): keep these rows as str for FilterSet/scalar-input
+    # generation; DjangoFileType / DjangoImageType belong in FIELD_OUTPUT_TYPE_MAP
+    # so output object types never leak into GraphQL input objects.
     models.FileField: str,
     models.ImageField: str,
 }
@@ -216,6 +230,14 @@ def convert_scalar(
     # ArrayField / HStoreField / choice / scalar branches without per-branch
     # override logic.
     effective_null = field.null if force_nullable is None else force_nullable
+    # TODO(spec-037 Slice 1): before the generic scalar path, route FileField /
+    # ImageField through FIELD_OUTPUT_TYPE_MAP for DjangoType output only.
+    # Pseudo-code:
+    # - file_effective_null is force_nullable when the override is set;
+    #   otherwise it is bool(field.null or field.blank).
+    # - output_type = field_output_type_for_field(field) by MRO.
+    # - if output_type exists, return output_type | None when file_effective_null.
+    # - do not change scalar_for_field(), because filters still use SCALAR_MAP.
     # Sentinel-guarded ``ArrayField`` dispatch runs **before** the MRO walk
     # so a subclass-of-``models.Field`` test double does not accidentally
     # match a parent in ``SCALAR_MAP``. The recursive call into

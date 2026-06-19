@@ -32,6 +32,14 @@ from .relay import DjangoNodeField, DjangoNodesField  # noqa: E402
 from .scalars import BigInt, strawberry_config  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 
+# TODO(spec-037 Slice 3/4): add the new public symbols and final 0.0.11 cut here.
+# Pseudo-code:
+# - import Upload from .scalars and DjangoFileType / DjangoImageType from
+#   .types.converters after those symbols exist.
+# - append Upload, DjangoFileType, and DjangoImageType to __all__ in sorted
+#   public-surface position with tests/base/test_init.py updated in lockstep.
+# - bump __version__ to 0.0.11 only in Slice 4 with pyproject.toml, uv.lock,
+#   docs/GLOSSARY.md, and the version test aligned.
 __version__ = "0.0.10"
 
 __all__ = (

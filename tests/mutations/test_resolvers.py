@@ -18,6 +18,15 @@ these tests pin the *resolver*, not the write-auth seam (that is
 ``test_permissions.py``).
 """
 
+# TODO(spec-037 Slice 2): add file upload assignment tests here.
+# Pseudo-code:
+# - declare a package-local model with FileField/ImageField over tmp_path storage.
+# - create through DjangoMutation with a SimpleUploadedFile and assert the saved
+#   FieldFile has the expected name/content through the generic model(**attrs) path.
+# - partial update with UNSET leaves the stored file unchanged.
+# - partial update with a new upload replaces it through the generic setattr path.
+# - validation failure, such as bad image content for ImageField, returns FieldError.
+
 from __future__ import annotations
 
 import itertools

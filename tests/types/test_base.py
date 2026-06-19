@@ -23,6 +23,13 @@ test focused on the behaviour under examination. ``CATEGORY_SCALAR_FIELDS``
 captures the scalar-only field list used in those updated tests.
 """
 
+# TODO(spec-037 Slice 1): add consumer-authored file/image override coverage here.
+# Pseudo-code:
+# - declare a DjangoType over a synthetic FileField with `attachment: str`.
+# - finalize and assert the generated annotation remains str, not DjangoFileType.
+# - assert no generated file resolver is installed for consumer_authored_fields.
+# - repeat with an assigned strawberry.field resolver to pin both override paths.
+
 import datetime
 import functools
 import itertools

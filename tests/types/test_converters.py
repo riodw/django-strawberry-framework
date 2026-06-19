@@ -18,6 +18,15 @@ Coverage knock-ons: these tests exercise ``convert_scalar``'s ``null``
 widening branch and ``registry.register_enum`` / ``get_enum``.
 """
 
+# TODO(spec-037 Slice 1): add synthetic FileField/ImageField converter coverage here.
+# Pseudo-code:
+# - build unmanaged models with FileField, ImageField, blank=True, and null=True.
+# - assert convert_scalar() returns DjangoFileType / DjangoImageType from
+#   FIELD_OUTPUT_TYPE_MAP while scalar_for_field() still returns str.
+# - assert ImageField subclasses resolve to DjangoImageType before FileField.
+# - assert nullable_overrides / required_overrides still win over blank/null.
+# - assert a FilterSet over a FileField still generates a scalar string input.
+
 import enum
 import itertools
 

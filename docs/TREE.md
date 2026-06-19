@@ -202,6 +202,13 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── registry.py                   # Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
+<!-- TODO(spec-037 Slice 4): update tree summaries after Upload/file-image mapping lands.
+Pseudo-code:
+- scalars.py mentions Upload re-export while strawberry_config remains BigInt-only.
+- types/converters.py mentions DjangoFileType / DjangoImageType and FIELD_OUTPUT_TYPE_MAP.
+- types/resolvers.py mentions generated file-column parent resolvers.
+- tests summaries mention Upload, file/image converter, and resolver coverage.
+-->
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared across the FilterSet / OrderSet / AggregateSet family.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 │   ├── base.py                   # Filter primitives + ``RelatedFilter``.

@@ -475,14 +475,17 @@ def build_mutation_input(
         else:
             # Upload staged seam (TODO-ALPHA-037-0.0.11). A ``FileField`` /
             # ``ImageField`` reaching the write generator MUST fail loud rather
-            # than silently emit ``str``: ``SCALAR_MAP`` maps both to ``str`` for
-            # the READ side, but the write input is the surface 037 maps to the
-            # ``Upload`` scalar, so the write generator rejects them until then.
-            # TODO(spec-036 Slice 1): wire ``FileField`` / ``ImageField`` to the
-            # ``Upload`` scalar input here once TODO-ALPHA-037-0.0.11 ships the
-            # ``Upload`` scalar + file/image field mapping; until then a write
-            # input over a file/image column fails loud (spec-036 Decision 2 /
-            # Out of scope - the thin input-converter seam reserved for 037).
+            # than silently emit ``str``: ``SCALAR_MAP`` stays ``str`` for filter
+            # inputs, but mutation inputs become Strawberry ``Upload`` in 037.
+            # TODO(spec-037 Slice 2): replace this raise with Upload mapping.
+            # Pseudo-code:
+            # - if field is FileField/ImageField, set python_attr = field.name,
+            #   graphql_name = graphql_camel_name(field.name), annotation = Upload.
+            # - leave requiredness to the existing input_field_required() branch;
+            #   optional fields and all partial inputs widen to Upload | None.
+            # - perform the python_attr in overrides skip after assigning the attr,
+            #   so Meta.input_class / Meta.partial_input_class overrides are honored.
+            # - never use attachment_id naming; file/image columns are scalar inputs.
             if isinstance(field, (models.FileField, models.ImageField)):
                 raise NotImplementedError(
                     f"{model.__name__}.{field.name} is a "

@@ -1475,3 +1475,31 @@ def test_connection_over_cascading_type_narrows_edges_and_total_count():
     # No further pages over the narrowed set.
     assert conn["pageInfo"]["hasNextPage"] is False
     assert conn["pageInfo"]["hasPreviousPage"] is False
+
+
+@pytest.mark.django_db
+def test_consumer_resolver_pre_sliced_queryset_raises_clear_error():
+    """A pre-sliced consumer queryset raises a clear ``GraphQLError``, not a raw ``TypeError``.
+
+    ``_finalize_queryset`` appends the deterministic total-order tiebreaker with
+    ``order_by``, which Django forbids on a sliced queryset (``TypeError: Cannot
+    reorder a query once a slice has been taken``). ``Category._meta.ordering`` is
+    empty, so an unordered slice always trips the reorder. That raw internal must
+    not leak to the client: the connection boundary must reject a pre-sliced
+    source with a clear, actionable ``GraphQLError``, symmetric with the existing
+    non-queryset-iterable guard.
+    """
+    services.seed_data(2)
+
+    def resolver(root, info) -> Iterable:
+        return Category.objects.all()[:5]  # already sliced before the pipeline reorders
+
+    schema = _field_schema(_make_sidecar_node_type("PreSlicedNode"), resolver=resolver)
+    result = schema.execute_sync("{ items { edges { node { id } } } }")
+
+    assert result.errors is not None
+    messages = [str(err.message) for err in result.errors]
+    # The raw Django internal must NOT leak to the client...
+    assert not any("Cannot reorder a query once a slice has been taken" in m for m in messages)
+    # ...it is replaced by the connection's clear pre-sliced guard.
+    assert any("already-sliced" in m for m in messages)

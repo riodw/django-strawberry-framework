@@ -1320,6 +1320,36 @@ def test_create_raw_pk_m2m_existing_id_succeeds():
     assert set(book.genres.values_list("pk", flat=True)) == {genre.pk}
 
 
+@pytest.mark.django_db
+def test_raw_pk_m2m_existence_check_coerces_out_of_range_pk_no_overflow():
+    """An out-of-range raw-pk M2M id is treated as not-found, never a raw ``OverflowError``.
+
+    ``_relation_existence_error`` runs ``pk__in`` on the raw pks. The default
+    ``AutoField`` / ``BigAutoField`` pk maps to a 32-bit ``Int`` input (so
+    graphql-core caps it), but a target with an explicit ``BigIntegerField`` /
+    ``PositiveBigIntegerField`` primary key maps to the arbitrary-precision
+    ``BigInt`` input - a pk past SQLite's signed 64-bit range then reaches this
+    query and overflows the parameter binding (a raw ``OverflowError`` escaping
+    as a top-level error). The pk must be range-coerced first - the coercion the
+    GlobalID path already applies via ``decode_model_global_id`` - so an
+    out-of-range pk falls out of the existing set and yields the field-keyed
+    ``FieldError`` a nonexistent pk yields.
+
+    Driven at ``_relation_existence_error`` directly: no fakeshop model has a
+    ``BigInteger`` primary key to carry the value end-to-end, and the overflow is
+    at this function's ``pk__in`` regardless of the target's pk column type.
+    """
+    library_models.Genre.objects.create(name="Real")
+    # 2**63: one past SQLite's signed-64-bit maximum (9223372036854775807).
+    error = resolvers._relation_existence_error(
+        "genres",
+        [9223372036854775808],
+        library_models.Genre,
+    )
+    assert error is not None
+    assert error.field == "genres"
+
+
 # ---------------------------------------------------------------------------
 # Create-validation parity with Model.objects.create (feedback - empty-value
 # defaults #11) and naive-datetime tz-coercion (feedback #15).

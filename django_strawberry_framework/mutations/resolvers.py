@@ -497,6 +497,34 @@ def _relation_visibility_error(
     return None
 
 
+def _coerce_relation_pk_or_none(related_model: type, pk: Any) -> Any:
+    """Coerce a raw M2M pk through the target's pk field; ``None`` if uncoercible / out of range.
+
+    The raw-pk M2M counterpart to ``relay.py::_coerce_pk_or_none`` (which coerces a
+    ``GlobalID`` ``node_id`` through the resolved Strawberry type's id field). A
+    raw-pk relation has no Relay-Node type and so no ``resolve_id_attr`` seam: the
+    existence query filters on ``pk__in`` directly, so coercion is against
+    ``related_model._meta.pk``. Coercion is ``to_python`` **then**
+    ``run_validators`` - the same two-step the GlobalID path uses: ``to_python`` is
+    a pure cast that does NOT range-check, so a syntactically-numeric but
+    out-of-range literal (a pk beyond the backend's signed-64-bit column range)
+    would reach ``pk__in`` and raise a raw backend ``OverflowError`` (``Python int
+    too large to convert to SQLite INTEGER``); the field's ``integer_field_range``
+    Min/MaxValueValidators reject it here as a ``ValidationError`` instead. An
+    uncoercible / out-of-range pk is treated as "identifies no row" - excluded from
+    the existence query (below) and so absent from the visible set, which makes it
+    the same not-found ``_relation_error`` as a genuinely missing pk, never a
+    backend crash (feedback - relation huge-pk crash).
+    """
+    pk_field = related_model._meta.pk
+    try:
+        value = pk_field.to_python(pk)
+        pk_field.run_validators(value)
+    except (ValueError, ValidationError):
+        return None
+    return value
+
+
 def _relation_existence_error(
     field_name: str,
     pks: list[Any],
@@ -515,10 +543,26 @@ def _relation_existence_error(
     whole write rolls back inside the transaction rather than persisting a dangling
     row. Used only for raw-pk M2M; the GlobalID path's visibility query already
     confirms existence (a hidden / missing pk is absent from the visible set).
+
+    Each pk is coerced through the target pk field first (``_coerce_relation_pk_or_none``),
+    mirroring the coercion the GlobalID path applies via ``decode_model_global_id``:
+    an uncoercible / out-of-range pk is dropped from the ``pk__in`` query so it can
+    never reach the backend as a raw ``OverflowError`` / ``ValueError``. Because the
+    membership check below still compares the FULL input set against the queried
+    rows, a dropped pk is absent from ``existing`` and so fails the subset check -
+    the same not-found ``_relation_error`` outcome as a valid-but-missing pk.
     """
+    coerced = [
+        value
+        for value in (_coerce_relation_pk_or_none(related_model, pk) for pk in pks)
+        if value is not None
+    ]
     existing = {
         str(pk)
-        for pk in related_model._default_manager.filter(pk__in=pks).values_list("pk", flat=True)
+        for pk in related_model._default_manager.filter(pk__in=coerced).values_list(
+            "pk",
+            flat=True,
+        )
     }
     if not {str(pk) for pk in pks} <= existing:
         return _relation_error(field_name)

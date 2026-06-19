@@ -354,3 +354,32 @@ def test_apply_logs_missing_symbol_notice_only_once(caplog):
             if r.name == "django_strawberry_framework" and "_DatabaseFailure" in r.message
         ]
         assert len(skip_records) == 1
+
+
+def test_apply_no_ops_when_toggle_disabled(settings):
+    """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install.
+
+    The Trac #37064 patch is gated by the same flag as the package's
+    other upstream patches, so a consumer who opts out of all
+    monkey-patching gets none of them. ``apply()`` must return before
+    re-installing when the flag is off, and resume installing when it
+    is back on.
+    """
+    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
+    try:
+
+        def _foreign(cls):
+            pass
+
+        SimpleTestCase._remove_databases_failures = classmethod(_foreign)
+        assert _django_patches._patch_is_installed() is False
+
+        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
+        _django_patches.apply()
+        assert _django_patches._patch_is_installed() is False
+
+        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
+        _django_patches.apply()
+        assert _django_patches._patch_is_installed() is True
+    finally:
+        SimpleTestCase._remove_databases_failures = saved

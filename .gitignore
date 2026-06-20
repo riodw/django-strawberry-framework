@@ -70,6 +70,9 @@ cover/
 *.log
 local_settings.py
 db.sqlite3-journal
+# User-uploaded media (fakeshop MEDIA_ROOT default); live tests use a temp dir,
+# but manual GraphiQL uploads land here and must not dirty the repo.
+examples/fakeshop/media/
 
 # Flask stuff:
 instance/

@@ -53,6 +53,7 @@ from ..utils.inputs import (
     graphql_camel_name,
     materialize_generated_input_class,
 )
+from ..utils.relations import is_forward_many_to_many
 
 # Module path the ``strawberry.lazy(...)`` marker references; pinned as a
 # single constant so any forward-ref and ``materialize_mutation_input_class``
@@ -185,7 +186,7 @@ def editable_input_fields(
         if getattr(field, "many_to_many", False):
             # Forward M2M only: a forward ``ManyToManyField`` is concrete and
             # writable; an auto-created reverse M2M accessor is not.
-            if getattr(field, "concrete", False) or not field.auto_created:
+            if is_forward_many_to_many(field):
                 selected.append(field)
             continue
         # Concrete column-backed fields only (``hasattr(f, "column")`` is the

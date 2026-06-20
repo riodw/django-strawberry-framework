@@ -1031,9 +1031,10 @@ def _make_asset_model():
     """Return a synthetic ``managed=False`` model with a FileField + ImageField.
 
     ``app_label="products"`` (an INSTALLED app) so the table can be created with
-    ``schema_editor``; the file column is required (no blank / no null) and the
-    image column is ``blank=True`` so the empty-file parent guard has a nullable
-    object to land on. The model NAME is uniquified per call so Django's app
+    ``schema_editor``; ``attachment`` is a required (no blank / no null) file
+    column and ``preview`` is ``blank=True`` -- but both file/image outputs are
+    nullable by default (spec-037 Decision 4), so the empty-file parent guard has
+    a nullable object to land on either way. The model NAME is uniquified per call so Django's app
     registry does not warn ``Model 'products.asset' was already registered``
     when several tests each build a synthetic asset model.
     """
@@ -1120,6 +1121,39 @@ def test_empty_file_resolves_parent_object_to_null(tmp_path):
             result = schema.execute_sync("{ assets { preview { url } } }")
             assert result.errors is None
             assert result.data["assets"][0]["preview"] is None
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(model)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_empty_required_file_resolves_to_null_without_error(tmp_path):
+    """A required (``null=False, blank=False``) FileField holding an empty value
+    resolves to ``null`` -- never a top-level "Cannot return null" error.
+
+    ``attachment`` is a plain required ``FileField``; a row saved with no file
+    stores ``""`` (the same empty-string state legacy rows, direct
+    ``Model.objects.create()``, fixtures, and manual SQL produce). The parent
+    resolver maps that empty ``FieldFile`` to ``None``, so the generated SDL must
+    be nullable to represent it (spec-037 Decision 4). Regression guard for the
+    finding that a required file column emitted ``attachment: DjangoFileType!``
+    and turned the empty-file ``None`` into a GraphQL non-null execution error.
+    """
+    model = _make_asset_model()
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(model)
+    try:
+        with override_settings(MEDIA_ROOT=str(tmp_path)):
+            # Required FileField left unset -> stored as "" (the legacy / direct-create edge).
+            asset = model()
+            asset.save()
+
+            schema = _asset_schema(_asset_type(model), model)
+            # SDL is nullable: the required column no longer emits ``DjangoFileType!``.
+            assert "attachment: DjangoFileType\n" in str(schema)
+            result = schema.execute_sync("{ assets { attachment { url } } }")
+            assert result.errors is None
+            assert result.data["assets"][0]["attachment"] is None
     finally:
         with db_connection.schema_editor() as schema_editor:
             schema_editor.delete_model(model)

@@ -4,6 +4,18 @@ Spec reference: `docs/spec-037-upload_file_image_mapping-0_0_11.md`
 Build plan: `docs/builder/build-037-upload_file_image_mapping-0_0_11.md`
 Status: final-accepted
 
+> **Maintainer commit note (out-of-scope change bundled in this range).** The
+> commit range `0273c869..HEAD` contains a one-line, unrelated baseline test
+> repair — `tests/orders/test_sets.py` re-pinned from the stale `"OrderSet.apply"`
+> assertion to `"OrderSet could not resolve"` (a substring of the committed,
+> intentional `utils/permissions.py::request_from_info` message; the production
+> helper was already correct and was NOT changed). No orders production file
+> changed in the 037 range. This is a maintainer-authorized orders/permissions
+> repair, not part of the upload/file feature — ideally committed separately from
+> the 037 source/doc/version changes. Full provenance below
+> (`## Failure ownership analysis`, `### Re-run disposition`, and the deferred-work
+> catalog's RESOLVED entry).
+
 Final test-run gate (Worker 1), run after the cross-slice integration pass
 (`docs/builder/bld-integration.md`) reached `final-accepted`. This is the last
 gate before the maintainer handoff. The gate is intentionally narrow: run the
@@ -45,8 +57,13 @@ E        +    where ConfigurationError('OrderSet could not resolve a Django Http
 tests/orders/test_sets.py:390: AssertionError
 =========================== short test summary info ============================
 FAILED tests/orders/test_sets.py::test_orderset_request_from_info_raises_on_unrecognized_context_shape
-======= 1 failed, 2212 passed, 4 skipped, 4 xfailed in 199.34s (0:03:19) =======
+pytest summary: 1 failed, 2212 passed, 4 skipped, 4 xfailed in 199.34s (0:03:19)
 ```
+
+(The pytest summary line above is reproduced WITHOUT pytest's `=======` border:
+a line beginning with seven `=` is read by `git diff --check` as a leftover
+conflict marker, so the border is dropped to keep the artifact diff-clean while
+preserving the verbatim counts.)
 
 Counts: **1 failed, 2212 passed, 4 skipped, 4 xfailed**.
 

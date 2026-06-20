@@ -1729,10 +1729,15 @@ def test_field_output_map_mro_precedence_image_subclass_wins():
     assert convert_field_output(field, "OwnerType") is DjangoImageType
 
 
-def test_convert_field_output_blank_and_null_widen_to_optional():
-    """``blank=True`` OR ``null=True`` widens the object to ``<object> | None``.
+def test_convert_field_output_file_image_nullable_by_default():
+    """File/image output is ``<object> | None`` by DEFAULT, regardless of ``blank`` / ``null``.
 
-    A plain required (no blank / no null) file column returns the bare object.
+    The generated parent resolver returns ``None`` for an empty / falsy
+    ``FieldFile`` even on a ``null=False, blank=False`` column (legacy rows,
+    direct ``Model.objects.create()``, fixtures store ``""``), so the SDL must be
+    nullable to match what the resolver can return (spec-037 Decision 4). A
+    stronger non-empty invariant is opt-in via ``required_overrides``
+    (``force_nullable=False``), covered in the force_nullable test below.
     """
 
     class _NullabilityOwner(models.Model):
@@ -1748,18 +1753,18 @@ def test_convert_field_output_blank_and_null_widen_to_optional():
     blank_file = _NullabilityOwner._meta.get_field("blank_file")
     null_file = _NullabilityOwner._meta.get_field("null_file")
 
-    assert convert_field_output(required, "OwnerType") is DjangoFileType
+    assert convert_field_output(required, "OwnerType") == (DjangoFileType | None)
     assert convert_field_output(blank_file, "OwnerType") == (DjangoFileType | None)
     assert convert_field_output(null_file, "OwnerType") == (DjangoFileType | None)
 
 
-def test_convert_field_output_force_nullable_overrides_blank_null():
-    """``force_nullable`` wins over the column's ``field.null`` / ``field.blank``.
+def test_convert_field_output_force_nullable_overrides_default():
+    """``force_nullable`` wins over the default-nullable file/image shape.
 
-    ``required_overrides`` (``force_nullable=False``) forces ``DjangoFileType``
-    even on a ``blank=True`` column; ``nullable_overrides``
-    (``force_nullable=True``) forces ``DjangoFileType | None`` even on a plain
-    required column.
+    ``required_overrides`` (``force_nullable=False``) forces the bare
+    ``DjangoFileType`` even on a ``blank=True`` column -- the opt-in to a stronger
+    non-empty invariant; ``nullable_overrides`` (``force_nullable=True``) keeps
+    ``DjangoFileType | None`` (the default) on a plain required column.
     """
 
     class _OverrideOwner(models.Model):

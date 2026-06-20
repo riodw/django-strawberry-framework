@@ -6,7 +6,8 @@ Public surface:
   ``types/base.py:_build_annotations`` calls for every non-relation column.
   Routes ``FileField`` / ``ImageField`` through ``FIELD_OUTPUT_TYPE_MAP`` to
   the structured ``DjangoFileType`` / ``DjangoImageType`` output objects
-  (widened to ``<object> | None`` on the ``blank``-aware nullability), and
+  (nullable by default as ``<object> | None`` to match the parent resolver's
+  empty-file ``None``), and
   delegates every other column to ``convert_scalar``. File/image columns are
   read-output-only here: the lookup is kept OFF ``convert_scalar`` /
   ``scalar_for_field`` / ``SCALAR_MAP`` so no output object can ever reach the
@@ -84,7 +85,8 @@ def _safe_file_attr(file_file: Any, attr: str) -> Any:
     The catch list is deliberately NARROW -- ``ValueError`` / ``OSError`` /
     ``NotImplementedError`` -- the storage-shaped errors a non-filesystem
     backend (S3 ``FieldFile.path`` -> ``NotImplementedError``) or a vanished
-    file (``.url`` / ``.size`` -> ``OSError`` / ``ValueError``) raises. Anything
+    file (``.size`` -> ``OSError``; ``.url`` on local storage is string-built
+    from ``MEDIA_URL`` and does NOT raise) raises. Anything
     else propagates: in particular ``SuspiciousFileOperation`` (a
     ``SuspiciousOperation``, NOT a ``ValueError`` / ``OSError``) is a
     path-traversal security signal that must surface as a top-level error, not
@@ -422,12 +424,14 @@ def convert_field_output(
     before spec-037). Routing, not an expansion of ``convert_scalar``:
 
     - A ``FileField`` / ``ImageField`` resolves through ``FIELD_OUTPUT_TYPE_MAP``
-      to ``DjangoFileType`` / ``DjangoImageType``, widened to ``<object> | None``
-      on the ``blank``-aware effective nullability (spec-037 Decision 4): the
-      ``force_nullable`` override wins when set, else the object is nullable when
-      the column is ``null=True`` OR ``blank=True`` (a ``blank=True`` column
-      stores an empty file the parent resolver maps to ``None``, so the field
-      must be nullable to represent it).
+      to ``DjangoFileType`` / ``DjangoImageType``, nullable by DEFAULT as
+      ``<object> | None`` (spec-037 Decision 4): the generated parent resolver
+      returns ``None`` for an empty / falsy ``FieldFile`` -- reachable even on a
+      ``null=False, blank=False`` column (legacy rows, direct
+      ``Model.objects.create()``, fixtures store ``""``) -- so the annotation
+      must be nullable to match. ``force_nullable`` still wins when set, so
+      ``Meta.required_overrides`` (``force_nullable=False``) is the explicit
+      opt-in for a caller asserting a stronger non-empty invariant.
     - Every other column delegates unchanged to ``convert_scalar`` -- keeping
       ``convert_scalar`` / ``scalar_for_field`` / ``SCALAR_MAP`` scalar-only so
       the shared filter-input path never sees an output object.
@@ -439,9 +443,17 @@ def convert_field_output(
     output_type = _field_output_type_for(field)
     if output_type is None:
         return convert_scalar(field, type_name, force_nullable=force_nullable)
-    file_effective_null = (
-        bool(field.null or field.blank) if force_nullable is None else force_nullable
-    )
+    # File/image output is nullable by DEFAULT, independent of ``null`` /
+    # ``blank``: the generated parent resolver (``resolvers._make_file_resolver``)
+    # returns ``None`` for an empty / falsy ``FieldFile``, and an empty value is
+    # reachable even on a ``null=False, blank=False`` column (legacy rows, direct
+    # ``Model.objects.create()``, fixtures, manual SQL all store ``""``). A
+    # non-null SDL would turn that ``None`` into a top-level "Cannot return null
+    # for non-nullable field" error, so the annotation must be ``<object> | None``
+    # to match what the resolver can actually return (spec-037 Decision 4).
+    # ``Meta.required_overrides`` (``force_nullable=False``) is the explicit
+    # opt-in for a caller asserting a stronger non-empty invariant.
+    file_effective_null = True if force_nullable is None else force_nullable
     return output_type | None if file_effective_null else output_type
 
 

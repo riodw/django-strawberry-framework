@@ -295,7 +295,7 @@ def _scalar_input_annotation(field: models.Field, type_name: str) -> Any:
     the required/optional rule (spec-036 Decision 6; the documented
     ``force_nullable`` tri-state use). A ``FileField`` / ``ImageField`` never
     reaches this helper: the caller maps it to the ``Upload`` scalar in its own
-    branch (TODO-ALPHA-037-0.0.11).
+    branch (spec-037).
     """
     return convert_scalar(field, type_name, force_nullable=False)
 
@@ -450,7 +450,7 @@ def build_mutation_input(
     honored, not clobbered. ``mutations/sets.py`` wires it from
     ``Meta.input_class`` / ``Meta.partial_input_class``; a direct caller may pass
     it explicitly. File/image columns now participate in this skip like any
-    scalar (TODO-ALPHA-037-0.0.11 lifted the spec-036 CR-6 carve-out).
+    scalar (spec-037 lifted the spec-036 CR-6 carve-out).
 
     ``shape`` is the precomputed ``MutationInputShape`` (DRY-1): the bind passes
     the one it already computed for the cache key so the selected fields + type
@@ -478,7 +478,7 @@ def build_mutation_input(
             )
         elif isinstance(field, (models.FileField, models.ImageField)):
             # A ``FileField`` / ``ImageField`` maps to Strawberry's ``Upload``
-            # scalar (TODO-ALPHA-037-0.0.11), NOT the read-side ``str`` (``SCALAR_MAP``
+            # scalar (spec-037), NOT the read-side ``str`` (``SCALAR_MAP``
             # stays ``str`` for the filter-input path only). A file/image column is a
             # SCALAR input, so the python attr is the plain field name (never
             # ``<name>_id`` - that is the FK relation scheme). The triple falls

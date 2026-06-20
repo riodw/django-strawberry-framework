@@ -1681,7 +1681,11 @@ class _SubImageField(models.ImageField):
 
 
 def test_convert_field_output_filefield_to_djangofiletype():
-    """A ``FileField`` resolves to ``DjangoFileType`` via ``FIELD_OUTPUT_TYPE_MAP``."""
+    """A ``FileField`` resolves to ``DjangoFileType`` via ``FIELD_OUTPUT_TYPE_MAP``.
+
+    The map identity is ``DjangoFileType``; ``convert_field_output`` widens it to
+    the default-nullable ``DjangoFileType | None`` (spec-037 Decision 4).
+    """
 
     class _FileOwner(models.Model):
         attachment = models.FileField()
@@ -1691,12 +1695,15 @@ def test_convert_field_output_filefield_to_djangofiletype():
             app_label = _unique_app_label("test_filefield_output")
 
     field = _FileOwner._meta.get_field("attachment")
-    assert convert_field_output(field, "OwnerType") is DjangoFileType
+    assert convert_field_output(field, "OwnerType") == (DjangoFileType | None)
     assert _field_output_type_for(field) is DjangoFileType
 
 
 def test_convert_field_output_imagefield_to_djangoimagetype():
-    """An ``ImageField`` resolves to ``DjangoImageType`` via ``FIELD_OUTPUT_TYPE_MAP``."""
+    """An ``ImageField`` resolves to ``DjangoImageType`` via ``FIELD_OUTPUT_TYPE_MAP``.
+
+    Widened to the default-nullable ``DjangoImageType | None`` (spec-037 Decision 4).
+    """
 
     class _ImageOwner(models.Model):
         preview = models.ImageField()
@@ -1706,7 +1713,7 @@ def test_convert_field_output_imagefield_to_djangoimagetype():
             app_label = _unique_app_label("test_imagefield_output")
 
     field = _ImageOwner._meta.get_field("preview")
-    assert convert_field_output(field, "OwnerType") is DjangoImageType
+    assert convert_field_output(field, "OwnerType") == (DjangoImageType | None)
 
 
 def test_field_output_map_mro_precedence_image_subclass_wins():
@@ -1726,7 +1733,7 @@ def test_field_output_map_mro_precedence_image_subclass_wins():
 
     field = _SubImageOwner._meta.get_field("preview")
     assert _field_output_type_for(field) is DjangoImageType
-    assert convert_field_output(field, "OwnerType") is DjangoImageType
+    assert convert_field_output(field, "OwnerType") == (DjangoImageType | None)
 
 
 def test_convert_field_output_file_image_nullable_by_default():

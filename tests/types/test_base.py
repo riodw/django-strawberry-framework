@@ -1592,7 +1592,7 @@ def test_resolved_relation_annotation_nullable_fk_widens_to_optional(monkeypatch
 # ``null`` (and a relation field) for the override-applies and validation
 # cases. ``text_value`` is a non-null column, ``note`` a nullable one (the
 # two directions the spec test plan names); ``partner`` is a relation field
-# for the scalar-only-scope reject. ``_unique_override_app_label`` namespaces
+# for the non-relation-scope reject. ``_unique_override_app_label`` namespaces
 # each synthetic model so Django's app registry does not collide across tests.
 # ---------------------------------------------------------------------------
 
@@ -1735,7 +1735,7 @@ def test_override_consumer_authored_field_raises():
 
 
 def test_override_relation_field_raises():
-    """A relation field name raises - scalar-only scope (Decision 10)."""
+    """A relation field name raises - non-relation scope (Decision 10)."""
     with pytest.raises(ConfigurationError, match="relation field"):
         _make_override_type(
             _make_override_model(),

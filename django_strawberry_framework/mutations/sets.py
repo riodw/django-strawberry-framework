@@ -62,7 +62,7 @@ from .inputs import (
     payload_object_slot,
     relation_input_annotation,
 )
-from .permissions import DjangoModelPermission
+from .permissions import _PERMISSION_ASYNC_RECOURSE, DjangoModelPermission
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from django.db import models
@@ -557,11 +557,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
                 owner=permission_class.__name__,
                 method="has_permission",
                 context="mutation",
-                recourse=(
-                    "A DjangoMutation runs its permission check synchronously, so it cannot "
-                    "await an async permission hook; redefine has_permission / "
-                    "check_permission as a sync method returning a bool."
-                ),
+                recourse=_PERMISSION_ASYNC_RECOURSE,
             )
             if not allowed:
                 return False

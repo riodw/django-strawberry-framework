@@ -93,6 +93,7 @@ from ..utils.querysets import (
 )
 from ..utils.relations import is_forward_many_to_many
 from .inputs import NON_FIELD_ERROR_KEY, FieldError, payload_object_slot
+from .permissions import _PERMISSION_ASYNC_RECOURSE
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
 # async ``get_queryset`` is met inside the (sync) ORM pipeline. The whole
@@ -104,20 +105,6 @@ _MUTATION_ASYNC_RECOURSE = (
     "A DjangoMutation runs its ORM pipeline synchronously (under one "
     "sync_to_async call on the async surface), so it cannot await an async "
     "get_queryset hook; redefine the target type's get_queryset as a sync method."
-)
-
-# The recourse appended to a ``SyncMisuseError`` raised when a permission hook
-# (``check_permission`` / a ``permission_classes`` entry's ``has_permission``)
-# returns a coroutine. Write authorization runs synchronously in the same sync
-# pipeline (spec-036 Decision 15), so an async permission hook can never be
-# awaited here - and silently treating its truthy coroutine as "allow" is an
-# authorization BYPASS (feedback - async permission bypass). It is rejected
-# loud, the same discipline ``apply_type_visibility_sync`` applies to an async
-# ``get_queryset``.
-_PERMISSION_ASYNC_RECOURSE = (
-    "A DjangoMutation runs its permission check synchronously, so it cannot await "
-    "an async permission hook; redefine has_permission / check_permission as a sync "
-    "method returning a bool."
 )
 
 

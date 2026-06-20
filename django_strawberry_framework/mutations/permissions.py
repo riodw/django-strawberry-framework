@@ -40,6 +40,21 @@ _OPERATION_PERMISSION_ACTION: dict[str, str] = {
     "delete": "delete",
 }
 
+# The recourse appended to a ``SyncMisuseError`` raised when a permission hook
+# (``check_permission`` / a ``permission_classes`` entry's ``has_permission``)
+# returns a coroutine. Write authorization runs synchronously in the same sync
+# pipeline (spec-036 Decision 15), so an async permission hook can never be
+# awaited - and silently treating its truthy coroutine as "allow" is an
+# authorization BYPASS (feedback - async permission bypass). Shared by both
+# enforcement seams - the resolver's ``_authorize_or_raise`` (``check_permission``)
+# and ``DjangoMutation.check_permission`` (each ``has_permission``) - so the
+# wording cannot drift between them.
+_PERMISSION_ASYNC_RECOURSE = (
+    "A DjangoMutation runs its permission check synchronously, so it cannot await "
+    "an async permission hook; redefine has_permission / check_permission as a sync "
+    "method returning a bool."
+)
+
 
 class DjangoModelPermission:
     """Default write-authorization: require the Django ``add`` / ``change`` / ``delete`` perm.

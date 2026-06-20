@@ -32,6 +32,7 @@ from strawberry import UNSET, relay
 
 from ..conf import settings
 from ..exceptions import ConfigurationError
+from ..utils.input_values import is_inactive_value
 from ..utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
@@ -440,7 +441,7 @@ def normalize_input_value(
     # caller MUST treat UNSET as "not supplied" - same as ``None`` - so
     # this entry point is the single defensive line every future caller
     # benefits from.
-    if raw_value is None or raw_value is UNSET:
+    if is_inactive_value(raw_value, unset_sentinel=UNSET):
         return None
 
     if isinstance(filter_instance, GlobalIDMultipleChoiceFilter):

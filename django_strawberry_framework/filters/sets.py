@@ -57,6 +57,7 @@ from ..utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
 )
+from ..utils.relations import is_many_side_relation_kind, relation_kind
 from .base import GlobalIDFilter, GlobalIDMultipleChoiceFilter, RelatedFilter
 from .inputs import _LOGIC_KEYS, LOOKUP_NAME_MAP, _field_specs, normalize_input_value
 
@@ -610,8 +611,14 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         choice between `ModelChoiceFilter` and `ModelMultipleChoiceFilter`
         and matches Decision 4's parity-floor split between the two
         Relay-aware primitives.
+
+        The many-side test is the shared cardinality classifier in
+        ``utils/relations.py`` (``is_many_side_relation_kind(relation_kind(field))``),
+        the same call the optimizer walker, the order set family, and the
+        relation resolvers route through, so the "rendered as a GraphQL list"
+        decision cannot drift between the filter family and its siblings.
         """
-        if getattr(field, "many_to_many", False) or getattr(field, "one_to_many", False):
+        if is_many_side_relation_kind(relation_kind(field)):
             return GlobalIDMultipleChoiceFilter
         return GlobalIDFilter
 
@@ -693,7 +700,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         via ``filter_instance.parent._owner_definition``. The owner is
         therefore not threaded as a parameter here.
         """
-        if input_value is None or input_value is UNSET:
+        if is_inactive_value(input_value, unset_sentinel=UNSET):
             return {}
         items = cls._iter_input_items(input_value)
         if items is None:
@@ -1064,7 +1071,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         rather than waiting for the sync recursion to discover it.
         """
         result: dict[int, dict[str, models.QuerySet]] = {}
-        if input_value is None or input_value is UNSET:
+        if is_inactive_value(input_value, unset_sentinel=UNSET):
             return result
         if _depth > cls._MAX_LOGIC_DEPTH:
             cls._raise_logic_depth_exceeded()
@@ -1088,7 +1095,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 else []
             )
             for child_input in children:
-                if child_input is None or child_input is UNSET:
+                if is_inactive_value(child_input, unset_sentinel=UNSET):
                     continue
                 result[id(child_input)] = await cls._derive_related_visibility_querysets_async(
                     child_input,
@@ -1192,7 +1199,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             ``cls._MAX_LOGIC_DEPTH``; a pathologically-deep input raises
             ``ConfigurationError`` instead of blowing the stack.
         """
-        if input_value is None or input_value is UNSET:
+        if is_inactive_value(input_value, unset_sentinel=UNSET):
             return
         if _depth > cls._MAX_LOGIC_DEPTH:
             cls._raise_logic_depth_exceeded()

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
+
+if TYPE_CHECKING:
+    from django.db import models
 
 RelationKind: TypeAlias = Literal[
     "many",
@@ -138,3 +141,20 @@ def instance_accessor(field: object) -> str:
     if get_accessor_name is not None:
         return get_accessor_name()
     return field.name  # type: ignore[attr-defined]
+
+
+def has_composite_pk(model: type[models.Model]) -> bool:
+    """Return whether ``model`` declares a Django 5.2+ composite primary key.
+
+    The FK-id-elision eligibility test (a forward single relation satisfying an
+    id-only child selection from the source row's local FK column) must fail
+    closed for a composite primary key: the source-row ``attname`` carries a
+    single-column id, but the target's ``pk`` is a tuple, so eliding would
+    compare the wrong shapes and surface wrong data. Single-sited here so the
+    optimizer's two elision deciders - ``FieldMeta.from_django_field`` (which
+    precomputes the ``fk_id_elision_eligible`` slot) and the walker's raw-field
+    fallback (``optimizer/walker.py::_can_elide_fk_id``) - cannot disagree on
+    what counts as composite.
+    """
+    pk_fields = getattr(model._meta, "pk_fields", None)
+    return pk_fields is not None and len(pk_fields) > 1

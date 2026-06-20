@@ -23,7 +23,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from ..exceptions import OptimizerError
-from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
+from ..utils.relations import (
+    has_composite_pk,
+    instance_accessor,
+    is_many_side_relation_kind,
+    relation_kind,
+)
 
 if TYPE_CHECKING:  # pragma: no cover
     from django.db import models
@@ -216,7 +221,7 @@ class FieldMeta:
                 and not is_m2m
                 and not is_o2m
                 and not auto_created
-                and not _has_composite_pk(related_model)
+                and not has_composite_pk(related_model)
             ),
             reverse_connector_attname=getattr(getattr(field, "field", None), "attname", None),
             auto_created=auto_created,
@@ -239,9 +244,3 @@ def _target_pk_name(model: type[models.Model] | None) -> str | None:
     if meta is None:
         return None
     return meta.pk.name
-
-
-def _has_composite_pk(model: type[models.Model]) -> bool:
-    """Return whether ``model`` declares a Django 5.2+ composite primary key."""
-    pk_fields = getattr(model._meta, "pk_fields", None)
-    return pk_fields is not None and len(pk_fields) > 1

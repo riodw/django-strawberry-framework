@@ -349,7 +349,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
 
         return _name_resolver(many_resolver, field_name)
 
-    if field_meta.one_to_one and field_meta.auto_created:
+    if kind == "reverse_one_to_one":
         related_does_not_exist = field_meta.related_model.DoesNotExist
 
         def reverse_one_to_one_resolver(root: Any, info: Info) -> Any:

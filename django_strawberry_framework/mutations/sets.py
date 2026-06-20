@@ -42,7 +42,7 @@ declared in this slice is inert: registered + bound at finalize, never resolved.
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any, get_args, get_origin
+from typing import TYPE_CHECKING, Any, get_origin
 
 import strawberry
 from strawberry import relay
@@ -51,6 +51,7 @@ from strawberry.types.base import StrawberryList
 from ..exceptions import ConfigurationError
 from ..registry import registry
 from ..utils.querysets import SyncMisuseError
+from ..utils.typing import unwrap_return_type
 from .inputs import (
     CREATE,
     PARTIAL,
@@ -820,14 +821,12 @@ def _annotation_core_is_global_id(annotation: Any) -> bool:
     ``relation_input_annotation`` emits ``relay.GlobalID`` (forward FK / OneToOne) or
     ``list[relay.GlobalID]`` (M2M) for a Relay-Node-primary target, and the related
     model's raw pk scalar (or ``list[<scalar>]``) otherwise. This peels the M2M ``list``
-    wrapper and compares the core against ``relay.GlobalID`` so both id shapes are
-    recognized from the one generator-emitted annotation (no separate Relay-vs-pk
-    re-derivation).
+    wrapper via ``utils/typing.py::unwrap_return_type`` (the shared one-layer list /
+    Strawberry-list peeler) and compares the core against ``relay.GlobalID`` so both id
+    shapes are recognized from the one generator-emitted annotation (no separate
+    Relay-vs-pk re-derivation).
     """
-    if get_origin(annotation) is list:
-        args = get_args(annotation)
-        return bool(args) and args[0] is relay.GlobalID
-    return annotation is relay.GlobalID
+    return unwrap_return_type(annotation) is relay.GlobalID
 
 
 def _strawberry_field_shape(field: Any) -> tuple[int, Any]:

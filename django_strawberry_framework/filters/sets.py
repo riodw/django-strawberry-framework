@@ -1331,10 +1331,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         # cookbook's contract for explicit callers.
         if requested_fields:
             for field_path in requested_fields:
-                method_name = f"check_{field_path.replace('__', '_')}_permission"
-                method = getattr(self, method_name, None)
-                if callable(method):
-                    method(request)
+                self._invoke_permission_method(self, field_path, request)
             return
         # No explicit set supplied - fall through to the active-input
         # variant. `_run_permission_checks` is a classmethod; route the

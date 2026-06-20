@@ -80,13 +80,6 @@ def _post_graphql(query: str):
     return Client().post("/graphql/", data={"query": query}, content_type="application/json")
 
 
-def _underlying_type(type_ref: dict) -> dict:
-    """Unwrap NON_NULL / LIST introspection wrappers to the named inner type."""
-    while type_ref.get("ofType") is not None:
-        type_ref = type_ref["ofType"]
-    return type_ref
-
-
 def _introspect_type(name: str, selection: str) -> dict:
     response = _post_graphql(
         f'query {{ __type(name: "{name}") {{ {selection} }} }}',
@@ -122,10 +115,11 @@ def test_media_specimen_output_sdl_is_default_nullable_over_http():
 @pytest.mark.django_db
 def test_populated_file_and_image_resolve_subfields_over_http(tmp_path):
     """A populated FileField / ImageField resolves name/size/url (+ width/height) over HTTP."""
+    image_bytes = _png_bytes()
     with override_settings(MEDIA_ROOT=str(tmp_path)):
         specimen = models.MediaSpecimen(label="m1")
         specimen.attachment.save("doc.txt", ContentFile(b"hello bytes"), save=False)
-        specimen.image.save("pic.png", ContentFile(_png_bytes()), save=False)
+        specimen.image.save("pic.png", ContentFile(image_bytes), save=False)
         specimen.save()
 
         response = _post_graphql(
@@ -153,6 +147,9 @@ def test_populated_file_and_image_resolve_subfields_over_http(tmp_path):
     assert row["attachment"]["url"].startswith("/media/")
     assert row["attachment"]["url"].endswith("doc.txt")
     assert row["image"]["name"].endswith("pic.png")
+    assert row["image"]["size"] == len(image_bytes)
+    assert row["image"]["url"].startswith("/media/")
+    assert row["image"]["url"].endswith("pic.png")
     assert row["image"]["width"] == _IMAGE_WIDTH
     assert row["image"]["height"] == _IMAGE_HEIGHT
 
@@ -187,15 +184,21 @@ def test_empty_required_file_resolves_to_null_over_http(tmp_path):
 
 
 def test_media_specimen_input_exposes_upload_over_http():
-    """The generated ``MediaSpecimenInput`` maps file/image columns to ``Upload`` over HTTP."""
+    """The generated ``MediaSpecimenInput`` maps file/image columns to NON_NULL ``Upload``."""
     input_type = _introspect_type(
         "MediaSpecimenInput",
         "inputFields { name type { kind name ofType { kind name } } }",
     )
     by_name = {f["name"]: f["type"] for f in input_type["inputFields"]}
-    # Required columns -> NON_NULL Upload.
-    assert _underlying_type(by_name["attachment"])["name"] == "Upload"
-    assert _underlying_type(by_name["image"])["name"] == "Upload"
+    # The columns are required (no null / blank / default), so the input field is
+    # ``Upload!``. Assert the DIRECT wrapper is NON_NULL -> Upload: a nullable
+    # ``Upload`` (kind SCALAR at the top) must NOT pass.
+    for field in ("attachment", "image"):
+        assert by_name[field] == {
+            "kind": "NON_NULL",
+            "name": None,
+            "ofType": {"kind": "SCALAR", "name": "Upload"},
+        }
 
 
 @pytest.mark.django_db

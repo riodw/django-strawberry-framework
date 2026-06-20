@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
 
-if TYPE_CHECKING:
+if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from django.db import models
 
 RelationKind: TypeAlias = Literal[

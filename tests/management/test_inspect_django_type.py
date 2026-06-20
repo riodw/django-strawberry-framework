@@ -45,10 +45,12 @@ from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.management.commands.inspect_django_type import (
+    Command,
     _matched_scalar_key,
     _render_annotation,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.converters import DjangoFileType, DjangoImageType
 
 
 @pytest.fixture(autouse=True)
@@ -139,6 +141,46 @@ def test_matched_scalar_key_names_supported_mro_ancestor():
     assert _matched_scalar_key(CustomTextField()) == "TextField"
     # A directly-supported field reports its own class (ancestor == concrete).
     assert _matched_scalar_key(models.CharField()) == "CharField"
+
+
+class _FakeOrigin:
+    def __init__(self, annotations):
+        self.__annotations__ = annotations
+
+
+class _FakeDefinition:
+    def __init__(self, annotations):
+        self.origin = _FakeOrigin(annotations)
+
+
+@pytest.mark.parametrize(
+    ("field_cls", "output_type"),
+    [(models.FileField, DjangoFileType), (models.ImageField, DjangoImageType)],
+)
+def test_scalar_row_names_file_output_converter_not_scalar_map(field_cls, output_type):
+    """A FileField / ImageField column's converter column names the output-map converter.
+
+    The read-side annotation for a file/image column is the structured
+    ``DjangoFileType`` / ``DjangoImageType`` output object, produced by
+    ``convert_field_output`` via ``FIELD_OUTPUT_TYPE_MAP`` -- NOT by
+    ``SCALAR_MAP`` (whose ``FileField`` / ``ImageField`` rows deliberately stay
+    ``str`` for the filter-input path). The converter column previously read
+    ``SCALAR_MAP[FileField]`` here, mis-attributing the converter to the row that
+    fired only on the filter path while the displayed type came from elsewhere.
+    The label must name the converter that actually produced the shown type, and
+    an ``ImageField`` (a ``FileField`` subclass) must resolve to ``DjangoImageType``
+    via the shared MRO walk, never silently falling through to ``DjangoFileType``.
+    """
+    field = field_cls()
+    field.name = "attachment"
+    definition = _FakeDefinition({"attachment": output_type | None})
+
+    graphql_type, nullable, converter = Command._scalar_row(definition, field)
+
+    assert graphql_type == f"{output_type.__name__}"
+    assert nullable == "yes"
+    assert converter == f"convert_field_output -> {output_type.__name__}"
+    assert "SCALAR_MAP" not in converter
 
 
 def test_render_annotation_renders_multi_member_union():

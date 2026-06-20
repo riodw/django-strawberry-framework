@@ -1483,15 +1483,18 @@ def _build_annotations(
 ) -> tuple[dict[str, Any], list[PendingRelation]]:
     """Build the annotation dict the Strawberry type decorator consumes.
 
-    Field-by-field dispatch: scalar entries in ``fields`` are routed
-    through ``convert_scalar``. Auto-synthesized relation entries always
-    record a ``PendingRelation`` and set the annotation to
+    Field-by-field dispatch: non-relation entries in ``fields`` are
+    routed through ``convert_field_output`` (the read-output entry point,
+    which sends a ``FileField`` / ``ImageField`` to the structured
+    ``DjangoFileType`` / ``DjangoImageType`` object and delegates every
+    other column unchanged to ``convert_scalar``). Auto-synthesized relation
+    entries always record a ``PendingRelation`` and set the annotation to
     ``PendingRelationAnnotation``; ``finalize_django_types()`` resolves
     them through ``registry.get(...)`` after every type has registered
     so multi-type / primary semantics apply uniformly. Consumer-authored
     fields short-circuit out of the synthesis loop on both branches: a
     name in ``consumer_authored_fields`` skips relation deferral at the
-    ``field.is_relation`` branch and skips ``convert_scalar`` at the
+    ``field.is_relation`` branch and skips ``convert_field_output`` at the
     scalar branch. See ``_consumer_assigned_fields`` for the four-corner
     override contract that populates ``consumer_authored_fields``. The
     caller pre-computes the field list with
@@ -1508,8 +1511,9 @@ def _build_annotations(
 
     Args:
         cls: The consumer-facing ``DjangoType`` subclass (its ``__name__``
-            threads into ``convert_scalar`` so generated choice enums
-            carry a stable name).
+            threads into ``convert_field_output`` (and on to
+            ``convert_scalar``) so generated choice enums carry a stable
+            name).
         fields: The Meta-filtered list of Django field objects.
         source_model: The Django model the type wraps. Used to resolve the
             primary-key attname when ``relay.Node`` suppression is active.
@@ -1538,8 +1542,9 @@ def _build_annotations(
 
     Raises:
         ConfigurationError: an unsupported scalar field type is encountered
-            (raised by ``convert_scalar``), or a selected relation has no
-            concrete related model to map to a GraphQL type.
+            (raised by ``convert_scalar`` via ``convert_field_output``), or a
+            selected relation has no concrete related model to map to a
+            GraphQL type.
     """
     annotations: dict[str, Any] = {}
     pending: list[PendingRelation] = []

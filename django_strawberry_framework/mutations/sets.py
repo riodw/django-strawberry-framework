@@ -41,7 +41,6 @@ declared in this slice is inert: registered + bound at finalize, never resolved.
 
 from __future__ import annotations
 
-import inspect
 from typing import TYPE_CHECKING, Any, get_origin
 
 import strawberry
@@ -50,7 +49,7 @@ from strawberry.types.base import StrawberryList
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
-from ..utils.querysets import SyncMisuseError
+from ..utils.querysets import reject_async_in_sync_context
 from ..utils.typing import unwrap_return_type
 from .inputs import (
     CREATE,
@@ -547,21 +546,23 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         """
         meta = type(self)._mutation_meta
         for permission_class in meta.permission_classes:
-            allowed = permission_class().has_permission(
-                info,
-                type(self),
-                operation,
-                data,
-                instance,
+            allowed = reject_async_in_sync_context(
+                permission_class().has_permission(
+                    info,
+                    type(self),
+                    operation,
+                    data,
+                    instance,
+                ),
+                owner=permission_class.__name__,
+                method="has_permission",
+                context="mutation",
+                recourse=(
+                    "A DjangoMutation runs its permission check synchronously, so it cannot "
+                    "await an async permission hook; redefine has_permission / "
+                    "check_permission as a sync method returning a bool."
+                ),
             )
-            if inspect.iscoroutine(allowed):
-                allowed.close()
-                raise SyncMisuseError(
-                    f"{permission_class.__name__}.has_permission returned a coroutine in a "
-                    "sync mutation context. A DjangoMutation runs its permission check "
-                    "synchronously, so it cannot await an async permission hook; redefine "
-                    "has_permission / check_permission as a sync method returning a bool.",
-                )
             if not allowed:
                 return False
         return True

@@ -67,7 +67,6 @@ Slice 4, NOT this slice.
 from __future__ import annotations
 
 import datetime
-import inspect
 from enum import Enum
 from typing import Any
 
@@ -87,7 +86,11 @@ from ..optimizer.extension import (
 from ..registry import registry
 from ..relay import GlobalIDDecode, decode_model_global_id
 from ..utils.inputs import graphql_camel_name
-from ..utils.querysets import SyncMisuseError, apply_type_visibility_sync, initial_queryset
+from ..utils.querysets import (
+    apply_type_visibility_sync,
+    initial_queryset,
+    reject_async_in_sync_context,
+)
 from ..utils.relations import is_forward_many_to_many
 from .inputs import NON_FIELD_ERROR_KEY, FieldError, payload_object_slot
 
@@ -1028,13 +1031,13 @@ def _authorize_or_raise(
     discipline. The async-``has_permission`` case is rejected one level down, in
     ``check_permission`` itself.
     """
-    allowed = mutation_cls().check_permission(info, operation, data, instance)
-    if inspect.iscoroutine(allowed):
-        allowed.close()
-        raise SyncMisuseError(
-            f"{mutation_cls.__name__}.check_permission returned a coroutine in a sync "
-            f"mutation context. {_PERMISSION_ASYNC_RECOURSE}",
-        )
+    allowed = reject_async_in_sync_context(
+        mutation_cls().check_permission(info, operation, data, instance),
+        owner=mutation_cls.__name__,
+        method="check_permission",
+        context="mutation",
+        recourse=_PERMISSION_ASYNC_RECOURSE,
+    )
     if not allowed:
         raise GraphQLError(
             f"Not authorized to {operation} {mutation_cls._primary_type.__name__}.",

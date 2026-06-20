@@ -88,6 +88,7 @@ from ..registry import registry
 from ..relay import GlobalIDDecode, decode_model_global_id
 from ..utils.inputs import graphql_camel_name
 from ..utils.querysets import SyncMisuseError, apply_type_visibility_sync, initial_queryset
+from ..utils.relations import is_forward_many_to_many
 from .inputs import NON_FIELD_ERROR_KEY, FieldError, payload_object_slot
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
@@ -306,7 +307,7 @@ def _relation_field_index(model: type) -> tuple[dict[str, Any], dict[str, Any]]:
     m2m_by_name: dict[str, Any] = {}
     for field in model._meta.get_fields():
         if getattr(field, "many_to_many", False):
-            if getattr(field, "concrete", False) or not field.auto_created:
+            if is_forward_many_to_many(field):
                 m2m_by_name[field.name] = field
         elif _is_forward_concrete_relation(field):
             fk_by_attr[f"{field.name}_id"] = field

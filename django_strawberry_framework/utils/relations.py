@@ -82,6 +82,29 @@ def is_many_side_relation_kind(kind: RelationKind | None) -> bool:
     return kind in MANY_SIDE_RELATION_KINDS
 
 
+def is_forward_many_to_many(field: object) -> bool:
+    """Return ``True`` for a forward, writable ``ManyToManyField``.
+
+    ``relation_kind`` maps BOTH a forward ``ManyToManyField`` and an
+    auto-created reverse M2M accessor (``ManyToManyRel``) to ``"many"`` -
+    cardinality-wise they are identical, so the classifier cannot tell them
+    apart. The mutation surfaces need the finer distinction: only a forward,
+    writable M2M is an editable column a write can set / index. A forward
+    ``ManyToManyField`` is ``concrete`` (equivalently, not ``auto_created``);
+    the reverse accessor is ``auto_created`` and not ``concrete``.
+
+    Single-sited here so the predicate cannot drift between the two mutation
+    surfaces that select editable M2M fields - the input generator
+    (``mutations/inputs.py::_select_editable_fields``) and the relation-field
+    index (``mutations/resolvers.py::_index_relation_fields``). ``getattr``
+    defaults defend against field shapes that omit a flag, matching
+    ``relation_kind``'s read contract.
+    """
+    return bool(getattr(field, "many_to_many", False)) and (
+        bool(getattr(field, "concrete", False)) or not getattr(field, "auto_created", False)
+    )
+
+
 def instance_accessor(field: object) -> str:
     """Return the attribute name relation rows are reached through on an instance.
 

@@ -11,7 +11,7 @@ Editing this board: `KANBAN.md` is a rendered artifact, not a source. The source
 Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
 
 - `<STATUS>` — the card workflow state: `BACKLOG` (unscheduled investigation / strategic-differentiation candidate), `TODO` (committed to a milestone, not yet active), `WIP` (actively being worked), or `DONE` (shipped). Updated when the card moves between workflow states. Blocking is not part of the workflow status; blocked cards render a derived `blocked` badge from unfinished `blocked_by` references and stay in their normal planning column.
-- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-045-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-058-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
+- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-045-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-059-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
 - `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is being tracked (everything else; scheduled cards are ordered by planned ship version, and backlog cards sort after the scheduled board). **Unlike status, milestone, and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
 - `X.Y.Z` — the package version the card shipped in (`DONE` cards), is planned to ship in (scheduled cards), or is provisionally bucketed under (`BACKLOG` cards). Alpha cards span `0.0.6` through `0.0.14` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Backlog cards may use post-`1.0.0` buckets as ordering placeholders; they stay unscheduled until promoted to `TODO`.
 
@@ -81,12 +81,12 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**63.8% complete** toward `1.0.0` - 37 of 58 cards done (65.9% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**62.7% complete** toward `1.0.0` - 37 of 59 cards done (64.4% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
 | Alpha (pre-0.1.0) | 37/44 (84.1%) | 83.8% |
-| Beta (pre-1.0.0) | 0/13 (0.0%) | 0.0% |
+| Beta (pre-1.0.0) | 0/14 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
 To complete the Alpha (pre-0.1.0) milestone: **84.1%**.
@@ -334,7 +334,7 @@ planned
 - [ ] Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
 - [ ] `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
 - [ ] Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
-- [ ] Migration guide (`TODO-BETA-055-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
+- [ ] Migration guide (`TODO-BETA-056-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
 
 #### Verified in upstream
 
@@ -343,7 +343,7 @@ planned
 #### Architectural posture
 
 - The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`][goal] non-goal "a thin wrapper around `strawberry-graphql-django`".
-- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-055-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
+- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-056-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
 
 #### Why it matters
 
@@ -358,8 +358,8 @@ planned
 
 #### Card references
 
-- Related: Migration guide (`TODO-BETA-055-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-055-0.1.6` - Migration and adoption guides
-- Related: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-055-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-055-0.1.6` - Migration and adoption guides
+- Related: Migration guide (`TODO-BETA-056-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-056-0.1.6` - Migration and adoption guides
+- Related: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-056-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-056-0.1.6` - Migration and adoption guides
 
 <a id="debug_toolbar_middleware"></a>
 ### [TODO-ALPHA-042-0.0.14 - Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
@@ -732,7 +732,7 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 #### Why it matters
 
 - `Meta.search_fields` is one of the five django-graphene-filters Layer-3 Meta keys explicitly listed in [`GOAL.md`][goal] alongside `filterset_class`, `orderset_class`, `aggregate_class`, and `fields_class`. Without it the package cannot claim full DGF parity at 1.0.0.
-- Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-052-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap.
+- Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-053-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap.
 
 #### Dependencies
 
@@ -751,7 +751,7 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 - Related: Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-050-0.1.3`). -> `TODO-BETA-050-0.1.3` - Layer 3 Meta key promotion
 - Dependency: planned; gated on `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) -> `DONE-030-0.0.9` - `DjangoConnectionField`
 - Dependency: `DONE-030-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields. -> `DONE-030-0.0.9` - `DjangoConnectionField`
-- Related: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-052-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap. -> `TODO-BETA-052-0.1.5` - Fakeshop GraphQL schema activation
+- Related: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-053-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap. -> `TODO-BETA-053-0.1.5` - Fakeshop GraphQL schema activation
 - Related: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-027-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="postgres_full_text_search_filter_primitives"></a>
@@ -907,8 +907,74 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - Do not move a key from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` until the pipeline applies it end-to-end.
 - mechanical bookkeeping: move keys from `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` as each subsystem lands end-to-end. The real work lives in the subsystem cards, not here.
 
+<a id="opt_in_node_sentinel_redaction_tier_metaredaction_mode"></a>
+### [TODO-BETA-051-0.1.4 - Opt-in node-sentinel redaction tier (`Meta.redaction_mode`)](KANBAN.html#opt_in_node_sentinel_redaction_tier_metaredaction_mode)
+
+- Priority: Medium
+- Parity: ⚛️ graphene-django (Required)
+- Severity: Medium
+- Status: Needs spec
+- Relative size: L
+- Labels: `layer-3`, `permissions`, `public-api`, `security`
+
+#### Predicted files
+
+- `django_strawberry_framework/permissions/` (planned)
+- [`django_strawberry_framework/types/`](django_strawberry_framework/types/)
+
+#### Planning note
+
+Strawberry port of graphene-django's node-level sentinel redaction — the third redaction tier the package deferred in spec-034 Decision 6 (row-exclusion) and re-confirmed as a `FieldSet` Non-goal (`TODO-BETA-046`). Upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes it as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden row so a non-null FK to a hidden target still resolves. This card recreates that surface behind an explicit per-`DjangoType` opt-in so a django-graphene-filters consumer relying on `isRedacted` / sentinel masking can port verbatim, without disturbing the default row-narrowing model.
+
+#### Dependencies
+
+- `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
+- `DONE-034-0.0.10` - Permissions subsystem
+
+#### Scope
+
+- Opt-in switch: introduce `Meta.redaction_mode` on `DjangoType` with `"exclude"` (default — the shipped row-narrowing behavior, unchanged) and `"sentinel"` (this tier). The two are mutually exclusive per type; the spec decides whether they may be mixed across a relation chain. The `"exclude"` default leaves every existing schema byte-for-byte unaffected.
+- Sentinel chain: in `"sentinel"` mode, a parent row that references a hidden non-null target yields a `pk=0` sentinel object (a `_make_sentinel` analog) instead of excluding the parent row, so the non-null FK still resolves — matching upstream's existence-preserving semantics.
+- SDL surface: expose `isRedacted: Boolean` on types in `"sentinel"` mode, resolving `True` for sentinel instances and `False` otherwise (the upstream `resolve_is_redacted` contract).
+- Node resolution: override the Relay `get_node` seam (shipped in `DONE-032-0.0.9`) so resolving a hidden id yields the sentinel in `"sentinel"` mode rather than `None`.
+- Reconcile with the cascade: in `"sentinel"` mode the masked relation targets must surface as sentinels rather than being narrowed out by `apply_cascade_permissions` (`DONE-034-0.0.10`). The spec resolves the tension — likely: the cascade narrows top-level rows as it does today, and sentinels appear only for non-null relation targets of rows that already survived the cascade. This is the core design decision.
+- Existence-leak posture: state the trade-off explicitly — sentinel masking re-introduces the existence signal that row-exclusion (spec-034 Decision 6) was chosen to avoid. The opt-in default keeps the safe behavior; choosing `"sentinel"` is a conscious consumer acceptance of the leak in exchange for django-graphene-filters parity.
+
+#### Definition of done
+
+- [ ] Add `docs/spec-node-sentinel.md` covering the `Meta.redaction_mode` switch, sentinel-chain semantics, the `isRedacted` SDL contract, the `get_node` override, and reconciliation with `apply_cascade_permissions`; state the existence-leak trade-off and why the tier is opt-in.
+- [ ] Implement the sentinel-row factory and node-resolution hook (extending the `permissions/` surface) plus the `isRedacted` field and `Meta.redaction_mode` wiring on `DjangoType`.
+- [ ] `Meta.redaction_mode` defaults to `"exclude"`; all existing schemas and tests stay unchanged under the default. The `"sentinel"` machinery is wired only when the mode is set.
+- [ ] Tests mirror the source one-to-one; live HTTP coverage exercises a hidden non-null FK target resolving to a `pk=0` sentinel with `isRedacted = true`, a normal row reading `isRedacted = false`, and `get_node` on a hidden id returning the sentinel in `"sentinel"` mode vs `null` in `"exclude"` mode.
+- [ ] Composability tests: `"sentinel"` mode + `apply_cascade_permissions` — the top-level cascade still narrows rows; sentinels appear only for relation targets of surviving rows (no row resurrection, no double counting).
+- [ ] Amend the `FieldSet` (`TODO-BETA-046`) Architectural-posture note so its node-sentinel "Non-goal" cross-references this card as the realized opt-in tier.
+
+#### Verified in upstream
+
+- ⚛️ `graphene_django` — `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes node-sentinel redaction as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden non-null FK target. This card ports that surface behind an opt-in.
+
+#### Architectural posture
+
+- This card is the explicit, opt-in reversal of spec-034 Decision 6. The default stays row-exclusion — the existence-leak-free model; this tier exists only so the one public django-graphene-filters behavior with no analog (`isRedacted` / sentinel FK masking) is portable for consumers who explicitly choose it. It does not become the default and does not weaken the cascade for `"exclude"` schemas.
+
+#### Why it matters
+
+- Closes the single remaining django-graphene-filters public-surface gap recorded in `docs/feedback.md` (finding P2): node-sentinel redaction was the only public upstream behavior with no equivalent and no card. This converts a buried non-goal into a tracked, opt-in parity feature.
+- Lets a graphene-django consumer relying on `isRedacted` / sentinel FK masking migrate verbatim instead of re-architecting around row-exclusion.
+
+#### Dependencies
+
+- `DONE-034-0.0.10` (Permissions subsystem) — extends the `apply_cascade_permissions` / `get_queryset` cascade; this tier reconciles sentinels with cascade narrowing.
+- `DONE-032-0.0.9` (Full Relay story) — overrides the shipped `get_node` node-resolution seam.
+
+#### Card references
+
+- Dependency: `DONE-034-0.0.10` (Permissions subsystem) — extends the `apply_cascade_permissions` / `get_queryset` cascade; this tier reconciles sentinels with cascade narrowing. -> `DONE-034-0.0.10` - Permissions subsystem
+- Dependency: `DONE-032-0.0.9` (Full Relay story) — overrides the shipped `get_node` node-resolution seam. -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
+- Related: Amends the `FieldSet` node-sentinel Non-goal note (`TODO-BETA-046`) — this card is the realized opt-in tier that note defers to. -> `TODO-BETA-046-0.1.1` - `FieldSet`
+
 <a id="stable_choice_enum_naming_override"></a>
-### [TODO-BETA-051-0.1.4 - Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
+### [TODO-BETA-052-0.1.4 - Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
 
 - Priority: Low-medium
 - Severity: Medium
@@ -952,7 +1018,7 @@ planned
 - Preserve enum reuse by `(model, field_name)` while making the published schema name explicit when consumers need it.
 
 <a id="fakeshop_graphql_schema_activation"></a>
-### [TODO-BETA-052-0.1.5 - Fakeshop GraphQL schema activation](KANBAN.html#fakeshop_graphql_schema_activation)
+### [TODO-BETA-053-0.1.5 - Fakeshop GraphQL schema activation](KANBAN.html#fakeshop_graphql_schema_activation)
 
 - Priority: Medium
 - Severity: Medium
@@ -989,7 +1055,7 @@ blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-050-0.1.3` (Layer 3
 - Blocked by: blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-050-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-050-0.1.3` - Layer 3 Meta key promotion
 
 <a id="product_catalog_layer_3_http_graphql_tests"></a>
-### [TODO-BETA-053-0.1.5 - Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
+### [TODO-BETA-054-0.1.5 - Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
 
 - Priority: Medium
 - Severity: Medium
@@ -1007,7 +1073,7 @@ blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-050-0.1.3` (Layer 3
 - bounded test suite: live `/graphql/` acceptance tests for the activated product-catalog schema, reusing the library app's placement + schema-reload pattern.
 
 <a id="mutation_transactions_and_idempotency"></a>
-### [TODO-BETA-054-0.1.6 - Mutation transactions and idempotency](KANBAN.html#mutation_transactions_and_idempotency)
+### [TODO-BETA-055-0.1.6 - Mutation transactions and idempotency](KANBAN.html#mutation_transactions_and_idempotency)
 
 - Priority: High
 - Severity: Major
@@ -1017,9 +1083,9 @@ blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-050-0.1.3` (Layer 3
 
 #### Predicted files
 
-- `django_strawberry_framework/mutations/` (planned)
+- [`django_strawberry_framework/mutations/`](django_strawberry_framework/mutations/)
 - [`examples/fakeshop/test_query/`](examples/fakeshop/test_query/)
-- `tests/mutations/` (planned)
+- [`tests/mutations/`](tests/mutations/)
 
 #### Planning note
 
@@ -1075,7 +1141,7 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 - Dependency: Builds on the core DjangoMutation lifecycle and generated input envelope from TODO-ALPHA-036. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
 
 <a id="migration_and_adoption_guides"></a>
-### [TODO-BETA-055-0.1.6 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
+### [TODO-BETA-056-0.1.6 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
 
 - Priority: Medium
 - Severity: Medium
@@ -1110,7 +1176,7 @@ planned
 - Add concise notes for DRF / django-filter users mapping serializers/filtersets/orders into the planned Layer 3 surfaces.
 
 <a id="adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines"></a>
-### [TODO-BETA-056-0.1.7 - Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
+### [TODO-BETA-057-0.1.7 - Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
 
 - Priority: Medium-high
 - Severity: Medium
@@ -1158,7 +1224,7 @@ planned
 - Related: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`). -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="optimizer_explain_mode"></a>
-### [TODO-BETA-057-0.1.7 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
+### [TODO-BETA-058-0.1.7 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
 
 - Priority: High
 - Severity: Medium
@@ -1216,7 +1282,7 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 - Original backlog score: Realistic 10/10, Impact 8/10, Difficulty 2/10; bang-for-buck score 40.0.
 
 <a id="stable_release_api_freeze_cleanup_verification_beta_stable"></a>
-### [TODO-STABLE-058-1.0.0 - Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
+### [TODO-STABLE-059-1.0.0 - Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
 
 - Priority: Critical
 - Severity: Major
@@ -1235,7 +1301,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Definition of done
 
-- [ ] Every other Beta card (`TODO-BETA-046-0.1.1` through `TODO-BETA-055-0.1.6` plus `TODO-BETA-050-0.1.3` and `TODO-BETA-053-0.1.5`) is in `DONE`.
+- [ ] Every other Beta card (`TODO-BETA-046-0.1.1` through `TODO-BETA-056-0.1.6` plus `TODO-BETA-050-0.1.3` and `TODO-BETA-054-0.1.5`) is in `DONE`.
 - [ ] API surface audit: top-level `__all__` confirmed stable; every public symbol documented; no `# experimental` markers in shipped code; no `_private` symbols accidentally referenced from docs.
 - [ ] SemVer policy committed in CHANGELOG header: every release after `1.0.0` follows MAJOR / MINOR / PATCH rules strictly; pre-`0.1.0` deprecation shims removed entirely.
 - [ ] Full async + sync coverage matrix validated; no `sync_to_async` workarounds remain on any resolver path.
@@ -1266,10 +1332,10 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Card references
 
-- Related: Every other Beta card (`TODO-BETA-046-0.1.1` through `TODO-BETA-055-0.1.6` plus `TODO-BETA-050-0.1.3` and `TODO-BETA-053-0.1.5`) is in `DONE`. -> `TODO-BETA-046-0.1.1` - `FieldSet`
-- Related: Every other Beta card (`TODO-BETA-046-0.1.1` through `TODO-BETA-055-0.1.6` plus `TODO-BETA-050-0.1.3` and `TODO-BETA-053-0.1.5`) is in `DONE`. -> `TODO-BETA-055-0.1.6` - Migration and adoption guides
-- Related: Every other Beta card (`TODO-BETA-046-0.1.1` through `TODO-BETA-055-0.1.6` plus `TODO-BETA-050-0.1.3` and `TODO-BETA-053-0.1.5`) is in `DONE`. -> `TODO-BETA-050-0.1.3` - Layer 3 Meta key promotion
-- Related: Every other Beta card (`TODO-BETA-046-0.1.1` through `TODO-BETA-055-0.1.6` plus `TODO-BETA-050-0.1.3` and `TODO-BETA-053-0.1.5`) is in `DONE`. -> `TODO-BETA-053-0.1.5` - Product-catalog Layer 3 HTTP GraphQL tests
+- Related: Every other Beta card (`TODO-BETA-046-0.1.1` through `TODO-BETA-056-0.1.6` plus `TODO-BETA-050-0.1.3` and `TODO-BETA-054-0.1.5`) is in `DONE`. -> `TODO-BETA-046-0.1.1` - `FieldSet`
+- Related: Every other Beta card (`TODO-BETA-046-0.1.1` through `TODO-BETA-056-0.1.6` plus `TODO-BETA-050-0.1.3` and `TODO-BETA-054-0.1.5`) is in `DONE`. -> `TODO-BETA-056-0.1.6` - Migration and adoption guides
+- Related: Every other Beta card (`TODO-BETA-046-0.1.1` through `TODO-BETA-056-0.1.6` plus `TODO-BETA-050-0.1.3` and `TODO-BETA-054-0.1.5`) is in `DONE`. -> `TODO-BETA-050-0.1.3` - Layer 3 Meta key promotion
+- Related: Every other Beta card (`TODO-BETA-046-0.1.1` through `TODO-BETA-056-0.1.6` plus `TODO-BETA-050-0.1.3` and `TODO-BETA-054-0.1.5`) is in `DONE`. -> `TODO-BETA-054-0.1.5` - Product-catalog Layer 3 HTTP GraphQL tests
 
 ## Done
 
@@ -1313,7 +1379,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 #### Package files
 
-- `django_strawberry_framework/mutations/` (historical)
+- [`django_strawberry_framework/mutations/`](django_strawberry_framework/mutations/)
 - [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
 - [`tests/types/test_converters.py`](tests/types/test_converters.py)
 
@@ -1409,9 +1475,9 @@ planned
 
 #### Package files
 
-- `django_strawberry_framework/mutations/` (historical)
+- [`django_strawberry_framework/mutations/`](django_strawberry_framework/mutations/)
 - [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
-- `tests/mutations/` (historical)
+- [`tests/mutations/`](tests/mutations/)
 
 #### Planning note
 
@@ -1913,7 +1979,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - [x] Permission-aware Node lookup: `node(id:)` returns `null` for hidden rows; no existence leak via error timing.
 - [x] Six schema-validation diagnostics from Goal 6 raise `ConfigurationError` with the documented messages.
 - [x] `django_strawberry_framework.testing.relay` module exposes `global_id_for(type_cls, id)` and `decode_global_id(gid)`.
-- [x] The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-052-0.1.5`.
+- [x] The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-053-0.1.5`.
 - [x] 100% coverage across the new code paths; tests pin both happy paths and every validation failure.
 
 #### Verified in upstream
@@ -1990,7 +2056,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - Related: `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `DONE-028-0.0.8` - Ordering subsystem
 - Related: `DONE-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
 - Related: `DONE-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `DONE-034-0.0.10` - Permissions subsystem
-- Related: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-052-0.1.5`. -> `TODO-BETA-052-0.1.5` - Fakeshop GraphQL schema activation
+- Related: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-053-0.1.5`. -> `TODO-BETA-053-0.1.5` - Fakeshop GraphQL schema activation
 - Related: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`) -> `DONE-030-0.0.9` - `DjangoConnectionField`
 
 <a id="django_model_based_globalid_encoding"></a>

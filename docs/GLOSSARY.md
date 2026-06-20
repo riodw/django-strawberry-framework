@@ -795,7 +795,7 @@ Overrides the GraphQL type name (defaults to the Python class name).
 
 **Status:** shipped (`0.0.9`).
 
-Tuple / list of **scalar** field names whose GraphQL nullability is forced to nullable (`T` → `T | None`) regardless of the Django column's `null`. The companion [`Meta.required_overrides`](#metarequired_overrides) forces the opposite direction (`T | None` → `T`). Together they decouple a scalar field's GraphQL nullability from its database column without an `AlterField` migration or a consumer-authored annotation:
+Tuple / list of **non-relation** field names whose GraphQL nullability is forced to nullable (`T` → `T | None`) regardless of the Django column's `null`. The companion [`Meta.required_overrides`](#metarequired_overrides) forces the opposite direction (`T | None` → `T`). Together they decouple a non-relation field's GraphQL nullability from its database column without an `AlterField` migration or a consumer-authored annotation:
 
 ```python
 class NullabilityOverrideBookType(DjangoType):
@@ -808,14 +808,14 @@ class NullabilityOverrideBookType(DjangoType):
 
 The override threads a tri-state `force_nullable` into [Scalar field conversion](#scalar-field-conversion)'s `convert_scalar`, so the widening decision is computed once and applied uniformly across plain scalars, [choice enums](#choice-enum-generation) (the enum's nullability flips; its members are unchanged), `ArrayField` (the outer `list[inner]` nullability flips; the inner element nullability still follows `base_field.null`), and `HStoreField`.
 
-**Scalar-only scope.** Relation-field overrides are rejected (deferred — the many-side list-vs-element nullability ambiguity is its own design).
+**Non-relation scope.** The override applies to non-relation model fields — scalar columns and, as of `0.0.11`, the file/image output objects (`required_overrides` forces a non-null `DjangoFileType!`). Relation-field overrides are rejected (deferred — the many-side list-vs-element nullability ambiguity is its own design).
 
 **Validation at type creation** (every failure raises [`ConfigurationError`](#configurationerror) naming the field):
 
 - **unknown** — a name not on `model._meta` (mirrors the [`Meta.optimizer_hints`](#metaoptimizer_hints) typo guard).
 - **excluded** — a name not in the post-[`Meta.fields`](#metafields) / [`Meta.exclude`](#metaexclude) selected set (kept distinct from *unknown* so the [`Meta.exclude`](#metaexclude) contract is not collapsed).
 - **consumer-authored** — a name with a consumer annotation / `strawberry.field` assignment (the annotation already controls nullability per [Scalar field override semantics](#scalar-field-override-semantics)).
-- **relation** — a relation field name (scalar-only scope).
+- **relation** — a relation field name (non-relation scope).
 - **Relay-suppressed pk** — the pk on a [`relay.Node`](#metainterfaces)-shaped type (its nullability is the interface's `id: GlobalID!` contract).
 - **both-sets collision** — a name in both `nullable_overrides` and `required_overrides` (contradictory; raised at the shape stage).
 
@@ -889,9 +889,9 @@ Per-relation narrowing key for the relation-as-Connection upgrade. On a Relay-No
 
 **Status:** shipped (`0.0.9`).
 
-Tuple / list of **scalar** field names whose GraphQL nullability is forced to required (`T | None` → `T`) regardless of the Django column's `null`. It is the inverse-direction companion to [`Meta.nullable_overrides`](#metanullable_overrides); both share one tri-state `force_nullable` seam through [Scalar field conversion](#scalar-field-conversion), the same scalar-only scope, and the same type-creation validation (unknown / excluded / consumer-authored / relation / Relay-suppressed-pk targets and the both-sets collision all raise [`ConfigurationError`](#configurationerror)). See [`Meta.nullable_overrides`](#metanullable_overrides) for the full validation table and the choice / array / hstore behavior.
+Tuple / list of **non-relation** field names whose GraphQL nullability is forced to required (`T | None` → `T`) regardless of the Django column's `null`. It is the inverse-direction companion to [`Meta.nullable_overrides`](#metanullable_overrides); both share one tri-state `force_nullable` seam through [Scalar field conversion](#scalar-field-conversion), the same non-relation scope (scalar columns and, as of `0.0.11`, file/image output objects), and the same type-creation validation (unknown / excluded / consumer-authored / relation / Relay-suppressed-pk targets and the both-sets collision all raise [`ConfigurationError`](#configurationerror)). See [`Meta.nullable_overrides`](#metanullable_overrides) for the full validation table and the choice / array / hstore behavior.
 
-**`required_overrides` changes the GraphQL contract, not the data.** Declaring `required_overrides = ("x",)` renders `x` as `T!` but does NOT alter the Django column (`null=True` stays) or sanitize runtime values — a resolver returning a row with `x is None` hits a Strawberry non-null violation at query time. The consumer must guarantee the invariant at the resolver boundary (e.g. `.exclude(x__isnull=True)`), exactly as for any non-null GraphQL field backed by nullable storage. (Symmetrically, [`Meta.nullable_overrides`](#metanullable_overrides) is always safe — widening to `T | None` never violates a non-null contract.)
+**`required_overrides` changes the GraphQL contract, not the data.** Declaring `required_overrides = ("x",)` renders `x` as `T!` but does NOT alter the Django column (`null=True` stays) or sanitize runtime values — a resolver returning a row with `x is None` hits a Strawberry non-null violation at query time. The consumer must guarantee the invariant at the resolver boundary (e.g. `.exclude(x__isnull=True)`), exactly as for any non-null GraphQL field backed by nullable storage. On a file/image column it is also the opt-out from the **default-nullable** output object (spec-037 Decision 4): `required_overrides` renders `DjangoFileType!` / `DjangoImageType!` instead of the default `… | None`, with the same contract-not-data caveat — an empty stored file then trips the non-null violation. (Symmetrically, [`Meta.nullable_overrides`](#metanullable_overrides) is always safe — widening to `T | None` never violates a non-null contract.)
 
 **See also:** [`Meta.nullable_overrides`](#metanullable_overrides) · [Scalar field conversion](#scalar-field-conversion) · [Scalar field override semantics](#scalar-field-override-semantics) · [`ConfigurationError`](#configurationerror).
 
@@ -1182,7 +1182,7 @@ Shipped scalar support:
 - date / datetime / time fields → Python-native time types (note: ``DurationField`` is intentionally absent from the default map because Strawberry has no first-party scalar for ``datetime.timedelta``; register a custom scalar via ``SCALAR_MAP[DurationField] = MyDurationScalar``)
 - UUID fields → `uuid.UUID`
 - ``BinaryField`` is intentionally absent from the default map (no first-party Strawberry scalar for ``bytes``); the conventional plug is ``SCALAR_MAP[BinaryField] = strawberry.scalars.Base64``
-- file and image fields → a three-way split: on **read**, a `FileField` / `ImageField` column converts to a structured [`DjangoFileType`](#djangofiletype) / [`DjangoImageType`](#djangoimagetype) output object (via the new `FIELD_OUTPUT_TYPE_MAP`, kept off this shared map); the **filter / scalar-input** value stays `str` (the `FileField` / `ImageField` rows in `SCALAR_MAP` are unchanged); the **mutation input** is the [`Upload`](#upload-scalar) scalar
+- file and image fields → a three-way split: on **read**, a `FileField` / `ImageField` column converts to a structured [`DjangoFileType`](#djangofiletype) / [`DjangoImageType`](#djangoimagetype) output object — nullable by default in the SDL regardless of the column's `null` / `blank` (an empty stored file resolves to `null`) — via the new `FIELD_OUTPUT_TYPE_MAP`, kept off this shared map; the **filter / scalar-input** value stays `str` (the `FileField` / `ImageField` rows in `SCALAR_MAP` are unchanged); the **mutation input** is the [`Upload`](#upload-scalar) scalar
 - `JSONField` → `strawberry.scalars.JSON`
 - PostgreSQL `ArrayField` → typed `list[T]` (recursive through `field.base_field`; soft-registered, only when `django.contrib.postgres.fields` imports successfully; nested `ArrayField` and outer `choices` rejected with [`ConfigurationError`](#configurationerror))
 - PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered, only when `django.contrib.postgres.fields` imports successfully; outer `choices` rejected with [`ConfigurationError`](#configurationerror))
@@ -1258,7 +1258,7 @@ Adds these mappings to [Scalar field conversion](#scalar-field-conversion):
 - `JSONField` → `strawberry.scalars.JSON`
 - PostgreSQL `ArrayField` → typed `list[T]` (recursive through `field.base_field`)
 - PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered, only when `django.contrib.postgres.fields` imports successfully)
-- `FileField` / `ImageField` read output → structured [`DjangoFileType`](#djangofiletype) / [`DjangoImageType`](#djangoimagetype) objects (switched from `str` in `0.0.11` — breaking wire-format change, parallel to the `PositiveBigIntegerField` → `BigInt` `0.0.6` precedent; opt out per field with an `attachment: str` annotation override). The filter / scalar-input value stays `str`; the mutation input is the [`Upload`](#upload-scalar) scalar
+- `FileField` / `ImageField` read output → structured [`DjangoFileType`](#djangofiletype) / [`DjangoImageType`](#djangoimagetype) objects, nullable by default in the SDL regardless of the column's `null` / `blank` (an empty stored file resolves to `null`; `required_overrides` opts into a non-null object). Switched from `str` in `0.0.11` — breaking wire-format change, parallel to the `PositiveBigIntegerField` → `BigInt` `0.0.6` precedent; opt out of the structured object per field with an `attachment: str` annotation override. The filter / scalar-input value stays `str`; the mutation input is the [`Upload`](#upload-scalar) scalar
 
 **See also:** [Scalar field conversion](#scalar-field-conversion) · [`BigInt` scalar](#bigint-scalar).
 

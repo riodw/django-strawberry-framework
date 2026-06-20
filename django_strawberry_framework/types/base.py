@@ -1214,7 +1214,7 @@ def _selected_meta_targets(
     reject names not in the selected set (via the caller's family-specific
     ``excluded_error``, which receives the sorted excluded names). Returns the
     ``{name: field}`` selected map and the sorted target names; the
-    domain-specific per-name checks (consumer-authored, scalar-only, Relay-pk,
+    domain-specific per-name checks (consumer-authored, non-relation, Relay-pk,
     many-side) stay in the caller, which iterates the returned names.
 
     Keeping the unknown-vs-excluded distinction here means a future ``Meta.*``
@@ -1324,7 +1324,8 @@ def _validate_nullability_override_targets(
         if selected_by_name[name].is_relation:
             raise ConfigurationError(
                 f"{model.__name__}.Meta nullable_overrides/required_overrides names relation "
-                f"field {name!r}; nullability overrides are scalar-only for now. Relation-field "
+                f"field {name!r}; nullability overrides apply to non-relation model fields only "
+                "(scalar columns and file/image output objects). Relation-field "
                 "nullability override is deferred (see spec-029 Decision 10).",
             )
 
@@ -1521,13 +1522,16 @@ def _build_annotations(
             synthesized scalar annotation is suppressed so Strawberry's
             interface-supplied ``id: GlobalID!`` is not shadowed.
         nullable_overrides: Normalized ``Meta.nullable_overrides`` frozenset.
-            A selected scalar field named here is forced to ``T | None``
-            (``force_nullable=True`` into ``convert_scalar``) regardless of
-            ``field.null``.
+            A selected non-relation field named here is forced nullable
+            (``force_nullable=True`` into ``convert_field_output``) regardless of
+            the column's ``null`` / ``blank`` -- ``T | None`` for a scalar column,
+            ``<object> | None`` for a file/image column.
         required_overrides: Normalized ``Meta.required_overrides`` frozenset.
-            A selected scalar field named here is forced to ``T``
-            (``force_nullable=False``) regardless of ``field.null``. The two
-            sets are validated disjoint and scalar-only upstream.
+            A selected non-relation field named here is forced required
+            (``force_nullable=False``) regardless of the column -- ``T`` for a
+            scalar, the bare ``DjangoFileType`` / ``DjangoImageType`` for a
+            file/image column. The two sets are validated disjoint and
+            non-relation (relation targets are rejected) upstream.
 
     Returns:
         A tuple of ``(annotations, pending_relations)``.
@@ -1615,12 +1619,13 @@ def _build_annotations(
                 # column (spec-011 Decision 7 #"keeps every selected Django field including the primary key").
                 continue
             # Per-field nullability override tri-state (spec-029 Decision 7):
-            # membership in ``nullable_overrides`` forces ``T | None``,
-            # membership in ``required_overrides`` forces ``T``, and absence
-            # from both leaves ``None`` so ``convert_scalar`` honors
-            # ``field.null``. The two sets are validated to be disjoint and
-            # scalar-only in ``_validate_nullability_override_targets`` before
-            # this loop runs, so the elif is exhaustive and unambiguous.
+            # membership in ``nullable_overrides`` forces nullable, membership in
+            # ``required_overrides`` forces required, and absence from both leaves
+            # ``None`` so ``convert_field_output`` applies the column's own default
+            # (``field.null`` for a scalar, nullable-by-default for a file/image
+            # object). The two sets are validated to be disjoint and non-relation
+            # (relation targets rejected) in ``_validate_nullability_override_targets``
+            # before this loop runs, so the elif is exhaustive and unambiguous.
             if field.name in nullable_overrides:
                 force_nullable: bool | None = True
             elif field.name in required_overrides:

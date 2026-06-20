@@ -111,8 +111,9 @@ Revision history (kept inline so the spec is self-contained):
   ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream));
   **storage-safe nullable subfields** (`path` / `size` / `url` / `width` /
   `height` nullable; `name` non-null) so a non-filesystem backend or a vanished
-  file degrades to `null` rather than a GraphQL 500, and the `blank`-or-`null`
-  object nullability
+  file degrades to `null` rather than a GraphQL 500, and the default-nullable
+  object shape (file/image output is `<object> | None` by default to match the
+  empty-file resolver `None`)
   ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability));
   the `Upload` re-export from the package root — no `_PACKAGE_SCALAR_MAP` entry,
   since `Upload` is already in Strawberry's built-in scalar registry (the
@@ -202,7 +203,7 @@ vocabulary used throughout the spec:
 - [`Meta.nullable_overrides`][glossary-metanullable-overrides] /
   [`Meta.required_overrides`][glossary-metarequired-overrides] — the existing
   `force_nullable` tri-state in [`convert_scalar`][types-converters] that this
-  card's `blank`-aware file nullability composes with
+  card's default-nullable file output composes with
   ([Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)).
 - [`ConfigurationError`][glossary-configurationerror] — the validation exception
   the read path keeps raising for an unsupported field; the file/image branch
@@ -289,7 +290,8 @@ version-cut only.
     row.
   - [ ] [`types/base.py`][types-base]: `_build_annotations` calls the new
     `convert_field_output` wrapper for non-relation columns (replacing the direct
-    `convert_scalar` call) and applies the `blank`-aware object nullability.
+    `convert_scalar` call) and applies the default-nullable object shape
+    (file/image output is `| None` by default, independent of `blank` / `null`).
   - [ ] [`types/resolvers.py`][types-resolvers] / [`types/finalizer.py`][types-finalizer]:
     define `_attach_file_resolvers` in [`types/resolvers.py`][types-resolvers] and
     call it from the [`types/finalizer.py`][types-finalizer] loop that attaches
@@ -306,16 +308,18 @@ version-cut only.
     `attachment: str` keeps the legacy `str` shape and gets no generated resolver
     or object type
     ([Scalar field override semantics][glossary-scalar-field-override-semantics]).
-  - [ ] Output object nullability: a file column widens to
-    `DjangoFileType | None` when the column is `null=True` **or** `blank=True`
-    (an absent file is representable for a blank column), composing with the
+  - [ ] Output object nullability: a file/image column maps to
+    `DjangoFileType | None` **by default**, independent of `null` / `blank` (the
+    parent resolver returns `None` for an empty `FieldFile`, reachable even on a
+    `null=False, blank=False` column), composing with the
     [`Meta.nullable_overrides`][glossary-metanullable-overrides] /
     [`Meta.required_overrides`][glossary-metarequired-overrides]
-    `force_nullable` tri-state.
+    `force_nullable` tri-state — `required_overrides` (`force_nullable=False`)
+    is the opt-in to the stricter `DjangoFileType!` contract.
   - [ ] Package coverage: [`tests/types/test_converters.py`][test-types] (the
     card's named test file) — `FileField` → `DjangoFileType`, `ImageField` →
-    `DjangoImageType` via `FIELD_OUTPUT_TYPE_MAP`, MRO precedence, `blank` /
-    `null` → `| None`, `force_nullable` compose, **and** the package's
+    `DjangoImageType` via `FIELD_OUTPUT_TYPE_MAP`, MRO precedence, default
+    `| None` (independent of `blank` / `null`), `force_nullable` compose, **and** the package's
     filter-input scalar lookup over a synthetic `FileField` / `ImageField` still
     yields a scalar (`str`) — `scalar_for_field` /
     [`filters/inputs.py`][filters-inputs] `_scalar_from_model_field` both return
@@ -658,7 +662,7 @@ from django_strawberry_framework import DjangoFileType, DjangoImageType, DjangoT
 
 
 class Asset(models.Model):
-    attachment = models.FileField(upload_to="files/")          # required: no default / blank / null
+    attachment = models.FileField(upload_to="files/")          # required column, but output is nullable by default
     preview = models.ImageField(upload_to="previews/", blank=True)  # optional: blank=True
 
 
@@ -676,7 +680,7 @@ generates:
 ```graphql
 type AssetType {
   id: Int!
-  attachment: DjangoFileType!
+  attachment: DjangoFileType
   preview: DjangoImageType
 }
 
@@ -697,10 +701,14 @@ type DjangoImageType {
 }
 ```
 
-The object field is nullable when the Django file column can realistically be
-absent (`null=True` or `blank=True`, unless
-[`Meta.required_overrides`][glossary-metarequired-overrides] forces the stricter
-contract). `name` is non-null for a present file; `path` / `size` / `url` /
+The object field is **nullable by default**, regardless of `null` / `blank`: the
+generated parent resolver returns `None` for an empty / falsy `FieldFile`, and an
+empty value is reachable even on a `null=False, blank=False` column (legacy rows,
+direct `Model.objects.create()`, fixtures, and manual SQL all store `""`), so the
+SDL must be nullable to represent it.
+[`Meta.required_overrides`][glossary-metarequired-overrides] is the explicit
+opt-in for a caller asserting a stronger non-empty contract (`DjangoFileType!`).
+`name` is non-null for a present file; `path` / `size` / `url` /
 `width` / `height` are **nullable** because storage backends and
 corrupt/vanished rows can make individual properties unavailable even when a
 file name exists
@@ -886,8 +894,8 @@ filter-input path also depends on. So [`convert_scalar`][types-converters] and
 [`scalar_for_field`][types-converters] stay scalar-shaped, and a new read-only
 helper `convert_field_output(field, type_name, *, force_nullable=None)` in
 [`types/converters.py`][types-converters] owns the `FIELD_OUTPUT_TYPE_MAP` MRO
-lookup: for a file/image column it returns the matching output object (widened to
-`<object> | None` on the `blank`-aware nullability of
+lookup: for a file/image column it returns the matching output object (nullable
+by default as `<object> | None`, independent of `blank` / `null`, per
 [Decision 4](#decision-4--read-side-resolution-empty-file-as-null-and-storage-safe-subfield-nullability)),
 and otherwise delegates to [`convert_scalar`][types-converters] for true scalar
 columns. [`types/base.py`][types-base] `_build_annotations` calls
@@ -983,15 +991,21 @@ Alternatives considered (and rejected):
 
 Two layers, at two different levels:
 
-- **Object-field nullability (parent level).** A file column widens to
-  `DjangoFileType | None` when the column is `null=True` **or** `blank=True` —
-  not just `field.null`. A `blank=True` file column stores `""` (an empty
-  `FieldFile`) for "no file", which the generated parent resolver
+- **Object-field nullability (parent level).** A file/image column maps to
+  `DjangoFileType | None` **by default**, independent of `null` / `blank`. The
+  generated parent resolver
   ([Decision 3](#decision-3--read-side-output-types-djangofiletype--djangoimagetype-mirroring-upstream))
-  maps to `None`, so the GraphQL field must be nullable to represent it. This
+  returns `None` for an empty / falsy `FieldFile`, and an empty value is
+  reachable even on a `null=False, blank=False` column — Django stores `""` for
+  "no file", and legacy rows, direct `Model.objects.create()`, fixtures, and
+  manual SQL can all leave it empty (a `blank=False` column is a form-validation
+  constraint, **not** a database non-empty invariant). A non-null SDL would turn
+  that `None` into a top-level `Cannot return null for non-nullable field` error,
+  so the field must be nullable to represent what the resolver can return. This
   composes with the [`Meta.nullable_overrides`][glossary-metanullable-overrides] /
   [`Meta.required_overrides`][glossary-metarequired-overrides] `force_nullable`
-  tri-state — `required_overrides` can force `DjangoFileType!` when the consumer
+  tri-state — `required_overrides` (`force_nullable=False`) is the explicit
+  opt-in to the stricter `DjangoFileType!` contract, for a consumer that
   guarantees a file is always present (the "contract, not data" caveat the
   override entry documents).
 - **Subfield nullability (field level).** `path` / `size` / `url` (and `width` /
@@ -1003,7 +1017,8 @@ resolver returns the bound `FieldFile`; Strawberry then resolves each *selected*
 subfield by `getattr(file_file, "path" | "url" | …)` **after** and **outside**
 the parent resolver — and those property accesses are exactly what raise on a
 non-filesystem backend (S3 `FieldFile.path` → `NotImplementedError`) or a
-vanished file (`.url` / `.size` → `OSError` / `ValueError`). A `try/except` in
+vanished file (`.size` → `OSError`; `.url` on local storage is string-built from
+`MEDIA_URL` and does *not* raise). A `try/except` in
 the parent resolver cannot reach them. So `DjangoFileType` / `DjangoImageType`
 are defined with **resolver-backed** fields, each delegating to a shared
 `_safe_file_attr(file_file, attr)` helper that performs the **narrow** catch
@@ -1048,10 +1063,13 @@ Alternatives considered (and rejected):
   Rejected: it leaves a latent 500 on non-filesystem storage / vanished files;
   the nullable-subfield contract is the safer engineering choice and the SDL
   divergence is small and documented.
-- **Widen the object on `field.null` only.** Rejected: a
-  `blank=True, null=False` file column (Django's common shape) would render
-  non-null while the resolver returns `None` — a guaranteed non-null violation;
-  `blank` must widen too.
+- **Widen the object on `field.null` only — or on `null` / `blank`.** Rejected:
+  the resolver returns `None` for *any* empty `FieldFile`, including on a
+  `null=False, blank=False` column (legacy rows, direct `Model.objects.create()`,
+  fixtures, and manual SQL all store `""`), so keying nullability on the column
+  flags at all leaves a guaranteed non-null violation. The object is **nullable
+  by default**; `required_overrides` is the explicit opt-in to a non-null
+  contract.
 - **Catch a broad `Exception` (or fold `SuspiciousFileOperation` into the
   guard) by default.** Rejected: it would hide real bugs and mask path-traversal
   signals; the catch list is narrowed to storage-shaped errors.
@@ -1314,7 +1332,7 @@ on both; Slice 4 is doc + version-cut only. Line deltas are planning estimates.
 
 | Slice | Files touched | New / changed tests | Approx. delta |
 | --- | --- | --- | --- |
-| 1 — read output objects + `FIELD_OUTPUT_TYPE_MAP` + file-column resolver | [`types/converters.py`][types-converters] (resolver-backed `DjangoFileType` / `DjangoImageType` + `_safe_file_attr` + new `FIELD_OUTPUT_TYPE_MAP` + read-only `convert_field_output` wrapper; `convert_scalar` / `scalar_for_field` / `SCALAR_MAP` file rows stay scalar-only), [`types/base.py`][types-base] (`_build_annotations` calls `convert_field_output` + `blank`-aware nullability), [`types/resolvers.py`][types-resolvers] (define `_attach_file_resolvers` parent empty-file resolver), [`types/finalizer.py`][types-finalizer] (call `_attach_file_resolvers` in the relation-resolver loop, passing `consumer_authored_fields`), [`pyproject.toml`][pyproject] (add Pillow to the dev/test extras for image-dimension tests, unless the [Risks](#risks-and-open-questions) stand-in fallback is taken) | [`tests/types/test_converters.py`][test-types] (~11 — incl. `FilterSet` over `FileField` stays scalar) + [`tests/types/test_resolvers.py`][test-types] (~8 — empty→null, populated subfields, per-subfield isolation, image dims) + [`tests/types/test_base.py`][test-types] (~2 — `attachment: str` gets no resolver) | `+190 / -10` |
+| 1 — read output objects + `FIELD_OUTPUT_TYPE_MAP` + file-column resolver | [`types/converters.py`][types-converters] (resolver-backed `DjangoFileType` / `DjangoImageType` + `_safe_file_attr` + new `FIELD_OUTPUT_TYPE_MAP` + read-only `convert_field_output` wrapper; `convert_scalar` / `scalar_for_field` / `SCALAR_MAP` file rows stay scalar-only), [`types/base.py`][types-base] (`_build_annotations` calls `convert_field_output` + default-nullable file/image shape), [`types/resolvers.py`][types-resolvers] (define `_attach_file_resolvers` parent empty-file resolver), [`types/finalizer.py`][types-finalizer] (call `_attach_file_resolvers` in the relation-resolver loop, passing `consumer_authored_fields`), [`pyproject.toml`][pyproject] (add Pillow to the dev/test extras for image-dimension tests, unless the [Risks](#risks-and-open-questions) stand-in fallback is taken) | [`tests/types/test_converters.py`][test-types] (~11 — incl. `FilterSet` over `FileField` stays scalar) + [`tests/types/test_resolvers.py`][test-types] (~8 — empty→null, populated subfields, per-subfield isolation, image dims) + [`tests/types/test_base.py`][test-types] (~2 — `attachment: str` gets no resolver) | `+190 / -10` |
 | 2 — `Upload` re-export + mutation input (+ verify write path) | [`scalars.py`][scalars] (re-export + docstring fix), [`mutations/inputs.py`][mutations-inputs] (seam → `Upload`), [`mutations/resolvers.py`][mutations-resolvers] (verify generic scalar path; branch only if a test proves a gap) | [`tests/test_scalars.py`][test-scalars] (~3 — incl. resolves with/without `strawberry_config()`) + [`tests/mutations/test_inputs.py`][test-mutations] (~6 — file→`Upload` required/optional, `| None`, lifted CR-6) + [`tests/mutations/test_resolvers.py`][test-mutations] (~5 — create/partial via the generic path, no `NotImplementedError`) | `+110 / -40` |
 | 3 — public exports + coverage hardening | [`__init__.py`][init] (3 exports + `__all__`) | [`tests/base/test_init.py`][test-base-init] (~3 exports) + storage/null/dimension hardening | `+50 / -0` |
 | 4 — docs + `0.0.11` version cut + card wrap | [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], [`README.md`][readme], [`GOAL.md`][goal], [`TODAY.md`][today], [`CHANGELOG.md`][changelog], [`KANBAN.md`][kanban], version files ([`pyproject.toml`][pyproject], [`__init__.py`][init], [`tests/base/test_init.py`][test-base-init]) | `test_version` → `0.0.11` | `+90 / -45` |
@@ -1334,10 +1352,14 @@ nullable-subfield rationale need explanatory comments.
 - **Empty file descriptor.** A `FieldFile` is falsy when no file name is stored;
   the generated output returns `None` for the whole field, so selecting
   `attachment { url }` on an empty file does not raise.
-- **`blank=True` but `null=False`.** File columns can be empty while storing
-  `""`. Object nullability treats `blank=True` as nullable for file/image
-  output, unless [`Meta.required_overrides`][glossary-metarequired-overrides]
-  forces the stricter contract.
+- **Empty value on a `null=False, blank=False` column.** File columns store `""`
+  (a falsy `FieldFile`) for "no file", reachable even when neither `null` nor
+  `blank` is set — `blank=False` is a form-validation constraint, not a database
+  non-empty invariant (legacy rows, direct `Model.objects.create()`, fixtures,
+  and manual SQL can all leave it empty). File/image output is therefore
+  **nullable by default**, independent of `null` / `blank`, unless
+  [`Meta.required_overrides`][glossary-metarequired-overrides] forces the
+  stricter contract.
 - **`Meta.required_overrides` on a blank file field.** Allowed, but the consumer
   owns the invariant; if the row contains an empty value, Strawberry's ordinary
   non-null violation is the correct signal ("contract, not data").
@@ -1417,8 +1439,8 @@ over a `tmp_path` storage), with no live fakeshop surface
 - **Converter / map tests** ([`tests/types/test_converters.py`][test-types]):
   `FileField` → `DjangoFileType`, `ImageField` → `DjangoImageType` via
   `FIELD_OUTPUT_TYPE_MAP`, MRO precedence (incl. a consumer `ImageField`
-  subclass), `null=True` / `blank=True` widen the object field,
-  `Meta.nullable_overrides` / `Meta.required_overrides` still win, `Meta.exclude`
+  subclass), file/image output is `| None` by default (independent of `null` /
+  `blank`), `Meta.nullable_overrides` / `Meta.required_overrides` still win, `Meta.exclude`
   remains the opt-out; **and a [`FilterSet`][glossary-filterset] over a synthetic
   `FileField` still produces a scalar (`str`) filter input, never
   `DjangoFileType`** (the P0 split regression guard).
@@ -1426,7 +1448,9 @@ over a `tmp_path` storage), with no live fakeshop surface
   ([`tests/types/test_resolvers.py`][test-types]): a synthetic model with
   non-empty file/image values resolves `name` / `path` / `size` / `url` (+
   `width` / `height`) through schema execution; an empty file resolves the
-  object as `null`; **per-subfield isolation** — a failing `path` returns `null`
+  object as `null` (including on a required `null=False, blank=False` column —
+  the default-nullable regression guard for the empty-required-file edge);
+  **per-subfield isolation** — a failing `path` returns `null`
   while `url` / `name` still resolve, selecting one subfield at a time (each
   subfield resolver guards independently, not the parent); the
   consumer-annotation override (`attachment: str`) receives **no** generated

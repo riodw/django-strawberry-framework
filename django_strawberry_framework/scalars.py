@@ -2,7 +2,7 @@
 
 Today: ``BigInt`` (a package-custom scalar) and ``Upload`` (re-exported from
 Strawberry's built-in ``strawberry.file_uploads.scalars`` per
-TODO-ALPHA-037-0.0.11). Unlike ``BigInt``, ``Upload`` is NOT registered in
+spec-037). Unlike ``BigInt``, ``Upload`` is NOT registered in
 ``_PACKAGE_SCALAR_MAP``: Strawberry's built-in ``DEFAULT_SCALAR_REGISTRY``
 already owns it, so an ``Upload``-annotated field resolves in any schema.
 
@@ -27,7 +27,7 @@ from strawberry.schema.config import StrawberryConfig
 from strawberry.types.scalar import ScalarDefinition
 
 # Re-export Strawberry's built-in ``Upload`` scalar (and its ``UploadDefinition``)
-# as the package's public upload scalar (TODO-ALPHA-037-0.0.11). ``Upload`` is a
+# as the package's public upload scalar (spec-037). ``Upload`` is a
 # ``NewType("Upload", bytes)`` already present in Strawberry's
 # ``DEFAULT_SCALAR_REGISTRY``, so it resolves in every schema with NO
 # ``_PACKAGE_SCALAR_MAP`` entry - the deliberate contrast with the package-custom

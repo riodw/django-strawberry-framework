@@ -8,7 +8,7 @@
 
 ## What products demonstrates today
 
-`examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.9` it exercises, end to end, the package capabilities a real consumer reaches for:
+`examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.11` it exercises, end to end, the package capabilities a real consumer reaches for:
 
 - **`DjangoType` schema** — four types configured entirely through `class Meta` (`model` + `fields`), with forward-FK + reverse-FK traversal and four root Relay connection fields (`allCategories` / `allItems` / `allProperties` / `allEntries`, each a `DjangoConnectionField` as of `0.0.9`).
 - **Relay nodes** — every type declares `Meta.interfaces = (relay.Node,)`, so each `id` is a Relay `GlobalID` (own-PK GlobalID filtering, `node(id:)` refetch shape). As of `0.0.9` the default `GlobalID` payload is the Django model label (`products.item:<pk>`) rather than the GraphQL type name, so a `CategoryType` → `ProductCategoryType` rename no longer invalidates cached IDs; `Meta.globalid_strategy` / `RELAY_GLOBALID_STRATEGY` select `model` (default) / `type` (legacy opt-out) / `type+model` (transitional) / callable.
@@ -16,18 +16,25 @@
 - **Ordering** — `Meta.orderset_class` on every type (declared in `apps/products/orders.py`), surfaced via a synthesized `orderBy:` argument. Includes the matching `check_name_permission` gate on `CategoryOrder`.
 - **Optimizer cooperation** — `DjangoConnectionField` hands its pre-slice `QuerySet` to `DjangoOptimizerExtension`, which plans `select_related` / `prefetch_related` / `only()` across the connection's `edges { node }` selection (and any nested `<field>Connection`s) without per-resolver boilerplate.
 - **Filter + order composition** — each connection runs the same `get_queryset` visibility → `filter` → `orderBy` → deterministic pk-order → optimizer-plan → cursor-slice pipeline the hand-written resolvers used to spell (visibility scopes, filter narrows, order arranges).
+- **`DjangoMutation` write surface** — as of `0.0.11` products also exposes a live `Mutation` (`createItem` / `updateItem` / `deleteItem` + `createCategory`), each an unannotated `DjangoMutationField` over a `DjangoMutation` subclass, with the shared `errors: list[FieldError]` envelope, `DjangoModelPermission` write authorization, `get_queryset`-scoped update/delete lookups, and an optimizer-backed post-write re-fetch (see "Mutations on products today").
 
 The live `/graphql/` HTTP suite at `examples/fakeshop/test_query/test_products_api.py` pins all of the above end to end.
 
 ## What's in `products/schema.py` today
 
-One representative type (`ItemType` / `PropertyType` / `EntryType` follow the same `class Meta` shape), plus the full connections-only `Query`. As of `0.0.9` the four root fields are `DjangoConnectionField` class attributes — the `django-graphene-filters` cookbook mirror — and the hand-written `filter:` / `orderBy:` resolver signatures are gone: `DjangoConnectionField` synthesizes those arguments from the same `Meta.filterset_class` / `Meta.orderset_class` sidecars and runs the same `get_queryset` → `filter` → `orderBy` → deterministic-order → optimizer composition the resolvers spelled by hand.
+One representative type (`ItemType` / `PropertyType` / `EntryType` follow the same `class Meta` shape), the connections-only `Query`, and — as of `0.0.11` — the `DjangoMutation` write surface (`Mutation`). As of `0.0.9` the four root fields are `DjangoConnectionField` class attributes — the `django-graphene-filters` cookbook mirror — and the hand-written `filter:` / `orderBy:` resolver signatures are gone: `DjangoConnectionField` synthesizes those arguments from the same `Meta.filterset_class` / `Meta.orderset_class` sidecars and runs the same `get_queryset` → `filter` → `orderBy` → deterministic-order → optimizer composition the resolvers spelled by hand. The `Mutation` block below declares one `DjangoMutation` subclass per operation (`class Meta` with `model` + `operation`), each surfaced as an unannotated `DjangoMutationField` — no Strawberry decorators on the mutation classes, the same Meta-driven shape as the types.
 
 ```python
 import strawberry
 from strawberry import relay
 
-from django_strawberry_framework import DjangoConnection, DjangoConnectionField, DjangoType
+from django_strawberry_framework import (
+    DjangoConnection,
+    DjangoConnectionField,
+    DjangoMutation,
+    DjangoMutationField,
+    DjangoType,
+)
 
 from . import filters, models, orders
 
@@ -60,6 +67,41 @@ class Query:
     all_items: DjangoConnection[ItemType] = DjangoConnectionField(ItemType)
     all_properties: DjangoConnection[PropertyType] = DjangoConnectionField(PropertyType)
     all_entries: DjangoConnection[EntryType] = DjangoConnectionField(EntryType)
+
+
+class CreateItem(DjangoMutation):
+    class Meta:
+        model = models.Item
+        operation = "create"
+
+
+class UpdateItem(DjangoMutation):
+    class Meta:
+        model = models.Item
+        operation = "update"
+
+
+class DeleteItem(DjangoMutation):
+    class Meta:
+        model = models.Item
+        operation = "delete"
+
+
+class CreateCategory(DjangoMutation):
+    class Meta:
+        model = models.Category
+        operation = "create"
+
+
+@strawberry.type
+class Mutation:
+    # Each field is an unannotated DjangoMutationField — the <Name>Payload return
+    # is materialized at finalization, so the factory types the field via a
+    # strawberry.lazy forward-ref. Defaults apply: DjangoModelPermission write-auth.
+    create_item = DjangoMutationField(CreateItem)
+    update_item = DjangoMutationField(UpdateItem)
+    delete_item = DjangoMutationField(DeleteItem)
+    create_category = DjangoMutationField(CreateCategory)
 ```
 
 ## What to put in `config/schema.py` today
@@ -68,6 +110,7 @@ Enable the optimizer at the project-schema boundary and finalize every imported 
 
 ```python
 import strawberry
+from apps.products.schema import Mutation as ProductsMutation
 from apps.products.schema import Query as ProductsQuery
 
 from django_strawberry_framework import (
@@ -82,17 +125,23 @@ class Query(ProductsQuery):
     """Top-level Query — extend with each app's Query as bases."""
 
 
+@strawberry.type
+class Mutation(ProductsMutation):
+    """Top-level Mutation — extend with each app's Mutation as bases."""
+
+
 finalize_django_types()
 
 _optimizer = DjangoOptimizerExtension()
 schema = strawberry.Schema(
     query=Query,
+    mutation=Mutation,
     config=strawberry_config(),
     extensions=[lambda: _optimizer],
 )
 ```
 
-Two rules the package enforces: `finalize_django_types()` must run **after** every module that defines `DjangoType` classes is imported and **before** `strawberry.Schema(...)` is constructed; and the optimizer is added as a module-level `DjangoOptimizerExtension` singleton wrapped in a factory (`extensions=[lambda: _optimizer]`), which preserves the instance-bound plan cache and emits no deprecation warning.
+Two rules the package enforces: `finalize_django_types()` must run **after** every module that defines `DjangoType` classes is imported and **before** `strawberry.Schema(...)` is constructed — the same call also materializes each mutation's `<Model>Input` / `<Model>PartialInput` / `<Name>Payload` classes and binds every `DjangoMutationField`, so the schema build can resolve their lazy references; and the optimizer is added as a module-level `DjangoOptimizerExtension` singleton wrapped in a factory (`extensions=[lambda: _optimizer]`), which preserves the instance-bound plan cache and emits no deprecation warning.
 
 ## Package scalar conversions
 
@@ -107,7 +156,7 @@ Two rules the package enforces: `finalize_django_types()` must run **after** eve
 - `FloatField` → `float`
 - `UUIDField` → `uuid.UUID`
 - `BinaryField` → `bytes`
-- `FileField` / `ImageField` → structured `DjangoFileType` / `DjangoImageType` read output (`name` non-null; `path` / `size` / `url`, plus image `width` / `height`, nullable / storage-safe; via `FIELD_OUTPUT_TYPE_MAP`; switched from `str` in `0.0.11` — breaking wire-format change). The filter / scalar-input value stays `str`; the generated `DjangoMutation` input is the `Upload` scalar
+- `FileField` / `ImageField` → structured `DjangoFileType` / `DjangoImageType` read output — the output object itself is **nullable by default** (an empty / absent stored file resolves to `null`, regardless of the column's `null` / `blank`; `required_overrides` is the opt-in to a non-null object), with `name` non-null and `path` / `size` / `url`, plus image `width` / `height`, nullable / storage-safe inside it; via `FIELD_OUTPUT_TYPE_MAP`; switched from `str` in `0.0.11` — breaking wire-format change. The filter / scalar-input value stays `str`; the generated `DjangoMutation` input is the `Upload` scalar
 - `JSONField` → `strawberry.scalars.JSON`
 - PostgreSQL `ArrayField` → `list[T]` (recursive through `field.base_field`; soft-registered when `django.contrib.postgres.fields` imports)
 - PostgreSQL `HStoreField` → `strawberry.scalars.JSON` (soft-registered)

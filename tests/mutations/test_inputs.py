@@ -14,7 +14,7 @@ Covers the spec-036 Slice 1 generation substrate
 - the ``FileField`` / ``ImageField`` -> ``Upload`` input mapping (required /
   optional shapes, ``| None`` widening, ``Meta.fields`` / ``Meta.exclude``
   narrowing, and the lifted spec-036 CR-6 merge-override carve-out)
-  (TODO-ALPHA-037-0.0.11);
+  (spec-037);
 - ``FieldError`` / ``build_payload_type`` envelope shape + the ``node`` / ``result``
   slot;
 - the ``FieldError`` public export.
@@ -530,7 +530,7 @@ def test_distinct_shapes_colliding_on_one_name_raise_configuration_error():
 
 
 # ---------------------------------------------------------------------------
-# Upload mapping (TODO-ALPHA-037-0.0.11) - FileField/ImageField become Upload
+# Upload mapping (spec-037) - FileField/ImageField become Upload
 # ---------------------------------------------------------------------------
 
 

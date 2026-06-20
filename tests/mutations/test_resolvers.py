@@ -1620,7 +1620,7 @@ def test_relation_field_index_excludes_generic_foreign_key():
 
 
 # ---------------------------------------------------------------------------
-# File upload assignment (TODO-ALPHA-037-0.0.11) - the verify-first contract
+# File upload assignment (spec-037) - the verify-first contract
 # ---------------------------------------------------------------------------
 #
 # These tests PROVE the shipped generic scalar-assignment path carries an

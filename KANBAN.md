@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-06-19
+Last refreshed: 2026-06-20
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -137,7 +137,7 @@ To complete the Alpha (pre-0.1.0) milestone: **84.1%**.
 
 ## In progress
 
-Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
+Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts. No cards in progress.
 
 ## To Do - Alpha (0.1.0)
 
@@ -1281,7 +1281,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
 - Severity: Medium
-- Status: In progress
+- Status: Shipped
 - Relative size: M
 - Labels: `converters`, `mutations`, `scalars`, `uploads`
 - Spec: [spec-037-upload_file_image_mapping-0_0_11.md](docs/spec-037-upload_file_image_mapping-0_0_11.md)
@@ -1359,7 +1359,7 @@ planned
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
 - Severity: Major
-- Status: In progress
+- Status: Shipped
 - Relative size: XL
 - Labels: `graphql-api`, `mutations`, `permissions`, `public-api`
 - Spec: [spec-036-mutations-0_0_11.md](docs/SPECS/spec-036-mutations-0_0_11.md)

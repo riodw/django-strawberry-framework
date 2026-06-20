@@ -1629,9 +1629,11 @@ def _build_annotations(
                 force_nullable = None
             # ``convert_field_output`` owns the file/image branch: it routes a
             # FileField / ImageField to the structured DjangoFileType /
-            # DjangoImageType output object (widened to ``| None`` on the
-            # ``blank``-aware nullability) and delegates every other column to
-            # ``convert_scalar`` unchanged. The ``force_nullable`` tri-state
+            # DjangoImageType output object (nullable by default as ``| None`` to
+            # match the parent resolver's empty-file ``None``) and delegates
+            # every other column to ``convert_scalar`` unchanged. A
+            # ``required_overrides`` (``force_nullable=False``) entry is the
+            # opt-in for a stronger non-empty invariant. The ``force_nullable`` tri-state
             # computed above is threaded through exactly as before; a consumer
             # ``attachment: str`` override is already skipped by the
             # ``consumer_authored_fields`` short-circuit above, so it receives

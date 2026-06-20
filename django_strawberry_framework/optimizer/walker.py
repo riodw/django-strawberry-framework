@@ -19,7 +19,12 @@ from ..utils.connections import (
     has_connection_sidecar_kwargs,
 )
 from ..utils.querysets import apply_type_visibility_sync
-from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
+from ..utils.relations import (
+    has_composite_pk,
+    instance_accessor,
+    is_many_side_relation_kind,
+    relation_kind,
+)
 from ..utils.strings import snake_case
 from . import logger
 from .hints import OptimizerHint, hint_is_skip
@@ -870,10 +875,7 @@ def _can_elide_fk_id(field: Any) -> bool:
         if target_field is not None
         else getattr(field, "target_field_name", None)
     )
-    pk_fields = (
-        getattr(related_model._meta, "pk_fields", None) if related_model is not None else None
-    )
-    if pk_fields is not None and len(pk_fields) > 1:  # pragma: no cover
+    if related_model is not None and has_composite_pk(related_model):  # pragma: no cover
         # Composite primary key (Django 5.2+).  Test fixtures do not
         # define one; the guard exists so the elision branch fails
         # closed if a consumer adopts composite PKs.

@@ -19,14 +19,10 @@ from ..utils.connections import (
     has_connection_sidecar_kwargs,
 )
 from ..utils.querysets import apply_type_visibility_sync
-from ..utils.relations import (
-    has_composite_pk,
-    instance_accessor,
-    is_many_side_relation_kind,
-    relation_kind,
-)
+from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
 from ..utils.strings import snake_case
 from . import logger
+from .field_meta import FieldMeta
 from .hints import OptimizerHint, hint_is_skip
 from .plans import (
     OptimizationPlan,
@@ -859,36 +855,19 @@ def _selected_scalar_names(
 def _can_elide_fk_id(field: Any) -> bool:
     """Return ``True`` when ``field`` stores the related object's id on the source row.
 
-    Composite primary keys (Django 5.2+) are excluded: the source-row
-    ``attname`` carries a single column id, but the target's ``pk`` is
-    a tuple, so eliding would compare the wrong shapes and surface
-    wrong data.
+    ``field`` is ``FieldMeta | Any`` per the ``_resolve_field_map`` dual
+    contract. A registered model yields a ``FieldMeta`` carrying the
+    precomputed ``fk_id_elision_eligible`` slot, returned directly. A raw
+    Django field (the unregistered-model fallback) is run through the
+    canonical ``FieldMeta._from_field_shape`` so the walker and ``FieldMeta``
+    share ONE elision predicate - including the composite-PK exclusion (a
+    single-column source ``attname`` cannot satisfy a tuple-shaped target
+    pk, so eliding would surface wrong data) - and cannot drift.
     """
     stamped = getattr(field, "fk_id_elision_eligible", None)
     if stamped is not None:
         return stamped
-    related_model = getattr(field, "related_model", None)
-    target_pk_name = _target_pk_name(field)
-    target_field = getattr(field, "target_field", None)
-    target_field_name = (
-        getattr(target_field, "name", None)
-        if target_field is not None
-        else getattr(field, "target_field_name", None)
-    )
-    if related_model is not None and has_composite_pk(related_model):  # pragma: no cover
-        # Composite primary key (Django 5.2+).  Test fixtures do not
-        # define one; the guard exists so the elision branch fails
-        # closed if a consumer adopts composite PKs.
-        return False
-    return (
-        field.attname is not None
-        and related_model is not None
-        and target_pk_name is not None
-        and target_field_name == target_pk_name
-        and not field.many_to_many
-        and not field.one_to_many
-        and not getattr(field, "auto_created", False)
-    )
+    return FieldMeta._from_field_shape(field, is_relation=True).fk_id_elision_eligible
 
 
 def _target_pk_name(field: Any) -> str | None:

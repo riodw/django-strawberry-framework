@@ -55,6 +55,42 @@ class SyncMisuseError(ConfigurationError, RuntimeError):
     """
 
 
+def reject_async_in_sync_context(
+    value: Any,
+    *,
+    owner: str,
+    method: str,
+    context: str,
+    recourse: str,
+) -> Any:
+    """Guard a synchronous hook result against an ``async def`` override.
+
+    Three sync pipeline seams invoke a consumer-overridable hook that
+    Decision 9 / Decision 15 allow to be sync OR async: the ``get_queryset``
+    visibility hook (``apply_type_visibility_sync``) and the two write
+    authorization hooks (``check_permission`` / a ``permission_classes``
+    entry's ``has_permission``). None can await - the whole ORM pipeline runs
+    synchronously (under one ``sync_to_async`` worker on the async surface),
+    so an ``async def`` override returns an orphaned coroutine. Treating that
+    truthy coroutine as success would be a silent bug - an authorization
+    BYPASS for the permission hooks - so it is rejected loudly.
+
+    When ``value`` is a coroutine it is ``close()``d (silencing the "coroutine
+    was never awaited" warning that ``filterwarnings = error`` would otherwise
+    turn into a test failure) and a ``SyncMisuseError`` is raised naming the
+    offending ``owner.method`` and the ``context`` it ran in, with the
+    surface-specific ``recourse`` appended. The message template lives here so
+    the three seams cannot drift. Otherwise ``value`` is returned unchanged, so
+    callers read ``x = reject_async_in_sync_context(x, ...)``.
+    """
+    if inspect.iscoroutine(value):
+        value.close()
+        raise SyncMisuseError(
+            f"{owner}.{method} returned a coroutine in a sync {context} context. {recourse}",
+        )
+    return value
+
+
 def initial_queryset(type_cls: type) -> models.QuerySet:
     """Return ``model._default_manager.all()`` for a ``DjangoType``'s model.
 
@@ -122,13 +158,13 @@ def apply_type_visibility_sync(
     than reach for an async resolver that cannot help, feedback M1).
     """
     result = type_cls.get_queryset(queryset, info)
-    if inspect.iscoroutine(result):
-        result.close()
-        raise SyncMisuseError(
-            f"{type_cls.__name__}.get_queryset returned a coroutine in a sync "
-            f"resolver context. {async_recourse}",
-        )
-    return result
+    return reject_async_in_sync_context(
+        result,
+        owner=type_cls.__name__,
+        method="get_queryset",
+        context="resolver",
+        recourse=async_recourse,
+    )
 
 
 async def apply_type_visibility_async(

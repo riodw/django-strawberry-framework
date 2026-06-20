@@ -32,6 +32,15 @@ rows resolving to ``null`` on the source-side specimen.
 PostgreSQL-only and the fakeshop runs on SQLite. Their converter entries stay
 covered by ``tests/`` against package-internal fixtures.
 
+``MediaSpecimen`` carries a ``FileField`` and an ``ImageField`` so the spec-037
+file/image converter rows are earned over a live ``/graphql/`` request (read =
+``DjangoFileType`` / ``DjangoImageType`` output objects, write = the ``Upload``
+scalar in the generated input). Unlike ``ArrayField`` / ``HStoreField`` these
+ARE SQLite-compatible (they store the relative name as ``TEXT``), so they belong
+here, not in synthetic package tests. The storage-backend fault-injection and
+corrupt-image edges (which need mocking a non-filesystem backend) stay in
+``tests/types/test_resolvers.py``.
+
 ``OverrideSpecimen`` is the substrate for the consumer-authored field-override
 demonstration (spec-029): each of its columns is overridden a different way by
 ``OverriddenScalarSpecimenType`` (``apps/scalars/schema.py``), and its ``token``
@@ -191,6 +200,35 @@ class Base36Field(models.Field):
         connection,
     ):
         return "text"
+
+
+class MediaSpecimen(models.Model):
+    """End-to-end coverage for the ``FileField`` / ``ImageField`` converter rows.
+
+    Exercises the spec-037 file/image contract over a live ``/graphql/`` request
+    rather than only package-internal synthetic schemas: on **read** a
+    ``FileField`` converts to a structured ``DjangoFileType`` and an
+    ``ImageField`` to ``DjangoImageType``; on **write** both columns map to
+    Strawberry's ``Upload`` scalar in the generated ``MediaSpecimenInput``.
+    ``FileField`` / ``ImageField`` are SQLite-compatible (they store the relative
+    name as ``TEXT``), so this row earns its package coverage over HTTP like every
+    other entry in this app instead of being deferred to synthetic tests.
+
+    Both columns are required (no ``null`` / ``blank``) **on purpose**: the live
+    SDL then pins the default-nullable output-object contract (spec-037
+    Decision 4) - the generated ``attachment`` / ``image`` fields are nullable in
+    the schema (`DjangoFileType` / `DjangoImageType`, no ``!``) even though the
+    Django columns are required, because an empty / absent stored file resolves
+    the whole object to ``null``. ``image`` reads ``width`` / ``height`` through
+    Pillow (the dev/test-only dependency added with spec-037).
+    """
+
+    label = models.TextField(unique=True)
+    attachment = models.FileField(upload_to="scalar_media/files/")
+    image = models.ImageField(upload_to="scalar_media/images/")
+
+    def __str__(self):
+        return self.label
 
 
 class OverrideSpecimen(models.Model):

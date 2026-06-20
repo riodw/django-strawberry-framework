@@ -16,6 +16,7 @@ from apps.kanban.schema import Query as KanbanQuery
 from apps.library.schema import Query as LibraryQuery
 from apps.products.schema import Mutation as ProductsMutation
 from apps.products.schema import Query as ProductsQuery
+from apps.scalars.schema import Mutation as ScalarsMutation
 from apps.scalars.schema import Query as ScalarsQuery
 
 from django_strawberry_framework import (
@@ -31,14 +32,15 @@ class Query(LibraryQuery, ProductsQuery, ScalarsQuery, KanbanQuery, GlossaryQuer
 
 
 @strawberry.type
-class Mutation(ProductsMutation):
+class Mutation(ProductsMutation, ScalarsMutation):
     """Top-level Mutation - extends each app's Mutation.
 
-    Products is the only app with a write surface today (spec-036 Slice 4), so it
-    is the sole base; the composition shape mirrors ``Query`` for future apps. The
-    mutation phase-2.5 bind runs inside ``finalize_django_types()`` below, so the
-    ``DjangoMutationField`` lazy payload / ``data:`` refs resolve at ``Schema(...)``
-    build.
+    Products carries the create/update/delete write surface (spec-036 Slice 4);
+    the scalars app adds the file-backed ``createMediaSpecimen`` so the spec-037
+    ``Upload`` mutation-input mapping is exercised over a live multipart
+    ``/graphql/`` request. The mutation phase-2.5 bind runs inside
+    ``finalize_django_types()`` below, so the ``DjangoMutationField`` lazy payload
+    / ``data:`` refs resolve at ``Schema(...)`` build.
     """
 
 

@@ -30,7 +30,13 @@ import strawberry
 from strawberry.types import Info
 
 from apps.scalars import filters, models, orders
-from django_strawberry_framework import BigInt, DjangoType, auto
+from django_strawberry_framework import (
+    BigInt,
+    DjangoMutation,
+    DjangoMutationField,
+    DjangoType,
+    auto,
+)
 from django_strawberry_framework.filters import filter_input_type
 from django_strawberry_framework.orders import order_input_type
 
@@ -171,6 +177,27 @@ class OverriddenScalarSpecimenType(DjangoType):
         )
 
 
+class MediaSpecimenType(DjangoType):
+    """``DjangoType`` over a ``FileField`` + ``ImageField`` model (spec-037).
+
+    On read, ``attachment`` converts to the structured ``DjangoFileType`` and
+    ``image`` to ``DjangoImageType`` - and both are **nullable by default** in
+    the live SDL even though the Django columns are required, because an empty /
+    absent stored file resolves the whole object to ``null`` (spec-037
+    Decision 4). Not Relay-Node-shaped (matching the other scalar specimens), so
+    the generated mutation payload carries the row in the ``result`` slot.
+    """
+
+    class Meta:
+        model = models.MediaSpecimen
+        fields = (
+            "id",
+            "label",
+            "attachment",
+            "image",
+        )
+
+
 @strawberry.type
 class Query:
     """Scalars coverage root fields."""
@@ -179,6 +206,11 @@ class Query:
     def all_override_specimens(self) -> list[OverriddenScalarSpecimenType]:
         """Root field for the consumer-authored field-override demonstration type."""
         return list(models.OverrideSpecimen.objects.order_by("id"))
+
+    @strawberry.field
+    def all_media_specimens(self) -> list[MediaSpecimenType]:
+        """Root field for the file/image read-output demonstration type (spec-037)."""
+        return list(models.MediaSpecimen.objects.order_by("id"))
 
     @strawberry.field
     def all_scalar_specimens(
@@ -251,4 +283,26 @@ class Query:
         return models.ScalarSpecimen.objects.filter(signed_big=signed_big).first()
 
 
-__all__ = ("Query",)
+class CreateMediaSpecimen(DjangoMutation):
+    """Create mutation over ``MediaSpecimen`` - the write side of the spec-037 surface.
+
+    The generated ``MediaSpecimenInput`` maps the ``attachment`` / ``image``
+    file columns to Strawberry's ``Upload`` scalar (the input-side half of
+    spec-037), so a live multipart ``/graphql/`` request can create a row with
+    real uploaded files. Uses the default ``[DjangoModelPermission]`` write
+    authorization, so the caller needs the ``scalars.add_mediaspecimen`` perm.
+    """
+
+    class Meta:
+        model = models.MediaSpecimen
+        operation = "create"
+
+
+@strawberry.type
+class Mutation:
+    """Scalars coverage write surface - the live ``Upload`` mutation path (spec-037)."""
+
+    create_media_specimen = DjangoMutationField(CreateMediaSpecimen)
+
+
+__all__ = ("Mutation", "Query")

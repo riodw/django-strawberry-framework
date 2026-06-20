@@ -159,6 +159,19 @@ STATIC_URL = "/static/"
 
 
 # ---------------------------------------------------------------------------
+# Media files (user uploads)
+# https://docs.djangoproject.com/en/stable/topics/files/
+# ---------------------------------------------------------------------------
+# Needed by the spec-037 ``MediaSpecimen`` FileField / ImageField columns so a
+# stored file's ``url`` is built from ``MEDIA_URL``. Live upload tests override
+# ``MEDIA_ROOT`` to a per-test temp dir so no files land in the repo.
+
+MEDIA_URL = "/media/"
+
+MEDIA_ROOT = BASE_DIR / "media"
+
+
+# ---------------------------------------------------------------------------
 # Third-party: django-strawberry-framework
 # ---------------------------------------------------------------------------
 

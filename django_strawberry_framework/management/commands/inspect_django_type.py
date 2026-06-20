@@ -48,7 +48,7 @@ from django_strawberry_framework.management.commands._imports import import_or_c
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.scalars import BigInt
 from django_strawberry_framework.types.base import DjangoType
-from django_strawberry_framework.types.converters import SCALAR_MAP
+from django_strawberry_framework.types.converters import SCALAR_MAP, _field_output_type_for
 from django_strawberry_framework.utils.strings import snake_case
 
 _GLOBAL_ID_GRAPHQL_TYPE = "GlobalID!"
@@ -292,6 +292,16 @@ class Command(BaseCommand):
         annotation = definition.origin.__annotations__[field.name]
         graphql_type = _render_annotation(annotation)
         nullable = _yes_no(_annotation_is_optional(annotation))
+        # A FileField / ImageField column is converted on the read side by
+        # ``convert_field_output`` via ``FIELD_OUTPUT_TYPE_MAP`` (-> the
+        # ``DjangoFileType`` / ``DjangoImageType`` output object), NOT by
+        # ``SCALAR_MAP`` (whose file rows stay ``str`` for the filter-input
+        # path). Naming the SCALAR_MAP row here would mis-attribute the
+        # converter, so report the output-map converter that actually fired -
+        # using the single shared MRO walk so the ordering can never drift.
+        output_type = _field_output_type_for(field)
+        if output_type is not None:
+            return graphql_type, nullable, f"convert_field_output -> {output_type.__name__}"
         # ``choice enum`` for a choice field; otherwise name the SCALAR_MAP row
         # that fired - the matched MRO ancestor (Decision 4) - so a consumer
         # subclass of a supported field reports the ancestor row (e.g.

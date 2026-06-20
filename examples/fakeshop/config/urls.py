@@ -46,7 +46,17 @@ def index(request):
 urlpatterns = [
     path("", index, name="index"),
     path("admin/", admin.site.urls),
-    path("graphql/", GraphQLView.as_view(schema=schema, graphql_ide="graphiql")),
+    # ``multipart_uploads_enabled=True`` lets the view accept GraphQL multipart
+    # requests (off by default for security) so the spec-037 ``Upload`` scalar
+    # can carry a real file in a live ``createMediaSpecimen`` mutation.
+    path(
+        "graphql/",
+        GraphQLView.as_view(
+            schema=schema,
+            graphql_ide="graphiql",
+            multipart_uploads_enabled=True,
+        ),
+    ),
     path("login/", auth_views.LoginView.as_view(template_name="admin/login.html"), name="login"),
     path("logout/", auth_views.LogoutView.as_view(next_page="/login/"), name="logout"),
 ]

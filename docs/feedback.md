@@ -1,76 +1,75 @@
-# Second-Pass Feedback
+# Feedback
 
 ## Findings
 
-1. **[P1] Converter tests still assert the pre-fix non-null file/image output.**
-   [`tests/types/test_converters.py`][test-types-converters] still has direct
-   mapping tests asserting `convert_field_output(field, "OwnerType") is
-   DjangoFileType` / `is DjangoImageType` in
-   `test_convert_field_output_filefield_to_djangofiletype`,
-   `test_convert_field_output_imagefield_to_djangoimagetype`, and
-   `test_field_output_map_mro_precedence_image_subclass_wins`. That contradicts
-   the current implementation in
-   [`types/converters.py`][types-converters]::convert_field_output, where unset
-   `force_nullable` now returns `DjangoFileType | None` /
-   `DjangoImageType | None` by default, and it also contradicts the newer
-   `test_convert_field_output_file_image_nullable_by_default` test in the same
-   file. This will fail as soon as the suite is run. Root fix: keep
-   `_field_output_type_for(...) is DjangoFileType` / `DjangoImageType` for
-   testing map identity, but change the `convert_field_output(...)` assertions in
-   those three tests to the default nullable union. Leave the existing
-   `force_nullable=False` assertion as the opt-in bare-object contract.
+1. **[P1] The new public file/image wire contract has no live `/graphql/`
+   acceptance coverage.**
 
-2. **[P2] The nullability-override scope still says scalar-only even though
-   file/image output objects now participate.** The shipped code accepts
-   `Meta.required_overrides = ("attachment",)` on a `FileField`: the validator in
-   [`types/base.py`][types-base]::_validate_nullability_override_targets rejects
-   relations but not file/image columns, and
-   [`types/base.py`][types-base]::_build_annotations threads the same
-   `force_nullable` tri-state into the file/image branch. That is now the
-   documented spec-037 contract. However, the public relation-field
-   `ConfigurationError` text still says "nullability overrides are scalar-only
-   for now", `_build_annotations` comments still say the sets are validated
-   scalar-only, and current docs in
-   [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], and
-   [`TODAY.md`][today] still describe `Meta.nullable_overrides` /
-   `Meta.required_overrides` as scalar-only. Root fix: rename this scope to
-   "non-relation model fields" or "column output fields" everywhere, and reserve
-   "scalar-only" for the `convert_scalar` / `SCALAR_MAP` / filter-input path.
+   The [`test_query` README][test-query-readme] says package coverage that can be
+   earned through the fakeshop `/graphql/` endpoint must be earned in
+   `examples/fakeshop/test_query/`. The implementation currently keeps every
+   file/image read-path assertion in package-level synthetic schemas:
+   [`tests/types/test_resolvers.py::_make_asset_model`][test-type-resolver-asset]
+   builds an in-process unmanaged model, then calls `schema.execute_sync(...)` for
+   the `DjangoFileType` / `DjangoImageType` output object, empty-file parent-null
+   behavior, image dimensions, and storage-failure degradation.
 
-3. **[P3] Standing file/image docs do not fully carry the default-nullable
-   object contract.** [`docs/spec-037-upload_file_image_mapping-0_0_11.md`][spec-037]
-   and [`TODAY.md`][today] now say the output object itself is nullable by
-   default independent of `null` / `blank`, with `required_overrides` as the
-   explicit opt-in to `DjangoFileType!`. The broader current docs only partially
-   say that: [`docs/GLOSSARY.md`][glossary] mentions empty / absent files
-   resolving to `null`, while its scalar-conversion rows and
-   `Meta.required_overrides` entry still do not name the default-nullable
-   file/image object case; [`docs/README.md`][docs-readme], [`README.md`][readme],
-   and the `0.0.11` file/image bullets in [`CHANGELOG.md`][changelog] likewise
-   describe structured objects without explicitly stating that generated SDL is
-   nullable by default regardless of the Django column. Root fix: add the same
-   one-sentence contract to the current public summary rows; do not rewrite the
-   older historical `0.0.9` changelog entry.
+   That is useful internal coverage, but it does not prove the consumer-visible
+   HTTP contract the README reserves for `test_query`: the fakeshop project schema
+   has no selected `FileField` / `ImageField`, no `DjangoFileType` /
+   `DjangoImageType` introspection assertion, and no live JSON response selecting
+   `name`, `path`, `size`, `url`, `width`, or `height`. The existing scalars app is
+   the local precedent: [`examples/fakeshop/apps/scalars/models.py`][scalars-models]
+   and [`examples/fakeshop/test_query/test_scalars_api.py`][test-scalars-api]
+   deliberately expose converter-table rows over HTTP when SQLite can support
+   them. File/image output is SQLite-compatible, so the happy-path and empty-file
+   object-null cases should be exposed the same way.
+
+   **Root fix:** add a minimal fakeshop acceptance surface with a real
+   `FileField` and `ImageField` model, schema type, and live tests under
+   `examples/fakeshop/test_query/` using the documented schema-reload fixture
+   pattern. Keep the storage-backend fault injection and corrupt-image edges in
+   package tests, but move at least the public SDL shape and representative HTTP
+   response behavior into live fakeshop coverage.
+
+2. **[P1] The `Upload` mutation path is verified only below the HTTP boundary.**
+
+   The write side has the same placement problem. The implementation proves
+   `FileField` / `ImageField` input generation in
+   [`tests/mutations/test_inputs.py`][test-mutation-inputs] and proves assignment
+   of `SimpleUploadedFile` through `schema.execute_sync(...)` in
+   [`tests/mutations/test_resolvers.py::_make_asset_model`][test-mutation-resolver-asset].
+   Those tests bypass the exact pipeline the README calls out: URL routing,
+   `GraphQLView`, request parsing, schema execution, and JSON response
+   serialization.
+
+   If this package now publicly maps mutation file columns to Strawberry's
+   `Upload`, the fakeshop schema should contain one real file-backed mutation and
+   a live `examples/fakeshop/test_query/` test should prove the generated input
+   type exposes `Upload` over HTTP. If Strawberry's current Django view can accept
+   GraphQL multipart requests, the test should also post a real multipart create
+   or update. If multipart transport is intentionally deferred, the live suite
+   should still introspect the fakeshop mutation input shape over `/graphql/`, and
+   the resolver-level `SimpleUploadedFile` tests can remain as the lower-level
+   assignment proof.
+
+   **Root fix:** promote one file-backed create/update surface into the example
+   project, extend the top-level fakeshop `Mutation` if needed, and add live HTTP
+   assertions for `Upload` input SDL plus the strongest transport path available
+   today.
 
 ## Notes
 
-I did not run pytest, per the repository instruction not to run it unless
-explicitly asked. This pass was a static review of the latest source and docs
-after the follow-up fixes.
+- I did not run `pytest`, per the repo instruction not to run it unless
+  explicitly asked.
+- The existing package tests still have value. The compliance gap is that the
+  public GraphQL contract is not represented in the live acceptance suite.
 
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 
-[changelog]: ../CHANGELOG.md
-[readme]: ../README.md
-[today]: ../TODAY.md
-
 <!-- docs/ -->
-
-[docs-readme]: README.md
-[glossary]: GLOSSARY.md
-[spec-037]: spec-037-upload_file_image_mapping-0_0_11.md
 
 <!-- docs/SPECS/ -->
 
@@ -78,14 +77,15 @@ after the follow-up fixes.
 
 <!-- django_strawberry_framework/ -->
 
-[types-base]: ../django_strawberry_framework/types/base.py
-[types-converters]: ../django_strawberry_framework/types/converters.py
-
 <!-- tests/ -->
-
-[test-types-converters]: ../tests/types/test_converters.py
+[test-mutation-inputs]: ../tests/mutations/test_inputs.py
+[test-mutation-resolver-asset]: ../tests/mutations/test_resolvers.py
+[test-type-resolver-asset]: ../tests/types/test_resolvers.py
 
 <!-- examples/ -->
+[scalars-models]: ../examples/fakeshop/apps/scalars/models.py
+[test-query-readme]: ../examples/fakeshop/test_query/README.md
+[test-scalars-api]: ../examples/fakeshop/test_query/test_scalars_api.py
 
 <!-- scripts/ -->
 

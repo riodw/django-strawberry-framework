@@ -261,7 +261,7 @@ licenses it (where applicable).
 - **Multipart request helper** — `TestClient` (`TODO-ALPHA-043-0.0.14`). Depends on the `Upload` scalar this card ships; the transport helper itself is `0.0.14`.
 - **Form-based mutations** — `DjangoFormMutation` (`TODO-ALPHA-038-0.0.12`). Reuses `Upload` through the same scalar-map helper.
 - **DRF serializer mutations + auth mutations** — `SerializerMutation` (`0.0.13`). Serializer upload handling builds on this scalar.
-- **A live fakeshop file-upload surface** — deferred to fakeshop activation (`TODO-BETA-051-0.1.5`). This card covers both directions with synthetic-model tests (Decision 9); no live `/graphql/` upload coverage exists because no fakeshop model carries a file column.
+- **A live fakeshop file-upload surface** — ~~deferred to fakeshop activation (`TODO-BETA-051-0.1.5`)~~ **SUPERSEDED (post-ship, 2026-06-20 round-4 review):** a live surface was added to the `scalars` app (`MediaSpecimen` model + `MediaSpecimenType` + `createMediaSpecimen`), with live `/graphql/` read + real-multipart-upload tests in `examples/fakeshop/test_query/test_uploads_api.py` (the `GraphQLView` now sets `multipart_uploads_enabled=True`). The `test_query` README live-coverage rule prevailed over Decision 9's deferral; the synthetic-model package tests are kept only for the storage-fault / corrupt-image edges. The broader products/fakeshop activation remains `TODO-BETA-051-0.1.5`.
 - **Field-level read gates** — `FieldSet` / per-field permission hooks in `0.1.1`. File-metadata permissions are not special-cased here.
 - **Remote-storage adapters, thumbnailing, image validation, signed-URL policies** — consumer/storage concerns beyond a model-field conversion card.
 

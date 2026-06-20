@@ -1245,6 +1245,23 @@ not introduced here and would be rejected if proposed.
 
 ### Decision 9 — Test placement: package tests own synthetic file/image models
 
+> **Superseded (post-ship, 2026-06-20 round-4 review).** A live fakeshop
+> file/image acceptance surface was added after all. The `scalars` app gained a
+> `MediaSpecimen` model (`FileField` + `ImageField`), a `MediaSpecimenType`, and a
+> file-backed `createMediaSpecimen` mutation, with live `/graphql/` tests in
+> `examples/fakeshop/test_query/test_uploads_api.py`: the read output objects, the
+> default-nullable SDL shape (a *required* column rendering nullable), the
+> empty-file object-`null` case, the `Upload` input SDL, and a **real multipart
+> upload** (the fakeshop `GraphQLView` enables `multipart_uploads_enabled=True`).
+> The [`examples/fakeshop/test_query/README.md`][test-query-readme] live-coverage
+> rule prevailed over the "prefer the card" deferral recorded below: file/image
+> output IS SQLite-reachable, so its public HTTP contract must be earned live. The
+> synthetic-model package tests below **remain** for the storage-backend
+> fault-injection and corrupt-image-dimension edges, which need a mocked
+> non-filesystem backend and so are genuinely unreachable from a live request. The
+> broader products/fakeshop activation stays [`TODO-BETA-051-0.1.5`][kanban]. The
+> original (now-historical) deferral rationale follows.
+
 No fakeshop model has a file/image field, and adding one solely for this card
 would be example-app churn, not a real acceptance path. Therefore:
 

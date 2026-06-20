@@ -93,6 +93,7 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/test_query/test_products_api.py",
     "examples/fakeshop/test_query/test_scalars_api.py",
     "examples/fakeshop/test_query/test_scalars_filter_api.py",
+    "examples/fakeshop/test_query/test_uploads_api.py",
     "examples/fakeshop/tests/test_export_schema.py",
     "examples/fakeshop/tests/test_inspect_django_type.py",
     "examples/fakeshop/tests/test_urls.py",

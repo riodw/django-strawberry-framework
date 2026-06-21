@@ -4,7 +4,7 @@ Status: verified
 
 ## DRY analysis
 
-- None — the module already routes its one data-leak-sensitive operation (running a target's sync `get_queryset` and rejecting an async hook) through the single canonical helper `utils/querysets.py::apply_type_visibility_sync` (`permissions.py:225`), and the "cascadable edge" predicate is defined exactly once in `_is_cascadable_edge` and consumed by both `_cascadable_edge_names` (the `fields=` validator) and `_walk` (`permissions.py:111`, `permissions.py:215`), so scope cannot drift between the validator and the walk. The async twin is a `sync_to_async` wrap of the single sync walk (`permissions.py:249`), so there is no second walk implementation to keep in parity. The `Q(...__in=...) | Q(...__isnull=True)` composition appears once. No near-copy or repeated literal exists to hoist.
+- None — the cascade-permissions subsystem is already single-sourced. `_is_cascadable_edge` is the one definition of "cascadable edge" that both the full walk (`_walk` via `_cascadable_edges`) and the `fields=` validator (`_validate_fields` via `_cascadable_edge_names`) key off, so scope cannot drift between the two entry paths. The per-edge sync `get_queryset` invocation is delegated to the canonical `utils/querysets.py::apply_type_visibility_sync` (the package's single sync-misuse site, Decision 10), and the async twin `aapply_cascade_permissions` wraps the one sync `_walk` through `sync_to_async` rather than carrying a second async walk implementation. There is no near-copy or repeated literal to consolidate (shadow overview reports 0 repeated string literals).
 
 ## High:
 
@@ -16,42 +16,28 @@ None.
 
 ## Low:
 
-### `field.remote_field` is a bare attribute access while the two preceding predicates use guarded `getattr`
-
-In `_is_cascadable_edge` the first two predicates read `getattr(field, "related_model", None)` and `getattr(field, "column", None)`, but the third reads `field.remote_field.parent_link` via `getattr(field.remote_field, "parent_link", False)` — the outer `field.remote_field` is unguarded.
-
-```django_strawberry_framework/permissions.py:102:106
-    return (
-        getattr(field, "related_model", None) is not None
-        and getattr(field, "column", None) is not None
-        and not getattr(field.remote_field, "parent_link", False)
-    )
-```
-
-This is correct today and not a latent crash: Python's `and` short-circuits, so `field.remote_field` is only evaluated once a field has both a non-`None` `related_model` and a non-`None` single-column `column` — i.e. a concrete forward `ForeignKey`/`OneToOneField`, which always carries a `remote_field` (`ForeignObjectRel`). The asymmetry (two defensive `getattr`s then one bare attribute access) is purely stylistic and arguably *correct* asymmetry: by the third clause the field's shape is already pinned, so a defensive `getattr(field, "remote_field", None)` would add a guard for a state that the first two predicates have already excluded. Defer unless a future Django release ever attaches a `column` to a field type that lacks `remote_field` (none exists today); at that point the bare access would surface as the right loud failure rather than a silent mis-scope, so leaving it unguarded is defensible even then. No action recommended now; recorded only so the next reviewer does not re-flag the asymmetry as an oversight.
+None.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** The per-edge target-hook probe delegates to `utils/querysets.py::apply_type_visibility_sync` (`permissions.py:225`), keeping the package's ONE sync-misuse site (the coroutine-close + `SyncMisuseError` raise) — a visibility-routing mistake is a data-leak class, so it is correctly not re-decided here. `SyncMisuseError` is re-exported in the established `types/relay.py` redundant-alias form (`permissions.py:57`) and adds no new public name (already in the root `__all__` via `types`). The target type is resolved through `registry.get` (`permissions.py:219`), reusing the registry's `Meta.primary` semantics rather than re-deriving primary selection. The async twin reuses the `filters/sets.py` `sync_to_async(thread_sensitive=True)` precedent (`permissions.py:249`).
-- **New helpers considered.** A shared cross-test cascading-hook fixture was considered for the test file but is correctly deferred to the integration pass (the per-slice `_exclude_private` re-declaration mirrors the sibling test-file pattern; noted in the test module's own docstring). No new production helper is warranted: the cascadable-edge predicate is already a single named function.
-- **Duplication risk in the current file.** The `Q(f"{field.name}__in")` / `Q(f"{field.name}__isnull")` pair (`permissions.py:227`) is a single composition site, not a near-copy. The two `model._meta.get_fields()` walks (`permissions.py:111` in `_cascadable_edge_names`, `permissions.py:214` in `_walk`) are intentionally distinct: one collects names for validation, the other composes constraints and applies the `names_to_walk` / `registry` / `has_custom_get_queryset` gates — folding them would couple validation to composition and is correctly left apart.
+- **Existing patterns reused.** `permissions.py::_walk #"apply_type_visibility_sync("` routes every per-edge target-hook run through the canonical `utils/querysets.py::apply_type_visibility_sync` (def at `utils/querysets.py:100`), keeping ONE sync-misuse-rejection site package-wide (Decision 10). `SyncMisuseError` is re-exported via the established redundant-alias form (`permissions.py #"from .utils.querysets import SyncMisuseError as SyncMisuseError"`, the `types/relay.py` convention) and adds no new public name (already in package-root `__all__` via `types`). `has_custom_get_queryset` (`types/base.py:669`) is the canonical "target has a real hook" gate reused as the per-edge skip predicate.
+- **New helpers considered.** Considered folding `_cascadable_edge_names` into `_cascadable_edges` callers directly; rejected — the tiny frozenset wrapper names the `fields=`-validation intent (Decision 5 step 1) and keeps `_validate_fields` reading at one abstraction level. Considered an async-native walk to mirror the sync one; correctly rejected by the existing design (the async twin wraps the single sync walk, so an `async def` target hook raises `SyncMisuseError` identically from both variants — no coroutine-color duplication).
+- **Duplication risk in the current file.** The four `getattr(field, ..., default)` reflective probes in `_is_cascadable_edge` are not a duplication smell — each tests a distinct field attribute (`related_model`, `column`, `many_to_many`, `parent_link`) and the `and`-chain ordering is load-bearing (short-circuits before `field.remote_field` is dereferenced on non-forward-relation fields). The two `Q(**{...})` constructions in `_walk` (`__in` and `__isnull`) are the two halves of the single nullable-FK-preserving disjunct, not a near-copy.
 
 ### Other positives
 
-- **Cycle guard is correct and request-scoped.** `_cascade_seen` is a `ContextVar` (not a module global), so isolation holds under both WSGI and ASGI, and the asgiref `copy_context()` into the `sync_to_async` worker thread means the async path's install/reset never leaks back into the event-loop task. The root call installs a fresh set and resets it in a `finally` (`permissions.py:187-191`) so a handler exception cannot leak a stale seen-set into the next request sharing the context. Re-entry on a class already in flight returns the queryset unchanged (`permissions.py:192-193`) — partial-narrow, never raise. The seen-set keys on the `DjangoType` *class* object, so a secondary-rooted walk that re-reaches its model via the primary still terminates (primary ≠ secondary in the set). All four behaviors are pinned: `test_cycle_guard_contextvar_breaks_mutual_cascade` (including the exception-path `finally` reset), `test_self_referential_fk_cascades_once`, `test_secondary_type_as_root_reaches_primary_on_transitive_revisit`, plus an autouse `_assert_contextvar_clean` fixture that makes any leak a hard failure.
-- **Edge scope is tight and empirically pinned.** The `getattr(field, "column", None) is not None` test (rather than a bare `hasattr`) correctly excludes M2M and `GenericRelation` (whose `column` attribute *exists* but is `None` under Django 6.0) — `test_single_column_scope_skips_m2m_reverse_and_generic` asserts the exact cascadable set `{"fk", "o2o", "content_type"}` and individually verifies each excluded kind. The explicit `parent_link` guard drops the MTI `<parent>_ptr` edge that otherwise passes the two-predicate test (`test_mti_parent_link_edge_excluded`), preventing a child row from being silently narrowed by its MTI-parent type's hook.
-- **Data-isolation correctness.** Nullable-FK rows survive a fully-hiding target via the `| Q(<fk>__isnull=True)` disjunct (`test_nullable_fk_rows_preserved`); a hidden-target row and a missing-target row are indistinguishable in the result, so the cascade never leaks "you may not see this" (`test_hidden_and_missing_targets_indistinguishable`). The target subquery base is pinned to the caller's *resolved* alias via `queryset.db` (`permissions.py:224`), not the private `_db`, so sharded callers never compose a cross-database `__in` (`test_multi_db_subquery_pinned_to_caller_alias`, `FAKESHOP_SHARDED`-gated).
-- **Pure `.filter` composition, zero added round-trips.** `_walk` never evaluates, reorders, or projects; the `__in` subqueries compile into the caller's single `SELECT` (`test_cascaded_traversal_adds_zero_queries` pins an absolute count of 1 with an `"IN (SELECT"` right-path guard, distinguishing real composition from a silently-empty walk). The identity-hook skip (`has_custom_get_queryset() is False`, `permissions.py:222`) avoids emitting a dead `__in (SELECT ...)` for default targets (`test_identity_hook_targets_skipped_no_sql`), and unregistered targets (`registry.get` → `None`) are skipped (`test_unregistered_target_model_skipped`).
-- **`fields=` validation is loud and well-specified.** `None` (walk all) vs `[]` (defined no-op) vs unknown/non-cascadable name (`ConfigurationError` naming field/model/cascadable-set) vs bare string (rejected up front so `fields="item"` does not validate per-character) are all distinct and each pinned (`test_fields_*`). A cascadable-but-hookless name validates clean and is skipped by the per-edge gate (`test_fields_valid_but_hookless_name_accepted`).
-- **Async/sync parity is a deliberate single-walk design, not a gap.** The async twin wraps the *entire* sync walk in `sync_to_async`, so an `async def` target hook still raises `SyncMisuseError` from `aapply_cascade_permissions` (no awaiting context inside the worker thread). This is documented in the module docstring and pinned by `test_aapply_async_target_hook_still_raises`; the off-loop execution + no-leak property is pinned by `test_aapply_runs_walk_off_event_loop`. Because there is no second async walk, there is no parity surface to drift.
-- **Composition with the optimizer and gates is verified.** A cascading hook is a custom hook, so the optimizer falls back from FK-id elision / `select_related` to a `Prefetch` baked with the live `info` (`test_fk_id_elision_falls_back_for_cascading_target`, `test_nested_relation_traversal_respects_target_cascade`), and a `strictness="raise"` run stays silent because the cascade composes SQL rather than lazy-loading (`test_strictness_raise_silent_across_cascaded_shape`). The `check_<field>_permission` input gates run *after* the cascade narrows rows, and a gate denial is byte-identical whether or not a hidden row exists (`test_gate_denial_no_existence_leak`) — the no-existence-leak property.
-- **Docstrings and GLOSSARY are accurate.** The module/function docstrings precisely describe the four ported upstream invariants and the three package adaptations (registry primary resolution, identity-hook skip, `parent_link` exclusion). `GLOSSARY.md:171-200` matches the implementation verbatim, including the `fields=` semantics, the sync/async pair, and the composition section — no drift. No TODOs, no stale spec references.
+- **Empty cycle diff confirmed.** `git diff 2e35ec278e585cb2a8a93b84ae641d1126ceb3d5 -- django_strawberry_framework/permissions.py` and `git diff HEAD -- …` are both empty — no source-logic, test, or comment change this cycle. Genuine shape #5 no-source-edit cycle.
+- **GLOSSARY is current, no drift.** Grepped every public symbol (`apply_cascade_permissions`, `aapply_cascade_permissions`, `SyncMisuseError`) against `docs/GLOSSARY.md`. The dedicated `apply_cascade_permissions` entry (GLOSSARY.md:180-210) accurately documents the single-column forward FK/O2O scope, the MTI `<parent>_ptr` exclusion, the four invariants (ContextVar cycle guard, single-column forward scope, `__isnull=True` nullable-FK preservation, `queryset.db` alias pinning), the loud `fields=` validation (bare-string rejection, unknown/non-cascadable name → `ConfigurationError`), the sync/async pair with `SyncMisuseError`, and the zero-round-trip `__in`-subquery composition. `SyncMisuseError`'s entries (GLOSSARY.md:1115, 1331) correctly attribute the raise to the shared `apply_type_visibility_sync`. No GLOSSARY-only fix in scope.
+- **ContextVar cycle guard is correct under both runtimes.** Root call installs `{cls}` and resets the var in a `finally` (frame-exit cleanup survives a handler exception); re-entry on an in-flight `cls` returns the partially-narrowed queryset without raising; non-root frames `seen.discard(cls)` in their own `finally`. `ContextVar` (not a plain global) so request isolation holds under WSGI/ASGI, and the async twin's `sync_to_async` install/reset runs on the asgiref-copied context (never leaking back to the event-loop task).
+- **Scope-leak guards are defensively tight.** `_is_cascadable_edge` excludes M2M (the explicit `not many_to_many` guard handles the Django 5.2 case where `ManyToManyField.column` is non-`None`), reverse relations / `GenericForeignKey` / `GenericRelation` (via `related_model` / `column` presence tests, with `column` value-checked not `hasattr`-checked to exclude the Django 6.0 `column=None` attributes), composite-PK/FK targets, and the MTI `<parent>_ptr` parent link (explicit `parent_link` guard) — each documented with the exact Django-version rationale.
+- **Loud, well-shaped validation.** `_validate_fields` distinguishes the `None` sentinel (walk all) from `[]` (defined no-op), rejects a bare string before it iterates into per-character noise, and converts a raw `TypeError` from a non-iterable into a contract-naming `ConfigurationError` (feedback M2). The `list(...)`-before-`set(...)` ordering is deliberate so unhashable entries are caught by the string check rather than escaping from `set(...)`.
+- **Zero added round-trips.** `_walk` composes pure `.filter(...)` `__in` subqueries and never evaluates, reorders, or projects, so the subqueries compile into the caller's single `SELECT` (Decision 7). The `lru_cache(maxsize=1024)` on `_cascadable_edges` caches immutable post-app-loading model metadata with bounded, correctness-neutral eviction.
 
 ### Summary
 
-`permissions.py` is genuinely new 0.0.10 code (the cascade-permissions surface, never previously reviewed) and it holds up to scrutiny as a data-isolation-critical module. The cycle guard is correctly a `ContextVar` with `finally`-reset request isolation across WSGI/ASGI and the asgiref-copied async-worker context; the edge scope is tight (single-column forward FK/OneToOne only, with the `column is not None` and `parent_link` subtleties handled and individually pinned); nullable-FK rows are preserved; subqueries are alias-pinned to `queryset.db`; the walk is pure `.filter` composition with zero added round-trips; and the sync-misuse routing is delegated to the package's single canonical helper. The async twin is a `sync_to_async` wrap of the one sync walk, so there is no parity gap — the documented `SyncMisuseError`-from-both-variants behavior is intentional and tested. The test suite is unusually thorough, pinning every invariant, edge case, and composition surface with right-path guards. No High or Medium findings; one stylistic Low (a bare `field.remote_field` access after two guarded `getattr`s) that is correct by short-circuit and recorded only to pre-empt re-flagging. The cycle diff against the baseline is empty (the file was not touched this cycle); this is a fresh first review of standing code.
+`permissions.py` is the cascade-permissions subsystem (`apply_cascade_permissions` / `aapply_cascade_permissions`) and is unchanged this cycle (empty diff vs both the per-cycle baseline `2e35ec27` and HEAD). Every load-bearing invariant the spawn brief named holds: ContextVar cycle guard with `finally` reset, single-column forward FK/O2O scope (with explicit M2M / MTI-`<parent>_ptr` exclusions carrying Django-version rationale), nullable-FK preservation via the `__isnull=True` disjunct, caller-alias pinning via `queryset.db`, sync+`sync_to_async` pairing through ONE sync walk, and zero added round-trips via `__in` subqueries. DRY is fully resolved — the edge predicate is single-sourced and the sync-misuse routing is delegated to the canonical `apply_type_visibility_sync`. GLOSSARY prose is current with no drift. Zero findings; genuine shape #5 no-source-edit cycle.
 
 ---
 
@@ -66,21 +52,13 @@ Filled by Worker 1 per no-source-edit cycle pattern.
 - None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — pass; 267 files left unchanged.
-- `uv run ruff check --fix .` — pass; all checks passed.
+- `uv run ruff format .` — pass (289 files left unchanged).
+- `uv run ruff check --fix .` — pass (all checks passed).
 
 ### Notes for Worker 3
-- Zero High, zero Medium. One Low (`### `field.remote_field` is a bare attribute access while the two preceding predicates use guarded `getattr``) is explicitly no-action: it is correct by `and` short-circuit (the third clause is only reached for concrete forward FK/OneToOne fields, which always carry `remote_field`), and a defensive `getattr` would guard a state the first two predicates already exclude. Recorded only to pre-empt re-flagging; no edit warranted.
-- No GLOSSARY-only fix in scope — `GLOSSARY.md:171-200` (`apply_cascade_permissions` entry) matches the implementation verbatim, no drift.
-- Cycle diff against `CYCLE_BASELINE` is empty; the file was not modified this cycle.
-
----
-
-## Comment/docstring pass
-
-Filled by Worker 1 per no-source-edit cycle pattern.
-
-No comment/docstring edits in scope. The module-level docstring and per-function docstrings accurately describe the four ported upstream invariants and the three package adaptations; no stale comments, no TODOs, no obsolete spec references.
+- Zero findings across High/Medium/Low. Diff empty vs both the per-cycle baseline `2e35ec278e585cb2a8a93b84ae641d1126ceb3d5` and HEAD (`git diff … -- django_strawberry_framework/permissions.py` empty for both).
+- No GLOSSARY-only fix in scope — `docs/GLOSSARY.md` entries for `apply_cascade_permissions` (180-210) and `SyncMisuseError` (1115, 1331) are current vs the implementation (verified via grep of all public symbols).
+- No deferred findings; no false-premise rejections.
 
 ---
 
@@ -88,43 +66,38 @@ No comment/docstring edits in scope. The module-level docstring and per-function
 
 Filled by Worker 1 per no-source-edit cycle pattern.
 
-Not warranted — no source edit was made this cycle (review-only). Per `AGENTS.md` ("Do not update CHANGELOG.md unless explicitly instructed") and the active plan `docs/review/review-0_0_10.md` (silent on changelog edits for review artifacts), no changelog entry applies.
+- **Not warranted.** Internal-only review with zero source/test/doc edits this cycle. AGENTS.md #21 ("Do not update CHANGELOG.md unless explicitly instructed") and the active plan `docs/review/review-0_0_11.md` (silent on changelog edits for review cycles) both apply.
 
 ---
 
 ## Verification (Worker 3)
 
+### Zero-edit proof (shape #5)
+- `git diff 2e35ec278e585cb2a8a93b84ae641d1126ceb3d5 -- django_strawberry_framework/permissions.py` and `git diff HEAD -- …` are BOTH empty. `permissions.py` is absent from `git diff --stat <baseline> -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md`.
+- The sole owned-path dirty hunk in the stat is `tests/management/test_inspect_django_type.py` (a file/image output-converter test, `_scalar_row` / `convert_field_output` — wholly unrelated to the cascade subsystem). It is the standing `inspect_django_type` concurrent-maintainer work this release (AGENTS.md #33; recorded in my memory across the connection.py / list_field.py cycles). Its owning artifact `rev-management__commands__inspect_django_type.md` is `Status: verified` (plan box still `[ ]` at review-0_0_11.md:103, so attributed under #33 rather than the closed-sibling carve-out). Either way it is not owned by THIS permissions cycle and is not a rejection trigger. The cycle's "Files touched: None" claim holds.
+- CHANGELOG `git diff -- CHANGELOG.md` empty. Each Worker 2 section opens "Filled by Worker 1 per no-source-edit cycle pattern."
+
 ### Logic verification outcome
+- High / Medium / Low all `None.` — independently confirmed genuine (not lazy), every load-bearing invariant pinned by a named test in `tests/test_permissions.py`:
+  - ContextVar cycle guard + `finally` reset: `test_cycle_guard_contextvar_breaks_mutual_cascade` (re-entry partial-narrows; root resets in `finally`; `ContextVar` not a global so WSGI/ASGI + asgiref-copied-context isolation).
+  - Single-column forward FK/O2O scope with M2M / reverse / generic exclusions: `test_single_column_scope_skips_m2m_reverse_and_generic`; MTI `<parent>_ptr` exclusion via the explicit `parent_link` guard: `test_mti_parent_link_edge_excluded`.
+  - Nullable-FK `__isnull=True` preservation: `test_nullable_fk_rows_preserved`.
+  - Caller-alias pinning via `queryset.db`: `test_multi_db_subquery_pinned_to_caller_alias`.
+  - Zero added round-trips via `__in` subqueries: `test_cascaded_traversal_adds_zero_queries`.
+  - Sync + `sync_to_async` sharing ONE `_walk`: `test_sync_helper_raises_syncmisuseerror_on_async_target_hook` + `test_aapply_async_target_hook_still_raises` (async twin raises identically from inside the worker thread).
+  - `fields=` loud validation: `test_fields_bare_string_raises`, `test_fields_non_iterable_raises_configuration_error`, `test_fields_unhashable_entry_raises_configuration_error`, `test_fields_non_string_entry_raises_configuration_error`, `test_fields_unknown_name_raises`, `test_fields_non_cascadable_name_raises`, `test_fields_empty_list_cascades_nothing`.
+- Reused-symbol claims confirmed live: `apply_type_visibility_sync` (def `utils/querysets.py:100`, `async_recourse` param) and `SyncMisuseError` (`utils/querysets.py:35`, `(ConfigurationError, RuntimeError)`); `has_custom_get_queryset` exists at `types/base.py`. The redundant-alias re-export adds no new public name.
 
-No-source-edit (shape #5) + no-findings (shape #1) on genuinely new, data-isolation-critical 0.0.10 code (`permissions.py`, never reviewed before). Did NOT rubber-stamp — independently re-derived each of the six dispatch-named highest-risk invariants against the actual source and `tests/test_permissions.py`:
-
-1. **ContextVar reset in `finally`.** `apply_cascade_permissions::apply_cascade_permissions` #"token = _cascade_seen.set(seen)" installs a fresh `{cls}` on the root call and resets in a `finally` (unconditional, fires on the walk-body exception path too). Non-root re-entry `if cls in seen: return queryset` partial-narrows without raising; non-root non-seen path uses `try/finally: seen.discard(cls)`. No cross-request guard leak. Pinned by `test_cycle_guard_contextvar_breaks_mutual_cascade` (asserts the `finally` reset after a `RuntimeError("boom")` walk body) + the autouse `_assert_contextvar_clean` fixture making any residual set a hard failure.
-2. **Single-column forward FK / OneToOne only; MTI `parent_link` exclusion.** `_is_cascadable_edge` = `related_model is not None AND column is not None AND not remote_field.parent_link`. The `column is not None` (not `hasattr`) correctly excludes M2M / `GenericRelation` whose `column` attribute exists-but-is-`None` under Django 6.0. `test_single_column_scope_skips_m2m_reverse_and_generic` asserts the exact set `{"fk", "o2o", "content_type"}` and individually checks each excluded kind; `test_mti_parent_link_edge_excluded` confirms the parent-link passes both upstream predicates yet is dropped by the guard.
-3. **Nullable-FK rows preserved.** `_walk` composes `Q(<field>__in=target_qs) | Q(<field>__isnull=True)`. `test_nullable_fk_rows_preserved` (hide-everything hook keeps the null-FK row) + `test_hidden_and_missing_targets_indistinguishable`.
-4. **Alias pinning via `queryset.db`.** `_walk` #"field.related_model._default_manager.using(queryset.db).all()" uses the public router-resolved `queryset.db`, not private `_db`. `test_multi_db_subquery_pinned_to_caller_alias` (FAKESHOP_SHARDED-gated).
-5. **Sync/async parity — no gap.** `aapply_cascade_permissions` is a pure `sync_to_async(apply_cascade_permissions, thread_sensitive=True)(...)` wrap of the one sync walk; no second walk exists. An `async def` hook raises `SyncMisuseError` from both variants via the single `apply_type_visibility_sync` probe (confirmed at `utils/querysets.py::apply_type_visibility_sync`, line 93). Pinned by `test_aapply_runs_walk_off_event_loop` + `test_aapply_async_target_hook_still_raises`.
-6. **Composition with `check_<field>_permission` gates.** Cascade narrows rows in `get_queryset` first; gates judge input after, over narrowed rows. `test_cascade_then_filter_gate_composition`, `test_cascade_then_order_gate_composition`, and the load-bearing `test_gate_denial_no_existence_leak` (byte-identical message AND `.extensions` with/without a hidden row) pin the no-existence-leak property.
-
-Also confirmed the delegated chokepoints exist as cited: `SyncMisuseError` (`utils/querysets.py:35`), `apply_type_visibility_sync` (`utils/querysets.py:93`), `has_custom_get_queryset` (`types/base.py:669`), `registry.get` (`registry.py:221`) — and the `has_custom_get_queryset() is False` identity-hook skip + unregistered-target skip in `_walk` (pinned by `test_identity_hook_targets_skipped_no_sql` / `test_unregistered_target_model_skipped`).
-
-**Single Low — correctly no-action.** The bare `field.remote_field` access (third clause of `_is_cascadable_edge`) is correct by `and` short-circuit: the first two clauses (`related_model is not None`, `column is not None`) pin the field to a concrete forward FK/OneToOne, which always carries `remote_field`, so the third clause cannot fault. No source defect; recorded only to pre-empt re-flagging. Verbatim trigger phrasing present, not a GLOSSARY-only fix — not a disqualifier.
+### Genuine #5, not a missed #4 (GLOSSARY accuracy)
+- `docs/GLOSSARY.md` `## apply_cascade_permissions` (180-207) read against live source: single-column forward FK/O2O scope, registry-primary lookup, skip-no-custom-hook gate, `Q(<fk>__in) | Q(<fk>__isnull=True)`, `queryset.db` alias pinning, depth-1 transitive cascade, the four invariants (ContextVar `finally` reset / single-column forward / `__isnull=True` / alias pinning), sync/async pair via `sync_to_async(thread_sensitive=True)`, `SyncMisuseError`, zero-round-trip `__in` — all accurate. `SyncMisuseError` entry (1115) correctly attributes the raise to the shared `apply_type_visibility_sync`. No GLOSSARY-only fix owed.
 
 ### DRY findings disposition
-
-DRY = None, accepted. Re-derived: the one data-leak-sensitive op routes through the single `apply_type_visibility_sync`; the cascadable-edge predicate is defined once in `_is_cascadable_edge` and consumed by both `_cascadable_edge_names` (validator) and `_walk` (walk), so scope cannot drift; the async twin is a `sync_to_async` wrap of the one sync walk (no second implementation). No near-copy to hoist.
+- DRY `- None` accepted: `_is_cascadable_edge` is the single edge predicate keyed by both the full walk and the `fields=` validator; per-edge sync hook delegated to canonical `apply_type_visibility_sync`; async twin wraps the one sync `_walk`. No near-copy to consolidate.
 
 ### Temp test verification
-
-No temp test needed. The six invariants are each pinned by a named test in `tests/test_permissions.py` that grep-matches and reads as a genuine right-path assertion (absolute query counts with `"IN (SELECT"` presence guards, exact cascadable-set equality, byte-identical-error checks). The source was read directly; the short-circuit reasoning for the single Low is verifiable by inspection. No executable confirmation gap remained.
-
-### Shape #5 additional checks
-- `git diff --stat <CYCLE_BASELINE> -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md`: empty for owned paths (the file was not touched this cycle — first review of standing code). Dirty working-tree files (`__init__.py`, `pyproject.toml`, `uv.lock`, `dicta.md`) are all diff-empty vs the baseline SHA → pre-baseline, not this item's edits.
-- Each Worker 2 section opens with `Filled by Worker 1 per no-source-edit cycle pattern.` ✓
-- The single Low has verbatim trigger phrasing and is no-action (not a GLOSSARY-only fix) ✓
-- Changelog `Not warranted` cites BOTH `AGENTS.md` and the active plan's silence; `git diff -- CHANGELOG.md` empty ✓
-- `uv run ruff format --check` (1 file already formatted) + `uv run ruff check` (All checks passed) on `permissions.py` ✓
-- GLOSSARY (`#apply_cascade_permissions`) matches the implementation — the four invariants, `fields=` semantics, sync/async pair, and composition section — and is diff-empty vs baseline (no GLOSSARY-only fix) ✓
+- None created; the existing permanent suite pins every invariant.
 
 ### Verification outcome
+- `cycle accepted; verified` — sets top-level `Status: verified` AND marks the `permissions.py` checklist box.
 
-`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `permissions.py` checklist box in `docs/review/review-0_0_10.md`.
+---

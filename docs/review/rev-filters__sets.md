@@ -2,19 +2,10 @@
 
 Status: verified
 
-> **Re-review after concurrent change.** This artifact previously closed `verified`
-> against a baseline where the cycle diff was empty. Commit `79b74b46
-> "Refactor permission checks to consolidate active permission targets"` then
-> rewrote ~+53 lines (constant hoists + a fused single-pass permission walk),
-> re-opening this item. The sections below are rewritten against CURRENT source at
-> HEAD (`git diff HEAD -- filters/sets.py` is empty; the maintainer's change is
-> committed). The whole file is the review unit; the consolidated permission logic
-> got the security-critical attention the dispatch called for. Iteration history is
-> preserved by this note + the prior `verified` close (now superseded).
-
 ## DRY analysis
 
-- None — the refactor under review IS a DRY consolidation, and it lands the file at its maximally-factored shape. The new `FilterSet._active_permission_targets` (sets.py:1292-1313) is a thin delegate to `utils/permissions.py::active_permission_targets`, which is now the single-sited single-pass classifier that BOTH `_active_permission_field_paths` (sets.py:1273-1289, takes the `LEAF` half) and `active_related_branches` (permissions.py:203-245, takes the `RELATED` half) wrap, and that `run_active_input_permission_checks` (permissions.py:319-337) consumes once per level instead of two full walks. The two new module constants `_LOGIC_WIRE_BY_PYTHON_ATTR` (sets.py:93) and `_NORMALIZE_TRAVERSAL` (sets.py:99-104) collapse per-call rebuilds in `_normalize_input` to import-time singletons. The remaining same-named twins versus `orders/sets.py` (`_iter_input_items`, `_request_from_info`, `_iter_active_related_branches`, `_active_permission_field_paths`, `_active_permission_targets`, `_run_permission_checks` body) are the deliberate two-family wrappers around the shared `utils/permissions.py` core, not duplication — the cross-folder consolidation of these wrappers is already deferred-with-trigger in the cycle-11 (`sets_mixins.py`) / cycle-12 (`filters/base.py`) artifacts ("re-confirm all 3 families share the params when AggregateSet / fieldsets WIP-ALPHA-028 lands"). No new act-now opportunity is unique to this file.
+- **Defer-with-trigger — sync/async visibility-derive sibling pair.** `FilterSet._derive_related_visibility_querysets_sync` (`filters/sets.py:974-1004`) and `_derive_related_visibility_querysets_async` (`filters/sets.py:1007-1023`) share the `_iter_visibility_steps` driver and differ only by `apply_type_visibility_sync` + `child_filterset.apply_sync` vs the `await`ed async pair. Collapsing into one maybe-await helper would reintroduce coroutine-color ambiguity (the sync path must raise `SyncMisuseError` synchronously, the async path must `await` before raise) and is exactly the shape the `connection.py` review flagged as the wrong consolidation. **Defer until a maybe-await primitive is introduced package-wide** (the same trigger the connection `_attach_count_sync/_async` pair carries); do not act now.
+- **Defer-with-trigger — filter/order apply-pipeline family mirror.** The whole `_run_permission_checks` / `_active_permission_targets` / `_iter_active_related_branches` / `_request_from_info` / `_extract_branch_value` / `_iter_input_items` set already bottoms out in single-sited `utils/permissions.py` cores (`run_active_input_permission_checks`, `active_permission_targets`, `active_related_branches`, `request_from_info`, `extract_branch_value`, `iter_input_items`); the local methods are thin family-config wrappers. The remaining near-duplication is the *apply-pipeline scaffold* (`apply_sync` / `apply_async` / `apply` + `_apply_common_prelude` / `_apply_common_finalize`) shared structurally with `orders/sets.py`. **Defer to the `rev-filters.md` folder pass and `rev-django_strawberry_framework.md` project pass** (cross-family, cross-module); the GLOSSARY (`docs/GLOSSARY.md:971`) already pins the filter/order apply-pair parity as intentional sibling design, so this is forward-looking, not act-now. Trigger: a third `*Set.apply_*` family (e.g. `AggregateSet`) landing — then fold the prelude/finalize/dispatch scaffold through a shared mixin.
 
 ## High:
 
@@ -26,31 +17,28 @@ None.
 
 ## Low:
 
-### `_q_for_branch` defensive-fallback sync derive on the async stash-miss path
-
-`_q_for_branch` (sets.py:1486-1563) consults `_nested_qs_by_branch_id` and, on a stash miss under the async path, falls back to `_derive_related_visibility_querysets_sync` — which would re-raise `SyncMisuseError` for an async-only target `get_queryset`. The docstring (sets.py:1496-1519) names this as a deliberate defensive fallback for callers that short-circuit past the `_collect_nested_visibility_querysets_async` pre-walk (e.g. invoking `_q_for_branch` directly). This remains correct: `_collect_nested_visibility_querysets_async` (sets.py:1034-1105) walks every reachable `and` / `or` / `not` arm with the same `_extract_branch_value` dual-key logic `_evaluate_logic_tree` uses and stashes each by `id(child_input)`, so the production async path can never reach the fallback for a branch the sync descent will later visit. Untouched by the refactor. Recorded only to pre-empt re-flagging — NOT a finding needing a fix. Re-examine only if the two walkers' branch-enumeration logic ever diverges (e.g. `_collect_nested_*` stops recursing a branch shape `_evaluate_logic_tree` still descends), at which point the stash-miss fallback would become a reachable async-path `SyncMisuseError`.
+None.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** `_iter_input_items` -> `utils/permissions.py::iter_input_items` (sets.py:659-667); `_request_from_info` -> `request_from_info(..., family_label="FilterSet")` (sets.py:864-875); `_iter_active_related_branches` -> `active_related_branches(...)` (sets.py:878-904); `_extract_branch_value` -> `extract_branch_value(...)` (sets.py:907-917); `_active_permission_targets` -> `active_permission_targets(...)` (sets.py:1305-1313); `_active_permission_field_paths` -> `_active_permission_targets(...)[0]` (sets.py:1289); `_invoke_permission_method` -> `invoke_permission_method(...)` (sets.py:1270); `_run_permission_checks`'s gate core -> `run_active_input_permission_checks(...)` (sets.py:1212-1219); visibility derive -> `apply_type_visibility_sync` / `apply_type_visibility_async`; the lifecycle-attr names + cache/guard via `SetLifecycleAttrs` + `expanded_once`; RelatedFilter collection via `collect_related_declarations` (sets.py:188-201). All single-sited with the order twin.
-- **New helpers considered.** The refactor already extracted the right helpers: `active_permission_targets` (permissions.py:153-200) is the single-pass classifier; `_active_permission_field_paths` and `active_related_branches` are now thin wrappers over it so the LEAF/RELATED classification rule stays single-sited. `_LOGIC_WIRE_BY_PYTHON_ATTR` / `_NORMALIZE_TRAVERSAL` (sets.py:93, 99-104) hoist the per-call rebuilds `_normalize_input` paid. `_apply_common_prelude` / `_apply_common_finalize` (sets.py:1658-1698) still collapse the sync/async shared body to one site each; the async-only `_nested_qs_by_branch_id` stash correctly stays inline in `apply_async`. No further helper warranted.
-- **Duplication risk in the current file.** The `and` / `or` / `not` three-branch unrolled loops recur in `_collect_nested_visibility_querysets_async`, `_run_permission_checks`, and `_evaluate_logic_tree`, but each unrolls differently (async derive vs perm recursion vs `Q` `&`/`|`/`~` composition with the `or` arm needing its own accumulator and `not` negated) — a shared iterator would obscure the per-branch operator semantics. Correct as intentional sibling shape. The two-call-site fan-out of every delegate (FilterSet here + OrderSet twin) is the deliberate two-family design.
+- **Existing patterns reused.** The apply pipeline's shared steps are single-sited: permission gates route through `utils/permissions.py::run_active_input_permission_checks` (`filters/sets.py:1219`) / `active_permission_targets` (`:1312`) / `invoke_permission_method` (`:1277`); request resolution through `request_from_info` (`:882`); input traversal through `utils/input_values.py::iter_active_fields` (`:722`) with the module-singleton `_NORMALIZE_TRAVERSAL` (`:100-105`); related-branch listing through `active_related_branches` (`:906`); branch-value extraction through `extract_branch_value` (`:924`); the cardinality classifier through `utils/relations.py::is_many_side_relation_kind(relation_kind(...))` (`:621`); the expansion cache/guard through `sets_mixins.expanded_once` (`:385-391`) keyed off the `SetLifecycleAttrs` descriptor (`:263-267`); related-declaration collection through `sets_mixins.collect_related_declarations` (`:194-201`); and sync-misuse routing through `utils/querysets.py::apply_type_visibility_sync` / `_async`. The depth-cap message is single-sourced in `_raise_logic_depth_exceeded` (`:1026-1038`); the prelude/finalize split (`_apply_common_prelude` `:1662`, `_apply_common_finalize` `:1685`) already dedupes the sync/async apply bodies.
+- **New helpers considered.** A unified maybe-await visibility-derive helper was evaluated and rejected (coroutine-color hazard; the sync path's synchronous `SyncMisuseError` raise is load-bearing for `apply`'s catch-rethrow contract). Hoisting the reverse-map (`_FORM_KEY_BY_PYTHON_ATTR` `:86-89`) and the wire-key map (`_LOGIC_WIRE_BY_PYTHON_ATTR` `:94`) to import-time is already done (feedback L2).
+- **Duplication risk in the current file.** The `and` / `or` / `not` branch handling repeats across `_run_permission_checks` (`:1231-1259`), `_evaluate_logic_tree` (`:1451-1485`), and `_collect_nested_visibility_querysets_async` (`:1084-1111`). This is intentional sibling design, not extractable: each walk does different work per arm (permission recursion vs `Q`-composition vs visibility pre-derive), and `_evaluate_logic_tree`'s `or`-group builds an OR-disjunction (`or_q |= ...`) while the other two iterate arms independently. The 6x `related_filters` / 3x `FilterSet` / 2x `_owner_definition` / 2x `is_relation` repeated literals (overview "Repeated string literals") are distinct attribute/config references, not consolidation candidates.
 
 ### Other positives
 
-- **The fused permission walk preserves the prior semantics exactly.** `run_active_input_permission_checks` now calls `cls._active_permission_targets(input_value)` ONCE (permissions.py:325) and partitions into `field_paths` (LEAF) + `related_branches` (RELATED), where it previously made two full `iter_active_fields` walks. The `LEAF` half is byte-identical to the old `active_permission_field_paths` (same `django_source_path` / `fallback_path` rule, permissions.py:192-197); the `RELATED` half yields the same `(field_name, related_obj, child_input)` tuples the old `active_related_branches` did (RELATED classification keys only off `related_attr` membership, independent of `field_specs` / `logic_keys`, permissions.py:175-179). `LOGIC` records are dropped by both old and new code. Branch iteration order moved from declared-collection order to input-iteration order, but is documented order-independent (per-class `_fired` dedup, AND-commutative narrowing). The duck-typed contract holds: both FilterSet and OrderSet define `_active_permission_targets` (orders/sets.py:350), so `cls._active_permission_targets` resolves on either family.
-- **The two new module constants are import-order-safe.** `_NORMALIZE_TRAVERSAL` (sets.py:99-104) holds `_field_specs` BY REFERENCE inside a frozen `SetInputTraversal` (input_values.py:89-114, no copy), and `iter_active_fields` reads `config.field_specs.get(...)` live at call time (input_values.py:176). `filters/inputs.py` mutates `_field_specs` IN PLACE (`_field_specs[key] = ...`, inputs.py:703,746 — never reassigned, inputs.py:141), so binds that happen after this module imports are observed by the singleton. `_LOGIC_WIRE_BY_PYTHON_ATTR = dict(_LOGIC_KEYS)` (sets.py:93) reproduces the old per-call `dict(_LOGIC_KEYS)` (`_LOGIC_KEYS` is the frozen `(("and_","and"),...)` tuple, inputs.py:130). Both hoists are pure perf with zero behavior change.
-- **Denial-before-filter ordering holds (both paths).** `apply_sync` -> `_apply_common_finalize` (sets.py:1681-1698) runs `_run_permission_checks` then `_validate_form_or_raise` BEFORE the `.qs` read, so a permission denial raises before the queryset materializes. `_run_permission_checks` recurses into `and`/`or`/`not` branches (sets.py:1224-1252) and `run_active_input_permission_checks` recurses into child RelatedFilter sets (permissions.py:329-337), so every nested gate fires pre-`.qs`. The async path routes the identical `_apply_common_finalize` through `sync_to_async(thread_sensitive=True)` (sets.py:1745) — same ordering, off-loop. Untouched by the refactor.
-- **Queryset-as-scope-boundary is airtight.** `_iter_visibility_steps` (sets.py:920-964) raises `ConfigurationError` for an ACTIVE related branch whose target type / child filterset cannot resolve (sets.py:947-952), rather than skipping it — the load-bearing "skipping silently returns unfiltered rows" guard. `_target_type_for_related_filter` (sets.py:1108-1135) prefers the child filterset's bound `_owner_definition.origin` over a model-only `registry.primary_for` lookup, closing the documented multi-DjangoType silent row-leak. Both untouched by the refactor.
-- **ORM correctness.** `_apply_related_constraints` (sets.py:1566-1655) wraps each branch as `pk__in=<parent-pk subquery>` to collapse many-side JOIN duplicates without `.distinct()` (no consumer-visible queryset mutation), keys the final `.filter()` on `related_filter.field_name` (the ORM accessor), and derives the subquery from `constrained` itself so the DB alias / custom-manager scoping carry through. The explicit-`queryset=` × child-qs mixed-model case raises a typed `ConfigurationError` via `is`-identity model comparison.
-- **Caches are clear-hook-correct.** `_lookups_for_field_class_cache` keys on the Django field CLASS (stable across `registry.clear()`) so it needs no clear hook — documented (sets.py:71-78); `_lookups_for_field` returns a `list(cached)` copy. `_FORM_KEY_BY_PYTHON_ATTR` built once at import from a `reversed` view so first-match-wins parity holds (sets.py:85-88).
-- **Test discipline.** Both `check_permissions` entry paths (explicit `requested_fields` and active-input fallback, sets.py:1315-1335) are pinned; the apply pipeline, Relay-vs-scalar conditional, depth cap, and nested-branch visibility are exercised through the example app and package tests. The fused walk is covered transitively by every existing permission test (the public behavior is unchanged).
+- **Correctness of the `or`-group guard.** `_evaluate_logic_tree` (`:1462-1474`) builds the OR sub-`Q` only when `or_branches` is non-empty, so an empty `or: []` does not collapse to `q &= Q()` (a no-op anyway) — and never to a match-nothing predicate. `and` (`:1451`) and `not` (`:1476`) are empty-safe by `.get(...) or []` / `is not None` guards. Empty `Q()` is the correct identity for `qs.filter(...)`.
+- **`pk__in` subquery de-duplication.** `_apply_related_constraints` (`:1655-1658`) wraps the many-side relation restriction as `pk__in=<parent-pk subquery>` rather than a direct `<rel>__in=` JOIN, avoiding duplicate parent rows in lists/connections without a consumer-visible `.distinct()` mutation — and matches the `Q(pk__in=...)` shape `_q_for_branch` (`:1567`) emits, so a related branch answers identically directly or nested under logic. The declared-name-vs-ORM-path divergence (`related_filter.field_name`, `:1656`) is handled with a load-bearing comment.
+- **Typed-error discipline.** Mixed-model `RelatedFilter(queryset=...)` raises a typed `ConfigurationError` naming both models (`:1613-1625`) instead of Django's opaque `TypeError` from `Query.combine`; the `is`-identity comparison correctly mirrors Django's own `self.model != rhs.model` (proxies / MTI children carry distinct identities). Unresolvable active branches raise rather than silently dropping the constraint (`_iter_visibility_steps` `:961-968`). Unsupported own-PK GlobalID lookups raise (`filter_for_lookup` `:563-567`). The depth cap surfaces a typed `ConfigurationError` (`:1034-1038`) instead of a Python `RecursionError`.
+- **Async-only `get_queryset` safety.** `_collect_nested_visibility_querysets_async` (`:1041-1112`) pre-walks every logical arm and awaits each branch's visibility map keyed by `id(child_input)` BEFORE the sync `.qs` read, so `_q_for_branch` (`:1546-1559`) consults the stash instead of the sync derive that would raise `SyncMisuseError` mid-`.qs`. The defensive sync fallback for direct `_q_for_branch` callers is documented and correct. The `_apply_common_finalize` wrap in `sync_to_async(thread_sensitive=True)` (`:1774`) keeps consumer sync hooks off the event loop, mirroring Django's own async-path wrapping.
+- **Cache safety.** `_lookups_for_field_class_cache` (`:79`) is keyed by Django field *class* (MRO-stable, survives `registry.clear()`), needs no clear hook, and returns a `list(cached)` copy (`:158`) so a mutating caller cannot corrupt the memo. `get_filters`'s `cls.__dict__`-based guard (`:372`) correctly avoids inheriting a parent's completed cache and avoids caching a half-built result during metaclass-driven creation.
+- **GLOSSARY fidelity.** `docs/GLOSSARY.md` is current against every public symbol: `FilterSet` (`:511-519`) matches the `apply_sync`/`apply_async`/`form.is_valid()`/`GraphQLError(extensions={"code":"FILTER_INVALID",...})` contract and the `IS a BaseFilterSet subclass` claim; `check_*_permission` active-input-only scope and explicit-`queryset=` filter-scope (`:515`, `:1049`); `RelatedFilter` (`:1043-1051`); `Meta.filterset_class` phase-2.5 owner binding (`:719-723`); `Meta.search_fields` planned-`0.1.2` (matches the TODO at `:361`); `SyncMisuseError` rewrap by `FilterSet.apply` (`:1332`). No drift.
 
 ### Summary
 
-`filters/sets.py` is the spec-027 FilterSet declaration + apply pipeline (1800 lines), re-reviewed after commit `79b74b46` rewrote the permission-target resolution. The refactor is a clean DRY consolidation: a new single-pass `active_permission_targets` classifier replaces two separate input walks per permission level, with `_active_permission_field_paths` / `active_related_branches` reduced to thin LEAF/RELATED wrappers and `run_active_input_permission_checks` calling the fused `cls._active_permission_targets` once. Both families define the method, preserving the duck-typed core contract. Two module constants (`_LOGIC_WIRE_BY_PYTHON_ATTR`, `_NORMALIZE_TRAVERSAL`) hoist per-call rebuilds to import time and are import-order-safe because `_field_specs` is mutated in place and held by reference. All four security-critical invariants the dispatch named are preserved and were re-derived against current source: denial-before-filter ordering fires on both sync and async paths before `.qs`; an active-but-unresolvable RelatedFilter branch raises rather than silently widening; visibility scoping prefers the bound owner type over a model-only registry lookup (closing the multi-type row-leak); and the `pk__in` subquery shape avoids both JOIN-duplicate corruption and consumer-visible `.distinct()` mutation. No High, no Medium, one no-action Low recorded only to pre-empt re-flagging of the documented async stash-miss defensive fallback. Qualifies as a no-findings + no-source-edit cycle (shapes #1 -> #5).
+`filters/sets.py` is byte-identical to both the per-cycle baseline (`298690ae`) and `HEAD` — `git diff` empty on both. The maintainer's recent edit to this file is already captured in `HEAD`, so there is no pending change to scope this cycle. The largest filters file remains a disciplined Layer-3/4 + apply-pipeline implementation: every shared concern (permission core, input traversal, cardinality classifier, expansion cache, sync-misuse routing, depth-cap message) routes through a canonical single-sited helper; the sync/async visibility-derive pair and the cross-family apply scaffold are intentional sibling designs deferred with explicit triggers. No High/Medium/Low findings. GLOSSARY prose for every public symbol is accurate. Genuine no-source-edit cycle (shape #5).
 
 ---
 
@@ -65,126 +53,68 @@ Filled by Worker 1 per no-source-edit cycle pattern.
 - None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — pass; 270 files left unchanged.
-- `uv run ruff check .` — pass; "All checks passed!" (the COM812/formatter-conflict notice is pre-existing config noise, not a result of this cycle).
+- `uv run ruff format .` — pass; `289 files left unchanged`.
+- `uv run ruff check --fix .` — pass; `All checks passed!`.
 
 ### Notes for Worker 3
-- Re-review after concurrent change (commit `79b74b46`). `git diff HEAD -- django_strawberry_framework/filters/sets.py` is EMPTY — the maintainer's change is committed; this is standing-code review against HEAD.
-- The refactor is behavior-preserving: the fused `active_permission_targets` single walk produces the SAME `LEAF` paths and `RELATED` branch tuples the two prior separate walks did (LEAF/RELATED classification is independent of the dropped LOGIC records; RELATED tuples are field-spec/logic-key independent). Verify by re-deriving from `utils/permissions.py:153-200` against `:248-292` (the LEAF wrapper) and `:203-245` (the RELATED wrapper).
-- The two new constants are import-order-safe: `_field_specs` is mutated in place (inputs.py:703,746; never reassigned at :141) and held by reference inside the frozen `SetInputTraversal` (input_values.py:89-114), read live at call time (input_values.py:176).
-- Single Low is no-action (documented async stash-miss defensive fallback in `_q_for_branch`); forward-looking re-examination trigger stated inline. No edit warranted.
-- No GLOSSARY-only fix in scope: GLOSSARY entries for `FilterSet`, `RelatedFilter`, `Meta.filterset_class`, `SyncMisuseError` carry no symbol-name drift from the refactor (the refactor added/renamed only private `_`-prefixed helpers, none of which are documented public contract).
+- `git diff 298690aecf51ecfaa917e58cffd3d411fe18d2e4 -- django_strawberry_framework/filters/sets.py` and `git diff HEAD -- django_strawberry_framework/filters/sets.py` both empty (0 lines) — confirmed twice. The file is unchanged this cycle; the maintainer edit named in the dispatch is already in HEAD.
+- Static overview regenerated this cycle (`docs/shadow/django_strawberry_framework__filters__sets.overview.md` + `.stripped.py`) per the REVIEW.md `filters/` mandate; shadow is gitignored, not an edit.
+- Two DRY bullets, both defer-with-trigger (sync/async visibility-derive pair; cross-family apply-pipeline scaffold forwarded to `rev-filters.md` + `rev-django_strawberry_framework.md`). Neither is act-now.
+- No GLOSSARY-only fix in scope. `docs/GLOSSARY.md` is dirty in the working tree, but that pending edit is the `apps.py`/AppConfig patch-modules entry (`docs/GLOSSARY.md:308`) from a prior cycle's apps.py Medium — it touches no FilterSet symbol. Every `filters/sets.py` public symbol's GLOSSARY prose is accurate (`FilterSet` `:511-519`, `RelatedFilter` `:1043-1051`, `Meta.filterset_class` `:719-723`, `Meta.search_fields` `:898-902`, `SyncMisuseError` `:1331-1332`).
 
 ---
 
 ## Comment/docstring pass
 
-Filled by Worker 1 per no-source-edit cycle pattern. No comment/docstring edits warranted — the refactor's new docstrings (`_active_permission_targets`, the updated `_active_permission_field_paths` "thin delegate to `_active_permission_targets`'s `LEAF` half" note) and the two new constant-block comments (sets.py:90-104, both citing feedback L2) are accurate and load-bearing. The `_q_for_branch` fallback rationale, the `pk__in`-vs-direct-JOIN dedup note, and the `get_filters` `cls.__dict__`-guard reasoning all still match the implementation.
+Filled by Worker 1 per no-source-edit cycle pattern.
+
+Logic-first review surfaced no findings, so no comment/docstring changes are warranted. The file's docstrings are dense and accurate: the module docstring correctly states it IS a `BaseFilterSet` subclass and names the spec-027 layers; the `get_filters` single-threaded contract, the `_q_for_branch` perf note, the `_apply_related_constraints` `pk__in`-vs-JOIN rationale, and the `_collect_nested_visibility_querysets_async` async-only-`get_queryset` explanation all match the implementation. The lone TODO (`:361`, `Meta.search_fields` card `0.1.2`) is a live, correctly-anchored deferral matching GLOSSARY `:898-902`.
 
 ---
 
 ## Changelog disposition
 
-Filled by Worker 1 per no-source-edit cycle pattern. Not warranted — no source change this cycle (AGENTS.md "Do not update CHANGELOG.md unless explicitly instructed"; the active plan `docs/review/review-0_0_10.md` is silent on changelog edits for review cycles). The maintainer's `79b74b46` refactor predates this review and is the maintainer's to changelog if desired.
+Filled by Worker 1 per no-source-edit cycle pattern.
+
+Not warranted. No source, test, GLOSSARY, or behavior change this cycle (empty diff vs baseline and HEAD), so there is nothing to record per `AGENTS.md` ("Do not update CHANGELOG.md unless explicitly instructed") and the active plan (`docs/review/review-0_0_11.md`) prescribes no changelog action for a review-only no-op cycle.
 
 ---
 
 ## Verification (Worker 3)
 
-Terminal-verify of the re-opened cycle (commit `79b74b46` rewrote `filters/sets.py`;
-`git diff HEAD -- filters/sets.py` is EMPTY — the change is committed, this is standing-code
-review against HEAD). Shape #5 (no this-cycle source edit). All four security-critical
-invariants the dispatch named were independently re-derived against current source.
+Shape #5 no-source-edit cycle, terminal-verify.
+
+### Zero-edit proof
+- `git diff 298690aecf51ecfaa917e58cffd3d411fe18d2e4 -- django_strawberry_framework/filters/sets.py` empty; `git diff HEAD -- django_strawberry_framework/filters/sets.py` empty. File byte-identical to both baseline and HEAD.
+- `git diff --stat 298690ae -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` empty this run — fully clean owned-paths stat, no sibling-cycle dirt and no #33 concurrent hunk to attribute. `filters/sets.py` absent from the stat.
+- Each Worker 2 section opens "Filled by Worker 1 per no-source-edit cycle pattern." (Fix report, Comment/docstring pass, Changelog disposition). Confirmed.
+- `uv run ruff format --check .` — 289 files already formatted. `uv run ruff check .` — All checks passed.
 
 ### Logic verification outcome
+All High / Medium / Low are `None.`; independently confirmed genuine, not a skipped defect, by reading the file's substantial surfaces:
+- **Metaclass collection** (`FilterSetMetaclass.__new__` `:170-194`): routes related-declaration collection through the shared `sets_mixins.collect_related_declarations` chokepoint (`:194`); no parallel collection logic.
+- **`get_filters` cache** (`:354-391`): the `"related_filters" in cls.__dict__` guard (`:372`) avoids caching a parent's completed cache or a half-built result; `expanded_once` reentry returns the unexpanded `super().get_filters` so a self-referential `RelatedFilter` neither recurses infinitely nor caches a partial.
+- **Meta validation / GlobalID own-PK** (`:556-567`): unsupported own-PK lookups (anything outside `exact`/`in`/`isnull`) raise a typed `ConfigurationError` naming the field, not Django's opaque default.
+- **Sync vs async visibility-derive** (`:973-1023`): the pair shares the `_iter_visibility_steps` driver and differs only by `apply_type_visibility_sync` + `apply_sync` vs the awaited async pair. The sync path's synchronous `SyncMisuseError` raise (via `apply_type_visibility_sync`) is load-bearing for `apply`'s catch-and-rethrow contract (`:1795-1804`, `RuntimeError` with "use apply_async instead") — a maybe-await collapse would reintroduce coroutine-color hazard. Defer correct.
+- **Per-field `check_*_permission` active-input-only scope** (`:1218-1259`): `run_active_input_permission_checks` keys on the source field (one fire per field across all lookups); logical `and`/`or`/`not` recurse separately with shared `_fired` dedup; depth-capped via `_raise_logic_depth_exceeded`. Active-input-only + dedup + depth-cap + "checks run only through apply entrypoint" are each pinned by named tests in `tests/filters/test_sets.py` (`test_run_permission_checks_fires_only_for_active_input_fields` :580, `_skips_unset_related_branch` :598, `_recurses_into_active_related_branch` :633, `_recurses_into_logical_branches` :661, `_dedups_child_gate_across_sibling_branches` :712, `_caps_logical_branch_nesting` :755, `test_permission_checks_run_only_through_apply_entrypoint` :860, `_short_circuits_on_none_and_unset` :1404).
+- **Optimizer / get_queryset composition** (`:1661-1804`): `_apply_common_prelude`/`_apply_common_finalize` dedup the sync/async apply bodies; `apply_async` awaits the top-level + nested visibility derives BEFORE the `.qs` read then routes finalize through one `sync_to_async(thread_sensitive=True)` (`:1774`); `_apply_related_constraints` wraps the many-side restriction as `pk__in=<parent-pk subquery>` (`:1655-1658`) to de-dup parent rows without a consumer-visible `.distinct()`. All consistent with the artifact.
 
-- **High / Medium: none asserted, none found.** Re-derived the artifact's behavior-preservation
-  claim from source rather than trusting it.
-- **Single-pass partition is behavior-equivalent to the prior two-walk result.**
-  `active_permission_targets` (permissions.py:153-200) runs `iter_active_fields` ONCE and
-  partitions by `field.kind`: LEAF -> `leaf_paths` via `spec.django_source_path` else
-  `fallback_path(python_attr)` (:192-197); RELATED -> `(python_attr, related_obj, raw_value)`
-  (:198-199); LOGIC dropped. The classifier (input_values.py:177-182) keys LOGIC off
-  `logic_keys`, then RELATED off `python_attr in related`, then LEAF (else). Independently
-  confirmed: (a) the LEAF half uses the full filter config so logic keys are correctly excluded
-  as LOGIC and lookup attrs collapse to the source field — byte-identical to old
-  `active_permission_field_paths`; (b) the RELATED half is config-independent (related membership
-  is checked off `related` alone, and related/logic names are disjoint families), so
-  `active_related_branches`'s `field_specs={}, logic_keys=frozenset()` call yields the same
-  branch tuples — the empty `logic_keys` only affects LEAF/LOGIC classification, which
-  `active_related_branches` discards. Both `_active_permission_field_paths` (sets.py:1289) and
-  `active_related_branches` (permissions.py:235) are now thin wrappers; the classification rule
-  is single-sited.
-- **`run_active_input_permission_checks` calls the fused classifier ONCE** (permissions.py:325
-  `cls._active_permission_targets(input_value)`) then fires per-field gates (:326-327) and the
-  per-branch / child-set gates (:329-337) — replacing two prior full walks.
-- **Denial-before-filter holds on BOTH paths.** `_apply_common_finalize` (sets.py:1696-1698)
-  runs `_run_permission_checks` then `_validate_form_or_raise` BEFORE reading `.qs`. `apply_sync`
-  (:1722) calls it directly; `apply_async` routes the same call through
-  `sync_to_async(thread_sensitive=True)`. A denial raises before the queryset materializes.
-- **`_iter_visibility_steps` raises, does not skip** (sets.py:946-961): an ACTIVE related branch
-  whose `target_type`/`child_filterset` cannot resolve raises `ConfigurationError` — the
-  "skipping silently returns unfiltered rows" guard. Untouched by the refactor.
-- **`_target_type_for_related_filter` prefers bound owner over model-only registry**
-  (sets.py:1128-1135): returns `child_owner.origin` first, falls back to
-  `registry.primary_for(child_model) or registry.get(child_model)` only when unbound — the
-  multi-DjangoType silent row-leak guard. Untouched.
-- **`pk__in` subquery dedup, no consumer-visible `.distinct()`**: `_apply_related_constraints`
-  filters `pk__in=matching_parent_pks` (sets.py:1654), comment at :1643 explicitly avoids
-  `.distinct()` to not mutate consumer-visible queryset state; `_q_for_branch` composes
-  `Q(pk__in=child_set.qs.values("pk"))` (:1563). Untouched.
-- **Two hoisted constants import-order-safe.** `_field_specs` is created once
-  (inputs.py:141 `_field_specs = {}`) and only ever mutated by subscript assignment
-  (inputs.py:703, 746 `_field_specs[...] = ...` — never reassigned). `filters/sets.py:61`
-  imports it by reference and binds it into the frozen `_NORMALIZE_TRAVERSAL` (sets.py:99-104);
-  `iter_active_fields` reads `config.field_specs.get(...)` live (input_values.py:176), so binds
-  after import are observed. `_LOGIC_WIRE_BY_PYTHON_ATTR = dict(_LOGIC_KEYS)` (sets.py:93)
-  snapshots the frozen tuple. Both pure perf, zero behavior change.
-- **Duck-typed contract holds on both families.** Both `FilterSet` (sets.py:1292) and `OrderSet`
-  (orders/sets.py:350) define `_active_permission_targets`, so the `cls._active_permission_targets`
-  call in the shared core resolves on either; `_active_permission_field_paths` on both reduces to
-  `[...][0]` (sets.py:1289, orders/sets.py:347).
+No false-premise rejections to verify (zero findings).
 
 ### DRY findings disposition
-
-No act-now DRY item — the cycle IS a DRY consolidation landing the file at its maximally-factored
-shape. The remaining FilterSet/OrderSet wrapper twins are the deliberate two-family design around
-the shared `utils/permissions.py` core; cross-folder wrapper consolidation stays deferred-with-trigger
-in the cycle-11/12 artifacts (AggregateSet / WIP-ALPHA-028). Carried forward unchanged.
-
-### Low disposition
-
-The single Low (`_q_for_branch` async stash-miss sync-derive defensive fallback, sets.py:1486-1563)
-is genuinely no-action: confirmed `_collect_nested_visibility_querysets_async` (sets.py:1034-1105)
-pre-walks the same `and`/`or`/`not` arms `_evaluate_logic_tree` descends and stashes by
-`id(child_input)`, so the production async path cannot reach the sync fallback. The forward-looking
-re-examination trigger (walker branch-enumeration divergence) is stated inline. No edit warranted.
+Two DRY items, both correctly **defer-with-trigger**, neither act-now:
+1. Sync/async visibility-derive sibling pair — deferred until a package-wide maybe-await primitive lands (same trigger as connection.py's `_attach_count_sync/_async`). The coroutine-color hazard is real (verified: sync path's synchronous raise is load-bearing for the `apply` catch-rethrow contract). Correct.
+2. Cross-family apply-pipeline scaffold (`apply_sync`/`apply_async`/`apply` + prelude/finalize shared structurally with `orders/sets.py`) — forwarded to the `rev-filters.md` folder pass and `rev-django_strawberry_framework.md` project pass; trigger is a third `*Set.apply_*` family (e.g. `AggregateSet`). GLOSSARY pins the filter/order apply-pair parity as intentional sibling design. Correct cross-module deferral.
 
 ### Temp test verification
+- None — no temp tests needed; zero-edit cycle verified against live source and the existing permanent suite (`tests/filters/test_sets.py`).
+- Disposition: n/a.
 
-- Temp test used: `docs/review/temp-tests/filters/test_active_permission_targets_equiv.py` (gitignored).
-  5 tests, all PASS. Independently re-derived the pre-refactor LEAF and RELATED walks (separate
-  `iter_active_fields` passes with the old per-walk configs) and asserted the fused
-  `active_permission_targets` LEAF half == old LEAF walk and RELATED half == old RELATED walk across
-  a mixed input (leaf + lookup-collapse + fallback + related + logic key + inactive/UNSET), plus
-  both wrappers (`active_permission_field_paths`, `active_related_branches`) == the fused halves,
-  plus inactive-related-branch exclusion. Run: `uv run pytest ... --no-cov -q` -> `5 passed`.
-- Disposition: DELETED (executable confirmation of an already-test-covered behavior-preserving
-  refactor; the public behavior is unchanged and covered transitively by the existing permission
-  suite — not a new behavior gap requiring promotion).
-
-### Shape #5 checks
-
-- Cycle diff for owned paths empty: `git diff HEAD -- filters/sets.py` empty; `git diff --stat HEAD`
-  shows only `management/commands/_imports.py`, `export_schema.py`, `inspect_django_type.py`,
-  `tests/management/test_imports.py` — all attribute to the CLOSED sibling cycle
-  `rev-management__commands.md` (Status: verified, [x] at review-0_0_10.md:90). Not a rejection trigger.
-- Each Worker 2 section opens with `Filled by Worker 1 per no-source-edit cycle pattern.` ✓
-- The single Low carries verbatim trigger phrasing; no GLOSSARY-only fix. ✓
-- Changelog `Not warranted` with BOTH citations (AGENTS.md + active-plan silence); `git diff -- CHANGELOG.md` empty. ✓
-- `uv run ruff format --check` (2 files already formatted) + `uv run ruff check` (All checks passed!) — pass.
-  The COM812/formatter-conflict notice is pre-existing config noise.
+### GLOSSARY (#4-vs-#5 gate)
+Genuine shape #5, not a missed #4. No GLOSSARY-only fix owed and no drift on filterset public symbols, confirmed by reading the entries against live source:
+- `FilterSet` (`:515`): `check_*_permission` **active-input-only scope** and explicit-`queryset=` **filter-scope-not-security** prose matches `run_active_input_permission_checks` (active-input core) and `_apply_related_constraints` (intersect, not a visibility gate). The `apply_sync`/`apply_async` resolver pair, `form.is_valid()`, and `GraphQLError(extensions={"code":"FILTER_INVALID",...})` claims match `_validate_form_or_raise`. The `IS a BaseFilterSet subclass` claim matches the class definition (`:230`).
+- `RelatedFilter` (`:1047-1049`), `Meta.filterset_class` (`:723`, phase-2.5 owner binding lives cross-module in `types/finalizer.py` — accurate, out of this file's scope), `Meta.search_fields` planned-`0.1.2` (`:902`, matches the live TODO at `sets.py:361`), `SyncMisuseError` rewrap — all accurate.
+- The owned-paths stat was empty this run, so there is no GLOSSARY working-tree hunk to attribute to #33 this cycle.
 
 ### Verification outcome
-
-`cycle accepted; verified` — sets top-level `Status: verified` AND marks the checklist box.
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `filters/sets.py` checklist box in `docs/review/review-0_0_11.md`.

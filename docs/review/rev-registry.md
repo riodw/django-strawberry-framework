@@ -4,7 +4,9 @@ Status: verified
 
 ## DRY analysis
 
-- None — the two cross-key collision phrasings already funnel through `registry.py::TypeRegistry._already_registered` (the `register` reverse-collision at line 141 and `register_enum`'s `(model, field_name)` collision at lines 457-461), the connection-cache eviction and the six subsystem co-clears both route through the single `registry.py::_clear_if_importable` helper (lines 215-219 and 498-527), and the `register_with_definition` rollback (lines 334-343) is the deliberate hand-written inverse of `register`'s mutations rather than a near-copy to hoist — collapsing the inverse into a shared helper would couple the two methods' internal state-mutation order and defeat the localized "mirror any new register side-effect here" comment that keeps them auditable side-by-side. The 0.0.9 DRY pass (`docs/feedback.md` "Registry Clear Optional-Callback Pattern") already single-sited the only real duplication in this module.
+- Defer with trigger: the connection-class cache eviction in `registry.py::TypeRegistry.unregister` (`_clear_if_importable("django_strawberry_framework.connection", "_connection_type_cache", lambda cache: cache.pop(type_cls, None))`) and the whole-cache purge in `registry.py::TypeRegistry.clear` (`_clear_if_importable("django_strawberry_framework.connection", "clear_connection_type_cache", lambda clear: clear())`) both reach into the same sidecar module via the same helper but with different attribute/action shapes (pop-one vs clear-all). This is the only repeated literal in the file (`"django_strawberry_framework.connection"`, 2x). Do NOT consolidate now — the two call sites have genuinely different semantics (per-type eviction vs full purge) and a shared wrapper would either take an action callback (no readability gain over the `_clear_if_importable` already-shared shape) or hard-couple `registry.py` to connection-cache internals. Defer until a third connection-cache reach-in appears in this module; fold all three through a connection-cache-specific helper exported from `connection.py` at that point.
+
+- Defer with trigger: `register_with_definition`'s rollback block (`registry.py::TypeRegistry.register_with_definition`, the `except Exception` body) hand-inlines the inverse of `register`'s mutations (`_types[model]` removal + empty-list pop, `_models.pop`, `_primaries` restore). It is a near-mirror of the trace-removal logic in `registry.py::TypeRegistry.unregister`. Do NOT consolidate now — `unregister` removes ALL traces unconditionally (including `_definitions` and `_pending`), whereas the rollback removes only state THIS `register` call appended and restores the pre-call `_primaries` snapshot rather than clearing it. Extracting a shared `_drop_type_traces` would need a "restore-to-snapshot vs delete" mode parameter that obscures both call sites. Defer until a third partial-rollback site appears; the source comment at `registry.py::TypeRegistry.register_with_definition #"Inverse of register's mutations above"` already flags the mirror obligation as the cheaper guard.
 
 ## High:
 
@@ -16,30 +18,27 @@ None.
 
 ## Low:
 
-### Linear scan in `definition_for_graphql_name` on the per-request GlobalID-decode path
-
-`definition_for_graphql_name` (lines 350-390) materializes a list comprehension over the full `iter_definitions()` stream on every call, filtering by `implements_relay_node(type_cls)` and `definition.graphql_type_name == name`. It is invoked from the GlobalID type-name decode path (`types/relay.py` #"registry.definition_for_graphql_name(type_name)", line 726), which runs per request when a consumer resolves a `node(id:)` field by encoded type name. The scan is O(number of registered DjangoTypes) per decode. This is correct and harmless at current registry sizes (a handful of types in the example project), and building a `graphql_type_name -> definition` index would have to (a) live behind `mark_finalized` to stay consistent with the ambiguity contract this method enforces by raising on duplicate `graphql_type_name`, and (b) be torn down in `clear()` alongside the existing maps. Defer until a consumer registers a large DjangoType catalog (rough trigger: tens-to-hundreds of Relay-Node types) AND profiling shows node-decode latency dominated by this scan; then add a finalize-built name index with the duplicate-detection moved to index-build time so the raise-on-ambiguity contract is preserved. Not worth the added mutable-state surface before that.
+None.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused.** `_already_registered` (lines 88-99) centralizes the two cross-key "already registered" `ConfigurationError` phrasings (consumed at lines 141 and 457-461); `_clear_if_importable` (lines 34-50) is the single cycle-safe optional-callback co-clear shape reused by `unregister`'s connection-cache eviction (lines 215-219) and all six `clear()` subsystem co-clears (lines 498-527). Every one of those six co-clear targets resolves on disk: `filters/inputs.py::clear_filter_input_namespace`, `filters/__init__.py` `_helper_referenced_filtersets`, `orders/inputs.py::clear_order_input_namespace`, `orders/__init__.py` `_helper_referenced_ordersets`, `connection.py::clear_connection_type_cache`, `relay.py` `_node_fields_declared`.
-- **New helpers considered.** Folding the `register_with_definition` rollback (lines 334-343) into a shared "undo register" helper was evaluated and rejected: it is the deliberate inverse of `register`'s three mutations, the inline comment explicitly tasks future editors to mirror new side-effects here, and a helper would couple the two methods' mutation ordering without removing a real near-copy.
-- **Duplication risk in the current file.** The 2x `"django_strawberry_framework.connection"` module-path literal (line 216 in `unregister`, line 519 in `clear`) is intentional sibling design — one evicts a single identity-keyed cache entry, the other calls the whole-cache `clear_connection_type_cache`; they target different attributes (`_connection_type_cache` vs `clear_connection_type_cache`) so the shared string is incidental, not a hoistable constant.
+- **Existing patterns reused.** `_clear_if_importable` (`registry.py::_clear_if_importable`) is the single-sited cycle-safe co-clear helper backing every subsystem teardown — ten call sites across `clear` (filter/order/mutation input namespaces + helper ledgers, connection cache, root node-field ledger) plus one in `unregister` (connection-cache eviction), per the 0.0.9 DRY pass. `_already_registered` (`registry.py::TypeRegistry._already_registered`) centralizes the "already registered" `ConfigurationError` phrasing for the two cross-key collision sites (`register` reverse-collision + `register_enum` `(model, field_name)` collision) so consumer substring-matching stays grep-stable; the distinct primary-flip / duplicate-primary / definition-collision phrasings are intentionally inline because they are test-pinned by different substrings. `_check_mutable` (`registry.py::TypeRegistry._check_mutable`) is the single finalize guard reused by every mutator except the deliberately-bypassing `clear`.
+- **New helpers considered.** A connection-cache reach-in wrapper and a shared partial-rollback `_drop_type_traces` were both evaluated and deferred-with-trigger (see `## DRY analysis`) — each would need a mode/action parameter that obscures the call sites today.
+- **Duplication risk in the current file.** The only repeated literal is `"django_strawberry_framework.connection"` (2x, `unregister` eviction + `clear` purge); intentional sibling design covered by the deferred DRY bullet. The co-clear blocks in `clear` are deliberately separate independent rows (not a loop/table) so an unreachable subsystem never blocks a later co-clear and each carries its own spec-anchored comment — the source comment at `registry.py::TypeRegistry.clear #"a future sidecar family"` documents the append-one-row growth path.
 
 ### Other positives
 
-- **Process-state safety is documented and structurally enforced.** The class docstring (lines 54-61) states the no-lock contract and why it holds (all production mutation runs at import time from `DjangoType.__init_subclass__`, single-threaded module load; `clear` is test-only). `_check_mutable` (lines 72-85) is a defense-in-depth boundary guard that fails loud on any out-of-band post-finalize mutation, and every mutator (`register`, `unregister`, `register_definition`, `add_pending_relation`, `discard_pending`, `register_enum`) calls it — with `clear()` the single intentional bypass, documented as such (lines 468-476).
-- **`register_with_definition` atomicity is correct.** It snapshots `_primaries[model]` and captures `register`'s `appended` return before the `register_definition` call, and the `except` branch rolls back only state THIS call added (lines 328-344), so an idempotent same-type re-register survives a later definition-mismatch failure intact. A collision raised inside `register` propagates before the `try`, leaving no partial state; `appended=False` correctly skips rollback.
-- **Reflective access is minimal and justified.** Only one `getattr` (line 47, inside `_clear_if_importable`, immediately after a guarded `importlib.import_module` whose `ImportError` is caught) — the partial-load skip contract. No `hasattr`/`setattr`/`isinstance` reflective branching elsewhere; lookups are plain dict reads.
-- **Import-time side effects are limited to the module-global singleton** `registry = TypeRegistry()` (line 530), whose `__init__` only allocates empty containers. The single first-party runtime import (`from .types.relay import implements_relay_node`, line 373) is in-function and decode-time, keeping `registry.py`'s module top decoupled from `types.relay` to avoid the early-import cycle — documented at lines 368-372, matching the `TYPE_CHECKING`-only `types.definition`/`types.relations` imports.
-- **Iterator/identity contracts are precise.** `discard_pending` matches by `id()` not `__eq__` (documented decoupling from `PendingRelation` hashability, lines 414-425); `iter_pending_relations`'s stale-view-under-concurrent-discard caveat is documented (lines 401-412) and the only consumer (`types/finalizer.py` #"for pending in registry.iter_pending_relations()", line 578) drains into a list before discarding (lines 578-613), honoring the contract. `types_for` returns an immutable tuple snapshot.
-- **No GLOSSARY drift.** GLOSSARY.md:834 and :843 describe `registry.get(model)`, `registry.model_for_type(...)`, `primary_for`, `types_for`, and `models_with_multiple_types` exactly as implemented (primary semantics, declaration-order tuple, two-or-more-types audit driver). All eight surveyed external consumers (permissions, filters/sets, types/{resolvers,converters,definition,base,finalizer,relay}, optimizer/{extension,walker}, management/inspect_django_type, testing/relay) call only the public surface in line with each method's documented return states.
+- **Mutation-safety contract is coherent and documented.** Every production mutator runs `_check_mutable` first; the class docstring (`registry.py::TypeRegistry`) explains the no-lock decision (import-time single-threaded mutation only) and `clear`'s docstring documents the deliberate guard bypass for test teardown. The contract is defense-in-depth: `DjangoType.__init_subclass__` already rejects post-finalize subclasses and the registry pins the same contract at its boundary.
+- **`register_with_definition` atomicity is correct.** It snapshots `_primaries[model]` before `register`, captures whether `register` actually appended state, and on `register_definition` failure rolls back ONLY this call's mutations — a pre-existing idempotent re-register survives a re-register-with-different-definition failure. `_types`/`_models` lock-step is asserted by comment and relied on in `unregister`.
+- **`get` vs `primary_for` vs `model_for_type` return semantics are precisely specified.** `get` returns the primary, falls back to a lone single type, and returns `None` for the multi-type-no-primary ambiguous state (documented as indistinguishable from "unregistered" without `types_for`); `primary_for` is strict `_primaries`-only; `model_for_type` tolerates `None` input so the optimizer pipelines through unwrapped wrappers without a guard. No accidental overlap.
+- **`iter_pending_relations` / `discard_pending` mutation-during-iteration hazard is documented, not silently broken.** The docstring spells out that `discard_pending` rebinds `self._pending` to a fresh list so an in-flight `yield from` sees a stale view, and notes the finalizer drains to a list first. `discard_pending` uses `id()` identity-matching deliberately (stronger than `__eq__`, avoids coupling to `PendingRelation` hashability).
+- **`definition_for_graphql_name` correctness.** Scans `iter_definitions()` for a unique `graphql_type_name` match over Relay-Node definitions only, keyed on `definition.graphql_type_name` (honoring `Meta.name`) not `type_cls.__name__`; raises distinct `ConfigurationError` phrasings for the no-match and ambiguity cases (ambiguity lists colliding origins sorted). The in-function `from .types.relay import implements_relay_node` import is justified by comment (early-import module must not couple its top to `types.relay`; decode-time call resolves cheaply).
 
 ### Summary
 
-`registry.py` is a mature, heavily-reviewed process-global singleton whose mutability, finalization, and rollback contracts are explicitly documented and structurally enforced via `_check_mutable`. The cycle diff against the baseline is empty (the file was not touched this cycle); every cross-module symbol the module references resolves on disk, every documented return state matches its consumers, and GLOSSARY prose is accurate. No High or Medium findings. The only Low is a forward-looking, explicitly-triggered note on the O(n) per-decode scan in `definition_for_graphql_name`, which is correct and appropriately simple at current registry sizes. This qualifies as a no-findings (shape #1) cycle collapsing to no-source-edit (shape #5).
+`registry.py` is byte-identical to both the per-cycle baseline (`7b6c615f9dcf65daf3dfda8edbd0ea4929000ef5`) and HEAD — `git diff` is empty in both directions. No source, test, GLOSSARY, or CHANGELOG edits are in scope, so this is a genuine no-source-edit cycle (shape #5). I re-verified the load-bearing `clear()` claim: all ten subsystem co-clear targets resolve to real symbols (`filters.inputs.clear_filter_input_namespace`, `filters._helper_referenced_filtersets`, `orders.inputs.clear_order_input_namespace`, `orders._helper_referenced_ordersets`, `mutations.inputs.clear_mutation_input_namespace`, `mutations.sets.clear_mutation_registry`, `connection.clear_connection_type_cache` + `_connection_type_cache`, `relay._node_fields_declared`), plus the `unregister` connection-cache eviction target. GLOSSARY prose is current — the registry-surface paragraph (`primary_for` / `types_for` / `models_with_multiple_types`), the `Meta.primary` entry (`registry.get(model)` / `registry.model_for_type`), and the `_helper_referenced_ordersets` co-clear note all match the implementation, no drift. Two DRY opportunities exist, both defer-with-trigger (connection-cache reach-in wrapper; shared partial-rollback helper) — neither is act-now. Zero High/Medium/Low findings.
 
 ---
 
@@ -54,58 +53,58 @@ Filled by Worker 1 per no-source-edit cycle pattern.
 - None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — pass (267 files left unchanged).
-- `uv run ruff check .` — pass (All checks passed!).
+- `uv run ruff format .` — pass; 289 files left unchanged.
+- `uv run ruff check --fix .` — pass; all checks passed.
 
 ### Notes for Worker 3
-- Cycle diff `git diff cd84886a39aa06d47e4d6beca2df529f6ba1dcf2 -- django_strawberry_framework/registry.py` is empty; the file was not modified this cycle.
-- Low (linear scan in `definition_for_graphql_name`) is forward-looking with an explicit trigger (large Relay-Node catalog + profiling showing node-decode latency dominated by the scan); no edit made.
-- No GLOSSARY-only fix in scope — GLOSSARY.md:834 and :843 verified accurate against the implementation.
-- All six `clear()` co-clear targets and the `unregister` connection-cache eviction target verified to resolve on disk (see DRY recap).
-
----
+- `registry.py` is byte-identical to baseline `7b6c615f9dcf65daf3dfda8edbd0ea4929000ef5` and HEAD (`git diff` empty both ways). Genuine shape #5.
+- Both DRY bullets are defer-with-trigger, not act-now; no source change required.
+- Low: none.
+- No GLOSSARY-only fix in scope — registry-surface, `Meta.primary`, and `_helper_referenced_ordersets` prose all current vs implementation.
+- Load-bearing `clear()` co-clear claim re-verified: all ten teardown targets + the `unregister` eviction target resolve to real symbols.
 
 ## Comment/docstring pass
 
-Filled by Worker 1 per no-source-edit cycle pattern. No comment or docstring edits warranted: the module's docstrings and inline comments are accurate, current, and load-bearing (mutability/finalization contract, rollback-mirror instruction, in-function-import rationale, co-clear partial-load contract). TODO comments: none. No stale spec references found.
+Filled by Worker 1 per no-source-edit cycle pattern.
 
----
+No comment or docstring edits in scope — the file is unchanged and the in-source comments (mutation-safety contract, `_types`/`_models` lock-step, rollback-mirror obligation, in-function-import rationale, co-clear growth path) all remain accurate.
 
 ## Changelog disposition
 
-Filled by Worker 1 per no-source-edit cycle pattern. Not warranted — no source change this cycle (review-only; cycle diff empty). Per `AGENTS.md` ("Do not update CHANGELOG.md unless explicitly instructed") and the active plan (`docs/review/review-0_0_10.md`) which carries no changelog directive for this item.
+Filled by Worker 1 per no-source-edit cycle pattern.
+
+Not warranted. No source behavior changed (zero-diff cycle). AGENTS.md: do not update `CHANGELOG.md` unless explicitly instructed; the active plan `docs/review/review-0_0_11.md` is silent on any registry changelog entry.
 
 ---
 
 ## Verification (Worker 3)
 
 ### Logic verification outcome
-No High / Medium findings to verify. Single Low (O(n) per-decode scan in `definition_for_graphql_name`) independently confirmed as a genuine forward-looking note that masks no present defect:
-
-- **Premise accurate.** `definition_for_graphql_name` (registry.py:375-379) materializes a list comprehension over the full `iter_definitions()` stream filtered by `implements_relay_node(type_cls)` AND `definition.graphql_type_name == name`, so the scan is O(number of registered definitions) per call.
-- **Call path is genuinely per-request.** Confirmed the sole caller at `types/relay.py::decode_global_id` line 726 — the `else` (no-".") type-name branch of GlobalID decode, which runs per request when a consumer resolves `node(id:)` by encoded type name. `implements_relay_node` def resolves at `types/relay.py:52`.
-- **Masks no defect.** The raise-on-miss / raise-on-ambiguity contract (registry.py:380-390) is already correct at any registry size; the scan is purely a perf consideration. The deferral rationale (an index must live behind `mark_finalized` and be torn down in `clear()`, with duplicate-detection moved to index-build time to preserve the ambiguity raise) is sound, and the trigger (tens-to-hundreds of Relay-Node types AND profiling showing node-decode latency dominated by the scan) is explicit and falsifiable. No present edit warranted. Verbatim trigger phrasing present; not a GLOSSARY-only fix.
-
-**Registry-mutation correctness (independent sanity-check of Worker 1's clearance):**
-
-- **`clear()` co-clears every registry.** Lines 477-483 clear all seven internal containers/flags; lines 498-527 co-clear all six subsystems. All six targets resolve on disk: `filters/inputs.py:829 clear_filter_input_namespace`, `filters/__init__.py:44 _helper_referenced_filtersets`, `orders/inputs.py:342 clear_order_input_namespace`, `orders/__init__.py:40 _helper_referenced_ordersets`, `connection.py:523 clear_connection_type_cache`, `relay.py:73 _node_fields_declared`.
-- **`unregister` evicts the connection cache.** Lines 215-219 `pop` the identity-keyed entry from `connection._connection_type_cache` (resolves at `connection.py:520`).
-- **Registration idempotency / process-state safety.** `register` returns `False` on same-`type_cls`/same-model re-register with matching primary flag (line 150) and raises on a flipped flag (lines 146-149) — primary status is a declaration, not mutable. `_check_mutable` guards all six mutators; `clear()` is the single documented bypass (lines 472-476).
-- **`register_with_definition` rollback is a faithful inverse.** Lines 334-343 undo exactly `register`'s three mutations (append to `_types[model]`, set `_models[type_cls]`, set `_primaries[model]`), gated on the `appended` return and restoring the `pre_primary` snapshot; an idempotent pre-existing registration survives a later definition-mismatch failure intact.
+All High / Medium / Low are `None.` — confirmed genuine, not lazy. Independent reads:
+- **Zero-edit proof (shape #5).** `git diff 7b6c615f9dcf65daf3dfda8edbd0ea4929000ef5 -- django_strawberry_framework/registry.py` empty; `git diff HEAD -- …registry.py` empty; `git diff --stat <baseline> -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` empty (no dirt in owned paths this run). registry.py byte-identical to baseline AND HEAD.
+- **Each Worker 2 section** opens `Filled by Worker 1 per no-source-edit cycle pattern.` (Fix report, Comment/docstring pass, Changelog disposition).
+- **clear() co-clear target list — all 11 resolve to real symbols** (grep-confirmed): `filters.inputs.clear_filter_input_namespace` (def @830), `filters._helper_referenced_filtersets` (set @44), `orders.inputs.clear_order_input_namespace` (def @342), `orders._helper_referenced_ordersets` (set @40), the **new mutations-namespace co-clears** `mutations.inputs.clear_mutation_input_namespace` (def @127) and `mutations.sets.clear_mutation_registry` (def @140), `connection.clear_connection_type_cache` (def @523), `relay._node_fields_declared` (list @74), plus the `unregister` connection-cache eviction target `connection._connection_type_cache` (@520). `implements_relay_node` (types/relay.py @52) backs `definition_for_graphql_name`.
+- **`_clear_if_importable` ImportError-only swallow** (line 48): `except ImportError:` — narrow, not bare `Exception`; preserves per-block independence so an unreachable subsystem skips without masking a real error in `action`. Pinned by `tests/test_registry.py::test_unregister_tolerates_unimportable_connection_submodule` (@1293).
+- **Registry reset/rollback semantics.** `register_with_definition` snapshots `pre_primary` before `register`, captures `appended`, and on `register_definition` failure rolls back ONLY this call's mutations (`_types`/`_models` removal + empty-list pop; restore-to-snapshot vs delete on `_primaries`). Matches the deferred DRY rationale. Pinned by `test_register_with_definition_rollback_clears_primary` (@903), `…rollback_restores_pre_existing_primary` (@924), `…idempotent_re_register_preserves_primary` (@980). `clear()` deliberately bypasses `_check_mutable` (test-teardown reset) — pinned by `test_clear_drops_all_state` (@244), `test_clear_resets_primaries` (@1112).
+- `get`/`primary_for`/`model_for_type` return semantics pinned by `test_get_returns_single_type_when_one_registered_no_primary` (@1017), `…primary_when_multiple_and_primary_declared` (@1027), `…none_when_multiple_and_no_primary` (@1041), `test_primary_for_returns_none_when_only_implicit_single_type` (@1057). No unpinned defensive seam → `None.` severities genuine; no masked defect forcing a source edit.
 
 ### DRY findings disposition
-DRY=None confirmed sound. `_already_registered` (lines 88-99) centralizes the two cross-key collision phrasings (consumed at lines 141, 457-461); `_clear_if_importable` (lines 34-50) single-sites the co-clear shape across `unregister` (215-219) and the six `clear()` blocks. The rejected hoist of the `register_with_definition` rollback into a shared helper is correctly left inline — it is the deliberate inverse and a helper would couple mutation ordering. The 2x `"django_strawberry_framework.connection"` literal is incidental (targets distinct attrs `_connection_type_cache` vs `clear_connection_type_cache`), not a hoistable constant.
+Both DRY items confirmed correctly **defer-with-trigger** (not act-now):
+1. Connection-cache reach-in (`"django_strawberry_framework.connection"` 2x — `unregister` pop-one eviction vs `clear` full purge): a shared wrapper would need an action callback (no gain over the already-shared `_clear_if_importable` shape) or hard-couple registry.py to connection internals. Trigger: a third connection-cache reach-in.
+2. `register_with_definition` partial-rollback near-mirror of `unregister` trace-removal: `unregister` removes ALL traces unconditionally; rollback removes only this-call state and restores the `_primaries` snapshot. A shared `_drop_type_traces` would need a "restore-to-snapshot vs delete" mode that obscures both call sites. Trigger: a third partial-rollback site. The source comment at `register_with_definition #"Inverse of register's mutations above"` already flags the mirror obligation. Confirmed verbatim in source (line 333).
 
 ### Temp test verification
-- None used — no-source-edit cycle, no behavioral change to pin. All claims verified by source re-read and grep of call sites / co-clear targets.
+- None — no temp tests needed; zero-edit cycle verified by diff + grep + existing named tests.
 - Disposition: n/a.
 
-### Shape #5 checks
-1. `git diff cd84886a39aa06d47e4d6beca2df529f6ba1dcf2 -- django_strawberry_framework/registry.py` empty; `git diff --stat <baseline> -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` empty over all owned paths.
-2. Every Worker 2 section opens with `Filled by Worker 1 per no-source-edit cycle pattern.`
-3. The single Low carries verbatim trigger phrasing; no GLOSSARY-only fix in scope.
-4. Changelog `Not warranted` cites both `AGENTS.md` and the active plan's silence; `git diff -- CHANGELOG.md` empty.
-5. Source byte-matches the shadow overview symbol/line map; diff empty ⇒ ruff format-check + check trivially clean (Worker 1 recorded both passing).
+### GLOSSARY accuracy (genuine #5, not missed #4)
+Spot-checked the registry prose against live source — all current, no drift, no owed GLOSSARY fix:
+- Registry surface (GLOSSARY:874): `primary_for(model)` / `types_for(model)` / `models_with_multiple_types()` match `registry.py` defs verbatim.
+- `Meta.primary` (GLOSSARY:865): `registry.get(model)` returns primary; `registry.model_for_type(SecondaryType)` reverse-discovers — matches `get()` (lines 234-240) and `model_for_type()` (lines 252-254).
+- `_helper_referenced_ordersets` co-clear note (GLOSSARY:981): ledger co-cleared by `registry.clear()` — matches the `orders._helper_referenced_ordersets` co-clear block. Genuine shape #5.
+
+### Changelog disposition
+`Not warranted` accepted. `git diff -- CHANGELOG.md` empty (confirmed). Disposition cites BOTH AGENTS.md ("do not update CHANGELOG.md unless explicitly instructed") AND the active plan `review-0_0_11.md` silence on a registry entry. Zero-diff cycle, internal-only — "Not warranted" is the correct state. Ruff format-check + check both pass on registry.py.
 
 ### Verification outcome
-`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `registry.py` checklist box in `docs/review/review-0_0_10.md`.
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `registry.py` checklist box `- [x]` in `docs/review/review-0_0_11.md`.

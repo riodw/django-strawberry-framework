@@ -84,7 +84,11 @@ _ALLOWED_MUTATION_META_KEYS: frozenset[str] = frozenset(
 )
 
 # The three valid ``Meta.operation`` values (spec-036 Decision 5). Single source
-# of truth: Slice 3's resolver imports this rather than re-spelling the set.
+# of truth for THIS module's membership check only
+# (``_validate_mutation_meta #"if operation not in _VALID_OPERATIONS"``): the
+# resolver dispatches on the verb literals directly (``== "create"`` / ``"update"``
+# in ``mutations/resolvers.py``) rather than testing this set, so it does not
+# import the constant.
 _VALID_OPERATIONS: frozenset[str] = frozenset({"create", "update", "delete"})
 
 # ``operation`` -> input-generator kind. ``create`` builds the required-aware

@@ -89,6 +89,7 @@ from ..utils.inputs import graphql_camel_name
 from ..utils.querysets import (
     apply_type_visibility_sync,
     initial_queryset,
+    model_for,
     reject_async_in_sync_context,
 )
 from ..utils.relations import is_forward_many_to_many
@@ -571,7 +572,7 @@ def _locate_instance(target_type: type, node_id: Any, info: Any) -> Any | None:
     leak). An ``async def get_queryset`` met here raises ``SyncMisuseError``
     (``apply_type_visibility_sync`` closes the coroutine first).
     """
-    model = target_type.__django_strawberry_definition__.model
+    model = model_for(target_type)
     queryset = apply_type_visibility_sync(
         target_type,
         initial_queryset(target_type),
@@ -807,7 +808,7 @@ def _run_pipeline_sync(
     """
     meta = mutation_cls._mutation_meta
     primary_type = mutation_cls._primary_type
-    model = primary_type.__django_strawberry_definition__.model
+    model = model_for(primary_type)
     slot = payload_object_slot(primary_type)
     payload_cls = _payload_cls_for(mutation_cls)
 
@@ -1090,7 +1091,7 @@ def _coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | Non
 
     Returns ``(pk, None)`` on success or ``(None, FieldError)`` otherwise.
     """
-    target_model = target_type.__django_strawberry_definition__.model
+    target_model = model_for(target_type)
     result = decode_model_global_id(id, target_model)
     if result.status in (GlobalIDDecode.DECODE_FAILED, GlobalIDDecode.WRONG_MODEL):
         return None, _invalid_lookup_id_error()

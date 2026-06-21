@@ -62,7 +62,8 @@ from strawberry.utils.inspect import in_async_context
 
 from .exceptions import ConfigurationError
 from .list_field import _validate_relay_djangotype_target
-from .types.relay import _NODE_TYPE_HINT_ATTR, _model_for, decode_global_id
+from .types.relay import _NODE_TYPE_HINT_ATTR, decode_global_id
+from .utils.querysets import model_for
 
 __all__ = ("DjangoNodeField", "DjangoNodesField")
 
@@ -135,7 +136,7 @@ def _coerce_pk_or_none(resolved_type: type, node_id: str) -> Any:
     NodeID attr that is not a concrete model field skips coercion and passes the
     raw string (pre-032 behavior - Django handles string lookups on the column).
     """
-    model = _model_for(resolved_type)
+    model = model_for(resolved_type)
     id_attr = resolved_type.resolve_id_attr()
     if id_attr == "pk":
         field = model._meta.pk
@@ -216,7 +217,7 @@ def decode_model_global_id(value: Any, expected_model: type) -> DecodeResult:
         resolved_type, node_id = decode_global_id(value)
     except Exception:
         return DecodeResult(GlobalIDDecode.DECODE_FAILED, None, None)
-    if _model_for(resolved_type) is not expected_model:
+    if model_for(resolved_type) is not expected_model:
         return DecodeResult(GlobalIDDecode.WRONG_MODEL, None, resolved_type)
     pk = _coerce_pk_or_none(resolved_type, node_id)
     if pk is None:

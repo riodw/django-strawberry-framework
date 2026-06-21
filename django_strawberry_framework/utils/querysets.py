@@ -91,17 +91,31 @@ def reject_async_in_sync_context(
     return value
 
 
+def model_for(type_cls: type) -> type[models.Model]:
+    """Return the Django model registered to a ``DjangoType``.
+
+    Centralizes the ``type_cls.__django_strawberry_definition__.model`` lookup
+    so every model-only read shares one source of truth with the
+    queryset-variant seed below - the Relay node / id helpers, the connection
+    total-order derive, the write pipeline's target-model reads, and the
+    cascade-permission walk. Callers are responsible for ``type_cls`` being a
+    registered ``DjangoType``; a missing definition surfaces as a raw
+    ``AttributeError``.
+    """
+    return type_cls.__django_strawberry_definition__.model
+
+
 def initial_queryset(type_cls: type) -> models.QuerySet:
     """Return ``model._default_manager.all()`` for a ``DjangoType``'s model.
 
     Step 1 of the Relay node defaults' four-step shape and the default
-    resolver seed for list / connection fields. Centralizes the
-    ``type_cls.__django_strawberry_definition__.model`` lookup so every
-    surface that needs a fresh unevaluated base queryset shares one source
-    of truth. Callers are responsible for ``type_cls`` being a registered
+    resolver seed for list / connection fields. Seeds from
+    ``model_for(type_cls)`` so the model lookup stays single-sited; every
+    surface that needs a fresh unevaluated base queryset shares this one
+    source. Callers are responsible for ``type_cls`` being a registered
     ``DjangoType``; a missing definition surfaces as a raw ``AttributeError``.
     """
-    return type_cls.__django_strawberry_definition__.model._default_manager.all()
+    return model_for(type_cls)._default_manager.all()
 
 
 def normalize_query_source(source: Any) -> tuple[Any, bool]:

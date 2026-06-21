@@ -61,7 +61,7 @@ from .utils.querysets import SyncMisuseError as SyncMisuseError
 # async hook with ``SyncMisuseError`` (the coroutine closed first); the cascade
 # reuses it as the per-edge probe so the package keeps ONE sync-misuse site
 # (Decision 10).
-from .utils.querysets import apply_type_visibility_sync
+from .utils.querysets import apply_type_visibility_sync, model_for
 
 # Module-level cycle-guard seen-set (the upstream ``_cascade_seen`` shape
 # verbatim). ``None`` means "no walk in flight" -- the next call is the root and
@@ -222,7 +222,7 @@ def apply_cascade_permissions(
             it raises identically -- the recourse is to make the target hook sync,
             or pass ``fields=`` to skip the async-hooked edge (Decision 10).
     """
-    model = cls.__django_strawberry_definition__.model
+    model = model_for(cls)
     names_to_walk = _validate_fields(model, fields)
 
     seen = _cascade_seen.get()

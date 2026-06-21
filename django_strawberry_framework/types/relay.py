@@ -43,6 +43,7 @@ from ..utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
     initial_queryset,
+    model_for,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import (Slice 4 quoted hint).
@@ -107,7 +108,7 @@ def install_is_type_of(type_cls: type) -> None:
     """
     if "is_type_of" in type_cls.__dict__:
         return
-    model = _model_for(type_cls)
+    model = model_for(type_cls)
 
     def is_type_of(obj: object, info: object) -> bool:  # noqa: ARG001
         hinted = getattr(obj, _NODE_TYPE_HINT_ATTR, None)
@@ -169,7 +170,7 @@ def _check_composite_pk_for_relay_node(type_cls: type) -> None:
     otherwise; only the latter case is the contract violation this
     gate is meant to catch.
     """
-    model = _model_for(type_cls)
+    model = model_for(type_cls)
     if not isinstance(model._meta.pk, CompositePrimaryKey):
         return
     # Ask Strawberry's annotation scan directly rather than
@@ -330,18 +331,6 @@ def _apply_node_filter(
     if node_ids is not None:
         return qs.filter(**{f"{id_attr}__in": node_ids})
     return qs
-
-
-def _model_for(cls: type) -> type[models.Model]:
-    """Return the registered model for ``cls.__django_strawberry_definition__``.
-
-    Centralizes the ``cls.__django_strawberry_definition__.model`` lookup
-    so model-only reads share one source of truth with the queryset-variant
-    lookup in ``utils/querysets.py::initial_queryset``. Mirrors that helper's
-    contract: callers are responsible for ``cls`` being a registered
-    ``DjangoType``; a missing definition surfaces as a raw ``AttributeError``.
-    """
-    return cls.__django_strawberry_definition__.model
 
 
 # Keep the GlobalID strategy helpers in this Relay foundation module; do not
@@ -770,7 +759,7 @@ def _order_nodes(
     """
     index = {str(getattr(obj, id_attr)): obj for obj in results}
     output: list = []
-    model = _model_for(cls)
+    model = model_for(cls)
     for key in coerced_keys:
         if required:
             try:

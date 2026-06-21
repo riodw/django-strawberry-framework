@@ -78,6 +78,7 @@ from .utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
     initial_queryset,
+    model_for,
     normalize_query_source,
 )
 from .utils.typing import is_async_callable
@@ -823,7 +824,7 @@ def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> mo
        Decision 11), because the schema middleware never sees the pre-slice
        queryset behind ``ConnectionExtension``.
     """
-    target_model = target_type.__django_strawberry_definition__.model
+    target_model = model_for(target_type)
     effective = tuple(qs.query.order_by) or tuple(target_model._meta.ordering)
     # Deterministic total order shared with the plan-time window (the
     # cursor-parity invariant, spec-033 Decision 11): the helper appends the pk

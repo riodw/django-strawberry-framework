@@ -137,12 +137,23 @@ vocabulary used throughout the spec:
 
 - [`DjangoFormMutation`][glossary-djangoformmutation] /
   [`DjangoModelFormMutation`][glossary-djangomodelformmutation] — the two subjects.
-  The glossary pins both as `DjangoMutation` subclasses consuming a Django `Form` /
-  `ModelForm` (`Meta.form_class`), surfacing validation through the shared
-  [`FieldError` envelope][glossary-fielderror-envelope] (populated from
-  `form.errors`) with the post-save object as the return value. This card ships
-  exactly that; both entries are promoted from `planned for 0.0.12` to
-  `shipped (0.0.12)` in Slice 5.
+  Both consume a Django `Form` / `ModelForm` (`Meta.form_class`) and surface
+  validation through the shared [`FieldError` envelope][glossary-fielderror-envelope]
+  (populated from `form.errors`). **The current glossary text is provisional and
+  Slice 5 must correct it on one point:** it describes *both* as `DjangoMutation`
+  subclasses, but this card's settled architecture
+  ([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling))
+  is that **only `DjangoModelFormMutation` subclasses [`DjangoMutation`][glossary-djangomutation]**
+  (it has a model, returns the post-save object in the uniform `node` / `result`
+  slot), while the **plain `DjangoFormMutation` is a model-less sibling** (its own
+  metaclass; no `DjangoType` object slot — the pinned `ok` + `errors` payload of
+  [Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling))
+  accepted by the **generalized mutation-field family**
+  ([Decision 5](#decision-5--public-surface-djangoformmutation--djangomodelformmutation-exported-from-the-root)).
+  Slice 5 promotes both entries from `planned for 0.0.12` to `shipped (0.0.12)` and
+  rewrites the `DjangoFormMutation` entry's "`DjangoMutation` subclass" /
+  "post-save object as the return value" claims to this sibling shape (see
+  [Doc updates](#doc-updates)).
 - [`DjangoMutation`][glossary-djangomutation] /
   [Input type generation][glossary-input-type-generation] /
   [`DjangoMutationField`][glossary-djangomutationfield] — the shipped
@@ -273,17 +284,29 @@ the prior); Slice 4 is the live consumer surface; Slice 5 is doc + version-cut o
     [Choice enum generation][glossary-choice-enum-generation] registry rather than
     re-deriving the scalar; an unknown form-field class raises
     [`ConfigurationError`][glossary-configurationerror] naming the field and class.
+    Record, per generated input field, the `input_attr → (form_field_name, kind)`
+    reverse map (`kind ∈ {scalar, relation_single, relation_multi, file}`) the
+    resolver needs to build a form-field-keyed payload — `categoryId` / `category_id`
+    → `category` / `relation_single`, an `Upload` field flagged `file`
+    ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth), P1).
   - [ ] [`forms/inputs.py`][forms-inputs] (its own module, per the committed
     four-module `forms/` layout — [Decision 4](#decision-4--module-and-test-locations-forms-subpackage-mirroring-mutations)):
-    build the `<Mutation>Input` `@strawberry.input` from the **form's declared
-    fields** (`form_class().fields`, narrowed by `Meta.fields` / `Meta.exclude`),
-    each input field's required-ness driven by the form field's `field.required`
-    (graphene-django parity), reusing
-    [`utils/inputs.py`][utils-inputs]'s `build_strawberry_input_class` +
-    `materialize_generated_input_class` core and materialized as a module global of
-    the `forms` input namespace for the
-    [`strawberry.lazy`][glossary-djangomutationfield] forward-ref the field factory
-    needs.
+    build **two** `@strawberry.input` classes from the **form's declared fields**
+    (`form_class().fields`, narrowed by `Meta.fields` / `Meta.exclude`) — `<FormClass>Input`
+    (create; each field's requiredness from `field.required`, graphene-django parity)
+    and `<FormClass>PartialInput` (update; model-backed fields optional, a **non-model
+    extra field keeps its `field.required`**, P2) — under the **shape-identity +
+    naming + collision discipline** of `036` adapted to forms: identity `(form_class,
+    operation kind, frozenset(effective field names))`, canonical `<FormClass>Input` /
+    shape-derived narrowed names, identical shapes dedupe, two distinct shapes on one
+    name → finalize-time [`ConfigurationError`][glossary-configurationerror] (P1).
+    Reuse [`utils/inputs.py`][utils-inputs]'s `build_strawberry_input_class` +
+    `materialize_generated_input_class` core (the latter's ledger gives the collision
+    raise for free) and materialize as module globals of the `forms` input namespace
+    for the [`strawberry.lazy`][glossary-djangomutationfield] forward-ref. Normalize +
+    fail-loud `Meta.fields` / `Meta.exclude` against `form.fields` (bare string,
+    duplicates, unknown names, empty effective set → `ConfigurationError`, mirroring
+    `036`'s `_normalize_field_sequence`, P3).
   - [ ] Package coverage: [`tests/forms/test_converter.py`][test-forms] — each
     supported form-field class → its annotation + required-ness; the
     `ModelChoiceField` / `ModelMultipleChoiceField` id mapping (Relay-`GlobalID`
@@ -316,11 +339,16 @@ the prior); Slice 4 is the live consumer surface; Slice 5 is doc + version-cut o
     [Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)
     / [Decision 13](#decision-13--finalization-seam-reuse-the-mutation-phase-25-bind-no-deferred_meta_keys-change)).
     The form-flavor `_validate_meta` override: `Meta.form_class` is required and must
-    be a `forms.Form` subclass (`DjangoFormMutation`) / `forms.ModelForm` subclass
-    (`DjangoModelFormMutation`), validated **before** `_resolve_model` is called (so a
-    missing / wrong-type `form_class` is a clean
-    [`ConfigurationError`][glossary-configurationerror], never a raw `AttributeError`
-    from `form_class._meta.model`); a `ModelForm` with no resolvable `_meta.model`
+    be — for `DjangoFormMutation` — a `forms.Form` subclass that is **NOT** a
+    `forms.ModelForm` (a `ModelForm` is *also* a `forms.Form` subclass, so the plain
+    base must **explicitly reject** it with a `ConfigurationError` naming
+    `DjangoModelFormMutation` as the correct base — otherwise a `ModelForm` would
+    silently write via `form.save()` and return only `{ ok errors }` with no object
+    slot, no `DjangoModelPermission` default, and no optimizer re-fetch, defeating the
+    two-base split, P2); and — for `DjangoModelFormMutation` — a `forms.ModelForm`
+    subclass. The check runs **before** `_resolve_model` (so a missing / wrong-type
+    `form_class` is a clean [`ConfigurationError`][glossary-configurationerror], never
+    a raw `AttributeError` from `form_class._meta.model`); a `ModelForm` with no resolvable `_meta.model`
     raises; `operation` is restricted to `{"create", "update"}` (a `"delete"` form
     mutation is **rejected** at class creation — the inherited base accepts it but the
     form flavor has no delete pipeline,
@@ -343,16 +371,29 @@ the prior); Slice 4 is the live consumer surface; Slice 5 is doc + version-cut o
   /
   [Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path))
   - [ ] [`forms/resolvers.py`][forms-resolvers]: the sync + async pipeline —
-    **decode** the `data:` input to a plain dict; (`update`) **locate** the row
-    through the target type's [`get_queryset`][glossary-get_queryset-visibility-hook]
-    (not-found → a `FieldError` on `id`, no existence leak) and bind the form with
-    `instance=<row>`; **authorize** via the inherited `check_permission` /
-    `Meta.permission_classes`; **validate** via `form.is_valid()` — a failure maps
-    `form.errors` onto the [`FieldError` envelope][glossary-fielderror-envelope]
-    (the form's `NON_FIELD_ERRORS` bucket → the `"__all__"` sentinel `036` froze)
-    and returns a null-object payload; **write** via `form.save()`; **re-fetch**
-    the saved object by pk + optimizer-plan for the response selection (the
-    `ModelForm` flavor); **return** the `<Name>Payload`. The whole pipeline runs
+    **decode** the `data:` input via the reverse map into a form-field-keyed
+    `provided_data` (scalars + relation pks; `categoryId` → `{"category": pk}`, the pk
+    **type- and visibility-checked through the `036` related-id path / the related
+    primary `DjangoType.get_queryset`** before it reaches the form — a hidden target
+    is a field-keyed `FieldError`, P1#2) and a `provided_files` (uploaded `Upload`
+    values), keeping files out of `data`
+    ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload), P1#2/#3);
+    (`update`) **locate** the row through the target type's
+    [`get_queryset`][glossary-get_queryset-visibility-hook] (not-found → a `FieldError`
+    on `id`, no existence leak); **authorize** via the inherited `check_permission` /
+    `Meta.permission_classes`; **construct** the form once — create:
+    `form_class(data=provided_data, files=provided_files)`; **update (partial):**
+    reconstruct the full payload `data = {**model_to_dict(instance, non-file fields),
+    **provided_data}`, `files = provided_files`, then
+    `form_class(data=, files=, instance=<row>)` (omitted fields preserved, P1#1);
+    **validate** via `form.is_valid()` — a failure maps `form.errors` onto the
+    [`FieldError` envelope][glossary-fielderror-envelope] (the form's
+    `NON_FIELD_ERRORS` bucket → the `"__all__"` sentinel `036` froze, via the reused
+    `_validation_error_to_field_errors(ValidationError(form.errors.as_data()))`) and
+    returns a null-object payload; **write** via `form.save()` (`ModelForm`) /
+    `perform_mutate` (plain form); **re-fetch** the saved object by pk + optimizer-plan
+    (the `ModelForm` flavor); **return** the `<Name>Payload` (`node` / `result` for the
+    `ModelForm`, the pinned `ok` + `errors` for the plain form). The whole pipeline runs
     inside one `transaction.atomic()`, and the async path runs the sync body in one
     `sync_to_async(thread_sensitive=True)` call — the same boundary `036` set.
   - [ ] [`mutations/fields.py`][mutations-fields]: generalize
@@ -368,22 +409,32 @@ the prior); Slice 4 is the live consumer surface; Slice 5 is doc + version-cut o
     today's behavior for a `DjangoMutation` target.
   - [ ] Package coverage: [`tests/forms/test_resolvers.py`][test-forms] — create /
     update happy paths, the `form.errors` → envelope (incl. a `NON_FIELD_ERRORS`
-    `clean()` error → `"__all__"`), the visibility-scoped `update` locate
-    (hidden row → not-found), write-auth denial vs success, sync + async, and the
-    G2 plan-shape (the `ModelForm` re-fetch keeps `select_related` /
-    `prefetch_related`, no `.only(...)`).
+    `clean()` error → `"__all__"`), the **decode split** (`categoryId` → `{"category":
+    pk}` in `data=`, an `Upload` → `files=`), the **partial-update reconstruction**
+    (omitted scalar / FK / M2M / file preserved; `unique_item_per_category` on a
+    one-field change), the **plain-form `ok` + `errors` payload + `perform_mutate`
+    default/override**, the visibility-scoped `update` locate (hidden row →
+    not-found), write-auth denial vs success, sync + async, and the G2 plan-shape (the
+    `ModelForm` re-fetch keeps `select_related` / `prefetch_related`, no `.only(...)`).
 - [ ] Slice 4: the products live form surface (per
   [Decision 12](#decision-12--live-coverage-products-grows-a-modelform-and-a-plain-form-mutation))
   - [ ] [`examples/fakeshop/apps/products/forms.py`][products-forms] (new): an
-    `ItemModelForm` (`forms.ModelForm` over `Item`) and a plain `Form` (e.g. a small
-    contact / action form); `products/schema.py` gains a `DjangoModelFormMutation`
-    and a `DjangoFormMutation`; `config/schema.py` already wires `mutation=Mutation`
-    ([`spec-036`][spec-036] Slice 4).
+    `ItemModelForm` (`forms.ModelForm` over `Item`, with a `clean_<field>`) and a
+    plain `Form` (e.g. a small contact / action form); `products/schema.py` gains a
+    `DjangoModelFormMutation` (create + update) and a `DjangoFormMutation`;
+    `config/schema.py` already wires `mutation=Mutation` ([`spec-036`][spec-036] Slice 4).
+    If `Item` (or a small example model) needs a file column for the multipart test,
+    add the minimal `FileField` + migration here.
   - [ ] [`test_products_api.py`][test-products-api] (seeded via `seed_data` /
     `create_users`): live `/graphql/` create / update through the `ModelForm`
-    mutation, the `form.errors` envelope (incl. a `unique_item_per_category`
-    `ModelForm`-level error keyed to `"__all__"`), write authorization, and the
-    plain `Form` mutation's validation envelope.
+    mutation; `categoryId` validating + writing through the form's `category` field;
+    **partial-update preservation** (a `name`-only update preserves `category` /
+    `description`, and `unique_item_per_category` fires on a one-field change); the
+    `form.errors` envelope (`clean_<field>` keyed to the field; the constraint error
+    keyed to `"__all__"`); write authorization; the visibility-scoped `update`; **a
+    raw `django.test.Client` multipart upload** to a form-backed `Upload` field
+    (the P1 file-routing contract); and the plain `Form` mutation's **success**
+    (`ok: true`) **and** validation-failure (`ok: false`, field-keyed `errors`) shapes.
 - [ ] Slice 5: doc updates + the `0.0.12` version cut + card wrap (per
   [Doc updates](#doc-updates) /
   [Decision 14](#decision-14--this-card-owns-the-0012-version-bump))
@@ -544,11 +595,16 @@ A true description of the repo as this spec is authored:
   [`FieldError`][glossary-fielderror-envelope] and does not re-open
   [`mutations/inputs.py`][mutations-inputs]'s model-column generator
   ([Decision 2](#decision-2--card-scope-boundary-the-two-form-flavors-ship-serializer--auth-stay-out-the-frozen-036-contracts-are-reused-unchanged)).
-- **Multipart upload transport / a test client.** A form's `forms.FileField` maps
-  to the [`Upload`][glossary-upload-scalar] scalar (the input typing), but the
-  multipart HTTP test-client ergonomics await the `0.0.14`
-  [`TestClient`][glossary-testclient] card
-  ([Edge cases](#edge-cases-and-constraints)).
+- **The `TestClient` *ergonomic* helper, NOT file-field correctness.** This card
+  **owns the runtime correctness** of `forms.FileField` / `forms.ImageField`: the
+  `Upload` input typing, the `data=` / `files=` decode split, and `form_class(data=,
+  files=, instance=)` construction
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)),
+  proven by **at least one raw `django.test.Client` multipart live test** for a
+  form-backed `Upload` field (Slice 4). The raw multipart HTTP path already exists
+  from the `0.0.11` upload work, so correctness does **not** wait on a helper; only
+  the *ergonomic* `TestClient`/`AsyncTestClient` wrapper is deferred to the `0.0.14`
+  [`TestClient`][glossary-testclient] card ([Edge cases](#edge-cases-and-constraints)).
 - **Form `delete`.** graphene-django form mutations are create / update only; a
   `ModelForm` does not delete. A `delete` write stays the model-driven
   [`DjangoMutation`][glossary-djangomutation] (`Meta.operation = "delete"`) the
@@ -584,14 +640,20 @@ metaclass-options surface the package replaces with a nested `class Meta`.
 | [`fields_for_form` + `convert_form_field`][upstream-forms-converter] (Django form field → GraphQL type) | [`forms/converter.py`][forms-converter] `convert_form_field` registry, reusing the read-side [scalar][glossary-scalar-field-conversion] / [choice-enum][glossary-choice-enum-generation] / [`Upload`][glossary-upload-scalar] converters where overlapping ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)) | this card — required parity |
 | [`ErrorType.from_errors(form.errors)`][upstream-forms-types] on the payload | `form.errors` → the frozen [`FieldError` envelope][glossary-fielderror-envelope], `NON_FIELD_ERRORS` → the `"__all__"` sentinel ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)) | this card — reuse the `036`-frozen envelope, byte-identical |
 | graphene-django `Meta.return_field_name` (per-mutation output field name) | not adopted — the `036` uniform `node` / `result` slot supersedes it ([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)) | deliberate non-adoption (card-body tension, [Risks](#risks-and-open-questions)) |
+| graphene-django `DjangoModelFormMutation` **full** update (a bound form over the raw input) | **partial** update via full-payload reconstruction from the located instance ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)) | deliberate divergence — matches the package's own `036` `PartialInput` contract |
+| graphene-django form file fields (multipart `request.FILES` → form `files=`) | `Upload` input typing + the `data=` / `files=` decode split + `form_class(data=, files=, instance=)` ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)) | this card — runtime correctness owned here (raw multipart live test) |
 | graphene `MutationOptions` / `ClientIDMutation` / `__init_subclass_with_meta__` | rejected for a nested `class Meta` base ([Decision 3](#decision-3--class-meta-surface-not-graphenes-mutationoptions)) | deliberately not borrowed |
 
 ### From `graphene-django` — borrow the user-facing shape
 
 - **`Form` / `ModelForm` consumption.** The mutation runs the consumer's existing
-  form: `form_class(data=...)` (create) / `form_class(data=..., instance=<row>)`
-  (update), `form.is_valid()`, `form.save()` — adopted; the form's
-  `clean_<field>` / `clean()` validation and widget coercions are honored for free.
+  form — `form_class(data=…, files=…)` (create) / a full-payload-reconstructed
+  `form_class(data=…, files=…, instance=<row>)` (update), `form.is_valid()`,
+  `form.save()`. The form's `clean_<field>` / `clean()` validation and widget
+  coercions are honored for free; the one deliberate divergence is **partial** update
+  semantics (graphene-django's form update is full), via the
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)
+  reconstruction, for consistency with the model-driven `036` `PartialInput`.
 - **`form.errors` → field-keyed envelope.** graphene-django's
   `ErrorType.from_errors(form.errors)` is the parity shape; here it maps onto the
   `036`-frozen [`FieldError`][glossary-fielderror-envelope].
@@ -685,30 +747,66 @@ type CreateItemViaFormPayload {
 
 The input fields are the **form's** declared fields (`ItemModelForm.Meta.fields`),
 not the model's editable columns — `description` is optional because the form field
-`required` is `False` (graphene-django parity). On success the payload's `node` is
-the saved object re-fetched and optimizer-planned for the response selection; on a
-`form.is_valid()` failure `node` is `null` and `errors` carries one
-[`FieldError`][glossary-fielderror-envelope] per offending field, with the form's
-`NON_FIELD_ERRORS` (cross-field `clean()`, model-constraint) bucket keyed to the
-`"__all__"` sentinel. `update` binds the form to a row located through
-`ItemType.get_queryset(...)`, so a row the caller cannot see is a not-found
-`FieldError` on `id`, never an existence leak. Write authorization is the inherited
+`required` is `False` (graphene-django parity). The relation input keeps the
+cross-flavor `categoryId` GraphQL name, but the resolver decodes it to the **form
+field** `category` (`{"category": pk}`) so the bound `ModelForm` validates it
+natively — not via a raw model `setattr`
+([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)
+reverse map). On success the payload's `node` is the saved object re-fetched and
+optimizer-planned for the response selection; on a `form.is_valid()` failure `node`
+is `null` and `errors` carries one [`FieldError`][glossary-fielderror-envelope] per
+offending field, with the form's `NON_FIELD_ERRORS` (cross-field `clean()`,
+model-constraint) bucket keyed to the `"__all__"` sentinel.
+
+**`update` is a true partial update.** `updateItemViaForm` takes
+`ItemModelFormPartialInput` — all-optional here because `ItemModelForm` declares only
+model-backed fields (a required *non-model* extra field, were there one, stays
+required, [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload));
+the resolver locates the row through
+`ItemType.get_queryset(...)` (a row the caller cannot see is a not-found `FieldError`
+on `id`, never an existence leak), then reconstructs the **full** bound-form payload
+from the located row's current values overlaid with the provided fields before
+constructing the form
+([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+So changing only `name` preserves `category` / `description` / `isPrivate` (and any
+file field), while `unique_item_per_category` still validates against the unchanged
+`category` — the `036` `PartialInput` contract, not graphene-django's full-update
+form. Write authorization is the inherited
 [`DjangoModelPermission`][glossary-djangomodelpermission] default (the `add` /
 `change` model perm).
 
 A plain `Form` (no model) wraps the same way through
-[`DjangoFormMutation`][glossary-djangoformmutation]; its payload has no `DjangoType`
-object slot (the form has no model row) — the model-less payload shape is settled in
-[Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)
-and [Risks](#risks-and-open-questions).
+[`DjangoFormMutation`][glossary-djangoformmutation], but its payload has **no
+`DjangoType` object slot** — it is the pinned two-field shape
+([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)):
+
+```graphql
+type Mutation {
+  subscribeToNewsletter(data: NewsletterFormInput!): SubscribeToNewsletterPayload!
+}
+
+type SubscribeToNewsletterPayload {
+  ok: Boolean!
+  errors: [FieldError!]!
+}
+```
+
+On success `perform_mutate(self, form, info)` runs (default: `form.save()` if present,
+else no-op; the consumer overrides it for the real side effect) and the payload is
+`ok: true, errors: []`; on a validation failure `ok: false` with the field-keyed
+`errors`. No cleaned-data is echoed (a model-less form returns a success flag, not
+data — a consumer needing data back uses a `DjangoModelFormMutation`).
 
 ### Error shapes
 
-- A `Meta` with no `form_class`, a `form_class` that is not a `forms.Form` /
-  `forms.ModelForm` subclass (per flavor), or a `DjangoModelFormMutation` whose
-  `form_class._meta.model` is unresolvable raises
-  [`ConfigurationError`][glossary-configurationerror] at mutation-class creation,
-  naming the offending key.
+- A `Meta` with no `form_class`; a `DjangoFormMutation` whose `form_class` is not a
+  `forms.Form` subclass **or is a `forms.ModelForm`** (wrong base — the error names
+  `DjangoModelFormMutation`); a `DjangoModelFormMutation` whose `form_class` is not a
+  `forms.ModelForm`, or whose `form_class._meta.model` is unresolvable; a bare-string
+  / duplicate-name / unknown-name `Meta.fields` / `Meta.exclude` (validated against
+  `form_class().fields`); or an empty effective field set — each raises
+  [`ConfigurationError`][glossary-configurationerror] at mutation-class creation /
+  finalization, naming the offending key.
 - A `form.is_valid()` failure populates the
   [`FieldError` envelope][glossary-fielderror-envelope] (a null-object payload),
   **not** a top-level `GraphQLError`. A form field error keys to the form field
@@ -985,13 +1083,39 @@ machinery, specified explicitly (no "if needed" hedge) in
 a `forms/sets.py` declaration registry + a `clear_form_mutation_registry`
 co-cleared from `registry.clear()` + a `bind_form_mutations()` entry point wired into
 [`types/finalizer.py`][types-finalizer]'s phase-2.5 window alongside `bind_mutations()`.
-**Preferred payload shape:** `errors: list[FieldError]!` plus the form's cleaned
-scalar **output fields** (graphene-django's plain `DjangoFormMutation` echoes
-`cleaned_data`), so a `{ subscribe(data: …) { ok email errors { field messages } } }`
-shape works without a model — settled with a fallback (an `errors`-only +
-`ok: Boolean!` payload) in [Risks](#risks-and-open-questions). The asymmetry mirrors
-graphene-django's own split (its `DjangoModelFormMutation` is model-backed; its
-`DjangoFormMutation` is not).
+**Pinned plain-form payload contract (P2 — a fixed schema rule, not a preferred /
+fallback branch).** The generated `<Name>Payload` for a plain `DjangoFormMutation` is
+**exactly two fields**: `ok: Boolean!` and `errors: [FieldError!]!`. No cleaned-data
+output fields are generated. The success/failure contract: on `form.is_valid()`
+success, `perform_mutate` runs and the payload is `ok: true, errors: []`; on a
+validation failure, `perform_mutate` does **not** run and the payload is `ok: false`
+with one `FieldError` per offending field (the form's `NON_FIELD_ERRORS` bucket under
+the `"__all__"` sentinel) — the same envelope every flavor returns. A write-auth
+denial is a top-level `GraphQLError`, never a payload (`036` Decision 15). The
+side-effect hook is **`perform_mutate(self, form, info) -> None`**: the default calls
+`form.save()` when the form exposes it (a `ModelForm` would, but the plain flavor is
+for non-`ModelForm` forms) and is otherwise a no-op; a consumer overrides it for the
+real action (send mail, enqueue a job) and returns `None`. The payload shape does not
+mirror input narrowing (there are no output fields to narrow), has no nullable
+ambiguity (`ok` is non-null, `errors` is the non-null list of non-null `FieldError`),
+and needs no per-field descriptions. This is the **fully-pinned** resolution of the
+prior preferred/fallback uncertainty: an implementer cannot ship a divergent
+plain-form shape.
+
+Rejected (recorded, not silently dropped): **cleaned-data echo** — graphene-django's
+plain `DjangoFormMutation` echoes `form.cleaned_data` as output fields (its
+`fields_for_form` is dual-purposed for input *and* output). Rejected for `0.0.12`
+because (a) `cleaned_data` is heterogeneous and includes values with no clean GraphQL
+output mapping (a `forms.FileField`'s cleaned value is an `UploadedFile`; a
+`ModelChoiceField`'s is a model instance), so a faithful echo would need a second
+output-type generator and ad-hoc per-type rules; (b) the plain form is a
+parity-completeness flavor where a predictable success flag is sufficient — a consumer
+that needs to return data uses a model-backed `DjangoModelFormMutation` (which returns
+the `node` / `result` object); and (c) `ok` + `errors` is trivially well-typed for a
+model-less payload and keeps the cross-flavor `errors` envelope identical. The
+asymmetry still mirrors graphene-django's split (its `DjangoModelFormMutation` is
+model-backed; its `DjangoFormMutation` is not) — only the model-less *output* shape
+differs, deliberately.
 
 **`Meta.return_field_name` is not adopted.** graphene-django lets a `ModelForm`
 mutation name its output field; [`spec-036`][spec-036] Decision 7 (AR-H5) **froze**
@@ -1071,6 +1195,107 @@ unknown form-field class raises [`ConfigurationError`][glossary-configurationerr
 naming the field and class (the graphene-django `convert_form_field`
 `ImproperlyConfigured` parity, raised as the package's own exception).
 
+**Per-field metadata: the `input_attr` → `form_field_name` reverse map (P1).** The
+generated input GraphQL names follow the cross-flavor `036` convention so the wire
+contract is uniform across mutation flavors — a `ModelChoiceField` named `category`
+generates `categoryId` (python attr `category_id`), a scalar/`MultipleChoice`/file
+field keeps its own name. But a **bound Django form is keyed by form-field name**
+(`ItemModelForm(data={"category": pk})`, **not** `{"category_id": pk}` — the latter
+makes the form think `category` is missing). So `forms/inputs.py` **retains, per
+generated input field, an `(input_attr, graphql_name) → (form_field_name, kind)`
+metadata record** that `forms/resolvers.py` consults at decode, where `kind ∈
+{scalar, relation_single, relation_multi, file}`:
+
+- `category_id` / `categoryId` → form field `category`, kind `relation_single`
+  (decode the `GlobalID` and **type-check + visibility-check it through the `036`
+  related-id path** — see the visibility paragraph below — then place the *visible*
+  `{"category": pk}`, where the bound `ModelChoiceField.to_python` resolves the pk to
+  the object).
+- `genres` → form field `genres`, kind `relation_multi` (the `list[pk]` is
+  type-/visibility-checked the same way, then placed under `genres` for
+  `ModelMultipleChoiceField`).
+- `avatar` → form field `avatar`, kind `file` (routed to `files=`, see
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+- every plain scalar → identity (`name` → `name`, kind `scalar`).
+
+The reverse map is the single fix for the P1 "`category_id` vs `category`" hazard: the
+generated input may *expose* `categoryId` (parity), but the decode always produces a
+**form-field-keyed** dict the bound form validates natively — never accidental
+model-assignment semantics. Package + live tests prove the relation field validates
+**through the form** (`clean_<field>` runs), not through a raw model `setattr`.
+
+**Relation visibility is enforced before the form, not delegated to the form's
+queryset (P1 — a restored `036` security invariant).** A default `ModelForm`'s
+relation field queryset is `Category.objects.all()` — **not** request-scoped — so
+relying on `ModelChoiceField.to_python` alone would let a permitted writer attach an
+`Item` to a **hidden** `Category` it merely holds / guesses the `GlobalID` for. So the
+`relation_single` / `relation_multi` decode **first runs the shipped `036`
+related-id path** — `decode_model_global_id` type-checks the id against the relation's
+Django target model (a wrong-model id → field-keyed `FieldError`), then the decoded
+pk(s) are **visibility-checked through the related model's primary
+[`DjangoType`][glossary-djangotype]'s [`get_queryset`][glossary-get_queryset-visibility-hook]**
+(the same `036` relation-visibility query: a pk the caller cannot *see* yields the same
+field-keyed `FieldError`, no existence leak). Only the **visible** pk(s) are then fed
+into the form, where the form's own `queryset` is a *secondary* guard, not the only
+one. A hidden-`Category` `GlobalID` therefore returns the **identical** field-keyed
+`FieldError` the model-driven mutation returns — proven by a live test where a
+permitted writer submits a hidden category id.
+
+**Two generated inputs: create (`field.required`) + partial.** Like the `036`
+`Input` / `PartialInput` split, the form flavor generates `<FormClass>Input` (create;
+each field's requiredness from the form field's `field.required`) and
+`<FormClass>PartialInput` (update). In the partial input, **model-backed** form fields
+are forced optional — [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)'s
+reconstruction supplies them from the located row — but a **non-model** extra form
+field (a `confirm`, a captcha, an action flag, with no model column to reconstruct
+from) keeps its declared `field.required` (P2 — see
+[Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)'s
+required-extra-field rule), so a required extra field stays required on update and an
+optional one may be omitted.
+
+**Shape identity + naming + collision (the `036` discipline, P1).** A generated form
+input's identity is **not** its name — it is the tuple **`(form_class, operation
+kind, frozenset(effective field names after `Meta.fields` / `Meta.exclude`))`**,
+exactly parallel to `036`'s `(model, operation kind, effective field set)`
+([`mutations/inputs.py`][mutations-inputs] `mutation_input_shape` /
+`mutation_input_type_name`). Keying on the **form class object** (not its `__name__`)
+captures the field *representation* — two forms with the same field names but
+different field types are different `form_class`es, so they never wrongly dedupe. The
+generated GraphQL **name** is the canonical `<FormClass.__name__>Input` /
+`<FormClass.__name__>PartialInput` for the **full** effective shape, and a
+**deterministic shape-derived name** (the model-flavor's injective sorted-field-token
+scheme) for a **narrowed** (`Meta.fields` / `Meta.exclude`) shape — so two different
+narrowings of one form get distinct names, and two narrowings to the *same* effective
+set dedupe. **Two distinct shapes that resolve to the same generated GraphQL name
+raise [`ConfigurationError`][glossary-configurationerror] at finalization** — this is
+the **fail-loud fix** for the two collision cases the review names: (a) the same
+`ItemModelForm` used by two mutations with different effective field sets (distinct
+shape-derived names; no clash, but if a narrowing collides with the canonical name it
+raises), and (b) two **different** `ItemForm` / `NewsletterForm` classes with the same
+`__name__` — both emit `<__name__>Input`, and because they are **distinct `form_class`
+identities they can never dedupe** (dedupe is only within one `form_class` + effective
+set), so this **always raises** regardless of whether their field shapes happen to
+match; the consumer disambiguates by renaming one form (a future explicit
+name-override `Meta` key is out of scope). Only repeats of the **same** `(form_class,
+operation kind, effective set)` dedupe to one materialized class. The raise comes
+**for free** from reusing
+[`utils/inputs.py`][utils-inputs]`::materialize_generated_input_class`, whose ledger
+already raises on a second *different* class under one name (the `036` AR-H1 / AR-M6
+raise) — so the form flavor inherits the early-`ConfigurationError`-not-late-Strawberry-error
+posture rather than re-deriving it.
+
+**`Meta.fields` / `Meta.exclude` are normalized + fail-loud against `form.fields`
+(P3).** Mirroring `036`'s `_normalize_field_sequence`, the form base validates the
+narrowing at **class creation**: a bare string (`fields = "name"`) is rejected (it
+would iterate as characters), duplicate names are rejected, `fields` and `exclude`
+are mutually exclusive, and a name in neither `form_class().fields` raises
+[`ConfigurationError`][glossary-configurationerror] naming the unknown field (a typo
+like `fields = ("emial",)` fails loud, never silently shrinks the input). An
+**empty effective field set** (a `fields = ()`, an `exclude` that drops every field,
+or a form with no fields) raises [`ConfigurationError`][glossary-configurationerror]
+at finalization — never a bare empty `@strawberry.input` that Strawberry rejects only
+at schema build (the `036` empty-input guard, applied to `form.fields`).
+
 **Materialization + the `data:`-ref seam.** [`forms/inputs.py`][forms-inputs] builds
 one `@strawberry.input` from the form fields — reusing
 [`utils/inputs.py`][utils-inputs]'s single-sited `build_strawberry_input_class` +
@@ -1116,9 +1341,23 @@ swapping the model-construct + `full_clean()` heart of the
 [`mutations/resolvers.py`][mutations-resolvers] pipeline for the form's own
 validation and write, but **reusing the surrounding `036` steps**:
 
-1. **Decode** the `data:` input to a plain `dict` of `{form_field_name: value}`
-   (`UNSET` stripped; a `ModelChoiceField` id decoded to a pk; choice enum members
-   unwrapped to their raw values, reusing the `036` decode helpers where they fit).
+1. **Decode** the `data:` input into **two `dict`s keyed by FORM-field name** —
+   `provided_data` (scalars, choice-enum raw values, and relation pks / pk-lists) and
+   `provided_files` (uploaded files) — using the
+   [Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)
+   `input_attr → (form_field_name, kind)` reverse map (`UNSET` stripped). A
+   `relation_single` field decodes its `GlobalID` via the reused
+   `decode_model_global_id` primitive (a wrong-model id is a `FieldError` on the input
+   field, the `036` AR-H4 contract) **and visibility-checks the pk through the related
+   model's primary `DjangoType.get_queryset`** (the `036` relation-visibility query —
+   a hidden / unseeable target is the same field-keyed `FieldError`, no existence
+   leak; [Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)),
+   landing only the *visible* `{form_field_name: pk}`; a `relation_multi` is
+   type-/visibility-checked the same way and lands `{form_field_name: [pk, …]}`; a
+   `file` field lands its uploaded value in **`provided_files`**, not `provided_data`
+   (the P1 file-routing fix below); a `scalar` choice-enum member is unwrapped to its
+   raw value. The split by `kind` is the single point that keeps form-field names,
+   visibility-checked relation pks, and file uploads each going to the right place.
 2. **Locate** (`update`, `ModelForm` only): the top-level `id:` argument is
    `strawberry.ID` (a raw GlobalID **string** the package decodes server-side via the
    reused `036` `_coerce_lookup_id` — the same `node(id: ID!)` contract the shipped
@@ -1132,15 +1371,47 @@ validation and write, but **reusing the surrounding `036` steps**:
    `_locate_instance`); a miss (hidden or genuinely absent — indistinguishable) is a
    not-found `FieldError` on `id`. This step
    **only locates** — the form is **not** constructed here (the located row is
-   carried to step 4 as the `instance=` kwarg), so the form is built exactly once,
-   matching graphene-django's `get_form_kwargs` (which assembles `{"data": …,
-   "instance": …}` and constructs the form a single time).
+   carried to step 4 as the `instance=` kwarg), so the form is built exactly once, in
+   step 4, from the reconstructed `data=` / `files=` payload. (graphene-django builds
+   its form once too via `get_form_kwargs`, but as a *full* update; the package's
+   step-4 merge is what adds true partial semantics on top of that single
+   construction.)
 3. **Authorize**: the inherited `check_permission` / `Meta.permission_classes`
    (before validation for `create`; after the locate for `update`). A denial raises
    a top-level `GraphQLError` ([`spec-036`][spec-036] Decision 15).
-4. **Validate**: construct the form **once** — `form = form_class(data=decoded)`
-   (`create`) or `form_class(data=decoded, instance=<located row>)` (`update`) —
-   then `form.is_valid()`. A failure maps `form.errors` onto the
+4. **Construct + validate** the form **once**, with the `data=` / `files=` split
+   Django requires (a bound form reads scalars/relations from `data=` and uploaded
+   files from `files=` — an `UploadedFile` in `data=` does **not** validate):
+   - **`create`** — `form_class(data=provided_data, files=provided_files)`.
+   - **`update` (the pinned partial-update contract, P1)** — a bound `ModelForm`
+     validates **every** field, so handing it only the provided fields would reject a
+     valid partial update (missing-required) or clear omitted optional fields. So the
+     resolver **reconstructs the complete bound payload from the located instance plus
+     the provided values**: `data = {**model_to_dict(instance, fields=<the form's
+     non-file fields>), **provided_data}` (the instance's current values — FK as pk
+     under `category`, M2M as `[pk]` under `genres` — overlaid by the provided
+     fields), and `files = provided_files` **only** (an omitted file field is
+     preserved by the bound `form_class(instance=…)` via its `initial`, never
+     re-supplied and never cleared); then `form_class(data=data, files=files,
+     instance=<located row>)`. This yields true partial semantics — omitted scalars,
+     FKs, M2Ms, and files are preserved; provided fields update — **and** the form
+     validates the full merged set, so `unique_item_per_category` validates correctly
+     when only `name` changes (the unchanged `category` comes from the instance). It
+     matches the `036` model-driven `PartialInput` contract (consistent partial-update
+     UX across both mutation flavors), not graphene-django's full-update form.
+     - **Required extra (non-model) form fields (P2).** `model_to_dict` only supplies
+       **model-backed** fields, so a `ModelForm`'s extra declared field with no model
+       column (a `confirm`, a captcha, an action flag) has **no instance value to
+       reconstruct**. The pinned rule: in the `<FormClass>PartialInput`, model-backed
+       fields are forced optional (reconstructed), but a **non-model form field keeps
+       its declared `field.required`** ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)).
+       So a **required** extra field stays required on update (the caller must supply
+       it — it is in `provided_data`, never silently `None`), while an **optional**
+       extra field may be omitted (and the bound form applies its own `initial` /
+       empty value). This avoids both failure modes the review names — an all-optional
+       input that lets a caller omit a required extra field (then the bound form fails
+       required validation confusingly) and a meaningless reconstructed `initial`.
+   Then `form.is_valid()`. A failure maps `form.errors` onto the
    [`FieldError` envelope][glossary-fielderror-envelope] by **reusing the `036`
    mapper directly, not a parallel one**: `form.errors.as_data()` yields the
    `{field: [ValidationError, …]}` shape that
@@ -1153,10 +1424,14 @@ validation and write, but **reusing the surrounding `036` steps**:
    produces). That mapper is promoted out of module-private as part of the shared
    pipeline surface (the helper-promotion paragraph below). Returns a null-object
    payload.
-5. **Write**: `form.save()`. For a `ModelForm` this returns the saved instance; for
-   a plain `Form`, `perform_mutate` runs the form's action (default: `form.save()`
-   if it exists, else the form's `cleaned_data` is the result). Runs inside the one
-   `transaction.atomic()` boundary.
+5. **Write**: for a `ModelForm`, `form.save()` (commit=True; M2M written via the
+   internal `save_m2m()`) returns the saved instance. For a plain `Form`,
+   `perform_mutate(self, form, info)` runs the form's side effect per the pinned
+   plain-form contract
+   ([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)):
+   the default calls `form.save()` when present, else is a no-op, and a consumer
+   overrides it for a custom action. Runs inside the one `transaction.atomic()`
+   boundary.
 6. **Re-fetch** (`ModelForm`): re-read the saved row by pk and optimizer-plan it for
    the response selection through the `036` `_refetch_optimized`
    ([Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path)).
@@ -1432,13 +1707,13 @@ estimates.
 
 | Slice | Files touched | New / changed tests | Approx. delta |
 | --- | --- | --- | --- |
-| 1 — form-field converter + form-derived input | [`forms/converter.py`][forms-converter] (new), [`forms/inputs.py`][forms-inputs] (new), [`forms/__init__.py`][forms-init] (new) | [`tests/forms/test_converter.py`][test-forms] + [`tests/forms/test_inputs.py`][test-forms] (~20 — every form-field class, id mapping, `Upload`, unknown-field error, form-derived input shape + required-ness) | `+260 / 0` |
+| 1 — form-field converter + reverse map + the two form-derived inputs | [`forms/converter.py`][forms-converter] (new; `convert_form_field` + the `input_attr → (form_field_name, kind)` reverse map), [`forms/inputs.py`][forms-inputs] (new; `<FormClass>Input` + `<FormClass>PartialInput`), [`forms/__init__.py`][forms-init] (new) | [`tests/forms/test_converter.py`][test-forms] + [`tests/forms/test_inputs.py`][test-forms] (~30 — every form-field class, id mapping, `Upload`, the reverse-map + `kind` flag, unknown-field error, the create + partial input shapes, the shape-identity collision/dedupe, `Meta.fields`/`exclude` fail-loud + empty-set) | `+360 / 0` |
 | 2 — the two base classes + `Meta` validation + bind seams | [`forms/sets.py`][forms-sets] (new; the form bases + a `make_declaration_registry` shared helper both registries instantiate), [`mutations/sets.py`][mutations-sets] (refactor validation into the overridable `_validate_meta`; add the `build_input` / `input_type_name` / `input_module_path` / `resolve_sync` / `resolve_async` seams, all model-defaulted; adopt the `make_declaration_registry` helper for its own quad), [`types/finalizer.py`][types-finalizer] (wire `bind_form_mutations()` into phase 2.5), [`registry.py`][registry] (`clear_form_mutation_registry` co-clear), [`__init__.py`][init] (two exports) | [`tests/forms/test_sets.py`][test-forms] + [`tests/mutations/test_sets.py`][test-mutations] extend (~20 — `Meta` matrix incl. `delete`-rejected + `form_class`-accepted, both bind paths, no-primary error, model-flavor seam defaults unchanged) | `+340 / -30` |
-| 3 — resolver pipeline + field-factory generalization | [`forms/resolvers.py`][forms-resolvers] (new), [`mutations/resolvers.py`][mutations-resolvers] (promote the reused pipeline helpers — `_locate_instance` / `_coerce_lookup_id` / `_authorize_or_raise` / `_refetch_optimized` / `_build_payload` / `_not_found_error` / `_validation_error_to_field_errors` — to an importable shared surface so `forms/` reuses by call, not by re-implementation), [`mutations/fields.py`][mutations-fields] (generalize the target check **and** the `_resolve` dispatch **and** the `data:` lazy-ref derivation — [Decision 5](#decision-5--public-surface-djangoformmutation--djangomodelformmutation-exported-from-the-root)) | [`tests/forms/test_resolvers.py`][test-forms] + [`tests/mutations/test_fields.py`][test-mutations] extend (~28 — create/update, `form.errors` envelope + `"__all__"`, visibility locate, write-auth, sync+async, G2 plan-shape, model-flavor dispatch unchanged) | `+460 / -30` |
-| 4 — products live form surface | `examples/fakeshop/apps/products/forms.py` (new), [`products/schema.py`][products-schema] (form mutations), [`test_products_api.py`][test-products-api] | live create/update via `ModelForm`, `form.errors` envelope, write-auth, plain-form validation | `+180 / -0` |
+| 3 — resolver pipeline + field-factory generalization | [`forms/resolvers.py`][forms-resolvers] (new), [`mutations/resolvers.py`][mutations-resolvers] (promote the reused pipeline helpers — `_locate_instance` / `_coerce_lookup_id` / `_authorize_or_raise` / `_refetch_optimized` / `_build_payload` / `_not_found_error` / `_validation_error_to_field_errors` — to an importable shared surface so `forms/` reuses by call, not by re-implementation), [`mutations/fields.py`][mutations-fields] (generalize the target check **and** the `_resolve` dispatch **and** the `data:` lazy-ref derivation — [Decision 5](#decision-5--public-surface-djangoformmutation--djangomodelformmutation-exported-from-the-root)) | [`tests/forms/test_resolvers.py`][test-forms] + [`tests/mutations/test_fields.py`][test-mutations] extend (~38 — create/update, the decode `data=`/`files=` split, relation type+visibility check (hidden → `FieldError`), partial-update preservation + required-extra-field rule, `form.errors` envelope + `"__all__"`, plain-form `ok`+`errors` + `perform_mutate`, visibility locate, write-auth, sync+async, G2 plan-shape, model-flavor dispatch unchanged) | `+560 / -30` |
+| 4 — products live form surface | `examples/fakeshop/apps/products/forms.py` (new; + a minimal file column/migration if needed for the multipart test), [`products/schema.py`][products-schema] (form mutations), [`test_products_api.py`][test-products-api] | live create/update via `ModelForm`, `categoryId`-through-form, partial-update preservation, `form.errors` envelope, write-auth, **a raw multipart `Upload` test**, plain-form success + validation | `+220 / -0` |
 | 5 — docs + `0.0.12` version cut + card wrap | [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], [`README.md`][readme], [`GOAL.md`][goal], [`TODAY.md`][today], [`docs/TREE.md`][tree], [`CHANGELOG.md`][changelog], [`KANBAN.md`][kanban], version files | `test_version` → `0.0.12` | `+120 / -50` |
 
-Total expected delta: ~`+1380 / -90` — an L cut, matching the card's relative size.
+Total expected delta: ~`+1580 / -90` — an L cut, matching the card's relative size.
 The `036`-surface generalization (the `mutations/sets.py` / `mutations/fields.py`
 seams + the `types/finalizer.py` wiring) is a real, named part of that delta — not the
 "single additive target-check edit" an earlier draft budgeted; it is justified because
@@ -1460,15 +1735,26 @@ this spec, removed in the slice that ships it).
   `form.errors[NON_FIELD_ERRORS]`, mapped to the `"__all__"` sentinel `036` froze —
   the same key a model-driven multi-field-constraint `ValidationError` uses, so the
   client contract is identical across flavors.
-- **`update` binds the form to the located instance.** The form is constructed
-  `form_class(data=..., instance=<row located via get_queryset>)`, so the form's
-  partial-update semantics and its own validation run against the visible row; a
-  hidden row is not-found before the form runs.
-- **File / image form fields.** `forms.FileField` / `forms.ImageField` map to the
-  [`Upload`][glossary-upload-scalar] scalar ([`spec-037`][spec-037]); the multipart
-  HTTP transport (and a test client) await the `0.0.14`
-  [`TestClient`][glossary-testclient] card, exactly as [`spec-037`][spec-037] scoped
-  it. The mapping (input typing) ships here; the transport does not.
+- **`update` partial-update preservation (P1).** The resolver reconstructs the full
+  bound payload (`data = {**model_to_dict(instance, fields=<non-file form fields>),
+  **provided_data}`, `files = provided_files`) before
+  `form_class(data=, files=, instance=<row located via get_queryset>)`
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  So a `name`-only update preserves the unprovided scalar (`description`), the FK
+  (`category`, as its current pk), the M2M (`genres`, as the current pk list), and any
+  file field (omitted → kept via the bound form's `initial`); a provided optional
+  field that the consumer wants emptied is sent explicitly. A hidden row is not-found
+  before the form runs.
+- **File / image form fields run live in this card (P1).** `forms.FileField` /
+  `forms.ImageField` map to the [`Upload`][glossary-upload-scalar] scalar
+  ([`spec-037`][spec-037]) on input, and the resolver routes uploaded values into the
+  form's **`files=`** argument (a bound Django form reads files from `files=`, never
+  `data=`), so `form_class(data=…, files=…, instance=…)` validates them. This is a
+  **runtime correctness contract this card owns**, proven by a raw
+  `django.test.Client` multipart live test (Slice 4); only the ergonomic `TestClient`
+  helper is deferred to `0.0.14` ([Non-goals](#non-goals)). An omitted file field on
+  partial update keeps the stored file (not in `files=`, preserved by the bound
+  `ModelForm(instance=…)`).
 - **A `ModelForm` whose `Meta.fields` omits an editable column.** The omitted column
   is simply not an input field — the form's contract governs the write surface
   (graphene-django parity), and the model's column default applies on `save()`.
@@ -1476,6 +1762,31 @@ this spec, removed in the slice that ships it).
   read side uses ([Choice enum generation][glossary-choice-enum-generation]); the
   decode unwraps the enum member to its raw choice value before the form sees it
   (reusing the `036` `_raw_choice_value` discipline).
+- **Relation visibility is not delegated to the form's queryset (P1).** A
+  `ModelChoiceField`'s default queryset is `Category.objects.all()` (not
+  request-scoped), so the decode type- and visibility-checks the id through the
+  related primary `DjangoType.get_queryset` **before** the form sees it; a hidden /
+  unseeable target is a field-keyed `FieldError`, identical to the model-mutation
+  path. The form's own queryset remains a secondary guard
+  ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)).
+- **A `ModelForm` placed on the plain `DjangoFormMutation` base (P2).** Rejected at
+  class creation with a [`ConfigurationError`][glossary-configurationerror] naming
+  `DjangoModelFormMutation` — `forms.ModelForm` is a `forms.Form` subclass, so the
+  plain base must exclude it, or a `ModelForm` would silently write with no object
+  slot / no `DjangoModelPermission` default / no optimizer re-fetch
+  ([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)).
+- **A required extra (non-model) `ModelForm` field on `update` (P2).** It has no
+  instance value to reconstruct, so it keeps its `field.required` in the partial
+  input (the caller must supply it); an optional extra field may be omitted
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+- **Two distinct generated form inputs colliding on one GraphQL name (P1).** Two
+  **different** form classes with the same `__name__` both emit `<__name__>Input` and
+  **always** raise a finalize-time [`ConfigurationError`][glossary-configurationerror]
+  (distinct `form_class` identities never dedupe — the reused
+  `materialize_generated_input_class` ledger raise); only repeats of the **same**
+  `(form_class, operation kind, effective set)` dedupe to one materialized class, and
+  two different narrowings of one form get distinct shape-derived names
+  ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)).
 - **Plain-form write authorization.** With no model, the
   [`DjangoModelPermission`][glossary-djangomodelpermission] default cannot apply; a
   plain `DjangoFormMutation` requires an explicit `Meta.permission_classes`
@@ -1492,28 +1803,63 @@ behavior reachable through `/graphql/`, package tests own internals.
 - **Live, over `/graphql/`** (Slice 4, [`test_products_api.py`][test-products-api],
   seeded via `seed_data` / `create_users`): `createItemViaForm` / `updateItemViaForm`
   happy paths; the `form.errors` envelope (a `clean_<field>` error keyed to the form
-  field, the `unique_item_per_category` `clean()` error keyed to `"__all__"`); a
-  non-colliding partial update; write authorization (anonymous denied, a caller
-  missing the model perm denied, a permitted caller succeeds); the visibility-scoped
-  `update` (a caller who cannot see a private `Item` gets not-found); and a plain
-  `Form` mutation's validation envelope.
+  field, the `unique_item_per_category` `clean()` error keyed to `"__all__"`);
+  **`categoryId` validates and writes through the `ModelForm`'s `category` field**
+  (not via model `setattr` — proving the P1 reverse map); **partial-update
+  preservation** — a `name`-only `updateItemViaForm` preserves `description` and
+  `category` (FK), and `unique_item_per_category` still fires when only `name` changes
+  to a value already taken under the unchanged `category` (the P1 partial-update
+  contract); a non-colliding partial update; write authorization (anonymous denied, a
+  caller missing the model perm denied, a permitted caller succeeds); the
+  visibility-scoped `update` (a caller who cannot see a private `Item` gets
+  not-found); **relation visibility** — a permitted writer submitting a **hidden**
+  `Category` `GlobalID` as `categoryId` gets the same field-keyed `FieldError` the
+  model-driven mutation returns (the restored P1 `036` invariant, proving the form's
+  default `Category.objects.all()` queryset is not the only guard); **a raw
+  `django.test.Client` multipart upload** to a form-backed `Upload` field, proving the
+  `data=` / `files=` split validates and writes the file (the P1 file-routing contract
+  — owned here, not deferred); and the plain `Form` mutation's **success** (`ok: true`,
+  empty `errors`) **and** validation-failure (`ok: false`, field-keyed `errors`) shapes.
 - **Package-internal** ([`tests/forms/`][test-forms]):
   - `test_converter.py` — each supported form-field class → annotation +
     required-ness; `ModelChoiceField` / `ModelMultipleChoiceField` id mapping
     (Relay-`GlobalID` vs raw pk); `forms.FileField` → [`Upload`][glossary-upload-scalar];
-    the unknown-field [`ConfigurationError`][glossary-configurationerror].
-  - `test_inputs.py` — the form-derived input shape (fields from `form.fields`,
-    required-ness from `field.required`, narrowed by `Meta.fields` / `Meta.exclude`);
-    materialization as a module global; a form-only (non-model) field included.
-  - `test_sets.py` — the `Meta` validation matrix (missing / wrong-type
-    `form_class`, `ModelForm`-with-no-model, `fields` + `exclude` both set, unknown
-    key); registration; phase-2.5 binding; the no-registered-primary-type error for
-    `DjangoModelFormMutation`.
+    **the `input_attr → (form_field_name, kind)` reverse map** (`category_id` /
+    `categoryId` → `category` / `relation_single`; a `file`-kind flag for an
+    `Upload` field); the unknown-field [`ConfigurationError`][glossary-configurationerror].
+  - `test_inputs.py` — the **two generated inputs** (`<FormClass>Input` with
+    `field.required` requiredness for create; `<FormClass>PartialInput` — model-backed
+    fields optional, **a required non-model extra field still required**, P2); fields
+    from `form.fields`, narrowed by `Meta.fields` / `Meta.exclude`; materialization as
+    a module global; a form-only (non-model) field included. **Shape identity (P1):**
+    the same form with two different `Meta.fields` narrowings → two **distinct**
+    generated names; two repeats of the **same** `(form_class, op, effective set)` →
+    **dedupe** (one materialized class); two **different** form classes with the
+    **same `__name__`** → a finalize-time [`ConfigurationError`][glossary-configurationerror]
+    collision **always** (distinct `form_class` identities never dedupe, even with
+    matching field shapes); an **empty effective field set** → `ConfigurationError`.
+  - `test_sets.py` — the `Meta` validation matrix (missing `form_class`; a `ModelForm`
+    on **`DjangoFormMutation`** rejected naming `DjangoModelFormMutation`, P2; a
+    non-`ModelForm` on `DjangoModelFormMutation` rejected; `ModelForm`-with-no-model;
+    `operation = "delete"` rejected; **`Meta.fields` bare-string / duplicate-name /
+    unknown-name against `form.fields`**, P3; `fields` + `exclude` both set; unknown
+    key); registration; phase-2.5 binding (both paths); the no-registered-primary-type
+    error for `DjangoModelFormMutation`.
   - `test_resolvers.py` — create / update happy paths; `form.is_valid()` failure →
     envelope (null object), incl. a `NON_FIELD_ERRORS` `clean()` error → `"__all__"`;
-    the visibility-scoped `update` locate (hidden row → not-found); write-auth
-    denial vs success; sync + async (the async path runs the body in one
-    `sync_to_async(thread_sensitive=True)` call); the
+    **the decode split** — `categoryId` → `{"category": pk}` in `data=`, an `Upload`
+    → `files=` (never `data=`); **relation visibility** — a hidden `Category` pk →
+    field-keyed `FieldError` before the form (P1, the `036` invariant); **a raw-pk /
+    wrong-model relation id** → `FieldError`; **partial-update reconstruction at the
+    unit tier** — omitted scalar / FK / M2M preserved from the located instance,
+    omitted file preserved via the bound form's `initial`, a **required extra
+    non-model field omitted → required error** while an optional one may be omitted
+    (P2), and `unique_item_per_category` validating on a one-field change; the
+    **plain-form `ok` + `errors` payload** and
+    the `perform_mutate(self, form, info)` default (calls `form.save()` if present,
+    else no-op) + a consumer override; the visibility-scoped `update` locate (hidden
+    row → not-found); write-auth denial vs success; sync + async (the async path runs
+    the body in one `sync_to_async(thread_sensitive=True)` call); the
     [`SyncMisuseError`][glossary-syncmisuseerror] async-hook-from-sync path; the G2
     re-fetch plan-shape (`select_related` / `prefetch_related` kept, no `.only(...)`).
   - [`tests/mutations/test_fields.py`][test-mutations] (extend) — the generalized
@@ -1544,9 +1890,17 @@ explicitly include the `CHANGELOG.md` edit** for it to be authorized.
   [`DjangoModelFormMutation`][glossary-djangomodelformmutation] from
   `planned for 0.0.12` to `shipped (0.0.12)` (updating each body to the shipped
   contract — the `Meta.form_class` surface, the form-derived input, the `form.errors`
-  → [`FieldError`][glossary-fielderror-envelope] mapping, the `036` reuse); add both
-  to **Public exports**, the **Index** (status column), and the **Mutations**
-  browse-by-category row; move the package-version line to `0.0.12`.
+  → [`FieldError`][glossary-fielderror-envelope] mapping, the `036` reuse). **Correct
+  the now-stale `DjangoFormMutation` entry (P2):** its current text calls the plain
+  `DjangoFormMutation` a "`DjangoMutation` subclass" with "the post-save object as the
+  return value" — rewrite it to the settled architecture
+  ([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)):
+  only `DjangoModelFormMutation` subclasses `DjangoMutation` (returns the post-save
+  object in the uniform `node` / `result` slot), while the plain `DjangoFormMutation`
+  is a model-less sibling accepted by the generalized mutation-field family, returning
+  the pinned `ok: Boolean!` + `errors: [FieldError!]!` payload (no object slot). Add
+  both symbols to **Public exports**, the **Index** (status column), and the
+  **Mutations** browse-by-category row; move the package-version line to `0.0.12`.
 - **Slice 5 — package docs**: [`docs/README.md`][docs-readme] / [`README.md`][readme]
   move form mutations from "Coming next (`0.0.12`)" to "Shipped today" and the
   README **Status** line from `0.0.11` to `0.0.12`; [`GOAL.md`][goal] — criterion
@@ -1566,13 +1920,54 @@ explicitly include the `CHANGELOG.md` edit** for it to be authorized.
 Each item names a preferred answer for the `0.0.12` cut and a fallback if
 implementation reveals it is wrong.
 
-- **The plain-`Form` payload shape (model-less).** Preferred answer
-  ([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)):
-  the plain `DjangoFormMutation` payload carries `errors: list[FieldError]!` plus the
-  form's cleaned scalar **output fields** (graphene-django's plain
-  `DjangoFormMutation` echoes `cleaned_data`), so a model-less mutation still returns
-  useful data. Fallback: an `errors`-only + `ok: Boolean!` payload if echoing
-  cleaned fields proves awkward to type from a form's heterogeneous `cleaned_data`.
+- **The plain-`Form` payload shape (model-less) — RESOLVED, no longer open (P2).**
+  Pinned in [Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)
+  as the fixed two-field shape `ok: Boolean!` + `errors: [FieldError!]!` with the
+  `perform_mutate(self, form, info) -> None` hook (default `form.save()`-if-present
+  else no-op). Cleaned-data echo (graphene parity) was considered and rejected for
+  `0.0.12` (heterogeneous `cleaned_data` has no clean GraphQL output mapping; the
+  plain form is a parity-completeness flavor; a data-returning consumer uses a
+  `DjangoModelFormMutation`). There is no remaining preferred/fallback ambiguity — an
+  implementer cannot ship a divergent plain-form shape.
+- **`ModelForm` partial-update semantics — RESOLVED (P1).** Pinned in
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload):
+  `update` reconstructs the full bound payload from the located instance overlaid with
+  the provided fields (`data = {**model_to_dict(instance, non-file fields),
+  **provided_data}`, `files = provided_files`), so a bound `ModelForm` validates the
+  whole set while omitted fields are preserved — the `036` `PartialInput` contract,
+  not graphene-django's full update. The alternative (graphene-style full update,
+  dropping `PartialInput` and requiring all form-required fields) was rejected for
+  cross-flavor consistency with the model-driven `DjangoMutation.update`. Fallback if
+  the reconstruction proves leaky for an exotic form (custom non-model fields with
+  required-on-partial semantics): narrow to graphene-style full update for that form
+  via an opt-in, never silently — but the package default is partial.
+- **Form-input shape identity + collision — RESOLVED (P1).** Pinned in
+  [Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)
+  as the `036`-parallel identity `(form_class, operation kind, frozenset(effective
+  field names))` with canonical / shape-derived names, dedupe, and a finalize-time
+  [`ConfigurationError`][glossary-configurationerror] for two distinct shapes on one
+  generated name (same form / different narrowings, and different forms / same
+  `__name__`). No remaining ambiguity — an implementer cannot silently reuse the wrong
+  input class or hit a late Strawberry name clash.
+- **Relation-id visibility in the form decode — RESOLVED (P1, a restored `036`
+  invariant).** Pinned in
+  [Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)
+  / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload):
+  the `relation_single` / `relation_multi` decode type- and visibility-checks the id
+  through the related primary `DjangoType.get_queryset` **before** the form, so the
+  form's non-request-scoped default queryset is not the only guard — a hidden target
+  is the same field-keyed `FieldError` as the model-mutation path. (Earlier revisions
+  delegated this to `ModelChoiceField.to_python`, which dropped the invariant; fixed.)
+- **Form `Meta` / base validation hardening — RESOLVED (P2 / P3).** Pinned: a
+  `ModelForm` on the plain `DjangoFormMutation` base is rejected at class creation
+  ([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)),
+  a required non-model extra field stays required on `update`
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)),
+  and `Meta.fields` / `Meta.exclude` are normalized + fail-loud against `form.fields`
+  (bare string / duplicate / unknown name / empty set →
+  [`ConfigurationError`][glossary-configurationerror],
+  [Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)),
+  mirroring the `036` model-mutation validators.
 - **Generalizing the field factory (dispatch + ref + target check).** Preferred
   answer ([Decision 5](#decision-5--public-surface-djangoformmutation--djangomodelformmutation-exported-from-the-root)):
   generalize [`DjangoMutationField`][glossary-djangomutationfield] along all three
@@ -1627,10 +2022,14 @@ implementation reveals it is wrong.
   converter, not this card's form converter.
 - **Auth mutations** ([Auth mutations][glossary-auth-mutations]) — `0.0.13`
   ([`TODO-ALPHA-040-0.0.13`][kanban]).
-- **Multipart upload transport / a test client** —
-  [`TestClient`][glossary-testclient] (`TODO-ALPHA-043-0.0.14`); a form's
-  `forms.FileField` maps to the [`Upload`][glossary-upload-scalar] scalar here, but
-  the multipart HTTP ergonomics land with the test client.
+- **The ergonomic `TestClient` / `AsyncTestClient` helper** —
+  [`TestClient`][glossary-testclient] (`TODO-ALPHA-043-0.0.14`). **File-field
+  correctness is NOT deferred:** this card owns the `forms.FileField` /
+  `forms.ImageField` → [`Upload`][glossary-upload-scalar] typing **and** the runtime
+  `data=` / `files=` decode split + `form_class(data=, files=, instance=)`
+  construction, proven by a raw `django.test.Client` multipart live test (Slice 4,
+  [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload)).
+  Only the *ergonomic* multipart test-client wrapper lands with the `0.0.14` helper.
 - **Form `delete`** — not shipped; the model-driven
   [`DjangoMutation`][glossary-djangomutation] (`Meta.operation = "delete"`) covers
   deletion ([Decision 10](#decision-10--operations-create--update-for-the-modelform-no-form-delete)).
@@ -1662,10 +2061,20 @@ plus the exports / version-cut the [`docs/SPECS/NEXT.md`][next] flow adds.
    the read-side [scalar][glossary-scalar-field-conversion] /
    [choice-enum][glossary-choice-enum-generation] /
    [`Upload`][glossary-upload-scalar] converters where overlapping, an unknown
-   class → [`ConfigurationError`][glossary-configurationerror]), and
-   [`forms/inputs.py`][forms-inputs] builds the form-derived `<Mutation>Input` from
-   `form.fields` (required-ness from `field.required`, narrowed by `Meta.fields` /
-   `Meta.exclude`), materialized as a module global
+   class → [`ConfigurationError`][glossary-configurationerror]) **and the
+   `input_attr → (form_field_name, kind)` reverse map** (`category_id` / `categoryId`
+   → `category` / `relation_single`; an `Upload` field flagged `file`); and
+   [`forms/inputs.py`][forms-inputs] builds **both** the form-derived
+   `<FormClass>Input` (create, `field.required` requiredness) and
+   `<FormClass>PartialInput` (update; model-backed fields optional, **a required
+   non-model extra field still required**) from `form.fields`, under the
+   `036`-parallel **shape identity** `(form_class, operation kind, effective field
+   set)` with canonical / shape-derived names, dedupe, and a finalize-time
+   **collision [`ConfigurationError`][glossary-configurationerror]** for two distinct
+   shapes on one name (same form / different narrowings; different forms / same
+   `__name__`); `Meta.fields` / `Meta.exclude` are normalized + fail-loud against
+   `form.fields` (bare string / duplicate / unknown name / empty set →
+   `ConfigurationError`); all materialized as module globals
    ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)).
 
 **Slice 2 — the two base classes**
@@ -1680,11 +2089,14 @@ plus the exports / version-cut the [`docs/SPECS/NEXT.md`][next] flow adds.
    `DjangoFormMutation` (the model-less sibling — its own metaclass + declaration
    registry + `bind_form_mutations()` wired into [`types/finalizer.py`][types-finalizer]'s
    phase-2.5 window, with a `registry.clear()` co-clear). The form-flavor
-   `_validate_meta` override enforces the matrix (missing / wrong-type `form_class`
-   validated **before** `_resolve_model`, `ModelForm`-with-no-model, `operation`
-   restricted to `{"create", "update"}` rejecting `"delete"`, `form_class` a known
-   key, mutually exclusive `fields` / `exclude`, unknown key →
-   [`ConfigurationError`][glossary-configurationerror]); the model flavor's seam
+   `_validate_meta` override enforces the matrix (missing `form_class`; **a
+   `ModelForm` on the plain `DjangoFormMutation` base rejected naming
+   `DjangoModelFormMutation`**, and a non-`ModelForm` on `DjangoModelFormMutation`
+   rejected — validated **before** `_resolve_model`; `ModelForm`-with-no-model;
+   `operation` restricted to `{"create", "update"}` rejecting `"delete"`; `form_class`
+   a known key; mutually exclusive / normalized / fail-loud `fields` / `exclude`;
+   unknown key → [`ConfigurationError`][glossary-configurationerror]); the model
+   flavor's seam
    defaults are unchanged (a `DjangoMutation` still validates + binds its model-column
    input exactly as `036` shipped); [`DEFERRED_META_KEYS`][types-base] /
    `ALLOWED_META_KEYS` are unchanged; both symbols export from [`__init__.py`][init]
@@ -1695,13 +2107,26 @@ plus the exports / version-cut the [`docs/SPECS/NEXT.md`][next] flow adds.
 **Slice 3 — resolver pipeline + field exposure**
 
 4. [`forms/resolvers.py`][forms-resolvers] runs the decode → locate → authorize →
-   `is_valid()` → `save()` → re-fetch → payload pipeline (sync + async, one
-   `transaction.atomic()` / one `sync_to_async(thread_sensitive=True)`), mapping
-   `form.errors` onto the [`FieldError` envelope][glossary-fielderror-envelope]
-   (`NON_FIELD_ERRORS` → `"__all__"`; the form constructed **once** at validate with
-   `data=` + the located `instance=`) and re-fetching the `ModelForm` payload object
-   through the `036` optimizer path (G2: `select_related` / `prefetch_related` kept,
-   no [`.only(...)`][glossary-only-projection]);
+   `is_valid()` → write → re-fetch → payload pipeline (sync + async, one
+   `transaction.atomic()` / one `sync_to_async(thread_sensitive=True)`). Decode
+   produces a **form-field-keyed** `provided_data` (`categoryId` → `{"category":
+   pk}`, via the reverse map; the relation pk **type- and visibility-checked through
+   the related primary `DjangoType.get_queryset` before the form** — a hidden target
+   is a field-keyed `FieldError`, the restored `036` invariant) + a **separate
+   `provided_files`** (uploaded `Upload` values, never in `data=`); `create`
+   constructs `form_class(data=provided_data,
+   files=provided_files)`, `update` reconstructs the **full partial payload** (`data =
+   {**model_to_dict(instance, non-file fields), **provided_data}`, `files =
+   provided_files`) then `form_class(data=, files=, instance=<located row>)` — so
+   omitted scalar / FK / M2M / file values are preserved and `unique_item_per_category`
+   validates on a one-field change (P1). `form.errors` maps onto the
+   [`FieldError` envelope][glossary-fielderror-envelope] (`NON_FIELD_ERRORS` →
+   `"__all__"`, via the reused `_validation_error_to_field_errors(ValidationError(
+   form.errors.as_data()))`); the `ModelForm` payload object is re-fetched through the
+   `036` optimizer path (G2: `select_related` / `prefetch_related` kept, no
+   [`.only(...)`][glossary-only-projection]); the **plain `DjangoFormMutation`
+   returns the pinned `ok: Boolean!` + `errors: [FieldError!]!` payload** with
+   `perform_mutate(self, form, info)` (default `form.save()`-if-present else no-op);
    [`mutations/fields.py`][mutations-fields]'s
    [`DjangoMutationField`][glossary-djangomutationfield] is generalized along all
    three model-hardwired axes (target check, `_resolve` dispatch →
@@ -1717,8 +2142,16 @@ plus the exports / version-cut the [`docs/SPECS/NEXT.md`][next] flow adds.
 5. Products exposes a `DjangoModelFormMutation` (create + update over `Item`) and a
    plain `DjangoFormMutation`, and [`test_products_api.py`][test-products-api]
    (seeded via `seed_data` / `create_users`) proves the create / update happy paths,
-   the `form.errors` envelope (field-level + the `unique_item_per_category`
-   `"__all__"` case), write authorization, and the visibility-scoped `update`
+   `categoryId` validating through the form's `category` field, **a hidden-`Category`
+   `GlobalID` → field-keyed `FieldError`** (the restored relation-visibility
+   invariant), **partial-update preservation** (a `name`-only update preserves
+   `category` / `description`, and `unique_item_per_category` fires on a one-field
+   change), the `form.errors` envelope (field-level + the `unique_item_per_category`
+   `"__all__"` case), write authorization, the visibility-scoped `update`, **a raw
+   `django.test.Client`
+   multipart upload to a form-backed `Upload` field** (the P1 file-routing contract,
+   owned here), and the plain `Form` mutation's **success** (`ok: true`) **and**
+   validation-failure shapes
    ([Decision 12](#decision-12--live-coverage-products-grows-a-modelform-and-a-plain-form-mutation)).
 
 **Cross-cutting — no regression**

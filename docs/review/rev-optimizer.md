@@ -1,86 +1,16 @@
-# Review: `django_strawberry_framework/optimizer/`
+# Review: `django_strawberry_framework/optimizer/` (folder pass)
 
 Status: verified
 
-Folder pass over the optimizer subpackage. All seven in-scope siblings are `verified`
-(`rev-optimizer___context.md`, `rev-optimizer__extension.md`, `rev-optimizer__field_meta.md`,
-`rev-optimizer__hints.md`, `rev-optimizer__plans.md`, `rev-optimizer__selections.md`,
-`rev-optimizer__walker.md`). This pass covers `optimizer/__init__.py`
-(shadow `docs/shadow/django_strawberry_framework__optimizer____init__.overview.md`) and the
-folder-level structure: cross-sibling duplicated helpers, naming / error-handling drift,
-repeated ORM/queryset patterns, misplaced responsibilities, `__init__.py` exports,
-circular-import risk, and the repeated-literal + import-direction checks across sibling
-shadows. The two siblings explicitly forwarded two cross-file DRY items to this pass; both
-are re-derived with all siblings in view and dispositioned below. Baseline HEAD `58ca2def`.
-No source edit warranted from this folder pass (shape #3 → #5).
+Folder pass over the 7 in-scope files (`_context.py`, `extension.py`, `field_meta.py`, `hints.py`, `plans.py`, `selections.py`, `walker.py`) plus the subpackage `__init__.py`. All 7 per-file artifacts are `verified` this cycle. Per-cycle baseline `252672d1b7c694e857bfe4fa71f1280137d83030`; `git diff 252672d1… -- django_strawberry_framework/optimizer/` is EMPTY and `git diff HEAD -- …/optimizer/` is EMPTY. No optimizer source file is dirty in `git status` (the dirty paths are `docs/review/*` scratchpads + sibling specs — AGENTS.md #34 concurrent maintainer work, out of scope). Static helper confirmed run on every `.py` including `__init__.py` (8 overviews under `docs/shadow/`). Genuine **shape #5 no-source-edit cycle**: no High, no behavior-changing Medium, every cross-file DRY item defer-with-trigger, zero tracked edits.
 
 ## DRY analysis
 
-- **FK-id-elision recompute twins (`field_meta.py` build-time stamper vs `walker.py`
-  walk-time consumer) — deferred-with-trigger, genuinely intentional dual-path. Disposition
-  CONFIRMED at folder scope.** `field_meta.py::FieldMeta._from_field_shape`
-  (field_meta.py:211-220 elision boolean), `field_meta.py::_target_pk_name` (field_meta.py:227-241),
-  and `field_meta.py::_has_composite_pk` (field_meta.py:244-247) are the build-time canonical
-  producers; `walker.py::_can_elide_fk_id` (walker.py:854-889) and `walker.py::_target_pk_name`
-  (walker.py:892-900) plus the inline composite-PK guard (walker.py:873-880) are the
-  walk-time consumers. Both walker helpers are `getattr(field, "<slot>", None)`-first shims
-  (walker.py:862-864, 894-896) that return the stamped value when present and only recompute
-  from a raw Django descriptor on the unstamped / test-double fallback. The recompute tails
-  are logically byte-equivalent to the producer (same seven `and` clauses, same composite-PK
-  exclusion). **This is NOT an act-now consolidation** for three folder-confirmed reasons:
-  (1) **input-contract divergence** — `field_meta._target_pk_name` takes a **model**
-  (field_meta.py:227), `walker._target_pk_name` takes a **field/FieldMeta** (walker.py:892);
-  a naive merge fuses two input shapes. (2) **deliberate decoupling** — `walker.py` does NOT
-  import `field_meta.py` at all (confirmed: walker's intra-package imports are only `hints`,
-  `plans`, `selections`); it consumes `FieldMeta` purely by stamped-slot duck-typing, so the
-  recompute tail is the *decoupling mechanism*, not an accidental copy. Folding it into a
-  shared free function would re-introduce a `walker → field_meta` edge that the current design
-  avoids. (3) the consolidation spans two files, so it cannot land in any single-file cycle.
-  **Defer with trigger (verbatim):** "walker's raw-descriptor recompute fallback is removed"
-  — i.e. once a registry-coverage gate guarantees every field reaching the walker is
-  `FieldMeta`-stamped, both walker shims collapse to a pure slot read, the recompute logic
-  lives only in `field_meta.py`, and the cross-file edge question is moot. Trigger unmet today
-  (`field_meta.py` has no `m2m_connector_attname` slot and the walker's fallback is still
-  reachable from fabricated resolver-path shapes). This is the cross-file confirmation the
-  `field_meta.py` and `walker.py` siblings forwarded.
+- **`_target_pk_name` recompute twin between `walker.py` and `field_meta.py` (forwarded from `rev-optimizer__walker.md`).** `optimizer/walker.py::_target_pk_name` (walker.py:873-881) and `optimizer/field_meta.py::_target_pk_name` (field_meta.py:232-246) both bottom out in a `related_model._meta.pk.name` read, but their input contracts diverge: the walker's takes a **field/FieldMeta** and dereferences `.related_model` (with a `getattr(field, "target_pk_name", None)` stamped fast-path first, walker.py:875-877), while `field_meta.py`'s takes a **model directly**. Consolidation requires a shared free function spanning both files plus a decision on where the stamped-slot short-circuit lives. **Defer with trigger:** "walker's raw-descriptor recompute fallback is removed" — once a registry-coverage gate guarantees every field reaching the walker is `FieldMeta`-stamped, the walker's recompute tail (walker.py:878-881) deletes and the only remaining `_target_pk_name` lives in `field_meta.py`; the twin collapses for free. Acting now is net-negative (a cross-file helper to bridge two genuinely different input contracts adds an indirection layer the trigger will obsolete). Folder-level disposition: **kept folder-level, deferred** — both sites are `optimizer/`-internal, so this is not a project-pass forward.
 
-- **Per-relation argument bundle re-passed through the walker dispatch tree
-  (`(plan, prefix, info, runtime_paths, resolver_identities, enable_only)` alongside the
-  relation tuple) — deferred-with-trigger, REFINED. Disposition: defer, but the trigger's
-  threshold is folder-confirmed as not-yet-met and the future home is correctly the folder
-  scope.** The shared context bundle threads through `_plan_select_relation` /
-  `_plan_prefetch_relation` / `_record_relation_access` / both `_apply_hint` re-dispatches /
-  `_plan_connection_relation` (the `enable_only=enable_only` token alone appears at 17 sites
-  in walker.py, of which ~4-6 are distinct dispatch families; the rest are the single-decision
-  recursive propagation of a flag derived once in `plan_optimizations` at walker.py:108). The
-  proposed consolidation — a frozen `RelationWalkContext` dataclass threaded once — does **not
-  yet exist anywhere in the package** (grep `RelationWalkContext` = NONE). Acting now is
-  net-neutral: the bundle is still readable at each site and the dataclass earns its keep only
-  when the call sites grow another member. spec-035 added exactly ONE member (`enable_only`)
-  to a bundle the prior 0.0.9 cycles already flagged on `_plan_select_relation` /
-  `_plan_prefetch_relation`; the trend is real but the threshold is one member short. **Defer
-  with trigger (verbatim):** "the planner gains a further per-relation context member beyond
-  `enable_only`" — at that point fold `(plan, prefix, info, runtime_paths,
-  resolver_identities, enable_only)` into a frozen `RelationWalkContext` dataclass threaded
-  once through the relation-walk dispatch family. **Refinement recorded for the next DRY
-  cycle:** when the trigger fires, the dataclass should be a *folder-scoped* type (a new
-  small module or a block in `walker.py`), because the bundle is internal to the walk and
-  never crosses the `extension.py` seam (extension calls `plan_optimizations(...)` /
-  `plan_relation(...)`, not the per-relation dispatchers) — so it is a walker-internal
-  consolidation, not a cross-sibling one. Confirm/refine: **confirmed** as a real deferred
-  candidate; **refined** to "walker-internal, folder-scoped dataclass" rather than a
-  cross-module shared type.
+- **Wide relation-context argument bundle threaded through walker's four projection writers (forwarded from `rev-optimizer__walker.md`).** `_plan_select_relation` / `_plan_prefetch_relation` / `_record_relation_access` / `_apply_hint`'s re-dispatches all thread the same `(plan, prefix, info, runtime_paths, resolver_identities, enable_only)` bundle alongside the relation tuple (walker.py:449-473, 716-722, 739-763, 765-776). **Defer with trigger:** "the planner gains a further per-relation context member beyond `enable_only`" — at that point fold the bundle into a frozen `RelationWalkContext` dataclass threaded once. Acting now is net-neutral (the bundle is still readable at four sites; the dataclass earns its keep on the next added member). All four sites are within `walker.py`, so this is a single-file deferral surfaced at folder level only because the relation-context shape is the spine of the walker's dispatch tree. Folder-level disposition: **kept folder-level (single-file), deferred.**
 
-- **No NEW folder-level DRY candidate surfaced by the cross-sibling checks.** The repeated
-  string-literal compare across all eight sibling shadows shows the only 2+-file literal is
-  `selections` (in `selections.py` and `walker.py`) plus per-file reflective-access attribute
-  names (`queryset`, `target_field`, `related_model`, `arguments`, `prefetch`, `operation`) —
-  all `getattr`-key strings for Django/Strawberry node shapes or parameter names, none of
-  which are string-keyed dispatch constants that could hoist to a shared named constant. The
-  genuine shared-vocabulary keys (the five `DST_OPTIMIZER_*` stash keys, the four pagination
-  arg names) are already single-sourced (`_context.py`, `extension.py::_PAGINATION_ARG_NAMES`)
-  and consequently do NOT appear as cross-file repeats — confirming the existing
-  single-sourcing holds. No new helper to extract at folder scope.
+- **`_can_elide_fk_id` eligibility-predicate twin — RESOLVED, not a candidate.** Recorded here for the audit trail because prior cycles forwarded it as a folder-level item: commit `3b4f90c0` routed `walker.py::_can_elide_fk_id`'s raw-field fallback through `FieldMeta._from_field_shape(field, is_relation=True).fk_id_elision_eligible` (walker.py:870), so the 8-conjunct eligibility predicate is now single-sourced in `field_meta.py::FieldMeta._from_field_shape` and shared by the walker, the resolver test-double path (`types/resolvers.py::_field_meta_for_resolver`, :292), and the canonical `from_django_field` entry. No remaining predicate duplication. Only the `_target_pk_name` model-pk *lookup* (first bullet) still hand-recomputes.
 
 ## High:
 
@@ -92,115 +22,31 @@ None.
 
 ## Low:
 
-None. (The pre-existing M2M-connector raw-`_meta` Low and the two `selections.py`
-intentional-asymmetry Lows are file-scoped and already dispositioned with verbatim triggers
-in their `verified` sibling artifacts; a folder pass does not re-litigate `verified` file
-internals. No folder-level Low surfaced.)
+None — the one pre-existing Low in scope (`walker.py::_connector_only_field` M2M branch reads `related_model._meta.pk.attname` raw, walker.py:928) is a single-file finding already recorded and deferred-with-trigger in `rev-optimizer__walker.md` ("a stamped `m2m_connector_attname` slot is added to `FieldMeta`"); it is not a cross-file folder concern and is not re-raised here.
 
 ## What looks solid
 
 ### DRY recap
 
-- **Existing patterns reused (folder-confirmed single-sourcing).** The subpackage routes
-  every shared mechanism through exactly one owner and the siblings consume by re-alias, not
-  re-implementation: request-scope stash dispatch + the five `DST_OPTIMIZER_*` keys are
-  single-sourced in `_context.py` (consumed by `extension.py` write-side and
-  `types/resolvers.py` read-side); the selection-traversal primitives (fragment /
-  directive / response-key / `edges { node }`-unwrap) are single-sourced in `selections.py`
-  (consumed by `walker.py:54-61` and `extension.py:67-75` under `_`-aliases, the 0.0.9 DRY
-  pass); the hint-skip dispatch is single-sourced in `hints.py::hint_is_skip` (consumed by
-  two `walker.py` sites + `extension.py`); relation classification is single-sourced in
-  `utils/relations.py` (consumed by `field_meta.py` and `walker.py`); the cursor-parity
-  `deterministic_order` / `ends_in_unique_column` live once in `plans.py` and are imported
-  back by `connection.py`. The plan-build-and-apply tail is single-sited in
-  `extension.py::apply_to`, shared by `_optimize` and `apply_connection_optimization`.
-- **New helpers considered.** The two forwarded cross-file items (FK-id-elision twin,
-  `RelationWalkContext` bundle) were both re-derived with all siblings in view and remain
-  deferred-with-trigger (see `## DRY analysis`); neither trigger has fired. A folder-level
-  hoist of the repeated reflective-access attribute-name literals was considered and rejected
-  — they are `getattr` keys / parameter names, not dispatch constants.
-- **Duplication risk in the current folder.** The FK-id-elision recompute logic is the one
-  genuinely-near-duplicate pair, and it is intentional sibling design: the producer stamps,
-  the consumer reads-stamped-or-recomputes, and the recompute tail is the deliberate
-  decoupling that keeps `walker.py` from importing `field_meta.py`. Divergence risk is
-  mitigated by both being test-pinned (eight relation shapes in
-  `tests/optimizer/test_field_meta.py`; the gate arms + elision-under-mutation in
-  `tests/optimizer/test_walker.py`).
+- **Shared discriminators are aliased, never re-implemented (forwarded item c — confirmed).** `is_fragment` and `should_include` are each defined exactly once in `optimizer/selections.py` (selections.py:273, :287). `walker.py` imports both and binds underscore aliases (`_is_fragment = is_fragment`, `_should_include = should_include`, walker.py:40,45,55-56; used at walker.py:1046). `extension.py` consumes them **transitively** through the higher-level `selections` helpers it imports (`named_children`, `node_children_with_runtime_prefix`, `directive_variable_names`, `ast_child_selections`, `resolve_unvisited_fragment`, `response_key` — extension.py:67-75, re-aliased under `_`-names at extension.py:85-89) — it does NOT re-spell the `type_condition`/`@skip`/`@include` logic. Grep confirms the `("skip", "include")` membership + `VariableNode` directive gate lives once (selections.py:251,258,290,295); the only other `"skip"` literal is `hints.py::hint_is_skip`'s `getattr(hint, "skip", False)` (hints.py:150), the distinct OptimizerHint-skip contract, not the directive gate. No discriminator drift possible across the three consumers.
+
+- **Every cross-module substrate is single-owned with a one-way DAG.** `_context.py` owns the 5 `DST_OPTIMIZER_*` keys + stash dispatch; `selections.py` owns selection traversal; `hints.py` owns the skip-shape primitive (`hint_is_skip`, consumed by walker.py:687,1331 + extension.py:1045); `plans.py` owns the `append_unique*` merge discipline + `prefetch_to` private-attr contract + the hoisted `ends_in_unique_column`/`deterministic_order` that `connection.py` imports back (spec-033 Decision 11); `field_meta.py` owns the `fk_id_elision_eligible` predicate + `_from_field_shape` shape source. No literal or near-copy is re-spelled across siblings beyond the deferred `_target_pk_name` lookup.
+
+- **Cross-sibling repeated-literal sweep clean.** Comparing the `Repeated string literals` sections of all 8 shadow overviews: the only literals appearing in 2+ files are `selections` (selections.py 10x + walker.py 2x) and `related_model` (walker.py 2x; read defensively in field_meta.py but not flagged repeated there). Both are graphql-core / Django protocol attribute names read via reflective `getattr` off heterogeneous duck-typed objects (AST nodes, Strawberry dataclasses, `FieldMeta`, raw Django fields) — protocol field names, not a string-keyed dispatch that could hoist to a shared constant. The string-key constants that DO warrant single-sourcing (`DST_OPTIMIZER_*`, `("skip","include")`, `_PAGINATION_ARG_NAMES`) are already centralized. No new folder-level literal-DRY candidate.
 
 ### Other positives
 
-- **`__init__.py` exports are minimal and correct.** Re-exports exactly
-  `DjangoOptimizerExtension` (the sole consumer-facing public symbol) and `logger`
-  (the canonical intra-subpackage logger handle that `extension.py` and `walker.py` consume
-  via `from . import logger`, so the `"django_strawberry_framework"` literal lives in one
-  place). `__all__ = ("DjangoOptimizerExtension", "logger")`. `OptimizationPlan` /
-  `plan_optimizations` are deliberately NOT re-exported (internal, consumed at their dotted
-  paths) — the docstring documents this and the rationale. Shadow overview: imports 2,
-  symbols 0, no executable code, no ORM markers, no repeated literals — clean namespace module.
-- **Import-direction graph is one-way and acyclic.** Intra-package edges form a clean DAG:
-  `_context.py` and `selections.py` are pure leaves (no intra-optimizer, no first-party
-  imports); `field_meta.py` / `hints.py` / `plans.py` import only outward to `..exceptions` /
-  `..utils`; `walker.py` imports `hints` / `plans` / `selections`; `extension.py` (the
-  orchestrator) imports all of `_context` / `hints` / `plans` / `selections` / `walker`;
-  `__init__.py` imports `.extension`. No sibling-to-sibling cycle. The single optimizer→types
-  edge (`walker.py:919 from ..types.definition import origin_has_custom_id_resolver`) is
-  correctly deferred to function scope to break the optimizer↔types cycle. `selections.py`'s
-  one strawberry import is likewise function-local.
-- **Error-handling is consistent across siblings.** `OptimizerError` (typed-input guards in
-  `field_meta.py`, `plans.py`, `walker.py`) and `ConfigurationError` (hint conflicts in
-  `hints.py`, hint application in `walker.py`) are the two consistent first-party exception
-  families; no sibling raises a bare `AttributeError`/`ValueError` where a typed error
-  belongs. Defensive reflective access uniformly uses the `getattr(..., default) or default`
-  idiom across `selections.py` (25 sites), `plans.py`, `walker.py`, and `field_meta.py`, with
-  the deliberate "fail-loud on malformed test double" exceptions (the M2M-connector raw
-  `_meta` read) documented in the owning sibling.
-- **Responsibility boundaries are clean (Two Scoops layering).** `field_meta.py` =
-  metadata PRODUCER; `plans.py` = passive plan CARRIER (stores `fk_id_elisions` as opaque
-  resolver keys, computes nothing about eligibility); `walker.py` = selection-tree planner /
-  metadata CONSUMER; `selections.py` = traversal substrate; `_context.py` = request-scope
-  hand-off dispatch; `hints.py` = the `OptimizerHint` value type; `extension.py` = the
-  Strawberry-extension orchestrator and the only consumer-facing entry. No misplaced
-  responsibility surfaced — the forwarded "where does FK-id-elision live" question resolves
-  cleanly (producer in `field_meta`, carrier in `plans`, consumer in `walker`), and each
-  sibling's artifact independently arrived at the same partition.
-- **spec-035 hardening kept the folder coherent.** spec-035 touched three siblings —
-  `extension.py` (G1 evaluated-queryset guard), `walker.py` (G2 `enable_only` projection
-  gate, +172 lines), and `selections.py` (the G3 TODO, re-anchored this review run to the
-  active BACKLOG card). All three changes routed through the existing single-owner seams
-  (G1 sits between `normalize_query_source` and the shared `apply_to` tail; G2 threads one
-  flag derived once and consumed at every projection writer; the G3 TODO ships no runtime
-  code). No new cross-sibling duplication, no responsibility migration, no new import edge.
-  The folder's internal structure is unchanged in shape — the hardening added behavior inside
-  the existing boundaries, exactly the desired outcome.
-- **Comment consistency across siblings.** The TODO anchors are now uniformly active: the
-  `selections.py` G3 anchor was re-anchored (verified prior-cycle edit, dirty vs HEAD) to
-  `TODO(BACKLOG polymorphic_interface_connections …)` and the two `walker.py` G3 anchors
-  carry the same deferral rationale; no sibling carries a stale spec reference. The
-  cross-sibling docstrings agree on the shared contracts (e.g. `hints.py::__post_init__` and
-  `walker.py::_apply_hint` both document construction-time conflict rejection vs dispatch
-  ordering).
+- **`__init__.py` export surface is correct and minimal.** `__all__ = ("DjangoOptimizerExtension", "logger")` (sorted, no private leak). `DjangoOptimizerExtension` is re-exported from `.extension` and consumed by the package root (`django_strawberry_framework/__init__.py:25`) — the single consumer-facing optimizer surface. `logger` is re-exported from `..` (the top-level package, the one home of the `"django_strawberry_framework"` logger-name literal) and is load-bearing: `walker.py:24` and `extension.py:51` consume it via `from . import logger`, and the re-export contract is pinned by `tests/optimizer/test_extension.py:52` + `tests/base/test_init.py:13`. The docstring's claim that removing the re-export "would silently break both production siblings, not just the tests" is accurate — grep confirms exactly those two production consumers and two test pins. `OptimizationPlan` / `plan_optimizations` are correctly NOT re-exported here (consumed at their dotted module paths; internal implementation detail, per the docstring).
+
+- **Import DAG is one-way acyclic, no circular-import risk.** Leaves with zero sibling imports: `_context.py`, `field_meta.py`, `hints.py`, `plans.py`, `selections.py`. Mid-level: `walker.py` → `{field_meta, hints, plans, selections}`. Apex: `extension.py` → `{_context, hints, plans, selections, walker}`. Subpackage init: `__init__.py` → `extension` + `..logger`. `extension → walker` is a forward edge (apex over mid-level); `selections` is imported by both `walker` and `extension` but imports no sibling back (the 0.0.9 substrate that removed the prior `extension ↔ walker` round-trip, docs/feedback.md Major 2). No back-edge anywhere; verified at source.
+
+- **Naming and error-handling are consistent across the folder.** Typed optimizer exceptions are sourced from one place (`..exceptions`: `OptimizerError` in field_meta/plans/walker, `ConfigurationError` in hints/walker). Reflective `getattr` reads carry `or`-defaults or upstream presence guards uniformly across every file (each per-file artifact's reflective-access audit came back clean). The `_`-prefixed-private vs `__all__`-public axis is applied consistently: no private symbol is re-exported, and every public-contract symbol that has GLOSSARY prose (`DjangoOptimizerExtension`, `OptimizerHint`, `OptimizationPlan.apply`, the `dst_optimizer_plan` stash, strictness, FK-id elision, plan cache) was verified drift-free in its per-file artifact, while the internal optimizer symbols (no `__all__`: `FieldMeta`, `hint_is_skip`, walker/plans/selections helpers) correctly carry no GLOSSARY entry — absence is correct, not drift.
+
+- **Comment consistency.** The cross-module-claim comments are grep-verified accurate: the `__init__.py` logger-consumer claim, the `extension.py:80-89` underscore-alias provenance note (tests import `_named_children`/`_node_children_with_runtime_prefix` from extension — confirmed at test_extension.py:54-55), the `plans.py` "connection.py imports this back" notes, and the spec-033/spec-035 Decision cross-references. No stale TODO across the folder (`selections.py:315` and the two `walker.py` spec-035 anchors are validly BACKLOG/spec-anchored and AGENTS.md-exempt).
 
 ### Summary
 
-The optimizer subpackage is in excellent folder-level shape. All seven in-scope siblings are
-`verified`; the `__init__.py` is a clean two-export namespace module with minimal,
-correctly-scoped public surface (`DjangoOptimizerExtension` + `logger`). The intra-package
-import graph is a one-way DAG with the single optimizer→types edge correctly function-scoped,
-so there is no circular-import risk. Responsibility boundaries are clean (producer / carrier /
-consumer / substrate / dispatch / value-type / orchestrator), error handling and defensive
-reflective-access idioms are consistent across siblings, and the spec-035 hardening
-(extension / walker / selections) added behavior strictly inside the existing single-owner
-seams without introducing new cross-sibling duplication or import edges. The cross-sibling
-repeated-literal compare surfaced no new DRY candidate — the only shared literals are
-reflective-access attribute names, while the genuine shared-vocabulary keys are already
-single-sourced. The two forwarded cross-file DRY items are both confirmed genuinely
-intentional dual-path / deferred-with-trigger: (1) the FK-id-elision recompute twins are the
-deliberate decoupling that keeps `walker.py` from importing `field_meta.py` (trigger:
-"walker's raw-descriptor recompute fallback is removed"); (2) the per-relation argument bundle
-is a confirmed-but-not-yet-triggered `RelationWalkContext` candidate, refined to
-walker-internal / folder-scoped (trigger: "the planner gains a further per-relation context
-member beyond `enable_only`"). No High / Medium / Low folder-level findings; no act-now
-consolidation warranted. No-source-edit folder pass (shape #3 → #5).
+The `optimizer/` subpackage is a mature, tightly-factored subsystem with a clean one-way acyclic import DAG (`selections`/`_context`/`field_meta`/`hints`/`plans` leaves → `walker` → `extension` → `__init__`), single-owned cross-module substrates, and a minimal correct export surface (`DjangoOptimizerExtension` + the load-bearing `logger` re-export, both with verified live consumers). All 7 per-file artifacts are `verified`; the cycle diff is empty against both the per-cycle baseline (`252672d1…`) and HEAD; no optimizer source is dirty. The folder-pass cross-file sweep surfaces no new finding: the three forwarded DRY items resolve to one RESOLVED predicate-twin (commit `3b4f90c0`), one folder-level defer-with-trigger (`_target_pk_name` lookup twin, kept folder-level), and one single-file defer-with-trigger (the relation-context argument bundle); the shared `is_fragment`/`should_include` discriminators are confirmed aliased (walker) / transitively consumed (extension), never re-implemented; the cross-sibling repeated-literal sweep is clean. Zero High/Medium/Low at folder level. Genuine no-source-edit (shape #5) cycle.
 
 ---
 
@@ -215,25 +61,14 @@ Filled by Worker 1 per no-source-edit cycle pattern.
 - None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — 270 files left unchanged.
-- `uv run ruff check --fix .` — All checks passed (only the pre-existing COM812-vs-formatter config notice).
+- `uv run ruff format .` — pass; `289 files left unchanged`.
+- `uv run ruff check --fix .` — pass; `All checks passed!` (only the pre-existing COM812-vs-formatter config notice).
 
 ### Notes for Worker 3
-- Folder pass over `optimizer/`; all seven siblings `verified`. Covered `optimizer/__init__.py`
-  (clean two-export namespace module) + folder structure. No High/Medium/Low folder finding.
-- Both forwarded cross-file DRY items are deferred-with-trigger (triggers unmet) and recorded
-  in `## DRY analysis`: FK-id-elision recompute twins (confirmed intentional dual-path —
-  `walker.py` does not import `field_meta.py`; the recompute tail is the decoupling) and the
-  per-relation argument bundle (confirmed candidate, refined to walker-internal /
-  folder-scoped; `RelationWalkContext` does not exist yet). Neither is act-now.
-- No GLOSSARY-only fix in scope. GLOSSARY/TREE folder-level optimizer references
-  (`DjangoOptimizerExtension`, subpackage descriptions) are accurate; per-symbol GLOSSARY
-  checks already cleared in the `verified` sibling artifacts.
-- `selections.py` is dirty vs HEAD — this is the VERIFIED TODO re-anchor from the closed
-  `rev-optimizer__selections.md` cycle (the maintainer has not yet committed it), i.e. the
-  folder's reviewed state, not an unrelated concurrent edit. Diff is exactly the -6/+12
-  comment block. No optimizer source edited THIS cycle (`git diff HEAD --
-  django_strawberry_framework/optimizer/` shows only that prior-cycle comment hunk).
+- Folder pass over `optimizer/`; all 7 per-file artifacts `verified`. Cycle diff EMPTY vs both baseline `252672d1b7c694e857bfe4fa71f1280137d83030` and HEAD (`33466db5`); no optimizer source dirty (dirty paths are `docs/review/*` + sibling specs, AGENTS.md #34 concurrent work). Static helper confirmed run on every `.py` including `__init__.py` (8 `docs/shadow/` overviews present).
+- No High / no behavior-changing Medium / no folder-level Low. Three forwarded DRY items dispositioned: (a) `_target_pk_name` lookup twin → KEPT FOLDER-LEVEL, defer-with-trigger "walker's raw-descriptor recompute fallback is removed" (both sites `optimizer/`-internal, NOT a project-pass forward); (b) relation-context argument bundle → single-file (`walker.py`) defer-with-trigger "the planner gains a further per-relation context member beyond `enable_only`"; (c) the prior `_can_elide_fk_id` predicate twin is RESOLVED by commit `3b4f90c0` (single-sourced through `FieldMeta._from_field_shape`), recorded in the DRY recap, not a candidate.
+- Forwarded item (c shared discriminators) confirmed: `is_fragment`/`should_include` defined once in `selections.py:273,287`, ALIASED by `walker.py:40,45,55-56`, consumed TRANSITIVELY by `extension.py` via the `selections` helper imports (extension.py:67-75) — neither consumer re-implements the directive/fragment logic (grep: `("skip","include")` gate lives once in `selections.py`).
+- Export surface: `__all__ = ("DjangoOptimizerExtension", "logger")` sorted/no-leak; `logger` re-export consumed by `walker.py:24` + `extension.py:51` + tests (`test_extension.py:52`, `test_init.py:13`); `DjangoOptimizerExtension` by package root `__init__.py:25`. Import DAG one-way acyclic (verified at source). No GLOSSARY-only fix in scope — all public-contract optimizer symbols verified drift-free in their per-file artifacts; internal symbols correctly carry no entry.
 
 ---
 
@@ -241,13 +76,7 @@ Filled by Worker 1 per no-source-edit cycle pattern.
 
 Filled by Worker 1 per no-source-edit cycle pattern.
 
-No comment/docstring edits warranted at folder scope. The `__init__.py` docstring accurately
-documents the two-export contract and the deliberate non-export of `OptimizationPlan` /
-`plan_optimizations`. Cross-sibling comment consistency confirmed: TODO anchors are uniformly
-active (no stale spec references), and the shared-contract docstrings agree across siblings
-(`hints.py`/`walker.py` hint dispatch; `_context.py`/`extension.py` stash hand-off;
-`selections.py` traversal substrate consumed by `walker.py`/`extension.py`). Shadow overview
-for `__init__.py` reports 0 TODO comments.
+No comment/docstring edits warranted at folder level. The cross-module-claim comments were grep-verified accurate across the folder: the `__init__.py` logger-consumer docstring (two production siblings + two test pins, all confirmed), the `extension.py:80-89` underscore-alias provenance note, the `plans.py` "connection.py imports this back" notes, and the spec-033/spec-035 Decision references. No stale TODO across the folder (per-file artifacts confirmed `selections.py:315` BACKLOG-anchored and the two `walker.py` spec-035 anchors validly scoped, all AGENTS.md-exempt). Each per-file artifact's comment pass is already `verified`.
 
 ---
 
@@ -255,106 +84,35 @@ for `__init__.py` reports 0 TODO comments.
 
 Filled by Worker 1 per no-source-edit cycle pattern.
 
-Not warranted — no source change this cycle (folder review only; empty optimizer-source diff
-for this cycle). Per AGENTS.md #21 ("Do not update CHANGELOG.md unless explicitly instructed")
-and the active plan `docs/review/review-0_0_10.md` (silent on changelog edits for review
-cycles). The spec-035 hardening ships its own CHANGELOG entry under its Slice 4 maintainer
-prompt, out of scope for this review.
+Not warranted — no source, test, GLOSSARY, or CHANGELOG edit this cycle (review-only folder pass, zero findings, empty cycle diff). AGENTS.md #21 forbids unsolicited CHANGELOG edits, and the active plan `docs/review/review-0_0_11.md` records no changelog obligation for the `optimizer/` folder-pass item. `git diff -- CHANGELOG.md` empty.
 
 ---
 
 ## Verification (Worker 3)
 
-Terminal folder-pass verification of the no-source-edit (shape #5) cycle over
-`django_strawberry_framework/optimizer/`. Baseline `58ca2def` == current HEAD. The four
-load-bearing folder claims were independently confirmed against current source.
+Shape #5 no-source-edit folder pass. Every gate verified at HEAD `33466db5`.
 
-### Logic verification outcome
+### Zero-edit proof
+- `git diff 252672d1b7c694e857bfe4fa71f1280137d83030 -- django_strawberry_framework/optimizer/` EMPTY.
+- `git diff HEAD -- django_strawberry_framework/optimizer/` EMPTY.
+- Owned-paths stat `git diff --stat 252672d1… -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` EMPTY — no optimizer source, no test, no GLOSSARY, no CHANGELOG hunk.
+- `git status` dirt is entirely `docs/dry/`, `docs/feedback2.md`, `docs/review/*` scratchpads, and `docs/spec-038…` — AGENTS.md #34 concurrent-maintainer / scratchpad work, no tracked optimizer file dirty. No sibling-cycle attribution needed (no dirty path touches the optimizer target).
+- `git diff -- CHANGELOG.md` EMPTY.
 
-No High / Medium / Low findings to address — all `None`, confirmed at folder scope.
-Independent confirmation of the four load-bearing structural claims:
+### Shape-#5 section gates
+- All four Worker 2 sections open `Filled by Worker 1 per no-source-edit cycle pattern.` — confirmed.
+- Zero High / zero Medium / zero folder-level Low. The one in-scope Low (`walker.py::_connector_only_field` M2M raw `_meta.pk.attname`) is correctly held single-file in `rev-optimizer__walker.md` with verbatim trigger, not re-raised here.
+- No GLOSSARY-only fix (none present; would be disqualifying).
+- Changelog `Not warranted` cites BOTH AGENTS.md #21 AND active-plan silence; diff empty — accepted.
 
-- **(a) `walker.py` does NOT import `field_meta.py` — CONFIRMED.** walker's intra-package
-  imports are exactly `logger` (`. `), `hints`, `plans`, `selections` (walker.py:24-37);
-  there is no `from .field_meta` edge at module or function scope. The only two `field_meta`
-  tokens in walker.py are a docstring (walker.py:181) and a comment (walker.py:916), not
-  imports. This validates the FK-id-elision dual-path rationale: walker's
-  `_can_elide_fk_id` / `_target_pk_name` (walker.py:854-900) are `getattr(stamped, None)`-first
-  shims whose raw-`_meta` recompute tails (e.g. `related_model._meta.pk.name` at walker.py:900,
-  the `field.attname … and not field.many_to_many …` chain at walker.py:881-889) ARE the
-  decoupling mechanism. Folding them into a shared free function would re-introduce the
-  `walker → field_meta` edge the design provably avoids.
-
-- **(b) Import graph acyclic, optimizer→types edge function-scoped — CONFIRMED.** Per-sibling
-  module-level intra-optimizer import scan: `_context.py` / `field_meta.py` / `hints.py` /
-  `plans.py` / `selections.py` are leaves (no sibling-to-sibling module imports); `walker.py`
-  imports `logger`/`hints`/`plans`/`selections`; `extension.py` imports
-  `logger`/`_context`/`hints`/`plans`/`selections`/`walker`; `__init__.py` imports `.extension`.
-  No back-edge, no cycle — clean one-way DAG. The single optimizer→types edge
-  (`from ..types.definition import origin_has_custom_id_resolver`) appears at exactly ONE site,
-  walker.py:919, function-local inside `_origin_has_custom_id_resolver` (the comment at
-  walker.py:916-918 names the cycle it breaks: `types.definition` pulls in
-  `optimizer.field_meta` at module load). No module-level `..types` import exists in any sibling.
-
-- **(c) `__init__.py` exports exactly the intended surface — CONFIRMED.** Module body is
-  `from .. import logger` + `from .extension import DjangoOptimizerExtension` and
-  `__all__ = ("DjangoOptimizerExtension", "logger")` — the minimal two-export namespace.
-  `OptimizationPlan` / `plan_optimizations` are deliberately NOT re-exported; the docstring
-  documents both the re-export contract (consumed by `extension.py`/`walker.py` via
-  `from . import logger`) and the non-export rationale.
-
-- **(d) Both DRY forwards genuinely deferred-with-valid-trigger, NOT dodged act-now
-  consolidations — CONFIRMED.**
-  - *FK-id-elision recompute twins*: the consolidation's own trigger ("walker's raw-descriptor
-    recompute fallback is removed") is unmet — `field_meta.py` has slots
-    `reverse_connector_attname` (field_meta.py:124) and `target_field_attname` but NO
-    `m2m_connector_attname` slot, so the walker recompute fallback is still reachable. Acting
-    now is impossible without re-introducing the avoided `walker→field_meta` edge (claim a),
-    making this a sound deferral, not a dodge.
-  - *`RelationWalkContext` bundle*: grep `RelationWalkContext` across the whole package =
-    NONE — the candidate type does not exist yet, and spec-035 added exactly one member
-    (`enable_only`), one short of the "further per-relation context member beyond
-    `enable_only`" trigger. Net-neutral to act now; correctly deferred (refined to
-    walker-internal/folder-scoped). Confirms Worker 1 shape #5 context.
-
-### DRY findings disposition
-
-No new folder-level DRY candidate (confirmed: cross-sibling repeated literals are
-`getattr`-key/parameter-name strings, not dispatch constants; genuine shared-vocabulary keys
-already single-sourced in `_context.py` / `extension.py`). The two forwarded cross-file items
-remain deferred-with-trigger per the independent checks above; neither trigger has fired.
-Both forwards from the `field_meta.py` and `walker.py` sibling cycles are now closed at folder
-scope. DRY soundness verified.
-
-### Sibling-cycle attribution (shape #5)
-
-`git diff --stat 58ca2def -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md`
-shows dirty hunks at `management/commands/_imports.py|export_schema.py|inspect_django_type.py`
-+ `tests/management/test_imports.py` (closed `rev-management__commands.md`, verified, [x] at
-review-0_0_10.md) and `optimizer/selections.py`. The `selections.py` hunk is exactly the
--6/+12 TODO re-anchor block (`TODO(spec-035 Slice 3)` → `TODO(BACKLOG
-polymorphic_interface_connections …)`), attributing to the closed sibling cycle
-`rev-optimizer__selections.md` (`Status: verified`, [x] at review-0_0_10.md:98) — the folder's
-reviewed state, not concurrent maintainer work. `git diff HEAD -- optimizer/` shows only that
-single prior-cycle comment hunk. The folder pass's own "Files touched: None" claim holds.
-
-### Temp test verification
-
-None used — no behavioral claim required runtime proof; all four claims are structural
-(import graph, export surface, candidate-existence) and confirmed by grep/read against source.
-
-### Shape #5 mechanics
-
-- Each Worker 2 section opens with `Filled by Worker 1 per no-source-edit cycle pattern.`
-  (Fix report, Comment/docstring pass, Changelog disposition). ✓
-- Changelog `Not warranted`: `git diff -- CHANGELOG.md` empty (0 lines); disposition cites
-  BOTH AGENTS.md #21 and the active plan `review-0_0_10.md`'s silence on changelog
-  authorization for review cycles. Internal-only framing matches the empty cycle diff. ✓
-- No GLOSSARY-only fix; no Low without verbatim trigger (all Lows are `None`). ✓
-- `uv run ruff format --check` — 8 files already formatted; `uv run ruff check` — all checks
-  passed (only the pre-existing COM812-vs-formatter notice). ✓
+### Folder reasoning verified at source
+- **Export surface.** `__init__.py` `__all__ = ("DjangoOptimizerExtension", "logger")` (sorted, no private leak). `logger` re-exported `from ..` (canonical top-level home of the `"django_strawberry_framework"` literal); consumed by `walker.py:24` + `extension.py:51` via `from . import logger` — both grep-confirmed. `DjangoOptimizerExtension` re-exported from `.extension`, consumed by package root `../__init__.py:25`. `OptimizationPlan`/`plan_optimizations` correctly not re-exported.
+- **Import DAG one-way acyclic.** Sibling-import grep per file: leaves with NO `from .` sibling edge = `_context.py`, `field_meta.py`, `hints.py`, `plans.py`, `selections.py` (their imports are `..exceptions`/`..utils`/`..registry`, not siblings). Mid: `walker.py` → `{field_meta, hints, plans, selections}` (+ `from . import logger`). Apex: `extension.py` → `{_context, hints, plans, selections, walker}`. `__init__.py` → `extension` + `..logger`. `selections.py` imported by both walker and extension but imports no sibling back. No back-edge.
+- **Shared discriminators ALIASED, not re-implemented.** `is_fragment`/`should_include` defined exactly once (selections.py:273,287). Walker imports both and binds underscore aliases (walker.py:40,45,55-56; `_is_fragment` used at walker.py:1046). Extension does NOT define or re-spell either (grep: no `def is_fragment`/`def should_include`; its `type_condition` mentions at extension.py:879-882 are the converted-selection adapter docstring, not the discriminator) — consumes them transitively via the `selections` helper imports (extension.py:67-76). No drift possible.
+- **`_can_elide_fk_id` twin genuinely RESOLVED by `3b4f90c0`.** Commit message + live source confirm: walker.py:867-870 returns the stamped slot if present, else delegates the raw-field fallback to `FieldMeta._from_field_shape(field, is_relation=True).fk_id_elision_eligible` — the same delegation `types/resolvers.py` uses. Predicate now single-sourced in `field_meta.py`. `related_model is None` short-circuit intact before any pk deref. Not a remaining candidate. The `model_for` grep hits in optimizer (`registry.model_for_type`, extension.py:655,1201) are a DIFFERENT method, unrelated to the sibling-cycle `utils/querysets.py::model_for` delegation — no optimizer involvement there.
+- **`_target_pk_name` twin correctly KEPT folder-level, NOT forwarded.** Divergent input contracts confirmed at source: `walker.py:873-881::_target_pk_name(field)` takes a field, stamped `target_pk_name` fast-path, then `.related_model` → `._meta.pk.name`; `field_meta.py:232-246::_target_pk_name(model)` takes a model directly with defensive `_meta` read. Both sites `optimizer/`-internal → correctly NOT a project-pass forward. Defer-with-trigger ("walker's raw-descriptor recompute fallback removed") is sound — the field_meta canonical lookup is the early-warning canary.
+- **Relation-context argument bundle** is single-file (`walker.py`), correctly deferred at folder level only because it is the dispatch spine; trigger ("planner gains a further per-relation context member beyond `enable_only`") sound. Not forwarded.
+- **Nothing forwarded to the project pass from this folder** — both live DRY items are `optimizer/`-internal. Confirmed.
 
 ### Verification outcome
-
-`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `optimizer/`
-folder-pass checklist box at `docs/review/review-0_0_10.md`.
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the optimizer/ folder-pass checkbox in `docs/review/review-0_0_11.md`.

@@ -4,7 +4,16 @@ Status: verified
 
 ## DRY analysis
 
-- None — the module is a thin public test-helper veneer over already-single-sourced machinery. `global_id_for` delegates payload computation to `types/relay.py::encode_typename` (the canonical per-strategy slot encoder), reads the strategy set `STRING_GLOBALID_STRATEGIES` and the gate-message constants `_RELAY_NODE_GATE_LEAD` / `_RELAY_NODE_GATE_INHERIT_TAIL` from `types/base.py`, and re-exports `decode_global_id` verbatim from `types/relay.py`. Nothing is duplicated locally; the five `ConfigurationError` raises carry distinct subjects/contracts and the four `f"global_id_for: "` literal prefixes are per-message human-readable strings, not a dispatch key (folding them into a constant would obscure each message and save nothing material).
+- None — the module is the consumer-facing thin shell over already-single-sourced
+  internals: `decode_global_id` is a verbatim re-export of
+  `django_strawberry_framework/types/relay.py::decode_global_id` (one import, no
+  re-implementation), and `global_id_for` reuses the live encode path
+  (`types/relay.py::encode_typename`), the live gate constants
+  (`types/base.py::_RELAY_NODE_GATE_LEAD` / `_RELAY_NODE_GATE_INHERIT_TAIL` /
+  `STRING_GLOBALID_STRATEGIES`), and the canonical `ConfigurationError` rather
+  than re-spelling any of them. There is no second call site to consolidate
+  against — minting through `encode_typename` is exactly what makes the helper
+  consistent-by-construction with live emission.
 
 ## High:
 
@@ -22,20 +31,84 @@ None.
 
 ### DRY recap
 
-- **Existing patterns reused.** `global_id_for` reuses `types/relay.py::encode_typename` (`testing/relay.py::global_id_for` #"encode_typename(definition, strategy") for payload computation, imports `STRING_GLOBALID_STRATEGIES` + the two gate-message constants from `types/base.py` (`testing/relay.py:40-44`), and re-exports `types/relay.py::decode_global_id` unchanged (`testing/relay.py:45`, `__all__` at `:47`). The helper reads the finalize-stamped `definition.effective_globalid_strategy` rather than the setting, so it is consistent-by-construction with live emission — pinned by the `live_id == global_id_for(...)` assertions in `tests/testing/test_relay.py:94,110,125`.
-- **Duplication risk in the current file.** The four `"global_id_for:"` message prefixes (`testing/relay.py:62,72,81,86`) are the only repeated literal (static overview flags `4x global_id_for:`). Intentional — each is a distinct error message with a different subject and remediation contract; a shared prefix constant would not be reused as a dispatch key and would harm message readability. Correct to leave inline.
+- **Existing patterns reused.** `global_id_for` (`testing/relay.py::global_id_for`)
+  mints the payload through `types/relay.py::encode_typename` — the exact slot
+  computation the installed `resolve_typename` closure runs — so the helper
+  cannot drift from live emission. It reuses the shared gate constants
+  `_RELAY_NODE_GATE_LEAD` / `_RELAY_NODE_GATE_INHERIT_TAIL` and the
+  `STRING_GLOBALID_STRATEGIES` frozenset from `types/base.py:107,113,122`
+  (the same constants the Phase-2.5 validator and connection/relation-shape
+  gates use), and raises the canonical `exceptions.ConfigurationError`.
+  `decode_global_id` is re-exported verbatim from
+  `types/relay.py::decode_global_id` (`testing/relay.py:45`) — same source as the
+  package-root `relay.py:65` consumer, so the public contract is single-sourced.
+- **New helpers considered.** None needed. The encode payload path is a single
+  `encode_typename(definition, strategy, type_cls, None, None)` call; the
+  `root`/`info` arguments are passed as `None` and the inline comment
+  (`testing/relay.py #"never touch"`) correctly notes the string-strategy
+  branches of `encode_typename` (`types/relay.py:479-482`) never read them —
+  only the `callable` branch does, and that branch is gated out one block
+  earlier. No wrapper would simplify the single call.
+- **Duplication risk in the current file.** The repeated `"global_id_for:"`
+  literal (4x, the static overview's lone repeated literal) is the message
+  prefix on each distinct `ConfigurationError` raise; the rest of each message
+  differs and names the specific failure mode. Hoisting the prefix to a constant
+  would hurt grep-ability of the raise sites and is not a real consolidation.
 
 ### Other positives
 
-- **Strategy-aware encoding is correct across all four strategy classes.** The gate `strategy in STRING_GLOBALID_STRATEGIES` (`testing/relay.py:85`) admits exactly `{model, type, type+model}`; `encode_typename` resolves `model`/`type+model` via `MODEL_LABEL_STRATEGIES` → `model._meta.label_lower` and the remaining `type` → `graphql_type_name` (`types/relay.py:490-493`). `STRING_GLOBALID_STRATEGIES \ MODEL_LABEL_STRATEGIES == {type}`, so there is no uncovered string strategy and no over-broad admission. `callable`/`custom` are correctly rejected before `encode_typename` is reached, so the `callable(strategy)` branch (the only one that touches `root`/`info`) is unreachable from this helper — which is why passing `None, None` for `(root, info)` at `:96` is safe, not a latent crash.
-- **Gate ordering is deliberate and documented.** `definition is None` → not-a-DjangoType (`:60`), then `not definition.finalized` BEFORE reading the strategy stamp (`:65`), then `strategy is None` → finalized-but-non-Relay-Node (`:78`), then the non-string-strategy gate (`:85`). The `finalized`-first ordering is justified inline against the spec-032 P2 partial-finalize hazard (strategy stamped in Phase 2.5 before Phase 3 flips `finalized`) and pinned by `tests/testing/test_relay.py::test_global_id_for_strategy_stamped_but_unfinalized_raises` (monkeypatch sets a strategy on an unfinalized type and asserts the not-finalized message wins).
-- **Public-API shape / back-compat intact.** `__all__ = ["decode_global_id", "global_id_for"]` (`:47`), the submodule path is the public surface (not re-exported from `testing/__init__`, by design), and the signatures match the GLOSSARY contract. The `# noqa: A002` on the `id` shadow is justified — `id` is the consumer-facing parameter name the helper documents.
-- **Test discipline.** Every branch is pinned in `tests/testing/test_relay.py`: the three string strategies (`:85,101,116`, each also asserting equality with the live-emitted id), `callable`/`custom` raise (`:169`), unfinalized raise (`:183`), non-Node raise (`:193`), the stamped-but-unfinalized edge (`:209`), the non-DjangoType branch (`:205`, asserts "not a registered DjangoType subclass"), the decode round-trip for primary + type-name payloads (`:244`), and the documented secondary-model-label-emitter → primary asymmetry (`:255`).
-- **Asymmetry contract is documented, not a bug.** The module docstring (`:24-30`) states the round-trip holds only for lone/primary model-label types and `type`-strategy payloads, because a secondary model-label emitter mints the payload it genuinely emits while `decode_global_id` routes it to the model's PRIMARY via `registry.get(model)` — exactly what a live `node(id:)` does. This is correct behavior pinned by `test_secondary_model_label_emitter_decodes_to_primary`.
+- **Gate ordering is correct and load-bearing.** `global_id_for` checks
+  `definition is None` → not finalized → `strategy is None` → strategy not in
+  `STRING_GLOBALID_STRATEGIES`, in that order. The `finalized` gate precedes the
+  strategy read deliberately: the strategy stamp is written in Phase 2.5 *before*
+  Phase 3 flips `finalized`, so a partial-finalize failure can leave a non-`None`
+  strategy on an unfinalized type; reading the stamp first would mint an id in
+  violation of the "finalized Relay-Node-shaped type" contract. The inline
+  comment (`testing/relay.py #"Gate on"`) documents exactly this and matches the
+  re-entrancy reasoning in `types/relay.py::install_globalid_typename_resolver`
+  (the step-0 guard, `types/relay.py:545-553`).
+- **Reads the stamped strategy, never the setting.** `global_id_for` reads
+  `definition.effective_globalid_strategy` (the finalize-frozen value,
+  `types/definition.py:179`) rather than `RELAY_GLOBALID_STRATEGY` — so the
+  minted id matches what the type actually emits even when a per-type
+  `Meta.globalid_strategy` overrides the schema default.
+- **`callable`/`custom` fail loud, not silently wrong.** Both fall outside
+  `STRING_GLOBALID_STRATEGIES` (`{"model", "type", "type+model"}`) and raise a
+  `ConfigurationError` explaining the encoder needs a live `(root, info)` the
+  helper cannot supply — the honest contract boundary, not a best-effort guess.
+- **Strategy-aware encoding matches live emission, verified at source.**
+  `encode_typename` (`types/relay.py:470-482`): `model` / `type+model` (members of
+  `MODEL_LABEL_STRATEGIES`, `types/relay.py:402`) → `definition.model._meta.label_lower`;
+  `type` → `definition.graphql_type_name`. This is byte-identical to the docstring's
+  promised payload mapping and to the slot the installed closure emits.
+- **Asymmetry contract documented, not papered over.** The module docstring
+  states `decode_global_id(global_id_for(T, pk)) == (T, str(pk))` holds only for
+  lone/primary model-label types and `type`-strategy payloads, because a
+  secondary model-label emitter's payload decodes to the model's *primary* via
+  `registry.get(model)`. Confirmed against `decode_global_id` Step 1
+  (`types/relay.py:707` `registry.get(model)`) — this is the same routing a live
+  `node(id:)` performs, correctly framed as expected behavior rather than a bug.
+- **Import-cost framing accurate.** Keeping the helpers out of `testing/__init__.py`
+  (whose `__all__` is `["safe_wrap_connection_method"]` only) keeps
+  `import django_strawberry_framework.testing` light; the `types`-package imports
+  are paid only by suites importing the submodule. The `testing/__init__`
+  docstring and `docs/GLOSSARY.md:53` both state the submodule path is the public
+  entry "by design" — consistent across module, package init, and GLOSSARY.
 
 ### Summary
 
-`testing/relay.py` is a clean public test-helper module: one function `global_id_for` plus a re-export of `decode_global_id`. It has no changes since the baseline (`git log 14910230..HEAD` empty, `git diff HEAD` empty; only `testing/__init__.py` changed +2 this set, a future-version doc bump). The strategy-aware encoding is correct for all four strategy classes — string strategies delegate to the canonical `encode_typename` and the `(root, info)=None` arguments are provably unreachable in the touching branch; `callable`/`custom` are gated out with a clear contract. The four ordered `ConfigurationError` gates are well-justified (the `finalized`-first ordering defends the spec-032 P2 partial-finalize hazard) and exhaustively tested, including the deliberately-documented decode asymmetry. No High/Medium/Low findings; DRY is correctly None (the file is a veneer over already-single-sourced machinery). GLOSSARY entry (`docs/GLOSSARY.md:46`) accurately describes the public contract. No-source-edit cycle.
+Public consumer test-helper module: `global_id_for(type_cls, id)` mints the
+strategy-aware encoded `GlobalID` a finalized Relay-Node type emits, and
+`decode_global_id` is a verbatim re-export of the internal decode dispatch. Both
+diffs against the per-cycle baseline (`f2365341`) and against HEAD are empty; the
+file last changed in `6148d3f1` (cumulative-in-HEAD). The strategy-aware
+encoding was verified against `types/relay.py::encode_typename` and
+`MODEL_LABEL_STRATEGIES` (model/type+model → model label, type → graphql type
+name) — it matches what the live closure emits. The re-export shares its source
+with the package-root consumer. The `GLOSSARY` entry is contract-level and
+accurate (no drift); private gate constants and `encode_typename` carry no
+GLOSSARY entry, which is correct. No High, Medium, or Low findings. Zero edits to
+any tracked file → no-source-edit cycle (shape #5).
 
 ---
 
@@ -50,21 +123,25 @@ Filled by Worker 1 per no-source-edit cycle pattern.
 - None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — pass, 270 files left unchanged.
-- `uv run ruff check .` — pass, all checks passed (only the pre-existing COM812/formatter advisory notice).
+- `uv run ruff format .` — `289 files left unchanged`.
+- `uv run ruff check --fix .` — `All checks passed!`.
 
 ### Notes for Worker 3
-- No-source-edit cycle (shape #5): empty `git log 14910230..HEAD` and empty `git diff HEAD` for `testing/relay.py`. The only this-set change to `testing/` was `testing/__init__.py` (+2, a `0.0.12`→`0.0.14` future-export doc-version bump), out of scope for this artifact.
-- No High / no behaviour-changing Medium / zero Lows.
-- No GLOSSARY-only fix in scope — `docs/GLOSSARY.md:46` (and the `0.0.9` model-label payload prose at `:97`) accurately describe the public contract; no drift.
-
----
-
-## Changelog disposition
-
-Filled by Worker 1 per no-source-edit cycle pattern.
-
-Not warranted — no source edits this cycle (AGENTS.md #21 "Do not update CHANGELOG.md unless explicitly instructed"; the active plan `docs/review/review-0_0_10.md` is silent on a changelog entry for this item).
+- Both `git diff f23653415f65ebb7e84240d81cf25977683dca66 -- django_strawberry_framework/testing/relay.py`
+  and `git diff HEAD -- django_strawberry_framework/testing/relay.py` are empty;
+  the file last changed in `6148d3f1` (cumulative-in-HEAD). Dirty working-tree
+  files are `docs/review/*`, `docs/dry/*`, `docs/feedback2.md`, and `docs/spec-*`
+  scratchpads only — out of scope per AGENTS.md #34.
+- No High / no behavior-changing Medium / no Low findings.
+- No GLOSSARY-only fix in scope: `docs/GLOSSARY.md:53` carries a contract-level
+  entry for `global_id_for` / `decode_global_id` ("mint and decode the
+  strategy-aware encoded `GlobalID` a finalized Relay-Node-shaped type emits …
+  NOT re-exported from the `testing` root, by design"). Verified accurate against
+  source — the strategy-aware encode (`encode_typename`), the re-export source,
+  and the non-re-export from `testing/__init__.py` (`__all__ =
+  ["safe_wrap_connection_method"]`) all match. The private gate constants
+  (`_RELAY_NODE_GATE_*`, `STRING_GLOBALID_STRATEGIES`) and `encode_typename`
+  carry no GLOSSARY entry — absence correct (internal/no `__all__`).
 
 ---
 
@@ -72,40 +149,104 @@ Not warranted — no source edits this cycle (AGENTS.md #21 "Do not update CHANG
 
 Filled by Worker 1 per no-source-edit cycle pattern.
 
-No comment/docstring edits warranted. The module docstring and the four inline comment blocks are accurate and load-bearing: the Phase-2.5-before-Phase-3 finalize-ordering rationale (`:66-71`), the finalized-but-unstamped non-Relay-Node note (`:79-80`), and the `(root, info)`-untouched justification for the `None, None` arguments (`:92-95`) each document a non-obvious correctness invariant verified above. No stale spec references (spec-032 anchors match the shipped behavior); no TODOs.
+No comment or docstring edits. The module docstring, the `global_id_for`
+docstring, and the inline gate/encode comments were each cross-checked against
+source and are accurate: the Phase-2.5-before-Phase-3 finalized-gate reasoning
+matches `install_globalid_typename_resolver`; the "string-strategy branches never
+touch root/info" comment matches `encode_typename:479-482`; the asymmetry
+contract matches `decode_global_id` Step 1's `registry.get(model)` routing.
+
+---
+
+## Changelog disposition
+
+Filled by Worker 1 per no-source-edit cycle pattern.
+
+Not warranted. No source/test/doc edits this cycle (AGENTS.md: "Do not update
+CHANGELOG.md unless explicitly instructed"), and the active plan
+(`docs/review/review-0_0_11.md`) records no changelog action for this item.
 
 ---
 
 ## Verification (Worker 3)
 
-Shadow dictum (first pass): the shadow strips `#` comments and string tokens, so its line numbers are not canonical. Treated original `testing/relay.py` line numbers and the artifact's references as authoritative; the shadow (`docs/shadow/django_strawberry_framework__testing__relay.overview.md`) was used only for control-flow confirmation (4 imports, 1 symbol, 1 branch hotspot, 4x `global_id_for:` repeated literal — matches source).
-
-Baseline note: dispatch SHA `14910230` predates current HEAD `58ca2def`; `git diff HEAD` and `git diff 14910230` for `testing/relay.py` are both empty and `git log 14910230..HEAD -- testing/relay.py` is empty, so the SHA drift is cosmetic (content-not-identifier — same pattern as prior cycles). `testing/relay.py` is absent from the cycle-wide diff stat.
-
 ### Logic verification outcome
-No-source-edit cycle (shape #5); no High/Medium/Low findings to disposition. Independently re-derived every load-bearing claim against canonical source:
-- **Strategy partition is exact.** `STRING_GLOBALID_STRATEGIES = {model, type, type+model}` (`types/base.py:122`); `MODEL_LABEL_STRATEGIES = {model, type+model}` (`types/relay.py:413`). Residual = exactly `{type}`. In `encode_typename` (`types/relay.py:481-493`): `callable` first (the ONLY branch reading `root`/`info`, :482), then `MODEL_LABEL_STRATEGIES → model._meta.label_lower` (:490-491), else `type → graphql_type_name` (:493). So the helper's `:85` gate admits exactly the three string strategies and each routes to a `(root,info)`-free branch.
-- **`(root, info)=None` delegation is provably safe.** `callable`/`custom` are rejected at `relay.py:85` BEFORE `encode_typename` is reached at `:96`, so the `callable(strategy)` branch is unreachable from this helper — passing `None, None` cannot crash. Verified the gate precedes the call in source, not just the artifact's prose.
-- **Gate ordering defends spec-032 P2.** `None` definition → not-a-DjangoType (`:60`); `not finalized` BEFORE reading the stamp (`:65`); `strategy is None` → non-Relay-Node (`:78`); non-string-strategy (`:85`). The finalized-first ordering is the partial-finalize defense (stamp written Phase 2.5, `finalized` flipped Phase 3) and is pinned by `test_global_id_for_strategy_stamped_but_unfinalized_raises` (`tests/testing/test_relay.py:209-233`, monkeypatches a strategy onto an unfinalized type and asserts the not-finalized message wins).
-- **Decode round-trip + re-export identity.** `decode_global_id` is a single def (`types/relay.py:634`) re-exported verbatim; `test_public_decode_round_trip_primary_and_type_name` pins both the round-trip (`:249-250`) AND `testing_relay.decode_global_id is types_relay.decode_global_id` (`:252`). The documented secondary→primary asymmetry is pinned by `test_secondary_model_label_emitter_decodes_to_primary` (`:255-266`) — correct routing, not a bug.
-- **Public-API back-compat intact.** `__all__ = ["decode_global_id", "global_id_for"]` (`:47`); submodule-path-only export (not re-exported from `testing/__init__`); GLOSSARY (`docs/GLOSSARY.md:46`) accurately describes the strategy-aware contract and the submodule-path discipline.
+No High / Medium / Low findings to address — genuine no-source-edit (shape #5)
+cycle. Each Worker 2 section opens `Filled by Worker 1 per no-source-edit cycle
+pattern.` as the shape gate requires. Independently confirmed the `None.`
+findings genuine:
 
-All ten branches are pinned by named tests in `tests/testing/test_relay.py` (three string strategies each with a `live_id ==` equality assertion at :94/:110/:125, callable/custom :169, unfinalized :183, non-Node :193, non-DjangoType :205, stamped-but-unfinalized :209, decode round-trip :249, asymmetry :255). Focused run `uv run pytest tests/testing/test_relay.py --no-cov` = 10 passed.
+- **Mint path matches live emission.** `global_id_for`
+  (`testing/relay.py::global_id_for`) calls
+  `encode_typename(definition, strategy, type_cls, None, None)` — the exact
+  per-strategy slot computation `_install_typename_closure`'s installed closure
+  runs (`types/relay.py::_install_typename_closure` calls
+  `encode_typename(definition, strategy, cls, root, info)`). Verified against
+  source: `model` / `type+model` ∈ `MODEL_LABEL_STRATEGIES`
+  (`types/relay.py:402`) → `definition.model._meta.label_lower`; `type` →
+  `definition.graphql_type_name` (`types/relay.py:479-482`). The `None`/`None`
+  `root`/`info` are safe — only the `callable` branch reads them and it is gated
+  out earlier (`strategy not in STRING_GLOBALID_STRATEGIES` raise).
+- **Gate ordering is sound.** `finalized` checked before the strategy read; the
+  strategy stamp (`effective_globalid_strategy`, `types/definition.py:179`,
+  default `None`) is written in Phase 2.5 before Phase 3 flips `finalized`
+  (`types/definition.py:180`), so a partial-finalize could leave a non-`None`
+  strategy on an unfinalized type — reading the stamp first would mint in
+  violation of the contract. Pinned by
+  `test_global_id_for_strategy_stamped_but_unfinalized_raises`.
+- **Gate constants single-sourced.** `_RELAY_NODE_GATE_LEAD` /
+  `_RELAY_NODE_GATE_INHERIT_TAIL` / `STRING_GLOBALID_STRATEGIES` are imported
+  from `types/base.py:107,113,122` (the same constants the connection / relation
+  gates use, `base.py:219,271`) — no re-spelling.
+- **`decode_global_id` is a verbatim re-export.** Imported from
+  `types/relay.py::decode_global_id` (`testing/relay.py:45`) — the same source
+  the package-root consumer imports (`relay.py:65`
+  `from .types.relay import _NODE_TYPE_HINT_ATTR, decode_global_id`). Single
+  source, no re-implementation.
 
 ### DRY findings disposition
-DRY None is sound and verified by grep/read: `global_id_for` delegates payload to the single-sourced `encode_typename`, imports the strategy set + the two gate constants from `types/base.py` (`STRING_GLOBALID_STRATEGIES` :122; `_RELAY_NODE_GATE_LEAD` :107 / `_RELAY_NODE_GATE_INHERIT_TAIL` :113 — the latter's hoist comment at `types/base.py:108-109` explicitly names `global_id_for` as the byte-identical 3rd compose site), and re-exports `decode_global_id` verbatim. Nothing duplicated locally. The 4x `"global_id_for:"` prefixes are distinct per-message human strings with separate subjects/remediation, not a dispatch key — correct inline.
+DRY-None genuine: the module is the consumer-facing thin shell — one re-export,
+one reuse of the live encode path plus shared gate constants and canonical
+`ConfigurationError`. No second mint call site exists to consolidate against;
+minting through `encode_typename` is what makes the helper
+consistent-by-construction with live emission. The repeated `"global_id_for:"`
+prefix (4x) is a per-raise message prefix whose hoisting would hurt grep-ability
+of the raise sites — correctly not a consolidation.
 
 ### Temp test verification
-- None — claims were verifiable by direct source/test read + the existing permanent suite; no temp test needed.
-- Disposition: n/a.
+- None used. Confirmed via existing focused suite.
 
 ### Verification outcome
-`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `testing/relay.py` checklist box in `docs/review/review-0_0_10.md`.
+`cycle accepted; verified`. Sets top-level `Status: verified` and marks the
+`testing/relay.py` checkbox in `docs/review/review-0_0_11.md`.
 
-Shape #5 gates all met: every Worker 2 section carries `Filled by Worker 1 per no-source-edit cycle pattern.`; no High/behaviour-Medium/Lows; no GLOSSARY-only fix; changelog `Not warranted` with both citations (AGENTS.md #21 + active-plan silence) and empty `git diff -- CHANGELOG.md`; ruff format-check + check pass on the target.
+Zero-edit proof: `git diff f23653415f65ebb7e84240d81cf25977683dca66 --
+django_strawberry_framework/testing/relay.py` AND `git diff HEAD --` both empty;
+owned-paths `--stat` vs baseline
+(`django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md`) empty; the
+file last changed in `6148d3f1` (cumulative-in-HEAD). Dirty working tree is
+`docs/review/*`, `docs/dry/*`, `docs/feedback2.md`, `docs/spec-038-*` only —
+out-of-scope scratchpads per AGENTS.md #34, no sibling-cycle attribution needed.
+
+GLOSSARY: `docs/GLOSSARY.md:53` carries a contract-level entry for
+`global_id_for` / `decode_global_id` ("mint and decode the strategy-aware
+encoded `GlobalID` a finalized Relay-Node-shaped type emits … NOT re-exported
+from the `testing` root, by design"). Verified accurate vs live source — the
+strategy-aware encode, the re-export source, and the non-re-export from
+`testing/__init__.py` (`__all__ = ["safe_wrap_connection_method"]`) all match.
+Private gate constants and `encode_typename` carry no GLOSSARY entry (absence
+correct — internal). Genuine #5, not a missed #4.
+
+Focused suite: `uv run pytest tests/testing/test_relay.py -q` → 10 passed (the
+coverage FAIL is the expected single-file-run artifact, not a test failure). The
+suite pins both halves of the contract: model/type/type+model mint, callable /
+custom / unfinalized / non-Node / strategy-stamped-but-unfinalized raises, the
+primary round-trip, and the secondary→primary decode asymmetry.
+
+Changelog: `Not warranted`, cites both AGENTS.md and the active plan's silence
+— `git diff -- CHANGELOG.md` empty. Cycle is internal-only (no public-API
+surface change this cycle), so "Not warranted" is the correct state.
 
 ---
 
 ## Iteration log
-
-(none)

@@ -106,42 +106,42 @@ New since `0.0.10`: top-level `_cross_web_patches.py` / `_strawberry_patches.py`
   - `django_strawberry_framework/mutations/`
     - [x] `django_strawberry_framework/mutations/fields.py` -> `docs/review/rev-mutations__fields.md`
     - [x] `django_strawberry_framework/mutations/inputs.py` -> `docs/review/rev-mutations__inputs.md`
-    - [ ] `django_strawberry_framework/mutations/permissions.py` -> `docs/review/rev-mutations__permissions.md` (RE-OPENED: source +15 lines via concurrent DRY commit 5065960e after cycle-26 verify)
-    - [ ] `django_strawberry_framework/mutations/resolvers.py` -> `docs/review/rev-mutations__resolvers.md` (RE-OPENED: source +13/-23 via concurrent DRY commits after cycle-27 verify)
-    - [ ] `django_strawberry_framework/mutations/sets.py` -> `docs/review/rev-mutations__sets.md` (RE-OPENED: source +19/-18 via concurrent DRY commits after cycle-28 verify; my verified comment fix survives uncommitted)
-    - [ ] folder pass: `django_strawberry_framework/mutations/` -> `docs/review/rev-mutations.md` (RE-OPENED: depends on re-opened siblings)
+    - [x] `django_strawberry_framework/mutations/permissions.py` -> `docs/review/rev-mutations__permissions.md`
+    - [x] `django_strawberry_framework/mutations/resolvers.py` -> `docs/review/rev-mutations__resolvers.md`
+    - [x] `django_strawberry_framework/mutations/sets.py` -> `docs/review/rev-mutations__sets.md`
+    - [x] folder pass: `django_strawberry_framework/mutations/` -> `docs/review/rev-mutations.md`
   - `django_strawberry_framework/optimizer/`
     - [x] `django_strawberry_framework/optimizer/_context.py` -> `docs/review/rev-optimizer___context.md`
     - [x] `django_strawberry_framework/optimizer/extension.py` -> `docs/review/rev-optimizer__extension.md`
     - [x] `django_strawberry_framework/optimizer/field_meta.py` -> `docs/review/rev-optimizer__field_meta.md`
-    - [ ] `django_strawberry_framework/optimizer/hints.py` -> `docs/review/rev-optimizer__hints.md`
-    - [ ] `django_strawberry_framework/optimizer/plans.py` -> `docs/review/rev-optimizer__plans.md`
-    - [ ] `django_strawberry_framework/optimizer/selections.py` -> `docs/review/rev-optimizer__selections.md`
-    - [ ] `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
-    - [ ] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
+    - [x] `django_strawberry_framework/optimizer/hints.py` -> `docs/review/rev-optimizer__hints.md`
+    - [x] `django_strawberry_framework/optimizer/plans.py` -> `docs/review/rev-optimizer__plans.md`
+    - [x] `django_strawberry_framework/optimizer/selections.py` -> `docs/review/rev-optimizer__selections.md`
+    - [x] `django_strawberry_framework/optimizer/walker.py` -> `docs/review/rev-optimizer__walker.md`
+    - [x] folder pass: `django_strawberry_framework/optimizer/` -> `docs/review/rev-optimizer.md`
   - `django_strawberry_framework/orders/`
-    - [ ] `django_strawberry_framework/orders/base.py` -> `docs/review/rev-orders__base.md`
-    - [ ] `django_strawberry_framework/orders/factories.py` -> `docs/review/rev-orders__factories.md`
-    - [ ] `django_strawberry_framework/orders/inputs.py` -> `docs/review/rev-orders__inputs.md`
-    - [ ] `django_strawberry_framework/orders/sets.py` -> `docs/review/rev-orders__sets.md`
-    - [ ] folder pass: `django_strawberry_framework/orders/` -> `docs/review/rev-orders.md`
+    - [x] `django_strawberry_framework/orders/base.py` -> `docs/review/rev-orders__base.md`
+    - [x] `django_strawberry_framework/orders/factories.py` -> `docs/review/rev-orders__factories.md`
+    - [x] `django_strawberry_framework/orders/inputs.py` -> `docs/review/rev-orders__inputs.md`
+    - [x] `django_strawberry_framework/orders/sets.py` -> `docs/review/rev-orders__sets.md`
+    - [x] folder pass: `django_strawberry_framework/orders/` -> `docs/review/rev-orders.md`
   - `django_strawberry_framework/testing/`
-    - [ ] `django_strawberry_framework/testing/_wrap.py` -> `docs/review/rev-testing___wrap.md`
-    - [ ] `django_strawberry_framework/testing/relay.py` -> `docs/review/rev-testing__relay.md`
-    - [ ] folder pass: `django_strawberry_framework/testing/` -> `docs/review/rev-testing.md`
+    - [x] `django_strawberry_framework/testing/_wrap.py` -> `docs/review/rev-testing___wrap.md`
+    - [x] `django_strawberry_framework/testing/relay.py` -> `docs/review/rev-testing__relay.md`
+    - [x] folder pass: `django_strawberry_framework/testing/` -> `docs/review/rev-testing.md`
   - `django_strawberry_framework/types/`
-    - [ ] `django_strawberry_framework/types/base.py` -> `docs/review/rev-types__base.md`
-    - [ ] `django_strawberry_framework/types/converters.py` -> `docs/review/rev-types__converters.md`
-    - [ ] `django_strawberry_framework/types/definition.py` -> `docs/review/rev-types__definition.md`
-    - [ ] `django_strawberry_framework/types/finalizer.py` -> `docs/review/rev-types__finalizer.md`
-    - [ ] `django_strawberry_framework/types/relations.py` -> `docs/review/rev-types__relations.md`
-    - [ ] `django_strawberry_framework/types/relay.py` -> `docs/review/rev-types__relay.md`
-    - [ ] `django_strawberry_framework/types/resolvers.py` -> `docs/review/rev-types__resolvers.md`
-    - [ ] folder pass: `django_strawberry_framework/types/` -> `docs/review/rev-types.md`
+    - [x] `django_strawberry_framework/types/base.py` -> `docs/review/rev-types__base.md`
+    - [x] `django_strawberry_framework/types/converters.py` -> `docs/review/rev-types__converters.md`
+    - [x] `django_strawberry_framework/types/definition.py` -> `docs/review/rev-types__definition.md`
+    - [x] `django_strawberry_framework/types/finalizer.py` -> `docs/review/rev-types__finalizer.md`
+    - [x] `django_strawberry_framework/types/relations.py` -> `docs/review/rev-types__relations.md`
+    - [x] `django_strawberry_framework/types/relay.py` -> `docs/review/rev-types__relay.md`
+    - [x] `django_strawberry_framework/types/resolvers.py` -> `docs/review/rev-types__resolvers.md`
+    - [x] folder pass: `django_strawberry_framework/types/` -> `docs/review/rev-types.md`
   - `django_strawberry_framework/utils/`
-    - [ ] `django_strawberry_framework/utils/connections.py` -> `docs/review/rev-utils__connections.md`
-    - [ ] `django_strawberry_framework/utils/input_values.py` -> `docs/review/rev-utils__input_values.md`
-    - [ ] `django_strawberry_framework/utils/inputs.py` -> `docs/review/rev-utils__inputs.md`
+    - [x] `django_strawberry_framework/utils/connections.py` -> `docs/review/rev-utils__connections.md`
+    - [x] `django_strawberry_framework/utils/input_values.py` -> `docs/review/rev-utils__input_values.md`
+    - [x] `django_strawberry_framework/utils/inputs.py` -> `docs/review/rev-utils__inputs.md`
     - [ ] `django_strawberry_framework/utils/permissions.py` -> `docs/review/rev-utils__permissions.md`
     - [ ] `django_strawberry_framework/utils/querysets.py` -> `docs/review/rev-utils__querysets.md`
     - [ ] `django_strawberry_framework/utils/relations.py` -> `docs/review/rev-utils__relations.md`

@@ -1783,79 +1783,79 @@ the [`docs/SPECS/NEXT.md`][next] flow adds.
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[changelog]: ../CHANGELOG.md
-[contributing]: ../CONTRIBUTING.md
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
-[pyproject]: ../pyproject.toml
-[readme]: ../README.md
-[start]: ../START.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[changelog]: ../../CHANGELOG.md
+[contributing]: ../../CONTRIBUTING.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
+[pyproject]: ../../pyproject.toml
+[readme]: ../../README.md
+[start]: ../../START.md
+[today]: ../../TODAY.md
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[glossary]: GLOSSARY.md
-[glossary-auto-typed-annotations]: GLOSSARY.md#auto-typed-annotations
-[glossary-bigint-scalar]: GLOSSARY.md#bigint-scalar
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-djangofiletype]: GLOSSARY.md#djangofiletype
-[glossary-djangoformmutation]: GLOSSARY.md#djangoformmutation
-[glossary-djangoimagetype]: GLOSSARY.md#djangoimagetype
-[glossary-djangomutation]: GLOSSARY.md#djangomutation
-[glossary-djangomutationfield]: GLOSSARY.md#djangomutationfield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-fielderror-envelope]: GLOSSARY.md#fielderror-envelope
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-input-type-generation]: GLOSSARY.md#input-type-generation
-[glossary-metaexclude]: GLOSSARY.md#metaexclude
-[glossary-metafields]: GLOSSARY.md#metafields
-[glossary-metamodel]: GLOSSARY.md#metamodel
-[glossary-metanullable-overrides]: GLOSSARY.md#metanullable_overrides
-[glossary-metarequired-overrides]: GLOSSARY.md#metarequired_overrides
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-relation-handling]: GLOSSARY.md#relation-handling
-[glossary-scalar-field-conversion]: GLOSSARY.md#scalar-field-conversion
-[glossary-scalar-field-override-semantics]: GLOSSARY.md#scalar-field-override-semantics
-[glossary-serializermutation]: GLOSSARY.md#serializermutation
-[glossary-specialized-scalar-conversions]: GLOSSARY.md#specialized-scalar-conversions
-[glossary-strawberry-config]: GLOSSARY.md#strawberry_config
-[glossary-testclient]: GLOSSARY.md#testclient
-[glossary-upload-scalar]: GLOSSARY.md#upload-scalar
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[glossary]: ../GLOSSARY.md
+[glossary-auto-typed-annotations]: ../GLOSSARY.md#auto-typed-annotations
+[glossary-bigint-scalar]: ../GLOSSARY.md#bigint-scalar
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-djangofiletype]: ../GLOSSARY.md#djangofiletype
+[glossary-djangoformmutation]: ../GLOSSARY.md#djangoformmutation
+[glossary-djangoimagetype]: ../GLOSSARY.md#djangoimagetype
+[glossary-djangomutation]: ../GLOSSARY.md#djangomutation
+[glossary-djangomutationfield]: ../GLOSSARY.md#djangomutationfield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fielderror-envelope]: ../GLOSSARY.md#fielderror-envelope
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-input-type-generation]: ../GLOSSARY.md#input-type-generation
+[glossary-metaexclude]: ../GLOSSARY.md#metaexclude
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metamodel]: ../GLOSSARY.md#metamodel
+[glossary-metanullable-overrides]: ../GLOSSARY.md#metanullable_overrides
+[glossary-metarequired-overrides]: ../GLOSSARY.md#metarequired_overrides
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-relation-handling]: ../GLOSSARY.md#relation-handling
+[glossary-scalar-field-conversion]: ../GLOSSARY.md#scalar-field-conversion
+[glossary-scalar-field-override-semantics]: ../GLOSSARY.md#scalar-field-override-semantics
+[glossary-serializermutation]: ../GLOSSARY.md#serializermutation
+[glossary-specialized-scalar-conversions]: ../GLOSSARY.md#specialized-scalar-conversions
+[glossary-strawberry-config]: ../GLOSSARY.md#strawberry_config
+[glossary-testclient]: ../GLOSSARY.md#testclient
+[glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[spec-001]: SPECS/spec-001-django_types-0_0_1.md
-[spec-017]: SPECS/spec-017-deferred_scalars-0_0_6.md
-[spec-025]: SPECS/spec-025-scalar_map_helper-0_0_7.md
-[spec-026]: SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md
-[spec-036]: SPECS/spec-036-mutations-0_0_11.md
+[next]: NEXT.md
+[spec-001]: spec-001-django_types-0_0_1.md
+[spec-017]: spec-017-deferred_scalars-0_0_6.md
+[spec-025]: spec-025-scalar_map_helper-0_0_7.md
+[spec-026]: spec-026-scalar_conversion_fakeshop-0_0_7.md
+[spec-036]: spec-036-mutations-0_0_11.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[filters-inputs]: ../django_strawberry_framework/filters/inputs.py
-[init]: ../django_strawberry_framework/__init__.py
-[mutations-inputs]: ../django_strawberry_framework/mutations/inputs.py
-[mutations-resolvers]: ../django_strawberry_framework/mutations/resolvers.py
-[scalars]: ../django_strawberry_framework/scalars.py
-[conf]: ../django_strawberry_framework/conf.py
-[types-base]: ../django_strawberry_framework/types/base.py
-[types-converters]: ../django_strawberry_framework/types/converters.py
-[types-finalizer]: ../django_strawberry_framework/types/finalizer.py
-[types-relay]: ../django_strawberry_framework/types/relay.py
-[types-resolvers]: ../django_strawberry_framework/types/resolvers.py
+[filters-inputs]: ../../django_strawberry_framework/filters/inputs.py
+[init]: ../../django_strawberry_framework/__init__.py
+[mutations-inputs]: ../../django_strawberry_framework/mutations/inputs.py
+[mutations-resolvers]: ../../django_strawberry_framework/mutations/resolvers.py
+[scalars]: ../../django_strawberry_framework/scalars.py
+[conf]: ../../django_strawberry_framework/conf.py
+[types-base]: ../../django_strawberry_framework/types/base.py
+[types-converters]: ../../django_strawberry_framework/types/converters.py
+[types-finalizer]: ../../django_strawberry_framework/types/finalizer.py
+[types-relay]: ../../django_strawberry_framework/types/relay.py
+[types-resolvers]: ../../django_strawberry_framework/types/resolvers.py
 
 <!-- tests/ -->
-[test-base-init]: ../tests/base/test_init.py
-[test-mutations]: ../tests/mutations/
-[test-scalars]: ../tests/test_scalars.py
-[test-types]: ../tests/types/
+[test-base-init]: ../../tests/base/test_init.py
+[test-mutations]: ../../tests/mutations/
+[test-scalars]: ../../tests/test_scalars.py
+[test-types]: ../../tests/types/
 
 <!-- examples/ -->
-[test-query-readme]: ../examples/fakeshop/test_query/README.md
+[test-query-readme]: ../../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->
 

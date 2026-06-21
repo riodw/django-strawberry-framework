@@ -1,0 +1,32 @@
+term,anchor,notes
+DjangoFormMutation,djangoformmutation,The plain-Form mutation base this card ships; promoted planned->shipped 0.0.12.
+DjangoModelFormMutation,djangomodelformmutation,The ModelForm mutation base this card ships; subclasses DjangoMutation via _resolve_model.
+DjangoMutation,djangomutation,The 036 foundation base DjangoModelFormMutation subclasses.
+DjangoMutationField,djangomutationfield,The shipped exposure factory reused (generalized) for the form flavor.
+DjangoNodeField,djangonodefield,The node(id: ID!) server-side-decode precedent the form update id: reuses via _coerce_lookup_id.
+FieldError envelope,fielderror-envelope,The 036-frozen error envelope reused byte-identical, populated from form.errors.
+Input type generation,input-type-generation,The 036 model-column generator; this card derives input from the FORM instead.
+DjangoModelPermission,djangomodelpermission,Default write-auth inherited by the ModelForm flavor via the _resolve_model seam.
+get_queryset visibility hook,get_queryset-visibility-hook,The visibility seam the update locate composes with.
+apply_cascade_permissions,apply_cascade_permissions,Cascade visibility rides inside a consumer's get_queryset, which the update locate composes with (the form pipeline does not call the cascade directly).
+DjangoOptimizerExtension,djangooptimizerextension,Post-save re-fetch optimizer the ModelForm payload rides (036 path).
+only() projection,only-projection,The G2 mutation gate suppresses .only() on the re-fetch.
+Meta.primary,metaprimary,Return-payload type resolves the form model's primary DjangoType.
+Meta.model,metamodel,The 0.0.11 _resolve_model source; the form flavor resolves model from form_class._meta.model.
+Meta.fields,metafields,Narrows which FORM fields become input fields.
+Meta.exclude,metaexclude,Opt-out surface for form fields.
+DjangoType,djangotype,The read-side type the ModelForm payload resolves to.
+Scalar field conversion,scalar-field-conversion,Read-side converters reused by the form-field mapping where types overlap.
+Choice enum generation,choice-enum-generation,A ChoiceField over model choices reuses the generated enum.
+Upload scalar,upload-scalar,A form FileField/ImageField maps to the Upload scalar (spec-037).
+ConfigurationError,configurationerror,Fail-loud for bad Meta (missing/wrong form_class, ModelForm-no-model, unknown form-field class).
+SyncMisuseError,syncmisuseerror,Sync form pipeline meeting an async get_queryset.
+SerializerMutation,serializermutation,The 0.0.13 sibling flavor; out of scope.
+Auth mutations,auth-mutations,The 0.0.13 sibling flavor; out of scope.
+Cross-subsystem invariants,cross-subsystem-invariants,No DjangoType Meta key added; DEFERRED_META_KEYS untouched.
+FieldSet,fieldset,Field-level read gates (0.1.1); compose on top of write auth.
+Per-field permission hooks,per-field-permission-hooks,0.1.1 read gates, distinct from write authorization.
+FilterSet,filterset,Set-family precedent for the subpackage layout / phase-2.5 bind.
+OrderSet,orderset,Set-family precedent for the subpackage layout / phase-2.5 bind.
+finalize_django_types,finalize_django_types,The phase-2.5 bind reused for form-mutation binding.
+TestClient,testclient,Future multipart helper explicitly out of scope.

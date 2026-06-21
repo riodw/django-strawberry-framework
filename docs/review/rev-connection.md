@@ -4,7 +4,31 @@ Status: verified
 
 ## DRY analysis
 
-- None — the file is already factored to its DRY shape. The shared `resolve_connection` head (`_resolve_connection_fast_path`, connection.py:394-455) is single-sited and reused by both `DjangoConnection.resolve_connection` (connection.py:494-505) and the generated `totalCount` variant (connection.py:619-630). The windowed-row build (`_resolve_from_window`, connection.py:171-255) is the one cursor/edge/pageInfo/totalCount derivation for both `resolve_connection` paths. The pipeline tail (`_finalize_queryset`, connection.py:768-808) and head (`_prepare_pipeline_source`, connection.py:811-840) are single-sited across `_pipeline_sync` / `_pipeline_async`. The `Manager`→`QuerySet` coercion (`normalize_query_source`), the sidecar-kwarg extraction (`connection_sidecar_inputs_from_kwargs`), the window-bounds derivation (`derive_connection_window_bounds`), and the deterministic-order predicate (`deterministic_order` / `ends_in_unique_column`) are all imported canonical helpers, not re-implemented here. The `first`+`last` guard (`_guard_first_and_last`), the non-queryset `totalCount` guard (`_guard_total_count_countable`), and the non-queryset sidecar guard (`_guard_sidecar_input_against_non_queryset`) are each single-sited so their literal error strings live once. No new consolidation opportunity remains.
+- Defer until a fourth synthesized-resolver shape lands; then fold the three
+  `_build_connection_resolver` `_resolve` closures (connection.py:1025-1033,
+  1037-1046, 1050-1058) and the relation variant (connection.py:1145-1193)
+  through a shared `_run_pipeline(target_type, source, info, kwargs, *, is_async)`
+  body. Today the four bodies differ on exactly two axes — sync vs async (`await`
+  on the resolver call AND `await _pipeline_async`) and source acquisition
+  (`initial_queryset(target_type)` / `resolver(root, info)` / windowed-rows probe).
+  The sidecar-extraction line (`connection_sidecar_inputs_from_kwargs(kwargs)`)
+  and the `__signature__` / `__annotations__` attachment are ALREADY single-sited
+  via `_synthesized_signature` (connection.py:1060-1062, 1195-1197). Collapsing
+  the remaining 3-4 lines now would hide the per-construction sync/async commit
+  (Decision 10) behind a flag argument — the explicit branching is the readable
+  shape while only these four colored shapes exist. Trigger: a fifth resolver
+  shape, or a sync/async axis that stops being a clean 1:1 mirror.
+
+- Defer until a third count-attachment call site appears; then extract the
+  `_guard_total_count_countable(...)` + `if want_count: setattr(conn,
+  _TOTAL_COUNT_ATTR, <count>)` body shared by `_attach_count_sync`
+  (connection.py:681-686) and `_attach_count_async` (connection.py:689-702).
+  The two are an intentional sync/async mirror that cannot collapse today — the
+  async variant must `await conn_awaitable` BEFORE the guard (the await-before-raise
+  `-W error` discipline) and `await nodes.acount()`, so the only truly shared
+  fragment is the guard call plus the `setattr`. A `maybe-await` abstraction would
+  reintroduce exactly the coroutine-color hazard the comment at connection.py:691-697
+  documents. Trigger: a non-resolve_connection caller needs the same attach.
 
 ## High:
 
@@ -22,23 +46,88 @@ None.
 
 ### DRY recap
 
-- **Existing patterns reused.** Imports the canonical cross-cutting helpers rather than re-deriving them: `normalize_query_source` / `initial_queryset` / `apply_type_visibility_{sync,async}` (utils/querysets.py), `connection_sidecar_inputs_from_kwargs` / `has_connection_sidecar_input` / `derive_connection_window_bounds` / `CONNECTION_{FILTER,ORDER}_KWARG` (utils/connections.py), `deterministic_order` / `ends_in_unique_column` / `WINDOW_ROW_NUMBER` / `WINDOW_TOTAL_COUNT` (optimizer/plans.py — the cursor-parity single source for plan-time and resolve-time order, connection.py:61-66, 800-808), `direct_child_selected` / `prime_selected_fields` (optimizer/selections.py), `_check_n1` (types/resolvers.py — one strictness checker shared with list relations), `_validate_relay_djangotype_target` (list_field.py — the four DjangoType guards plus the Relay-Node guard). The `_ends_in_unique_column = ends_in_unique_column` re-export (connection.py:90) is a deliberate name-stability shim for the spec-030 test pins, documented as such.
-- **New helpers considered.** Internal `resolve_connection` skeleton was already extracted to `_resolve_connection_fast_path` and the window build to `_resolve_from_window` in the 0.0.9 DRY pass (`docs/feedback.md`); no further extraction is warranted. The sync/async pipeline pair (`_pipeline_sync` / `_pipeline_async`) deliberately keeps its colored steps explicit (visibility/filter/order awaited vs not) with only the color-agnostic head/tail (`_prepare_pipeline_source` / `_finalize_queryset`) shared — collapsing the colored bodies behind a maybe-await abstraction was correctly rejected (docstrings at connection.py:817-829, 883).
-- **Duplication risk in the current file.** The three `total_count` string occurrences in executable code (connection.py:650-651 `_populate` namespace/annotation keys, connection.py:722 `connection_options.get("total_count")`) are two distinct concerns — the Python field-attribute name on the generated class vs the `Meta.connection` option key — not a single literal to hoist. The two `getattr(node, WINDOW_ROW_NUMBER)` reads in `_resolve_from_window` (connection.py:241, 250) read the same annotation for different page-flag computations; binding to a local would not reduce a real near-copy.
+- **Existing patterns reused.** The file is the connection-surface integration
+  point and consistently routes shared logic to canonical helpers rather than
+  re-implementing: window-bound derivation through
+  `utils/connections.py::derive_connection_window_bounds` (connection.py:294-301),
+  the `Manager`->`QuerySet` + is-queryset decision through
+  `utils/querysets.py::normalize_query_source` (connection.py:859), the
+  deterministic total order through `optimizer/plans.py::deterministic_order`
+  (connection.py:832) so plan-time and resolve-time order share one source
+  (cursor-parity invariant), the count-detection fragment-descent rule through
+  `optimizer/selections.py::direct_child_selected` (connection.py:388-391), the
+  four target guards plus Relay-Node guard through
+  `list_field.py::_validate_relay_djangotype_target` (connection.py:1236-1244),
+  the nested-connection strictness check through the parameterized
+  `types/resolvers.py::_check_n1` (connection.py:1178-1186), and the
+  `to_attr` naming through `optimizer/walker.py::_relation_connection_to_attr`
+  (connection.py:1143). The `_ends_in_unique_column` re-export (connection.py:90)
+  is a deliberate single-source alias to `optimizer/plans.py::ends_in_unique_column`,
+  preserving the `tests/test_connection.py` / `tests/optimizer/test_plans.py:867-869`
+  import pin while keeping one implementation.
+- **New helpers considered.** Both candidates above were evaluated and
+  explicitly deferred with trigger conditions — collapsing them now would hide
+  the sync/async per-construction commit or reintroduce coroutine-color hazards.
+- **Duplication risk in the current file.** The 3x `total_count` literal
+  (the field name, the `__annotations__` key, the namespace key) is confined to
+  `_build_total_count_connection._populate` (connection.py:649-652) and the
+  field/resolver definitions it wires; it is the GraphQL/Python member name, not
+  a cross-cutting magic string, and the camelCase `totalCount` selection name
+  is single-sited in `_total_count_requested` (connection.py:389). The repeated
+  `models.QuerySet` `isinstance` checks (connection.py:672, 759, 784) are three
+  distinct guards over three distinct misuse shapes (non-countable totalCount,
+  sidecar-over-iterable, pre-sliced) — intentional parallel guard siblings, each
+  with its own actionable `GraphQLError`, not consolidatable without losing the
+  distinct messages.
 
 ### Other positives
 
-- **Async-safety discipline.** `_attach_count_async` (connection.py:689-702) awaits the queued connection coroutine BEFORE the `_guard_total_count_countable` raise, so a guard-raise never leaves the coroutine unawaited — matching the close-before-raise discipline the package enforces elsewhere (and consistent with the maintainer's standing `-W error` / unawaited-coroutine memory). The guard's decision depends only on `nodes` / `want_count`, never on `conn`, so awaiting first is side-effect-safe.
-- **Guard ordering is correct and pinned.** `_resolve_connection_fast_path` runs `_guard_first_and_last` before evaluating the `want_count` callable and before `prime_selected_fields(info)`, so a `first`+`last` error short-circuits before `info` is touched (cited test `test_first_and_last_guard_on_generated_subclass`).
-- **`_finalize_queryset` ordering correctness.** `tuple(qs.query.order_by) or tuple(target_model._meta.ordering)` (connection.py:800) correctly falls back to `_meta.ordering` when `query.order_by` is empty — Django applies `Meta.ordering` implicitly so the tuple is empty even when `qs.ordered` is True; reading `query.order_by` in isolation would silently drop `Meta.ordering` and rewrite it to `ORDER BY pk`. The fallback to `_meta.ordering` (Django guarantees a list, default `[]`) is safe.
-- **Reflective-access audit clean.** Every `getattr` / `setattr` / `isinstance` / `hasattr` is justified: window-annotation reads (`WINDOW_ROW_NUMBER` / `WINDOW_TOTAL_COUNT`), the `_TOTAL_COUNT_ATTR` private-instance carry, the `_WindowedConnectionRows` / `models.QuerySet` / `StrawberryContainer` isinstance discriminations, and the `_window_rows_are_annotated` integrity probe (mirrors upstream's `resolve_optimized_connection_by_prefetch` fallback). The `_NOT_A_WINDOW` module-level sentinel uses identity comparison so it can never collide with a legitimate `resolve_connection` return.
-- **`_check_n1` call site is correct.** The relation-connection resolver passes `relation_field_name` (the plan-key vocabulary, NOT the accessor) and `declaring_type` as `parent_type` with `kind="connection_to_attr"`; verified against types/resolvers.py:173-176, where the `connection_to_attr` branch probes the `to_attr` and never reads `accessor_name`, so omitting `accessor_name` here is correct.
-- **`clear_connection_type_cache` wiring verified** — referenced at registry.py:520 (the documented registry reset), keyed on `target_type` identity so a stale entry is never wrong (hygiene, not correctness).
-- **GLOSSARY accuracy.** `DjangoConnection`, `DjangoConnectionField`, `Meta.connection`, `Meta.relation_shapes`, and "Connection-aware optimizer planning" entries in `docs/GLOSSARY.md` match the source contract (first+last guard, concrete-not-alias generation, `totalCount` opt-in, windowed-prefetch fast path, sync-pipeline `SyncMisuseError` posture for async-`get_queryset` relation connections). No drift.
+- **Cursor-parity invariant is structurally enforced, not merely asserted.**
+  Plan-time and resolve-time windows both derive from
+  `derive_connection_window_bounds` and both order through `deterministic_order`,
+  so the two halves cannot silently disagree — the load-bearing correctness claim
+  is single-sourced by construction (connection.py:294-301, 832).
+- **Ambiguous-empty window handling is correct and well-reasoned.**
+  `_resolve_from_window` (connection.py:205-224) refuses to infer `totalCount = 0`
+  for `limit == 0` (`first: 0`) / `offset > 0` (overshot `after:`) windows, falling
+  back to the per-parent pipeline so byte-identical results are preserved. The
+  distinction between genuinely-empty and ambiguous-empty is the subtle correctness
+  edge and it is handled explicitly.
+- **Await-before-raise discipline.** `_attach_count_async` (connection.py:698-701)
+  awaits the queued connection coroutine before the guard can raise, so a
+  guard-raise never leaves a coroutine unawaited (a hard failure under `-W error`,
+  consistent with the package's `tests/conftest.py` async-leak posture).
+- **Lazy-subpackage contract preserved.** The `filters` / `orders` imports are
+  function-local in `_synthesized_signature` (connection.py:953-954) so bare
+  `import django_strawberry_framework` does not eagerly pull the filters/orders
+  subpackages — pinned by `tests/filters/test_finalizer.py` /
+  `tests/orders/test_inputs.py`.
+- **Fail-loud non-queryset and pre-slice guards** convert leaked Django internals
+  (`Cannot reorder a query once a slice has been taken`, opaque `Int!`-null
+  violations) into clear, actionable `GraphQLError`s naming the cause and the fix
+  (connection.py:661-678, 748-792).
+- **Concrete-class generation rationale is documented at the decision site**
+  (connection.py:725-738) — handing the schema a generic alias loses the
+  `resolve_connection` override at Strawberry's generic specialization, the
+  spec-032 Slice-4 discovered bug; the concrete subclass survives schema build.
+- **Test pins are named inline** throughout (`test_first_and_last_guard_on_generated_subclass`,
+  `test_fast_path_total_count_marker_bypasses_non_queryset_guard`,
+  `test_fast_path_first_zero_falls_back_for_total_count_and_pageinfo`), so a future
+  editor knows which behavior each branch owes.
 
 ### Summary
 
-`connection.py` is a mature, heavily-iterated module (spec-030/032/033) and reviews clean. The cycle diff against baseline `3a568dc` is empty — the file is unchanged this cycle. Every shared shape (the `resolve_connection` head, the window build, the pipeline head/tail, all three GraphQLError guards) is already single-sited, and every cross-cutting concern is delegated to a canonical helper rather than re-implemented. Cross-referenced signatures (`_check_n1`, `normalize_query_source`, `deterministic_order`, `derive_connection_window_bounds`) all match their call sites; the async await-before-raise discipline and the `Meta.ordering`-aware deterministic-order fallback are both correct. No High/Medium/Low findings. No-findings + no-source-edit cycle (shapes #1 + #5).
+`connection.py` is unchanged versus both the per-cycle baseline
+(`fcf827ec`) and HEAD (`git diff` empty on both), and is a mature, well-factored
+module: every shared concern is routed to a canonical helper, the sync/async and
+fast-path/fallback branches are deliberate sibling shapes with documented
+correctness rationale, and the cursor-parity invariant is structurally
+single-sourced rather than asserted. GLOSSARY prose for `DjangoConnection`,
+`DjangoConnectionField`, `Meta.connection`, and connection-aware optimizer
+planning all accurately reflect the current implementation — no drift. No High,
+Medium, or Low findings. Two DRY opportunities exist but are correctly deferred
+with explicit trigger conditions; acting on either now would harm readability or
+reintroduce coroutine-color hazards. This is a no-source-edit cycle (shape #5).
 
 ---
 
@@ -53,54 +142,115 @@ Filled by Worker 1 per no-source-edit cycle pattern.
 - None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — pass (267 files left unchanged).
-- `uv run ruff check --fix .` — pass (All checks passed).
+- `uv run ruff format .` — pass (289 files left unchanged).
+- `uv run ruff check --fix .` — pass (All checks passed!).
 
 ### Notes for Worker 3
-- No GLOSSARY-only fix in scope; GLOSSARY entries for the connection symbols verified accurate, no drift.
-- Cycle diff `git diff 3a568dcc98453ac7444d0d4aaea6bd019bd19746 -- django_strawberry_framework/connection.py` is empty.
-- No deferred findings, no false-premise rejections.
+- No GLOSSARY-only fix in scope: the connection-surface symbols
+  (`DjangoConnection`, `DjangoConnectionField`, `Meta.connection`,
+  connection-aware optimizer planning) were grepped in `docs/GLOSSARY.md` and the
+  prose accurately reflects the current implementation — no drift, no edit owed.
+- Both DRY-analysis bullets are defer-with-trigger; neither is act-now, so no
+  source edit is warranted. Triggers quoted verbatim in `## DRY analysis`.
+- `connection.py` is byte-identical to HEAD and to the cycle baseline
+  `fcf827ec` (`git diff` empty on both), so there is no diff for Worker 3 to
+  re-verify beyond the unchanged-source claim.
 
 ---
 
 ## Comment/docstring pass
 
-Filled by Worker 1 per no-source-edit cycle pattern. No comment/docstring edits warranted — the module's docstrings and inline comments are accurate against the implementation and the cross-referenced helpers (verified `_check_n1` `connection_to_attr` branch, `normalize_query_source`, `deterministic_order`, `_meta.ordering` fallback). No stale TODOs (helper reports 0). No edits.
+Filled by Worker 1 per no-source-edit cycle pattern.
+
+No comment or docstring edits: the module's docstrings and inline comments
+accurately describe behavior, cite their governing spec decisions, name their
+test pins, and carry no stale TODO anchors (static overview: 0 TODO comments).
+Nothing to polish.
 
 ---
 
 ## Changelog disposition
 
-Filled by Worker 1 per no-source-edit cycle pattern. Not warranted — no source, test, GLOSSARY, or behavior change this cycle (empty cycle diff). Per `AGENTS.md` ("Do not update CHANGELOG.md unless explicitly instructed") and the active plan `docs/review/review-0_0_10.md` (silent on changelog), no entry is added.
+Filled by Worker 1 per no-source-edit cycle pattern.
+
+Not warranted. No source, test, or doc edits were made this cycle (AGENTS.md #21
+"Do not update CHANGELOG.md unless explicitly instructed"; the active plan
+`docs/review/review-0_0_11.md` is silent on any connection.py change). Nothing to
+record.
 
 ---
 
 ## Verification (Worker 3)
 
 ### Logic verification outcome
-No High/Medium/Low findings to address — the no-findings claim is genuine, not a rubber-stamp. Independently re-read the full source and the shadow overview (control flow matches), and spot-checked every high-risk area Worker 1 cleared against its cited call site:
+No-source-edit cycle (shape #5). Core zero-edit proof holds two ways:
+`git diff fcf827ec4026e800ed2ef5964279bee0e85c5509 -- django_strawberry_framework/connection.py`
+empty AND `git diff HEAD -- connection.py` empty; the target is absent from
+`git diff --stat <baseline> -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md`.
 
-- **N+1 / `_check_n1` `connection_to_attr` branch.** Confirmed at `types/resolvers.py::_check_n1` (the `kind == "connection_to_attr"` branch reads `to_attr` and computes `lazy = getattr(root, to_attr, None) is None`; `probe_name = accessor_name or field_name`). The relation-connection resolver (`connection.py::_build_relation_connection_resolver` #"`_check_n1(`") passes `relation_field_name` as `field_name`, `declaring_type` as `parent_type`, `kind="connection_to_attr"`, `to_attr=to_attr`, and OMITS `accessor_name`. Since the branch never reads `accessor_name` (only `to_attr`), the omission is correct — the artifact's claim holds.
-- **Pagination / cursor window math.** `derive_connection_window_bounds` returns `ConnectionWindowBounds(offset, limit, reverse)` (utils/connections.py); `connection.py::_consume_window` reads `bounds.offset` / `bounds.limit`, matching. The empty-window classification in `_resolve_from_window` (`offset == 0 and (limit is None or limit > 0)` → genuine-empty fast path; else ambiguous → `None` → per-parent fallback) is sound, and the forward-row-number cursor (`getattr(node, WINDOW_ROW_NUMBER) - 1`) plus the `first_rn > 1` / `row_number < total` page flags are internally consistent with the documented forward-window scheme.
-- **Async await-before-raise.** `_attach_count_async` (connection.py #"conn = await conn_awaitable") awaits the queued connection coroutine BEFORE `_guard_total_count_countable` can raise; the guard depends only on `nodes` / `want_count`, so awaiting first is side-effect-safe and never leaves a coroutine unawaited under `-W error`. Matches the package's close-before-raise discipline.
-- **Deterministic-order fallback.** `_finalize_queryset` #"effective = tuple(qs.query.order_by)" falls back to `_meta.ordering` when `query.order_by` is empty, then delegates to `optimizer/plans.py::deterministic_order` (the single plan-time/resolve-time source). `WINDOW_ROW_NUMBER` / `WINDOW_TOTAL_COUNT` constants match plans.py:476-477. Correct Django behavior — `Meta.ordering` leaves `query.order_by` empty even when `qs.ordered` is True.
-- **Cache / request-state.** `_NOT_A_WINDOW` is a module-level identity sentinel (no collision risk); `clear_connection_type_cache` is wired into `registry.py:520`; `_window_rows_are_annotated` is the integrity probe gating the fast path alongside `no_sidecar`. All sound.
+Independent read confirms the `None.` severities are genuine, not lazy:
+- The non-queryset `totalCount` guard is single-sited in
+  `_guard_total_count_countable` and shared by both `_attach_count_sync` and
+  `_attach_count_async`; verified via grep that the guard call appears once per
+  helper and the message is one canonical `GraphQLError`.
+- Await-before-raise discipline confirmed at the source: `_attach_count_async`
+  awaits `conn_awaitable` BEFORE calling the guard, so a guard-raise never leaves
+  a coroutine unawaited (`-W error` posture). The guard reads only
+  `nodes` / `want_count`, so awaiting first is side-effect-safe.
+- Ambiguous-empty window classification in `_resolve_from_window` is correct:
+  the fast-path `totalCount = 0` fires only when `offset == 0 and (limit is None
+  or limit > 0)`; the `limit == 0` (`first: 0`) and `offset > 0` (overshot
+  `after:`) cases return `None` to fall back to the per-parent pipeline rather
+  than inferring `totalCount = 0` (Decision 5).
+- The `_ends_in_unique_column` re-export is a single-source alias to
+  `optimizer/plans.py::ends_in_unique_column`, identity-pinned by
+  `tests/optimizer/test_plans.py` (`assert _ends_in_unique_column is
+  ends_in_unique_column`) and imported by `tests/test_connection.py`.
 
-`normalize_query_source` (utils/querysets.py:71), the sidecar guards, and the `_NOT_A_WINDOW` discrimination all match their call sites. No missed High/Medium.
+No missed defect forces a source edit. Each Worker 2 section opens with
+"Filled by Worker 1 per no-source-edit cycle pattern."
 
 ### DRY findings disposition
-DRY = None and genuine: the `resolve_connection` head (`_resolve_connection_fast_path`), the window build (`_resolve_from_window`), the pipeline head/tail (`_prepare_pipeline_source` / `_finalize_queryset`), and all three `GraphQLError` guards are each single-sited; every cross-cutting concern is delegated to a canonical helper rather than re-implemented. No new consolidation opportunity. The three `total_count` literal occurrences are two distinct concerns (Python attr name vs `Meta.connection` key) — correctly not hoisted.
+Both DRY items are correctly recorded as defer-with-trigger, not act-now:
+- The 3x `_run_pipeline`-collapse candidate: collapsing the four resolver
+  closures now would hide the per-construction sync/async commit (Decision 10)
+  behind a flag argument. Trigger quoted verbatim ("a fifth resolver shape, or a
+  sync/async axis that stops being a clean 1:1 mirror").
+- The `_attach_count_sync` / `_attach_count_async` mirror: the async variant must
+  `await` before the guard and `await nodes.acount()`, so a `maybe-await`
+  abstraction would reintroduce the coroutine-color hazard the source comment
+  documents. Trigger quoted verbatim ("a non-resolve_connection caller needs the
+  same attach"). Neither is a GLOSSARY-only fix; no source edit owed.
+
+### GLOSSARY drift check (#4-vs-#5 gate)
+Genuine shape #5, not a missed #4. The only working-tree GLOSSARY hunk is at
+line 305 — the `apps.py` Trac #37064 hardening entry (concurrent maintainer /
+sibling-cycle work). The connection-surface prose is untouched by the diff and
+accurate vs live source: `DjangoConnection`, `DjangoConnectionField`,
+`Meta.connection`, and `Connection-aware optimizer planning` all reflect the
+current implementation. No GLOSSARY fix owed by this cycle.
+
+### Sibling / concurrent-work attribution
+Working-tree dirty paths over owned dirs are
+`django_strawberry_framework/management/commands/inspect_django_type.py`, its
+test `tests/management/test_inspect_django_type.py`, and the `docs/GLOSSARY.md`
+line-305 apps.py entry — all out-of-scope concurrent maintainer work per
+AGENTS.md #33, none touching `connection.py` or connection prose. The cycle's
+"Files touched: None" claim holds.
 
 ### Temp test verification
-- None — no-source-edit cycle, no behavior to pin.
-- Disposition: n/a.
+None needed — zero-edit cycle, no behavior change to pin.
 
-### Shape #5 (no-source-edit) checks
-1. `git diff 3a568dcc98453ac7444d0d4aaea6bd019bd19746 -- django_strawberry_framework/connection.py` empty; `git diff --stat <baseline> -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` empty. Working-tree dirty paths (`__init__.py`, `pyproject.toml`, `uv.lock`, `docs/bug_hunt/dicta.md`) all diff-EMPTY vs the baseline SHA — pre-baseline orchestrator work (AGENTS.md #33), not this item's edits.
-2. Each Worker 2 section opens with `Filled by Worker 1 per no-source-edit cycle pattern.` ✓
-3. No Lows present (no-findings) — no verbatim-trigger requirement; no GLOSSARY-only fix (GLOSSARY diff empty). ✓
-4. Changelog `Not warranted` cites BOTH `AGENTS.md` and the active plan's silence; `git diff -- CHANGELOG.md` empty. ✓
-5. `uv run ruff format --check` (1 file already formatted) + `uv run ruff check` (All checks passed) on connection.py. ✓
+### Changelog disposition
+"Not warranted" verified: `git diff -- CHANGELOG.md` empty, and the disposition
+cites BOTH AGENTS.md #21 and the active plan's silence. Internal-only framing
+matches an empty-diff cycle.
+
+### Validation
+`uv run ruff format --check django_strawberry_framework/connection.py` — already
+formatted. `uv run ruff check django_strawberry_framework/connection.py` — all
+checks passed.
 
 ### Verification outcome
-- `cycle accepted; verified` — sets top-level `Status: verified` AND marks the `connection.py` checklist box in `docs/review/review-0_0_10.md`.
+`cycle accepted; verified` — sets top-level `Status: verified` and marks the
+`connection.py` checklist box in `docs/review/review-0_0_11.md`.

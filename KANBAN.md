@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-06-20
+Last refreshed: 2026-06-21
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -11,7 +11,7 @@ Editing this board: `KANBAN.md` is a rendered artifact, not a source. The source
 Every card uses the form `<STATUS>[-<MILESTONE>]-NNN-X.Y.Z`:
 
 - `<STATUS>` — the card workflow state: `BACKLOG` (unscheduled investigation / strategic-differentiation candidate), `TODO` (committed to a milestone, not yet active), `WIP` (actively being worked), or `DONE` (shipped). Updated when the card moves between workflow states. Blocking is not part of the workflow status; blocked cards render a derived `blocked` badge from unfinished `blocked_by` references and stay in their normal planning column.
-- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-045-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-059-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
+- `<MILESTONE>` *(optional)* — the development phase the card lives in while it's still pre-shipping: `ALPHA` (pre-`0.1.0`), `BETA` (post-`0.1.0` / pre-`1.0.0`), or `STABLE` (post-`1.0.0`). Used on `BACKLOG`, `TODO`, and `WIP` cards. The two release cards themselves are tagged with the phase they usher in: `TODO-BETA-045-0.1.0` is the alpha → beta cut-over and `TODO-STABLE-060-1.0.0` is the beta → stable cut-over. **Dropped when the card ships** — `DONE` cards use the bare `DONE-NNN-X.Y.Z` form (no milestone segment). The card's version tag (`X.Y.Z`) already encodes which phase the shipment belongs to, and the bare form keeps the shipped-card cluster compact and uniform across the package's history.
 - `NNN` — a 3-digit sequence number indicating the order the card was completed (`DONE` cards) or is being tracked (everything else; scheduled cards are ordered by planned ship version, and backlog cards sort after the scheduled board). **Unlike status, milestone, and version, this number is not stable** — it is recomputed whenever a card's position in the shipping sequence changes (reordered, new card inserted between two existing cards, version-tag bumped). Use the card title, not the NNN, when referencing a card from long-lived documents.
 - `X.Y.Z` — the package version the card shipped in (`DONE` cards), is planned to ship in (scheduled cards), or is provisionally bucketed under (`BACKLOG` cards). Alpha cards span `0.0.6` through `0.0.14` leading up to `0.1.0`; Beta cards span `0.1.1` through `0.1.6` leading up to `1.0.0`. The `0.1.0` and `1.0.0` tags are reserved for the two release cards themselves. Backlog cards may use post-`1.0.0` buckets as ordering placeholders; they stay unscheduled until promoted to `TODO`.
 
@@ -81,12 +81,12 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**62.7% complete** toward `1.0.0` - 37 of 59 cards done (64.4% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**61.7% complete** toward `1.0.0` - 37 of 60 cards done (63.3% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
 | Alpha (pre-0.1.0) | 37/44 (84.1%) | 83.8% |
-| Beta (pre-1.0.0) | 0/14 (0.0%) | 0.0% |
+| Beta (pre-1.0.0) | 0/15 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
 To complete the Alpha (pre-0.1.0) milestone: **84.1%**.
@@ -662,7 +662,7 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 
 #### Architectural posture
 
-- Non-goal — node-level sentinel redaction. The upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType.get_node` / `_make_sentinel` (`is_redacted=True`) masks a hidden non-null FK target in place instead of dropping the row. The package deliberately did **not** adopt this tier (spec-034 Decision 6 chose row-exclusion), and `FieldSet` does **not** revive it. The redaction taxonomy is two-tier: relation/row visibility = queryset narrowing (`apply_cascade_permissions`, which is why the fakeshop `view_<model>` hooks cascade rather than keep a row with a sentinel FK), field visibility = `FieldSet` (redact value / deny). There is no third node-sentinel tier — `FieldSet` redaction runs only on fields of rows that already survived the cascade; it never masks a relation target to keep an otherwise-hidden row visible. Revisit only if strict django-graphene-filters node-sentinel parity is explicitly wanted, and note it conflicts with the row-narrowing model.
+- Non-goal — node-level sentinel redaction. The upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType.get_node` / `_make_sentinel` (`is_redacted=True`) masks a hidden non-null FK target in place instead of dropping the row. The package deliberately did **not** adopt this tier (spec-034 Decision 6 chose row-exclusion), and `FieldSet` does **not** revive it. The redaction taxonomy is two-tier: relation/row visibility = queryset narrowing (`apply_cascade_permissions`, which is why the fakeshop `view_<model>` hooks cascade rather than keep a row with a sentinel FK), field visibility = `FieldSet` (redact value / deny). There is no third node-sentinel tier — `FieldSet` redaction runs only on fields of rows that already survived the cascade; it never masks a relation target to keep an otherwise-hidden row visible. It is now tracked as an explicit, opt-in tier — `TODO-BETA-051-0.1.4` (`Meta.redaction_mode`) — for consumers who explicitly want strict django-graphene-filters node-sentinel parity; it stays opt-in (not the default) because it conflicts with the row-narrowing model.
 
 #### Why it matters
 
@@ -948,7 +948,7 @@ Strawberry port of graphene-django's node-level sentinel redaction — the third
 - [ ] `Meta.redaction_mode` defaults to `"exclude"`; all existing schemas and tests stay unchanged under the default. The `"sentinel"` machinery is wired only when the mode is set.
 - [ ] Tests mirror the source one-to-one; live HTTP coverage exercises a hidden non-null FK target resolving to a `pk=0` sentinel with `isRedacted = true`, a normal row reading `isRedacted = false`, and `get_node` on a hidden id returning the sentinel in `"sentinel"` mode vs `null` in `"exclude"` mode.
 - [ ] Composability tests: `"sentinel"` mode + `apply_cascade_permissions` — the top-level cascade still narrows rows; sentinels appear only for relation targets of surviving rows (no row resurrection, no double counting).
-- [ ] Amend the `FieldSet` (`TODO-BETA-046`) Architectural-posture note so its node-sentinel "Non-goal" cross-references this card as the realized opt-in tier.
+- [x] Amend the `FieldSet` (`TODO-BETA-046`) Architectural-posture note so its node-sentinel "Non-goal" cross-references this card as the realized opt-in tier.
 
 #### Verified in upstream
 
@@ -1282,8 +1282,73 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 
 - Original backlog score: Realistic 10/10, Impact 8/10, Difficulty 2/10; bang-for-buck score 40.0.
 
+<a id="configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key"></a>
+### [TODO-BETA-059-0.1.7 - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)](KANBAN.html#configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key)
+
+- Priority: Low
+- Parity: ⚛️ graphene-django (Required)
+- Severity: Low
+- Status: Needs spec
+- Relative size: M
+- Labels: `config`, `filters`, `public-api`
+
+#### Predicted files
+
+- [`django_strawberry_framework/conf.py`](django_strawberry_framework/conf.py)
+- [`django_strawberry_framework/filters/inputs.py`](django_strawberry_framework/filters/inputs.py)
+- [`django_strawberry_framework/filters/sets.py`](django_strawberry_framework/filters/sets.py)
+- [`django_strawberry_framework/utils/connections.py`](django_strawberry_framework/utils/connections.py)
+
+#### Planning note
+
+Recreate django-graphene-filters' configurable filter-tree key namespace — `DJANGO_GRAPHENE_FILTERS` `FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY` (`django_graphene_filters/conf.py:13-16`, defaults `filter`/`and`/`or`/`not`) — the one DGF config surface with no analogue (`docs/feedback.md` finding P3). The package currently hardcodes the GraphQL names (`_LOGIC_KEYS` at `filters/inputs.py:131`, `CONNECTION_FILTER_KWARG` at `utils/connections.py:41`); this card makes them settings-driven while keeping the defaults and the default SDL byte-for-byte unchanged.
+
+#### Dependencies
+
+- `DONE-027-0.0.8` - Filtering subsystem
+- `DONE-030-0.0.9` - `DjangoConnectionField`
+
+#### Scope
+
+- Settings surface: extend the `DJANGO_STRAWBERRY_FRAMEWORK` namespace (`conf.py`) with `FILTER_KEY` (default `"filter"`), `AND_KEY` (`"and"`), `OR_KEY` (`"or"`), and `NOT_KEY` (`"not"`), mirroring DGF's `DJANGO_GRAPHENE_FILTERS` keys and defaults, read through the existing `Settings` accessor so a host project renames them without touching package code.
+- Logic-key rework: `_LOGIC_KEYS` (`filters/inputs.py:131`) and its import-time derivatives in `filters/sets.py` (`_LOGIC_PYTHON_ATTRS`, `_LOGIC_WIRE_BY_PYTHON_ATTR`, the `:1084` loop) are frozen module constants computed at import. Make the GraphQL wire names settings-derived and resolve the import-ordering tension — likely lazy resolution at schema-build time rather than at module import — so settings declared in the host `settings.py` are honored.
+- Filter argument: the connection `filter` argument name (`CONNECTION_FILTER_KWARG = "filter"`, `utils/connections.py:41`) becomes `FILTER_KEY`-driven; the connection field signature, the resolver kwarg lookup, and any `kwargs.get("filter")` sites follow.
+- Python-attr vs wire-name split: keep the Python-side attribute names (`and_`/`or_`/`not_`) stable — they are language-mandated keyword escapes, not parity surface. Only the GraphQL wire names are configurable; the spec pins which layer the rename applies to.
+- Default parity: with no settings set, the generated SDL is byte-for-byte unchanged (`filter`/`and`/`or`/`not`), and the `conf.py` malformed/partial-mapping coercion contract still falls back to these defaults.
+
+#### Definition of done
+
+- [ ] Add a spec (or amend the filtering spec) covering the four settings keys and DGF-matching defaults, the import-time → schema-build-time resolution change, the Python-attr/wire-name split, and the default-unchanged guarantee.
+- [ ] `conf.py` exposes `FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY` with DGF-matching defaults via the existing `Settings` accessor.
+- [ ] `_LOGIC_KEYS` / its derived structures and `CONNECTION_FILTER_KWARG` resolve from settings at schema-build time (not import time); the spec documents the exact resolution point.
+- [ ] Default (no settings) generated SDL is unchanged and existing filter tests pass untouched.
+- [ ] Tests mirror upstream one-to-one: a host setting renames the operator keys and the `filter` argument in generated SDL and they filter correctly end-to-end (package + live HTTP); a malformed/partial settings dict falls back to defaults per the `conf.py` coercion contract.
+
+#### Verified in upstream
+
+- ⚛️ `graphene_django` — `django_graphene_filters/conf.py:13-16` defines `FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY` (defaults `filter`/`and`/`or`/`not`) under the `DJANGO_GRAPHENE_FILTERS` settings dict, letting the schema author rename the filter-tree operator keys. This package hardcodes them (`filters/inputs.py:131` `_LOGIC_KEYS`, `utils/connections.py:41` `CONNECTION_FILTER_KWARG`); this card ports the rename capability behind the same kind of settings dict.
+
+#### Architectural posture
+
+- This recreates DGF's one filtering config surface with no analogue (`docs/feedback.md` finding P3). The fixed wire names were a deliberate simplification; this card makes them configurable behind settings while keeping the defaults — and the byte-for-byte default SDL — unchanged. The cost is moving `_LOGIC_KEYS` off the import-time fast path to a settings-resolved value; the spec pins the resolution point so import ordering stays correct. It does not change the default schema and only the GraphQL wire names are configurable — the Python attribute names stay fixed.
+
+#### Why it matters
+
+- Closes the last django-graphene-filters config-surface gap recorded in `docs/feedback.md` (finding P3): `DJANGO_GRAPHENE_FILTERS` `FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY` had no analogue and no card.
+- Lets a django-graphene-filters consumer who renamed their filter-tree keys (e.g. to avoid clashing with an existing `filter`/`and`/`or`/`not` model field) migrate without a breaking schema rename.
+
+#### Dependencies
+
+- `DONE-027-0.0.8` (Filtering subsystem) — owns `_LOGIC_KEYS` and the filter-tree input-type generation whose wire names this card makes configurable.
+- `DONE-030-0.0.9` (`DjangoConnectionField`) — owns the `filter` argument (`CONNECTION_FILTER_KWARG`) that `FILTER_KEY` renames.
+
+#### Card references
+
+- Dependency: `DONE-027-0.0.8` (Filtering subsystem) — owns `_LOGIC_KEYS` and the filter-tree input-type generation whose wire names this card makes configurable. -> `DONE-027-0.0.8` - Filtering subsystem
+- Dependency: `DONE-030-0.0.9` (`DjangoConnectionField`) — owns the `filter` argument (`CONNECTION_FILTER_KWARG`) that `FILTER_KEY` renames. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+
 <a id="stable_release_api_freeze_cleanup_verification_beta_stable"></a>
-### [TODO-STABLE-059-1.0.0 - Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
+### [TODO-STABLE-060-1.0.0 - Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
 
 - Priority: Critical
 - Severity: Major

@@ -2,20 +2,28 @@
 
 Status: verified
 
+DRIFT RE-REVIEW. This file was verified earlier in the 0.0.11 cycle, then the
+maintainer committed concurrent DRY commit `5065960e` ("Share the permission
+async-recourse string between both seams", +15 lines) which added the shared
+`_PERMISSION_ASYNC_RECOURSE` constant to this module. Current source re-reviewed
+from scratch. The +15 lines are already in HEAD and in the per-cycle baseline
+(`git diff 1d8de0c -- …permissions.py` and `git diff HEAD -- …permissions.py`
+are both empty), so this drift re-review records zero source edits — shape #5.
+
 ## DRY analysis
 
-- None — the file is a single ~26-line class plus one module-level mapping. The
-  one cross-surface concern — resolving the request user from `info` — is already
-  single-sited in `utils/permissions.py::request_from_info` and reused here
-  (`mutations/permissions.py::DjangoModelPermission.has_permission` line 79), the
-  same helper the read-side filter/order permission pipelines call, so user
-  resolution stays single-sourced across read and write. The operation->action
-  map `_OPERATION_PERMISSION_ACTION` (lines 37-41) is the single Decision-15 verb
-  table; `mutations/fields.py` and `mutations/inputs.py` carry their own
-  `_OPERATION_INPUT_KIND` for a *different* axis (input-type kind, not perm verb),
-  so the two tables are not a merge candidate. Model resolution delegates to
-  `mutations/sets.py::DjangoMutation._resolve_model` (the form/serializer override
-  seam), not re-implemented here. No literal/near-copy left to hoist.
+- None — this module is now the *single source of truth* for both
+  permission-contract literals. `_OPERATION_PERMISSION_ACTION`
+  (`mutations/permissions.py:37-41`) is the one operation→Django-action map, and
+  the `5065960e` commit moved `_PERMISSION_ASYNC_RECOURSE`
+  (`mutations/permissions.py:52-56`) here precisely to dedupe a byte-identical
+  inline copy that previously lived in both `mutations/resolvers.py`
+  (`_authorize_or_raise`) and `mutations/sets.py`
+  (`DjangoMutation.check_permission`). Both seams now import it
+  (`mutations/resolvers.py:96` → consumed at `:1026`; `mutations/sets.py:65` →
+  consumed at `:564`). The DRY shape this file would otherwise be a candidate for
+  has already been realized by the commit under review; there is no further
+  consolidation to extract here.
 
 ## High:
 
@@ -33,84 +41,87 @@ None.
 
 ### DRY recap
 
-- **Existing patterns reused.** `request_from_info(info, family_label="DjangoMutation")`
-  (`utils/permissions.py::request_from_info`) is the shared read+write request
-  resolver — reused verbatim at `mutations/permissions.py:79` so user extraction is
-  single-sited across the filter/order `apply` seam and this mutation
-  `check_permission` seam. Model resolution defers to
-  `mutations/sets.py::DjangoMutation._resolve_model` (line 83), the documented
-  override hook the 0.0.12 form / 0.0.13 serializer flavors replace — so all
-  flavors authorize through this one default without re-opening base validation.
-- **New helpers considered.** A "build the codename" helper was considered and
-  rejected — the `f"{app_label}.{action}_{model_name}"` template (line 85) is the
-  Django/DRF `DjangoModelPermissions` codename scheme used exactly once; extracting
-  it would add indirection with no second call site.
-- **Duplication risk in the current file.** The three-entry verb map
-  (`_OPERATION_PERMISSION_ACTION`) reads like the `_OPERATION_INPUT_KIND` map in
-  `mutations/fields.py` / `mutations/inputs.py`, but they key different axes
-  (perm-action verb vs input-type kind) and would diverge under any future
-  operation that needed one without the other — intentionally separate, not a
-  near-copy.
+- **Existing patterns reused.** `has_permission` reuses the read-side request
+  resolver `utils/permissions.py::request_from_info`
+  (`mutations/permissions.py:30,94`) so user resolution stays single-sited across
+  read and write seams. The async-coroutine guard is *not* hand-rolled here:
+  both consuming seams route the shared `_PERMISSION_ASYNC_RECOURSE` through the
+  canonical `utils/querysets.py::reject_async_in_sync_context`
+  (`utils/querysets.py:58-91`), which owns the `inspect.iscoroutine` check, the
+  `value.close()`, and the `SyncMisuseError` message template — so neither the
+  guard logic nor the message prefix can drift across the three sync seams
+  (`get_queryset`, `check_permission`, `has_permission`).
+- **New helpers considered.** None needed. The two module-level literals are now
+  each single-sited and imported by their consumers; extracting anything further
+  (e.g. the `f"{app_label}.{action}_{model_name}"` codename format) would create
+  a one-caller indirection with no second call site to justify it — Django's
+  codename scheme is referenced by the adjacent comment, not duplicated as logic.
+- **Duplication risk in the current file.** None. The `5065960e` commit removed
+  the only duplication risk (the inline recourse-string copies in `resolvers.py`
+  and `sets.py`); a grep for the recourse text now hits only
+  `mutations/permissions.py:53-54`. The other `cannot await an async …` strings
+  at `resolvers.py:106` and `querysets.py:145` are the distinct *`get_queryset`*
+  recourse, not copies of this permission recourse — correctly separate.
 
 ### Other positives
 
-- **No fall-through to allow.** Every non-authorized path returns `False` or
-  raises; the only `True`-producing expression is `bool(user.has_perm(codename))`
-  (line 86). There is no `try/except` swallowing an error into an allow, so a
-  resolution failure can never silently authorize a write.
-- **Anonymous / unauthenticated denied by construction.** `user is None`
-  (AuthenticationMiddleware absent, or `request` with no `.user`) returns `False`
-  (lines 80-82); an `AnonymousUser` reaches `has_perm` and returns `False` since it
-  holds no perms. Both the safe default — pinned by
-  `tests/mutations/test_permissions.py::test_anonymous_user_is_denied` and the
-  end-to-end `test_anonymous_create_denied_top_level_error_no_write`.
-- **Write authz is genuinely distinct from read visibility.** `has_perm(codename)`
-  is a model-level perm check passed a string (no object argument), so it consults
-  model permissions only — never `get_queryset`. The GLOSSARY can-view != can-write
-  contract holds in code; `test_hidden_row_is_not_found_before_auth_signal_no_existence_leak`
-  confirms the visibility lookup runs first (hidden row -> not-found, no auth-signal
-  leak) and `test_permission_classes_override_deny_blocks_permitted_caller` confirms
-  a deny is honored even for a perm-holding caller (no read-visibility fallback).
-- **Per-operation verb isolation pinned.** `add` authorizes only `create`,
-  `change` only `update`, `delete` only `delete`
-  (`test_create_perm_does_not_authorize_update_or_delete` +
-  `test_change_and_delete_perms_authorize_their_operations`); the map itself is
-  frozen by `test_operation_action_map_is_pinned`.
-- **Fail-loud, not bypass, on the two unreachable edges.** An unknown `operation`
-  raises `KeyError` on the map lookup (line 84) and an unresolved model raises
-  `AttributeError` on `model._meta` (line 85) — both are upstream-validated away
-  (operation is one of three verbs and a resolvable model is required at finalize
-  per `mutations/sets.py`), and both fail loud rather than silently allowing, which
-  is the correct security posture for a write-authz surface.
-- **Async-bypass guard lives at the right layer.** This file's `has_permission` is
-  sync by design; the coroutine-truthiness bypass (`if not has_permission(...)`
-  treating an `async def` deny as ALLOW) is closed one level up in
-  `mutations/sets.py::DjangoMutation.check_permission` via `inspect.iscoroutine` ->
-  `SyncMisuseError`, pinned by `test_async_has_permission_is_rejected_not_bypassed`
-  and `test_async_check_permission_override_is_rejected_not_bypassed`. Correct
-  separation — the bypass risk is in the caller's dispatch loop, not in the leaf
-  check.
-- **Docstrings are accurate and load-bearing.** The module + class + method
-  docstrings precisely state the verb map, the anonymous-denied default, the
-  read/write separation, and the Slice-2-ships-class / Slice-3-wires-enforcement
-  split; none promise behavior the body does not deliver. `del data, instance` with
-  the explanatory comment makes the spec-signature-only parameters explicit.
+- **No permission bypass introduced by `5065960e`.** Verified end to end:
+  - `mutations/resolvers.py::_authorize_or_raise` (`:1021-1031`) wraps
+    `mutation_cls().check_permission(...)` in `reject_async_in_sync_context(...,
+    recourse=_PERMISSION_ASYNC_RECOURSE)`. A coroutine return is closed and
+    raised as `SyncMisuseError` *before* the `if not allowed` branch, so an
+    `async def check_permission` can never reach the truthy-coroutine path that
+    would silently allow.
+  - `mutations/sets.py::DjangoMutation.check_permission` (`:551-568`) wraps each
+    `permission_class().has_permission(...)` in the same guard with the same
+    shared recourse; an `async def has_permission` entry is rejected one level
+    down before the `if not allowed: return False` branch.
+  - The guard (`utils/querysets.py:86-90`) raises on `inspect.iscoroutine(value)`
+    unconditionally and only returns the original value otherwise — there is no
+    code path where a coroutine is coerced to `True`/allow. The fail-closed
+    semantics of `has_permission` itself are unchanged: `user is None →
+    False` (`permissions.py:96-97`), and the default delegates to
+    `user.has_perm(codename)` so an anonymous / unauthenticated user is denied.
+- **Shared recourse string is correct and accurate.** The wording
+  (`permissions.py:52-56`) names the real recourse — "redefine has_permission /
+  check_permission as a sync method returning a bool" — and matches the contract
+  both seams enforce. The final raised message reads
+  `"{owner}.{method} returned a coroutine in a sync {context} context. {recourse}"`
+  (`utils/querysets.py:89`), so each seam names its own offending hook while the
+  shared tail stays identical.
+- **Module placement of the constant is the right home.** `sets.py` already
+  imported `DjangoModelPermission` from this leaf module (`sets.py:65`), and
+  `resolvers.py` already imported from it, so hoisting the constant here adds no
+  new import edge and introduces no circular-import risk — `permissions.py`
+  imports only `..utils.permissions` (one local edge) and `typing`.
+- **Contract docstrings stay accurate.** The module / class / method docstrings
+  still correctly describe write-authorization as a first-class contract
+  *separate* from `get_queryset` visibility, the `create→add / update→change /
+  delete→delete` mapping, and the anonymous-denied safe default — all consistent
+  with `_OPERATION_PERMISSION_ACTION` and `has_permission`'s body.
+- **GLOSSARY in sync.** `docs/GLOSSARY.md` `#djangomodelpermission` (lines
+  376-388) accurately documents the `add`/`change`/`delete` mapping, the
+  `[DjangoModelPermission]` safe default vs explicit-empty `[]` AllowAny opt-out,
+  the top-level `GraphQLError` (not `FieldError`) denial surface, and the
+  must-be-synchronous-or-`SyncMisuseError` rule. No drift on any documented
+  public-contract symbol. The two private constants
+  (`_OPERATION_PERMISSION_ACTION`, `_PERMISSION_ASYNC_RECOURSE`) carry no GLOSSARY
+  entry — correct, both are `_`-prefixed internals.
 
 ### Summary
 
-`DjangoModelPermission.has_permission` is a tight, correct, security-sound default
-write-authorization check: it maps the mutation operation to the Django
-`add`/`change`/`delete` model-permission verb, checks `user.has_perm(codename)`,
-and denies on every non-authorized path (anonymous, missing user, missing perm)
-with no fall-through to allow and no fallback to read visibility. User resolution
-and model resolution are both delegated to single-sited seams
-(`request_from_info`, `_resolve_model`), and the async-bypass hazard is correctly
-handled by the caller in `sets.py`. The file is byte-identical to both the
-per-cycle baseline (`d04b7a95`) and HEAD — zero tracked edits this cycle — and the
-GLOSSARY/README contract (`DjangoModelPermission` entry, can-view != can-write,
-exported from the package root) matches the implementation with no drift. No
-High/Medium/Low findings; this is a clean first-review of new write-authz
-production code.
+Clean drift re-review of a security-sensitive write-authorization surface. The
+maintainer's concurrent DRY change (`5065960e`) is correct: it moves the
+async-recourse string to this leaf permission module and imports it into both
+the `resolvers._authorize_or_raise` and `sets.DjangoMutation.check_permission`
+seams, eliminating a byte-identical inline duplicate while keeping the wording
+single-sourced. The coroutine-bypass guard remains the canonical
+`reject_async_in_sync_context` helper, which closes the orphaned coroutine and
+raises `SyncMisuseError` before any truthy-coroutine path could allow — so **no
+permission bypass is introduced**, and the fail-closed semantics
+(`user is None → False`, anonymous denied) are intact. `permissions.py` itself
+is byte-identical against both the per-cycle baseline and HEAD, no High / no
+behavior-changing Medium, no findings — shape #5 (no-source-edit cycle).
 
 ---
 
@@ -125,132 +136,137 @@ Filled by Worker 1 per no-source-edit cycle pattern.
 - None — no-source-edit cycle.
 
 ### Validation run
-- `uv run ruff format .` — pass; 289 files left unchanged.
-- `uv run ruff check --fix .` — pass; all checks passed.
+- `uv run ruff format .` — pass; `289 files left unchanged`.
+- `uv run ruff check --fix .` — pass; `All checks passed!`.
 
 ### Notes for Worker 3
-- No GLOSSARY-only fix in scope. Grepped `docs/GLOSSARY.md` for all three public
-  symbols (`DjangoModelPermission`, `permission_classes`, `check_permission`) plus
-  `README.md` / `docs/README.md`: the `DjangoModelPermission` entry (GLOSSARY:376-390)
-  and the mutations README paragraph (docs/README.md:123) describe verb map,
-  anonymous-denied default, can-view != can-write separation, empty-`[]` AllowAny
-  opt-out, sync-only / async-rejected hook, and package-root export — all match the
-  implementation; no drift, no edit warranted.
-- `git diff d04b7a95...HEAD -- django_strawberry_framework/mutations/permissions.py`
-  and `git diff HEAD -- <target>` both empty; file exists at baseline. Genuine
-  shape #5 (the spec-036 mutations work landed in HEAD before this cycle's baseline).
-- Zero H/M/L findings; nothing forwarded to the folder or project pass.
-
----
+- Drift re-review of `5065960e` (shared `_PERMISSION_ASYNC_RECOURSE` constant).
+  Verified the constant has exactly two cross-module consumers
+  (`resolvers.py:1026`, `sets.py:564`), both routed through
+  `utils/querysets.py::reject_async_in_sync_context`, which closes any coroutine
+  and raises `SyncMisuseError` before any allow path — no permission bypass.
+- `permissions.py` is empty-diff vs baseline `1d8de0c` AND vs HEAD; the +15
+  lines are cumulative-in-HEAD, not a pending edit.
+- All severities `None.`; the single DRY bullet is `None —` (the module is now
+  the single source of truth; the consolidation was the commit under review).
+- No GLOSSARY-only fix in scope: `#djangomodelpermission` (GLOSSARY:376-388) is
+  accurate and in sync; private constants carry no entry (correct).
+- Out of scope but noted: an unrelated uncommitted edit exists in
+  `mutations/sets.py` (the sibling RE-OPENED item's prior verified comment fix
+  per plan line 111); not touched here.
 
 ## Comment/docstring pass
 
-Filled by Worker 1 per no-source-edit cycle pattern.
-
-No comment/docstring changes. The module, class, and `has_permission` docstrings
-plus the `_OPERATION_PERMISSION_ACTION` comment and the `del data, instance` inline
-comment are accurate and non-redundant; no stale references, no TODO anchors, no
-promises the body does not keep.
-
----
+Filled by Worker 1 per no-source-edit cycle pattern. No comment or docstring
+changes needed — the module / class / method docstrings and the two constant
+comments accurately describe current behavior, and the recourse-string comment
+(`permissions.py:43-51`) correctly documents the dual-seam single-source intent
+of `5065960e`.
 
 ## Changelog disposition
 
-Filled by Worker 1 per no-source-edit cycle pattern.
-
-Not warranted. No source/test/doc edits this cycle (AGENTS.md: update CHANGELOG only
-when explicitly instructed; the active plan `docs/review/review-0_0_11.md` defines a
-read-only review pass and is silent on changelog edits).
+Filled by Worker 1 per no-source-edit cycle pattern. Not warranted —
+no source edit this cycle (zero tracked-file edits). Internal DRY refactor is
+already committed by the maintainer (`5065960e`); CHANGELOG updates are
+maintainer-driven and the active plan (`docs/review/review-0_0_11.md`) records no
+changelog task for this item, per AGENTS.md ("Do not update CHANGELOG.md unless
+explicitly instructed").
 
 ---
 
 ## Verification (Worker 3)
 
+DRIFT RE-VERIFICATION of a security-sensitive write-authorization leaf, shape #5
+(no-source-edit). Verified with security rigor: a permission bypass would be a High.
+
 ### Logic verification outcome
 
-Zero-edit shape #5 confirmed and security-audited with maximum rigor (new write-authz
-surface). No source/test edit this cycle:
-- `git diff d04b7a95 -- django_strawberry_framework/mutations/permissions.py` empty.
-- `git diff HEAD -- django_strawberry_framework/mutations/permissions.py` empty.
-- File exists at baseline (`git cat-file -e` ok) — genuine #5, not a new-file artifact gap.
-- `git diff HEAD -- CHANGELOG.md` empty (matches "Not warranted").
-- Owned-paths `--stat` vs baseline dirt: only `utils/relations.py` (1 line) — a
-  non-target sibling (owned by `rev-utils__relations.md`), out of scope per diff-scoping;
-  not a rejection trigger.
+All High / Medium / Low are `None.` — independently confirmed genuine, not lazy:
 
-Independent security audit of `DjangoModelPermission.has_permission` — all `None.`
-severities confirmed genuine, no path falls through to allow:
-- **No fall-through to allow.** The single `True`-producing expression is
-  `bool(user.has_perm(codename))` (line 86); `user is None -> False` (lines 81-82). No
-  `try/except` swallows a resolution failure into an allow.
-  (`test_user_lacking_perm_is_denied`, `test_user_with_add_perm_allowed_for_create`.)
-- **Anonymous / unauthenticated denied.** `user is None -> False`; an `AnonymousUser`
-  reaches `has_perm` and returns `False` (holds no perms). Pinned by
-  `test_anonymous_user_is_denied` + `test_anonymous_create_denied_top_level_error_no_write`.
-- **Write authz never consults `get_queryset`.** `has_perm(codename)` is passed a string
-  only (no object arg) — a pure model-level perm check, never row visibility. The
-  can-view != can-write contract holds in code; pinned by
-  `test_hidden_row_is_not_found_before_auth_signal_no_existence_leak` (visibility lookup
-  first; hidden row -> not-found, no auth-signal leak) and
-  `test_permission_classes_override_deny_blocks_permitted_caller` (deny honored over a
-  perm-holder, no read-visibility fallback).
-- **Per-operation verb mapping correct.** `_OPERATION_PERMISSION_ACTION` =
-  `{create:add, update:change, delete:delete}`, frozen by
-  `test_operation_action_map_is_pinned`; isolation pinned by
-  `test_create_perm_does_not_authorize_update_or_delete` +
-  `test_change_and_delete_perms_authorize_their_operations`.
-- **Unreachable edges fail loud, not silent-allow.** Unknown `operation` -> `KeyError`
-  on the map lookup (line 84); unresolved model -> `AttributeError` on `model._meta`
-  (line 85). Both upstream-validated (`sets.py::_validate_mutation_meta` pins operation
-  to the three verbs and requires a resolvable model), and both fail loud — the correct
-  posture for a write-authz leaf.
-- **Async-coroutine bypass guard lives one layer up in `sets.py::check_permission`.**
-  This file's `has_permission` is sync by design; the truthy-coroutine bypass is closed
-  at `sets.py` (lines 557-564): `inspect.iscoroutine(allowed)` -> `allowed.close()` +
-  `raise SyncMisuseError`. Pinned by `test_async_has_permission_is_rejected_not_bypassed`
-  (an async `has_permission` deny raises, no row written) and
-  `test_async_check_permission_override_is_rejected_not_bypassed` (async
-  `check_permission` override caught one level up). Correct separation — the bypass risk
-  is in the caller's dispatch loop, not the leaf check.
-- **User resolution single-sited.** `request_from_info(info, family_label="DjangoMutation")`
-  (line 79) returns the request and never an allow signal: it resolves
-  `info.context.request` / bare `HttpRequest` or raises `ConfigurationError`; the leaf
-  then reads `getattr(request, "user", None)`. Shared verbatim with the read-side
-  filter/order seam — confirmed family-neutral message (no `.apply` suffix).
-
-### GLOSSARY (#4-vs-#5 gate)
-
-Genuine #5, not a missed #4. The `DjangoModelPermission` entry (GLOSSARY:380) reads
-accurate vs live source: verb map (`add`/`change`/`delete`), anonymous-denied safe
-default, can-view != can-write separation, top-level `GraphQLError` on denial (not a
-`FieldError` entry), unset -> `[DjangoModelPermission]` default, explicit empty `[]`
-AllowAny opt-out, and the sync-only / async-rejected-`SyncMisuseError` hook contract —
-all match `permissions.py` + `sets.py::check_permission`. The `FieldError`-envelope
-(GLOSSARY:499) and `DjangoMutation` (GLOSSARY:388) cross-references to it are consistent.
-No drift; no GLOSSARY-only fix owed.
+- **Zero-edit proof (two ways).** `git diff 891e03ba… -- …/mutations/permissions.py`
+  empty AND `git diff HEAD -- …/mutations/permissions.py` empty. The owned-paths
+  `--stat` (`django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md`)
+  vs baseline is **fully clean** this run — no #33 dirt, no sibling hunks to
+  attribute. The +15 `5065960e` lines are cumulative-in-HEAD, not a pending edit.
+- **Shared recourse single-sourced.** `grep -rn _PERMISSION_ASYNC_RECOURSE
+  django_strawberry_framework/` returns exactly 5 hits: the definition
+  (`permissions.py:52`) + exactly the two import seams (`resolvers.py:96`,
+  `sets.py:65`) + their two consumption sites (`resolvers.py:1026`,
+  `sets.py:564`). No third consumer; no inline copy survives anywhere.
+- **No bypass at seam 1 (`resolvers.py::_authorize_or_raise`, :1021-1031).** The
+  hook call `mutation_cls().check_permission(...)` is the FIRST positional arg to
+  `reject_async_in_sync_context(...)`, so the guard evaluates the coroutine-check
+  before the `if not allowed:` branch (:1028) is ever reached. An `async def
+  check_permission` override is `.close()`d and raised as `SyncMisuseError`, never
+  coerced truthy → allow.
+- **No bypass at seam 2 (`sets.py::DjangoMutation.check_permission`, :551-568).**
+  Same wrapping: each `permission_class().has_permission(...)` is the wrapped arg;
+  guard fires before `if not allowed: return False` (:566-567). An `async def
+  has_permission` entry is rejected one level down before the deny branch.
+- **Guard fails closed (`utils/querysets.py::reject_async_in_sync_context`,
+  :86-91).** `if inspect.iscoroutine(value): value.close(); raise SyncMisuseError`
+  unconditionally; otherwise returns `value` unchanged. No path coerces a
+  coroutine to True/allow. Message template
+  `"{owner}.{method} returned a coroutine in a sync {context} context. {recourse}"`
+  (:89) keeps the shared tail identical while each seam names its own hook.
+- **Leaf fail-closed semantics intact (`permissions.py:94-101`).** `user is None →
+  return False` (:96-97). The ONLY True-producer is `bool(user.has_perm(codename))`
+  (:101), passed a STRING codename with no object arg → pure model-perm check, so
+  an anonymous / unauthenticated user (no perms) is denied. Unknown `operation` →
+  `KeyError` at `_OPERATION_PERMISSION_ACTION[operation]` (:99); unresolved model →
+  `AttributeError` (:98): both fail LOUD, never silent-allow.
+- **Test coverage matches the risk.** Both no-bypass seams are pinned by name in
+  `tests/mutations/test_permissions.py`:
+  `test_async_has_permission_is_rejected_not_bypassed` (:389, sets.py seam),
+  `test_async_check_permission_override_is_rejected_not_bypassed` (:424, resolvers
+  seam). Fail-closed pinned by `test_anonymous_user_is_denied` (:90) +
+  `test_anonymous_create_denied_top_level_error_no_write` (:215). Verb-map +
+  per-operation isolation pinned (:90-132). No pytest run needed — no new test
+  introduced, and the no-bypass behavior is already named-test-pinned.
 
 ### DRY findings disposition
 
-DRY analysis `- None` confirmed genuine: user resolution single-sited in
-`utils/permissions.py::request_from_info` (reused at line 79), model resolution delegated
-to `sets.py::DjangoMutation._resolve_model` (line 83 — the 0.0.12/0.0.13 flavor seam),
-the verb map is the single Decision-15 table (distinct axis from
-`_OPERATION_INPUT_KIND`). No literal/near-copy to hoist; nothing forwarded to folder or
-project pass.
+Single DRY bullet is the justified `None —` — confirmed correct. `5065960e` was
+itself the DRY consolidation: the byte-identical inline recourse strings that
+previously lived in both `resolvers.py` and `sets.py` are gone (grep proves the
+text now resolves only to `permissions.py:52-56`). This module is the single
+source of truth for both permission-contract literals; no further consolidation
+to extract. The constant's home here adds no new import edge (both seams already
+imported from this leaf — `sets.py:65` also pulls `DjangoModelPermission`), so no
+circular-import risk.
 
 ### Temp test verification
 
-None — no behavior suspicion required a temp test; the existing
-`tests/mutations/test_permissions.py` suite (Slice 2 class-behavior + Slice 3
-enforcement) pins every audited path.
+- None used. The no-bypass behavior is already pinned by the two named tests
+  above; an independent source read of both seams' dispatch ordering plus the
+  guard body was sufficient. No suspicion required a temp test.
+
+### Changelog disposition (verified)
+
+`git diff -- CHANGELOG.md` empty. "Not warranted" cites BOTH AGENTS.md ("Do not
+update CHANGELOG.md unless explicitly instructed") AND the active plan's silence
+on a changelog task for this item — both present. The "internal-only" framing is
+honest: zero source edits this cycle and the `5065960e` DRY move is internal
+(the recourse string is a private `_`-prefixed constant, not a public-API
+surface). Correct state.
+
+### GLOSSARY
+
+`#djangomodelpermission` (GLOSSARY:376-388) read accurate vs live source: verb
+map (`create→add` / `update→change` / `delete→delete`), anonymous-denied safe
+default, can-view ≠ can-write separation, top-level `GraphQLError` (not
+`FieldError`) denial surface, unset→`[DjangoModelPermission]` vs explicit
+`[]`-AllowAny opt-out, and the must-be-synchronous-or-`SyncMisuseError` rule. No
+drift. Both private constants (`_OPERATION_PERMISSION_ACTION`,
+`_PERMISSION_ASYNC_RECOURSE`) correctly carry no GLOSSARY entry (`_`-prefixed
+internals). No GLOSSARY-only fix in scope.
 
 ### Validation
 
-`uv run ruff format --check` (1 file already formatted) + `uv run ruff check` (all checks
-passed) on the target. Pytest not run preemptively (no test introduced; existing tests
-read directly and grep-confirmed by name).
+- `uv run ruff format --check …/permissions.py` — `1 file already formatted`.
+- `uv run ruff check …/permissions.py` — `All checks passed!`.
 
 ### Verification outcome
 
 `cycle accepted; verified` — sets top-level `Status: verified` AND marks the
-`mutations/permissions.py` checkbox in `docs/review/review-0_0_11.md`.
+re-opened `mutations/permissions.py` checkbox `[x]` in `docs/review/review-0_0_11.md`.

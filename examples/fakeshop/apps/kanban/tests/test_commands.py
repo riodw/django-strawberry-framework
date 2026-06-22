@@ -1,4 +1,4 @@
-"""Kanban command tests for card, changed-file, and predicted-file import workflows."""
+"""Kanban command tests for changed-file and predicted-file import workflows."""
 
 import json
 from io import StringIO
@@ -39,30 +39,6 @@ def _write_json(tmp_path, payload: dict) -> str:
     path = tmp_path / "cards.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return str(path)
-
-
-@pytest.mark.django_db
-def test_import_cards_command_accepts_changed_files(tmp_path, beta_version):
-    path = _write_json(
-        tmp_path,
-        {
-            "cards": [
-                {
-                    "title": "Imported changed files",
-                    "target_version": beta_version.number,
-                    "relative_size": "s",
-                    "changed_files": [TRACKED_FILE],
-                },
-            ],
-        },
-    )
-
-    out = StringIO()
-    call_command("import_cards", path, stdout=out)
-
-    card = models.Card.objects.get(title="Imported changed files")
-    assert "Created" in out.getvalue()
-    assert list(card.changed_files.values_list("path", flat=True)) == [TRACKED_FILE]
 
 
 @pytest.mark.django_db

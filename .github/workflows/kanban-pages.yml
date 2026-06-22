@@ -3,20 +3,27 @@ name: Kanban Pages
 on:
   push:
     branches: ["main"]
+    # Regenerate-and-deploy: the build job re-runs the export scripts against the
+    # fakeshop GraphQL schema + db.sqlite3, so this tracks the rendering INPUTS (data,
+    # scripts, GraphQL schema/models, config) — NOT the regenerated outputs
+    # (KANBAN.md/html, docs/GLOSSARY.md), which the job overwrites. Migrations/tests
+    # under the app globs are excluded (they never change the rendered board); a package
+    # or other engine change that does alter rendering is republished via the next
+    # input change or a manual workflow_dispatch.
     paths:
       - ".github/workflows/kanban-pages.yml"
-      - "django_strawberry_framework/**"
-      - "docs/GLOSSARY.md"
-      - "examples/fakeshop/apps/kanban/**"
-      - "examples/fakeshop/apps/glossary/**"
-      - "examples/fakeshop/config/**"
       - "examples/fakeshop/db.sqlite3"
-      - "KANBAN.html"
-      - "KANBAN.md"
-      - "pyproject.toml"
+      - "examples/fakeshop/config/**"
+      - "examples/fakeshop/apps/kanban/**"
+      - "!examples/fakeshop/apps/kanban/migrations/**"
+      - "!examples/fakeshop/apps/kanban/tests/**"
+      - "examples/fakeshop/apps/glossary/**"
+      - "!examples/fakeshop/apps/glossary/migrations/**"
+      - "!examples/fakeshop/apps/glossary/tests/**"
       - "scripts/build_glossary_md.py"
       - "scripts/build_kanban_html.py"
       - "scripts/build_kanban_md.py"
+      - "pyproject.toml"
       - "uv.lock"
   workflow_dispatch:
 

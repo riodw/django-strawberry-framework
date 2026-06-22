@@ -1,6 +1,6 @@
 # Review: `django_strawberry_framework/utils/permissions.py`
 
-Status: fix-implemented
+Status: verified
 
 ## DRY analysis
 
@@ -36,7 +36,7 @@ None.
 
 ### Summary
 
-`utils/permissions.py` is the deliberately single-sited active-input permission-traversal core shared by the FilterSet and OrderSet families (and, for `request_from_info`, the mutation seam). It is unchanged this cycle: both `git diff be1d5b23540b2ea2b2e991585b93a9bcf744aa7e -- target` and `git diff HEAD -- target` are empty, and `git log baseline..HEAD -- target` returns nothing — the `verbatim_path` promotion the spawn flagged landed earlier (commit 8d6ca99b "Finish REVIEW") and is cumulative-in-HEAD, with the last touch to the file at `bd998093`. The family-neutral contract, active-input-only scope, and `verbatim_path` identity-fallback helper all verify at source; the LEAF/RELATED partition is exhaustive, disjoint, and source-field-keyed; reflective access is uniformly defaulted-or-guarded; the parent-vs-child double dispatch fires each gate exactly once. No symbol is public-contract (none appear in `docs/GLOSSARY.md`; the package-root `from .permissions import` resolves to the distinct *top-level* `permissions.py`, not this `utils/` module) so GLOSSARY absence is correct. No High / Medium / Low findings. Genuine shape #5 (no-source-edit cycle).
+`utils/permissions.py` is the deliberately single-sited active-input permission-traversal core shared by the FilterSet and OrderSet families (and, for `request_from_info`, the mutation seam). It is unchanged this cycle: both `git diff 9dff727f525941a367dd5ec4a7d473c900186918 -- target` and `git diff HEAD -- target` are empty, and `git log baseline..HEAD -- target` returns nothing — the `verbatim_path` promotion the spawn flagged landed earlier (commit 8d6ca99b "Finish REVIEW") and is cumulative-in-HEAD, with the last touch to the file at `bd998093`. The family-neutral contract, active-input-only scope, and `verbatim_path` identity-fallback helper all verify at source; the LEAF/RELATED partition is exhaustive, disjoint, and source-field-keyed; reflective access is uniformly defaulted-or-guarded; the parent-vs-child double dispatch fires each gate exactly once. No symbol is public-contract (none appear in `docs/GLOSSARY.md`; the package-root `from .permissions import` resolves to the distinct *top-level* `permissions.py`, not this `utils/` module) so GLOSSARY absence is correct. No High / Medium / Low findings. Genuine shape #5 (no-source-edit cycle).
 
 ---
 
@@ -55,7 +55,7 @@ Filled by Worker 1 per no-source-edit cycle pattern.
 - `uv run ruff check --fix .` — `All checks passed!`
 
 ### Notes for Worker 3
-- No-source-edit cycle: both `git diff be1d5b23540b2ea2b2e991585b93a9bcf744aa7e -- django_strawberry_framework/utils/permissions.py` and `git diff HEAD -- …` are empty; `git log baseline..HEAD -- target` returns nothing. The `verbatim_path` promotion (public + in `__all__`, used as `fallback_path` by `active_related_branches` at `:252` and `orders/sets.py:362`) is cumulative-in-HEAD (commit 8d6ca99b; last file touch `bd998093`), not a pending edit.
+- No-source-edit cycle: both `git diff 9dff727f525941a367dd5ec4a7d473c900186918 -- django_strawberry_framework/utils/permissions.py` and `git diff HEAD -- …` are empty; `git log baseline..HEAD -- target` returns nothing. The `verbatim_path` promotion (public + in `__all__`, used as `fallback_path` by `active_related_branches` at `:252` and `orders/sets.py:362`) is cumulative-in-HEAD (commit 8d6ca99b; last file touch `bd998093`), not a pending edit.
 - All severities `None.` — nothing forward-looking to carry forward.
 - No GLOSSARY-only fix in scope: grep of `docs/GLOSSARY.md` for every backticked symbol from this file (`verbatim_path`, `run_active_input_permission_checks`, `active_permission_targets`, `active_related_branches`, `active_permission_field_paths`, `invoke_permission_method`, `request_from_info`, `extract_branch_value`, `iter_input_items`, `_check_method_name`) returns zero hits — all are private `utils/` helpers (not re-exported from the package root; the root `from .permissions import` is the distinct top-level module), so absence is correct, not drift.
 - Orphan check: `verbatim_path` has real first-party consumers (`utils/permissions.py:252`, `orders/sets.py:362`); `git log -S 'def verbatim_path'` shows it was introduced by the REVIEW-cycle promotion (8d6ca99b) and `grep _verbatim_path` returns zero — twin fully removed, no orphan.
@@ -79,3 +79,36 @@ Not warranted — zero edits to any tracked file this cycle. Per `AGENTS.md` ("D
 ---
 
 ## Verification (Worker 3)
+
+Terminal-verify of a shape #5 no-source-edit cycle. All checks independently confirmed against live source — no findings to relitigate (High/Medium/Low all `None.`).
+
+### Zero-edit proof
+- `git diff 9dff727f525941a367dd5ec4a7d473c900186918 -- django_strawberry_framework/utils/permissions.py` — empty. `git diff HEAD -- …` — empty. `git log baseline..HEAD -- target` — empty.
+- Owned-paths stat `git diff --stat <baseline> -- django_strawberry_framework/ tests/ docs/GLOSSARY.md CHANGELOG.md` — empty; target absent from the stat. No sibling-cycle attribution needed.
+- Each Worker 2 section opens `Filled by Worker 1 per no-source-edit cycle pattern.` — present (Fix report, Comment/docstring, Changelog).
+
+### Logic verification outcome
+- **Active-input-only scope.** `extract_branch_value` (`:103-125`) collapses `None`/`unset_sentinel` to "not supplied" via `is_inactive_value`; the classifier skips inactive values. Confirmed at source.
+- **Single-pass classifier.** `active_permission_targets` (`:164-211`) runs `iter_active_fields` once and partitions on `.kind` (LEAF→source path / RELATED→branch tuple, LOGIC dropped). Markers `LOGIC/RELATED/LEAF` single-sited in `utils/input_values.py:48-50`; `iter_active_fields` at `:137`, `is_inactive_value` at `:74`. `active_related_branches` (`:214-256`) returns the RELATED half with `field_specs={}`/`logic_keys=frozenset()`/`fallback_path=verbatim_path`; `active_permission_field_paths` (`:259-303`) returns the LEAF half — both thin wrappers, classification single-sited.
+- **`verbatim_path`** (`:152-161`) public + in `__all__` (`:70`). Consumers grep to exactly two first-party sites: in-file `active_related_branches` (`:252`) and order side `orders/sets.py:362` (`fallback_path=verbatim_path`, with `handle_top_level_list=True` at `:363`). `_verbatim_attr` orphan grep — ZERO hits; twin fully removed.
+- **`request_from_info` family-neutral, no `.apply` suffix.** Message names `family_label` only (`:90,98`). Consumers: `filters/sets.py:882` (`FilterSet`), `orders/sets.py:305` (`OrderSet`), and the mutation seam `mutations/permissions.py:94` (`DjangoMutation`). Read the mutation seam (`:80-101`): it is a `has_permission`-style model-perm check with NO `.apply` method, so hard-coding `.apply` would mis-describe it — feedback CR-5 holds.
+- **`iter_input_items`** sole `def` is `utils/input_values.py:53`; re-export here (`:67`) preserves the legacy import path, not a re-implementation.
+
+### DRY findings disposition
+DRY-None genuine. This module IS the FilterSet/OrderSet active-input permission resolution; the single-pass classifier is the sole source and the two halves are deliberate thin wrappers (re-merging would re-introduce the cross-family duplication). Carried-forward: none (all severities `None.`).
+
+### Temp test verification
+- No temp tests created — empty-diff #5 with all claims grep-confirmable against live source; existing `tests/utils/test_permissions.py` pins the family-label resolution, sentinel collapse, fire/dedup, and double-dispatch.
+- Disposition: none.
+
+### GLOSSARY (#4-vs-#5 gate)
+Grep of `docs/GLOSSARY.md` for every backticked symbol (`verbatim_path`, `run_active_input_permission_checks`, `active_permission_targets`, `active_related_branches`, `active_permission_field_paths`, `invoke_permission_method`, `request_from_info`, `extract_branch_value`, `_check_method_name`, `iter_input_items`) — ZERO hits each. All are private `utils/` helpers; the package-root `from .permissions import` (`__init__.py:27`) resolves to the **distinct top-level** `django_strawberry_framework/permissions.py` (confirmed present, separate file), not this `utils/` module — so GLOSSARY absence is correct, no #4 fix hiding. Genuine #5, not a missed #4.
+
+### Changelog
+`git diff -- CHANGELOG.md` — empty. Disposition cites BOTH `AGENTS.md` ("Do not update CHANGELOG.md unless explicitly instructed") AND the active plan's silence. Internal-only framing matches the (zero-edit) diff scope. Accepted.
+
+### Validation
+`uv run ruff format --check` — `2 files already formatted` (COM812-formatter warning only, benign). `uv run ruff check` — `All checks passed!`.
+
+### Verification outcome
+`cycle accepted; verified` — sets top-level `Status: verified` AND marks the `utils/permissions.py` checklist box in `docs/review/review-0_0_11.md`.

@@ -142,11 +142,11 @@ New since `0.0.10`: top-level `_cross_web_patches.py` / `_strawberry_patches.py`
     - [x] `django_strawberry_framework/utils/connections.py` -> `docs/review/rev-utils__connections.md`
     - [x] `django_strawberry_framework/utils/input_values.py` -> `docs/review/rev-utils__input_values.md`
     - [x] `django_strawberry_framework/utils/inputs.py` -> `docs/review/rev-utils__inputs.md`
-    - [ ] `django_strawberry_framework/utils/permissions.py` -> `docs/review/rev-utils__permissions.md`
-    - [ ] `django_strawberry_framework/utils/querysets.py` -> `docs/review/rev-utils__querysets.md`
-    - [ ] `django_strawberry_framework/utils/relations.py` -> `docs/review/rev-utils__relations.md`
-    - [ ] `django_strawberry_framework/utils/strings.py` -> `docs/review/rev-utils__strings.md`
-    - [ ] `django_strawberry_framework/utils/typing.py` -> `docs/review/rev-utils__typing.md`
-    - [ ] folder pass: `django_strawberry_framework/utils/` -> `docs/review/rev-utils.md`
-  - [ ] project-level pass: `django_strawberry_framework/` -> `docs/review/rev-django_strawberry_framework.md`
-- [ ] final test-run gate: `uv run pytest` -> `docs/review/rev-final.md`
+    - [x] `django_strawberry_framework/utils/permissions.py` -> `docs/review/rev-utils__permissions.md`
+    - [x] `django_strawberry_framework/utils/querysets.py` -> `docs/review/rev-utils__querysets.md`
+    - [x] `django_strawberry_framework/utils/relations.py` -> `docs/review/rev-utils__relations.md`
+    - [x] `django_strawberry_framework/utils/strings.py` -> `docs/review/rev-utils__strings.md`
+    - [x] `django_strawberry_framework/utils/typing.py` -> `docs/review/rev-utils__typing.md`
+    - [x] folder pass: `django_strawberry_framework/utils/` -> `docs/review/rev-utils.md`
+  - [x] project-level pass: `django_strawberry_framework/` -> `docs/review/rev-django_strawberry_framework.md`
+- [x] final test-run gate: `uv run pytest` -> `docs/review/rev-final.md`

@@ -30,6 +30,7 @@ from apps.library import models as library_models
 from apps.products import models as product_models
 from apps.scalars import models as scalars_models
 from asgiref.sync import sync_to_async
+from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError
 from django.db import connection as db_connection
@@ -1842,3 +1843,38 @@ def test_explicit_null_on_non_nullable_file_column_is_field_error(tmp_path):
     finally:
         with db_connection.schema_editor() as schema_editor:
             schema_editor.delete_model(model)
+
+
+def test_explicit_null_error_allows_null_on_nullable_column():
+    """``_explicit_null_error`` yields no error for ``null`` on a ``null=True`` column.
+
+    The complement of ``test_explicit_null_on_non_nullable_file_column_is_field_error``:
+    an explicit ``None`` on a nullable scalar column is a valid clear, so the guard
+    returns ``None`` (no ``FieldError``). ``NullableScalarSpecimen.score`` is
+    ``null=True``. No live products mutation exposes a nullable scalar column, so this
+    branch is earned against a real nullable example model rather than a live query.
+    """
+    assert (
+        resolvers._explicit_null_error(
+            scalars_models.NullableScalarSpecimen,
+            "score",
+            "score",
+            None,
+        )
+        is None
+    )
+
+
+def test_validation_error_to_field_errors_non_dict_uses_all_key():
+    """A non-dict ``ValidationError`` (``.messages``, no ``.error_dict``) maps under the sentinel.
+
+    ``full_clean()`` always raises with an ``error_dict`` (the keyed path), so this
+    ``.messages`` fallback serves a bare ``ValidationError`` - the shape the ``0.0.12``
+    form / ``0.0.13`` serializer flavors and a model ``clean()`` raising a plain
+    message produce. It is the documented single-source mapper, exercised directly as
+    it is unreachable through the current ``full_clean`` path.
+    """
+    errors = resolvers._validation_error_to_field_errors(ValidationError("a plain message"))
+    assert [(error.field, error.messages) for error in errors] == [
+        (NON_FIELD_ERROR_KEY, ["a plain message"]),
+    ]

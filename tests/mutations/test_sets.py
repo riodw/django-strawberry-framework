@@ -1105,3 +1105,71 @@ def test_django_mutation_and_permission_are_public_exports():
     assert DjangoModelPermissionFromPackage is DjangoModelPermission
     assert "DjangoMutation" in django_strawberry_framework.__all__
     assert "DjangoModelPermission" in django_strawberry_framework.__all__
+
+
+def test_meta_fields_bare_string_raises():
+    """A bare-string ``Meta.fields`` (would iterate as characters) raises at class creation."""
+    with pytest.raises(ConfigurationError, match="not a bare string"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                fields = "name"
+
+
+def test_meta_permission_classes_non_iterable_raises():
+    """A non-iterable ``Meta.permission_classes`` (an int) raises via the ``list()`` guard.
+
+    A bare ``str`` / ``bytes`` / class is caught by the explicit ``isinstance`` guard;
+    any *other* non-iterable (here an ``int``) trips the ``list(value)`` ``TypeError``
+    branch instead, surfacing the same fail-loud ``ConfigurationError`` at class creation.
+    """
+    with pytest.raises(ConfigurationError, match="must be a sequence of"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                permission_classes = 5
+
+
+def test_bind_skips_relation_lock_for_non_relay_target():
+    """The relation-type-lock skips a relation whose target type is NOT Relay-Node.
+
+    The AR-M2 relation-type-lock only guards a Relay-Node relation's ``GlobalID`` core
+    and container shape against a consumer ``input_class`` override. When the FK
+    target's ``DjangoType`` is a plain (non-Node) type, the generated ``<field>_id`` is
+    a raw pk with no GlobalID visibility contract to defeat, so the lock skips it and
+    the consumer ``input_class`` merges with the raw-pk remainder. Products' relation
+    targets are all Relay-Node, so this skip branch is earned with a non-Node pair here.
+    """
+
+    class NonNodeCategoryType(DjangoType):
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name")
+
+    class NonNodeItemType(DjangoType):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name", "category")
+
+    @strawberry.input
+    class CustomItemInput:
+        name: str = strawberry.field(description="custom")
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            input_class = CustomItemInput
+
+    finalize_django_types()
+
+    from django_strawberry_framework.mutations.inputs import _materialized_names
+
+    merged = _materialized_names["ItemInput"]
+    assert CreateItem._input_class is merged
+    field_names = {field.python_name for field in merged.__strawberry_definition__.fields}
+    assert {"name", "category_id"} <= field_names

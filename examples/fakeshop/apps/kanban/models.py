@@ -17,13 +17,13 @@ Two foundations every model leans on:
   signal receiver creates the row automatically on first save.
 """
 
-import operator
 import uuid
-from functools import reduce
 
 from django.db import models
 from django.db.models.lookups import Exact
 from django.utils.text import slugify
+
+from .constraints import OneHotLinkCount
 
 DEPENDENCY_REFERENCE_KIND_KEYS = frozenset(
     {
@@ -736,19 +736,8 @@ def _exactly_one_link_constraint() -> models.CheckConstraint:
     admin / fixtures / future code cannot create empty or multi-linked rows that
     the ``post_save`` signal would never produce.
     """
-    non_null_count = reduce(
-        operator.add,
-        (
-            models.Case(
-                models.When(**{f"{name}__isnull": False}, then=1),
-                default=0,
-                output_field=models.IntegerField(),
-            )
-            for name in _UUID_LINK_NAMES
-        ),
-    )
     return models.CheckConstraint(
-        condition=Exact(non_null_count, models.Value(1)),
+        condition=Exact(OneHotLinkCount(*_UUID_LINK_NAMES), models.Value(1)),
         name="kanban_uuidmodel_exactly_one_link",
     )
 

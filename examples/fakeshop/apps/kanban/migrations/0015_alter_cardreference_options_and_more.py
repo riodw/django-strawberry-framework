@@ -11,9 +11,16 @@ def _delete_card_reference_source_uuid_rows(apps, schema_editor):
     Their only link is ``cardreferencesource``, which is about to be removed;
     left in place they would become all-null rows that violate the recreated
     ``kanban_uuidmodel_exactly_one_link`` constraint.
+
+    Pinned to ``schema_editor.connection.alias`` so the delete runs on the database
+    being migrated, not the router default. Under the multi-DB (``FAKESHOP_SHARDED``)
+    layout the ``shard_b`` test database is migrated after ``default`` has already run
+    the later ``RemoveField`` dropping ``cardreferencesource``, so an unpinned query
+    would hit ``default`` and raise ``no such column: ...cardreferencesource_id``.
     """
     uuid_model = apps.get_model("kanban", "UUIDModel")
-    uuid_model.objects.filter(cardreferencesource__isnull=False).delete()
+    alias = schema_editor.connection.alias
+    uuid_model.objects.using(alias).filter(cardreferencesource__isnull=False).delete()
 
 
 class Migration(migrations.Migration):

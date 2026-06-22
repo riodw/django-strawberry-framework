@@ -431,8 +431,13 @@ def test_multi_db_subquery_pinned_to_caller_alias():
     )
     assert result.db == "shard_b"
     assert target_type is registry.get(AliasTarget)
-    # The cascade composed a constraint (an ``__in`` subquery)...
-    assert "IN (SELECT" in str(result.query)
+    # The cascade composed a constraint (an inlined ``__in`` subquery). ``str(query)``
+    # forces ``DEFAULT_DB_ALIAS`` compilation, which cannot render a subquery pinned to
+    # a non-default alias ("Subqueries aren't allowed across different databases"), so
+    # compile against the caller's own alias (carried by both the outer query and the
+    # pinned RHS) to render the inlined ``IN (SELECT ...)``.
+    compiled_sql = result.query.get_compiler(using=result.db).as_sql()[0]
+    assert "IN (SELECT" in compiled_sql
     # ...and the queryset it ran the target hook against was pinned to the caller's
     # resolved alias - the genuine RHS the walk built, observed inside the hook itself.
     assert received_dbs == ["shard_b"]

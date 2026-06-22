@@ -338,17 +338,22 @@ the prior); Slice 4 is the live consumer surface; Slice 5 is doc + version-cut o
     registry + `bind_form_mutations()` wired into [`types/finalizer.py`][types-finalizer],
     [Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)
     / [Decision 13](#decision-13--finalization-seam-reuse-the-mutation-phase-25-bind-no-deferred_meta_keys-change)).
-    The form-flavor `_validate_meta` override: `Meta.form_class` is required and must
-    be — for `DjangoFormMutation` — a `forms.Form` subclass that is **NOT** a
-    `forms.ModelForm` (a `ModelForm` is *also* a `forms.Form` subclass, so the plain
-    base must **explicitly reject** it with a `ConfigurationError` naming
-    `DjangoModelFormMutation` as the correct base — otherwise a `ModelForm` would
-    silently write via `form.save()` and return only `{ ok errors }` with no object
-    slot, no `DjangoModelPermission` default, and no optimizer re-fetch, defeating the
-    two-base split, P2); and — for `DjangoModelFormMutation` — a `forms.ModelForm`
-    subclass. The check runs **before** `_resolve_model` (so a missing / wrong-type
-    `form_class` is a clean [`ConfigurationError`][glossary-configurationerror], never
-    a raw `AttributeError` from `form_class._meta.model`); a `ModelForm` with no resolvable `_meta.model`
+    The form-flavor `_validate_meta` override: `Meta.form_class` is required. In
+    Django, **`forms.ModelForm` is NOT a subclass of `forms.Form`** — both are
+    siblings under `forms.BaseForm` (`issubclass(ModelForm, Form)` is `False`;
+    `ModelForm` → `BaseModelForm` → `BaseForm`, `Form` → `BaseForm`). So the plain
+    `DjangoFormMutation` **checks `issubclass(form_class, forms.ModelForm)` first** and
+    raises a `ConfigurationError` naming `DjangoModelFormMutation` as the correct base
+    (a *targeted* message — without this explicit check a bare `issubclass(…,
+    forms.Form)` gate would still reject a `ModelForm`, but with a confusing generic
+    "not a `Form`" message; and the targeting matters because, were a `ModelForm` let
+    through, it would silently write via `form.save()` and return only `{ ok errors }`
+    with no object slot, no `DjangoModelPermission` default, and no optimizer re-fetch,
+    defeating the two-base split, P2). It then requires a `forms.Form` subclass.
+    `DjangoModelFormMutation` requires a `forms.ModelForm` subclass. The check runs
+    **before** `_resolve_model` (so a missing / wrong-type `form_class` is a clean
+    [`ConfigurationError`][glossary-configurationerror], never a raw `AttributeError`
+    from `form_class._meta.model`); a `ModelForm` with no resolvable `_meta.model`
     raises; `operation` is restricted to `{"create", "update"}` (a `"delete"` form
     mutation is **rejected** at class creation — the inherited base accepts it but the
     form flavor has no delete pipeline,
@@ -799,10 +804,11 @@ data — a consumer needing data back uses a `DjangoModelFormMutation`).
 
 ### Error shapes
 
-- A `Meta` with no `form_class`; a `DjangoFormMutation` whose `form_class` is not a
-  `forms.Form` subclass **or is a `forms.ModelForm`** (wrong base — the error names
-  `DjangoModelFormMutation`); a `DjangoModelFormMutation` whose `form_class` is not a
-  `forms.ModelForm`, or whose `form_class._meta.model` is unresolvable; a bare-string
+- A `Meta` with no `form_class`; a `DjangoFormMutation` whose `form_class` is a
+  `forms.ModelForm` (wrong base — checked first, the error names
+  `DjangoModelFormMutation`) or is not a `forms.Form` subclass; a
+  `DjangoModelFormMutation` whose `form_class` is not a `forms.ModelForm`, or whose
+  `form_class._meta.model` is unresolvable; a bare-string
   / duplicate-name / unknown-name `Meta.fields` / `Meta.exclude` (validated against
   `form_class().fields`); or an empty effective field set — each raises
   [`ConfigurationError`][glossary-configurationerror] at mutation-class creation /
@@ -1771,9 +1777,11 @@ this spec, removed in the slice that ships it).
   ([Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)).
 - **A `ModelForm` placed on the plain `DjangoFormMutation` base (P2).** Rejected at
   class creation with a [`ConfigurationError`][glossary-configurationerror] naming
-  `DjangoModelFormMutation` — `forms.ModelForm` is a `forms.Form` subclass, so the
-  plain base must exclude it, or a `ModelForm` would silently write with no object
-  slot / no `DjangoModelPermission` default / no optimizer re-fetch
+  `DjangoModelFormMutation`. `forms.ModelForm` is **not** a `forms.Form` subclass (a
+  sibling under `forms.BaseForm`), so the plain base checks
+  `issubclass(form_class, forms.ModelForm)` **first** to emit the targeted message —
+  otherwise a `ModelForm` would silently write with no object slot / no
+  `DjangoModelPermission` default / no optimizer re-fetch
   ([Decision 6](#decision-6--base-class-strategy-djangomodelformmutation-rides-the-djangomutation-base-the-plain-form-is-the-model-less-sibling)).
 - **A required extra (non-model) `ModelForm` field on `update` (P2).** It has no
   instance value to reconstruct, so it keeps its `field.required` in the partial

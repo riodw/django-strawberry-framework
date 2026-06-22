@@ -2,56 +2,143 @@
 
 ## Findings
 
-### [P1] Form input type identity is under-specified and will collide across narrowed shapes
+### [P1] `form.save()` can still leak a raw database error instead of the frozen envelope
 
-The spec now says the form flavor materializes `<FormClass>Input` and `<FormClass>PartialInput` as module globals (`docs/spec-038-form_mutations-0_0_12.md:294`, `docs/spec-038-form_mutations-0_0_12.md:1205`, `docs/spec-038-form_mutations-0_0_12.md:1217`). That name is not enough to identify the generated GraphQL type shape.
+The resolver pipeline pins `form.is_valid()` errors to the shared `FieldError`
+envelope, then writes with a bare `form.save()` (`docs/spec-038-form_mutations-0_0_12.md:1414`,
+`docs/spec-038-form_mutations-0_0_12.md:1427`). Unlike the shipped model-mutation
+pipeline, this path does not specify an `IntegrityError` fallback around the write.
 
-Two common cases collide:
+That reopens the race / residual-constraint hole `036` already closed: a
+`ModelForm` can validate successfully, then lose a concurrent uniqueness race or hit a
+database constraint at `save()`. Today the model path maps that class of failure back
+to the payload envelope (`django_strawberry_framework/mutations/resolvers.py:867`);
+the form path as written would bubble a top-level GraphQL error / 500, breaking the
+cross-flavor `FieldError` contract exactly where the spec says the contract is frozen.
 
-- The same `ItemModelForm` used by two mutations with different `Meta.fields` / `Meta.exclude` effective field sets.
-- Two apps defining different `ItemForm` / `NewsletterForm` classes with the same class name.
+Require the form resolver to catch `IntegrityError` from `form.save()` inside the same
+`transaction.atomic()` and map it through the same helper / message policy as the
+model mutation path. Add a package test that mocks a valid `ModelForm.save()` raising
+`IntegrityError` and asserts a null object plus `errors: [{ field: "__all__", ... }]`,
+not a top-level GraphQL error.
 
-`spec-036` already had to solve this for model-generated inputs: shape identity is `(model, operation kind, effective field set)`, with deterministic narrowed-shape names and fail-loud duplicate-name checks. The form spec needs the same level of precision. Right now an implementer could either silently reuse the wrong input class or hit a late Strawberry schema error from two distinct classes with the same GraphQL name.
+### [P2] There is no form-construction hook, so common existing forms cannot be reused
 
-Pin a form-input shape identity and naming rule before implementation. It should include at least operation kind, the form class identity, the effective field set after `Meta.fields` / `Meta.exclude`, and the generated representation metadata where it affects GraphQL names/types. Add tests for same form + different narrowing, different forms with the same `__name__`, and identical shapes deduping idempotently.
+The input generator instantiates the form with no arguments to read `form.fields`
+(`docs/spec-038-form_mutations-0_0_12.md:1317`), and the runtime constructs bound forms
+only as `form_class(data=..., files=...)` / `form_class(data=..., files=..., instance=...)`
+(`docs/spec-038-form_mutations-0_0_12.md:1385`, `docs/spec-038-form_mutations-0_0_12.md:1395`).
+The text even references graphene-django's `get_form_kwargs`, but does not provide an
+equivalent hook (`docs/spec-038-form_mutations-0_0_12.md:1376`).
 
-### [P1] `ModelChoiceField` decode no longer enforces related-object visibility
+That is a real migration blocker. Existing Django forms often require constructor
+kwargs such as `user`, `request`, or tenant context to scope querysets, choose choices,
+or attach service dependencies. The current contract only supports forms with a
+no-argument constructor and no request-time kwargs. Relation visibility before the form
+is necessary, but it does not replace a form's own queryset scoping or custom
+constructor requirements.
 
-The revised reverse map correctly decodes `categoryId` into form field `category` (`docs/spec-038-form_mutations-0_0_12.md:1177`, `docs/spec-038-form_mutations-0_0_12.md:1188`, `docs/spec-038-form_mutations-0_0_12.md:1257`). But the spec says the resolver decodes the `GlobalID` to a pk and lets `ModelChoiceField.to_python` resolve through the form field's queryset (`docs/spec-038-form_mutations-0_0_12.md:1189`).
+Pin both halves explicitly: schema-time field discovery requires either a no-arg form
+or an overridable `get_unbound_form()` / `get_form_fields()` hook whose field shape is
+stable; runtime needs a `get_form_kwargs(info, data, files, instance=None)` or
+`get_form(...)` hook used by create and update. Add tests for a form that requires a
+`user` kwarg and for a hook that scopes a `ModelChoiceField.queryset` without changing
+the generated input shape.
 
-That drops a security invariant from `spec-036`: relation IDs are type-checked and visibility-checked through the related model's primary `DjangoType.get_queryset` before assignment. A default `ModelForm` field queryset is usually `Category.objects.all()`, not request-scoped. So a caller who can write an `Item` can attach it to a hidden `Category` by guessing or holding its GlobalID, unless every consumer remembers to scope each form field queryset manually.
+### [P2] Plain `DjangoFormMutation` has contradictory `operation` rules
 
-Keep the form's queryset validation, but do not make it the only guard. The decode for `relation_single` / `relation_multi` should first reuse the `036` related-id type + visibility path, then feed the visible pk(s) into the form. Add live coverage where a permitted writer tries to submit a hidden category GlobalID and receives the same field-keyed `FieldError` as the model mutation path.
+Decision 10 says the plain form flavor has no model operation and does not declare
+`Meta.operation` (`docs/spec-038-form_mutations-0_0_12.md:1528`). But the validation
+matrix says the form-flavor override restricts `operation` to `{"create", "update"}`
+(`docs/spec-038-form_mutations-0_0_12.md:352`, `docs/spec-038-form_mutations-0_0_12.md:2096`),
+and the generated input identity includes `operation kind`
+(`docs/spec-038-form_mutations-0_0_12.md:1257`).
 
-### [P2] `DjangoFormMutation` still accepts a `ModelForm` unless the validation explicitly rejects it
+That leaves implementers two incompatible readings: accept meaningless
+`operation = "create"` / `"update"` on a model-less mutation, or reject it despite the
+shared validation checklist. It also leaves the plain-form input cache key without a
+defined operation component.
 
-The architecture says plain `DjangoFormMutation` is model-less, has no `DjangoType` object slot, and returns only `ok` + `errors` (`docs/spec-038-form_mutations-0_0_12.md:1051`, `docs/spec-038-form_mutations-0_0_12.md:1065`). But the validation checklist says `DjangoFormMutation.Meta.form_class` must be a `forms.Form` subclass (`docs/spec-038-form_mutations-0_0_12.md:334`).
+Split the rules by base class. `DjangoModelFormMutation` should require / default and
+validate `operation in {"create", "update"}`. Plain `DjangoFormMutation` should reject
+any `Meta.operation` as an unknown / unsupported key and use a fixed identity sentinel
+such as `"plain"` for input-shape caching. Add tests for `Meta.operation` on the plain
+base and for plain-form input dedupe.
 
-`forms.ModelForm` is also a `forms.Form` subclass. Under the written validation, a consumer can accidentally put a `ModelForm` on the model-less base, get a model write through the default `form.save()` path, and receive only `{ ok errors }` with no object slot, no `DjangoModelPermission` default, and no optimizer re-fetch. That contradicts the entire split between the two bases.
+### [P2] The converter cannot both map base `forms.Field` to `str` and fail on unknown fields
 
-Make the validation explicit: plain `DjangoFormMutation` accepts `forms.Form` subclasses **excluding** `forms.ModelForm`; `DjangoModelFormMutation` accepts only `forms.ModelForm`. Add a class-creation test proving a `ModelForm` on the plain base raises a `ConfigurationError` naming the correct base.
+Decision 7 specifies a single-dispatch registry on `forms.Field`
+(`docs/spec-038-form_mutations-0_0_12.md:1158`), maps "base `Field`" to `str`
+(`docs/spec-038-form_mutations-0_0_12.md:1162`), and also requires an unknown
+form-field class to raise `ConfigurationError`
+(`docs/spec-038-form_mutations-0_0_12.md:1194`, `docs/spec-038-form_mutations-0_0_12.md:2063`).
 
-### [P2] Partial-update reconstruction does not define what happens to required extra `ModelForm` fields
+With normal `functools.singledispatch`, registering `forms.Field` is a catch-all for
+every custom field subclass. The unknown-field error becomes unreachable, and a
+consumer's custom field silently becomes `String` even when its cleaned value is not a
+string or its widget semantics need a different input shape.
 
-The spec derives input from `form_class().fields`, not only model fields, and generates an all-optional `<FormClass>PartialInput` for update (`docs/spec-038-form_mutations-0_0_12.md:1205`). The partial reconstruction then fills omitted values from `model_to_dict(instance, fields=<the form's non-file fields>)` (`docs/spec-038-form_mutations-0_0_12.md:1298`).
+Choose one contract. For the fail-loud contract the spec already claims, do not use a
+base `forms.Field` fallback. Either handle exact `forms.Field` specially before the
+dispatch, or implement an explicit registry that raises when `type(field)` is not one
+of the supported classes. Add a custom `class CustomField(forms.Field)` test that
+proves it raises.
 
-That works for model-backed fields, but not for extra `ModelForm` fields with no model column: `confirm`, captcha-like fields, action flags, or any required field declared on the form class. There is no instance value to reconstruct. Making every update field optional means callers can omit a required extra field, but the bound form will still fail required validation or get a meaningless initial value.
+### [P2] `ModelChoiceField.to_field_name` is ignored by the relation decode
 
-Pin the contract. Good options:
+The spec maps `ModelChoiceField` / `ModelMultipleChoiceField` to the target id
+(`docs/spec-038-form_mutations-0_0_12.md:1168`) and decodes `categoryId` to
+`{"category": pk}` before handing the value to the bound form
+(`docs/spec-038-form_mutations-0_0_12.md:1209`, `docs/spec-038-form_mutations-0_0_12.md:1212`).
 
-- Extra non-model fields remain required even in the partial update input.
-- Extra non-model fields can be omitted only when the form field has an explicit `initial`.
-- ModelForms with required extra fields are rejected for `operation = "update"` unless the spec defines a resolver hook to supply them.
+Django form relation fields can set `to_field_name`, and `ForeignKey(to_field=...)`
+can generate exactly that shape. In that case `ModelChoiceField.to_python()` looks up
+by the configured target field, not by `pk`. Feeding the decoded pk into the form makes
+a valid GraphQL id fail form validation whenever the form expects a slug/code/other
+unique target value.
 
-Whichever rule is chosen, add tests for a `ModelForm` with a required extra field and for an optional extra field, so partial update behavior is not accidental.
+After the type + visibility check finds the related object, convert the value passed
+to the form with the form field's own key: `obj.serializable_value(field.to_field_name)`
+when `to_field_name` is set, else `obj.pk`. Do the same per element for
+`ModelMultipleChoiceField`. Add tests for single and multi relation fields with
+`to_field_name`.
 
-### [P3] `Meta.fields` / `Meta.exclude` validation needs the same fail-loud treatment as model mutations
+### [P2] Create-time narrowing can exclude a required form field and produce an always-invalid mutation
 
-The form spec states that `Meta.fields` / `Meta.exclude` narrow `form.fields` and are mutually exclusive (`docs/spec-038-form_mutations-0_0_12.md:197`, `docs/spec-038-form_mutations-0_0_12.md:343`). It does not pin the failure behavior for a bare string, duplicate names, unknown form field names, or an empty effective field set.
+The spec validates malformed `Meta.fields` / `Meta.exclude` names and empty effective
+sets (`docs/spec-038-form_mutations-0_0_12.md:1287`), but it does not reject a create
+mutation that narrows out a required form field. Create construction only passes the
+provided input fields to the bound form (`docs/spec-038-form_mutations-0_0_12.md:1385`).
 
-Those are not just polish. A typo like `fields = ("emial",)` can produce an empty generated input, a late schema error, or a mutation that silently exposes less than intended. The model mutation base already normalizes and rejects malformed declarations early; the form base should do the same against `form_class().fields`.
+For standard Django form fields, a required field omitted from bound `data=` fails
+required validation; `initial` is not a substitute for submitted data in the general
+case. So `Meta.fields = ("name",)` on a form whose required `category` remains in
+`form.fields` creates a schema that looks valid but cannot succeed.
 
-Add explicit `ConfigurationError` requirements and tests for bare string, duplicate names, unknown `fields` / `exclude` names, and effective empty input shape.
+Add a create-time validation rule: if `operation = "create"` excludes any
+`field.required` form field, raise `ConfigurationError` naming the missing required
+form fields, unless the spec deliberately defines a hook that supplies those values
+before binding. Cover both `Meta.fields` and `Meta.exclude`.
+
+### [P3] Optional file clearing is not expressible
+
+Partial update explicitly preserves omitted file fields by leaving them out of
+`files=` (`docs/spec-038-form_mutations-0_0_12.md:1393`,
+`docs/spec-038-form_mutations-0_0_12.md:1755`), and the edge-case text says an optional
+field the consumer wants emptied is sent explicitly
+(`docs/spec-038-form_mutations-0_0_12.md:1745`). For `FileField` / `ImageField`,
+however, the only input shape is `Upload`.
+
+Django's clearable file semantics distinguish "no change" from "clear" with a false
+sentinel produced by `ClearableFileInput`, not with an uploaded file. A nullable
+`Upload` value does not give the resolver a clear signal, and sending no file means
+preserve. That leaves optional file/image fields uploadable and preservable, but not
+clearable.
+
+Either document file clearing as out of scope for `0.0.12`, or add an explicit input
+representation such as `<field>Clear: Boolean` for clearable file fields and route it
+through the form/widget-compatible clear path. Add a partial-update test for clearing a
+blank/null file field if it is in scope.
 
 ## Checks run
 

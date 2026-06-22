@@ -119,7 +119,9 @@ Plan header + checklist follow the template in `REVIEW.md` "Required plan struct
 
 ## Final test-run gate
 
-After every per-file, folder, and project-level checkbox is `- [x]`, Worker 0 spawns Worker 1 once more for `docs/review/rev-final.md`.
+After every per-file, folder, and project-level checkbox is `- [x]`, Worker 0 first runs the **mandatory pre-gate drift sweep**, then spawns Worker 1 once more for `docs/review/rev-final.md`.
+
+**Mandatory pre-gate drift sweep.** Before the gate, confirm every verified file is still verified against *current* source — a run that spans a concurrent maintainer/DRY cycle can silently stale an already-`verified` artifact, and a mid-run *targeted* (hand-picked) sweep WILL miss files (this happened: one verified module drifted via a multi-file refactor commit and was caught only here, not mid-run). Sweep ALL verified files, never a subset: `git diff --name-only <run-start-SHA> HEAD -- 'django_strawberry_framework/**/*.py'` lists every package file touched during the run; for each, confirm it was verified at a baseline at-or-after its last-modifying commit (`git log -1 --format=%h -- <file>`). Any file verified *before* its last change is stale → re-open it (uncheck the box, re-run the full cycle against current source) before proceeding. When one refactor commit fans the same change across N files (e.g. a helper promotion), batch the re-opens with a shared verification recipe in the spawn prompts. Only once the sweep is clean does the gate run.
 
 - Worker 1 runs `uv run pytest` once (full sweep across all three test trees per `AGENTS.md`).
 - **Do NOT inspect or assert line coverage.** Only that existing tests still pass.

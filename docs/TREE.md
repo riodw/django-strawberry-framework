@@ -612,7 +612,6 @@ It owns the board invariants rather than leaving them in importer scripts: card 
 Management commands:
 - `manage.py import_card_changed_files` - Replace kanban card changed-file links.
 - `manage.py import_card_predicted_files` - Replace kanban card predicted-path links.
-- `manage.py import_cards` - Create kanban cards from a JSON file.
 
 `apps.library/`
 

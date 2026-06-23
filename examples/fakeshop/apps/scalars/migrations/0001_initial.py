@@ -9,13 +9,7 @@ import apps.scalars.models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("scalars", "0001_initial"),
-        ("scalars", "0002_scalar_specimen_tag"),
-        ("scalars", "0003_overridespecimen"),
-        ("scalars", "0004_overridespecimen_note"),
-        ("scalars", "0005_mediaspecimen"),
-    ]
+    initial = True
 
     dependencies = []
 

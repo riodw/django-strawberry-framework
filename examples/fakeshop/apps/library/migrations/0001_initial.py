@@ -5,12 +5,7 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("library", "0001_initial"),
-        ("library", "0002_taggeditem"),
-        ("library", "0003_patron_lifetime_fines_cents"),
-        ("library", "0004_patron_email"),
-    ]
+    initial = True
 
     dependencies = [
         ("contenttypes", "0002_remove_content_type_name"),

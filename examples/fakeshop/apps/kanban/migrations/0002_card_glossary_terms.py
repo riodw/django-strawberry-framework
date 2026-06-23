@@ -79,18 +79,9 @@ def _delete_card_reference_source_uuid_rows(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("kanban", "0013_card_glossary_terms"),
-        ("kanban", "0014_relativesize_description"),
-        ("kanban", "0015_alter_cardreference_options_and_more"),
-        ("kanban", "0016_remove_card_relative_size_high"),
-        ("kanban", "0017_packagefile_card_changed_files"),
-        ("kanban", "0018_rename_packagefile_trackedpath"),
-    ]
-
     dependencies = [
-        ("glossary", "0002_remove_glossarydocument_glossary_document_key_required_and_more"),
-        ("kanban", "0012_alter_boarddoc_options_boarddoc_include_heading_and_more"),
+        ("glossary", "0001_initial"),
+        ("kanban", "0001_initial"),
     ]
 
     operations = [

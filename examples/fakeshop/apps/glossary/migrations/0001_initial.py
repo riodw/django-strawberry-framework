@@ -37,13 +37,10 @@ def copy_glossary_documents_to_board_docs(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("glossary", "0001_initial"),
-        ("glossary", "0002_remove_glossarydocument_glossary_document_key_required_and_more"),
-    ]
+    initial = True
 
     dependencies = [
-        ("kanban", "0012_alter_boarddoc_options_boarddoc_include_heading_and_more"),
+        ("kanban", "0001_initial"),
     ]
 
     operations = [

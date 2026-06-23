@@ -152,7 +152,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - Status: Planned
 - Relative size: L
 - Labels: `forms`, `mutations`, `public-api`
-- Spec: [spec-038-form_mutations-0_0_12.md](docs/spec-038-form_mutations-0_0_12.md)
+- Spec: [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md)
 
 #### Predicted files
 

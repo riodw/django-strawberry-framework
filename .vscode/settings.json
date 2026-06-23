@@ -1,0 +1,46 @@
+{
+  // Shared editor config for django-strawberry-framework. Mirrors the tooling in
+  // pyproject.toml (Ruff) and pytest.ini. Keep this minimal and contributor-neutral
+  // — no personal paths or opinionated extras.
+
+  // Ruff drives both formatting and linting (see [tool.ruff] in pyproject.toml).
+  "[python]": {
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.ruff": "explicit",
+      "source.organizeImports.ruff": "explicit"
+    }
+  },
+
+  // Point the Python extension at the uv-managed virtualenv.
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+
+  // pytest is configured in pytest.ini (testpaths, addopts); leave args empty so
+  // that config drives discovery.
+  "python.testing.pytestEnabled": true,
+  "python.testing.unittestEnabled": false,
+  "python.testing.pytestArgs": [],
+
+  // Keep generated caches and build output out of the explorer and search.
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/.ruff_cache": true,
+    "**/.pytest_cache": true,
+    "**/*.egg-info": true,
+    "**/dist": true
+  },
+  "search.exclude": {
+    "**/__pycache__": true,
+    "**/.ruff_cache": true,
+    "**/.pytest_cache": true,
+    "**/*.egg-info": true,
+    "**/dist": true
+  },
+
+  // Editor and workbench behavior.
+  "explorer.autoReveal": "focusNoScroll",
+  "window.title": "${activeEditorLong}${separator}${rootName}",
+  "search.collapseResults": "alwaysExpand",
+  "editor.find.cursorMoveOnType": false
+}

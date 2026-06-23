@@ -1,0 +1,10 @@
+{
+  // Extensions recommended for contributors to this repo. VS Code prompts to
+  // install these on first open; they mirror the tooling in pyproject.toml.
+  "recommendations": [
+    "charliermarsh.ruff",
+    "ms-python.python",
+    "ms-python.vscode-pylance",
+    "tamasfe.even-better-toml"
+  ]
+}

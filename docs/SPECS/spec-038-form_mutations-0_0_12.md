@@ -849,7 +849,7 @@ data — a consumer needing data back uses a `DjangoModelFormMutation`).
 
 ### Decision 1 — Spec filename and canonical naming
 
-The spec file lives at **`docs/spec-038-form_mutations-0_0_12.md`**.
+The spec file lives at **`docs/SPECS/spec-038-form_mutations-0_0_12.md`**.
 
 Justification:
 
@@ -1198,6 +1198,21 @@ required-ness from `field.required`:
   `list[<id>]`.
 - `forms.FileField` / `forms.ImageField` → the [`Upload`][glossary-upload-scalar]
   scalar ([`spec-037`][spec-037]).
+
+**The related model for a relation field's id basis.** A `ModelForm` relation
+field has a backing column, so the related model (and its primary
+[`DjangoType`][glossary-djangotype], which decides Relay-`GlobalID` vs raw pk) is
+resolved through that column (`form_class._meta.model._meta.get_field(name)` →
+`column.related_model`). A **plain `Form`** `ModelChoiceField` /
+`ModelMultipleChoiceField` (a form-declared relation with no model column) has no
+such column, so its related model is its **`field.queryset.model`**; the identical
+Relay-`GlobalID`-vs-raw-pk rule and `<name>_id` / `list[<id>]` scheme then apply, so
+the wire contract is uniform across the model-backed and model-less relation paths.
+The [`forms/resolvers.py`][forms-resolvers] decode (the relation visibility check in
+[Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--formerrors--save--optimizer-refetch--payload))
+resolves the same related primary type by the **same basis** — `column.related_model`
+for a model-backed relation, `field.queryset.model` for a model-less one — so the
+input id type and the decode's visibility query agree.
 
 **Where a form field overlaps a Django column type, reuse the read-side converters.**
 A `ChoiceField` whose choices come from a model's `choices` should resolve to the
@@ -2212,7 +2227,7 @@ implementation reveals it is wrong.
   field name verbatim for migration.
 - **Card-citation note — the spec filename vs the card's `docs/spec-form_mutations.md`.**
   The card DoD names `docs/spec-form_mutations.md`; the structured convention
-  authors at `docs/spec-038-form_mutations-0_0_12.md`
+  authors at `docs/SPECS/spec-038-form_mutations-0_0_12.md`
   ([Decision 1](#decision-1--spec-filename-and-canonical-naming)). Recorded, not
   silently reconciled, per the [`docs/SPECS/NEXT.md`][next] boundary rule.
 - **`form.save(commit=False)` vs `form.save()` for relation timing.** Preferred
@@ -2264,9 +2279,9 @@ plus the exports / version-cut the [`docs/SPECS/NEXT.md`][next] flow adds.
 
 **Spec + companion CSV**
 
-1. `docs/spec-038-form_mutations-0_0_12.md` (the canonical card spec) and its
+1. `docs/SPECS/spec-038-form_mutations-0_0_12.md` (the canonical card spec) and its
    companion `spec-038-form_mutations-0_0_12-terms.csv` exist;
-   `uv run python scripts/check_spec_glossary.py --spec docs/spec-038-form_mutations-0_0_12.md`
+   `uv run python scripts/check_spec_glossary.py --spec docs/SPECS/spec-038-form_mutations-0_0_12.md`
    reports `OK: <N> terms`.
 
 **Slice 1 — form-field converter + form-derived input**

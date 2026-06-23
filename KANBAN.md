@@ -61,7 +61,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
 - `0.0.8` shipped both planned read-side subsystems: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`.
-- `0.0.11` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
+- `0.0.12` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -97,6 +97,7 @@ To complete the Alpha (pre-0.1.0) milestone: **84.1%**.
 
 | Card | Spec file |
 | --- | --- |
+| `WIP-ALPHA-038-0.0.12` - Form-based mutations (Django Forms / ModelForms) | [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md) |
 | `DONE-037-0.0.11` - Upload scalar and file / image field mapping | [spec-037-upload_file_image_mapping-0_0_11.md](docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md) |
 | `DONE-036-0.0.11` - Mutations + auto-generated Input types | [spec-036-mutations-0_0_11.md](docs/SPECS/spec-036-mutations-0_0_11.md) |
 | `DONE-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | [spec-035-optimizer_hardening-0_0_10.md](docs/SPECS/spec-035-optimizer_hardening-0_0_10.md) |
@@ -137,19 +138,15 @@ To complete the Alpha (pre-0.1.0) milestone: **84.1%**.
 
 ## In progress
 
-Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts. No cards in progress.
-
-## To Do - Alpha (0.1.0)
-
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
+Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
 
 <a id="form_based_mutations_django_forms_modelforms"></a>
-### [TODO-ALPHA-038-0.0.12 - Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)
+### [WIP-ALPHA-038-0.0.12 - Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
 - Severity: Major
-- Status: Planned
+- Status: In progress
 - Relative size: L
 - Labels: `forms`, `mutations`, `public-api`
 - Spec: [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md)
@@ -208,6 +205,10 @@ needs spec
 - Dependency: `DONE-036-0.0.11` — general mutation infrastructure (input-type generation, mutation-field plumbing) is the foundation form mutations attach to. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
 - Related: Validation errors surface through the shared `errors: list[FieldError]` envelope defined in `DONE-036-0.0.11`, populated from `form.errors`. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
 - Related: Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `DONE-036-0.0.11`. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+
+## To Do - Alpha (0.1.0)
+
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 <a id="drf_serializer_mutations_serializermutation"></a>
 ### [TODO-ALPHA-039-0.0.13 - DRF serializer mutations (`SerializerMutation`)](KANBAN.html#drf_serializer_mutations_serializermutation)
@@ -1559,7 +1560,7 @@ needs spec
 - [x] Add `docs/spec-mutations.md`.
 - [x] Implement `django_strawberry_framework/mutations/` (sets, fields, resolvers, input-type generation) on the DRF-style Meta surface (`Meta.input_class`, `Meta.partial_input_class`, etc.).
 - [x] Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`.
-- [x] Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
+- [x] Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `WIP-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
 - [x] Tests under `tests/mutations/`.
 - [x] Live HTTP coverage under `examples/fakeshop/test_query/` exercising the products write surface.
 
@@ -1595,9 +1596,9 @@ needs spec
 - Dependency: `DONE-018-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution. -> `DONE-018-0.0.6` - Multiple DjangoTypes per model with `Meta.primary`
 - Related: Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`. -> `DONE-010-0.0.4` - 0.0.4 foundation slice (definition-order independence)
 - Dependency: `DONE-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`. -> `DONE-034-0.0.10` - Permissions subsystem
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-038-0.0.12` - Form-based mutations (Django Forms / ModelForms)
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-039-0.0.13` - DRF serializer mutations (`SerializerMutation`)
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `TODO-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-040-0.0.13` - Auth mutations (login / logout / register)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `WIP-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `WIP-ALPHA-038-0.0.12` - Form-based mutations (Django Forms / ModelForms)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `WIP-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-039-0.0.13` - DRF serializer mutations (`SerializerMutation`)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `WIP-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-040-0.0.13` - Auth mutations (login / logout / register)
 - Related: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by 038 / 039 / 040. -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="optimizer_robustness_hardening_upstream_comparison_guards"></a>

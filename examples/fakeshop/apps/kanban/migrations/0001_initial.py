@@ -39,20 +39,7 @@ def move_spec_links_to_spec_docs(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    replaces = [
-        ("kanban", "0001_initial"),
-        ("kanban", "0002_uuidmodel_kanban_uuidmodel_exactly_one_link"),
-        ("kanban", "0003_alter_card_options_alter_carditem_options_and_more"),
-        ("kanban", "0004_card_reference"),
-        ("kanban", "0005_remove_card_body_remove_card_summary_and_more"),
-        ("kanban", "0006_boarddoc_boarddockind_and_more"),
-        ("kanban", "0007_unique_card_number"),
-        ("kanban", "0008_board_doc_card_references"),
-        ("kanban", "0009_target_version_number_required"),
-        ("kanban", "0010_card_number_and_milestone_required"),
-        ("kanban", "0011_required_spec_doc_card"),
-        ("kanban", "0012_alter_boarddoc_options_boarddoc_include_heading_and_more"),
-    ]
+    initial = True
 
     dependencies = []
 

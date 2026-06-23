@@ -55,6 +55,19 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["django_strawberry_framework"]
 
+[tool.hatch.build.targets.sdist]
+# Ship the package, tests, and key metadata only. Without this, hatchling's default
+# sdist tars the whole tree — internal docs/SPECS, examples/ (with sqlite DBs), and
+# any local .claude/ state — into a ~7 MB archive.
+include = [
+    "/django_strawberry_framework",
+    "/tests",
+    "/README.md",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/pyproject.toml",
+]
+
 [tool.ruff]
 line-length = 99
 target-version = "py310"

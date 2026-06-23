@@ -164,6 +164,11 @@ poetry.toml
 # ruff
 .ruff_cache/
 
+# Claude Code local state — settings.local.json, worktrees, scheduled tasks, agent
+# memory. Not shared; and since hatchling's sdist reads .gitignore (but not
+# .git/info/exclude), this also keeps them out of built source distributions.
+.claude/
+
 # Shared workflow shadow files (static-analysis byproducts)
 # Review/build artifacts, plan files, and worker instructions remain tracked.
 docs/shadow/

@@ -250,3 +250,80 @@ def test_abstract_base_target_raises_at_construction():
     """The abstract ``DjangoMutation`` base (no ``Meta`` -> no ``_mutation_meta``) is rejected."""
     with pytest.raises(ConfigurationError, match="abstract base"):
         DjangoMutationField(DjangoMutation)
+
+
+# ---------------------------------------------------------------------------
+# Three-axis generalization (spec-038 Slice 3)
+# ---------------------------------------------------------------------------
+
+
+def test_generalized_target_accepts_modelform_and_plain_form_family():
+    """``DjangoMutationField`` accepts both form-mutation flavors (the duck-typed target check).
+
+    The Slice-3 generalization recognizes the mutation / form family by the
+    duck-typed ``_mutation_meta`` + ``resolve_sync`` / ``resolve_async`` +
+    ``input_type_name`` / ``input_module_path`` protocol, NOT
+    ``issubclass(DjangoMutation)`` - so a ``DjangoModelFormMutation`` (a
+    ``DjangoMutation`` subclass) AND a plain ``DjangoFormMutation`` (NOT a
+    ``DjangoMutation`` subclass) both construct without raising.
+    """
+    from django import forms
+
+    from django_strawberry_framework import DjangoFormMutation, DjangoModelFormMutation
+
+    class ItemModelForm(forms.ModelForm):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    class ContactForm(forms.Form):
+        message = forms.CharField()
+
+    class CreateItemForm(DjangoModelFormMutation):
+        class Meta:
+            form_class = ItemModelForm
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = ContactForm
+            permission_classes = []
+
+    # Neither construction raises (the family is accepted).
+    assert DjangoMutationField(CreateItemForm) is not None
+    assert DjangoMutationField(Submit) is not None
+
+
+def test_model_flavor_dispatch_unchanged():
+    """A ``DjangoMutation`` target still names ``mutations.inputs`` for ``data:`` + routes the model pipeline.
+
+    The no-regression pin: the generalized ``data:`` lazy-ref consults the model
+    base's ``input_module_path`` default (``mutations.inputs``), the synthesized
+    signature is unchanged per operation, and the seam dispatch
+    (``resolve_sync`` / ``resolve_async``) delegates to the model pipeline.
+    """
+    _declare_item_primaries()
+    CreateItem, UpdateItem, DeleteItem = _operation_mutations()
+
+    @strawberry.type
+    class Mutation:
+        create_item = DjangoMutationField(CreateItem)
+        update_item = DjangoMutationField(UpdateItem)
+        delete_item = DjangoMutationField(DeleteItem)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+
+    # The model ``data:`` input materializes in ``mutations.inputs`` (NOT
+    # ``forms.inputs``); the field args are the unchanged per-operation shape.
+    inputs_module = sys.modules[INPUTS_MODULE_PATH]
+    assert hasattr(inputs_module, "ItemInput")
+    assert _field_arg_map(schema, "createItem") == {"data": "ItemInput!"}
+    assert _field_arg_map(schema, "updateItem") == {"id": "ID!", "data": "ItemPartialInput!"}
+    assert _field_arg_map(schema, "deleteItem") == {"id": "ID!"}
+    # The model seam default routes to the model resolver pipeline.
+    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+
+    assert CreateItem.resolve_sync.__func__ is DjangoMutation.resolve_sync.__func__
+    assert mutation_resolvers.resolve_mutation_sync is not None

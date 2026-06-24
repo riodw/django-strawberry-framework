@@ -15,9 +15,6 @@ DEFAULT_MD_PATH = REPO_ROOT / "KANBAN.md"
 KANBAN_HTML_PATH = "KANBAN.html"
 GITHUB_BLOB_URL = "https://github.com/riodw/django-strawberry-framework/blob/main"
 CARD_REF_RE = re.compile(r"\{\{card_ref:(\d+)\}\}")
-CARD_ID_RE = re.compile(
-    r"\b(?:TODO|WIP|BACKLOG|BLOCKED|DONE)(?:-[A-Z]+)?-\d{3}-\d+\.\d+\.\d+\b",
-)
 LINK_DEFINITIONS_KEY = "link-definitions"
 COLUMN_DOC_KEYS = {
     "in-progress",
@@ -151,45 +148,27 @@ def resolve_card_refs(text: str, doc: dict[str, Any]) -> str:
     return CARD_REF_RE.sub(replace, text)
 
 
-def card_reference_replacements(card: dict[str, Any]) -> tuple[dict[str, str], dict[str, str]]:
-    """Return card-reference prose and token rewrites from FK targets."""
-    grouped = defaultdict(list)
-    for reference in card.get("outgoingReferences", []):
-        if reference.get("rawText"):
-            grouped[reference["rawText"]].append(reference)
+def resolve_card_refs_for_card(text: str, card: dict[str, Any]) -> str:
+    """Replace ``{{card_ref:N}}`` placeholders using a card's FK-backed references.
 
-    text_replacements = {}
-    token_replacements = {}
-    for raw_text, references in grouped.items():
-        tokens = CARD_ID_RE.findall(raw_text)
-        if not tokens:
-            continue
-        resolved_text = raw_text
-        ordered_references = sorted(references, key=lambda value: value["order"])
-        for token, reference in zip(tokens, ordered_references, strict=False):
-            resolved_token = card_key(reference["targetCard"])
-            token_replacements[token] = resolved_token
-            resolved_text = resolved_text.replace(token, resolved_token, 1)
-        text_replacements[raw_text] = resolved_text
-    return text_replacements, token_replacements
+    The card-side mirror of :func:`resolve_card_refs` (which serves ``BoardDoc``
+    bodies): ``N`` indexes the card's ``outgoingReferences`` by ``order`` and
+    resolves to the *current* id of the referenced target card. The card id is a
+    deliberately unstable, recomputed ordinal, so prose stores the stable
+    placeholder and the id is resolved at render time from the reference FK --
+    never a literal id snapshot that would drift on the next renumber.
+    """
+    references = {
+        reference["order"]: reference for reference in card.get("outgoingReferences", [])
+    }
 
+    def replace(match: re.Match[str]) -> str:
+        reference = references.get(int(match.group(1)))
+        if reference is None:
+            return match.group(0)
+        return card_key(reference["targetCard"])
 
-def resolve_card_text(
-    text: str,
-    text_replacements: dict[str, str],
-    token_replacements: dict[str, str],
-) -> str:
-    """Resolve stale card-id prose snippets using normalized card references."""
-    resolved = text
-    for raw_text, replacement in sorted(
-        text_replacements.items(),
-        key=lambda item: len(item[0]),
-        reverse=True,
-    ):
-        resolved = resolved.replace(raw_text, replacement)
-    for token, replacement in token_replacements.items():
-        resolved = resolved.replace(token, replacement)
-    return resolved
+    return CARD_REF_RE.sub(replace, text)
 
 
 def bullet_lines(prefix: str, text: str) -> list[str]:
@@ -371,7 +350,6 @@ def render_tracked_paths(card: dict[str, Any]) -> list[str]:
 
 def render_card(card: dict[str, Any]) -> list[str]:
     """Render a kanban card with its lookup metadata and child rows."""
-    text_replacements, token_replacements = card_reference_replacements(card)
     slug = card["slug"]
     lines = [
         f'<a id="{slug}"></a>',
@@ -416,7 +394,7 @@ def render_card(card: dict[str, Any]) -> list[str]:
             [
                 "#### Planning note",
                 "",
-                resolve_card_text(planning_note.strip(), text_replacements, token_replacements),
+                resolve_card_refs_for_card(planning_note.strip(), card),
                 "",
             ],
         )
@@ -446,14 +424,14 @@ def render_card(card: dict[str, Any]) -> list[str]:
                 lines.extend(
                     bullet_lines(
                         f"- {marker}",
-                        resolve_card_text(item["text"], text_replacements, token_replacements),
+                        resolve_card_refs_for_card(item["text"], card),
                     ),
                 )
             else:
                 lines.extend(
                     bullet_lines(
                         "-",
-                        resolve_card_text(item["text"], text_replacements, token_replacements),
+                        resolve_card_refs_for_card(item["text"], card),
                     ),
                 )
         lines.append("")
@@ -468,10 +446,9 @@ def render_card(card: dict[str, Any]) -> list[str]:
             target_card = reference["targetCard"]
             target = f"`{card_key(target_card)}` - {target_card['title']}"
             kind = reference["kind"]["label"]
-            text = resolve_card_text(
+            text = resolve_card_refs_for_card(
                 reference.get("rawText", "").strip(),
-                text_replacements,
-                token_replacements,
+                card,
             )
             if text:
                 lines.extend(bullet_lines(f"- {kind}: {text} ->", target))

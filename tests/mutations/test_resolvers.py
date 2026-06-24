@@ -358,7 +358,7 @@ def test_coerce_lookup_id_rejects_non_globalid():
     against the target model, and a malformed string cannot decode at all, so both
     are rejected as a ``FieldError`` on ``id`` BEFORE any pk lookup - never coerced
     to a bare pk that would skip the AR-H4 type guard or raise a Django coercion
-    error at ``.get(pk=...)`` (feedback #1). ``_coerce_lookup_id`` is always called
+    error at ``.get(pk=...)`` (feedback #1). ``coerce_lookup_id`` is always called
     with the mutation's resolved primary type, so this unit pin passes a real bound
     ``ItemT`` (the shared ``decode_model_global_id`` reads ``target_type``'s model
     up front); decode fails on the malformed input with no pk lookup or DB read.
@@ -371,7 +371,7 @@ def test_coerce_lookup_id_rejects_non_globalid():
             primary = True
 
     for bad in ("5", "not-a-global-id", 5):
-        node_id, error = resolvers._coerce_lookup_id(bad, ItemT)
+        node_id, error = resolvers.coerce_lookup_id(bad, ItemT)
         assert node_id is None
         assert error is not None and error.field == "id"
 
@@ -611,7 +611,7 @@ def test_transaction_rolls_back_when_post_save_step_fails():
     # Force the post-save snapshot step to blow up so the atomic block aborts.
     with mock.patch.object(
         resolvers,
-        "_refetch_optimized",
+        "refetch_optimized",
         side_effect=RuntimeError("boom after save"),
     ):
         res = schema.execute_sync(
@@ -1874,7 +1874,7 @@ def test_validation_error_to_field_errors_non_dict_uses_all_key():
     message produce. It is the documented single-source mapper, exercised directly as
     it is unreachable through the current ``full_clean`` path.
     """
-    errors = resolvers._validation_error_to_field_errors(ValidationError("a plain message"))
+    errors = resolvers.validation_error_to_field_errors(ValidationError("a plain message"))
     assert [(error.field, error.messages) for error in errors] == [
         (NON_FIELD_ERROR_KEY, ["a plain message"]),
     ]

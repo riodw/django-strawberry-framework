@@ -46,7 +46,7 @@ _OPERATION_PERMISSION_ACTION: dict[str, str] = {
 # pipeline (spec-036 Decision 15), so an async permission hook can never be
 # awaited - and silently treating its truthy coroutine as "allow" is an
 # authorization BYPASS (feedback - async permission bypass). Shared by both
-# enforcement seams - the resolver's ``_authorize_or_raise`` (``check_permission``)
+# enforcement seams - the resolver's ``authorize_or_raise`` (``check_permission``)
 # and ``DjangoMutation.check_permission`` (each ``has_permission``) - so the
 # wording cannot drift between them.
 _PERMISSION_ASYNC_RECOURSE = (

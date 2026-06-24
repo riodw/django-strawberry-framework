@@ -532,6 +532,29 @@ class TypeRegistry:
             "clear_mutation_registry",
             lambda clear: clear(),
         )
+        # Form-mutation co-clears (spec-038 Slice 2). The same two-block shape as
+        # the mutation co-clears above, in the disjoint ``forms`` namespace: (1) the
+        # generated form-input + form-payload globals ledger
+        # (``clear_form_input_namespace`` - the Slice-1 ledger finally wired here;
+        # the model-less ``{ ok errors }`` payloads route through the
+        # ``mutations.inputs`` ledger cleared above); (2) the plain-form
+        # ``DjangoFormMutation`` declaration registry (``clear_form_mutation_registry``)
+        # so a fresh finalize re-emits cleanly and ``iter_form_mutations()`` is empty.
+        _clear_if_importable(
+            "django_strawberry_framework.forms.inputs",
+            "clear_form_input_namespace",
+            lambda clear: clear(),
+        )
+        _clear_if_importable(
+            "django_strawberry_framework.forms.sets",
+            "clear_form_mutation_registry",
+            lambda clear: clear(),
+        )
+        _clear_if_importable(
+            "django_strawberry_framework.forms.sets",
+            "clear_form_shape_build_cache",
+            lambda clear: clear(),
+        )
         _clear_if_importable(
             "django_strawberry_framework.connection",
             "clear_connection_type_cache",

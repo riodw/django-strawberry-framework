@@ -28,8 +28,10 @@ import sys
 
 import pytest
 from apps.products import models
+from apps.products.forms import REJECTED_ITEM_NAME
 from apps.products.services import create_users, delete_data, seed_cascade_split, seed_data
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
@@ -817,7 +819,7 @@ def test_update_item_wellformed_id_uncoercible_node_id_is_not_found_no_crash():
     coerced through the model's pk field and, failing, treated as not-found - a
     ``FieldError`` on ``id`` (indistinguishable from a missing row), NEVER reaching
     ``.get(pk="abc")`` where Django would raise a top-level ``ValueError`` (500) and
-    leak the pk column type. Pins the ``_coerce_lookup_id`` UNCOERCIBLE_PK branch
+    leak the pk column type. Pins the ``coerce_lookup_id`` UNCOERCIBLE_PK branch
     over the live HTTP stack (the malformed test above exercises only DECODE_FAILED,
     the wrong-type test only WRONG_MODEL).
     """
@@ -2076,3 +2078,609 @@ def test_post_non_object_json_body_returns_400_not_500(body):
     response = _post_raw_body(body)
 
     assert response.status_code == 400
+
+
+# =============================================================================
+# Form-mutation live surface (spec-038 Slice 4 / Decision 12). The products
+# schema exposes `DjangoModelFormMutation` (`createItemViaForm` /
+# `updateItemViaForm` over `ItemModelForm`, `createItemWithFileViaForm` over
+# `ItemFileModelForm`, `createStampedItemViaForm` over `StampedItemModelForm`)
+# and a plain `DjangoFormMutation` (`submitContact` over `ContactForm`). Every
+# test seeds via `seed_data` / `create_users` / `seed_cascade_split` first line
+# and reuses the existing reload fixture + `_post_graphql` / `_login_with_perm` /
+# `_global_id` helpers. The `ModelForm` wire envelope is
+# `{ node, errors { field messages } }`; the plain form is
+# `{ ok, errors { field messages } }`.
+# =============================================================================
+
+# The form-mutation query strings (named distinctly from the `036` `_CREATE_ITEM`
+# constants so each wire contract is spelled once). `createItemViaForm(data:
+# ItemModelFormInput!)`, `updateItemViaForm(id: ID!, data: ItemModelFormPartialInput!)`,
+# `submitContact(data: ContactFormInput!)`, `createStampedItemViaForm(data:
+# StampedItemModelFormInput!)`. `categoryId` is the Relay `ID!` GlobalID string,
+# server-decoded (the same shape the `036` `createItem` uses).
+_CREATE_ITEM_VIA_FORM = (
+    "mutation($d: ItemModelFormInput!) { createItemViaForm(data: $d) { "
+    "node { name category { name } } errors { field messages } } }"
+)
+_UPDATE_ITEM_VIA_FORM = (
+    "mutation($id: ID!, $d: ItemModelFormPartialInput!) { updateItemViaForm(id: $id, data: $d) { "
+    "node { name } errors { field messages } } }"
+)
+_CREATE_STAMPED_ITEM_VIA_FORM = (
+    "mutation($d: StampedItemModelFormInput!) { createStampedItemViaForm(data: $d) { "
+    "node { name description } errors { field messages } } }"
+)
+_SUBMIT_CONTACT = (
+    "mutation($d: ContactFormInput!) { submitContact(data: $d) { ok errors { field messages } } }"
+)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_happy_path():
+    """`createItemViaForm` with a permitted caller creates the `Item`, no errors.
+
+    The `ModelForm` create flavor mirrors the `036` `createItem` happy path:
+    `view_item_1` granted the explicit `add_item` (the `ModelForm` flavor inherits
+    `DjangoModelPermission`, codename `add_item`). The payload `node` carries the
+    created `name` + the nested `category { name }` (the optimizer re-fetch), and the
+    row persists.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={
+            "d": {
+                "name": "FormWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaForm"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "FormWidget", "category": {"name": category.name}}
+    created = models.Item.objects.get(name="FormWidget", category=category)
+    assert created.description == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_category_id_writes_through_form_category_field():
+    """`categoryId` validates + writes through the form's `category` field (P1 reverse map).
+
+    The created `Item.category_id` equals the submitted category pk, and the only
+    channel the test query offers for setting it is the generated `categoryId` input
+    arg (the form's `category` `ModelChoiceField` reverse-mapped). This is NOT a raw
+    model `setattr` - the value reaches the bound form by its form-field key.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={
+            "d": {
+                "name": "ReverseMapWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaForm"]
+    assert result["errors"] == []
+    created = models.Item.objects.get(name="ReverseMapWidget")
+    # The FK was written through the form's `category` field from the `categoryId` arg.
+    assert created.category_id == category.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_via_form_non_colliding_partial_update():
+    """A `name`-only `updateItemViaForm` persists `name`, leaving the row otherwise intact.
+
+    The non-colliding partial-update success: `ItemModelFormPartialInput` provides only
+    `name`; the unprovided `description` / `category` are reconstructed from the located
+    row via `model_to_dict` and left unchanged. `staff_1` (full visibility) granted the
+    explicit `change_item` codename.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(
+        name="BeforeForm",
+        description="keep me",
+        category=category,
+    )
+    client = _login_with_perm("staff_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_FORM,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk), "d": {"name": "AfterForm"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaForm"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "AfterForm"}
+    item.refresh_from_db()
+    assert item.name == "AfterForm"
+    assert item.description == "keep me"
+    assert item.category_id == category.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_via_form_partial_update_preserves_category_and_description():
+    """RIGHT-PATH / LOAD-BEARING: a `name`-only update preserves `category` (FK) + `description`.
+
+    The mutation's `data:` is `{name: ...}` ONLY, so the test can only exercise the
+    partial-update reconstruction path - it cannot accidentally pass `category` /
+    `description` through. After the update, the located row's `category_id` and
+    `description` are UNCHANGED from their seeded values while `name` IS the new value.
+    If reconstruction dropped the FK / scalar, this assertion would fail.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(
+        name="PreserveBefore",
+        description="preserve this description",
+        category=category,
+    )
+    original_category_id = item.category_id
+    client = _login_with_perm("staff_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_FORM,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk), "d": {"name": "PreserveAfter"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaForm"]
+    assert result["errors"] == []
+    item.refresh_from_db()
+    assert item.name == "PreserveAfter"
+    # The unprovided FK + scalar are reconstructed (not dropped) - the P1 preservation.
+    assert item.category_id == original_category_id
+    assert item.description == "preserve this description"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_via_form_partial_collision_fires_unique_constraint_on_name_change():
+    """RIGHT-PATH / LOAD-BEARING: a `name`-only collision fires `unique_item_per_category`.
+
+    Two `Item`s `A` / `B` under one category; `updateItemViaForm(A, {name: "B"})`. The
+    mutation's `data:` carries ONLY `name`, so the unchanged `category` co-participates
+    in the composite constraint via the `model_to_dict` reconstruction (the right-path
+    proof - if reconstruction dropped `category`, the constraint could not fire). The
+    form's `_post_clean` -> `validate_constraints()` catches it as a `NON_FIELD_ERRORS`
+    entry mapped to the `"__all__"` sentinel; `node` is null, exactly one `errors` entry,
+    and `A`'s name is unchanged.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item_a = models.Item.objects.create(name="FormA", category=category)
+    models.Item.objects.create(name="FormB", category=category)
+    client = _login_with_perm("staff_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_FORM,
+        client=client,
+        variables={"id": _global_id("products.item", item_a.pk), "d": {"name": "FormB"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaForm"]
+    assert result["node"] is None
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["field"] == "__all__"
+    item_a.refresh_from_db()
+    assert item_a.name == "FormA"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_clean_field_error_is_field_keyed():
+    """A `clean_<field>` error -> `FieldError` keyed to the FORM field (`name`), no top-level error.
+
+    `ItemModelForm.clean_name` rejects `REJECTED_ITEM_NAME`. The failure surfaces in
+    `form.errors["name"]`, mapped to a `FieldError` whose `field` is the form field name
+    `name`. `node` is null, `messages` non-empty, no top-level GraphQL error, no write.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={
+            "d": {
+                "name": REJECTED_ITEM_NAME,
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaForm"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["name"]
+    assert result["errors"][0]["messages"]
+    assert models.Item.objects.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_unique_constraint_envelope_uses_all_sentinel():
+    """A duplicate `(category, name)` `createItemViaForm` -> a `"__all__"`-keyed `FieldError`.
+
+    The model's `unique_item_per_category` constraint surfaces through the `ModelForm`'s
+    `_post_clean` -> `validate_constraints()` as a `NON_FIELD_ERRORS` entry mapped to the
+    `"__all__"` sentinel - identical to the `036` model-driven path (line 388). `node` is
+    null, exactly one `errors` entry, no second row written.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    existing = models.Item.objects.create(name="FormDup", category=category)
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={
+            "d": {
+                "name": existing.name,
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaForm"]
+    assert result["node"] is None
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["field"] == "__all__"
+    assert models.Item.objects.filter(name="FormDup", category=category).count() == 1
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_anonymous_is_denied_top_level_error_no_write():
+    """An anonymous `createItemViaForm` -> top-level error, `data` null, no write.
+
+    The `ModelForm` flavor inherits the `DjangoModelPermission` default, which denies a
+    caller with no authenticated user. The denial RAISES a top-level `GraphQLError` on
+    the non-null payload field (so GraphQL nulls `data`), NOT a `FieldError` envelope
+    entry - identical to the `036` anonymous denial (line 458).
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        variables={
+            "d": {
+                "name": "AnonFormWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    assert payload["data"] is None
+    assert "Not authorized" in payload["errors"][0]["message"]
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="AnonFormWidget").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_missing_model_perm_is_denied_no_write():
+    """A caller holding only `view_item` (lacks `add_item`) -> top-level denial, no write.
+
+    `view_item_1` holds only `products.view_item` and LACKS `add_item`, so the inherited
+    `DjangoModelPermission` denies the create - a top-level `GraphQLError`, no row written
+    (mirror line 493). Isolates the model-perm codename denial from the anonymous case.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login("view_item_1")  # only products.view_item, no add_item
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={
+            "d": {
+                "name": "NoPermFormWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    assert payload["data"] is None
+    assert "Not authorized" in payload["errors"][0]["message"]
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="NoPermFormWidget").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_via_form_visibility_scoped_hidden_private_row_is_not_found():
+    """A caller who holds `change_item` but cannot SEE a private `Item` gets not-found.
+
+    `seed_cascade_split` gives `item_under_private` (a public Item under a PRIVATE
+    category) and `item_under_public`. A non-staff `view_item_1` user granted
+    `change_item` cannot see `item_under_private` (the `ItemType.get_queryset` cascade
+    hides it), so the `updateItemViaForm` LOCATE misses -> a not-found `FieldError` on
+    `id`, row unchanged; the same update succeeds for `item_under_public`. The write perm
+    is HELD, isolating the visibility miss from an authorization denial (mirror line 528).
+    """
+    create_users(1)
+    chain = seed_cascade_split()
+    private_gid = _global_id("products.item", chain["item_under_private"].pk)
+    public_gid = _global_id("products.item", chain["item_under_public"].pk)
+    client = _login_with_perm("view_item_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_FORM,
+        client=client,
+        variables={"id": private_gid, "d": {"name": "RenamedHidden"}},
+    )
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaForm"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["id"]
+    chain["item_under_private"].refresh_from_db()
+    assert chain["item_under_private"].name == "zzz_item_under_private"
+
+    # Contrast: the SAME update succeeds for the visible public row.
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_FORM,
+        client=client,
+        variables={"id": public_gid, "d": {"name": "RenamedPublicForm"}},
+    )
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaForm"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "RenamedPublicForm"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_relation_id_for_hidden_category_is_field_error():
+    """RIGHT-PATH / LOAD-BEARING (P1): a permitted writer cannot attach a `Category` they cannot SEE.
+
+    `seed_cascade_split` gives a PRIVATE category. A non-staff `view_item_1` user granted
+    `add_item` cannot see it, so `createItemViaForm(categoryId=<private cat gid>)` is a
+    field-keyed `FieldError` on `categoryId` - the relation id is resolved through the
+    target's visibility `get_queryset` (the form decode), NOT delegated to the form's
+    default `Category.objects.all()` queryset (which would have accepted it). The SAME
+    caller's create against the VISIBLE public category SUCCEEDS - the contrast proving
+    the decode visibility query, not the form queryset, is the guard. The submitted
+    GlobalID is well-formed-but-hidden, so the test can only exercise the
+    visibility-decode path, not a parse-failure path. The headline slice invariant
+    (mirror line 694).
+    """
+    create_users(1)
+    chain = seed_cascade_split()
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    # Hidden private category: FieldError on categoryId, no write.
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={
+            "d": {
+                "name": "AttachHiddenForm",
+                "categoryId": _global_id("products.category", chain["private_cat"].pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaForm"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["categoryId"]
+    assert models.Item.objects.count() == before
+    assert not models.Item.objects.filter(name="AttachHiddenForm").exists()
+
+    # Visible public category: the same caller's same create succeeds.
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={
+            "d": {
+                "name": "AttachVisibleForm",
+                "categoryId": _global_id("products.category", chain["public_cat"].pk),
+            },
+        },
+    )
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaForm"]
+    assert result["errors"] == []
+    assert result["node"] == {
+        "name": "AttachVisibleForm",
+        "category": {"name": chain["public_cat"].name},
+    }
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path):
+    """A raw `django.test.Client` multipart upload to a form-backed `Upload` field (P1 file-routing).
+
+    Mirrors `test_uploads_api.py::test_multipart_create_uploads_real_files_over_http`'s
+    transport: under `override_settings(MEDIA_ROOT=tmp_path)`, a permitted caller
+    (force-login + `add_item`) POSTs the GraphQL-multipart `{operations, map, "0":
+    SimpleUploadedFile(...)}` body, with `map` pointing `"0"` at
+    `variables.d.attachment` and `variables.d.attachment` set to `None`.
+    **Load-bearing:** `errors == []`, the row exists with the file attached
+    (`attachment.name` endswith `doc.txt`), proving the resolver split routed the
+    `Upload` into the form's `files=` (NOT `data=`) and the form validated + wrote it. A
+    plain-text `FileField` (no Pillow / no image-dimension assertions).
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    from django.contrib.auth.models import Permission
+
+    user = get_user_model().objects.get(username="view_item_1")
+    user.user_permissions.add(
+        Permission.objects.get(codename="add_item", content_type__app_label="products"),
+    )
+    user = get_user_model().objects.get(pk=user.pk)  # drop the stale perm cache
+
+    mutation = (
+        "mutation($d: ItemFileModelFormInput!) { createItemWithFileViaForm(data: $d) { "
+        "node { name } errors { field messages } } }"
+    )
+    operations = {
+        "query": mutation,
+        "variables": {
+            "d": {
+                "name": "UploadedFormWidget",
+                "categoryId": _global_id("products.category", category.pk),
+                "attachment": None,
+            },
+        },
+    }
+    file_map = {"0": ["variables.d.attachment"]}
+
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        client = Client()
+        client.force_login(user)
+        response = client.post(
+            "/graphql/",
+            data={
+                "operations": json.dumps(operations),
+                "map": json.dumps(file_map),
+                "0": SimpleUploadedFile(
+                    "doc.txt",
+                    b"form upload bytes",
+                    content_type="text/plain",
+                ),
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert "errors" not in body, body
+        result = body["data"]["createItemWithFileViaForm"]
+        assert result["errors"] == []
+        assert result["node"] == {"name": "UploadedFormWidget"}
+
+        # The row landed with the file routed into `files=` (the data=/files= split).
+        created = models.Item.objects.get(name="UploadedFormWidget")
+        assert created.attachment.name.endswith("doc.txt")
+        # Read + close the handle so the suite's `-W error` does not catch a leaked
+        # file finalizer (the FieldFile leaves the underlying file open after read()).
+        with created.attachment.open("rb") as handle:
+            assert handle.read() == b"form upload bytes"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_stamped_item_via_form_get_form_kwargs_injects_user():
+    """A `get_form_kwargs` override injecting `user` drives a kwarg-requiring form (P2).
+
+    `StampedItemModelForm.__init__` REQUIRES a `user` kwarg and its `clean()` requires
+    `user.is_authenticated`; `CreateStampedItemViaForm.get_form_kwargs` injects
+    `user=info.context.request.user`. The create succeeds for a logged-in caller, and the
+    injected user stamps the created row's `description` (`stamped by <username>`) - the
+    user-stamped side effect pins that the user actually reached the form. The bind
+    succeeded despite the required-kwarg `__init__`, proving schema-time `base_fields`
+    discovery never instantiated the form.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_STAMPED_ITEM_VIA_FORM,
+        client=client,
+        variables={
+            "d": {
+                "name": "StampedWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createStampedItemViaForm"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "StampedWidget", "description": "stamped by view_item_1"}
+    created = models.Item.objects.get(name="StampedWidget")
+    assert created.description == "stamped by view_item_1"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_submit_contact_plain_form_success_shape():
+    """`submitContact` with valid data -> `ok: true`, empty `errors` (the plain-form success).
+
+    The model-less `DjangoFormMutation` flavor: `AllowAny` opens the success path to any
+    caller. Valid `ContactForm` data validates (no write - the form is model-less), so
+    the payload is `{ ok: true, errors: [] }`.
+    """
+    create_users(1)
+
+    response = _post_graphql(
+        _SUBMIT_CONTACT,
+        variables={"d": {"subject": "Hello there", "email": "user@example.com"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["submitContact"]
+    assert result["ok"] is True
+    assert result["errors"] == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_submit_contact_plain_form_validation_failure_shape():
+    """`submitContact` with data failing `clean_subject` -> `ok: false`, field-keyed `errors`.
+
+    A blank-after-strip `subject` trips `ContactForm.clean_subject`, so `form.is_valid()`
+    fails. The payload is `{ ok: false }` with a field-keyed `errors` entry on the form
+    field `subject` (`messages` non-empty). No top-level GraphQL error.
+    """
+    create_users(1)
+
+    response = _post_graphql(
+        _SUBMIT_CONTACT,
+        variables={"d": {"subject": "   ", "email": "user@example.com"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["submitContact"]
+    assert result["ok"] is False
+    assert [e["field"] for e in result["errors"]] == ["subject"]
+    assert result["errors"][0]["messages"]

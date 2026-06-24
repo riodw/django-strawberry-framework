@@ -39,8 +39,12 @@ card targets `0.0.12` — so the `pyproject.toml` / `__version__` /
 `0.0.12` **lands here**, exactly as [`spec-037`][spec-037] Decision 10 owned the
 final `0.0.11` cut.
 
-Status: **PLANNED** — authored for [`TODO-ALPHA-038-0.0.12`][kanban] via the
-[`docs/SPECS/NEXT.md`][next] flow; not yet implemented. Five slices: Slice 1
+Status: **IN PROGRESS** — authored for [`TODO-ALPHA-038-0.0.12`][kanban] via the
+[`docs/SPECS/NEXT.md`][next] flow; Slices 1–4 built and accepted (the form
+converter + form-derived inputs; the two bases + `Meta` validation + the phase-2.5
+bind; the resolver pipeline + `DjangoMutationField` exposure; the products live form
+surface), only Slice 5 remains. Slice 5 flips this line to shipped at the `0.0.12` cut.
+Five slices: Slice 1
 (**form-field → Strawberry input mapping** — `forms/converter.py` + the
 form-derived input generator;
 [Decision 7](#decision-7--form-field--strawberry-input-mapping-the-form-is-the-input-source-of-truth)),
@@ -1562,7 +1566,7 @@ validation and write, but **reusing the surrounding `036` steps**:
    `IntegrityError` → `FieldError` mapper (P1), not left to bubble.** A `form.is_valid()`
    pass can still lose a concurrent-uniqueness race or hit a residual DB constraint at
    `save()`; the write runs through the shipped
-   [`mutations/resolvers.py`][mutations-resolvers]`::_save_or_field_errors` (promoted
+   [`mutations/resolvers.py`][mutations-resolvers]`::save_or_field_errors` (promoted
    to the shared surface), so that `IntegrityError` class returns the **same
    null-object + `FieldError` envelope** the model-driven path returns (the same
    message policy / `"__all__"` keying), **never** a top-level `GraphQLError` / 500 —
@@ -1572,21 +1576,22 @@ validation and write, but **reusing the surrounding `036` steps**:
    boundary (the `IntegrityError` is caught at the resolver, so the atomic block is
    exited cleanly with the envelope as the result).
 6. **Re-fetch** (`ModelForm`): re-read the saved row by pk and optimizer-plan it for
-   the response selection through the `036` `_refetch_optimized`
+   the response selection through the `036` `refetch_optimized`
    ([Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path)).
 7. **Return** the `<Name>Payload` (the saved object in the uniform slot + empty
    `errors` on success; null object + populated `errors` on failure).
 
 **Helper reuse — share, do not re-implement.** Steps 2 / 3 / 4 / 6 / 7 are not new
-code: the form pipeline **calls the shipped `036` pipeline helpers by name** —
-`_locate_instance` (the visibility-scoped `update` locate, a security contract),
-`_coerce_lookup_id` / `_not_found_error` (the server-side `id` decode + not-found
-shape), `_authorize_or_raise` (the write-auth gate), `_refetch_optimized`
+code: the form pipeline **calls the shipped `036` pipeline helpers by name** (now
+promoted to the public, underscore-dropped surface this slice landed) —
+`locate_instance` (the visibility-scoped `update` locate, a security contract),
+`coerce_lookup_id` / `not_found_error` (the server-side `id` decode + not-found
+shape), `authorize_or_raise` (the write-auth gate), `refetch_optimized`
 ([Decision 9](#decision-9--optimizer-composition-the-modelform-payload-re-fetch-rides-the-spec-036-g2-path)),
-`_build_payload` + `payload_object_slot` (the uniform-slot envelope),
-`_validation_error_to_field_errors` (the validation-error mapper reused per step 4),
-and `_save_or_field_errors` (the save-time `IntegrityError` → `FieldError` mapper
-reused per step 5, P1) — plus the
+`build_payload` + `payload_object_slot` (the uniform-slot envelope),
+`validation_error_to_field_errors` (the validation-error mapper reused per step 4),
+and `save_or_field_errors` (the save-time `IntegrityError` → `FieldError` mapper
+reused per step 5, P1, generalized to wrap a zero-arg save callable) — plus the
 `transaction.atomic()` + `sync_to_async(thread_sensitive=True)` boundary. These are
 **module-private (`_`-prefixed) in [`mutations/resolvers.py`][mutations-resolvers]
 today**, so this card is the first cross-module consumer: rather than have
@@ -1770,7 +1775,15 @@ it. It gets its **own** explicit machinery (no "if needed"): a `forms/sets.py`
 declaration registry (`register_form_mutation` / `iter_form_mutations`), a
 `clear_form_mutation_registry()` co-cleared from `registry.clear()` (mirroring
 `clear_mutation_registry`), and a `bind_form_mutations()` entry point that
-materializes each plain form's model-less input + payload. `bind_form_mutations()` is
+materializes each plain form's model-less input + payload. **`registry.clear()`
+co-clears THREE form rows** (Slice 2, verified): `clear_form_input_namespace` (the
+Slice-1 generated-input/payload-globals ledger, finally wired here),
+`clear_form_mutation_registry` (the plain-form declaration registry above), and
+`clear_form_shape_build_cache` (the form-input build cache — the deliberate twin of
+the model-flavor `_shape_build_cache`, needed so two mutations over one form-shape
+dedupe to one materialized input instead of tripping the materialize collision; it
+is cleared at `bind_form_mutations()` start AND co-cleared here so a stale class from
+a failed / re-run finalize cannot leak). `bind_form_mutations()` is
 **wired into [`types/finalizer.py`][types-finalizer]'s phase-2.5 window** alongside the
 existing `bind_mutations()` / `_bind_filtersets()` / `_bind_ordersets()` calls — a
 single named `finalizer.py` edit, not a new public finalize entry point the consumer
@@ -1857,8 +1870,8 @@ estimates.
 | Slice | Files touched | New / changed tests | Approx. delta |
 | --- | --- | --- | --- |
 | 1 — form-field converter + reverse map + the two form-derived inputs | [`forms/converter.py`][forms-converter] (new; `convert_form_field` fail-loud dispatch + the `input_attr → (form_field_name, kind)` reverse map), [`forms/inputs.py`][forms-inputs] (new; `<FormClass>Input` + `<FormClass>PartialInput` from `base_fields`, shape identity, narrowing + create-required guards, `get_form_fields()`), [`forms/__init__.py`][forms-init] (new) | [`tests/forms/test_converter.py`][test-forms] + [`tests/forms/test_inputs.py`][test-forms] (~36 — every form-field class, id mapping, `Upload`, the reverse-map + `kind` flag, custom-field raise, `base_fields` discovery, the create + partial input shapes, shape-identity collision/dedupe, `Meta.fields`/`exclude` fail-loud + empty-set + create-required guard) | `+420 / 0` |
-| 2 — the two base classes + `Meta` validation + bind seams | [`forms/sets.py`][forms-sets] (new; the form bases + a `make_declaration_registry` shared helper both registries instantiate), [`mutations/sets.py`][mutations-sets] (refactor validation into the overridable `_validate_meta`; add the `build_input` / `input_type_name` / `input_module_path` / `resolve_sync` / `resolve_async` seams, all model-defaulted; adopt the `make_declaration_registry` helper for its own quad), [`types/finalizer.py`][types-finalizer] (wire `bind_form_mutations()` into phase 2.5), [`registry.py`][registry] (`clear_form_mutation_registry` co-clear), [`__init__.py`][init] (two exports) | [`tests/forms/test_sets.py`][test-forms] + [`tests/mutations/test_sets.py`][test-mutations] extend (~20 — `Meta` matrix incl. `delete`-rejected + `form_class`-accepted, both bind paths, no-primary error, model-flavor seam defaults unchanged) | `+340 / -30` |
-| 3 — form relation decoder + resolver pipeline + field-factory generalization | [`forms/resolvers.py`][forms-resolvers] (new; the form relation decoder + `get_form_kwargs` construction), [`mutations/resolvers.py`][mutations-resolvers] (promote the reused pipeline helpers — `_locate_instance` / `_coerce_lookup_id` / `_authorize_or_raise` / `_refetch_optimized` / `_build_payload` / `_not_found_error` / `_validation_error_to_field_errors` / `_save_or_field_errors` — to an importable shared surface so `forms/` reuses by call, not by re-implementation), [`mutations/fields.py`][mutations-fields] (generalize the target check **and** the `_resolve` dispatch **and** the `data:` lazy-ref derivation — [Decision 5](#decision-5--public-surface-djangoformmutation--djangomodelformmutation-exported-from-the-root)) | [`tests/forms/test_resolvers.py`][test-forms] + [`tests/mutations/test_fields.py`][test-mutations] extend (~46 — create/update, decode `data=`/`files=` split, relation visibility on Relay **and** raw-pk single+multi, `to_field_name`, `IntegrityError` envelope, `get_form_kwargs`/`get_form` hooks, partial-update preservation + required-extra rule, envelope + `"__all__"`, plain-form `ok`+`errors`, visibility locate, write-auth, sync+async, G2 plan-shape, model-flavor dispatch unchanged) | `+660 / -30` |
+| 2 — the two base classes + `Meta` validation + bind seams | [`forms/sets.py`][forms-sets] (new; the form bases + a `make_declaration_registry` shared helper both registries instantiate), [`mutations/sets.py`][mutations-sets] (refactor validation into the overridable `_validate_meta`; add the `build_input` / `input_type_name` / `input_module_path` / `resolve_sync` / `resolve_async` seams, all model-defaulted; adopt the `make_declaration_registry` helper for its own quad), [`mutations/inputs.py`][mutations-inputs] (`build_payload_type(object_type=None)` emits the model-less `{ ok errors }` plain-form payload from ONE builder + ONE materialize ledger per Decision 6 — the model branch byte-unchanged), [`types/finalizer.py`][types-finalizer] (wire `bind_form_mutations()` into phase 2.5), [`registry.py`][registry] (THREE form co-clear rows: `clear_form_input_namespace` + `clear_form_mutation_registry` + `clear_form_shape_build_cache`), [`mutations/fields.py`][mutations-fields] (TODO-anchor only — the `_input_type_name` body is now byte-identical to the `input_type_name` seam; Slice 3 deletes it), [`__init__.py`][init] (two exports) | [`tests/forms/test_sets.py`][test-forms] + [`tests/mutations/test_sets.py`][test-mutations] extend (~20 — `Meta` matrix incl. `delete`-rejected + `form_class`-accepted, both bind paths, no-primary error, model-flavor seam defaults unchanged) | `+340 / -30` |
+| 3 — form relation decoder + resolver pipeline + field-factory generalization | [`forms/resolvers.py`][forms-resolvers] (new; the visibility-on-every-branch form relation decoder + the `kind`-split decode + the partial-update reconstruction + the sync/async pipeline entries), [`mutations/resolvers.py`][mutations-resolvers] (promote the reused pipeline helpers — `locate_instance` / `coerce_lookup_id` / `authorize_or_raise` / `refetch_optimized` / `build_payload` / `not_found_error` / `validation_error_to_field_errors` / `save_or_field_errors` (generalized to wrap a zero-arg save callable) / `raw_choice_value` — to an importable shared surface, underscore-dropped in place, so `forms/` reuses by call, not by re-implementation; `authorize_or_raise` denial message falls back to the mutation class name when `_primary_type is None`), [`forms/sets.py`][forms-sets] (fill the four `resolve_*` stubs to delegate to `forms/resolvers.py`; add the `get_form_kwargs` / `get_form` construction hooks on both bases + `perform_mutate` / `check_permission` on the plain base; wire the `guard_required` create-required waiver; extend `_cached_build_form_input` to return `(input_cls, field_specs)` and stash `_input_field_specs` at bind for the decode reverse map), [`mutations/fields.py`][mutations-fields] (generalize the target check (duck-typed `_has_mutation_protocol`, no `issubclass(DjangoMutation)` / no form-base import) **and** the `_resolve` dispatch (call `mutation_cls.resolve_sync` / `resolve_async`, `id`-gate on `operation != "form"`) **and** the `data:` lazy-ref derivation (consult `input_type_name` / `input_module_path`; payload-return ref stays `mutations.inputs`); delete the transient `_input_type_name` twin — [Decision 5](#decision-5--public-surface-djangoformmutation--djangomodelformmutation-exported-from-the-root)), [`mutations/sets.py`][mutations-sets] / [`mutations/permissions.py`][mutations-permissions] / [`relay.py`][relay] (docstring-only `::OldName` rename-sweep refs from the helper promotion, per the AGENTS.md symbol-rename mandate) | [`tests/forms/test_resolvers.py`][test-forms] + [`tests/mutations/test_fields.py`][test-mutations] extend (~46 — create/update, decode `data=`/`files=` split, relation visibility on Relay **and** raw-pk single+multi, `to_field_name`, `IntegrityError` envelope, `get_form_kwargs`/`get_form` hooks, partial-update preservation + required-extra rule, envelope + `"__all__"`, plain-form `ok`+`errors`, visibility locate, write-auth, sync+async, G2 plan-shape, model-flavor dispatch unchanged) + the `::OldName` call-site/docstring rename sweep in [`tests/mutations/test_resolvers.py`][test-mutations] / `test_permissions.py` / [`test_products_api.py`][test-products-api] | `+660 / -30` |
 | 4 — products live form surface | `examples/fakeshop/apps/products/forms.py` (new; + a minimal file column/migration if needed for the multipart test), [`products/schema.py`][products-schema] (form mutations), [`test_products_api.py`][test-products-api] | live create/update via `ModelForm`, `categoryId`-through-form, partial-update preservation, `form.errors` envelope, write-auth, **a raw multipart `Upload` test**, plain-form success + validation | `+220 / -0` |
 | 5 — docs + `0.0.12` version cut + card wrap | [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], [`README.md`][readme], [`GOAL.md`][goal], [`TODAY.md`][today], [`docs/TREE.md`][tree], [`CHANGELOG.md`][changelog], [`KANBAN.md`][kanban], version files | `test_version` → `0.0.12` | `+120 / -50` |
 
@@ -2108,7 +2121,10 @@ explicitly include the `CHANGELOG.md` edit** for it to be authorized.
   `ModelForm` write surface; [`docs/TREE.md`][tree] fills the planned `forms/` /
   [`tests/forms/`][test-forms] summary lines; [`CHANGELOG.md`][changelog] carries the
   `[Unreleased]` → `0.0.12` bullets **only when the Slice 5 maintainer prompt
-  explicitly requests it**.
+  explicitly requests it** (this repo's [`CHANGELOG.md`][changelog] cuts a dated
+  `## [0.0.X] - DATE` block per release rather than maintaining a standing
+  `[Unreleased]` section, so mechanically the entry is a fresh dated `0.0.12` block
+  matching the `[0.0.11]` template; "`[Unreleased]` → `0.0.12`" names the conceptual move).
 - **Slice 5 — card wrap**: [`KANBAN.md`][kanban] moves
   [`TODO-ALPHA-038-0.0.12`][kanban] to Done with the next `DONE-NNN-0.0.12` id,
   keeping its `SpecDoc` pointing at the canonical card spec (a `SpecDoc` DB edit
@@ -2499,6 +2515,7 @@ plus the exports / version-cut the [`docs/SPECS/NEXT.md`][next] flow adds.
 [mutations-resolvers]: ../../django_strawberry_framework/mutations/resolvers.py
 [mutations-sets]: ../../django_strawberry_framework/mutations/sets.py
 [registry]: ../../django_strawberry_framework/registry.py
+[relay]: ../../django_strawberry_framework/relay.py
 [types-base]: ../../django_strawberry_framework/types/base.py
 [types-converters]: ../../django_strawberry_framework/types/converters.py
 [types-finalizer]: ../../django_strawberry_framework/types/finalizer.py

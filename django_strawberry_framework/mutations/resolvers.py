@@ -175,7 +175,7 @@ def _decode_relations(
         text_error = _unencodable_text_error(graphql_name, value)
         if text_error is not None:
             return {}, [], text_error
-        scalar_and_fk_attrs[python_name] = _make_aware_if_naive(_raw_choice_value(value))
+        scalar_and_fk_attrs[python_name] = _make_aware_if_naive(raw_choice_value(value))
 
     return scalar_and_fk_attrs, m2m_assignments, None
 
@@ -257,7 +257,7 @@ def _unencodable_text_error(field_name: str, value: Any) -> FieldError | None:
     return None
 
 
-def _raw_choice_value(value: Any) -> Any:
+def raw_choice_value(value: Any) -> Any:
     """Unwrap a choice-enum member to its raw Django choice value (spec-036 Decision 6).
 
     A ``choices`` column resolves to the SAME generated Strawberry ``Enum`` on the
@@ -465,7 +465,7 @@ def _relation_visibility_error(
     model HAS a primary Relay-Node type (``mutations/inputs.py``), so this path is
     reached only with a resolvable primary. Hidden and missing are
     indistinguishable (the uniform ``_relation_error``, no existence leak),
-    matching the update/delete locate (``_locate_instance``); FK / OneToOne pass a
+    matching the update/delete locate (``locate_instance``); FK / OneToOne pass a
     one-element list, M2M the whole set (verified in one ``pk__in`` query). An
     ``async def get_queryset`` met here raises ``SyncMisuseError`` (the same sync
     discipline as the locate path).
@@ -561,7 +561,7 @@ def _relation_existence_error(
     return None
 
 
-def _locate_instance(target_type: type, node_id: Any, info: Any) -> Any | None:
+def locate_instance(target_type: type, node_id: Any, info: Any) -> Any | None:
     """Locate an update / delete row through the visibility ``get_queryset`` (spec-036 Decision 10).
 
     ``apply_type_visibility_sync(target_type, initial_queryset(target_type),
@@ -670,7 +670,7 @@ def _unique_constraint_groups(model: type) -> list[set[str]]:
     return groups
 
 
-def _validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
+def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
     """Map a Django ``ValidationError`` to the ``FieldError`` envelope (spec-036 Decision 7 / AR-M3).
 
     Uses ``exc.error_dict`` when present (per-field), keying the model's
@@ -731,7 +731,7 @@ def _assign_m2m(instance: Any, m2m_assignments: list[Any]) -> None:
         getattr(instance, m2m_name).set(pks)
 
 
-def _refetch_optimized(
+def refetch_optimized(
     target_type: type,
     pk: Any,
     info: Any,
@@ -775,7 +775,7 @@ def _refetch_optimized(
     return queryset.first()
 
 
-def _build_payload(
+def build_payload(
     payload_cls: type,
     slot: str,
     obj: Any,
@@ -864,13 +864,13 @@ def _validate_save_assign_refetch_payload(
     if error_payload is not None:
         return error_payload
 
-    write_error = _save_or_field_errors(instance)
+    write_error = save_or_field_errors(instance.save)
     if write_error is not None:
-        return _build_payload(payload_cls, slot, None, write_error)
+        return build_payload(payload_cls, slot, None, write_error)
     _assign_m2m(instance, m2m_assignments)
 
-    obj = _refetch_optimized(primary_type, instance.pk, info, force_load=False)
-    return _build_payload(payload_cls, slot, obj, [])
+    obj = refetch_optimized(primary_type, instance.pk, info, force_load=False)
+    return build_payload(payload_cls, slot, obj, [])
 
 
 def _run_create(
@@ -896,11 +896,11 @@ def _run_create(
     genuinely required field (no default, ``null=False``, ``blank=False``) is
     input-required, so it can never be unprovided here.
     """
-    _authorize_or_raise(mutation_cls, info, "create", data, instance=None)
+    authorize_or_raise(mutation_cls, info, "create", data, instance=None)
 
     scalar_and_fk_attrs, m2m_assignments, decode_error = _decode_relations(model, data, info)
     if decode_error is not None:
-        return _build_payload(payload_cls, slot, None, [decode_error])
+        return build_payload(payload_cls, slot, None, [decode_error])
 
     instance = model(**scalar_and_fk_attrs)
     provided = _provided_attr_names(model, scalar_and_fk_attrs, m2m_assignments)
@@ -927,18 +927,18 @@ def _run_update(
     payload_cls: type,
 ) -> Any:
     """The ``update`` branch: locate -> authorize -> set provided -> [validate -> save -> re-fetch]."""
-    node_id, id_error = _coerce_lookup_id(id, primary_type)
+    node_id, id_error = coerce_lookup_id(id, primary_type)
     if id_error is not None:
-        return _build_payload(payload_cls, slot, None, [id_error])
-    instance = _locate_instance(primary_type, node_id, info)
+        return build_payload(payload_cls, slot, None, [id_error])
+    instance = locate_instance(primary_type, node_id, info)
     if instance is None:
-        return _build_payload(payload_cls, slot, None, [_not_found_error()])
+        return build_payload(payload_cls, slot, None, [not_found_error()])
 
-    _authorize_or_raise(mutation_cls, info, "update", data, instance=instance)
+    authorize_or_raise(mutation_cls, info, "update", data, instance=instance)
 
     scalar_and_fk_attrs, m2m_assignments, decode_error = _decode_relations(model, data, info)
     if decode_error is not None:
-        return _build_payload(payload_cls, slot, None, [decode_error])
+        return build_payload(payload_cls, slot, None, [decode_error])
 
     for attr, value in scalar_and_fk_attrs.items():
         setattr(instance, attr, value)
@@ -980,21 +980,21 @@ def _run_delete(
     the visibility-located row (guaranteed present here); the snapshot is only the
     optimizer-shaped response object.
     """
-    node_id, id_error = _coerce_lookup_id(id, primary_type)
+    node_id, id_error = coerce_lookup_id(id, primary_type)
     if id_error is not None:
-        return _build_payload(payload_cls, slot, None, [id_error])
-    instance = _locate_instance(primary_type, node_id, info)
+        return build_payload(payload_cls, slot, None, [id_error])
+    instance = locate_instance(primary_type, node_id, info)
     if instance is None:
-        return _build_payload(payload_cls, slot, None, [_not_found_error()])
+        return build_payload(payload_cls, slot, None, [not_found_error()])
 
-    _authorize_or_raise(mutation_cls, info, "delete", data=None, instance=instance)
+    authorize_or_raise(mutation_cls, info, "delete", data=None, instance=instance)
 
-    snapshot = _refetch_optimized(primary_type, instance.pk, info, force_load=True)
+    snapshot = refetch_optimized(primary_type, instance.pk, info, force_load=True)
     instance.delete()
-    return _build_payload(payload_cls, slot, snapshot, [])
+    return build_payload(payload_cls, slot, snapshot, [])
 
 
-def _authorize_or_raise(
+def authorize_or_raise(
     mutation_cls: type,
     info: Any,
     operation: str,
@@ -1027,9 +1027,13 @@ def _authorize_or_raise(
         recourse=_PERMISSION_ASYNC_RECOURSE,
     )
     if not allowed:
-        raise GraphQLError(
-            f"Not authorized to {operation} {mutation_cls._primary_type.__name__}.",
-        )
+        # The model / ``ModelForm`` flavor names its target model
+        # (``_primary_type.__name__``); a plain ``DjangoFormMutation`` carries
+        # ``_primary_type is None`` (no object to return - spec-038 Decision 6), so
+        # fall back to the mutation class name, keeping ONE auth gate for both
+        # flavors (spec-038 Slice 3 plain-form auth-message discretion).
+        target_name = getattr(mutation_cls._primary_type, "__name__", mutation_cls.__name__)
+        raise GraphQLError(f"Not authorized to {operation} {target_name}.")
 
 
 def _full_clean_or_payload(
@@ -1050,20 +1054,30 @@ def _full_clean_or_payload(
     try:
         instance.full_clean(exclude=exclude)
     except ValidationError as exc:
-        return _build_payload(payload_cls, slot, None, _validation_error_to_field_errors(exc))
+        return build_payload(payload_cls, slot, None, validation_error_to_field_errors(exc))
     return None
 
 
-def _save_or_field_errors(instance: Any) -> list[FieldError] | None:
-    """``save()`` the instance; map a race ``IntegrityError`` to the envelope else ``None`` (Major-2)."""
+def save_or_field_errors(save_callable: Any) -> list[FieldError] | None:
+    """Run ``save_callable()``; map a race ``IntegrityError`` to the envelope else ``None`` (Major-2).
+
+    Wraps a zero-arg callable rather than a fixed ``instance.save()`` so ONE
+    ``IntegrityError`` -> envelope catch (the ``_integrity_error_field_errors``
+    message policy, single-sourced) serves every save path: the ``036`` model
+    pipeline passes ``instance.save``; the form pipeline passes ``form.save`` (the
+    ``ModelForm`` flavor) / a bound ``perform_mutate`` (the plain flavor, spec-038
+    Decision 8 step 5). A post-validation ``IntegrityError`` from any of them
+    returns the same ``"__all__"`` envelope, never a top-level ``GraphQLError`` at
+    the write.
+    """
     try:
-        instance.save()
+        save_callable()
     except IntegrityError:
         return _integrity_error_field_errors()
     return None
 
 
-def _coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | None]:  # noqa: A002
+def coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | None]:  # noqa: A002
     """Decode + type-check the update/delete ``id:`` against the target model (feedback #1).
 
     ``DjangoMutationField`` declares ``id`` as ``strawberry.ID`` - the
@@ -1096,11 +1110,11 @@ def _coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | Non
     if result.status in (GlobalIDDecode.DECODE_FAILED, GlobalIDDecode.WRONG_MODEL):
         return None, _invalid_lookup_id_error()
     if result.status is GlobalIDDecode.UNCOERCIBLE_PK:
-        return None, _not_found_error()
+        return None, not_found_error()
     return result.pk, None
 
 
-def _not_found_error() -> FieldError:
+def not_found_error() -> FieldError:
     """Build the not-found ``FieldError`` on ``id`` (hidden or missing - no existence leak)."""
     return FieldError(field="id", messages=["No matching row found."])
 

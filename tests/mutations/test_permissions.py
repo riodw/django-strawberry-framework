@@ -424,7 +424,7 @@ def test_async_has_permission_is_rejected_not_bypassed():
 def test_async_check_permission_override_is_rejected_not_bypassed():
     """An async ``check_permission`` override raises SyncMisuseError, not a silent allow (feedback).
 
-    The override returns a coroutine; ``_authorize_or_raise`` closes it and raises
+    The override returns a coroutine; ``authorize_or_raise`` closes it and raises
     ``SyncMisuseError`` rather than treating the truthy coroutine as authorized. No
     row is written.
     """

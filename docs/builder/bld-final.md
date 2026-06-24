@@ -1,306 +1,205 @@
-# Build: Final test-run gate — upload_file_image_mapping / 0.0.11 (037)
+# Build: Final test-run gate — form_mutations / 0.0.12 (038)
 
-Spec reference: `docs/spec-037-upload_file_image_mapping-0_0_11.md`
-Build plan: `docs/builder/build-037-upload_file_image_mapping-0_0_11.md`
+Spec reference: `docs/SPECS/spec-038-form_mutations-0_0_12.md`
+Build plan: `docs/builder/build-038-form_mutations-0_0_12.md`
 Status: final-accepted
 
-> **Maintainer commit note (out-of-scope change bundled in this range).** The
-> commit range `0273c869..HEAD` contains a one-line, unrelated baseline test
-> repair — `tests/orders/test_sets.py` re-pinned from the stale `"OrderSet.apply"`
-> assertion to `"OrderSet could not resolve"` (a substring of the committed,
-> intentional `utils/permissions.py::request_from_info` message; the production
-> helper was already correct and was NOT changed). No orders production file
-> changed in the 037 range. This is a maintainer-authorized orders/permissions
-> repair, not part of the upload/file feature — ideally committed separately from
-> the 037 source/doc/version changes. Full provenance below
-> (`## Failure ownership analysis`, `### Re-run disposition`, and the deferred-work
-> catalog's RESOLVED entry).
+Worker 1 final test-run gate. All six slices (1, 2, 3, 4, 5a, 5b) and the
+cross-slice integration pass (`bld-integration.md`, including the I1 normalizer
+consolidation + the I2 `Item.attachment` package-`tests/`-tree fixture sweep) are
+`final-accepted`. This gate is the comprehensive backstop before maintainer handoff:
+it runs the full `pytest` sweep across all three test trees plus the Django
+consistency checks and the lint/format/diff gate, and assembles the deferred-work
+catalog. It does NOT inspect line coverage (the maintainer's / CI's gate).
 
-Final test-run gate (Worker 1), run after the cross-slice integration pass
-(`docs/builder/bld-integration.md`) reached `final-accepted`. This is the last
-gate before the maintainer handoff. The gate is intentionally narrow: run the
-fixed command set, record each command's verbatim pass/fail, catalog deferred
-work. Worker 1 does NOT fix code in this pass — a failure routes back through the
-owning slice loop.
-
-## Gate baseline note
-
-The build plan's pre-flight recorded a CLEAN working-tree baseline (no baseline
-exceptions). Pre-flight ran `git status --short` (working tree), NOT a full
-`pytest` sweep, so a committed-but-failing test in an unrelated subsystem was not
-visible at pre-flight. The final gate is the first and only place the full
-`pytest --no-cov` sweep runs — and it is where the pre-existing failure below
-surfaced.
-
-## Gate commands and verbatim results
-
-### 1. Full test sweep — `uv run pytest --no-cov` — **FAIL**
-
-```text
-=================================== FAILURES ===================================
-_____ test_orderset_request_from_info_raises_on_unrecognized_context_shape _____
-
-    def test_orderset_request_from_info_raises_on_unrecognized_context_shape():
-        """A non-HttpRequest context with no ``.request`` attribute raises."""
-
-        class _PlainCtx:
-            pass
-
-        info = SimpleNamespace(context=_PlainCtx())
-        with pytest.raises(ConfigurationError) as exc_info:
-            OrderSet._request_from_info(info)
->       assert "OrderSet.apply" in str(exc_info.value)
-E       AssertionError: assert 'OrderSet.apply' in 'OrderSet could not resolve a Django HttpRequest from `info.context` (got _PlainCtx). Expected `info.context.request` or a bare HttpRequest.'
-E        +  where 'OrderSet could not resolve a Django HttpRequest from `info.context` (got _PlainCtx). Expected `info.context.request` or a bare HttpRequest.' = str(ConfigurationError('OrderSet could not resolve a Django HttpRequest from `info.context` (got _PlainCtx). Expected `info.context.request` or a bare HttpRequest.'))
-E        +    where ConfigurationError('OrderSet could not resolve a Django HttpRequest from `info.context` (got _PlainCtx). Expected `info.context.request` or a bare HttpRequest.') = <ExceptionInfo ConfigurationError('OrderSet could not resolve a Django HttpRequest from `info.context` (got _PlainCtx). Expected `info.context.request` or a bare HttpRequest.') tblen=3>.value
-
-tests/orders/test_sets.py:390: AssertionError
-=========================== short test summary info ============================
-FAILED tests/orders/test_sets.py::test_orderset_request_from_info_raises_on_unrecognized_context_shape
-pytest summary: 1 failed, 2212 passed, 4 skipped, 4 xfailed in 199.34s (0:03:19)
-```
-
-(The pytest summary line above is reproduced WITHOUT pytest's `=======` border:
-a line beginning with seven `=` is read by `git diff --check` as a leftover
-conflict marker, so the border is dropped to keep the artifact diff-clean while
-preserving the verbatim counts.)
-
-Counts: **1 failed, 2212 passed, 4 skipped, 4 xfailed**.
-
-### 2a. Django system check — `uv run python examples/fakeshop/manage.py check` — **PASS**
-
-```text
-System check identified no issues (0 silenced).
-```
-
-### 2b. Migration consistency — `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` — **PASS**
-
-```text
-No changes detected
-```
-
-Exit code 0 (migration state is consistent; no migration file would be produced).
-
-### 3a. Format check — `uv run ruff format --check .` — **PASS**
-
-```text
-warning: The following rule may cause conflicts when used with the formatter: `COM812`. ...
-287 files already formatted
-```
-
-Exit code 0. (The `COM812` warning is the standing repo-config note documented in
-`AGENTS.md` #"COM812 only auto-adds to already-multi-line constructs", not a
-format failure.)
-
-### 3b. Lint check — `uv run ruff check .` — **PASS**
-
-```text
-All checks passed!
-```
-
-Exit code 0.
-
-### 3c. Whitespace / conflict-marker check — `git diff --check` — **PASS**
-
-No output; exit code 0. As the build plan's preamble anticipated, the binary
-`examples/fakeshop/db.sqlite3` (modified by the Slice 4 card-close) does not trip
-`git diff --check` (it only flags whitespace/conflict markers in text).
-
-## Failure ownership analysis (the one FAIL)
-
-The single failing test is **`tests/orders/test_sets.py::test_orderset_request_from_info_raises_on_unrecognized_context_shape`** — in the **orders** subsystem, which build-037 (upload_file_image_mapping) never touched.
-
-- **Not owned by any 037 slice.** The 037 build's modified files are exactly the read/write/scalar/export source (`types/converters.py`, `types/base.py`, `types/resolvers.py`, `types/finalizer.py`, `mutations/inputs.py`, `mutations/resolvers.py`, `scalars.py`, `__init__.py`), their tests, and the Slice-4 docs/version/DB surfaces — per `git status --short`. The failing test file and its source dependency are NOT in that set.
-- **Pre-existing on the committed baseline.** `git diff HEAD -- tests/orders/test_sets.py django_strawberry_framework/utils/permissions.py django_strawberry_framework/orders/sets.py` is **empty** — the three files are committed and unmodified by this build's uncommitted working tree. The failure exists in `HEAD`, not in any 037 diff.
-- **Root cause (test lags committed source).** `tests/orders/test_sets.py::test_orderset_request_from_info_raises_on_unrecognized_context_shape` asserts `"OrderSet.apply" in str(exc_info.value)`. The message is produced by `django_strawberry_framework/utils/permissions.py::request_from_info`, which **deliberately dropped the `.apply` suffix** (its docstring #"hard-coding ``.apply`` would mis-describe the mutation caller (feedback CR-5)" — the shared helper now serves the filter/order `.apply` seam AND the mutation `check_permission` seam, which has no `.apply` method). The current message is `"OrderSet could not resolve a Django HttpRequest from `info.context` (got _PlainCtx). ..."` — correct behavior; the test's expected substring is stale. The `permissions.py` refactor landed in commit `bd998093` ("Refactor mutation input handling and error reporting"); the test was not re-pinned to the new message in the same change.
-- **Out of scope for Worker 1 to fix here.** This gate forbids editing source/tests, and the fix belongs to the orders/permissions subsystem, not the upload_file_image_mapping spec. Worker 1 must NOT widen 037 scope to absorb an unrelated subsystem's stale assertion.
-
-### Disposition / routing
-
-Per the gate rule "If any command fails: do NOT mask it … set `revision-needed`, identify which slice owns the failing behavior", the honest finding is that **no 037 slice owns this failure** — it is a pre-existing baseline defect in the orders/permissions subsystem, surfaced (not caused) by this gate's full sweep. The 037 build itself is gate-clean: Django checks, format, lint, and `git diff --check` all pass, and all 037-scoped tests pass (the 2212 passing tests include every Slice 1–3 read/write/scalar/export test).
-
-Recommended routing (Worker 0 / maintainer decision):
-
-- **This is a maintainer-baseline call, not an 037 slice re-loop.** The 037 slice loops cannot fix a file outside their scope. Re-spawning a Worker 2 against an 037 slice would not touch `tests/orders/test_sets.py`. The correct fix — re-pin the stale assertion in `tests/orders/test_sets.py` line 390 from `"OrderSet.apply"` to a substring of the current `request_from_info` message (e.g. `"could not resolve a Django HttpRequest"` or just `"OrderSet"`) — is a one-line orders-subsystem test correction that belongs to whoever owns the `bd998093` `permissions.py` refactor, not to build-037.
-- Worker 0 should escalate to the maintainer: build-037 is functionally complete and gate-clean within its own scope; the single red is a stale orders-subsystem test assertion that predates this build on the committed baseline. The maintainer either (a) fixes the one-line stale assertion as a separate concern, then Worker 1 re-runs this gate, or (b) explicitly authorizes the 037 commit despite the unrelated red with a follow-up card for the orders test.
-
-The artifact `Status:` stays **`revision-needed`** because a `pytest` failure is present in the full sweep; `final-accepted` is gated on a green sweep regardless of ownership.
+Ran from the repo root on 2026-06-23. Working-tree baseline matches the expected
+build-038 state: all six slices' source/test edits + I1 (`utils/inputs.py`,
+`mutations/sets.py`, `forms/inputs.py`) + I2 (`tests/mutations/test_sets.py`,
+`tests/mutations/test_inputs.py`, `tests/filters/test_sets.py`); the net-new
+`django_strawberry_framework/forms/`, `tests/forms/`, `examples/.../products/forms.py`,
+and the source-only `examples/fakeshop/apps/products/migrations/0002_item_attachment.py`
+are present. The carve-out files (`examples/fakeshop/db.sqlite3`, `KANBAN.md`,
+`KANBAN.html`, `docs/GLOSSARY.md`, `docs/feedback.md`) are dirty as expected from the
+concurrent-writer + Slice-5b regenerate state per the build-plan flags — NOT touched
+by this gate. `manage.py migrate` was NOT run (the `0002` migration is intentionally
+source-only / un-applied to the committed `db.sqlite3`).
 
 ---
 
-## Final gate re-run (Worker 1) — 2026-06-19
+## Gate command results
 
-Re-run of the final test-run gate after the maintainer-authorized one-line
-re-pin of the single stale orders-subsystem assertion landed. Per the prior
-gate's `## Failure ownership analysis`, the lone red was
-`tests/orders/test_sets.py::test_orderset_request_from_info_raises_on_unrecognized_context_shape`
-asserting the stale substring `"OrderSet.apply"`. The maintainer authorized
-re-pinning that assertion (as a separate out-of-scope concern) to
-`"OrderSet could not resolve"` — a substring of the committed, intentional
-`django_strawberry_framework/utils/permissions.py::request_from_info` message
-(family-label + canonical phrasing). The production helper `request_from_info`
-was **not** changed (it was already correct); only the stale test assertion was
-aligned. Confirmed before re-running: `tests/orders/test_sets.py` line 390 now
-reads `assert "OrderSet could not resolve" in str(exc_info.value)`. This is the
-ONLY change since the prior gate. No source/test edits were made by Worker 1 in
-this gate (the re-pin pre-dated this spawn).
+| # | Command | Result |
+|---|---|---|
+| 1 | `uv run pytest --no-cov` | **PASS** — `2366 passed, 4 skipped, 4 xfailed in 127.20s` (exit 0) |
+| 2 | `uv run python examples/fakeshop/manage.py check` | **PASS** — `System check identified no issues (0 silenced).` |
+| 3 | `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` | **PASS** — `No changes detected` (exit 0) |
+| 4 | `uv run ruff format --check .` | **PASS** — `277 files already formatted` (exit 0) |
+| 5 | `uv run ruff check .` | **PASS** — `All checks passed!` (exit 0) |
+| 6 | `git diff --check` | **PASS** — no whitespace errors / conflict markers (exit 0) |
 
-### Re-run commands and verbatim results
+### Gate 1 — `uv run pytest --no-cov` (full sweep, all three test trees)
 
-#### 1. Full test sweep — `uv run pytest --no-cov` — **PASS**
+PASS. **2366 passed, 4 skipped, 4 xfailed, 0 failed** in 127.20s (exit 0). The
+explicit `--no-cov` opted out of `pytest.ini`'s auto-applied `--cov` (no coverage
+inspected — the maintainer's gate). All three `AGENTS.md` test trees ran in the one
+invocation, confirmed by represented node ids in the run:
 
-```text
-============ 2213 passed, 4 skipped, 4 xfailed in 197.70s (0:03:17) ============
-```
+- Package `tests/` — e.g. `tests/utils/test_typing.py`, `tests/utils/test_strings.py`
+  (and the full `tests/mutations/`, `tests/forms/`, `tests/filters/` set).
+- Per-app non-live `examples/fakeshop/apps/*/tests/` — e.g.
+  `apps/products/tests/test_services.py`, `apps/products/tests/test_schema.py`,
+  `apps/products/tests/test_commands.py`, `apps/library/tests/test_schema.py`; plus the
+  project-level `examples/fakeshop/tests/` (`test_export_schema.py`,
+  `test_inspect_django_type.py`).
+- Live tier `examples/fakeshop/test_query/` — e.g. `test_kanban_api.py`,
+  `test_library_api.py`, `test_uploads_api.py`, `test_products_api.py`.
 
-Counts: **0 failed, 2213 passed, 4 skipped, 4 xfailed**. The previously-failing
-orders test now PASSES (the passing count rose from 2212 → 2213, exactly the one
-re-pinned test). Confirmed in isolation:
+`FAKESHOP_SHARDED` was NOT set (those tests are out of the default invocation per
+`AGENTS.md`). The two most-likely failure sources the gate prompt flagged did **not**
+materialize: (a) no additional Slice-4 `Item.attachment`-column staleness surfaced in
+the example/live trees — the I2 sweep had only swept the package `tests/` tree, but
+Slice 4 authored its own `examples/.../test_products_api.py` against the new column, so
+no example/live test hardcoded `Item`'s old columns; (b) no generated-doc-freshness
+test (regenerate-and-diff of `KANBAN.md` / `docs/GLOSSARY.md`) went red against the
+concurrent-writer mixed DB state.
 
-```text
-tests/orders/test_sets.py::test_orderset_request_from_info_raises_on_unrecognized_context_shape PASSED [100%]
-============================== 1 passed in 0.06s ===============================
-```
+### Gate 2 — `uv run python examples/fakeshop/manage.py check`
 
-ZERO failures across all three test trees.
+PASS. `System check identified no issues (0 silenced).` No model/admin/url drift.
 
-#### 2a. Django system check — `uv run python examples/fakeshop/manage.py check` — **PASS**
+### Gate 3 — `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run`
 
-```text
-System check identified no issues (0 silenced).
-```
+PASS. `No changes detected` (exit 0). The Slice-4 `Item.attachment` migration
+`0002_item_attachment.py` already exists, so model state is migration-consistent and
+no un-generated migration is outstanding. `migrate` was NOT run (the `0002` migration
+is intentionally source-only / un-applied to the committed `db.sqlite3`).
 
-#### 2b. Migration consistency — `uv run python examples/fakeshop/manage.py makemigrations --check --dry-run` — **PASS**
+### Gate 4 — `uv run ruff format --check .`
 
-```text
-No changes detected
-```
+PASS. `277 files already formatted` (exit 0). Read-only; no `--fix` passed. (The
+`COM812 may cause conflicts with the formatter` line is the standing repo config
+warning, not a format failure — the `--check` exit code is 0.)
 
-Exit code 0 (migration state is consistent; no migration file would be produced).
+### Gate 5 — `uv run ruff check .`
 
-#### 3a. Format check — `uv run ruff format --check .` — **PASS**
+PASS. `All checks passed!` (exit 0). Read-only lint; no `--fix`.
 
-```text
-287 files already formatted
-```
+### Gate 6 — `git diff --check`
 
-Exit code 0. (The `COM812` warning is the standing repo-config note documented in
-`AGENTS.md` #"COM812 only auto-adds to already-multi-line constructs", not a
-format failure.)
+PASS. No whitespace errors or conflict markers anywhere in the working tree (exit 0).
 
-#### 3b. Lint check — `uv run ruff check .` — **PASS**
+---
 
-```text
-All checks passed!
-```
+### Deferred work catalog
 
-Exit code 0.
+Per BUILD.md, this catalog walks every per-slice + integration artifact's
+spec-reconciliation / `What looks solid` / `Notes for Worker 1` sections and surfaces
+every explicitly-deferred item. It is the next spec author's / maintainer's reading
+list. Nothing was deferred beyond the items below.
 
-#### 3c. Whitespace / conflict-marker check — `git diff --check` — **PASS**
+**Doc-debt / source follow-ups (out of spec-038 contract):**
 
-No output; exit code 0. The binary `examples/fakeshop/db.sqlite3` (modified by the
-Slice 4 card-close) does not trip `git diff --check` (it only flags
-whitespace/conflict markers in text).
+- **(a) `docs/TREE.md` stale `mutations/` "planned by TODO-ALPHA-036-0.0.11" line.**
+  Source: Slice 5a + 5b `Notes for Worker 1`; `bld-integration.md` "Deferred
+  follow-ups". `docs/TREE.md` still renders `mutations/` as
+  `# planned by TODO-ALPHA-036-0.0.11` despite `mutations/` shipping in `0.0.11`
+  (`DONE-036`). This is **spec-036 doc debt, OUT of spec-038's contract** — Worker 1
+  edits only the active spec, never source `TREE.md` here. No licensing spec line (it
+  is pre-existing debt from a prior build). Maintainer / next-author follow-up.
 
-### Re-run disposition
+- **(b) DONE-038 card-body free-text `Status: In progress` cosmetic.** Source: Slice 5b
+  `### Final verification` (item 4b); `bld-integration.md` "Deferred follow-ups". The
+  rendered DONE-038 card body shows `Status: In progress` (vs sibling DONE-037's
+  `Status: Shipped`). It was already `In progress` at HEAD (pre-existing free-text,
+  independent of the workflow `status.key=done`, which is correct); outside Slice-5b's
+  named scope. Not a defect — cosmetic. A one-line DB-backed `CardItem.text` →
+  `"Shipped"` + re-render (matching DONE-037) if the maintainer wants the DONE-card
+  convention nicety.
 
-All six gate commands PASS. The full `pytest --no-cov` sweep is green with ZERO
-failures; the previously-flagged pre-existing orders-subsystem red is resolved by
-the maintainer-authorized re-pin. The artifact `Status:` is set to
-**`final-accepted`**. The gate closes; Worker 0 may mark the final checklist box
-`- [x]`.
+- **(c) Slice-1 Low: `_model_less_relation_annotation` `queryset=None` → raw
+  `AttributeError`.** Source: Slice 1 `Notes for Worker 1` / Open-Low;
+  `bld-integration.md` Step-5 walk + "Deferred follow-ups". A plain-`Form`
+  `ModelChoiceField` declared with no `queryset` raises a raw `AttributeError` instead
+  of a `ConfigurationError`. Out-of-spec input shape, reviewed-and-accepted as a Low at
+  Slice 1 (spec does not require the graceful raise for this shape). Robustness nicety
+  for a future slice / card; not a cross-slice duplication, so not part of the I1 loop.
 
-Note for the maintainer: the one-line `tests/orders/test_sets.py` re-pin is a
-separate out-of-scope concern from the build-037 commit (it aligns a stale
-orders/permissions-subsystem assertion that pre-dated this build on `HEAD`). The
-maintainer may wish to commit that one-line test fix separately from the build-037
-source/doc/version changes.
+- **(d) Spec `docs/`-vs-`docs/SPECS/` self-reference residual.** Source: build-plan
+  "Build-wide context flags" (spec path discrepancy); `bld-integration.md` "Deferred
+  follow-ups". The live spec is `docs/SPECS/spec-038-form_mutations-0_0_12.md`, but the
+  spec prose self-references `docs/spec-038-...` (in `docs/`, not `docs/SPECS/`) in
+  Decision 1 / Definition-of-done item 1 / the DoD spec-glossary command path. Cosmetic
+  spec-internal inconsistency; not a blocker (all plans/builds/reviews used the
+  `docs/SPECS/` path). Worker 1 may reconcile in a future spec-touching pass or leave to
+  the next-author `docs/SPECS/NEXT.md` Step-8 archive sweep.
 
-## Spec changes made (Worker 1 only)
+**Future-card test pin (carry-forward DRY):**
 
-None. The gate surfaced no 037-spec reconciliation need. The spec status header
-(lines 38–65) still accurately describes the build state ("all four slices
-final-accepted … the cross-slice integration pass + final gate still follow") —
-the integration pass is now complete and this final gate is in flight; the header
-is not stale and was not edited. `scripts/check_spec_glossary.py` was not re-run
-(no spec edit). The single test failure is out-of-spec (orders subsystem) and is
-not a 037 spec gap.
+- **(e) `tests/utils/` direct pin for `normalize_field_name_sequence` before the
+  0.0.13 serializer card.** Source: `bld-integration.md` I1 recommended fix + Worker-2
+  `Notes for Worker 3` + Worker-3 `Notes for Worker 1`. The I1-lifted shared helper
+  `utils/inputs.py::normalize_field_name_sequence(value, *, label, flavor)` is currently
+  pinned only indirectly (through the two delegations exercised by
+  `tests/mutations/test_sets.py` + `tests/forms/test_inputs.py`). A direct
+  `tests/utils/test_inputs.py` case over both `flavor` strings + the bare-string +
+  duplicate raises is the cleaner pin before the `0.0.13` `SerializerMutation` card
+  (`TODO-ALPHA-039-0.0.13`) adds a third reader. Flagged at-discretion / non-blocking;
+  not added, to avoid over-scoping the consolidation.
 
-## Deferred work catalog
+**Retrospective lesson (not a deferral, recorded for the catalog):**
 
-The next spec author's reading list. Walks every per-slice and integration
-artifact's spec-reconciliation / `What looks solid` / `Notes for Worker 1`
-sections plus the spec's own `## Risks and open questions` and
-`## Out of scope`. One bullet per deferral, with source and the spec line that
-licenses it (where applicable).
+- **(f) I2 lesson — a model-column add must sweep all three test-tree fixtures.**
+  Source: `bld-integration.md` I2 consolidation pass + Worker-1 integration re-run
+  memory. The Slice-4 `Item.attachment` `FileField` add went uncaught in the package
+  `tests/` tree until the integration consolidation loop, because that tree was last
+  fully run before Slice 4 and several fixtures hardcoded `Item`'s old editable-column
+  set. Lesson for future builds: a model-column add must grep-sweep all three test
+  trees (package `tests/`, per-app `examples/fakeshop/apps/*/tests/`, live
+  `examples/fakeshop/test_query/`) for hardcoded column assumptions in the same change,
+  not rely on the final gate to surface them. (The fix landed in this build — I2 — so
+  this is a workflow note, not outstanding work.)
 
-### Pre-existing baseline defect surfaced by this gate (RESOLVED — recorded for provenance)
+**Concurrency-coordination items for the maintainer (reconcile at commit; NOT build
+defects):**
 
-- **Stale orders-subsystem test assertion — RESOLVED (maintainer-authorized re-pin).** `tests/orders/test_sets.py::test_orderset_request_from_info_raises_on_unrecognized_context_shape` (line 390) previously asserted the old `"OrderSet.apply"` substring against the post-`bd998093` `utils/permissions.py::request_from_info` message that deliberately dropped `.apply`. It was pre-existing on `HEAD`, unrelated to 037, and red the prior full sweep. The maintainer authorized a one-line re-pin to `"OrderSet could not resolve"` (a substring of the committed, intentional `request_from_info` message) — a separate out-of-scope concern from the build-037 commit. The production helper was NOT changed (already correct); only the stale assertion was aligned. As of the 2026-06-19 final gate re-run the assertion passes and the full sweep is green (2213 passed). Owner: maintainer / orders-permissions subsystem (NOT a 037 slice). The maintainer may wish to commit this one-line test fix separately from the build-037 changes.
+- **(g1) Mixed `examples/fakeshop/db.sqlite3` / `KANBAN.md` / `KANBAN.html` /
+  `docs/GLOSSARY.md` diff.** Source: build-plan "Build-wide context flags" (Slice-5 DB
+  writes apply on top of concurrent work, maintainer-authorized 2026-06-23) + Slice 5b
+  `### Final verification`. A concurrent writer intermittently rewrites
+  `db.sqlite3` with semantic kanban data; per maintainer direction, Slice 5b's DB-backed
+  card move + GLOSSARY promotion were applied on top of that concurrent state WITHOUT
+  reverting it. Consequence: the regenerated `KANBAN.*` / `docs/GLOSSARY.md` reflect
+  BOTH the concurrent edits AND the 038 card move. The `git diff db.sqlite3 clean`
+  verification was correctly NOT applicable (the DB legitimately diverged); Slice 5b
+  proved its writes via the two-consecutive-regenerate byte-stability check instead.
+  **The maintainer reconciles this mixed diff at commit** — it is a coordination point,
+  not a build defect. (This gate left all four files untouched.)
 
-### Build-cycle deferrals (per-slice + integration artifacts)
+- **(g2) Un-applied `products.0002` migration on the committed `db.sqlite3`.** Source:
+  build-plan flags + Slice 4 artifact + this gate's prompt. The Slice-4
+  `0002_item_attachment.py` migration is intentionally **source-only / un-applied** to
+  the committed `db.sqlite3` (the live tests run on pytest-django's ephemeral DB, which
+  applies all migrations fresh, so they exercise the new column without the committed DB
+  needing it). `makemigrations --check` reports "No changes" (model state matches the
+  migration graph); `migrate` was NOT run. Maintainer note: the column is in the
+  migration source and exercised by the test suite, but the committed `db.sqlite3` does
+  not carry the applied migration — intentional and per-plan.
 
-- **Pillow dev/test-only dependency** — Slice 1 (`bld-slice-1-read_output_objects.md` `### What looks solid`; integration `### 5`), licensed by spec `## Risks and open questions` #"Image dimension dependency + test strategy" ("Preferred answer: add Pillow as a dev/test-only dependency"). Pillow was added as a dev-only dep so the `width` / `height` image-dimension tests run against a real in-memory PNG; the package source never imports it (no runtime surface). Standing follow-up: keep the `uv.lock` 0.0.11 bump from disturbing it (noted in worker-1 memory). Not a defect; recorded as an intentional dev-dependency addition.
-- **`DONE-037` card-body `planningState` renders "In progress"** — Slice 4 (`bld-slice-4-docs_version_cut.md`; integration `### 5`), no spec line (it is a `Card.planningState` free-text field distinct from the workflow `status` FK that the close procedure flips). Precedent-consistent with the freshly-closed `DONE-036` card. Flagged as an **optional maintainer follow-up**: a separate `planningState` pass would also re-touch `DONE-036`. Explicitly NOT a card-close defect.
-- **Three Slice-4 DB drift-cluster reconciliations (reconciled UP, recorded for provenance)** — Slice 4 (`bld-slice-4-docs_version_cut.md`; integration `### 5`). These were fixed in this build but the next author should know they were pre-existing DB drift, not 037-introduced:
-  - `036` `SpecDoc.url` was DB-stale at `docs/spec-036` and reconciled UP to `docs/SPECS/spec-036` (else KANBAN regen regressed two links).
-  - `djangomodelpermission` `GlossaryTerm.body` lagged its committed file and was synced UP.
-  - The `037` card body referenced a stale `034` and `"Pairs with 028"` and was reconciled to `036` (mutations = 036, 034 = permissions, 028 = ordering) — the spec `## Risks and open questions` #"Card conflict — stale `"Pairs with 028"` note" and #"Card conflict — stale `mutations/ (planned)` predicted file" license the read that the genuine pairing is `DONE-036-0.0.11`.
+---
 
-### Spec `## Risks and open questions` items deferred by design (the durable follow-up list)
+## Outcome
 
-- **Clearing an existing file via mutation input** — spec `## Risks` #"Clearing an existing file via mutation input". This card does NOT promise a clear-file path: omitted upload leaves the file unchanged, provided upload replaces, explicit `null` on a `null=False` column is a `FieldError` (`_explicit_null_error`). Fallback deferred to a future form/serializer flavor (an explicit clear-file sentinel) if real users need it — Decision 6.
-- **Output subfield nullability vs upstream parity** — spec `## Risks` #"Output subfield nullability vs upstream parity". The deliberate, documented divergence (`path` / `size` / `url` / `width` / `height` nullable; `name` non-null) shipped as the preferred answer (Decision 4). The fallback (keep `path` nullable at minimum, document local-storage-only for the rest) is recorded only as a contingency if the nullable subfields prove awkward downstream — no action needed now.
-- **Image-content validation** — spec `## Error shapes` / `## Risks` (the `forms.ImageField` content-sniffing note). The generated `DjangoMutation` does NOT reject arbitrary non-image bytes; model-field validation + declared validators run, not `forms.ImageField` content sniffing. Upload content validation is deferred to a future `DjangoFormMutation` (`0.0.12`, `TODO-ALPHA-038`) / `SerializerMutation` (`0.0.13`) flavor — the card does not promise validation it cannot honestly enforce.
-- **Storage-metadata read cost (no batching / caching)** — spec `## Risks` #"Storage-metadata read cost". Selecting `size` / `url` / `width` / `height` asks Django storage per object/subfield; this card does NOT batch or cache, and the optimizer cannot prefetch object-store metadata. A batching / caching layer (or a storage-metadata dataloader) is a profiling-gated follow-up — Decision 4.
-- **File-column filtering contract** — spec `## Risks` #"File-column filtering contract". File columns keep the scalar `str` filter mapping in `SCALAR_MAP` (filtering the stored name/path string, not file metadata). The fallback — rejecting file/image filters with a `ConfigurationError` once a deliberate file-filter contract is designed — is a future follow-up, not this card (Decision 3).
-- **Path-safety exception policy (`SuspiciousFileOperation` propagates)** — spec `## Risks` #"Path-safety exception policy". `SuspiciousFileOperation` is deliberately NOT folded into the `_safe_file_attr` degrade-to-`null` catch (it propagates as a top-level error so path-traversal / hostile-name conditions stay visible). The fallback (add it to the catch set for graceful degradation) is operator-preference-gated — the default is visibility (Decision 4). Pinned by a test; not deferred work, recorded as a deliberate contract the next author should not silently change.
+**All six gate commands PASS. Status: `final-accepted`.**
 
-### Spec `## Out of scope (explicitly tracked elsewhere)` — downstream cards that build on this one
+The full `pytest` sweep (2366 passed / 0 failed across all three test trees), the two
+Django consistency checks, and the three lint/format/diff gates all pass. No re-loop is
+needed — no owning slice to route back. The build delivers the spec end-to-end; the
+deferred-work catalog above captures the (out-of-038-contract) doc debt, the
+future-card test-pin opportunity, the I2 retrospective lesson, and the
+concurrency-coordination items the maintainer reconciles at commit.
 
-- **Multipart request helper** — `TestClient` (`TODO-ALPHA-043-0.0.14`). Depends on the `Upload` scalar this card ships; the transport helper itself is `0.0.14`.
-- **Form-based mutations** — `DjangoFormMutation` (`TODO-ALPHA-038-0.0.12`). Reuses `Upload` through the same scalar-map helper.
-- **DRF serializer mutations + auth mutations** — `SerializerMutation` (`0.0.13`). Serializer upload handling builds on this scalar.
-- **A live fakeshop file-upload surface** — ~~deferred to fakeshop activation (`TODO-BETA-051-0.1.5`)~~ **SUPERSEDED (post-ship, 2026-06-20 round-4 review):** a live surface was added to the `scalars` app (`MediaSpecimen` model + `MediaSpecimenType` + `createMediaSpecimen`), with live `/graphql/` read + real-multipart-upload tests in `examples/fakeshop/test_query/test_uploads_api.py` (the `GraphQLView` now sets `multipart_uploads_enabled=True`). The `test_query` README live-coverage rule prevailed over Decision 9's deferral; the synthetic-model package tests are kept only for the storage-fault / corrupt-image edges. The broader products/fakeshop activation remains `TODO-BETA-051-0.1.5`.
-- **Field-level read gates** — `FieldSet` / per-field permission hooks in `0.1.1`. File-metadata permissions are not special-cased here.
-- **Remote-storage adapters, thumbnailing, image validation, signed-URL policies** — consumer/storage concerns beyond a model-field conversion card.
-
-## Summary
-
-Build-037 (upload_file_image_mapping / 0.0.11) is functionally complete and
-**fully gate-clean**. The final test-run gate was run twice:
-
-- **Prior gate (revision-needed):** all six commands passed EXCEPT the full
-  `pytest --no-cov` sweep, which red on **one** pre-existing, out-of-scope test —
-  `tests/orders/test_sets.py::test_orderset_request_from_info_raises_on_unrecognized_context_shape`
-  — whose stale `"OrderSet.apply"` assertion lagged the committed
-  `utils/permissions.py::request_from_info` message (the `.apply` suffix was
-  deliberately dropped in commit `bd998093`, an orders/mutation-permissions
-  refactor unrelated to this build). No 037 slice owned or introduced the failure;
-  the recommended fix was a one-line orders-subsystem test re-pin belonging to the
-  maintainer, not an 037 slice re-loop.
-
-- **Final gate re-run (final-accepted, 2026-06-19):** after the
-  maintainer-authorized one-line re-pin of that stale assertion to
-  `"OrderSet could not resolve"` (a substring of the committed, intentional
-  `request_from_info` message; the production helper was NOT changed), all six gate
-  commands PASS. Full sweep: **2213 passed, 4 skipped, 4 xfailed, 0 failed** (the
-  passing count rose 2212 → 2213, exactly the one re-pinned test, confirmed passing
-  in isolation). Django system check, migration consistency, `ruff format --check`,
-  `ruff check`, and `git diff --check` all PASS. The cross-slice integration pass
-  found no consolidation needed.
-
-Worker 1 did not (and per the gate rules must not) edit source or tests in either
-gate pass; the re-pin pre-dated this re-run spawn. The one-line
-`tests/orders/test_sets.py` re-pin is a separate out-of-scope concern from the
-build-037 commit — the maintainer may wish to commit it separately.
-
-The `### Deferred work catalog` is written end-to-end — the prior pre-existing
-baseline defect is now marked **RESOLVED**, and the catalog carries the build-cycle
-deferrals (Pillow dev-dep, the `DONE-037` `planningState` render, the three DB
-drift reconciliations), every spec `## Risks and open questions` follow-up
-(file-clearing, subfield nullability, image-content validation, storage-metadata
-cost, file-column filtering, path-safety policy), and the `## Out of scope`
-downstream cards (`0.0.12` form mutations, `0.0.13` serializer mutations, `0.0.14`
-multipart `TestClient`, `0.1.5` live fakeshop upload surface, `0.1.1` field-level
-read gates).
+The build is **READY for maintainer handoff.** Worker 0 may mark the final checklist
+box `- [x]`. The maintainer reviews the whole build, then commits the source/test
+changes + every `bld-*.md` artifact + the completed plan + the spec edits, reconciling
+the mixed `db.sqlite3` / `KANBAN.*` / `docs/GLOSSARY.md` diff (item g1) and noting the
+un-applied `products.0002` migration (item g2) at commit time.

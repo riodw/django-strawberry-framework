@@ -546,26 +546,47 @@ def payload_object_slot(primary_type: type) -> str:
     return "node" if implements_relay_node(primary_type) else "result"
 
 
-def build_payload_type(mutation_name: str, *, object_type: type, object_slot: str) -> type:
-    """Build the ``<Name>Payload`` ``@strawberry.type`` wrapper (spec-036 Decision 7).
+def build_payload_type(
+    mutation_name: str,
+    *,
+    object_type: type | None,
+    object_slot: str | None,
+) -> type:
+    """Build the ``<Name>Payload`` ``@strawberry.type`` wrapper (spec-036 Decision 7 / spec-038 Decision 6).
 
-    ``object_slot`` is the UNIFORM object-field name from
-    ``payload_object_slot(primary_type)`` - ``"node"`` for a Relay-Node target,
-    ``"result"`` otherwise (AR-H5). It is NEVER model-derived, so a ``Property``
-    payload exposes ``node`` / ``result``, never a ``property``-named field.
+    Two payload shapes from ONE builder + ONE materialize ledger (the
+    single-source DRY choice, spec-038 Decision 6):
 
-    Fields: ``<object_slot>: object_type | None`` (nullable - ``null`` on a
-    validation failure) and ``errors: list[FieldError]`` (the non-null list of
-    non-null ``FieldError`` the spec writes ``[FieldError!]!``). ``object_type``
-    is referenced directly: by the time Slice 2's phase-2.5 bind calls this, the
-    read ``DjangoType`` is a real class, so a direct ``object_type | None``
-    annotation resolves at schema build (the genuine import-time forward-ref
-    hazard is the ``DjangoMutationField`` resolver return, Slice 3's concern).
+    - **model-backed** (``object_type`` is non-``None``): ``object_slot`` is the
+      UNIFORM object-field name from ``payload_object_slot(primary_type)`` -
+      ``"node"`` for a Relay-Node target, ``"result"`` otherwise (AR-H5). It is
+      NEVER model-derived, so a ``Property`` payload exposes ``node`` / ``result``,
+      never a ``property``-named field. Fields: ``<object_slot>: object_type | None``
+      (nullable - ``null`` on a validation failure) and ``errors:
+      list[FieldError]`` (the non-null list of non-null ``FieldError`` the spec
+      writes ``[FieldError!]!``). ``object_type`` is referenced directly: by the
+      time Slice 2's phase-2.5 bind calls this, the read ``DjangoType`` is a real
+      class, so a direct ``object_type | None`` annotation resolves at schema build
+      (the genuine import-time forward-ref hazard is the ``DjangoMutationField``
+      resolver return, Slice 3's concern).
+    - **model-less** (``object_type`` is ``None``, the plain ``DjangoFormMutation``
+      flavor, spec-038 Decision 6): NO object slot at all - a model-less mutation
+      has no ``DjangoType`` to return. Fields: ``ok: bool`` (``Boolean!`` - the
+      success flag) and the SAME ``errors: list[FieldError]`` envelope. The None
+      branch is net-new and never reached by the model flavor (which always passes
+      a non-``None`` ``object_type``), so the model payload is byte-unchanged.
     """
-    namespace: dict[str, Any] = {
-        "__annotations__": {object_slot: object_type | None, "errors": list[FieldError]},
-        object_slot: None,
-        "errors": strawberry.field(default_factory=list),
-    }
+    if object_type is None:
+        namespace: dict[str, Any] = {
+            "__annotations__": {"ok": bool, "errors": list[FieldError]},
+            "ok": False,
+            "errors": strawberry.field(default_factory=list),
+        }
+    else:
+        namespace = {
+            "__annotations__": {object_slot: object_type | None, "errors": list[FieldError]},
+            object_slot: None,
+            "errors": strawberry.field(default_factory=list),
+        }
     cls = type(f"{mutation_name}Payload", (), namespace)
     return strawberry.type(cls)

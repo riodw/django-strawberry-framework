@@ -1454,6 +1454,18 @@ swapping the model-construct + `full_clean()` heart of the
 [`mutations/resolvers.py`][mutations-resolvers] pipeline for the form's own
 validation and write, but **reusing the surrounding `036` steps**:
 
+**Ordering correction — authorize runs BEFORE the relation decode (post-ship security
+fix).** The step numbers below reflect the original draft sequence, but the shipped
+pipeline runs **authorize before step 1's relation decode** (for `update`: locate →
+authorize → decode), matching the `036` model path's authorize-first order. The relation
+decode (step 1) issues visibility-scoped `get_queryset` queries, so running it before the
+write-authorization check (step 3) let an unauthorized caller probe related-object
+visibility by id — a write-auth denial (top-level `GraphQLError`) versus an in-band
+relation [`FieldError`][glossary-fielderror-envelope] is an observable distinction. The
+corrected order collapses both to the denial and closes that side channel; any flavor
+reusing this pipeline (the `0.0.13` [`SerializerMutation`][glossary-serializermutation])
+**must authorize before decoding relations**.
+
 1. **Decode** the `data:` input into **two `dict`s keyed by FORM-field name** —
    `provided_data` (scalars, choice-enum raw values, and relation pks / pk-lists) and
    `provided_files` (uploaded files) — using the

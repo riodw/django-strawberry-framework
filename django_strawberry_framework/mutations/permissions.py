@@ -99,3 +99,40 @@ class DjangoModelPermission:
         action = _OPERATION_PERMISSION_ACTION[operation]
         codename = f"{model._meta.app_label}.{action}_{model._meta.model_name}"
         return bool(user.has_perm(codename))
+
+
+class DenyAll:
+    """Deny-by-default write authorization for a model-less plain ``DjangoFormMutation``.
+
+    A plain ``DjangoFormMutation`` has no model, so the
+    ``DjangoModelPermission`` default cannot apply to it: that class reads the
+    model via ``mutation._resolve_model(mutation.Meta)`` and maps the operation to
+    an ``add`` / ``change`` / ``delete`` codename, neither of which a model-less
+    ``"form"`` mutation provides (it would raise at request time, not deny). So an
+    *unset* ``Meta.permission_classes`` on a plain form installs this class
+    instead (spec-038 Decision 11): it **denies every request**, keeping the
+    safe-by-default posture ``036`` established rather than silently shipping an
+    unauthenticated write surface.
+
+    A public plain-form write is the explicit opt-in ``Meta.permission_classes =
+    []`` (the ``036`` AllowAny posture - an empty class list authorizes every
+    request, because ``check_permission`` iterates no classes). This class inspects
+    **no** model metadata, so it is safe for the model-less flavor; its
+    ``has_permission`` signature matches the seam every permission class exposes.
+
+    Internal-by-design: the plain form installs it as a default, so a consumer
+    never names it (deny is the default; ``[]`` opts in to public). It is not part
+    of the pinned public ``__all__`` surface (which widens only via a spec).
+    """
+
+    def has_permission(
+        self,
+        info: Any,
+        mutation: type,
+        operation: str,
+        data: Any,
+        instance: Any = None,
+    ) -> bool:
+        """Always deny: a plain form with no explicit ``permission_classes`` is closed."""
+        del info, mutation, operation, data, instance  # a closed default reads none of them.
+        return False

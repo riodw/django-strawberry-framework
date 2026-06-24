@@ -52,7 +52,7 @@ from ..mutations.inputs import (
     build_payload_type,
     materialize_mutation_input_class,
 )
-from ..mutations.permissions import _PERMISSION_ASYNC_RECOURSE
+from ..mutations.permissions import _PERMISSION_ASYNC_RECOURSE, DenyAll
 from ..mutations.sets import (
     DjangoMutation,
     _validate_permission_classes,
@@ -606,25 +606,34 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
           no model operation - Decision 10).
         - **``fields`` + ``exclude`` both supplied / bare-string / duplicate /
           unknown-name** - via the Slice-1 ``resolve_effective_form_fields``.
+        - **``permission_classes``** - validated + normalized by the shared
+          ``_validate_permission_classes`` with ``unset_default=(DenyAll,)``: a
+          model-less form cannot inherit the model-permission default, so an unset
+          ``permission_classes`` denies by default and a public write is the
+          explicit ``permission_classes = []`` opt-out (Decision 11 / Finding 1).
 
         The snapshot carries ``model=None`` + the ``"form"`` operation sentinel +
         ``form_class`` (Decision 7 P2 - the fixed shape-identity component a plain
         form carries in place of a model operation).
         """
         name = cls.__name__
+        declared = {key for key in vars(meta) if not key.startswith("_")}
         # ``operation`` is RECOGNIZED-but-rejected on the plain base (not merely an
         # unknown key): a model-less mutation has no model operation (Decision 10).
-        # Reject it FIRST with a targeted message naming the reason, so a consumer
-        # who copied a ``DjangoModelFormMutation`` ``Meta`` sees "operation is not
-        # supported" rather than a generic "unknown keys: ['operation']" - then run
-        # the typo guard over the genuinely-unknown remainder.
-        if getattr(meta, "operation", None) is not None:
+        # Reject it by KEY PRESENCE, not value, so an explicit ``operation = None``
+        # is rejected too - the fixed ``"form"`` sentinel must not accept ANY copied
+        # ``Meta.operation`` key (``docs/feedback.md`` Finding 5; a value check let
+        # ``None`` slip through as if absent). Reject it FIRST with a targeted
+        # message naming the reason, so a consumer who copied a
+        # ``DjangoModelFormMutation`` ``Meta`` sees "operation is not supported"
+        # rather than a generic "unknown keys: ['operation']" - then run the typo
+        # guard over the genuinely-unknown remainder.
+        if "operation" in declared:
             raise ConfigurationError(
                 f"DjangoFormMutation {name}.Meta.operation is not supported; a model-less form "
                 "mutation has no model operation (Decision 10). Remove Meta.operation.",
             )
 
-        declared = {key for key in vars(meta) if not key.startswith("_")}
         unknown = sorted(declared - _ALLOWED_PLAIN_FORM_META_KEYS - {"operation"})
         if unknown:
             raise ConfigurationError(
@@ -654,9 +663,16 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         exclude = getattr(meta, "exclude", None)
         _resolve_effective_form_field_names(form_class, fields=fields, exclude=exclude)
 
+        # The plain flavor has no model, so it CANNOT inherit the
+        # ``DjangoModelPermission`` default (that class reads the resolved model,
+        # which a model-less mutation never provides - it would crash at request
+        # time, not deny). An unset ``permission_classes`` therefore defaults to
+        # ``[DenyAll]`` (deny-by-default); a public plain-form write is the explicit
+        # ``permission_classes = []`` opt-out (spec-038 Decision 11 / Finding 1).
         permission_classes = _validate_permission_classes(
             name,
             getattr(meta, "permission_classes", None),
+            unset_default=(DenyAll,),
         )
 
         return _ValidatedMutationMeta(

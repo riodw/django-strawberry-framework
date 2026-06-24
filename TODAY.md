@@ -8,7 +8,7 @@
 
 ## What products demonstrates today
 
-`examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.11` it exercises, end to end, the package capabilities a real consumer reaches for:
+`examples/fakeshop/apps/products/` is a full model-backed GraphQL app over `Category` / `Item` / `Property` / `Entry`. As of `0.0.12` it exercises, end to end, the package capabilities a real consumer reaches for:
 
 - **`DjangoType` schema** — four types configured entirely through `class Meta` (`model` + `fields`), with forward-FK + reverse-FK traversal and four root Relay connection fields (`allCategories` / `allItems` / `allProperties` / `allEntries`, each a `DjangoConnectionField` as of `0.0.9`).
 - **Relay nodes** — every type declares `Meta.interfaces = (relay.Node,)`, so each `id` is a Relay `GlobalID` (own-PK GlobalID filtering, `node(id:)` refetch shape). As of `0.0.9` the default `GlobalID` payload is the Django model label (`products.item:<pk>`) rather than the GraphQL type name, so a `CategoryType` → `ProductCategoryType` rename no longer invalidates cached IDs; `Meta.globalid_strategy` / `RELAY_GLOBALID_STRATEGY` select `model` (default) / `type` (legacy opt-out) / `type+model` (transitional) / callable.

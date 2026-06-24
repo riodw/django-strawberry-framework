@@ -226,7 +226,10 @@ def _build_input_fields(
     for top_name, related_or_none in all_fields.items():
         python_attr = top_name.replace("__", "_")
         graphql_name = _camel_case(python_attr)
-        field_kwargs: dict[str, Any] = {}
+        # Every order field is optional (``inner | None`` / ``Ordering | None``):
+        # pass ``default=None`` explicitly now that an omitted ``default`` means
+        # required (``utils/inputs.py`` / ``docs/feedback.md`` Finding 2).
+        field_kwargs: dict[str, Any] = {"default": None}
         if python_attr != graphql_name:
             field_kwargs["name"] = graphql_name
         if related_or_none is not None:

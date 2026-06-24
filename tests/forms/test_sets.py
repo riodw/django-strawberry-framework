@@ -64,6 +64,7 @@ from django_strawberry_framework.forms.sets import (
 from django_strawberry_framework.mutations.inputs import (
     _materialized_names as mutation_materialized_names,
 )
+from django_strawberry_framework.mutations.permissions import DenyAll
 from django_strawberry_framework.mutations.sets import iter_mutations
 from django_strawberry_framework.registry import registry
 
@@ -257,6 +258,10 @@ def test_modelform_missing_operation_rejected():
         "update",
         "delete",
         "upsert",
+        # An explicit ``operation = None`` is rejected by KEY PRESENCE, not value
+        # (docs/feedback.md Finding 5): the fixed ``"form"`` sentinel accepts no
+        # copied ``Meta.operation`` key, even one set to ``None``.
+        None,
     ],
 )
 def test_plain_base_rejects_any_operation(operation):
@@ -301,6 +306,49 @@ def test_plain_form_class_accepted_as_known_key():
     assert Submit._mutation_meta.form_class is form_cls
     assert Submit._mutation_meta.model is None
     assert Submit._mutation_meta.operation == "form"
+    # An unset ``permission_classes`` defaults to deny-by-default for the plain
+    # flavor - it cannot inherit the model-permission default (Finding 1).
+    assert Submit._mutation_meta.permission_classes == [DenyAll]
+
+
+def test_plain_form_unset_permission_classes_defaults_to_deny_all():
+    """A plain form with no ``permission_classes`` defaults to ``[DenyAll]`` (Finding 1).
+
+    A model-less form cannot inherit ``DjangoModelPermission`` (it reads a model
+    the plain flavor never resolves), so the safe default is deny-by-default rather
+    than a request-time crash.
+    """
+    form_cls = _contact_form()
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = form_cls
+
+    assert Submit._mutation_meta.permission_classes == [DenyAll]
+
+
+def test_plain_form_empty_permission_classes_is_allow_any_opt_out():
+    """An explicit ``permission_classes = []`` on a plain form is preserved (allow-any opt-out)."""
+    form_cls = _contact_form()
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = form_cls
+            permission_classes = []
+
+    assert Submit._mutation_meta.permission_classes == []
+
+
+def test_modelform_unset_permission_classes_keeps_model_permission_default():
+    """The ModelForm flavor still defaults to ``[DjangoModelPermission]`` (no regression, Finding 1)."""
+    form_cls = _item_model_form()
+
+    class CreateItem(DjangoModelFormMutation):
+        class Meta:
+            form_class = form_cls
+            operation = "create"
+
+    assert CreateItem._mutation_meta.permission_classes == [DjangoModelPermission]
 
 
 def test_modelform_unknown_meta_key_raises():

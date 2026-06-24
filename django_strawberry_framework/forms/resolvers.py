@@ -88,6 +88,7 @@ from typing import Any
 
 import strawberry
 from asgiref.sync import sync_to_async
+from django import forms
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.forms.models import model_to_dict
@@ -205,7 +206,17 @@ def _decode_form_relation_single(
     related model is the form field's ``queryset.model`` (single-sourced off the
     form field for BOTH the model-backed and model-less relation, matching the
     Slice-1 input id basis).
+
+    An explicit ``null`` (or any of the form field's ``empty_values``) is NOT an
+    id to decode: it is a clear / no-value. It is passed through unchanged so the
+    bound form's OWN validation decides - a required ``ModelChoiceField`` raises
+    its field-keyed required error via ``form.is_valid()``, an optional one clears
+    to the empty value (``docs/feedback.md`` Finding 4). Treating it as a raw pk
+    instead would mis-report a decode-level "Invalid id for relation" error and
+    block a legitimate nullable-FK clear.
     """
+    if value in form_field.empty_values:
+        return value, None
     related_model = form_field.queryset.model
     if isinstance(value, relay.GlobalID):
         result = decode_model_global_id(value, related_model)
@@ -236,7 +247,16 @@ def _decode_form_relation_multi(
     type-checked, visibility-checked on its own branch, and ``to_field_name``
     converted) and returns the list under the form field name. The first member
     error short-circuits. An empty list is a valid clear.
+
+    An explicit ``null`` (or any of the form field's ``empty_values``, including
+    the empty list) clears the M2M: return ``[]`` so the bound form decides
+    required-ness (required -> a field-keyed error via ``form.is_valid()``;
+    optional -> clear) and ``None`` is NEVER iterated - iterating it would raise a
+    top-level ``TypeError`` instead of the field-keyed envelope
+    (``docs/feedback.md`` Finding 4).
     """
+    if values in form_field.empty_values:
+        return [], None
     keys: list[Any] = []
     for value in values:
         key, error = _decode_form_relation_single(
@@ -314,15 +334,30 @@ def _decode_form_data(
 
 
 def _non_file_form_field_names(mutation_cls: type) -> list[str]:
-    """Return the form's non-file field names for ``model_to_dict`` reconstruction.
+    """Return the form's non-file DECLARED field names for ``model_to_dict`` reconstruction.
 
-    A file column's ``model_to_dict`` value is the stored relative path, NOT a
-    re-bindable ``data=`` value, so file fields are excluded from the
-    reconstructed ``data=`` (an omitted file is preserved via the bound form's
-    ``instance=`` ``initial`` instead). Reads the bind-stashed reverse map so the
-    field set agrees with the input the decode walks.
+    Derived from the form's FULL declared field set (``get_form_fields``), **not**
+    the (possibly narrowed) generated-input reverse map: a ``Meta.fields`` /
+    ``Meta.exclude`` narrowing drops the excluded model-backed fields from the
+    GraphQL input, but the bound ``ModelForm`` still validates EVERY field it
+    declares. Reconstructing only the narrowed input fields would leave an excluded
+    required model-backed field (e.g. a narrowed-away ``category``) absent from the
+    bound ``data=``, so the form fails its required / composite-uniqueness
+    validation against a field the client never narrowed away. Reconstructing from
+    ``base_fields`` instead preserves the located row's value for every declared
+    field, while the resolver still overlays ONLY the provided input (so the
+    excluded fields stay invisible on the wire) - ``docs/feedback.md`` Finding 3.
+
+    A file field's ``model_to_dict`` value is the stored relative path, NOT a
+    re-bindable ``data=`` value, so file fields are excluded (an omitted file is
+    preserved via the bound form's ``instance=`` ``initial`` instead);
+    ``forms.ImageField`` subclasses ``forms.FileField``, so the one ``isinstance``
+    catches both. A declared non-model extra field (a ``confirm``) is harmlessly
+    included - ``model_to_dict`` ignores any name that is not a model column, and
+    a required extra stays required in the partial input so it is always provided.
     """
-    return [spec.form_field_name for spec in mutation_cls._input_field_specs if spec.kind != FILE]
+    form_fields = get_form_fields(mutation_cls._mutation_meta.form_class)
+    return [name for name, field in form_fields.items() if not isinstance(field, forms.FileField)]
 
 
 def _reconstruct_partial_data(

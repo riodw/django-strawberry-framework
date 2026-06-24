@@ -3,8 +3,15 @@
 The form-flavor write runtime, the sibling of ``mutations/resolvers.py`` (the
 ``036`` model pipeline). The pipeline is (spec-038 Decision 8):
 
-    decode -> (update) locate -> authorize -> construct + validate-once
+    (update) locate -> authorize -> decode -> construct + validate-once
             -> write -> (ModelForm) re-fetch -> payload
+
+**Authorize runs BEFORE the relation decode** (matching the ``036`` model path):
+the decode issues visibility-scoped ``get_queryset`` queries, so running it
+pre-auth would let an unauthorized caller probe related-object visibility by id
+(a write-auth denial ``GraphQLError`` vs an in-band relation ``FieldError`` is an
+observable distinction). For ``update`` the locate must precede authorize (object
+-level perms need the instance), exactly as the model path locates first.
 
 and the form-specific invariants this module owns:
 
@@ -372,7 +379,7 @@ def _run_modelform_pipeline_sync(
     data: Any,
     id: Any,  # noqa: A002
 ) -> Any:
-    """The ``ModelForm`` flavor body (decode -> locate -> authorize -> validate -> save -> refetch)."""
+    """The ``ModelForm`` flavor body (locate -> authorize -> decode -> validate -> save -> refetch)."""
     from ..mutations.inputs import payload_object_slot
 
     meta = mutation_cls._mutation_meta
@@ -382,10 +389,6 @@ def _run_modelform_pipeline_sync(
     is_update = meta.operation == "update"
 
     with transaction.atomic():
-        provided_data, provided_files, decode_error = _decode_form_data(mutation_cls, data, info)
-        if decode_error is not None:
-            return build_payload(payload_cls, slot, None, [decode_error])
-
         instance = None
         if is_update:
             node_id, id_error = coerce_lookup_id(id, primary_type)
@@ -395,7 +398,15 @@ def _run_modelform_pipeline_sync(
             if instance is None:
                 return build_payload(payload_cls, slot, None, [not_found_error()])
 
+        # Authorize BEFORE decoding relations: the decode issues visibility-scoped
+        # ``get_queryset`` queries, so running it pre-auth would let an unauthorized
+        # caller probe related-object visibility by id (denial vs relation FieldError).
+        # Matches the ``036`` model path's locate -> authorize -> decode order.
         authorize_or_raise(mutation_cls, info, meta.operation, data, instance=instance)
+
+        provided_data, provided_files, decode_error = _decode_form_data(mutation_cls, data, info)
+        if decode_error is not None:
+            return build_payload(payload_cls, slot, None, [decode_error])
 
         if is_update:
             form_data = _reconstruct_partial_data(mutation_cls, instance, provided_data)
@@ -420,7 +431,7 @@ def _run_modelform_pipeline_sync(
 
 
 def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> Any:
-    """The plain ``DjangoFormMutation`` body: decode -> authorize -> validate -> write -> ``{ ok errors }``.
+    """The plain ``DjangoFormMutation`` body: authorize -> decode -> validate -> write -> ``{ ok errors }``.
 
     No ``id`` (no row to locate), no object slot (no ``DjangoType`` to return), no
     re-fetch. The payload is the pinned ``{ ok errors }`` shape, instantiated
@@ -431,10 +442,9 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
     payload_cls = _form_payload_cls(mutation_cls)
 
     with transaction.atomic():
-        provided_data, provided_files, decode_error = _decode_form_data(mutation_cls, data, info)
-        if decode_error is not None:
-            return payload_cls(ok=False, errors=[decode_error])
-
+        # Authorize BEFORE decoding (see the ModelForm body): a plain form with a
+        # ``ModelChoiceField`` would otherwise let an unauthorized caller probe
+        # relation visibility pre-auth.
         authorize_or_raise(
             mutation_cls,
             info,
@@ -442,6 +452,10 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
             data,
             instance=None,
         )
+
+        provided_data, provided_files, decode_error = _decode_form_data(mutation_cls, data, info)
+        if decode_error is not None:
+            return payload_cls(ok=False, errors=[decode_error])
 
         instance = mutation_cls()
         form = instance.get_form(info, data=provided_data, files=provided_files, instance=None)

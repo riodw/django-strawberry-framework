@@ -43,7 +43,7 @@ and the form-specific invariants this module owns:
   provided_files``. Scalars + FK come from ``model_to_dict`` (a FK's stored
   ``attname`` IS the ``to_field`` / pk key the bound form resolves), while M2M is
   reconstructed as the field's ``to_field_name`` values (``_to_form_key_value``) so
-  an omitted M2M binds in the SAME shape a provided one decodes to (Finding 3). An
+  an omitted M2M binds in the SAME shape a provided one decodes to (Decision 8). An
   omitted file is preserved via the bound ``form_class(instance=...)``'s ``initial``
   (never re-supplied, never cleared). A required non-model extra field stays
   required in the Slice-1 partial input, so it is always present in
@@ -214,7 +214,7 @@ def _decode_form_relation_single(
     id to decode: it is a clear / no-value. It is passed through unchanged so the
     bound form's OWN validation decides - a required ``ModelChoiceField`` raises
     its field-keyed required error via ``form.is_valid()``, an optional one clears
-    to the empty value (``docs/feedback.md`` Finding 4). Treating it as a raw pk
+    to the empty value (spec-038 Decision 8 step 1). Treating it as a raw pk
     instead would mis-report a decode-level "Invalid id for relation" error and
     block a legitimate nullable-FK clear.
     """
@@ -256,7 +256,7 @@ def _decode_form_relation_multi(
     required-ness (required -> a field-keyed error via ``form.is_valid()``;
     optional -> clear) and ``None`` is NEVER iterated - iterating it would raise a
     top-level ``TypeError`` instead of the field-keyed envelope
-    (``docs/feedback.md`` Finding 4).
+    (spec-038 Decision 8 step 1).
     """
     if values in form_field.empty_values:
         return [], None
@@ -365,7 +365,7 @@ def _reconstruct_partial_data(
       ``to_field_name`` set, the bound form looks members up by THAT key, so a
       ``model_to_dict`` (instance) shape would fail validation for an omitted M2M
       while a PROVIDED list (decoded to ``to_field_name`` values) passes - an
-      omitted-vs-provided inconsistency (``docs/feedback.md`` Finding 3). Only a
+      omitted-vs-provided inconsistency (spec-038 Decision 8 step 4). Only a
       form field that is a real forward M2M on the model is reconstructed this way;
       a non-model extra is left to ``model_to_dict`` (which ignores non-columns).
 

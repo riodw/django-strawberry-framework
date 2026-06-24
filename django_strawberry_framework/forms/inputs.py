@@ -488,8 +488,8 @@ def guard_create_required_fields(
     excludes ``guard_required``, so a waiving mutation (``guard_required=False``,
     having overridden ``get_form_kwargs`` / ``get_form``) that materializes a
     narrowed shape FIRST must not suppress the guard for a later non-waiving
-    mutation reusing the same cached shape (``docs/feedback.md`` Finding 5). The
-    guard is tied to the declaration, not the built input shape.
+    mutation reusing the same cached shape. The guard is tied to the declaration,
+    not the built input shape (spec-038 Decision 7 P2, the create-required guard).
     """
     dropped_required = sorted(_required_form_field_names(form_class) - set(effective_field_names))
     if dropped_required:

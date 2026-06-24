@@ -1,23 +1,169 @@
-# Review feedback — restricted stripped snapshot
-Review source: only `.stripped.py` files under `docs/shadow/current/`, generated from `HEAD` after the stripped snapshot directory was empty.
+# Review feedback — spec-038 form-mutations, DRY pass
+
+Focus: duplication / single-sourcing opportunities across the form-mutation
+subsystem (`django_strawberry_framework/forms/`) and the `036` helpers it shares
+(`mutations/resolvers.py`, `mutations/sets.py`). The prior round's fixes are in the
+working tree (the `docs/feedback.md` "Finding N" comment citations were re-anchored
+to `spec-038` Decisions, and the `_form_kwargs_overridden` waiver caveat is now
+documented — both correct).
+
+The implementation is already strongly DRY at the macro level: the pipeline
+helpers (`locate_instance` / `coerce_lookup_id` / `authorize_or_raise` /
+`refetch_optimized` / `build_payload` / `save_or_field_errors` /
+`validation_error_to_field_errors` / `raw_choice_value`) are promoted `036` code
+**called**, not re-implemented. The opportunities below are residual: a payload
+helper that was *not* promoted and got re-spelled, an identical relation-membership
+core duplicated 3×, and the two form bases carrying parallel `build_input` /
+`input_type_name` bodies.
+
 ## Findings
-### High — Nullable model relation inputs still cannot be set to `null`
-`docs/shadow/current/django_strawberry_framework__mutations__inputs.stripped.py::build_mutation_input` makes non-required generated fields nullable and defaulted to `strawberry.UNSET`, so a nullable single relation can be explicitly passed as `null` in GraphQL. But `docs/shadow/current/django_strawberry_framework__mutations__resolvers.stripped.py::_decode_relations` dispatches relation fields to `_decode_single_relation_id` before the scalar null guard runs. `_decode_single_relation_id` then wraps the value in a one-element list, and `_decode_relation_id_set` treats `None` as a scalar primary-key value rather than as a deliberate null assignment.
-Impact: updates cannot clear a nullable FK/one-to-one relation, and creates cannot explicitly submit `null` for a nullable single relation, even though the generated input contract permits that value. The runtime returns a relation error instead of setting the relation attribute to `None`.
-Root fix: handle `value is None` in the single-relation path before `_decode_relation_id_set`. Return `(None, None)` when the Django relation field is nullable, and return a field error when it is not. Keep `_decode_relation_id_list` rejecting `None` for many-valued relations.
-### High — Scalar relation IDs bypass related type visibility
-`docs/shadow/current/django_strawberry_framework__mutations__inputs.stripped.py::relation_input_annotation` falls back to the related model primary-key scalar whenever the registered related type is not Relay-shaped. In `docs/shadow/current/django_strawberry_framework__mutations__resolvers.stripped.py::_decode_relation_id_set`, only `relay.GlobalID` inputs set `needs_visibility=True`; plain scalar primary keys skip `_relation_visibility_error` and go through `_relation_existence_error`, which queries the related model default manager directly.
-Impact: a mutation can attach an object hidden by the related GraphQL type's `get_queryset` whenever that relation is represented as a scalar ID rather than a GlobalID. This is a security/invariant gap: Relay relation inputs enforce type visibility, form relation decoding enforces type visibility through `_visible_related_object`, but model mutation scalar relation inputs only enforce database existence.
-Root fix: when `registry.get(related_model)` returns a type, validate scalar relation IDs through the same `apply_type_visibility_sync(initial_queryset(...))` path used for GlobalID relation inputs. Fall back to default-manager existence checks only when no registered related type exists.
-### Medium — Partial ModelForm updates reconstruct many-to-many values in the wrong shape
-`docs/shadow/current/django_strawberry_framework__forms__resolvers.stripped.py::_run_modelform_pipeline_sync` reconstructs omitted update data with `_reconstruct_partial_data`, and `_reconstruct_partial_data` uses `model_to_dict(instance, fields=_non_file_form_field_names(...))` as bound `data=` for the form. That is not the same shape produced by `_decode_form_relation_multi`, which deliberately converts submitted relation values through `_to_form_key_value` before inserting them into bound form data.
-Impact: omitted many-to-many fields on partial ModelForm updates are reconstructed from instance/initial-data shape, while provided many-to-many fields are decoded into submitted choice-key shape. Required M2M form fields can therefore fail validation or validate inconsistently when omitted from a partial update, especially for `ModelMultipleChoiceField` configurations that use `to_field_name`.
-Root fix: reconstruct partial form data field-by-field using the form fields, not `model_to_dict` wholesale. For `ModelChoiceField`, use `_to_form_key_value(obj, form_field)`; for `ModelMultipleChoiceField`, use a list of those keys; for scalar model fields, use the model-backed value; continue excluding file fields from reconstructed bound data.
-### Medium — Scalar ModelChoice inputs ignore `to_field_name`
-`docs/shadow/current/django_strawberry_framework__forms__inputs.stripped.py::_model_less_relation_annotation` and `_field_triple_and_spec` generate scalar relation annotations from the related model primary key whenever the relation is not represented as `relay.GlobalID`. `docs/shadow/current/django_strawberry_framework__forms__resolvers.stripped.py::_decode_form_relation_single` then coerces scalar inputs with `_coerce_relation_pk_or_none`, again assuming the submitted scalar is a primary key. Only after finding the object does `_to_form_key_value` convert it to the form field's `to_field_name` value.
-Impact: a `ModelChoiceField` or `ModelMultipleChoiceField` configured with `to_field_name` exposes the wrong GraphQL scalar contract for non-Relay relations. Clients must submit the database primary key even though the Django form field is configured to accept another unique key, and the generated scalar type can be wrong when that key is not the same type as the primary key.
-Root fix: derive the scalar relation input from `form_field.to_field_name or related_model._meta.pk.name`, and resolve scalar inputs against that form choice key under the same visibility/queryset checks. GlobalID inputs can remain identity-based, but scalar inputs should match the Django form field's submitted-value contract.
-### Medium — Form input caching can bypass required-field validation
-`docs/shadow/current/django_strawberry_framework__forms__sets.stripped.py::_cached_build_form_input` keys `_form_shape_build_cache` by `(form_class, operation_kind, frozenset(effective))` and returns cached values before calling `build_form_inputs(..., guard_required=guard_required)`. The cache key does not include `guard_required`, and the guard is not rerun on cache hits.
-Impact: a mutation class that overrides `get_form_kwargs`/`get_form` can intentionally build a narrowed form input while bypassing the required-field guard. A later default mutation using the same form class and effective field set can then reuse that cached input and avoid the required-field validation it should have failed. Binding order inside `bind_form_mutations` becomes observable configuration behavior.
-Root fix: run the dropped-required-field guard before returning from the cache, or include the guard outcome in the cache key and still validate guarded declarations independently. The validation should be tied to each mutation declaration, not only to the first class that materializes a given form input shape.
+
+### [High] `forms/resolvers.py::_form_payload_cls` re-implements `036`'s `_payload_cls_for` verbatim
+
+`forms/resolvers.py::_form_payload_cls` is byte-identical logic to
+`mutations/resolvers.py::_payload_cls_for`:
+
+```python
+# forms/resolvers.py::_form_payload_cls
+from ..mutations import inputs
+return getattr(inputs, mutation_cls._payload_type_name)
+
+# mutations/resolvers.py::_payload_cls_for
+from . import inputs
+return getattr(inputs, mutation_cls._payload_type_name)
+```
+
+Both read the materialized `<Name>Payload` from `mutations.inputs` by
+`_payload_type_name`, and `_form_payload_cls`'s own docstring states the form
+payload is materialized into `mutations.inputs` for *both* flavors precisely so the
+lookup is the same. This is the same "promote the `036` helper and reuse it" move
+the spec already applied to nine pipeline helpers — `_payload_cls_for` was simply
+missed.
+
+- **Fix:** promote `_payload_cls_for` → `payload_cls_for` (underscore-dropped in
+  place, exactly like the other promoted helpers), import it in
+  `forms/resolvers.py`, and delete `_form_payload_cls`. Update the
+  `AGENTS.md` `::OldName` rename-sweep refs.
+
+### [High] The pk-membership-subset `_relation_error` core is duplicated across three functions
+
+`mutations/resolvers.py::_relation_visibility_error`,
+`::_raw_pk_relation_error`, and `::_relation_existence_error` each end with the
+identical 5-line membership check:
+
+```python
+present = {str(pk) for pk in <queryset>.filter(pk__in=<query_pks>).values_list("pk", flat=True)}
+if not {str(pk) for pk in <declared_pks>} <= present:
+    return _relation_error(field_name)
+return None
+```
+
+The only axes of variation are the queryset (the visibility-scoped
+`apply_type_visibility_sync(initial_queryset(...))` for the two visibility checks,
+the `_default_manager` for the existence check) and whether the queried pks were
+pre-coerced. This is exactly the kind of "the same invariant spelled three times"
+that drifts — and two of the three sites are new this cycle, so the duplication is
+fresh.
+
+- **Fix:** extract one helper, e.g.
+
+  ```python
+  def _relation_membership_error(field_name, queryset, declared_pks, query_pks):
+      present = {str(pk) for pk in queryset.filter(pk__in=query_pks).values_list("pk", flat=True)}
+      if not {str(pk) for pk in declared_pks} <= present:
+          return _relation_error(field_name)
+      return None
+  ```
+
+  and have all three call it (passing the visibility queryset or the default
+  manager, and `declared_pks` / `query_pks` for the coercion split). The membership
+  semantics then live in one place, which is where the no-existence-leak invariant
+  belongs.
+
+### [Medium] The visibility-scoped related queryset is built identically on the model and form paths
+
+`mutations/resolvers.py::_relation_visibility_error` and `::_raw_pk_relation_error`
+and `forms/resolvers.py::_visible_related_object` each build:
+
+```python
+apply_type_visibility_sync(related_type, initial_queryset(related_type), info, <recourse>)
+```
+
+The composition is already over two single-sourced primitives (`initial_queryset`
++ `apply_type_visibility_sync`), so the literal dedup is small — but the spec's
+whole cross-flavor security claim is that the form and model paths apply *the same*
+related-type `get_queryset`. A shared
+`visibility_scoped_related_queryset(related_type, info, recourse)` would make that
+sameness structural rather than coincidental, and reads as the obvious companion to
+the `_relation_membership_error` extraction above (one builds the queryset, the
+other checks membership in it).
+
+- **Fix (optional, judgment call):** extract the one-line builder if you want the
+  invariant pinned in code; the `recourse` string stays a parameter
+  (`_FORM_ASYNC_RECOURSE` vs `_MUTATION_ASYNC_RECOURSE`). Lower urgency than the two
+  above since the underlying helpers are already shared.
+
+### [Medium] `forms/sets.py` — the two bases carry parallel `build_input` / `input_type_name` bodies
+
+`DjangoModelFormMutation.build_input` and `DjangoFormMutation.build_input` differ
+only in the `operation_kind` and the waiver base; their tail is identical:
+
+```python
+input_cls, field_specs = _cached_build_form_input(meta.form_class, operation_kind=..., fields=meta.fields, exclude=meta.exclude, guard_required=not _form_kwargs_overridden(cls, <base>))
+materialize_form_input_class(input_cls.__name__, input_cls)
+cls._input_field_specs = field_specs
+return input_cls
+```
+
+Likewise `DjangoModelFormMutation.input_type_name` and
+`DjangoFormMutation.input_type_name` share the full body except `operation_kind`:
+
+```python
+effective = _resolve_effective_form_field_names(meta.form_class, fields=meta.fields, exclude=meta.exclude)
+full = tuple(get_form_fields(meta.form_class))
+return form_input_type_name(meta.form_class, <operation_kind>, effective, full_field_names=full)
+```
+
+- **Fix:** two module helpers — `_build_and_stash_form_input(cls, meta, *, operation_kind, base)`
+  and `_form_input_type_name_for(meta, operation_kind)` — each base then becomes a
+  one-line call. This keeps the materialize-and-stash sequence and the name
+  derivation single-sited, so a future change to either (e.g. a new field-spec
+  stash) touches one place.
+
+### [Low] `CREATE if meta.operation == "create" else PARTIAL` repeated in the `ModelForm` base
+
+The operation→kind mapping appears at both
+`DjangoModelFormMutation.build_input` and `.input_type_name`. Minor, but if you
+extract the helpers above it collapses naturally into a single
+`_modelform_operation_kind(meta)` (or just an inline arg passed from one site).
+
+## Considered and deliberately NOT recommended
+
+To keep the DRY pass from forcing consolidation that would hurt clarity (per the
+`AGENTS.md` "highest-quality fix, never a pragmatic shortcut" bar):
+
+- **The two `_validate_meta` matrices** (`DjangoModelFormMutation` vs
+  `DjangoFormMutation`) look parallel but are genuinely disjoint: different
+  allowed-key sets, the plain base's targeted `ModelForm`-rejection and
+  `operation`-rejection messages, and the deny-by-default permission default. Their
+  shared atoms (`_require_form_class`, `_resolve_effective_form_field_names`,
+  `_validate_permission_classes`) are *already* extracted. Merging the matrices
+  would couple the targeted error messages — net negative. Leave split.
+- **`resolve_sync` / `resolve_async` seam overrides on the two bases** are 2-line
+  delegations to the already-single-sourced `resolve_form_sync` /
+  `resolve_form_async`, differing by the `id` parameter (model) vs none (plain).
+  Consolidating adds indirection for no real dedup. Leave.
+- **The two pipeline bodies** (`_run_modelform_pipeline_sync` /
+  `_run_plain_form_pipeline_sync`) share a short authorize→decode→validate prologue,
+  but the payload construction (`build_payload(..., slot, ...)` vs
+  `payload_cls(ok=..., errors=...)`) and the locate/refetch steps differ
+  materially; the genuinely shared atoms (decode, error-mapping, save-mapping) are
+  already helpers. Forcing a single body would obscure the two distinct envelopes.
+  Leave as the two-branch dispatch they are.
+
+## Checks run
+
+- `uv run ruff check` / `ruff format --check` over the touched modules → clean
+- `uv run python scripts/check_trailing_commas.py --check …` → clean
+- Did **not** run `pytest` (per `AGENTS.md`); the extractions above are
+  behavior-preserving and covered by the existing live + package suites.

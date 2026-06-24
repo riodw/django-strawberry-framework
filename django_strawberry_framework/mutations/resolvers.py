@@ -130,8 +130,9 @@ def _decode_relations(
     ``FieldError``, never attached. A raw pk scalar (a non-Relay target) is not
     decoded, but is STILL visibility-checked when the related model has a registered
     (even non-Relay) primary type with a ``get_queryset`` - the model-path
-    equivalent of the form decoder, closing the raw-pk visibility gap (feedback
-    Finding 2). With no primary registered there is no visibility contract to apply.
+    equivalent of the form decoder's visibility-on-every-branch contract, closing
+    the raw-pk visibility gap. With no primary registered there is no contract to
+    apply.
 
     Returns ``(scalar_and_fk_attrs, m2m_assignments, error)`` where
     ``scalar_and_fk_attrs`` is the ``{model_attr: value}`` map for ``setattr`` /
@@ -355,7 +356,7 @@ def _decode_relation_id_set(
     one, which has no ``GlobalID`` but can still define a ``get_queryset`` - the set
     is visibility-checked through ``_raw_pk_relation_error``, exactly as the form
     path does (``forms/resolvers.py::_visible_related_object``), closing the
-    model-path raw-pk visibility gap (feedback Finding 2). With NO primary type
+    model-path raw-pk visibility gap. With NO primary type
     registered there is no visibility contract to apply: a raw-pk **M2M** set still
     gets the pre-``.set(...)`` existence check (it is assigned via
     ``instance.<m2m>.set(pks)``, which writes a dangling through-row for any
@@ -574,7 +575,7 @@ def _raw_pk_relation_error(
     relation_field: Any,
     info: Any,
 ) -> FieldError | None:
-    """Visibility- or existence-check a RAW-PK relation set before it is attached (feedback Finding 2).
+    """Visibility- or existence-check a RAW-PK relation set before it is attached.
 
     A raw-pk relation (the related model has no Relay-Node primary, so the input is
     the related pk scalar, not a ``GlobalID``) is NOT automatically exempt from the

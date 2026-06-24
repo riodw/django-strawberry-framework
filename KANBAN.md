@@ -202,7 +202,7 @@ needs spec
 
 - graphene-django ships `SerializerMutation`; the highest-leverage write-side feature for DRF migrants.
 - no on-board predecessor.
-- new `rest_framework/` subpackage (serializer converter dual-purposed for inputs + outputs, plus `SerializerMutation`); soft DRF dependency. Reuses 036's infra + error envelope. Spec + tests + live HTTP.
+- new `rest_framework/` subpackage (serializer converter dual-purposed for inputs + outputs, plus `SerializerMutation`); soft DRF dependency. Reuses DONE-036-0.0.11's infra + error envelope. Spec + tests + live HTTP.
 
 #### Card references
 
@@ -241,7 +241,7 @@ planned
 
 - strawberry-graphql-django ships a small auth-mutations module.
 - depends on `DONE-036-0.0.11`.
-- new `auth/` module (`login` / `logout` / `register` + `current_user` query helper) composing with permissions; builds on 036's mutation infra. Mirrored tests; opt-in import.
+- new `auth/` module (`login` / `logout` / `register` + `current_user` query helper) composing with permissions; builds on DONE-036-0.0.11's mutation infra. Mirrored tests; opt-in import.
 
 #### Card references
 
@@ -515,7 +515,7 @@ planned
 
 #### Definition of done
 
-- [ ] Every other Alpha card (`ALPHA-013-0.0.6` through `ALPHA-044-0.0.14` plus `ALPHA-024-0.0.9`) is in `DONE`.
+- [ ] Every other Alpha card (`DONE-013-0.0.4` through `TODO-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`.
 - [ ] Full test pass under each supported `(Python, Django, Strawberry)` combination.
 - [ ] Coverage stays at 100% for the package source tree.
 - [ ] Version bumped to `0.1.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
@@ -545,6 +545,12 @@ planned
 - release-blocking.
 - final card in the Alpha queue; gates the alpha → beta milestone.
 - release / verification card, no new subsystem: full `(Python, Django, Strawberry)` matrix pass, 100% coverage, version bump to `0.1.0`, CHANGELOG promotion, doc status cross-check, parity audit, tag + publish.
+
+#### Card references
+
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `TODO-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-013-0.0.4` - Real M2M coverage
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `TODO-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `TODO-ALPHA-044-0.0.14` - Response-extensions debug middleware
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `TODO-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method`
 
 <a id="fieldset"></a>
 ### [TODO-BETA-046-0.1.1 - `FieldSet`](KANBAN.html#fieldset)
@@ -874,7 +880,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 
 #### Planning note
 
-Strawberry port of graphene-django's node-level sentinel redaction — the third redaction tier the package deferred in spec-034 Decision 6 (row-exclusion) and re-confirmed as a `FieldSet` Non-goal (`TODO-BETA-046`). Upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes it as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden row so a non-null FK to a hidden target still resolves. This card recreates that surface behind an explicit per-`DjangoType` opt-in so a django-graphene-filters consumer relying on `isRedacted` / sentinel masking can port verbatim, without disturbing the default row-narrowing model.
+Strawberry port of graphene-django's node-level sentinel redaction — the third redaction tier the package deferred in spec-034 Decision 6 (row-exclusion) and re-confirmed as a `FieldSet` Non-goal (`TODO-BETA-046-0.1.1`). Upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes it as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden row so a non-null FK to a hidden target still resolves. This card recreates that surface behind an explicit per-`DjangoType` opt-in so a django-graphene-filters consumer relying on `isRedacted` / sentinel masking can port verbatim, without disturbing the default row-narrowing model.
 
 #### Dependencies
 
@@ -897,7 +903,7 @@ Strawberry port of graphene-django's node-level sentinel redaction — the third
 - [ ] `Meta.redaction_mode` defaults to `"exclude"`; all existing schemas and tests stay unchanged under the default. The `"sentinel"` machinery is wired only when the mode is set.
 - [ ] Tests mirror the source one-to-one; live HTTP coverage exercises a hidden non-null FK target resolving to a `pk=0` sentinel with `isRedacted = true`, a normal row reading `isRedacted = false`, and `get_node` on a hidden id returning the sentinel in `"sentinel"` mode vs `null` in `"exclude"` mode.
 - [ ] Composability tests: `"sentinel"` mode + `apply_cascade_permissions` — the top-level cascade still narrows rows; sentinels appear only for relation targets of surviving rows (no row resurrection, no double counting).
-- [x] Amend the `FieldSet` (`TODO-BETA-046`) Architectural-posture note so its node-sentinel "Non-goal" cross-references this card as the realized opt-in tier.
+- [x] Amend the `FieldSet` (`TODO-BETA-046-0.1.1`) Architectural-posture note so its node-sentinel "Non-goal" cross-references this card as the realized opt-in tier.
 
 #### Verified in upstream
 
@@ -921,7 +927,7 @@ Strawberry port of graphene-django's node-level sentinel redaction — the third
 
 - Dependency: `DONE-034-0.0.10` (Permissions subsystem) — extends the `apply_cascade_permissions` / `get_queryset` cascade; this tier reconciles sentinels with cascade narrowing. -> `DONE-034-0.0.10` - Permissions subsystem
 - Dependency: `DONE-032-0.0.9` (Full Relay story) — overrides the shipped `get_node` node-resolution seam. -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
-- Related: Amends the `FieldSet` node-sentinel Non-goal note (`TODO-BETA-046`) — this card is the realized opt-in tier that note defers to. -> `TODO-BETA-046-0.1.1` - `FieldSet`
+- Related: Amends the `FieldSet` node-sentinel Non-goal note (`TODO-BETA-046-0.1.1`) — this card is the realized opt-in tier that note defers to. -> `TODO-BETA-046-0.1.1` - `FieldSet`
 
 <a id="stable_choice_enum_naming_override"></a>
 ### [TODO-BETA-052-0.1.4 - Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
@@ -1079,7 +1085,7 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 
 #### Dependencies
 
-- Builds on the core DjangoMutation lifecycle and generated input envelope from TODO-ALPHA-036.
+- Builds on the core DjangoMutation lifecycle and generated input envelope from DONE-036-0.0.11.
 
 #### Other
 
@@ -1088,7 +1094,7 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 
 #### Card references
 
-- Dependency: Builds on the core DjangoMutation lifecycle and generated input envelope from TODO-ALPHA-036. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+- Dependency: Builds on the core DjangoMutation lifecycle and generated input envelope from DONE-036-0.0.11. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
 
 <a id="migration_and_adoption_guides"></a>
 ### [TODO-BETA-056-0.1.6 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
@@ -1450,7 +1456,7 @@ needs spec
 
 - graphene-django ships `DjangoFormMutation` / `DjangoModelFormMutation`.
 - no on-board predecessor.
-- new `forms/` subpackage (form-field converter + `Form`/`ModelForm` mutation classes) on the DRF-style Meta surface; reuses 036's mutation infra + shared error envelope. Spec + tests + live HTTP.
+- new `forms/` subpackage (form-field converter + `Form`/`ModelForm` mutation classes) on the DRF-style Meta surface; reuses DONE-036-0.0.11's mutation infra + shared error envelope. Spec + tests + live HTTP.
 
 #### Card references
 
@@ -1639,7 +1645,7 @@ needs spec
 
 - mutations are the single largest unscoped gap vs strawberry-graphql-django (create / update / delete + auto-generated Input / PartialInput types).
 - no on-board predecessor.
-- `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by 038 / 039 / 040.
+- `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by DONE-038-0.0.12 / TODO-ALPHA-039-0.0.13 / TODO-ALPHA-040-0.0.13.
 
 #### Card references
 
@@ -1649,7 +1655,7 @@ needs spec
 - Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms)
 - Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-039-0.0.13` - DRF serializer mutations (`SerializerMutation`)
 - Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-040-0.0.13` - Auth mutations (login / logout / register)
-- Related: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by 038 / 039 / 040. -> `DONE-027-0.0.8` - Filtering subsystem
+- Related: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by DONE-038-0.0.12 / TODO-ALPHA-039-0.0.13 / TODO-ALPHA-040-0.0.13. -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="optimizer_robustness_hardening_upstream_comparison_guards"></a>
 ### [DONE-035-0.0.10 - Optimizer robustness hardening (upstream-comparison guards)](KANBAN.html#optimizer_robustness_hardening_upstream_comparison_guards)
@@ -2107,7 +2113,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 
 #### Other
 
-- eight-goal umbrella for the complete Relay surface (Root `node`/`nodes` fields, relation-as-Connection upgrade, cursor contracts, permission integration, schema-validation diagnostics, test helpers, fakeshop activation). New `relay.py` + `test/relay.py` + finalizer changes + spec. Cursor mechanics overlap with 024; this card is the connective tissue tying it all together.
+- eight-goal umbrella for the complete Relay surface (Root `node`/`nodes` fields, relation-as-Connection upgrade, cursor contracts, permission integration, schema-validation diagnostics, test helpers, fakeshop activation). New `relay.py` + `test/relay.py` + finalizer changes + spec. Cursor mechanics overlap with DONE-030-0.0.9; this card is the connective tissue tying it all together.
 - ~~`Meta.interfaces` design~~ — `Meta.interfaces` accepted end-to-end for any Strawberry interface; `(relay.Node,)` activates the Node foundation.
 - ~~`GlobalID` mapping decision~~ — Strawberry-supplied `id: GlobalID!` from the Relay interface replaces the synthesized `id: int!`; Django primary key remains projected as a connector column for the optimizer (Decision 2 of [`docs/SPECS/spec-015-relay_interfaces-0_0_5.md`][spec-011]).
 - ~~Default `resolve_*` injection~~ — `resolve_id_attr`, `resolve_id`, `resolve_node`, `resolve_nodes` defaults injected when `relay.Node` is in `Meta.interfaces`; consumer overrides preserved via Strawberry's `__func__` identity test.
@@ -2142,11 +2148,11 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - Auto-upgrade reverse FK / M2M to Connection based on a row-count threshold
 - Refetchable container schema metadata for `useRefetchableFragment`
 - Permission-aware cursor decoding (cursor decode re-runs `get_queryset` so privileged cursors don't leak)
-- `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands.
+- `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when DONE-030-0.0.9 lands.
 - `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections.
 - `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections.
 - `DONE-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`.
-- `DONE-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands.
+- `DONE-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when DONE-034-0.0.10 lands.
 - `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`)
 - `django_strawberry_framework/relay.py` (new) — `DjangoNodeField`, `DjangoNodesField`, GlobalID decode dispatch
 - `django_strawberry_framework/types/base.py` — `Meta.connection` / `Meta.relation_shapes` validation
@@ -2161,7 +2167,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - Fakeshop product-catalog Relay activation (Goal 8)
 - Per-type `useFragment` / `useRefetchableFragment` patterns (mechanics; the schema-side `@refetchable` directive support lives in BETTER item 39 sub-feature 5)
 - Every BETTER item 39 sub-feature builds on this card's mechanics
-- Fakeshop products-app activation (`examples/fakeshop/apps/products/schema.py`): replace the four `Query` list resolvers (`all_categories` / `all_items` / `all_properties` / `all_entries`) with `DjangoConnectionField`s for the 1-to-1 `django-graphene-filters` cookbook mirror (connections-only — the cookbook Query is `all_object_types = AdvancedDjangoFilterConnectionField(ObjectTypeNode)` with no list resolvers). The four `*Type` classes are already Relay-Node-shaped with `filterset_class` / `orderset_class` wired, so only the root-field shape changes; `relay.node()` / root `Node.Field` refetch is the separate root-Node goal of this card. Deferred from the `DONE-030-0.0.9` (`DjangoConnectionField`) cycle and gated on `DONE-033-0.0.9` (connection-aware optimizer): a `0.0.9` `DjangoConnectionField` derives an empty optimizer plan, so a connections-only products conversion must land with 033 to avoid regressing the `test_products_optimizer_*` SQL-shape coverage.
+- Fakeshop products-app activation (`examples/fakeshop/apps/products/schema.py`): replace the four `Query` list resolvers (`all_categories` / `all_items` / `all_properties` / `all_entries`) with `DjangoConnectionField`s for the 1-to-1 `django-graphene-filters` cookbook mirror (connections-only — the cookbook Query is `all_object_types = AdvancedDjangoFilterConnectionField(ObjectTypeNode)` with no list resolvers). The four `*Type` classes are already Relay-Node-shaped with `filterset_class` / `orderset_class` wired, so only the root-field shape changes; `relay.node()` / root `Node.Field` refetch is the separate root-Node goal of this card. Deferred from the `DONE-030-0.0.9` (`DjangoConnectionField`) cycle and gated on `DONE-033-0.0.9` (connection-aware optimizer): a `0.0.9` `DjangoConnectionField` derives an empty optimizer plan, so a connections-only products conversion must land with DONE-033-0.0.9 to avoid regressing the `test_products_optimizer_*` SQL-shape coverage.
 
 #### Card references
 
@@ -2169,11 +2175,11 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - Related: `filter: <Type>FilterInput` — generated from `Meta.filterset_class` (composes with `DONE-027-0.0.8`) -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: `orderBy: [<Type>OrderInput!]` — generated from `Meta.orderset_class` (composes with `DONE-028-0.0.8`) -> `DONE-028-0.0.8` - Ordering subsystem
 - Related: `search: String` — generated from `Meta.search_fields` (composes with `TODO-BETA-047-0.1.2` — note: search is `1.0.0` scope, ships after `0.1.0`; until then, search arg is absent) -> `TODO-BETA-047-0.1.2` - `Meta.search_fields` support
-- Related: `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when 026 lands. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Related: `DONE-030-0.0.9` (`DjangoConnectionField`) — **hard dependency**; this card unblocks when DONE-030-0.0.9 lands. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 - Related: `DONE-027-0.0.8` (Filtering subsystem) — soft dependency for the filter argument on Connections. -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: `DONE-028-0.0.8` (Ordering subsystem) — soft dependency for the orderBy argument on Connections. -> `DONE-028-0.0.8` - Ordering subsystem
 - Related: `DONE-033-0.0.9` (Connection-aware optimizer planning) — ships in parallel; the Node entry points and the relation-as-Connection upgrade both rely on the walker recognizing `edges { node { ... } }`. -> `DONE-033-0.0.9` - Connection-aware optimizer planning
-- Related: `DONE-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when 029 lands. -> `DONE-034-0.0.10` - Permissions subsystem
+- Related: `DONE-034-0.0.10` (Permissions subsystem) — soft dependency; the Node entry points respect `get_queryset` immediately and integrate with declared permissions when DONE-034-0.0.10 lands. -> `DONE-034-0.0.10` - Permissions subsystem
 - Related: The fakeshop `library` HTTP test suite gains Relay-shaped queries (refetch, paginated connection, cursor round-trip, `totalCount`). Fakeshop `products` activation lights up the full Relay surface as part of `TODO-BETA-053-0.1.5`. -> `TODO-BETA-053-0.1.5` - Fakeshop GraphQL schema activation
 - Related: `django_strawberry_framework/connection.py` — main implementation (shipped as part of `DONE-030-0.0.9`) -> `DONE-030-0.0.9` - `DjangoConnectionField`
 
@@ -2402,7 +2408,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - [x] When the wrapped type declares `Meta.filterset_class`, the connection field exposes `filter: <Type>FilterInput` and routes input values through the filterset's `apply_sync` / `apply_async` pair.
 - [x] When the wrapped type declares `Meta.orderset_class`, the connection field exposes `orderBy: [<Type>OrderInput!]` and routes through the orderset's `apply_sync` / `apply_async` pair.
 - [x] Connection field composes with `cls.get_queryset(queryset, info)` — visibility scoping runs before any filter / order / cursor work.
-- [x] Optimizer cooperation: the connection-aware planner (`DONE-033-0.0.9`) layers on without retrofit; this card ships against the existing flat-selection walker and the connection-aware walker takes over when 032 lands.
+- [x] Optimizer cooperation: the connection-aware planner (`DONE-033-0.0.9`) layers on without retrofit; this card ships against the existing flat-selection walker and the connection-aware walker takes over when DONE-033-0.0.9 lands.
 - [x] Live HTTP coverage in `examples/fakeshop/test_query/` exercises a real round-trip with filter + orderBy + cursor + totalCount on a Relay-Node-shaped type.
 
 #### Foundation-slice seam

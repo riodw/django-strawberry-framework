@@ -72,6 +72,10 @@ The plan must prefer small, reusable helpers over duplicated local logic. If a h
 
 When a slice changes a root or relation field's wire shape (a list field becoming a connection, or any change to the `edges` / `node` / argument envelope a consumer query must use), the plan must require re-pinning **every** test tree that exercises that field — not just the one the spec slice text names. `AGENTS.md` defines three: package `tests/`, per-app non-live `examples/fakeshop/apps/<app>/tests/` (in-process `schema.execute_sync`), and live `examples/fakeshop/test_query/` (HTTP). A per-pass `git diff` review stays green on a stale tree because the un-re-pinned file is never in the diff — the full `pytest` sweep at the final gate is the first run to execute it, turning a missed tree into a late re-loop. Plan the grep (`grep -rn <converted field name>` across all three trees) as an explicit test step.
 
+### Example-model field changes ripple into package-test fixtures
+
+When a slice adds, removes, or renames a field/column on an example-project model that package tests use as a fixture (`AGENTS.md` allows package `tests/` to use real example models), the change silently breaks every test that hard-codes the model's field set — and it surfaces through **different mechanisms** (a stale `fields=` / `exclude=` list, an editable-column expectation, a `"__all__"` shorthand that now raises on an unfilterable column type, a dedup/identity assertion). The change-owning slice's focused test scope rarely includes those files, so the breakage hides until a later pass or the final gate runs the full tree. The plan for such a slice must require a **full `uv run pytest tests/ --no-cov` sweep** (not just the slice's focused scope) before the slice is accepted, and must treat a column add as a known cross-tree fixture-staleness hazard. A regression introduced this way is the build's to fix **in-loop** (re-loop the owning slice or fold it into the integration pass) — never defer an in-build regression to a spawned background task.
+
 ### DRY analysis shape
 
 The `Plan (Worker 1)` section's DRY analysis answers three questions explicitly, each as a bullet that cites file paths and line ranges:
@@ -110,6 +114,10 @@ After Worker 3 has accepted the slice:
 10. Append a short memory entry.
 
 If DRY opportunities remain, do not accept the slice. Record the finding and set `revision-needed`.
+
+### Verifying "relocated / promoted / unchanged" claims
+
+When a slice claims a body was **relocated** into a seam/classmethod, **promoted** (e.g. a private helper renamed public), or otherwise carried over **unchanged** — the kind of claim a "no-regression" gate rests on — do not accept it on prose. Prove it mechanically against pristine HEAD: an executable-token or character diff of the moved/renamed body vs `git show HEAD:<path>` (strip comments/whitespace and normalize a renamed receiver/identifier, then confirm token-identity). The claim most worth distrusting is exactly the one that is cheapest to wave through ("I only moved it"); the shell diff is the proof. Apply the same to a helper-promotion (the rename-only claim) and a cross-flavor lift (both call sites' messages/behavior byte-identical to their originals). An unproven relocation/promotion claim is grounds to withhold `final-accepted`.
 
 ## Integration pass
 

@@ -80,6 +80,14 @@ Any claim that a failing test, broken behavior, or unexpected diff entry is "pre
 
 On a re-pass after `revision-needed`, run focused tests for both the file you fixed AND every test file that imports the changed surface — including sibling apps and the example projects. Module-local tests catch your targeted fix; sibling tests catch over-corrections that break unrelated callers.
 
+### Example-model field changes need a full package-test sweep
+
+If your slice adds, removes, or renames a field/column on an example-project model (package `tests/` may use real example models as fixtures), run the **full `uv run pytest tests/ --no-cov` sweep** before setting `Status: built`, not just the slice's focused tests. A column change silently breaks tests that hard-code the model's field set, and it surfaces through different mechanisms (a stale `fields=` / `exclude=` list, an editable-column expectation, a `"__all__"` shorthand that now raises on an unfilterable column type, a dedup/identity assertion) across files your slice never names. Fix every staleness it surfaces in the same pass — the faithful fix restores the test's original intent against the model's **current** field set (e.g. add the new column to the relevant `fields=`/`exclude=`/expected list), never weaken the assertion to force a pass, and never change production code to make a stale test green.
+
+### Do not defer an in-build failure to a spawned background task
+
+A test that fails because of a change THIS build made (a column add, a renamed symbol, a moved helper) is the build's to fix in the active loop — not a separate-session follow-up. Do not call a task-spawning tool to off-load such a failure. If you discover one outside your current slice's scope, record it prominently in `### Notes for Worker 1 (spec reconciliation)` (and as a focused-test failure in the build report) so Worker 0 can route it through the owning slice loop or the integration pass. Background-task hand-off is only for genuinely out-of-build, pre-existing-at-HEAD issues (verified per "Pre-existing claim verification").
+
 ## DRY implementation rules
 
 Before adding logic, check:

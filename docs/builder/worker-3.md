@@ -78,6 +78,10 @@ Any claim that a defect was "pre-existing at HEAD" — yours or Worker 2's — m
 
 A claimed runtime property — "strictness-visible", "loud fallback", "fails closed", "raises on miss" — is verified by tracing the control flow to the claim, not by trusting the plan's or diff's prose. An earlier short-circuit or guard (a planned-key early return, a cached-state check, a default-arg arm) can silence a fallback that reads as loud. Confirm no prior branch swallows the path before accepting the claim; an unverified behavioral claim is a Medium finding.
 
+### Relocation / promotion claim verification
+
+A claim that a body was **relocated** into a seam/classmethod, a private helper **promoted** (renamed public) "rename-only", or logic carried over **unchanged / byte-identical** — the claims a "no-regression" gate leans on — must be proven mechanically, not on prose. Diff the moved/renamed body against pristine HEAD (`git show HEAD:<path>`), stripping comments/whitespace and normalizing any renamed receiver/identifier, and confirm token-identity. For a cross-flavor lift, confirm BOTH call sites reproduce their originals' messages/behavior byte-for-byte. The cheapest claim to wave through ("I only moved it") is the one most worth this check; an unverified relocation/promotion claim is a Medium finding.
+
 ### Public-surface check (every review)
 
 Run `git diff -- django_strawberry_framework/__init__.py` and confirm `__all__` and the re-export list are unchanged, OR confirm any change is authorized by the active spec (cite the spec line). The Definition of Done for most slices includes "no new public exports"; making this an explicit per-review item prevents drift from compounding silently. Record the result in the artifact under `### Public-surface check`.

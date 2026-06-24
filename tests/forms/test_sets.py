@@ -51,6 +51,7 @@ from django_strawberry_framework.forms import (
 from django_strawberry_framework.forms import (
     DjangoModelFormMutation as DjangoModelFormMutationFromForms,
 )
+from django_strawberry_framework.forms.inputs import CREATE
 from django_strawberry_framework.forms.inputs import (
     INPUTS_MODULE_PATH as FORMS_INPUTS_MODULE_PATH,
 )
@@ -58,7 +59,9 @@ from django_strawberry_framework.forms.inputs import (
     _materialized_names as form_materialized_names,
 )
 from django_strawberry_framework.forms.sets import (
+    _cached_build_form_input,
     _form_mutation_registry,
+    clear_form_shape_build_cache,
     iter_form_mutations,
 )
 from django_strawberry_framework.mutations.inputs import (
@@ -413,6 +416,49 @@ def test_modelform_unknown_field_name_routes_through_slice1_narrowing():
                 form_class = form_cls
                 operation = "create"
                 fields = ("definitely_not_a_field",)
+
+
+def test_cached_build_form_input_runs_required_guard_per_declaration():
+    """A cached narrowed shape does NOT let a later declaration bypass the create-required guard (Finding 5).
+
+    The per-shape build cache is keyed by ``(form_class, operation_kind, effective
+    set)`` - NOT by ``guard_required``. So a WAIVING mutation
+    (``guard_required=False``, having overridden ``get_form_kwargs`` / ``get_form``)
+    that materializes a narrowed shape FIRST must not poison the cache for a later
+    NON-waiving mutation over the same form + effective set: the guard is tied to
+    each declaration, not to whichever class built the shape first. Pre-fix, the
+    second call returned the cached value and silently skipped the guard.
+    """
+
+    class _RequiredExtraForm(forms.ModelForm):
+        confirm = forms.CharField()  # required, no model column - dropped by the narrowing below
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    clear_form_shape_build_cache()
+    # The waiving declaration narrows `confirm` away and builds without the guard.
+    waived_cls, _specs = _cached_build_form_input(
+        _RequiredExtraForm,
+        operation_kind=CREATE,
+        fields=("name", "category"),
+        exclude=None,
+        guard_required=False,
+    )
+    assert waived_cls is not None  # the waiver built + cached the narrowed shape
+
+    # A later NON-waiving declaration over the SAME form + effective set must STILL
+    # raise (the guard runs per-declaration, before the cache lookup), not silently
+    # reuse the waived shape.
+    with pytest.raises(ConfigurationError, match="confirm"):
+        _cached_build_form_input(
+            _RequiredExtraForm,
+            operation_kind=CREATE,
+            fields=("name", "category"),
+            exclude=None,
+            guard_required=True,
+        )
 
 
 # ---------------------------------------------------------------------------

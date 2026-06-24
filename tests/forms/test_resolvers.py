@@ -1016,6 +1016,79 @@ def test_partial_update_preserves_unprovided_m2m():
 
 
 @pytest.mark.django_db
+def test_partial_update_preserves_unprovided_m2m_with_to_field_name():
+    """An omitted M2M whose form field sets ``to_field_name`` survives a partial update (Finding 3).
+
+    The decode lands a PROVIDED M2M as ``to_field_name`` values
+    (``_to_form_key_value``); ``model_to_dict`` would reconstruct an OMITTED one as
+    related INSTANCES (effectively pks), which a ``ModelMultipleChoiceField`` keyed
+    by ``to_field_name`` cannot resolve - so an omitted M2M would spuriously fail
+    validation on a one-field update (``docs/feedback.md`` Finding 3). Reconstruction
+    now converts each member by ``to_field_name`` too, so omitted and provided M2M
+    bind in the same shape. Fails on the pre-fix ``model_to_dict`` reconstruction.
+    """
+
+    class BookForm(forms.ModelForm):
+        genres = forms.ModelMultipleChoiceField(
+            queryset=library_models.Genre.objects.all(),
+            to_field_name="name",
+            required=False,
+        )
+
+        class Meta:
+            model = library_models.Book
+            fields = ("title", "shelf", "genres")
+
+    class GenreT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Genre
+            fields = ("id", "name")
+            primary = True
+
+    class ShelfT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+            primary = True
+
+    class BookT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Book
+            fields = ("id", "title")
+            primary = True
+
+    class UpdateBook(DjangoModelFormMutation):
+        class Meta:
+            form_class = BookForm
+            operation = "update"
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        update_book = DjangoMutationField(UpdateBook)
+
+    finalize_django_types()
+    schema = _schema(Mutation)
+    branch = library_models.Branch.objects.create(name=_uniq("Br"))
+    shelf = library_models.Shelf.objects.create(code=_uniq("Sh"), branch=branch)
+    genre = library_models.Genre.objects.create(name=_uniq("G"))
+    book = library_models.Book.objects.create(title="Orig", shelf=shelf)
+    book.genres.add(genre)
+    res = schema.execute_sync(
+        "mutation($id: ID!, $d: BookFormPartialInput!){ updateBook(id:$id, data:$d){ "
+        "node{ title } errors{ field messages } } }",
+        variable_values={"id": global_id_for(BookT, book.pk), "d": {"title": "Renamed"}},
+    )
+    assert res.errors is None, res.errors
+    payload = res.data["updateBook"]
+    # The omitted to_field_name M2M did NOT spuriously fail validation.
+    assert payload["errors"] == [], payload["errors"]
+    assert payload["node"]["title"] == "Renamed"
+    book.refresh_from_db()
+    assert list(book.genres.values_list("pk", flat=True)) == [genre.pk]  # preserved
+
+
+@pytest.mark.django_db
 def test_required_extra_field_omitted_on_update_is_coercion_error():
     """A required non-model extra field stays required in the partial input; omitting it
     is a GraphQL coercion error BEFORE the resolver (P2 / docs/feedback.md Finding 2).

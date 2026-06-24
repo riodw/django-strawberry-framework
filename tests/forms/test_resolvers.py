@@ -1249,6 +1249,43 @@ def test_write_auth_denial_raises_top_level_error():
 
 
 @pytest.mark.django_db
+def test_write_auth_runs_before_relation_visibility_decode():
+    """An unauthorized caller submitting a HIDDEN relation id gets the auth denial,
+    NOT a relation ``FieldError`` -- write-auth runs BEFORE the visibility-scoped
+    relation decode, so an unauthorized actor cannot probe related-object
+    visibility/existence by id (the authz-ordering side channel).
+
+    Pre-fix the decode ran first, so a hidden ``categoryId`` returned an in-band
+    ``FieldError`` payload (``res.errors is None``) while a *visible* one reached the
+    denial -- an observable distinction. Post-fix both collapse to the denial.
+    """
+
+    @classmethod
+    def hide_all(cls, qs, info):
+        return qs.none()
+
+    (
+        schema,
+        (
+            CategoryT,
+            _ItemT,
+            _C,
+            _U,
+        ),
+    ) = _build_item_form_schema(permission_classes=[_DenyAll], category_get_queryset=hide_all)
+    cat = product_models.Category.objects.create(name=_uniq("Cat"))
+    res = schema.execute_sync(
+        _CREATE,
+        variable_values={"d": {"name": "X", "categoryId": global_id_for(CategoryT, cat.pk)}},
+    )
+    # The denial (top-level GraphQLError), not a categoryId FieldError payload:
+    # the visibility-scoped relation decode never ran for the unauthorized caller.
+    assert res.errors is not None
+    assert "Not authorized" in str(res.errors[0].message)
+    assert res.data is None or res.data.get("createItem") is None
+
+
+@pytest.mark.django_db
 def test_plain_form_write_auth_denial_names_mutation_class():
     """A plain-form deny raises naming the mutation class (the ``_primary_type is None`` fallback)."""
 

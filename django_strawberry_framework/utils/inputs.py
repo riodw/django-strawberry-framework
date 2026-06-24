@@ -117,8 +117,19 @@ def build_strawberry_input_class(
 
     ``field_specs`` is a list of ``(python_attr, annotation, field_kwargs)``
     triples. ``field_kwargs`` may carry ``name=`` for the GraphQL alias,
-    ``default=`` for the dataclass default (defaults to ``None``), and
-    ``description=`` for the Strawberry field description.
+    ``default=`` for the dataclass default, and ``description=`` for the
+    Strawberry field description.
+
+    **A triple that OMITS ``default`` builds a REQUIRED field**: no class
+    default is set, so ``@strawberry.input`` renders the field non-null and
+    rejects an omitted value at GraphQL coercion. A bare ``None`` default
+    (the prior behavior) renders non-null SDL *yet still accepts omission*,
+    delivering ``None`` to the resolver and masking the missing-input error
+    (``docs/feedback.md`` Finding 2). An OPTIONAL field must therefore pass an
+    explicit ``default`` - ``strawberry.UNSET`` for the mutation / form
+    ``annotation | None`` widening, ``None`` for the filter / order optional
+    inputs (Strawberry tolerates a required field after a defaulted one; its
+    inputs are keyword-only).
 
     The class is constructed via ``type(name, (), namespace)`` rather than
     ``dataclasses.make_dataclass`` because ``make_dataclass`` replaces any
@@ -131,6 +142,10 @@ def build_strawberry_input_class(
     namespace: dict[str, Any] = {"__annotations__": {}}
     for python_attr, annotation, raw_kwargs in field_specs:
         kwargs = dict(raw_kwargs or {})
+        # The PRESENCE of ``default`` (not its value) decides required-vs-optional:
+        # a required field gets NO class default at all, so ``None`` is a legal
+        # explicit default for an optional field rather than the required sentinel.
+        has_default = "default" in kwargs
         default = kwargs.pop("default", None)
         strawberry_field_kwargs: dict[str, Any] = {}
         if "name" in kwargs:
@@ -139,9 +154,18 @@ def build_strawberry_input_class(
             strawberry_field_kwargs["description"] = kwargs.pop("description")
         namespace["__annotations__"][python_attr] = annotation
         if strawberry_field_kwargs:
-            namespace[python_attr] = strawberry.field(default=default, **strawberry_field_kwargs)
-        else:
+            # An aliased / described field still needs a ``strawberry.field``;
+            # pass ``default`` only when one was supplied so a required aliased
+            # field (e.g. a required FK ``categoryId``) stays non-null.
+            namespace[python_attr] = (
+                strawberry.field(default=default, **strawberry_field_kwargs)
+                if has_default
+                else strawberry.field(**strawberry_field_kwargs)
+            )
+        elif has_default:
             namespace[python_attr] = default
+        # else: a required, un-aliased field -> NO class attribute, so
+        # ``@strawberry.input`` renders it non-null and coercion rejects omission.
     cls = type(name, (), namespace)
     return strawberry.input(cls)
 

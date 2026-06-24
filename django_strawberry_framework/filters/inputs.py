@@ -607,10 +607,13 @@ def _build_logic_fields(type_name: str) -> list[tuple[str, Any, dict[str, Any]]]
     """
     self_ref = Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)]
     list_ref = list[self_ref]
+    # The logic operators are optional; pass ``default=None`` explicitly so
+    # ``build_input_class`` keeps them omittable (omitting ``default`` now means
+    # required -- ``utils/inputs.py`` / ``docs/feedback.md`` Finding 2).
     return [
-        ("and_", list_ref | None, {"name": "and"}),
-        ("or_", list_ref | None, {"name": "or"}),
-        ("not_", self_ref | None, {"name": "not"}),
+        ("and_", list_ref | None, {"name": "and", "default": None}),
+        ("or_", list_ref | None, {"name": "or", "default": None}),
+        ("not_", self_ref | None, {"name": "not", "default": None}),
     ]
 
 
@@ -695,7 +698,9 @@ def _build_input_fields(
                 continue
             target_name = _input_type_name_for(target_fs)
             inner = Annotated[target_name, strawberry.lazy(INPUTS_MODULE_PATH)]
-            field_kwargs: dict[str, Any] = {}
+            # Optional field: ``default=None`` is explicit now that an omitted
+            # ``default`` means required (``utils/inputs.py`` Finding 2).
+            field_kwargs: dict[str, Any] = {"default": None}
             if python_attr != graphql_name:
                 field_kwargs["name"] = graphql_name
             triples.append(
@@ -720,14 +725,16 @@ def _build_input_fields(
                 model_field,
                 owner_definition,
             )
-            leaf_kwargs: dict[str, Any] = {}
+            # Every operator-bag leaf is optional: pass ``default=None`` so the
+            # bag field stays omittable under the Finding 2 required-by-default rule.
+            leaf_kwargs: dict[str, Any] = {"default": None}
             if lookup_python_attr != lookup_graphql_name:
                 leaf_kwargs["name"] = lookup_graphql_name
             bag_specs.append(
                 (lookup_python_attr, annotation, leaf_kwargs),
             )
         bag_class = build_input_class(bag_name, bag_specs)
-        outer_kwargs: dict[str, Any] = {}
+        outer_kwargs: dict[str, Any] = {"default": None}
         if python_attr != graphql_name:
             outer_kwargs["name"] = graphql_name
         triples.append(

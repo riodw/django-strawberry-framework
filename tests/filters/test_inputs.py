@@ -145,12 +145,16 @@ def test_build_logic_fields_uses_inside_list_annotated_for_and_or():
 
 
 def test_build_logic_fields_emits_strawberry_field_name_for_python_keywords():
-    """`and` / `or` / `not` are Python keywords -- they ride through `strawberry.field(name=...)`."""
+    """`and` / `or` / `not` are Python keywords -- they ride through `strawberry.field(name=...)`.
+
+    Each carries an explicit ``default=None`` so it stays OPTIONAL under the
+    Finding 2 rule that an omitted ``default`` now builds a REQUIRED field.
+    """
     triples = _build_logic_fields("X")
     by_attr = {python_attr: kwargs for python_attr, _, kwargs in triples}
-    assert by_attr["and_"] == {"name": "and"}
-    assert by_attr["or_"] == {"name": "or"}
-    assert by_attr["not_"] == {"name": "not"}
+    assert by_attr["and_"] == {"name": "and", "default": None}
+    assert by_attr["or_"] == {"name": "or", "default": None}
+    assert by_attr["not_"] == {"name": "not", "default": None}
 
 
 # ---------------------------------------------------------------------------

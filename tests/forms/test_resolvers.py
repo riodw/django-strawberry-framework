@@ -1016,12 +1016,15 @@ def test_partial_update_preserves_unprovided_m2m():
 
 
 @pytest.mark.django_db
-def test_required_extra_field_omitted_on_update_raises_field_error():
-    """A required non-model extra field omitted on update -> a required ``FieldError`` (P2).
+def test_required_extra_field_omitted_on_update_is_coercion_error():
+    """A required non-model extra field stays required in the partial input; omitting it
+    is a GraphQL coercion error BEFORE the resolver (P2 / docs/feedback.md Finding 2).
 
-    The Slice-1 partial input keeps a required non-model extra field required, so
-    an omitted one is absent from ``provided_data`` and the bound form fails its
-    required validation.
+    The Slice-1 partial input keeps a required non-model extra field required (it
+    is not a model-backed field forced optional). Now that a required generated
+    field carries NO class default, an omitted required field is rejected at
+    variable coercion rather than silently arriving as ``None`` at the resolver and
+    surfacing as an in-band ``FieldError`` (which masked the missing-input error).
     """
 
     class ConfirmForm(forms.ModelForm):
@@ -1062,10 +1065,11 @@ def test_required_extra_field_omitted_on_update_raises_field_error():
         "node{ name } errors{ field messages } } }",
         variable_values={"id": global_id_for(ItemT, item.pk), "d": {"name": "Y"}},
     )
-    assert res.errors is None, res.errors
-    payload = res.data["updateItem"]
-    assert payload["node"] is None
-    assert "confirm" in [e["field"] for e in payload["errors"]]
+    # The required ``confirm`` is non-null in SDL AND rejects omission at coercion:
+    # a top-level error, no in-band envelope (the resolver is never reached).
+    assert res.errors is not None
+    assert "confirm" in str(res.errors[0]).lower()
+    assert res.data is None
 
 
 # ---------------------------------------------------------------------------
@@ -1449,3 +1453,267 @@ def test_modelform_refetch_keeps_select_related_and_suppresses_only():
     assert plan.select_related == ("category",)
     # No `.only(...)` projection under a MUTATION (the G2 gate suppresses it).
     assert plan.only_fields == ()
+
+
+# ---------------------------------------------------------------------------
+# docs/feedback.md review fixes
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_plain_form_unset_permission_classes_denies_by_default():
+    """An unset ``permission_classes`` on a plain form DENIES (deny-by-default), not crashes.
+
+    A model-less plain form cannot inherit the ``DjangoModelPermission`` default
+    (that class reads the resolved model, which the plain flavor never provides -
+    it would raise at request time). An unset ``permission_classes`` therefore
+    installs ``DenyAll`` and the write is denied with the top-level authorization
+    error, not an ``AttributeError`` (docs/feedback.md Finding 1).
+    """
+
+    class ContactForm(forms.Form):
+        message = forms.CharField()
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = ContactForm
+            # permission_classes intentionally unset -> deny-by-default (DenyAll).
+
+    @strawberry.type
+    class Mutation:
+        submit = DjangoMutationField(Submit)
+
+    finalize_django_types()
+    schema = _schema(Mutation)
+    res = schema.execute_sync(
+        "mutation($d: ContactFormInput!){ submit(data:$d){ ok errors{ field } } }",
+        variable_values={"d": {"message": "hi"}},
+    )
+    assert res.errors is not None
+    assert "Not authorized" in str(res.errors[0].message)
+    assert res.data is None or res.data["submit"] is None
+
+
+@pytest.mark.django_db
+def test_required_form_field_omitted_yields_coercion_error():
+    """Omitting a generated REQUIRED form field is rejected at coercion, not delivered as None.
+
+    ``Item.name`` is required, so the create input's ``name`` is non-null AND now
+    carries no class default: omitting it produces a top-level GraphQL coercion
+    error before the resolver and writes no row (docs/feedback.md Finding 2).
+    """
+    (
+        schema,
+        (
+            CategoryT,
+            _ItemT,
+            _C,
+            _U,
+        ),
+    ) = _build_item_form_schema()
+    cat = product_models.Category.objects.create(name=_uniq("Cat"))
+    res = schema.execute_sync(
+        _CREATE,
+        variable_values={"d": {"categoryId": global_id_for(CategoryT, cat.pk)}},  # name omitted
+    )
+    assert res.errors is not None
+    assert "name" in str(res.errors[0]).lower()
+    assert res.data is None
+    assert product_models.Item.objects.count() == 0  # the resolver never ran
+
+
+@pytest.mark.django_db
+def test_narrowed_update_preserves_excluded_required_fk_and_validates_constraint():
+    """A ``Meta.fields``-narrowed update reconstructs an EXCLUDED required FK from the row.
+
+    The ModelForm declares ``('name', 'category')`` while the update mutation
+    narrows the GraphQL input to ``('name',)``. A name-only update must preserve
+    the located row's ``category`` (the bound ModelForm validates ``category`` even
+    though it is off the wire), and the ``unique_item_per_category`` constraint
+    must still validate against that preserved FK (docs/feedback.md Finding 3).
+    """
+
+    class NameCategoryForm(forms.ModelForm):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    class CategoryT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name")
+            primary = True
+
+    class ItemT(DjangoType, relay.Node):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name", "category")
+            primary = True
+
+    class UpdateItem(DjangoModelFormMutation):
+        class Meta:
+            form_class = NameCategoryForm
+            operation = "update"
+            fields = ("name",)  # narrow the GraphQL input to name only
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        update_item = DjangoMutationField(UpdateItem)
+
+    finalize_django_types()
+    schema = _schema(Mutation)
+    # The narrowed shape gets a shape-derived input name; read it off the bound class.
+    input_name = UpdateItem._input_class.__name__
+    query = (
+        f"mutation($id: ID!, $d: {input_name}!){{ updateItem(id:$id, data:$d){{ "
+        "node{ name category{ name } } errors{ field messages } } }"
+    )
+    cat = product_models.Category.objects.create(name=_uniq("Cat"))
+    item = product_models.Item.objects.create(name="Before", category=cat)
+
+    # 1) the excluded required FK is preserved from the located row.
+    res = schema.execute_sync(
+        query,
+        variable_values={"id": global_id_for(ItemT, item.pk), "d": {"name": "After"}},
+    )
+    assert res.errors is None, res.errors
+    payload = res.data["updateItem"]
+    assert payload["errors"] == []
+    assert payload["node"]["name"] == "After"
+    assert payload["node"]["category"]["name"] == cat.name  # category preserved
+    item.refresh_from_db()
+    assert item.category_id == cat.pk
+
+    # 2) the preserved FK still feeds composite-uniqueness validation: a name-only
+    # update colliding within the preserved category trips unique_item_per_category.
+    product_models.Item.objects.create(name="Taken", category=cat)
+    res2 = schema.execute_sync(
+        query,
+        variable_values={"id": global_id_for(ItemT, item.pk), "d": {"name": "Taken"}},
+    )
+    assert res2.errors is None, res2.errors
+    payload2 = res2.data["updateItem"]
+    assert payload2["node"] is None
+    assert NON_FIELD_ERROR_KEY in [e["field"] for e in payload2["errors"]]
+
+
+@pytest.mark.django_db
+def test_decode_relation_single_empty_value_passes_through():
+    """An explicit ``null`` single-relation value passes through unchanged (Finding 4).
+
+    The decode does NOT decide required-ness or report a bogus 'Invalid id' for an
+    empty value; it hands the empty value to the bound form, which clears (optional)
+    or raises its own field-keyed required error (required).
+    """
+    field = forms.ModelChoiceField(queryset=product_models.Category.objects.all())
+    decoded, error = form_resolvers._decode_form_relation_single(
+        None,
+        graphql_name="categoryId",
+        form_field=field,
+        info=None,
+    )
+    assert error is None
+    assert decoded is None
+
+
+@pytest.mark.django_db
+def test_decode_relation_multi_empty_values_return_empty_list():
+    """An explicit ``null`` or empty list on an M2M returns ``[]`` and never iterates ``None`` (Finding 4)."""
+    field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.all())
+    for empty in (None, []):
+        decoded, error = form_resolvers._decode_form_relation_multi(
+            empty,
+            graphql_name="genres",
+            form_field=field,
+            info=None,
+        )
+        assert error is None
+        assert decoded == []
+
+
+@pytest.mark.django_db
+def test_explicit_null_fk_on_update_yields_form_required_error_not_invalid_id():
+    """Explicit ``null`` on a required FK surfaces the FORM's field-keyed required error,
+    NOT a decode-level 'Invalid id' on the relation (docs/feedback.md Finding 4)."""
+    (
+        schema,
+        (
+            _CategoryT,
+            ItemT,
+            _C,
+            _U,
+        ),
+    ) = _build_item_form_schema()
+    cat = product_models.Category.objects.create(name=_uniq("Cat"))
+    item = product_models.Item.objects.create(name="X", category=cat)
+    res = schema.execute_sync(
+        _UPDATE,
+        variable_values={"id": global_id_for(ItemT, item.pk), "d": {"categoryId": None}},
+    )
+    assert res.errors is None, res.errors
+    payload = res.data["updateItem"]
+    assert payload["node"] is None
+    fields = [e["field"] for e in payload["errors"]]
+    assert "category" in fields  # the bound form's required error, keyed to the form field
+    assert "categoryId" not in fields  # NOT the decode-level 'Invalid id for relation' error
+
+
+@pytest.mark.django_db
+def test_explicit_null_m2m_on_update_clears_not_crashes():
+    """Explicit ``null`` on an M2M relation is a clear handled by the form, NOT a TypeError.
+
+    A required M2M cleared to empty surfaces the bound form's field-keyed required
+    error; before the fix the multi decoder iterated ``None`` and raised a
+    top-level ``TypeError`` (docs/feedback.md Finding 4).
+    """
+
+    class BookForm(forms.ModelForm):
+        class Meta:
+            model = library_models.Book
+            fields = ("title", "shelf", "genres")
+
+    class GenreT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Genre
+            fields = ("id", "name")
+            primary = True
+
+    class ShelfT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+            primary = True
+
+    class BookT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Book
+            fields = ("id", "title")
+            primary = True
+
+    class UpdateBook(DjangoModelFormMutation):
+        class Meta:
+            form_class = BookForm
+            operation = "update"
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        update_book = DjangoMutationField(UpdateBook)
+
+    finalize_django_types()
+    schema = _schema(Mutation)
+    branch = library_models.Branch.objects.create(name=_uniq("Br"))
+    shelf = library_models.Shelf.objects.create(code=_uniq("Sh"), branch=branch)
+    genre = library_models.Genre.objects.create(name=_uniq("G"))
+    book = library_models.Book.objects.create(title="Orig", shelf=shelf)
+    book.genres.add(genre)
+    res = schema.execute_sync(
+        "mutation($id: ID!, $d: BookFormPartialInput!){ updateBook(id:$id, data:$d){ "
+        "node{ title } errors{ field messages } } }",
+        variable_values={"id": global_id_for(BookT, book.pk), "d": {"genres": None}},
+    )
+    assert res.errors is None, res.errors  # no top-level TypeError
+    payload = res.data["updateBook"]
+    assert payload["node"] is None
+    assert "genres" in [e["field"] for e in payload["errors"]]

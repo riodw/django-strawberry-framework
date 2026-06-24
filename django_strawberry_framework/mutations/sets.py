@@ -334,7 +334,12 @@ def _normalize_field_sequence(value: Any, *, label: str = "fields") -> tuple[str
     return normalize_field_name_sequence(value, label=label, flavor="DjangoMutation")
 
 
-def _validate_permission_classes(mutation_name: str, value: Any) -> list[Any]:
+def _validate_permission_classes(
+    mutation_name: str,
+    value: Any,
+    *,
+    unset_default: tuple[Any, ...] = (DjangoModelPermission,),
+) -> list[Any]:
     """Validate + normalize ``Meta.permission_classes`` at class creation (feedback P2).
 
     The DoD says an invalid ``permission_classes`` entry is rejected at
@@ -342,7 +347,12 @@ def _validate_permission_classes(mutation_name: str, value: Any) -> list[Any]:
     ``AttributeError`` inside ``DjangoMutation.check_permission`` (which does
     ``permission_class().has_permission(...)``). So:
 
-    - ``None`` (unset) -> the ``[DjangoModelPermission]`` default seam.
+    - ``None`` (unset) -> ``list(unset_default)``: the model-backed flavors keep
+      the ``[DjangoModelPermission]`` default, while the model-less plain
+      ``DjangoFormMutation`` passes ``unset_default=(DenyAll,)`` so an unset
+      ``permission_classes`` denies rather than crashing in the model-permission
+      default (spec-038 Decision 11 - there is no safe model-permission default
+      without a model; ``docs/feedback.md`` Finding 1).
     - a bare ``str`` / ``bytes`` (a single name) or a bare class (forgot the
       enclosing sequence) -> ``ConfigurationError``: the contract is a *sequence*
       of permission classes.
@@ -353,10 +363,11 @@ def _validate_permission_classes(mutation_name: str, value: Any) -> list[Any]:
       naming the offending entry.
 
     Returns the normalized ``list`` the snapshot stores (so ``check_permission``
-    iterates a known list, never a raw consumer value).
+    iterates a known list, never a raw consumer value). An explicit ``[]`` is
+    preserved as the documented allow-any opt-out for BOTH flavors.
     """
     if value is None:
-        return [DjangoModelPermission]
+        return list(unset_default)
     if isinstance(value, (str, bytes, type)):
         raise ConfigurationError(
             f"DjangoMutation {mutation_name}.Meta.permission_classes must be a sequence of "

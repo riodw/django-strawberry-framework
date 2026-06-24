@@ -74,6 +74,15 @@ Before Worker 0 creates `docs/builder/build-<NNN>-<topic>-<0_0_X>.md`:
 
 Record the outcome in the build plan's preamble (`Pre-flight: passed on YYYY-MM-DD; baseline: clean; cleanup: old artifacts removed, memory/shadow/temp-tests cleared` or `Pre-flight: <issue>, resolved by <action>; baseline: <summary>; cleanup: <summary>`). If any check fails and cannot be resolved without maintainer input, escalate before creating the build plan.
 
+### Tracked binary / generated files: churn and concurrent-writer handling
+
+This repo tracks binary and generated files that a concurrent maintainer process (or a build's own test/regenerate runs) can rewrite mid-build — `examples/fakeshop/db.sqlite3`, `KANBAN.md` / `KANBAN.html`, `docs/GLOSSARY.md`, and any other rendered-from-DB doc. `git status` reporting one of these dirty does **not** by itself mean a worker caused it, and a same-size binary diff (`Bin N -> N bytes, 0 insertions, 0 deletions`) is **not** proof of a no-op — git does not line-diff binaries.
+
+- **At pre-flight,** note in the build plan which tracked binary/generated files are concurrent-writable so later passes do not mistake their churn for build output.
+- **Diff the SEMANTIC content before treating churn as revertible tool-drift.** For a SQLite DB, compare the `iterdump()` (schema + rows), not the file bytes; for a generated doc, compare against a fresh regenerate. A genuine no-op (page-level churn from a read-only open) is safe to leave; a semantic change is either the slice's intended output or a concurrent writer's work.
+- **Never blind-`git checkout` a tracked binary/generated file as "tool drift."** If the semantic diff shows it is a concurrent writer's in-progress work, treat it as out-of-scope per `AGENTS.md` rule 34 — record it in the build plan's baseline-dirty list and **do not revert it** (reverting clobbers their work; the concurrent process may re-apply it, churning the build repeatedly). Only revert when the semantic diff confirms it is genuinely the build's own throwaway churn on a slice with no intended change to that file.
+- **DB-backed slices that legitimately diverge the DB from HEAD** (a kanban card move, a glossary regenerate) cannot use the "`git diff <generated doc>` is clean" verification — the DB has legitimately diverged. Verify instead by **two-consecutive-regenerate byte-stability** (the slice's own writes regenerate deterministically) plus spot-checks of the rendered result. When a concurrent writer is active on the same DB, apply the slice's writes **on top** without reverting the concurrent state, and hand the mixed diff to the maintainer to reconcile at commit.
+
 ## Versioned build plan
 
 Worker 0 is **handed** the active spec file at the start of the cycle. Worker 0 does not write the spec; Worker 0 derives the build plan from it.

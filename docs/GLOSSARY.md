@@ -17,7 +17,7 @@ Companion files:
 - `alpha constraint` — current behavior that works but is intentionally narrower than the eventual API.
 - `post-1.0.0` — strategic differentiation tracked in [`../BACKLOG.md`][backlog], not on the roadmap to `1.0.0`.
 
-Current package version: `0.0.11`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
+Current package version: `0.0.12`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
 ## Public exports
 
@@ -27,8 +27,10 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`DjangoConnection`](#djangoconnection) — generic Relay connection return-type alias (`DjangoConnection[T]`).
 - [`DjangoConnectionField`](#djangoconnectionfield) — Relay connection field factory over a Relay-Node-shaped `DjangoType`.
 - [`DjangoFileType`](#djangofiletype) — structured read-output object for a `FileField` column (`name` / `path` / `size` / `url`).
+- [`DjangoFormMutation`](#djangoformmutation) — plain `Form` mutation base (model-less sibling): `Meta.form_class`, pinned `ok` + `errors` payload, no object slot.
 - [`DjangoImageType`](#djangoimagetype) — structured read-output object for an `ImageField` column (`DjangoFileType` fields plus `width` / `height`).
 - [`DjangoListField`](#djangolistfield) — non-Relay `list[T]` factory function for root Query fields.
+- [`DjangoModelFormMutation`](#djangomodelformmutation) — `ModelForm` mutation base subclassing `DjangoMutation`; returns the post-save object in the uniform `node` / `result` slot.
 - [`DjangoModelPermission`](#djangomodelpermission) — default write-authorization class (Django `add` / `change` / `delete` model perms) for `Meta.permission_classes`.
 - [`DjangoMutation`](#djangomutation) — model-driven create / update / delete mutation base configured through a nested `class Meta`.
 - [`DjangoMutationField`](#djangomutationfield) — write-side field factory exposing a `DjangoMutation` on the schema's `Mutation` type.
@@ -73,11 +75,11 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`DjangoConnection`](#djangoconnection) | shipped (`0.0.9`) |
 | [`DjangoConnectionField`](#djangoconnectionfield) | shipped (`0.0.9`) |
 | [`DjangoFileType`](#djangofiletype) | shipped (`0.0.11`) |
-| [`DjangoFormMutation`](#djangoformmutation) | planned for `0.0.12` |
+| [`DjangoFormMutation`](#djangoformmutation) | shipped (`0.0.12`) |
 | [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) | planned for `0.0.14` |
 | [`DjangoImageType`](#djangoimagetype) | shipped (`0.0.11`) |
 | [`DjangoListField`](#djangolistfield) | shipped (`0.0.7`) |
-| [`DjangoModelFormMutation`](#djangomodelformmutation) | planned for `0.0.12` |
+| [`DjangoModelFormMutation`](#djangomodelformmutation) | shipped (`0.0.12`) |
 | [`DjangoModelPermission`](#djangomodelpermission) | shipped (`0.0.11`) |
 | [`DjangoMutation`](#djangomutation) | shipped (`0.0.11`) |
 | [`DjangoMutationField`](#djangomutationfield) | shipped (`0.0.11`) |
@@ -305,7 +307,7 @@ Validation that a manual relation annotation matches the Django relation cardina
 
 **Status:** shipped (`0.0.7`).
 
-`django_strawberry_framework/apps.py` ships `DjangoStrawberryFrameworkConfig` with `name = "django_strawberry_framework"` and `verbose_name = "Django Strawberry Framework"`. The `ready()` body imports the package's three defensive patch modules — `django_strawberry_framework._cross_web_patches`, `django_strawberry_framework._django_patches`, and `django_strawberry_framework._strawberry_patches` — and calls each module's `apply()` at Django app-load time: `_django_patches` installs the [Django Trac #37064 hardening](#django-trac-37064-hardening) (test-only), while `_strawberry_patches` and `_cross_web_patches` install the non-UTF-8 request-body `500` fix for Strawberry's HTTP view (production request handling); all three are gated by the `APPLY_UPSTREAM_PATCHES` setting (default on), and each `apply()` self-gates, is idempotent, and is self-healing, so a consumer who sets `DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}` gets none of them. Consumers list `"django_strawberry_framework"` in `INSTALLED_APPS` and Django's implicit single-AppConfig discovery resolves the explicit class.
+`django_strawberry_framework/apps.py` ships `DjangoStrawberryFrameworkConfig` with `name = "django_strawberry_framework"` and `verbose_name = "Django Strawberry Framework"`. The `ready()` body imports `django_strawberry_framework._django_patches` and calls `apply()` to install the [Django Trac #37064 hardening](#django-trac-37064-hardening) at Django app-load time. Consumers list `"django_strawberry_framework"` in `INSTALLED_APPS` and Django's implicit single-AppConfig discovery resolves the explicit class.
 
 **See also:** [Django Trac #37064 hardening](#django-trac-37064-hardening) · [Schema export management command](#schema-export-management-command).
 
@@ -337,9 +339,9 @@ Resolver-backed output object for a `FileField` column, carrying `name` (non-nul
 
 ## `DjangoFormMutation`
 
-**Status:** planned for `0.0.12`.
+**Status:** shipped (`0.0.12`).
 
-`DjangoMutation` subclass that consumes a Django `Form`. Declared via `Meta.form_class`; validation errors surface through the shared [`FieldError` envelope](#fielderror-envelope) (populated from `form.errors`); the post-save object is the mutation return value.
+The model-less sibling base for a plain Django `Form` mutation, declared via `Meta.form_class`. Unlike [`DjangoModelFormMutation`](#djangomodelformmutation) it is **not** a [`DjangoMutation`](#djangomutation) subclass: a plain `Form` has no model, so it has its own lightweight metaclass and carries **no** [`DjangoType`](#djangotype) object slot in its payload. It is accepted by the generalized [`DjangoMutationField`](#djangomutationfield) family and shares the form pipeline (`is_valid()` -> `form.errors` -> [`FieldError`](#fielderror-envelope) -> `perform_mutate`) and the form-field converter. Its generated `<Name>Payload` is pinned to exactly two fields -- `ok: Boolean!` and `errors: [FieldError!]!` -- with no cleaned-data output fields. On `form.is_valid()` success `perform_mutate(self, form, info) -> None` runs (its default calls `form.save()` when present, else is a no-op; a consumer overrides it for the real side effect) and the payload is `ok: true, errors: []`; on a validation failure `perform_mutate` does not run and the payload is `ok: false` with one [`FieldError`](#fielderror-envelope) per offending field (the form's `NON_FIELD_ERRORS` bucket keyed under the `"__all__"` sentinel) -- the same envelope every flavor returns. A write-authorization denial is a top-level `GraphQLError`, never a payload entry. It has its own `forms/sets.py` declaration registry + `bind_form_mutations()` entry point wired into [`finalize_django_types`](#finalize_django_types) phase 2.5. Exported from the package root.
 
 **See also:** [`DjangoMutation`](#djangomutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`FieldError` envelope](#fielderror-envelope).
 
@@ -367,11 +369,11 @@ Non-Relay `list[T]` **root Query field**. The smallest entry point for migrants 
 
 ## `DjangoModelFormMutation`
 
-**Status:** planned for `0.0.12`.
+**Status:** shipped (`0.0.12`).
 
-`DjangoMutation` subclass that consumes a Django `ModelForm` declared via `Meta.form_class`. Errors and return-shape contracts match [`DjangoFormMutation`](#djangoformmutation).
+The `ModelForm` mutation base, declared via `Meta.form_class`. It **subclasses** [`DjangoMutation`](#djangomutation), overriding `_resolve_model` to return `Meta.form_class._meta.model`, and so reuses the base value: the primary [`DjangoType`](#djangotype) payload in the uniform `node` / `result` slot, the [`DjangoModelPermission`](#djangomodelpermission) default (authorized for free through the model override), the visibility-scoped `update` locate, and the optimizer re-fetch (the G2 gate keeps `select_related` / `prefetch_related` but suppresses `.only(...)` under the mutation operation). Its input is form-derived rather than model-column derived, and `Meta.operation` is restricted to `"create"` / `"update"` (no form `delete`). Validation runs `form.is_valid()` then `form.save()`; `form.errors` populate the shared [`FieldError` envelope](#fielderror-envelope) (`NON_FIELD_ERRORS` keyed under `"__all__"`) and the post-save row is returned in the uniform slot. Bound at [`finalize_django_types`](#finalize_django_types) phase 2.5 alongside the other [`DjangoMutation`](#djangomutation) bases. Exported from the package root.
 
-**See also:** [`DjangoFormMutation`](#djangoformmutation) · [`DjangoMutation`](#djangomutation).
+**See also:** [`DjangoFormMutation`](#djangoformmutation) · [`DjangoMutation`](#djangomutation) · [`FieldError` envelope](#fielderror-envelope).
 
 ## `DjangoModelPermission`
 

@@ -210,6 +210,11 @@ def test_filterset_get_fields_includes_pk_for_all_fields_shorthand():
         class Meta:
             model = Item
             fields = "__all__"
+            # ``Item.attachment`` is a ``FileField`` (spec-038 Slice 4) that
+            # ``django-filter`` has no default filter for; the ``"__all__"``
+            # sweep would otherwise raise on it. Excluding it keeps this test
+            # focused on its intent: the shorthand adds the PK column.
+            exclude = ("attachment",)
 
     fields = ItemFilter.get_fields()
     pk_name = Item._meta.pk.name

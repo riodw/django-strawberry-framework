@@ -16,6 +16,17 @@ This project follows a milestone-style cadence during pre-`1.0.0`:
 
 See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of each patch.
 
+## [0.0.12] - 2026-06-23
+
+### Added
+- **Form-based mutations — `DjangoFormMutation` / `DjangoModelFormMutation`.** Two new write bases on the DRF-shaped `class Meta` surface (`Meta.form_class` + optional `fields` / `exclude`, not Strawberry decorators), for consumers whose write validation already lives in a Django `Form` / `ModelForm`. [`DjangoModelFormMutation`][glossary-djangomodelformmutation] (a `ModelForm`) subclasses [`DjangoMutation`][glossary-djangomutation] via the shipped `_resolve_model` seam — it supplies its model from `form_class._meta.model`, returns the post-save object in the uniform `node` / `result` slot, and inherits the [`DjangoModelPermission`][glossary-djangomodelpermission] write-auth default and the visibility-scoped `update` locate unchanged. [`DjangoFormMutation`][glossary-djangoformmutation] (a plain model-less `Form`) is its sibling — its own metaclass and declaration registry, no `DjangoType` object slot, the pinned `ok: Boolean!` + `errors: [FieldError!]!` payload, and an overridable `perform_mutate(self, form, info)` write hook (defaults to `form.save()`-if-present else no-op). Both are exported from the package root (two net-new public exports).
+- **Form-field → Strawberry-input mapping (`forms/converter.py`).** A `convert_form_field` registry derives the mutation input from the form's *declared* fields (`form_class.base_fields`, narrowed by `Meta.fields` / `Meta.exclude`), reusing the read-side scalar / choice-enum / [`Upload`][glossary-upload-scalar] converters where a form field's type overlaps a Django column type — so a plain `Form` can declare fields a model does not have (a `confirm_email`, a `captcha`). `ModelChoiceField` maps to the target's id (Relay `GlobalID` or raw pk by the target's primary `DjangoType`), `ModelMultipleChoiceField` / `MultipleChoiceField` to a list, and `forms.FileField` / `forms.ImageField` to [`Upload`][glossary-upload-scalar]. A custom form-field subclass with no supported ancestor raises [`ConfigurationError`][glossary-configurationerror] naming the field.
+- **The `form.errors` → frozen `FieldError` envelope pipeline.** `form.is_valid()` populates the byte-identical [`FieldError`][glossary-fielderror-envelope] envelope `036` froze — a `clean_<field>` error keys to its field, and the form's `NON_FIELD_ERRORS` bucket keys to the same `"__all__"` sentinel — and returns a null-object payload rather than raising at the GraphQL boundary; the write runs through `form.save()` (`ModelForm`) / `perform_mutate` (plain form), wrapped by the `036` `IntegrityError` → envelope mapper. Every relation id (Relay `GlobalID` or raw pk) is visibility-checked through the related primary type's `get_queryset` before the form runs, closing the raw-pk visibility gap. The `ModelForm` `update` is a partial update (the located instance's fields reconstruct the form payload, so omitted fields are preserved) and its payload object is re-fetched and optimizer-planned. Sync + async, inside the one `transaction.atomic()` boundary `036` set; the `ModelForm` re-fetch rides the `spec-035` **G2** gate (keep `select_related` / `prefetch_related`, suppress `.only(...)`).
+
+### Changed
+- **The `036` `DjangoMutationField` factory + mutation base were generalized to expose the form flavors — no model-driven regression.** The shipped [`DjangoMutationField`][glossary-djangomutationfield] was generalized along three axes (target-check, `_resolve` dispatch, and the synthesized `data:` lazy-ref derivation) so it accepts the mutation/form family and routes a form flavor to `forms/resolvers.py`; the `DjangoMutation` base grew overridable `_validate_meta` / `build_input` / `input_type_name` / `input_module_path` / `resolve_sync` / `resolve_async` seams. Every seam defaults to today's model behavior — a model-driven `DjangoMutation` validates, materializes its model-column input, and resolves exactly as before. This is an internal generalization, not a breaking change; no consumer-visible behavior of the `0.0.11` model-driven mutation changes.
+- **`django_strawberry_framework.__version__` is now `0.0.12`.**
+
 ## [0.0.11] - 2026-06-19
 
 ### Added
@@ -299,7 +310,9 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [glossary-djangoconnection]: docs/GLOSSARY.md#djangoconnection
 [glossary-djangoconnectionfield]: docs/GLOSSARY.md#djangoconnectionfield
 [glossary-djangofiletype]: docs/GLOSSARY.md#djangofiletype
+[glossary-djangoformmutation]: docs/GLOSSARY.md#djangoformmutation
 [glossary-djangoimagetype]: docs/GLOSSARY.md#djangoimagetype
+[glossary-djangomodelformmutation]: docs/GLOSSARY.md#djangomodelformmutation
 [glossary-djangomodelpermission]: docs/GLOSSARY.md#djangomodelpermission
 [glossary-djangomutation]: docs/GLOSSARY.md#djangomutation
 [glossary-djangomutationfield]: docs/GLOSSARY.md#djangomutationfield

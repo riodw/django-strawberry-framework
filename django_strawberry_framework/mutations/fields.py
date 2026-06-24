@@ -33,7 +33,7 @@ Decision 14. The ``id`` argument is the raw ``strawberry.ID`` string - the
 rather than letting Strawberry's argument conversion own it. The SDL renders
 ``id: ID!`` by design (the Relay-spec / node-field contract), and the resolver
 decodes the id and type-checks it against the mutation's target model -
-``resolvers.py::_coerce_lookup_id`` returns a ``FieldError`` on ``id`` for a
+``resolvers.py::coerce_lookup_id`` returns a ``FieldError`` on ``id`` for a
 malformed / unresolvable / wrong-model id, never coercing it to a bare pk
 (feedback #1). This is a single, consistent contract (NOT the headline schema's
 ``id: GlobalID!``, which the spec is reconciled to ``id: ID!`` to match - feedback
@@ -58,82 +58,80 @@ from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
 
 from ..exceptions import ConfigurationError
-from .inputs import (
-    INPUTS_MODULE_PATH,
-    editable_input_fields,
-    mutation_input_type_name,
-)
-from .resolvers import resolve_mutation_async, resolve_mutation_sync
-from .sets import _OPERATION_INPUT_KIND, DjangoMutation
+from .inputs import INPUTS_MODULE_PATH
 
 
 def _validate_mutation_target(mutation_cls: Any) -> None:
-    """Reject a bad ``DjangoMutationField`` target at the construction line (spec-036 Decision 5).
+    """Reject a bad ``DjangoMutationField`` target at the construction line (spec-036 / spec-038 Decision 5).
 
-    The target must be a **concrete, validated** ``DjangoMutation`` subclass: a
-    class (not an instance / arbitrary value), a ``DjangoMutation`` subclass, and
-    carrying a non-``None`` ``_mutation_meta`` (the metaclass stamps it at class
-    creation for a concrete subclass; the abstract base carries ``None``). It does
-    NOT require ``_input_class`` / ``_payload_type_name`` - those are BIND outputs
-    populated at ``finalize_django_types``, and the field is constructed at import
-    (when ``@strawberry.type class Mutation`` evaluates) BEFORE the bind runs.
-    A failure raises ``ConfigurationError`` naming ``DjangoMutationField`` so the
-    error fires at the assignment line, not at finalize.
+    The target must be a **concrete, validated** member of the mutation / form
+    family: a class (not an instance / arbitrary value) carrying the mutation
+    protocol - a ``_mutation_meta`` attribute and the ``resolve_sync`` /
+    ``resolve_async`` + ``input_type_name`` / ``input_module_path`` seams - plus a
+    non-``None`` ``_mutation_meta`` (the metaclass stamps it at class creation for a
+    concrete subclass; an abstract base carries ``None``).
+
+    The check is **duck-typed**, NOT ``issubclass(DjangoMutation)`` (spec-038
+    Decision 5): the plain ``DjangoFormMutation`` is model-less and is NOT a
+    ``DjangoMutation`` subclass, and importing the form bases here would close a
+    load cycle (``forms/sets.py`` imports ``mutations/sets.py``). So the family is
+    recognized by the protocol attrs every flavor carries - the ``036``
+    ``DjangoMutation`` (and so ``DjangoModelFormMutation``) and the plain
+    ``DjangoFormMutation`` all pass; today's ``DjangoMutation`` behavior is
+    unchanged (it carries every protocol attr).
+
+    It does NOT require ``_input_class`` / ``_payload_type_name`` - those are BIND
+    outputs populated at ``finalize_django_types``, and the field is constructed at
+    import (when ``@strawberry.type class Mutation`` evaluates) BEFORE the bind
+    runs. A failure raises ``ConfigurationError`` naming ``DjangoMutationField`` so
+    the error fires at the assignment line, not at finalize.
     """
-    if not isinstance(mutation_cls, type) or not issubclass(mutation_cls, DjangoMutation):
+    if not isinstance(mutation_cls, type) or not _has_mutation_protocol(mutation_cls):
         raise ConfigurationError(
-            f"DjangoMutationField requires a concrete DjangoMutation subclass; "
-            f"got {mutation_cls!r}.",
+            f"DjangoMutationField requires a concrete DjangoMutation / DjangoFormMutation / "
+            f"DjangoModelFormMutation subclass; got {mutation_cls!r}.",
         )
     if getattr(mutation_cls, "_mutation_meta", None) is None:
         raise ConfigurationError(
-            f"DjangoMutationField requires a concrete DjangoMutation subclass with a "
-            f"nested Meta; {mutation_cls.__name__} is the abstract base (no Meta).",
+            f"DjangoMutationField requires a concrete mutation subclass with a nested Meta; "
+            f"{mutation_cls.__name__} is the abstract base (no Meta).",
         )
 
 
-def _input_type_name(meta: Any) -> str:
-    """Return the generated input class name for a create / update mutation (spec-036 Decision 14).
+def _has_mutation_protocol(mutation_cls: type) -> bool:
+    """Return whether a class carries the duck-typed mutation / form-mutation protocol.
 
-    Mirrors the bind's name choice (``sets.py::_materialize_input_for`` /
-    ``_materialize_merged_input``): the input class - generated OR consumer-merged -
-    materializes under the **canonical shape name** ``mutation_input_type_name(...)``
-    (the ``<Model>Input`` / ``<Model>PartialInput`` for the full shape, or a
-    deterministic shape-derived name for a narrowed shape). A consumer
-    ``input_class`` / ``partial_input_class`` is a representation override that does
-    NOT change the effective field set, so the merged class takes the SAME canonical
-    name (``_materialize_merged_input`` names + materializes the merge under
-    ``shape.type_name``, NOT the consumer class's ``__name__``) - the lazy ``data:``
-    ref must therefore name the canonical shape, never ``consumer_input.__name__``
-    (which is never a module global, so a stale ref there fails the
-    ``strawberry.lazy`` resolve at schema build). Computed at construction from the
-    same selectors the generator uses so the ref names the exact class the bind
-    materializes.
+    The protocol every dispatchable flavor exposes (the Slice-2 seams): a
+    ``_mutation_meta`` attribute (present even as ``None`` on an abstract base, so
+    the next guard can distinguish "abstract base" from "not a mutation at all"),
+    callable ``resolve_sync`` / ``resolve_async`` (the dispatch seams ``_resolve``
+    calls), and callable ``input_type_name`` + an ``input_module_path`` (the
+    ``data:`` lazy-ref seams). A class missing any is not a mutation family member.
     """
-    operation_kind = _OPERATION_INPUT_KIND[meta.operation]
-    effective_field_names = tuple(
-        field.name
-        for field in editable_input_fields(meta.model, fields=meta.fields, exclude=meta.exclude)
-    )
-    full_field_names = tuple(field.name for field in editable_input_fields(meta.model))
-    return mutation_input_type_name(
-        meta.model,
-        operation_kind,
-        effective_field_names,
-        full_field_names=full_field_names,
+    if not hasattr(mutation_cls, "_mutation_meta"):
+        return False
+    return (
+        callable(getattr(mutation_cls, "resolve_sync", None))
+        and callable(getattr(mutation_cls, "resolve_async", None))
+        and callable(getattr(mutation_cls, "input_type_name", None))
+        and getattr(mutation_cls, "input_module_path", None) is not None
     )
 
 
-def _lazy_ref(type_name: str) -> Any:
-    """Return ``Annotated[<type_name>, strawberry.lazy(INPUTS_MODULE_PATH)]``.
+def _lazy_ref(type_name: str, module_path: str) -> Any:
+    """Return ``Annotated[<type_name>, strawberry.lazy(module_path)]``.
 
-    The forward-ref shape ``orders/inputs.py`` uses for its generated input
-    classes: a string type name resolved through
-    ``mutations.inputs.__dict__`` at schema build, after the phase-2.5 bind
-    materializes the named class as a module global. Single-sited so the ``data:``
-    argument and the payload return annotation use one ref shape.
+    The forward-ref shape ``orders/inputs.py`` uses for its generated classes: a
+    string type name resolved through ``<module_path>.__dict__`` at schema build,
+    after the phase-2.5 bind materializes the named class as a module global.
+    ``module_path`` is a parameter (NOT a hardcoded ``INPUTS_MODULE_PATH``) so the
+    ``data:`` ref can name the per-flavor input namespace
+    (``mutation_cls.input_module_path``: ``mutations.inputs`` for the model flavor,
+    ``forms.inputs`` for the form flavors) while the PAYLOAD-return ref always names
+    ``mutations.inputs`` (both flavors materialize their payload there - spec-038
+    Decision 5, the load-bearing namespace divergence).
     """
-    return Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)]
+    return Annotated[type_name, strawberry.lazy(module_path)]
 
 
 def _synthesized_mutation_signature(
@@ -148,12 +146,24 @@ def _synthesized_mutation_signature(
     - ``update``: ``id: ID!`` + ``data: <Model>PartialInput!``.
     - ``delete``: ``id: ID!`` only.
 
-    ``data`` is a ``strawberry.lazy`` forward-ref to the generated input class
-    (materialized at the bind, after this signature is built at import - the same
-    timing hazard as the payload). ``id`` is the raw ``strawberry.ID`` string (the
-    ``DjangoNodeField`` server-side-decode precedent). The **return** annotation is
-    a ``strawberry.lazy`` forward-ref to the generated ``<Name>Payload`` (non-null
-    - the field always returns a payload; the object slot inside is nullable).
+    For a form flavor (spec-038): a plain ``DjangoFormMutation`` (the ``"form"``
+    operation sentinel) has ``data:`` but NO ``id``; a ``DjangoModelFormMutation``
+    create / update follows the model create / update shape. So ``id`` is built for
+    ``operation in ("update", "delete")`` and ``data`` for every operation that is
+    not ``"delete"`` (create / update / the ``"form"`` sentinel all take ``data:``).
+
+    ``data`` is a ``strawberry.lazy`` forward-ref to the generated input class -
+    named via the seams ``mutation_cls.input_type_name(meta)`` +
+    ``mutation_cls.input_module_path`` (the model default = ``mutations.inputs`` /
+    today's name; the form flavors override to ``forms.inputs`` + the form-input
+    name), so the form ``data:`` ref resolves the form-derived input. ``id`` is the
+    raw ``strawberry.ID`` string (the ``DjangoNodeField`` server-side-decode
+    precedent). The **return** annotation is a ``strawberry.lazy`` forward-ref to
+    the generated ``<Name>Payload`` (non-null - the field always returns a payload;
+    the object slot inside is nullable). The payload ref ALWAYS names
+    ``mutations.inputs`` (``INPUTS_MODULE_PATH``): both flavors materialize their
+    payload there, even though the form ``data:`` input lives in ``forms.inputs``
+    (the spec-038 Decision 5 namespace divergence - do not conflate them).
     """
     meta = mutation_cls._mutation_meta
     operation = meta.operation
@@ -170,14 +180,14 @@ def _synthesized_mutation_signature(
         )
         annotations["id"] = strawberry.ID
 
-    if operation in ("create", "update"):
-        data_ann = _lazy_ref(_input_type_name(meta))
+    if operation != "delete":
+        data_ann = _lazy_ref(mutation_cls.input_type_name(meta), mutation_cls.input_module_path)
         params.append(
             inspect.Parameter("data", inspect.Parameter.KEYWORD_ONLY, annotation=data_ann),
         )
         annotations["data"] = data_ann
 
-    return_annotation = _lazy_ref(f"{mutation_cls.__name__}Payload")
+    return_annotation = _lazy_ref(f"{mutation_cls.__name__}Payload", INPUTS_MODULE_PATH)
     annotations["return"] = return_annotation
     return inspect.Signature(params, return_annotation=return_annotation), annotations
 
@@ -204,13 +214,23 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
     both ``schema.execute_sync`` and ``await schema.execute``.
     """
     _validate_mutation_target(mutation_cls)
+    # The plain ``DjangoFormMutation`` (the ``"form"`` operation sentinel) has a
+    # model-LESS resolver seam whose signature is ``resolve_sync(info, *, data)`` -
+    # NO ``id`` param - so passing ``id=`` would be a TypeError. Every model /
+    # ``ModelForm`` operation (create / update / delete) DOES take ``id=`` (create
+    # passes ``UNSET``, exactly as the ``036`` model dispatch always did), so the
+    # only flavor that omits ``id`` is the plain ``"form"`` sentinel (spec-038
+    # Slice 3 ``_resolve`` id-kwarg gating).
+    takes_id = mutation_cls._mutation_meta.operation != "form"
 
     def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:  # noqa: ARG001
         data = kwargs.get("data", strawberry.UNSET)
-        node_id = kwargs.get("id", strawberry.UNSET)
+        call_kwargs: dict[str, Any] = {"data": data}
+        if takes_id:
+            call_kwargs["id"] = kwargs.get("id", strawberry.UNSET)
         if in_async_context():
-            return resolve_mutation_async(mutation_cls, info, data=data, id=node_id)
-        return resolve_mutation_sync(mutation_cls, info, data=data, id=node_id)
+            return mutation_cls.resolve_async(info, **call_kwargs)
+        return mutation_cls.resolve_sync(info, **call_kwargs)
 
     signature, annotations = _synthesized_mutation_signature(mutation_cls)
     _resolve.__signature__ = signature

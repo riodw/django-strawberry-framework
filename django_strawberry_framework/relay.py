@@ -203,7 +203,7 @@ def decode_model_global_id(value: Any, expected_model: type) -> DecodeResult:
     """Decode a typed ``GlobalID`` against ``expected_model``, non-raising (spec-036 DRY-2).
 
     The single source of the mutation typed-id contract the root ``id:`` decode
-    (``_coerce_lookup_id``) and the relation ``<field>_id`` decode
+    (``coerce_lookup_id``) and the relation ``<field>_id`` decode
     (``_decode_relation_id_set``) both consume: decode the value via
     ``decode_global_id`` (shape-only), verify the resolved type's model **is**
     ``expected_model``, and coerce ``node_id`` through the resolved type's id field

@@ -208,6 +208,11 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── factories.py              # Filter input-class BFS factory + the (currently unconsumed) dynamic-FilterSet cache.
 │   ├── inputs.py                 # Filter input namespace, lookup-name scaffolding, and shape converters.
 │   └── sets.py                   # ``FilterSet`` + ``FilterSetMetaclass`` - declaration, validation, and the apply pipeline.
+├── forms/    # Form-based mutation subsystem - ``DjangoFormMutation`` / ``DjangoModelFormMutation`` over a Django ``Form`` / ``ModelForm`` (``Meta.form_class``).
+│   ├── converter.py              # ``convert_form_field`` registry - Django form field -> Strawberry input annotation + required-ness (reuses the read-side scalar / choice-enum / ``Upload`` converters).
+│   ├── inputs.py                 # Form-derived ``@strawberry.input`` generation (``<FormClass>Input`` / ``<FormClass>PartialInput``) from ``form_class.base_fields``.
+│   ├── resolvers.py              # The form mutation pipeline - ``is_valid()`` -> ``form.errors`` -> ``FieldError`` envelope -> ``save()`` / ``perform_mutate`` (sync + async).
+│   └── sets.py                   # The two form-mutation bases + ``Meta`` validation; ``DjangoModelFormMutation`` rides ``DjangoMutation`` via ``_resolve_model``, the plain ``DjangoFormMutation`` is the model-less sibling.
 ├── management/    # Django management namespace for the framework's ``manage.py`` commands.
 │   └── commands/    # Implementations of the framework's ``manage.py`` commands (``export_schema``, ``inspect_django_type``).
 │       ├── export_schema.py      # manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol.
@@ -277,14 +282,18 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── factories.py              # Filter input-class BFS factory + the (currently unconsumed) dynamic-FilterSet cache.
 │   ├── inputs.py                 # Filter input namespace, lookup-name scaffolding, and shape converters.
 │   └── sets.py                   # ``FilterSet`` + ``FilterSetMetaclass`` - declaration, validation, and the apply pipeline.
-├── forms/    # planned by TODO-ALPHA-038-0.0.12 - Form-based mutations (Django Forms / ModelForms)
+├── forms/    # Form-based mutation subsystem - ``DjangoFormMutation`` / ``DjangoModelFormMutation`` over a Django ``Form`` / ``ModelForm`` (``Meta.form_class``).
+│   ├── converter.py              # ``convert_form_field`` registry - Django form field -> Strawberry input annotation + required-ness (reuses the read-side scalar / choice-enum / ``Upload`` converters).
+│   ├── inputs.py                 # Form-derived ``@strawberry.input`` generation (``<FormClass>Input`` / ``<FormClass>PartialInput``) from ``form_class.base_fields``.
+│   ├── resolvers.py              # The form mutation pipeline - ``is_valid()`` -> ``form.errors`` -> ``FieldError`` envelope -> ``save()`` / ``perform_mutate`` (sync + async).
+│   └── sets.py                   # The two form-mutation bases + ``Meta`` validation; ``DjangoModelFormMutation`` rides ``DjangoMutation`` via ``_resolve_model``, the plain ``DjangoFormMutation`` is the model-less sibling.
 ├── management/    # Django management namespace for the framework's ``manage.py`` commands.
 │   └── commands/    # Implementations of the framework's ``manage.py`` commands (``export_schema``, ``inspect_django_type``).
 │       ├── export_schema.py      # manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol.
 │       └── inspect_django_type.py  # manage.py inspect_django_type - print a DjangoType's per-field GraphQL resolution table.
 ├── middleware/    # planned by TODO-ALPHA-042-0.0.14 - Debug-toolbar middleware
 │   └── debug_toolbar.py          # planned by TODO-ALPHA-042-0.0.14 - Debug-toolbar middleware
-├── mutations/    # planned by TODO-ALPHA-036-0.0.11 - Mutations + auto-generated Input types
+├── mutations/    # shipped in DONE-036-0.0.11 - Mutations + auto-generated Input types
 ├── optimizer/    # Optimizer subsystem - selection-driven queryset planning via ``DjangoOptimizerExtension`` (N+1 prevention).
 │   ├── _context.py               # Shared context read/write helpers for optimizer <-> resolver hand-off.
 │   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
@@ -357,6 +366,11 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_sets.py              # FilterSet tests for Meta collection, validation, sync/async apply, and tree overrides.
 │   └── fixtures/    # Fixture modules for filter lazy-resolution tests.
 │       └── filtersets.py         # Fixture FilterSet declarations for cross-module lazy-resolution tests.
+├── forms/    # Package tests for the form-mutation subsystem.
+│   ├── test_converter.py         # ``convert_form_field`` tests - each supported form field -> annotation + required-ness, relation id mapping, ``Upload`` mapping, and the unknown-field raise.
+│   ├── test_inputs.py            # Form-derived input tests - shape from ``base_fields``, ``Meta.fields`` / ``Meta.exclude`` narrowing, and materialization as a module global.
+│   ├── test_resolvers.py         # Form pipeline tests - create / update happy paths, ``form.errors`` -> envelope, decode split, partial-update reconstruction, plain-form payload, and the G2 re-fetch shape.
+│   └── test_sets.py              # Form-base tests - the ``Meta`` validation matrix, plain-form input dedupe, registration / finalizer binding, and the model-flavor seam defaults.
 ├── management/    # Package tests for django-strawberry-framework management commands.
 │   ├── test_export_schema.py     # Management command tests for export_schema SDL output and failure modes.
 │   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
@@ -494,11 +508,15 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_sets.py              # FilterSet tests for Meta collection, validation, sync/async apply, and tree overrides.
 │   └── fixtures/    # Fixture modules for filter lazy-resolution tests.
 │       └── filtersets.py         # Fixture FilterSet declarations for cross-module lazy-resolution tests.
-├── forms/    # planned by TODO-ALPHA-038-0.0.12 - Form-based mutations (Django Forms / ModelForms)
+├── forms/    # Package tests for the form-mutation subsystem.
+│   ├── test_converter.py         # ``convert_form_field`` tests - each supported form field -> annotation + required-ness, relation id mapping, ``Upload`` mapping, and the unknown-field raise.
+│   ├── test_inputs.py            # Form-derived input tests - shape from ``base_fields``, ``Meta.fields`` / ``Meta.exclude`` narrowing, and materialization as a module global.
+│   ├── test_resolvers.py         # Form pipeline tests - create / update happy paths, ``form.errors`` -> envelope, decode split, partial-update reconstruction, plain-form payload, and the G2 re-fetch shape.
+│   └── test_sets.py              # Form-base tests - the ``Meta`` validation matrix, plain-form input dedupe, registration / finalizer binding, and the model-flavor seam defaults.
 ├── management/    # Package tests for django-strawberry-framework management commands.
 │   ├── test_export_schema.py     # Management command tests for export_schema SDL output and failure modes.
 │   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
-├── mutations/    # planned by TODO-ALPHA-036-0.0.11 - Mutations + auto-generated Input types
+├── mutations/    # shipped in DONE-036-0.0.11 - Mutations + auto-generated Input types
 ├── optimizer/    # Package tests for optimizer planning and DjangoOptimizerExtension.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
 │   ├── test_extension.py         # DjangoOptimizerExtension tests for root-gated planning and queryset optimization.

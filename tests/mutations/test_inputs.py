@@ -129,6 +129,7 @@ def test_editable_fields_exclude_pk_auto_timestamps_and_reverse_relations():
         "name",
         "description",
         "category",
+        "attachment",
         "is_private",
     ]
     # Dropped explicitly.
@@ -152,7 +153,7 @@ def test_editable_fields_narrow_by_exclude():
         f.name
         for f in editable_input_fields(product_models.Item, exclude=("description", "is_private"))
     ]
-    assert names == ["name", "category"]
+    assert names == ["name", "category", "attachment"]
 
 
 def test_editable_fields_rejects_fields_and_exclude_together():

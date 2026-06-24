@@ -15,6 +15,7 @@ logger = logging.getLogger("django_strawberry_framework")
 from strawberry import auto  # noqa: E402  # logger must exist before subpackage imports
 
 from .connection import DjangoConnection, DjangoConnectionField  # noqa: E402
+from .forms import DjangoFormMutation, DjangoModelFormMutation  # noqa: E402
 from .list_field import DjangoListField  # noqa: E402
 from .mutations import (  # noqa: E402
     DjangoModelPermission,
@@ -33,15 +34,17 @@ from .scalars import BigInt, Upload, strawberry_config  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 from .types.converters import DjangoFileType, DjangoImageType  # noqa: E402
 
-__version__ = "0.0.11"
+__version__ = "0.0.12"
 
 __all__ = (
     "BigInt",
     "DjangoConnection",
     "DjangoConnectionField",
     "DjangoFileType",
+    "DjangoFormMutation",
     "DjangoImageType",
     "DjangoListField",
+    "DjangoModelFormMutation",
     "DjangoModelPermission",
     "DjangoMutation",
     "DjangoMutationField",

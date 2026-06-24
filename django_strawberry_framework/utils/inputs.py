@@ -63,6 +63,52 @@ def graphql_camel_name(name: str) -> str:
     return head + "".join(part.capitalize() for part in rest)
 
 
+def normalize_field_name_sequence(
+    value: Any,
+    *,
+    label: str = "fields",
+    flavor: str,
+) -> tuple[str, ...] | None:
+    """Return a ``Meta.fields`` / ``Meta.exclude`` value as a tuple of names, or ``None``.
+
+    The flavor-agnostic body shared by ``mutations/sets.py::_normalize_field_sequence``
+    and ``forms/inputs.py::normalize_form_field_sequence`` (spec-038 integration
+    pass, Finding I1). Both sites normalize a declared field sequence the same way;
+    they differed only in the human flavor label interpolated into the two
+    ``ConfigurationError`` messages, so that single divergence is hoisted to the
+    ``flavor`` parameter -- mirroring how ``mutations/sets.py::make_declaration_registry``
+    already parameterizes its reject wording by a flavor label. The
+    field-existence-basis check (a name not in the model's editable columns /
+    the form's ``base_fields``) stays at each call site; this helper only validates
+    the SHAPE of the declared sequence.
+
+    ``None`` means "unset". A non-``None`` value is coerced to a tuple so the bind
+    and the generator see one shape. A bare string is rejected (it would iterate
+    as characters); a duplicate name is rejected (it would collapse silently when
+    the effective field set is taken as a ``frozenset``, masking a malformed
+    declaration), failing loud naming the repeated field(s). ``label`` names which
+    key (``fields`` / ``exclude``) is at fault; ``flavor`` names the mutation
+    base(s) in the message (e.g. ``"DjangoMutation"`` or
+    ``"DjangoFormMutation / DjangoModelFormMutation"``).
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        raise ConfigurationError(
+            f"{flavor} Meta.fields / Meta.exclude must be a sequence of field "
+            f"names, not a bare string: {value!r}.",
+        )
+    names = tuple(value)
+    seen: set[str] = set()
+    duplicates = sorted({name for name in names if name in seen or seen.add(name)})
+    if duplicates:
+        raise ConfigurationError(
+            f"{flavor} Meta.{label} declares duplicate field name(s): "
+            f"{duplicates!r}. Each field may appear at most once.",
+        )
+    return names
+
+
 def build_strawberry_input_class(
     name: str,
     field_specs: list[tuple[str, Any, dict[str, Any] | None]],

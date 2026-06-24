@@ -847,10 +847,11 @@ def test_bind_dedupes_full_set_fields_with_bare_create():
 
     The type identity is the EFFECTIVE field set (spec-036 Decision 6 line 334),
     not the raw ``(fields, exclude)`` declaration. ``Item``'s full editable set is
-    ``("name", "description", "category", "is_private")``; a ``fields`` list naming
-    exactly that set IS the canonical shape, so it must resolve to the same
-    materialized ``ItemInput`` as an un-narrowed create (spec-036 Edge cases line
-    509) rather than spuriously raising AR-M6 on a same-name collision.
+    ``("name", "description", "category", "attachment", "is_private")``; a
+    ``fields`` list naming exactly that set IS the canonical shape, so it must
+    resolve to the same materialized ``ItemInput`` as an un-narrowed create
+    (spec-036 Edge cases line 509) rather than spuriously raising AR-M6 on a
+    same-name collision.
     """
     _declare_products_primaries()
 
@@ -867,6 +868,7 @@ def test_bind_dedupes_full_set_fields_with_bare_create():
                 "name",
                 "description",
                 "category",
+                "attachment",
                 "is_private",
             )
 
@@ -897,7 +899,12 @@ def test_bind_dedupes_fields_with_complementary_exclude():
         class Meta:
             model = product_models.Item
             operation = "create"
-            exclude = ("description", "category", "is_private")
+            exclude = (
+                "description",
+                "category",
+                "attachment",
+                "is_private",
+            )
 
     # Reaches finalize without raising; both share one shape-derived input type.
     finalize_django_types()
@@ -1173,3 +1180,125 @@ def test_bind_skips_relation_lock_for_non_relay_target():
     assert CreateItem._input_class is merged
     field_names = {field.python_name for field in merged.__strawberry_definition__.fields}
     assert {"name", "category_id"} <= field_names
+
+
+# ---------------------------------------------------------------------------
+# No-model-flavor-regression: the new seams default to today's model behavior
+# (spec-038 Slice 2 / DoD item 6). The 036-surface generalization relocated the
+# validation body into ``_validate_meta`` and added ``build_input`` /
+# ``input_type_name`` / ``input_module_path`` / ``resolve_*`` seams; these pin
+# that the MODEL flavor's behavior is byte-identical to before.
+# ---------------------------------------------------------------------------
+
+
+def test_validate_meta_is_the_relocated_classmethod_seam():
+    """The metaclass validates via the ``_validate_meta`` classmethod seam (relocated body).
+
+    The former module-level ``_validate_mutation_meta`` is gone; the validation is
+    now ``DjangoMutation._validate_meta``. A model mutation still validates exactly
+    as before (a representative case re-pinned), and the seam is a classmethod a
+    subclass can override (the form flavor does).
+    """
+    from django_strawberry_framework.mutations import sets as mutation_sets
+
+    assert not hasattr(mutation_sets, "_validate_mutation_meta")
+    assert "_validate_meta" in vars(DjangoMutation)
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+
+    # The relocated body produces the same validated snapshot as before.
+    assert CreateItem._mutation_meta.model is product_models.Item
+    assert CreateItem._mutation_meta.operation == "create"
+    # The net-new form_class slot is None on the model flavor (no regression).
+    assert CreateItem._mutation_meta.form_class is None
+
+
+def test_model_flavor_input_seams_produce_today_defaults():
+    """``build_input`` / ``input_type_name`` / ``input_module_path`` default to model behavior.
+
+    The seams exist and, on a plain ``DjangoMutation``, produce the model-column
+    input materialized in ``mutations.inputs`` under the canonical ``<Model>Input``
+    name - the exact 036 behavior, just reached through the overridable seam.
+    """
+    from django_strawberry_framework.mutations.inputs import (
+        _materialized_names,
+        editable_input_fields,
+    )
+
+    _declare_products_primaries()
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+
+    # input_module_path defaults to the mutations.inputs namespace.
+    assert CreateItem.input_module_path == INPUTS_MODULE_PATH
+    # input_type_name returns the canonical model-input name (full shape).
+    assert CreateItem.input_type_name(CreateItem._mutation_meta) == "ItemInput"
+
+    finalize_django_types()
+
+    # build_input (via the bind) materialized the model-column input into
+    # mutations.inputs under the canonical name (the 036 default).
+    assert "ItemInput" in _materialized_names
+    materialized = _materialized_names["ItemInput"]
+    assert CreateItem._input_class is materialized
+    # The input carries the model's editable columns (name + category_id), proving
+    # it is the model-column input, not a form-derived one.
+    field_names = {f.python_name for f in materialized.__strawberry_definition__.fields}
+    editable = {f.name for f in editable_input_fields(product_models.Item)}
+    assert "name" in field_names
+    assert "category_id" in field_names  # FK -> <field>_id scheme
+    assert "name" in editable
+
+
+def test_model_flavor_resolve_seams_delegate_to_resolver_entry_points():
+    """``resolve_sync`` / ``resolve_async`` default to the model resolver entry points.
+
+    The seams delegate to ``mutations/resolvers.py::resolve_mutation_sync`` /
+    ``resolve_mutation_async`` (today's model dispatch), so the model resolver path
+    is unchanged when Slice 3 rewires ``fields.py::_resolve`` to call them.
+    """
+    assert "resolve_sync" in vars(DjangoMutation)
+    assert "resolve_async" in vars(DjangoMutation)
+    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+
+    assert callable(mutation_resolvers.resolve_mutation_sync)
+    assert callable(mutation_resolvers.resolve_mutation_async)
+
+
+def test_make_declaration_registry_dedupes_and_rejects_post_finalize():
+    """The refactored declaration-registry quad behaves as the hand-written one did.
+
+    The ``make_declaration_registry`` factory single-sources the dedup / clear /
+    post-finalize reject; a fresh registry over a disjoint list still dedupes by
+    identity and rejects a declaration after finalization.
+    """
+    from django_strawberry_framework.mutations.sets import make_declaration_registry
+
+    reg = make_declaration_registry("ProbeFlavor")
+
+    class Probe:
+        pass
+
+    reg.register(Probe)
+    reg.register(Probe)  # identity dedup
+    assert reg.store.count(Probe) == 1
+    assert reg.iter_() == (Probe,)
+
+    reg.clear()
+    assert reg.iter_() == ()
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name")
+            primary = True
+
+    finalize_django_types()
+    with pytest.raises(ConfigurationError, match="ProbeFlavor .* after finalization"):
+        reg.register(Probe)

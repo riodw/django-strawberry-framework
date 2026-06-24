@@ -42,13 +42,15 @@ from strawberry import relay
 from django_strawberry_framework import (
     DjangoConnection,
     DjangoConnectionField,
+    DjangoFormMutation,
+    DjangoModelFormMutation,
     DjangoMutation,
     DjangoMutationField,
     DjangoType,
     apply_cascade_permissions,
 )
 
-from . import filters, models, orders
+from . import filters, forms, models, orders
 
 
 class CategoryType(DjangoType):
@@ -253,23 +255,135 @@ class CreateCategory(DjangoMutation):
         operation = "create"
 
 
+# --------------------------------------------------------------------------- #
+# Form-mutation write surface (spec-038 Slice 4 / Decision 12)
+# --------------------------------------------------------------------------- #
+
+
+class AllowAny:
+    """Allow-all permission class for the model-less plain ``DjangoFormMutation``.
+
+    A plain ``DjangoFormMutation`` has no model, so the ``DjangoModelPermission``
+    default cannot apply and an explicit ``Meta.permission_classes`` is required
+    (spec-038 Decision 11). The package ships no allow-all class, so the example
+    declares this 3-line one: a plain form's authorization is a consumer choice, and
+    the contact-form success path must be reachable for any caller. The
+    ``has_permission`` signature matches the seam
+    (``has_permission(info, mutation, operation, data, instance)``).
+    """
+
+    def has_permission(
+        self,
+        info,
+        mutation,
+        operation,
+        data,
+        instance=None,
+    ):
+        del info, mutation, operation, data, instance
+        return True
+
+
+class CreateItemViaForm(DjangoModelFormMutation):
+    """Create an ``Item`` through ``ItemModelForm`` (the ``ModelForm`` create flavor)."""
+
+    class Meta:
+        form_class = forms.ItemModelForm
+        operation = "create"
+
+
+class UpdateItemViaForm(DjangoModelFormMutation):
+    """Update an ``Item`` through ``ItemModelForm`` (the partial-update flavor)."""
+
+    class Meta:
+        form_class = forms.ItemModelForm
+        operation = "update"
+
+
+class CreateItemWithFileViaForm(DjangoModelFormMutation):
+    """Create an ``Item`` through ``ItemFileModelForm`` - the multipart ``Upload`` form.
+
+    The form's ``attachment`` ``FileField`` maps to the ``Upload`` scalar in the
+    generated input; the resolver routes the uploaded value into the form's ``files=``,
+    proving the ``data=`` / ``files=`` split (the P1 file-routing contract).
+    """
+
+    class Meta:
+        form_class = forms.ItemFileModelForm
+        operation = "create"
+
+
+class CreateStampedItemViaForm(DjangoModelFormMutation):
+    """Create an ``Item`` through ``StampedItemModelForm``, injecting ``user`` (the P2 case).
+
+    ``StampedItemModelForm.__init__`` REQUIRES a ``user`` kwarg, so this mutation
+    overrides ``get_form_kwargs`` to inject ``user=info.context.request.user`` at
+    runtime. The override also waives the create-required-narrowing guard at bind. The
+    injected user stamps the created row's ``description``, so the live test can pin that
+    the user actually reached the form (and that schema-time ``base_fields`` discovery
+    never instantiated the kwarg-requiring form).
+    """
+
+    class Meta:
+        form_class = forms.StampedItemModelForm
+        operation = "create"
+
+    def get_form_kwargs(
+        self,
+        info,
+        *,
+        data,
+        files,
+        instance=None,
+    ):
+        kwargs = super().get_form_kwargs(info, data=data, files=files, instance=instance)
+        kwargs["user"] = info.context.request.user
+        return kwargs
+
+
+class SubmitContact(DjangoFormMutation):
+    """Submit a model-less ``ContactForm`` (the plain-form ``{ ok, errors }`` flavor).
+
+    No ``operation`` (a plain base rejects any ``Meta.operation``); an explicit
+    ``permission_classes`` is required (no model default), so the success path is open to
+    any caller via ``AllowAny``.
+    """
+
+    class Meta:
+        form_class = forms.ContactForm
+        permission_classes = (AllowAny,)
+
+
 @strawberry.type
 class Mutation:
-    """Fakeshop products app write surface - the `DjangoMutation` create / update / delete.
+    """Fakeshop products app write surface - the `DjangoMutation` + form-mutation writes.
 
     Each field is an unannotated `DjangoMutationField` (spec-036 Decision 7): the
     return `<Name>Payload` is materialized at finalization and cannot be named at
     import, so the factory types the field via a `strawberry.lazy` forward-ref. The
-    `Item` writes cover create / update / delete; `createCategory` exercises a
-    second model end to end. No `permission_classes` override - the default
+    `DjangoMutation` `Item` writes cover create / update / delete; `createCategory`
+    exercises a second model end to end. No `permission_classes` override - the default
     `DjangoModelPermission` (the Django `add` / `change` / `delete` model perms) is
     exactly what the live write-authorization tests exercise (spec-036 Decision 15).
+
+    The form-mutation surface (spec-038 Slice 4) adds the `DjangoModelFormMutation`
+    create / update over `Item` via `ItemModelForm` (`createItemViaForm` /
+    `updateItemViaForm`), the file-backed `Upload` form (`createItemWithFileViaForm`),
+    the `get_form_kwargs`-injects-`user` form (`createStampedItemViaForm`), and the
+    model-less plain `DjangoFormMutation` (`submitContact`). The `ModelForm` flavors
+    inherit the same `DjangoModelPermission` default (codenames `add_item` /
+    `change_item`); the plain form names an explicit `AllowAny`.
     """
 
     create_item = DjangoMutationField(CreateItem)
     update_item = DjangoMutationField(UpdateItem)
     delete_item = DjangoMutationField(DeleteItem)
     create_category = DjangoMutationField(CreateCategory)
+    create_item_via_form = DjangoMutationField(CreateItemViaForm)
+    update_item_via_form = DjangoMutationField(UpdateItemViaForm)
+    create_item_with_file_via_form = DjangoMutationField(CreateItemWithFileViaForm)
+    create_stamped_item_via_form = DjangoMutationField(CreateStampedItemViaForm)
+    submit_contact = DjangoMutationField(SubmitContact)
 
 
 __all__ = ("Mutation", "Query")

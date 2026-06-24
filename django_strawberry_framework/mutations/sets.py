@@ -41,7 +41,7 @@ declared in this slice is inert: registered + bound at finalize, never resolved.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, get_origin
+from typing import TYPE_CHECKING, Any, NamedTuple, get_origin
 
 import strawberry
 from strawberry import relay
@@ -49,16 +49,19 @@ from strawberry.types.base import StrawberryList
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
+from ..utils.inputs import normalize_field_name_sequence
 from ..utils.querysets import reject_async_in_sync_context
 from ..utils.typing import unwrap_return_type
 from .inputs import (
     CREATE,
+    INPUTS_MODULE_PATH,
     PARTIAL,
     build_mutation_input,
     build_payload_type,
     editable_input_fields,
     materialize_mutation_input_class,
     mutation_input_shape,
+    mutation_input_type_name,
     payload_object_slot,
     relation_input_annotation,
 )
@@ -99,13 +102,6 @@ _VALID_OPERATIONS: frozenset[str] = frozenset({"create", "update", "delete"})
 _OPERATION_INPUT_KIND: dict[str, str] = {"create": CREATE, "update": PARTIAL}
 
 
-# Declaration registry: every concrete ``DjangoMutation`` records itself here at
-# class creation; ``bind_mutations`` drains it at phase 2.5 and
-# ``registry.clear()`` resets it via ``clear_mutation_registry`` (wired in this
-# slice). A list keeps registration order deterministic; identity dedup keeps a
-# re-imported class from double-registering (the set-ledger idempotency contract).
-_mutation_registry: list[type] = []
-
 # Per-finalize-pass build cache keyed by generated-input shape identity
 # (``(model, operation_kind, frozenset(effective field names))``, spec-036
 # Decision 6 line 334). The key is the EFFECTIVE field set, NOT the raw
@@ -123,37 +119,81 @@ _mutation_registry: list[type] = []
 _shape_build_cache: dict[tuple, type] = {}
 
 
-def register_mutation(mutation_cls: type) -> None:
-    """Record a concrete ``DjangoMutation`` for the phase-2.5 bind.
+class DeclarationRegistry(NamedTuple):
+    """The ``(register, clear, iter, store)`` quad ``make_declaration_registry`` returns.
 
-    Idempotent by identity: a class re-imported under a module reload is recorded
-    once. Rejects a declaration after ``registry.mark_finalized()`` /
-    ``finalize_django_types()`` (spec-036 Edge cases) - the bind has already run,
-    so a late mutation would never be materialized; failing loud mirrors
-    ``TypeRegistry._check_mutable``.
+    A flat named bundle (not a tuple of bare callables) so a caller assigns the
+    three public functions to module-level names AND keeps a handle on the backing
+    ``store`` list for the tests that introspect it directly (e.g. the
+    ``_mutation_registry.count(...)`` idempotency assertion). ``register`` /
+    ``clear`` / ``iter_`` carry the dedup / clear / snapshot mechanics; ``store``
+    is the disjoint ``list[type]`` they close over.
     """
-    if registry.is_finalized():
-        raise ConfigurationError(
-            f"Cannot declare DjangoMutation {mutation_cls.__name__} after finalization; "
-            "mutation declarations are import-time only (call registry.clear() first).",
-        )
-    if mutation_cls not in _mutation_registry:
-        _mutation_registry.append(mutation_cls)
+
+    register: Any
+    clear: Any
+    iter_: Any
+    store: list[type]
 
 
-def clear_mutation_registry() -> None:
-    """Drop every registered mutation declaration (the ``registry.clear()`` co-clear hook).
+def make_declaration_registry(label: str) -> DeclarationRegistry:
+    """Build a fresh declaration registry + its ``(register, clear, iter)`` callables.
 
-    Wired into ``TypeRegistry.clear`` so a fresh finalize starts with an empty
-    declaration registry and ``iter_mutations()`` yields nothing until new
-    mutations declare. Mirrors the filter / order helper-ledger ``.clear()``.
+    The Decision-13 shared-mechanics factory: given a human ``label``
+    (``"DjangoMutation"`` / ``"DjangoFormMutation"``), create a private
+    ``list[type]`` and return callables bound over it -
+
+    - ``register`` records a class for the phase-2.5 bind, idempotent by identity
+      (a class re-imported under a module reload is recorded once) and rejecting a
+      declaration after ``registry.mark_finalized()`` / ``finalize_django_types()``
+      (spec-036 Edge cases) - the bind has already run, so a late declaration would
+      never be materialized; failing loud mirrors ``TypeRegistry._check_mutable``.
+      ``label`` names the flavor in the reject message.
+    - ``clear`` drops every recorded declaration (the ``registry.clear()`` co-clear
+      hook) so a fresh finalize starts empty.
+    - ``iter_`` returns every recorded declaration in registration order.
+
+    The model flavor and the plain-form flavor (``forms/sets.py``) each instantiate
+    this over their OWN list, so the dedup / reject / clear logic is single-sourced
+    while the two ledgers stay disjoint (different ``bind_*`` bodies, different
+    ``registry.clear()`` rows - the over-DRY trap Decision 13 names is avoided by
+    keeping the storage separate).
     """
-    _mutation_registry.clear()
+    store: list[type] = []
+
+    def register(declaration_cls: type) -> None:
+        if registry.is_finalized():
+            raise ConfigurationError(
+                f"Cannot declare {label} {declaration_cls.__name__} after finalization; "
+                "mutation declarations are import-time only (call registry.clear() first).",
+            )
+        if declaration_cls not in store:
+            store.append(declaration_cls)
+
+    def clear() -> None:
+        store.clear()
+
+    def iter_() -> tuple[type, ...]:
+        return tuple(store)
+
+    return DeclarationRegistry(register=register, clear=clear, iter_=iter_, store=store)
 
 
-def iter_mutations() -> tuple[type, ...]:
-    """Return every registered mutation declaration in registration order."""
-    return tuple(_mutation_registry)
+# The model-flavor declaration registry: every concrete ``DjangoMutation`` records
+# itself here at class creation; ``bind_mutations`` drains it at phase 2.5 and
+# ``registry.clear()`` resets it via ``clear_mutation_registry``. The list +
+# callables come from ``make_declaration_registry`` (spec-038 Decision 13) so the
+# plain-form flavor (``forms/sets.py``) instantiates the SAME mechanics over a
+# SECOND, disjoint list - the dedup / reject / clear logic is single-sourced while
+# the two ledgers stay separate. ``register_mutation`` / ``clear_mutation_registry``
+# / ``iter_mutations`` stay the importable public names ``registry.py`` (the
+# co-clear), the metaclass, ``mutations/fields.py``, and the tests reference;
+# ``_mutation_registry`` stays the backing list the idempotency tests introspect.
+_mutation_declaration_registry = make_declaration_registry("DjangoMutation")
+register_mutation = _mutation_declaration_registry.register
+clear_mutation_registry = _mutation_declaration_registry.clear
+iter_mutations = _mutation_declaration_registry.iter_
+_mutation_registry = _mutation_declaration_registry.store
 
 
 def _validate_input_class(
@@ -241,6 +281,7 @@ class _ValidatedMutationMeta:
     __slots__ = (
         "exclude",
         "fields",
+        "form_class",
         "input_class",
         "model",
         "operation",
@@ -258,6 +299,7 @@ class _ValidatedMutationMeta:
         fields: tuple[str, ...] | None,
         exclude: tuple[str, ...] | None,
         permission_classes: list[Any],
+        form_class: Any = None,
     ) -> None:
         self.model = model
         self.operation = operation
@@ -266,37 +308,30 @@ class _ValidatedMutationMeta:
         self.fields = fields
         self.exclude = exclude
         self.permission_classes = permission_classes
+        # The form-flavor snapshot (spec-038 Slice 2): a ``DjangoModelFormMutation``
+        # / ``DjangoFormMutation`` records its ``Meta.form_class`` here so the form
+        # ``build_input`` / resolver read one snapshot shape. The model flavor
+        # leaves it ``None`` (it has no ``form_class``), so the model path is
+        # byte-unchanged - the slot is net-new state never read by the model
+        # bind/resolver.
+        self.form_class = form_class
 
 
 def _normalize_field_sequence(value: Any, *, label: str = "fields") -> tuple[str, ...] | None:
     """Return ``Meta.fields`` / ``Meta.exclude`` as a tuple of names, or ``None``.
 
-    ``None`` means "unset". A non-``None`` value is coerced to a tuple so the
-    bind and the generator see one shape (``editable_input_fields`` accepts a
-    tuple). A bare string is a common mistake (it would iterate as characters),
-    so it is rejected here at class creation. A duplicate name (e.g.
-    ``("name", "name", "category")``) is also rejected here: the duplicate would
-    otherwise collapse silently when the effective field set is taken as a
-    ``frozenset``, masking a malformed declaration, so it fails loud naming the
-    repeated field(s). ``label`` names which key (``fields`` / ``exclude``) is at
-    fault in the message.
+    The model-flavor entry point: delegates to the shared
+    ``utils/inputs.py::normalize_field_name_sequence`` (spec-038 integration pass,
+    Finding I1) with the ``DjangoMutation`` flavor label, so the bare-string and
+    duplicate-name ``ConfigurationError`` messages stay byte-identical to the
+    pre-consolidation wording. ``None`` means "unset"; a non-``None`` value is
+    coerced to a tuple so the bind and the generator see one shape
+    (``editable_input_fields`` accepts a tuple). A bare string and a duplicate
+    name both fail loud at class creation; ``label`` names which key (``fields`` /
+    ``exclude``) is at fault. The field-existence-basis check lives separately in
+    the bind.
     """
-    if value is None:
-        return None
-    if isinstance(value, str):
-        raise ConfigurationError(
-            "DjangoMutation Meta.fields / Meta.exclude must be a sequence of field "
-            f"names, not a bare string: {value!r}.",
-        )
-    names = tuple(value)
-    seen: set[str] = set()
-    duplicates = sorted({name for name in names if name in seen or seen.add(name)})
-    if duplicates:
-        raise ConfigurationError(
-            f"DjangoMutation Meta.{label} declares duplicate field name(s): "
-            f"{duplicates!r}. Each field may appear at most once.",
-        )
-    return names
+    return normalize_field_name_sequence(value, label=label, flavor="DjangoMutation")
 
 
 def _validate_permission_classes(mutation_name: str, value: Any) -> list[Any]:
@@ -344,105 +379,6 @@ def _validate_permission_classes(mutation_name: str, value: Any) -> list[Any]:
     return classes
 
 
-def _validate_mutation_meta(mutation_cls: type, meta: type) -> _ValidatedMutationMeta:
-    """Validate a concrete mutation's nested ``Meta`` at class creation (spec-036 Decision 5).
-
-    The validation matrix (raising ``ConfigurationError`` naming the offending
-    key, all at class-creation per Slice 2 line 53):
-
-    - **unknown ``Meta`` key** - the typo guard over ``_ALLOWED_MUTATION_META_KEYS``
-      (own keys only, no MRO walk), mirroring ``types/base.py::_validate_meta``.
-    - **no resolvable model** - ``_resolve_model(meta)`` returns ``None`` (in
-      0.0.11 a missing ``Meta.model``; the seam lets the 0.0.12 / 0.0.13 flavors
-      supply it differently).
-    - **bad ``operation``** - missing or not in ``{"create", "update", "delete"}``.
-    - **``fields`` + ``exclude`` both supplied** - mutual exclusion.
-    - **bad ``input_class`` / ``partial_input_class``** - not a ``@strawberry.input``
-      type, or field names diverging from the generated scheme (AR-M2).
-
-    ``permission_classes`` is validated + normalized by
-    ``_validate_permission_classes`` (feedback P2): it defaults to
-    ``[DjangoModelPermission]`` when unset, must otherwise be a *sequence* of
-    classes each exposing a callable ``has_permission``, and a bad entry is
-    rejected here at class creation rather than as a request-time ``TypeError`` /
-    ``AttributeError`` inside ``check_permission`` (spec-036 Decision 15 - the
-    write-auth seam; the enforcement runs in Slice 3's resolver).
-    """
-    name = mutation_cls.__name__
-    declared = {key for key in vars(meta) if not key.startswith("_")}
-    unknown = sorted(declared - _ALLOWED_MUTATION_META_KEYS)
-    if unknown:
-        raise ConfigurationError(f"DjangoMutation {name}.Meta has unknown keys: {unknown}.")
-
-    model = mutation_cls._resolve_model(meta)
-    if model is None:
-        raise ConfigurationError(
-            f"DjangoMutation {name}.Meta declares no resolvable model; set Meta.model.",
-        )
-
-    operation = getattr(meta, "operation", None)
-    if operation not in _VALID_OPERATIONS:
-        raise ConfigurationError(
-            f"DjangoMutation {name}.Meta.operation must be one of "
-            f"{sorted(_VALID_OPERATIONS)}; got {operation!r}.",
-        )
-
-    fields = _normalize_field_sequence(getattr(meta, "fields", None), label="fields")
-    exclude = _normalize_field_sequence(getattr(meta, "exclude", None), label="exclude")
-    if fields is not None and exclude is not None:
-        raise ConfigurationError(
-            f"DjangoMutation {name}.Meta declares both `fields` and `exclude`; "
-            "supply at most one.",
-        )
-    if operation == "delete" and (fields is not None or exclude is not None):
-        # A ``delete`` is ``id:``-only and materializes NO input (spec-036 Decision
-        # 14), so ``fields`` / ``exclude`` have no effect. Because delete skips
-        # input generation, an unknown / malformed name in them is never validated
-        # by ``editable_input_fields`` either, so a typo'd field silently finalizes.
-        # Reject the inapplicable keys outright: declaring them on a delete is a
-        # configuration mistake regardless of whether the names are valid.
-        raise ConfigurationError(
-            f"DjangoMutation {name}.Meta.operation is 'delete', which is id-only and "
-            "takes no input; remove the inapplicable Meta.fields / Meta.exclude.",
-        )
-
-    input_class = getattr(meta, "input_class", None)
-    if input_class is not None:
-        _validate_input_class(
-            name,
-            input_class,
-            attr_name="input_class",
-            model=model,
-            fields=fields,
-            exclude=exclude,
-        )
-    partial_input_class = getattr(meta, "partial_input_class", None)
-    if partial_input_class is not None:
-        _validate_input_class(
-            name,
-            partial_input_class,
-            attr_name="partial_input_class",
-            model=model,
-            fields=fields,
-            exclude=exclude,
-        )
-
-    permission_classes = _validate_permission_classes(
-        name,
-        getattr(meta, "permission_classes", None),
-    )
-
-    return _ValidatedMutationMeta(
-        model=model,
-        operation=operation,
-        input_class=input_class,
-        partial_input_class=partial_input_class,
-        fields=fields,
-        exclude=exclude,
-        permission_classes=permission_classes,
-    )
-
-
 class DjangoMutationMetaclass(type):
     """Collect + validate a concrete ``DjangoMutation``'s ``Meta`` and register it.
 
@@ -468,7 +404,7 @@ class DjangoMutationMetaclass(type):
             # no nested ``Meta`` is not a concrete mutation: skip validation /
             # registration, exactly as the set metaclasses skip their bases.
             return new_class
-        new_class._mutation_meta = _validate_mutation_meta(new_class, meta)
+        new_class._mutation_meta = new_class._validate_meta(meta)
         register_mutation(new_class)
         return new_class
 
@@ -516,6 +452,207 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         """
         return getattr(meta, "model", None)
 
+    @classmethod
+    def _validate_meta(cls, meta: type) -> _ValidatedMutationMeta:
+        """Validate a concrete mutation's nested ``Meta`` at class creation (spec-036 Decision 5).
+
+        The overridable validation seam the metaclass invokes
+        (``DjangoMutationMetaclass.__new__``). This default is the **model flavor**
+        (the 0.0.11 body relocated verbatim from the former module-level
+        ``_validate_mutation_meta``); the spec-038 form flavors override it with
+        their own matrix (``forms/sets.py``). The validation matrix (raising
+        ``ConfigurationError`` naming the offending key, all at class-creation per
+        Slice 2 line 53):
+
+        - **unknown ``Meta`` key** - the typo guard over
+          ``_ALLOWED_MUTATION_META_KEYS`` (own keys only, no MRO walk), mirroring
+          ``types/base.py::_validate_meta``.
+        - **no resolvable model** - ``cls._resolve_model(meta)`` returns ``None``
+          (in 0.0.11 a missing ``Meta.model``; the seam lets the 0.0.12 / 0.0.13
+          flavors supply it differently).
+        - **bad ``operation``** - missing or not in
+          ``{"create", "update", "delete"}``.
+        - **``fields`` + ``exclude`` both supplied** - mutual exclusion.
+        - **bad ``input_class`` / ``partial_input_class``** - not a
+          ``@strawberry.input`` type, or field names diverging from the generated
+          scheme (AR-M2).
+
+        ``permission_classes`` is validated + normalized by
+        ``_validate_permission_classes`` (feedback P2): it defaults to
+        ``[DjangoModelPermission]`` when unset, must otherwise be a *sequence* of
+        classes each exposing a callable ``has_permission``, and a bad entry is
+        rejected here at class creation rather than as a request-time ``TypeError``
+        / ``AttributeError`` inside ``check_permission`` (spec-036 Decision 15 - the
+        write-auth seam; the enforcement runs in Slice 3's resolver).
+        """
+        name = cls.__name__
+        declared = {key for key in vars(meta) if not key.startswith("_")}
+        unknown = sorted(declared - _ALLOWED_MUTATION_META_KEYS)
+        if unknown:
+            raise ConfigurationError(f"DjangoMutation {name}.Meta has unknown keys: {unknown}.")
+
+        model = cls._resolve_model(meta)
+        if model is None:
+            raise ConfigurationError(
+                f"DjangoMutation {name}.Meta declares no resolvable model; set Meta.model.",
+            )
+
+        operation = getattr(meta, "operation", None)
+        if operation not in _VALID_OPERATIONS:
+            raise ConfigurationError(
+                f"DjangoMutation {name}.Meta.operation must be one of "
+                f"{sorted(_VALID_OPERATIONS)}; got {operation!r}.",
+            )
+
+        fields = _normalize_field_sequence(getattr(meta, "fields", None), label="fields")
+        exclude = _normalize_field_sequence(getattr(meta, "exclude", None), label="exclude")
+        if fields is not None and exclude is not None:
+            raise ConfigurationError(
+                f"DjangoMutation {name}.Meta declares both `fields` and `exclude`; "
+                "supply at most one.",
+            )
+        if operation == "delete" and (fields is not None or exclude is not None):
+            # A ``delete`` is ``id:``-only and materializes NO input (spec-036
+            # Decision 14), so ``fields`` / ``exclude`` have no effect. Because
+            # delete skips input generation, an unknown / malformed name in them is
+            # never validated by ``editable_input_fields`` either, so a typo'd field
+            # silently finalizes. Reject the inapplicable keys outright: declaring
+            # them on a delete is a configuration mistake regardless of whether the
+            # names are valid.
+            raise ConfigurationError(
+                f"DjangoMutation {name}.Meta.operation is 'delete', which is id-only and "
+                "takes no input; remove the inapplicable Meta.fields / Meta.exclude.",
+            )
+
+        input_class = getattr(meta, "input_class", None)
+        if input_class is not None:
+            _validate_input_class(
+                name,
+                input_class,
+                attr_name="input_class",
+                model=model,
+                fields=fields,
+                exclude=exclude,
+            )
+        partial_input_class = getattr(meta, "partial_input_class", None)
+        if partial_input_class is not None:
+            _validate_input_class(
+                name,
+                partial_input_class,
+                attr_name="partial_input_class",
+                model=model,
+                fields=fields,
+                exclude=exclude,
+            )
+
+        permission_classes = _validate_permission_classes(
+            name,
+            getattr(meta, "permission_classes", None),
+        )
+
+        return _ValidatedMutationMeta(
+            model=model,
+            operation=operation,
+            input_class=input_class,
+            partial_input_class=partial_input_class,
+            fields=fields,
+            exclude=exclude,
+            permission_classes=permission_classes,
+        )
+
+    # Module path the generated input class is materialized into - the
+    # ``strawberry.lazy`` target Slice 3's ``DjangoMutationField`` references for
+    # the ``data:`` argument. The model default is ``mutations.inputs``; the form
+    # flavors override it to ``forms.inputs`` (a disjoint namespace). A class
+    # attribute (not a classmethod) because it has no per-``Meta`` dependence.
+    input_module_path: str = INPUTS_MODULE_PATH
+
+    @classmethod
+    def build_input(cls, meta: _ValidatedMutationMeta, primary_type: type) -> type | None:
+        """Build + materialize the operation's generated input class (the bind hook seam).
+
+        The overridable input-materialization seam ``_bind_mutation`` calls at
+        phase 2.5. The **model default** delegates to ``_materialize_input_for``
+        (today's exact model behavior: the model-column ``<Model>Input`` /
+        ``<Model>PartialInput`` built from the editable columns, or ``None`` for a
+        ``delete``); the form flavors override it to build the form-derived input
+        from ``forms/inputs.py`` instead (spec-038 Decision 13). Returning ``None``
+        means "no input for this operation" (the model ``delete`` case).
+        """
+        return _materialize_input_for(cls.__name__, meta, primary_type)
+
+    @classmethod
+    def input_type_name(cls, meta: _ValidatedMutationMeta) -> str:
+        """Return the generated input class name for a create / update mutation (the name seam).
+
+        The overridable input-name seam Slice 3's ``mutations/fields.py`` consults
+        to synthesize the lazy ``data:`` forward-ref. The **model default** is the
+        canonical-shape name ``mutation_input_type_name(...)`` (the
+        ``<Model>Input`` / ``<Model>PartialInput`` for the full shape, or a
+        deterministic shape-derived name for a narrowing) - single-sourced with the
+        bind's name choice via ``mutation_input_shape``. The form flavors override
+        it with ``forms/inputs.py::form_input_type_name``.
+
+        Spec-038 Slice 3 rewired ``mutations/fields.py::_synthesized_mutation_signature``
+        to consult this seam (deleting the transient ``_input_type_name`` twin), so
+        this is now the single source for the model ``data:`` lazy-ref name.
+        """
+        operation_kind = _OPERATION_INPUT_KIND[meta.operation]
+        effective_field_names = tuple(
+            field.name
+            for field in editable_input_fields(
+                meta.model,
+                fields=meta.fields,
+                exclude=meta.exclude,
+            )
+        )
+        full_field_names = tuple(field.name for field in editable_input_fields(meta.model))
+        return mutation_input_type_name(
+            meta.model,
+            operation_kind,
+            effective_field_names,
+            full_field_names=full_field_names,
+        )
+
+    @classmethod
+    def resolve_sync(
+        cls,
+        info: Any,
+        *,
+        data: Any,
+        id: Any,  # noqa: A002  # ``id`` is the GraphQL arg name
+    ) -> Any:
+        """Resolve a mutation synchronously (the sync resolver seam).
+
+        The overridable sync-dispatch seam Slice 3's ``mutations/fields.py``
+        ``_resolve`` will call. The **model default** delegates to today's
+        ``mutations/resolvers.py::resolve_mutation_sync`` (so the model dispatch is
+        unchanged); the form flavors override it with the form resolver pipeline
+        (spec-038 Slice 3). Function-local import to keep the module-load order
+        independent of ``resolvers.py``.
+        """
+        from .resolvers import resolve_mutation_sync
+
+        return resolve_mutation_sync(cls, info, data=data, id=id)
+
+    @classmethod
+    def resolve_async(
+        cls,
+        info: Any,
+        *,
+        data: Any,
+        id: Any,  # noqa: A002  # ``id`` is the GraphQL arg name
+    ) -> Any:
+        """Resolve a mutation asynchronously (the async resolver seam).
+
+        The async mirror of ``resolve_sync``: the **model default** delegates to
+        ``mutations/resolvers.py::resolve_mutation_async``; the form flavors
+        override it with the async form pipeline (spec-038 Slice 3).
+        """
+        from .resolvers import resolve_mutation_async
+
+        return resolve_mutation_async(cls, info, data=data, id=id)
+
     def check_permission(
         self,
         info: Any,
@@ -546,7 +683,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         never be awaited here; it is closed and raised as a ``SyncMisuseError``,
         the same discipline ``apply_type_visibility_sync`` applies to an async
         ``get_queryset``. (An async ``check_permission`` override is caught by the
-        resolver's ``_authorize_or_raise`` one level up.)
+        resolver's ``authorize_or_raise`` one level up.)
         """
         meta = type(self)._mutation_meta
         for permission_class in meta.permission_classes:
@@ -866,7 +1003,10 @@ def _bind_mutation(mutation_cls: type) -> None:
     meta = mutation_cls._mutation_meta
     primary_type = _resolve_primary_type(mutation_cls, meta.model)
 
-    input_cls = _materialize_input_for(mutation_cls.__name__, meta, primary_type)
+    # Route the input materialization through the ``build_input`` seam (spec-038
+    # Decision 13): the model flavor's default rebuilds the model-column input
+    # exactly as before, the form flavor builds the form-derived input instead.
+    input_cls = mutation_cls.build_input(meta, primary_type)
 
     payload_cls = build_payload_type(
         mutation_cls.__name__,

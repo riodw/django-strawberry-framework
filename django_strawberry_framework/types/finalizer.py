@@ -708,6 +708,19 @@ def finalize_django_types() -> None:
     from ..mutations.sets import bind_mutations
 
     bind_mutations()
+    # Bind plain ``DjangoFormMutation`` declarations (spec-038 Slice 2 / Decision
+    # 6 / Decision 13) in the SAME phase-2.5 window. The model-less plain-form
+    # ledger is disjoint from the ``DjangoMutation`` ledger ``bind_mutations()``
+    # drains; the ``DjangoModelFormMutation`` flavor is a ``DjangoMutation``
+    # subclass and already bound via ``bind_mutations()`` above, so this drains
+    # ONLY the plain-form registry, materializing each plain form's form-derived
+    # input + its pinned ``{ ok errors }`` payload before ``strawberry.Schema(...)``
+    # resolves them. Function-local import (cycle-safe, mirroring the
+    # ``bind_mutations`` idiom); the bind only matters when the consumer imported
+    # the form-mutations subsystem.
+    from ..forms.sets import bind_form_mutations
+
+    bind_form_mutations()
     _bind_filtersets()
     _bind_ordersets()
 

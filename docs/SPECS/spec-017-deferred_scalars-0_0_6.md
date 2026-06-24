@@ -363,7 +363,7 @@ def _serialize_bigint(value: Any) -> str:
 # Strawberry emits `DeprecationWarning: Passing a class to strawberry.scalar() is
 # deprecated. Use StrawberryConfig.scalar_map instead...` whenever a class or
 # NewType-backed type is passed directly to strawberry.scalar(...). The
-# warning-free migration is roadmapped as WIP-ALPHA-020-0.0.7 (Warning-free
+# warning-free migration is roadmapped as DONE-025-0.0.7 (Warning-free
 # scalar registration via StrawberryConfig.scalar_map). That card will introduce
 # a package-side `strawberry_config(...)` factory and remove this suppression
 # block entirely. For 0.0.6, the deprecation is suppressed at the definition
@@ -496,7 +496,7 @@ if _HSTORE_FIELD_CLS is not None and isinstance(field, _HSTORE_FIELD_CLS):
 - *In `0.0.6`*: `BigInt` is a Strawberry `ScalarWrapper` (the return value of `strawberry.scalar(NewType(...))`). It works as a direct field annotation without any schema config — `category: BigInt` in a `DjangoType` or `@strawberry.field` works as-is.
 - *In the warning-free follow-up* (post-`0.0.6`, when the package provides a `StrawberryConfig` helper): `BigInt` may become a bare `NewType` (or stay as a `ScalarWrapper` exported alongside a config helper). Consumers using `BigInt` directly will need to merge a package-provided `StrawberryConfig(scalar_map={...})` into their `strawberry.Schema(...)` call. A bare `NewType("BigInt", int)` annotation without `scalar_map` fails Strawberry schema construction with `Unexpected type '...BigInt'` — verified by probe.
 
-The follow-up is a **real public-API migration**, not an internal-only refactor. The package will need to document the migration step (deprecation period, a config-merge helper, a stable annotation path), which is exactly why the warning-free design needs its own spec rather than being folded into this card. Roadmapped as `WIP-ALPHA-020-0.0.7 — Warning-free scalar registration via StrawberryConfig.scalar_map` (added to KANBAN in Slice 6 of this card).
+The follow-up is a **real public-API migration**, not an internal-only refactor. The package will need to document the migration step (deprecation period, a config-merge helper, a stable annotation path), which is exactly why the warning-free design needs its own spec rather than being folded into this card. Roadmapped as `DONE-025-0.0.7 — Warning-free scalar registration via StrawberryConfig.scalar_map` (added to KANBAN in Slice 6 of this card).
 
 **Recommended starting point** for the follow-up (final shape settled in TODO-ALPHA-045's own spec; this spec author has thought through alternatives and pinned a vetted direction, but the follow-up author may react to new information — e.g., Strawberry adding first-class scalar-registration support, or implementation revealing that conflict-resolution forces a different API shape): a **factory function** `strawberry_config(extra_scalar_map=None) -> StrawberryConfig` returning a composed `StrawberryConfig` pre-populated with the package's scalar map. `BigInt` stays usable as a direct annotation. Composable with consumer extras (factory accepts `extra_scalar_map=...`). Forward-extensible for future package scalars ([`Upload`][glossary-upload-scalar] from TODO-ALPHA-027 slots into the factory's internal map automatically). Consumer migration is a single-line change: add `config=strawberry_config()` to existing `strawberry.Schema(query=Query, ...)` calls. The TODO-ALPHA-045 card body — drafted verbatim in Slice 6 of this spec — explores this direction and enumerates the open design questions (helper module name, conflict-resolution behavior for colliding scalar-map keys, deprecation-window shape) for the follow-up spec to settle. (Note: `extra_extensions=` is deliberately *not* part of the factory signature — Strawberry extensions are passed to `strawberry.Schema(..., extensions=[...])`, not into `StrawberryConfig`. If extension composition becomes a real need, that's a separate helper returning a schema-construction bundle, not a `StrawberryConfig`.)
 
@@ -721,8 +721,8 @@ Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verb
 
 ## Risks and open questions
 
-- **Strawberry deprecation suppressed at the `BigInt` definition site.** Tight `warnings.catch_warnings()` filter. Consumers see no warning at import time. A regression test (`test_package_import_does_not_emit_strawberry_deprecation_warning`, subprocess-based) catches both (a) accidental removal of the filter and (b) Strawberry tightening the deprecation into a hard error. Migration to `StrawberryConfig.scalar_map` is roadmapped as **`WIP-ALPHA-020-0.0.7 — Warning-free scalar registration via StrawberryConfig.scalar_map`** (added to KANBAN in Slice 6). **Thread-safety caveat:** Python docs note that `warnings.catch_warnings()` is *not* thread-safe. The package's use of it is single-threaded module-load (`scalars.py` first-import), protected by the CPython import lock, so this does not affect runtime. A future re-architecture that imports `scalars.py` from a worker thread (rare, but possible under hot-reload tools like `django-stubs`'s runserver or `pytest-watch`) would need to revisit.
-- **`scalar_map` follow-up is a real public-API migration, not an internal refactor.** Under `scalar_map`, consumers using `BigInt` as a direct annotation will need to merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`. A bare `NewType("BigInt", int)` without `scalar_map` fails Strawberry schema construction (verified by probe). The `WIP-ALPHA-020-0.0.7` card body — drafted inline in this spec's Slice 6 — explores the recommended architectural direction (factory function `strawberry_config(...)`, `BigInt` stays usable as a direct annotation, composable with consumer extras, forward-extensible for future package scalars). The follow-up will produce its own spec settling final design details, deprecation window, and migration guide.
+- **Strawberry deprecation suppressed at the `BigInt` definition site.** Tight `warnings.catch_warnings()` filter. Consumers see no warning at import time. A regression test (`test_package_import_does_not_emit_strawberry_deprecation_warning`, subprocess-based) catches both (a) accidental removal of the filter and (b) Strawberry tightening the deprecation into a hard error. Migration to `StrawberryConfig.scalar_map` is roadmapped as **`DONE-025-0.0.7 — Warning-free scalar registration via StrawberryConfig.scalar_map`** (added to KANBAN in Slice 6). **Thread-safety caveat:** Python docs note that `warnings.catch_warnings()` is *not* thread-safe. The package's use of it is single-threaded module-load (`scalars.py` first-import), protected by the CPython import lock, so this does not affect runtime. A future re-architecture that imports `scalars.py` from a worker thread (rare, but possible under hot-reload tools like `django-stubs`'s runserver or `pytest-watch`) would need to revisit.
+- **`scalar_map` follow-up is a real public-API migration, not an internal refactor.** Under `scalar_map`, consumers using `BigInt` as a direct annotation will need to merge a package-provided `StrawberryConfig` into their `strawberry.Schema(...)`. A bare `NewType("BigInt", int)` without `scalar_map` fails Strawberry schema construction (verified by probe). The `DONE-025-0.0.7` card body — drafted inline in this spec's Slice 6 — explores the recommended architectural direction (factory function `strawberry_config(...)`, `BigInt` stays usable as a direct annotation, composable with consumer extras, forward-extensible for future package scalars). The follow-up will produce its own spec settling final design details, deprecation window, and migration guide.
 - **`PositiveBigIntegerField` wire-format change.** Breaking for any current consumer; acceptable in alpha; documented in CHANGELOG. Override recourse arrives with WIP-ALPHA-015.
 - **`BigAutoField` deliberately deferred.** PKs near `2**31` will hit GraphQL's `Int` boundary. No current-day recourse.
 - **`HStoreField` and `JSONField` share `JSON`.** Schema clients cannot distinguish them at the GraphQL type level. Future dedicated `HStore` scalar possible.
@@ -737,14 +737,14 @@ Per the slice checklist's Slice 6. The verbatim `BigInt` entry text and the verb
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- Filter input shapes — [`FilterSet`][glossary-filterset], WIP-ALPHA-021-0.0.8.
-- Mutation input types for `BigInt` — [Mutations subsystem][glossary-djangomutation], TODO-ALPHA-028-0.0.11.
-- Multi-database routing — [Multi-database cooperation][glossary-multi-database-cooperation], WIP-ALPHA-019-0.0.7.
+- Filter input shapes — [`FilterSet`][glossary-filterset], DONE-027-0.0.8.
+- Mutation input types for `BigInt` — [Mutations subsystem][glossary-djangomutation], DONE-036-0.0.11.
+- Multi-database routing — [Multi-database cooperation][glossary-multi-database-cooperation], DONE-023-0.0.7.
 - Multi-dimensional `ArrayField`.
 - Dedicated `HStore` scalar.
 - `BigAutoField` → `BigInt`.
 - Consumer-facing scalar annotation overrides — DONE-019-0.0.6.
-- Strawberry-deprecation-free `BigInt` definition (via `StrawberryConfig.scalar_map` + a package-provided config helper) — roadmapped as `WIP-ALPHA-020-0.0.7`.
+- Strawberry-deprecation-free `BigInt` definition (via `StrawberryConfig.scalar_map` + a package-provided config helper) — roadmapped as `DONE-025-0.0.7`.
 - `BigInt64`-bounded variant of `BigInt`.
 
 ## Definition of done

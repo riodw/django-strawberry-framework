@@ -158,7 +158,7 @@ def _cached_build_form_input(
     (``guard_create_required_fields``) runs PER declaration, BEFORE the cache
     lookup, so a waiving mutation that materializes a narrowed shape first cannot
     suppress the guard for a later non-waiving mutation reusing the cached shape
-    (the cache key excludes ``guard_required`` - ``docs/feedback.md`` Finding 5).
+    (the cache key excludes ``guard_required`` - spec-038 Decision 7 P2).
     The create-shaped kinds (``CREATE`` / ``FORM``) then route through
     ``build_form_inputs`` (with ``guard_required=False`` - already guarded), and
     only the matching input + its specs are returned (the partial it also builds is
@@ -176,7 +176,7 @@ def _cached_build_form_input(
     # (``guard_required=False``, having overridden ``get_form_kwargs`` / ``get_form``)
     # that materializes this shape FIRST must not suppress the guard for a later
     # non-waiving mutation reusing the same cached shape - the guard is tied to the
-    # declaration, not the built input shape (``docs/feedback.md`` Finding 5). The
+    # declaration, not the built input shape (spec-038 Decision 7 P2). The
     # partial input is never create-required-guarded (it widens model-backed fields
     # optional), so the guard is create-shaped only.
     if guard_required and operation_kind != PARTIAL:
@@ -250,7 +250,18 @@ def _form_kwargs_overridden(cls: type, base: type) -> bool:
     when a consumer overrides the form-construction hook to inject fields the
     generated input does not carry (a ``user``, a tenant, a defaulted column), the
     create-required-narrowing guard cannot know WHICH fields the override supplies,
-    so it trusts the override and waives the guard. Detection is an identity check
+    so it trusts the override and waives the guard.
+
+    **Caveat (deliberate trade-off, spec-038 Decision 7).** The waiver is COARSE: it
+    trusts that the override supplies any required field a ``Meta.fields`` /
+    ``Meta.exclude`` narrowing dropped, but does NOT verify it. An override taken for
+    an UNRELATED reason (scoping a ``ModelChoiceField.queryset``, injecting a
+    ``request``) while ALSO narrowing a required field away therefore silently
+    re-opens the "schema looks valid but can never validate" hole the guard exists to
+    catch. The strict alternative (only waive for fields the override demonstrably
+    injects) would reject legitimate kwarg-injection forms, so the spec accepts the
+    trust; a consumer who hits the hole keeps the narrowed-away field in the input
+    instead. Detection is an identity check
     against the framework base's default ``get_form_kwargs`` / ``get_form`` - a
     concrete subclass that re-defines either resolves to a different function
     object on ``cls`` than on ``base``. (Both methods are plain instance methods, so
@@ -629,7 +640,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
           ``_validate_permission_classes`` with ``unset_default=(DenyAll,)``: a
           model-less form cannot inherit the model-permission default, so an unset
           ``permission_classes`` denies by default and a public write is the
-          explicit ``permission_classes = []`` opt-out (Decision 11 / Finding 1).
+          explicit ``permission_classes = []`` opt-out (Decision 11).
 
         The snapshot carries ``model=None`` + the ``"form"`` operation sentinel +
         ``form_class`` (Decision 7 P2 - the fixed shape-identity component a plain
@@ -641,7 +652,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         # unknown key): a model-less mutation has no model operation (Decision 10).
         # Reject it by KEY PRESENCE, not value, so an explicit ``operation = None``
         # is rejected too - the fixed ``"form"`` sentinel must not accept ANY copied
-        # ``Meta.operation`` key (``docs/feedback.md`` Finding 5; a value check let
+        # ``Meta.operation`` key (spec-038 Decision 10; a value check let
         # ``None`` slip through as if absent). Reject it FIRST with a targeted
         # message naming the reason, so a consumer who copied a
         # ``DjangoModelFormMutation`` ``Meta`` sees "operation is not supported"
@@ -687,7 +698,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         # which a model-less mutation never provides - it would crash at request
         # time, not deny). An unset ``permission_classes`` therefore defaults to
         # ``[DenyAll]`` (deny-by-default); a public plain-form write is the explicit
-        # ``permission_classes = []`` opt-out (spec-038 Decision 11 / Finding 1).
+        # ``permission_classes = []`` opt-out (spec-038 Decision 11).
         permission_classes = _validate_permission_classes(
             name,
             getattr(meta, "permission_classes", None),

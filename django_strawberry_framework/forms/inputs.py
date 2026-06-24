@@ -469,6 +469,38 @@ def _required_form_field_names(form_class: type[forms.BaseForm]) -> set[str]:
     return {name for name, field in get_form_fields(form_class).items() if field.required}
 
 
+def guard_create_required_fields(
+    form_class: type[forms.BaseForm],
+    effective_field_names: Any,
+) -> None:
+    """Raise if a create-shaped narrowing drops a still-declared required form field (P2).
+
+    A bound form fails required-validation for any ``field.required`` field absent
+    from its bound ``data=``, so a create whose effective field set (after
+    ``Meta.fields`` / ``Meta.exclude``) omits a still-declared required form field
+    would compile to a schema that looks valid but can never succeed. This raises
+    ``ConfigurationError`` naming the dropped required field(s), covering both
+    ``Meta.fields`` and ``Meta.exclude``.
+
+    Factored out of ``build_form_inputs`` so the bind's per-shape build cache
+    (``forms/sets.py::_cached_build_form_input``) can run it PER mutation
+    DECLARATION rather than only on the first build of a given shape: the cache key
+    excludes ``guard_required``, so a waiving mutation (``guard_required=False``,
+    having overridden ``get_form_kwargs`` / ``get_form``) that materializes a
+    narrowed shape FIRST must not suppress the guard for a later non-waiving
+    mutation reusing the same cached shape (``docs/feedback.md`` Finding 5). The
+    guard is tied to the declaration, not the built input shape.
+    """
+    dropped_required = sorted(_required_form_field_names(form_class) - set(effective_field_names))
+    if dropped_required:
+        raise ConfigurationError(
+            f"DjangoFormMutation create input for {form_class.__name__} drops required form "
+            f"field(s) {dropped_required!r} via Meta.fields / Meta.exclude; a bound form can "
+            "never validate without them. Keep them in the input, or override get_form_kwargs "
+            "/ get_form to supply them (which waives this guard).",
+        )
+
+
 def build_form_inputs(
     form_class: type[forms.BaseForm],
     *,
@@ -500,14 +532,7 @@ def build_form_inputs(
     """
     effective = resolve_effective_form_fields(form_class, fields=fields, exclude=exclude)
     if guard_required:
-        dropped_required = sorted(_required_form_field_names(form_class) - set(effective))
-        if dropped_required:
-            raise ConfigurationError(
-                f"DjangoFormMutation create input for {form_class.__name__} drops required form "
-                f"field(s) {dropped_required!r} via Meta.fields / Meta.exclude; a bound form can "
-                "never validate without them. Keep them in the input, or override get_form_kwargs "
-                "/ get_form to supply them (which waives this guard).",
-            )
+        guard_create_required_fields(form_class, effective)
 
     create_cls, create_specs = build_form_input_class(
         form_class,

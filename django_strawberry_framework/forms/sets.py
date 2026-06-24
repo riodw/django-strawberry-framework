@@ -66,6 +66,7 @@ from .inputs import (
     build_form_inputs,
     form_input_type_name,
     get_form_fields,
+    guard_create_required_fields,
     materialize_form_input_class,
     resolve_effective_form_fields,
 )
@@ -153,18 +154,34 @@ def _cached_build_form_input(
     Mirrors ``mutations/sets.py::_materialize_input_for``'s cache-by-shape-identity:
     the first ``build_input`` for a given ``(form_class, operation_kind, effective
     set)`` builds + caches the class; a later identical shape reuses it so the
-    materialize ledger dedupes idempotently. The create-shaped kinds (``CREATE`` /
-    ``FORM``) route through ``build_form_inputs`` so the Slice-1
-    create-required-narrowing guard fires (a narrowing dropping a still-declared
-    required field raises); only the matching input + its specs are returned (the
-    partial it also builds is discarded). ``PARTIAL`` builds the partial directly
-    (no create-required guard - it widens model-backed fields optional).
+    materialize ledger dedupes idempotently. The create-required-narrowing guard
+    (``guard_create_required_fields``) runs PER declaration, BEFORE the cache
+    lookup, so a waiving mutation that materializes a narrowed shape first cannot
+    suppress the guard for a later non-waiving mutation reusing the cached shape
+    (the cache key excludes ``guard_required`` - ``docs/feedback.md`` Finding 5).
+    The create-shaped kinds (``CREATE`` / ``FORM``) then route through
+    ``build_form_inputs`` (with ``guard_required=False`` - already guarded), and
+    only the matching input + its specs are returned (the partial it also builds is
+    discarded). ``PARTIAL`` builds the partial directly (never create-required
+    guarded - it widens model-backed fields optional).
 
     Returns the ``(input_cls, field_specs)`` pair so the Slice-1 reverse-map specs
     survive the per-shape dedupe and reach the bind's ``_input_field_specs`` stash
     (spec-038 Slice 3 - the P1 decode reverse map).
     """
     effective = _resolve_effective_form_field_names(form_class, fields=fields, exclude=exclude)
+
+    # Run the create-required-narrowing guard PER declaration, BEFORE the per-shape
+    # cache lookup: the cache key excludes ``guard_required``, so a waiving mutation
+    # (``guard_required=False``, having overridden ``get_form_kwargs`` / ``get_form``)
+    # that materializes this shape FIRST must not suppress the guard for a later
+    # non-waiving mutation reusing the same cached shape - the guard is tied to the
+    # declaration, not the built input shape (``docs/feedback.md`` Finding 5). The
+    # partial input is never create-required-guarded (it widens model-backed fields
+    # optional), so the guard is create-shaped only.
+    if guard_required and operation_kind != PARTIAL:
+        guard_create_required_fields(form_class, effective)
+
     cache_key = (form_class, operation_kind, frozenset(effective))
     cached = _form_shape_build_cache.get(cache_key)
     if cached is not None:
@@ -177,12 +194,14 @@ def _cached_build_form_input(
             exclude=exclude,
         )
     else:
+        # The guard already ran per-declaration above; ``build_form_inputs`` would
+        # otherwise re-run it only on a cache MISS (the bypass this fix closes).
         input_cls, field_specs, _partial_cls, _partial_specs = build_form_inputs(
             form_class,
             operation_kind=operation_kind,
             fields=fields,
             exclude=exclude,
-            guard_required=guard_required,
+            guard_required=False,
         )
     _form_shape_build_cache[cache_key] = (input_cls, field_specs)
     return input_cls, field_specs

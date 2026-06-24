@@ -127,9 +127,11 @@ def _decode_relations(
     ``DoesNotExist``. The type-checked id is then **resolved through the related
     model's primary type visibility ``get_queryset``** (spec-036 Decision 10 /
     feedback P1): a row the caller cannot see is the same field-keyed
-    ``FieldError``, never attached. A raw pk scalar (a non-Relay target) is passed
-    through unchanged - no decode and
-    no visibility check (there is no Relay-Node target type to scope it).
+    ``FieldError``, never attached. A raw pk scalar (a non-Relay target) is not
+    decoded, but is STILL visibility-checked when the related model has a registered
+    (even non-Relay) primary type with a ``get_queryset`` - the model-path
+    equivalent of the form decoder, closing the raw-pk visibility gap (feedback
+    Finding 2). With no primary registered there is no visibility contract to apply.
 
     Returns ``(scalar_and_fk_attrs, m2m_assignments, error)`` where
     ``scalar_and_fk_attrs`` is the ``{model_attr: value}`` map for ``setattr`` /
@@ -340,21 +342,25 @@ def _decode_relation_id_set(
     ``_relation_error`` on ``field_name`` (AR-H4 + feedback CR-1: a wrong-type id
     is never a cross-model lookup, an uncoercible pk is never a raw ``ValueError``).
     A raw pk scalar (a non-Relay-Node target, which has no ``GlobalID`` shape)
-    passes through unchanged - no decode, no coercion, no visibility hook to apply.
-    The decoded ``GlobalID`` set is then visibility-checked in one query (Decision
+    passes through the decode unchanged (there is no ``GlobalID`` to decode), then
+    takes the raw-pk relation check below rather than the ``GlobalID`` visibility
+    query. The decoded ``GlobalID`` set is visibility-checked in one query (Decision
     10 / feedback P1): a hidden / missing member is the same ``_relation_error``,
     indistinguishable (no existence leak). A list is homogeneously typed (all
     ``GlobalID`` for a Relay target, all raw pk otherwise), so ``needs_visibility``
-    is all-or-nothing and the whole coerced set is checked together.
+    is all-or-nothing and the whole set is checked together.
 
-    A raw-pk **M2M** set carries no ``GlobalID`` visibility contract, but it is
-    still assigned post-save via ``instance.<m2m>.set(pks)``, which writes
-    through-table rows for WHATEVER pks it is handed - a nonexistent pk produces a
-    dangling through row (an invalid FK SQLite flags at teardown) and a false
-    "success" (feedback - raw-pk M2M accepts nonexistent ids). So a raw-pk M2M set
-    is existence-checked in one query before the assignment. A raw-pk FK needs no
-    such check: ``full_clean()`` validates FK existence against the column before
-    ``save()``; M2M is the only relation written outside ``full_clean``.
+    A raw-pk set is NOT exempt from the related type's visibility contract: when
+    the related model has a registered primary ``DjangoType`` - even a NON-Relay
+    one, which has no ``GlobalID`` but can still define a ``get_queryset`` - the set
+    is visibility-checked through ``_raw_pk_relation_error``, exactly as the form
+    path does (``forms/resolvers.py::_visible_related_object``), closing the
+    model-path raw-pk visibility gap (feedback Finding 2). With NO primary type
+    registered there is no visibility contract to apply: a raw-pk **M2M** set still
+    gets the pre-``.set(...)`` existence check (it is assigned via
+    ``instance.<m2m>.set(pks)``, which writes a dangling through-row for any
+    nonexistent pk it is handed), while a raw-pk **FK** relies on ``full_clean()``'s
+    own FK existence check against the column before ``save()``.
     """
     expected_model = relation_field.related_model
     pks: list[Any] = []
@@ -372,8 +378,8 @@ def _decode_relation_id_set(
         error = _relation_visibility_error(field_name, pks, expected_model, info)
         if error is not None:
             return [], error
-    elif pks and getattr(relation_field, "many_to_many", False):
-        error = _relation_existence_error(field_name, pks, expected_model)
+    elif pks:
+        error = _raw_pk_relation_error(field_name, pks, expected_model, relation_field, info)
         if error is not None:
             return [], error
     return pks, None
@@ -557,6 +563,77 @@ def _relation_existence_error(
         )
     }
     if not {str(pk) for pk in pks} <= existing:
+        return _relation_error(field_name)
+    return None
+
+
+def _raw_pk_relation_error(
+    field_name: str,
+    pks: list[Any],
+    related_model: type,
+    relation_field: Any,
+    info: Any,
+) -> FieldError | None:
+    """Visibility- or existence-check a RAW-PK relation set before it is attached (feedback Finding 2).
+
+    A raw-pk relation (the related model has no Relay-Node primary, so the input is
+    the related pk scalar, not a ``GlobalID``) is NOT automatically exempt from the
+    related type's visibility contract. The original decode skipped visibility on
+    the raw-pk branch on the premise that "a raw-pk target has no type to scope" -
+    but ``registry.get(related_model)`` can return a **non-Relay** primary
+    ``DjangoType`` that still defines a ``get_queryset`` (a supported
+    configuration; the read surface scopes every list/node through it), in which
+    case a writer could otherwise attach a row that hook hides. The form path
+    already closes this on every branch (``_visible_related_object``); this is the
+    model-path equivalent, so the model and form flavors enforce the SAME relation
+    visibility invariant (spec-038 frames the form fix as closing the gap the
+    ``036`` model path leaves).
+
+    When a primary type IS registered the pks are visibility-checked through the
+    SAME ``apply_type_visibility_sync(initial_queryset(...))`` query the
+    ``GlobalID`` branch uses (a hidden / missing member is the uniform
+    ``_relation_error``, indistinguishable - no existence leak). When NO primary is
+    registered there is no visibility contract: a raw-pk **M2M** set still needs the
+    pre-``.set(...)`` existence check (``_relation_existence_error``), while a raw-pk
+    **FK** relies on ``full_clean``'s own FK existence check.
+
+    An explicit ``None`` is NOT a pk to check: on a single FK / OneToOne it is a
+    nullable-relation clear (the decoded attr is set to ``NULL``, validated by
+    ``full_clean`` for a non-nullable column), so it is dropped from the check and
+    passed through. (An M2M never carries a ``None`` element - its list element type
+    is non-null, and an explicit whole-list ``null`` is rejected upstream by
+    ``_decode_relation_id_list``.)
+
+    Each remaining pk is coerced through the target pk field first
+    (``_coerce_relation_pk_or_none``), mirroring the ``GlobalID`` branch's
+    ``decode_model_global_id`` coercion: an uncoercible / out-of-range raw pk is
+    dropped from the ``pk__in`` query so it can never reach the backend as a raw
+    ``OverflowError`` / ``ValueError`` and - absent from the visible set - yields
+    the same not-found ``_relation_error`` a genuinely missing pk does. An ``async
+    def get_queryset`` met here raises ``SyncMisuseError`` (the standing sync
+    discipline).
+    """
+    real_pks = [pk for pk in pks if pk is not None]
+    if not real_pks:
+        return None
+    related_type = registry.get(related_model)
+    if related_type is None:
+        if getattr(relation_field, "many_to_many", False):
+            return _relation_existence_error(field_name, real_pks, related_model)
+        return None
+    coerced = [
+        value
+        for value in (_coerce_relation_pk_or_none(related_model, pk) for pk in real_pks)
+        if value is not None
+    ]
+    queryset = apply_type_visibility_sync(
+        related_type,
+        initial_queryset(related_type),
+        info,
+        _MUTATION_ASYNC_RECOURSE,
+    )
+    visible = {str(pk) for pk in queryset.filter(pk__in=coerced).values_list("pk", flat=True)}
+    if not {str(pk) for pk in real_pks} <= visible:
         return _relation_error(field_name)
     return None
 

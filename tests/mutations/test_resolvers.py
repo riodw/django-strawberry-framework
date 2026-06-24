@@ -1356,6 +1356,178 @@ def test_raw_pk_m2m_existence_check_coerces_out_of_range_pk_no_overflow():
 
 
 # ---------------------------------------------------------------------------
+# Raw-pk (non-Relay target) relation VISIBILITY (feedback Finding 2)
+#
+# A relation to a NON-Relay-Node target generates a raw-pk input (no GlobalID). The
+# original decode visibility-checked only the GlobalID branch, so a raw-pk relation
+# whose related model has a registered (non-Relay) primary type with a get_queryset
+# could attach a row that hook hides - the gap the form path already closes.
+# _decode_relation_id_set now visibility-checks the raw-pk branch too, for both M2M
+# and FK, falling back to existence-only when no primary type is registered.
+# ---------------------------------------------------------------------------
+
+
+def _build_book_raw_visibility_schema(*, genre_get_queryset=None, shelf_get_queryset=None):
+    """Declare NON-Relay Genre + Shelf primaries so Book.genres (M2M) and Book.shelf (FK) are raw-pk.
+
+    Optional ``genre_get_queryset`` / ``shelf_get_queryset`` install a visibility
+    hook on the related primary so the raw-pk visibility gap (feedback Finding 2)
+    can be driven end to end: a related row the hook hides must be a field-keyed
+    ``FieldError``, never silently attached.
+    """
+    type(
+        "BranchT",
+        (DjangoType, relay.Node),
+        {
+            "Meta": type(
+                "Meta",
+                (),
+                {"model": library_models.Branch, "fields": ("id", "name"), "primary": True},
+            ),
+        },
+    )
+
+    genre_body: dict = {
+        "Meta": type(
+            "Meta",
+            (),
+            {"model": library_models.Genre, "fields": ("id", "name"), "primary": True},
+        ),
+    }
+    if genre_get_queryset is not None:
+        genre_body["get_queryset"] = genre_get_queryset
+    GenreT = type("GenreT", (DjangoType,), genre_body)  # NON-Relay -> Book.genres is a raw-pk list
+
+    shelf_body: dict = {
+        "Meta": type(
+            "Meta",
+            (),
+            {"model": library_models.Shelf, "fields": ("id", "code"), "primary": True},
+        ),
+    }
+    if shelf_get_queryset is not None:
+        shelf_body["get_queryset"] = shelf_get_queryset
+    ShelfT = type("ShelfT", (DjangoType,), shelf_body)  # NON-Relay -> Book.shelf is a raw-pk FK
+
+    class BookT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Book
+            fields = (
+                "id",
+                "title",
+                "shelf",
+                "genres",
+            )
+            primary = True
+
+    class CreateBook(DjangoMutation):
+        class Meta:
+            model = library_models.Book
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        create_book = DjangoMutationField(CreateBook)
+
+    finalize_django_types()
+    return _schema(Mutation), (GenreT, ShelfT, BookT)
+
+
+_RAW_CREATE_BOOK = (
+    "mutation($d: BookInput!){ createBook(data:$d){ node{ id } errors{ field messages } } }"
+)
+
+
+@pytest.mark.django_db
+def test_create_raw_pk_m2m_hidden_member_is_field_error_no_visibility_leak():
+    """A raw-pk M2M id the related type's get_queryset hides -> FieldError, never attached (Finding 2)."""
+
+    @classmethod
+    def _hide_secret(cls, queryset, info, **kwargs):
+        return queryset.exclude(name="Secret")
+
+    schema, (_GenreT, _ShelfT, _BookT) = _build_book_raw_visibility_schema(
+        genre_get_queryset=_hide_secret,
+    )
+    shelf = _make_branch_shelf()
+    hidden = library_models.Genre.objects.create(name="Secret")
+    res = schema.execute_sync(
+        _RAW_CREATE_BOOK,
+        variable_values={"d": {"title": "Probe", "shelfId": shelf.pk, "genres": [hidden.pk]}},
+    )
+    assert_mutation_field_error(res, "createBook", "genres")
+    assert not library_models.Book.objects.filter(title="Probe").exists()
+
+
+@pytest.mark.django_db
+def test_create_raw_pk_fk_hidden_target_is_field_error_no_visibility_leak():
+    """A raw-pk FK id the related type's get_queryset hides -> FieldError, never attached (Finding 2)."""
+
+    @classmethod
+    def _hide_hidden(cls, queryset, info, **kwargs):
+        return queryset.exclude(code="HIDDEN")
+
+    schema, (_GenreT, _ShelfT, _BookT) = _build_book_raw_visibility_schema(
+        shelf_get_queryset=_hide_hidden,
+    )
+    branch = library_models.Branch.objects.create(name="Main")
+    hidden_shelf = library_models.Shelf.objects.create(code="HIDDEN", branch=branch)
+    res = schema.execute_sync(
+        _RAW_CREATE_BOOK,
+        variable_values={"d": {"title": "Probe", "shelfId": hidden_shelf.pk}},
+    )
+    assert_mutation_field_error(res, "createBook", "shelfId")
+    assert not library_models.Book.objects.filter(title="Probe").exists()
+
+
+@pytest.mark.django_db
+def test_create_raw_pk_relation_visible_members_still_attach():
+    """The raw-pk visibility check does not over-reject: a VISIBLE FK + M2M still attach (Finding 2)."""
+
+    @classmethod
+    def _hide_decoy(cls, queryset, info, **kwargs):
+        return queryset.exclude(name="Decoy")
+
+    schema, (_GenreT, _ShelfT, _BookT) = _build_book_raw_visibility_schema(
+        genre_get_queryset=_hide_decoy,
+    )
+    shelf = _make_branch_shelf()
+    library_models.Genre.objects.create(name="Decoy")  # hidden, deliberately not attached
+    visible = library_models.Genre.objects.create(name="Visible")
+    res = schema.execute_sync(
+        _RAW_CREATE_BOOK,
+        variable_values={"d": {"title": "Good", "shelfId": shelf.pk, "genres": [visible.pk]}},
+    )
+    assert res.errors is None, res.errors
+    assert res.data["createBook"]["errors"] == []
+    book = library_models.Book.objects.get(title="Good")
+    assert set(book.genres.values_list("pk", flat=True)) == {visible.pk}
+
+
+@pytest.mark.django_db
+def test_single_fk_explicit_null_decodes_to_clear_not_relation_error():
+    """An explicit ``null`` on a single FK decodes to ``None`` (a clear), never a relation error (Finding 1).
+
+    Refutes ``docs/feedback.md`` Finding 1's claim that a nullable single relation
+    cannot be set to ``null``. ``_decode_single_relation_id`` passes a non-GlobalID
+    ``None`` straight through: the single-relation raw-pk branch drops ``None``
+    before any existence / visibility check (even when, as here, the related model
+    HAS a registered primary type), so the decoded attr is ``None`` - which clears a
+    nullable FK and is caught by ``full_clean`` for a non-nullable one (keyed to the
+    model field), not a decode-level "Invalid id for relation".
+    """
+    # Build the schema so ``Category`` HAS a registered primary type - the case
+    # that would wrongly route ``None`` into a visibility check if it were not
+    # dropped first (the regression guard for the Finding 2 fix).
+    _build_item_schema()
+    fk_field = product_models.Item._meta.get_field("category")
+    pk, error = resolvers._decode_single_relation_id("categoryId", None, fk_field, info=None)
+    assert error is None
+    assert pk is None
+
+
+# ---------------------------------------------------------------------------
 # Create-validation parity with Model.objects.create (feedback - empty-value
 # defaults #11) and naive-datetime tz-coercion (feedback #15).
 #

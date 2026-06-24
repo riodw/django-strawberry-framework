@@ -37,14 +37,17 @@ and the form-specific invariants this module owns:
   ``to_field_name`` (``obj.serializable_value(field.to_field_name)`` else
   ``obj.pk``) so the bound form validates by the same key it was built on.
 
-- **``update`` reconstructs the full bound payload** (Decision 8 step 4, P1):
-  ``data = {**model_to_dict(instance, <the form's non-file fields>),
-  **provided_data}``, ``files = provided_files``. ``model_to_dict`` supplies FK
-  as pk and M2M as ``[pk]`` under the form field name, so an omitted scalar / FK /
-  M2M keeps the located row's value; an omitted file is preserved via the bound
-  ``form_class(instance=...)``'s ``initial`` (never re-supplied, never cleared). A
-  required non-model extra field stays required in the Slice-1 partial input, so
-  it is always present in ``provided_data``.
+- **``update`` reconstructs the full bound payload** (Decision 8 step 4, P1): for
+  every non-file declared form field the input did not provide, supply the located
+  row's value under the form field name, then overlay ``provided_data``; ``files =
+  provided_files``. Scalars + FK come from ``model_to_dict`` (a FK's stored
+  ``attname`` IS the ``to_field`` / pk key the bound form resolves), while M2M is
+  reconstructed as the field's ``to_field_name`` values (``_to_form_key_value``) so
+  an omitted M2M binds in the SAME shape a provided one decodes to (Finding 3). An
+  omitted file is preserved via the bound ``form_class(instance=...)``'s ``initial``
+  (never re-supplied, never cleared). A required non-model extra field stays
+  required in the Slice-1 partial input, so it is always present in
+  ``provided_data``.
 
 - **The form is constructed once via the overridable ``get_form`` /
   ``get_form_kwargs`` hooks** (Decision 8 step 4 / Decision 6); ``form.is_valid()``
@@ -333,33 +336,6 @@ def _decode_form_data(
     return provided_data, provided_files, None
 
 
-def _non_file_form_field_names(mutation_cls: type) -> list[str]:
-    """Return the form's non-file DECLARED field names for ``model_to_dict`` reconstruction.
-
-    Derived from the form's FULL declared field set (``get_form_fields``), **not**
-    the (possibly narrowed) generated-input reverse map: a ``Meta.fields`` /
-    ``Meta.exclude`` narrowing drops the excluded model-backed fields from the
-    GraphQL input, but the bound ``ModelForm`` still validates EVERY field it
-    declares. Reconstructing only the narrowed input fields would leave an excluded
-    required model-backed field (e.g. a narrowed-away ``category``) absent from the
-    bound ``data=``, so the form fails its required / composite-uniqueness
-    validation against a field the client never narrowed away. Reconstructing from
-    ``base_fields`` instead preserves the located row's value for every declared
-    field, while the resolver still overlays ONLY the provided input (so the
-    excluded fields stay invisible on the wire) - ``docs/feedback.md`` Finding 3.
-
-    A file field's ``model_to_dict`` value is the stored relative path, NOT a
-    re-bindable ``data=`` value, so file fields are excluded (an omitted file is
-    preserved via the bound form's ``instance=`` ``initial`` instead);
-    ``forms.ImageField`` subclasses ``forms.FileField``, so the one ``isinstance``
-    catches both. A declared non-model extra field (a ``confirm``) is harmlessly
-    included - ``model_to_dict`` ignores any name that is not a model column, and
-    a required extra stays required in the partial input so it is always provided.
-    """
-    form_fields = get_form_fields(mutation_cls._mutation_meta.form_class)
-    return [name for name, field in form_fields.items() if not isinstance(field, forms.FileField)]
-
-
 def _reconstruct_partial_data(
     mutation_cls: type,
     instance: Any,
@@ -367,16 +343,61 @@ def _reconstruct_partial_data(
 ) -> dict[str, Any]:
     """Reconstruct the full bound ``data=`` for a partial ``ModelForm`` update (NET-NEW, P1).
 
-    ``data = {**model_to_dict(instance, fields=<non-file form fields>),
-    **provided_data}`` - ``model_to_dict`` supplies FK as pk and M2M as ``[pk]``
-    under the form field name, so an omitted scalar / FK / M2M keeps the located
-    row's value while a provided field overrides it. The ``unique_*`` constraint
-    therefore validates on a one-field change (the unchanged co-member comes from
-    ``model_to_dict``). Net-new: the ``036`` update does ``setattr`` on the located
-    instance, not a ``model_to_dict`` payload reconstruction.
+    For every non-file declared form field NOT overridden by ``provided_data``,
+    supply the located row's value under the form field name, then overlay
+    ``provided_data``; ``files`` is supplied separately and an omitted file is
+    preserved via the bound ``form_class(instance=...)``'s ``initial``. The result
+    lets the bound form validate a one-field change against the row's other
+    (unchanged) values - e.g. a ``unique_together`` co-member comes from the row,
+    not the input.
+
+    Two reconstruction shapes, each matching what the DECODE produces for a PROVIDED
+    field so an omitted field binds byte-compatibly with a provided one:
+
+    - **Scalars + FK / OneToOne** come from ``model_to_dict``: a FK's value is its
+      ``attname`` (the stored ``to_field`` value - the pk by default, or the
+      ``ForeignKey(to_field=...)`` value), which is exactly the key the bound
+      ``ModelChoiceField`` resolves and what ``_to_form_key_value`` produces for a
+      provided FK. So FK / scalar need no special handling.
+    - **M2M** is reconstructed as a list of ``_to_form_key_value(obj, form_field)``
+      (the ``to_field_name`` value, default ``obj.pk``) - NOT ``model_to_dict``'s
+      list of related INSTANCES. For a ``ModelMultipleChoiceField`` with
+      ``to_field_name`` set, the bound form looks members up by THAT key, so a
+      ``model_to_dict`` (instance) shape would fail validation for an omitted M2M
+      while a PROVIDED list (decoded to ``to_field_name`` values) passes - an
+      omitted-vs-provided inconsistency (``docs/feedback.md`` Finding 3). Only a
+      form field that is a real forward M2M on the model is reconstructed this way;
+      a non-model extra is left to ``model_to_dict`` (which ignores non-columns).
+
+    Reconstruction reads the form's FULL declared field set (``get_form_fields``),
+    NOT the (possibly narrowed) generated input: a ``Meta.fields`` / ``Meta.exclude``
+    narrowing drops excluded model-backed fields from the GraphQL input, but the
+    bound ``ModelForm`` still validates EVERY field it declares, so an excluded
+    required field (e.g. a narrowed-away ``category``) must still be reconstructed
+    from the located row (the prior P1 fix). A file field's ``model_to_dict`` value
+    is the stored relative path, not a re-bindable ``data=`` value, so file fields
+    are excluded (``forms.ImageField`` subclasses ``forms.FileField``, so the one
+    ``isinstance`` catches both). Net-new vs. ``036``: the model update does
+    ``setattr`` on the located instance, not a bound-data reconstruction.
     """
-    base = model_to_dict(instance, fields=_non_file_form_field_names(mutation_cls))
-    return {**base, **provided_data}
+    model = mutation_cls._mutation_meta.model
+    form_fields = get_form_fields(mutation_cls._mutation_meta.form_class)
+    m2m_field_names = {field.name for field in model._meta.many_to_many}
+
+    m2m_data: dict[str, Any] = {}
+    scalar_names: list[str] = []
+    for name, form_field in form_fields.items():
+        if name in provided_data or isinstance(form_field, forms.FileField):
+            continue
+        if isinstance(form_field, forms.ModelMultipleChoiceField) and name in m2m_field_names:
+            m2m_data[name] = [
+                _to_form_key_value(obj, form_field) for obj in getattr(instance, name).all()
+            ]
+        else:
+            scalar_names.append(name)
+
+    base = model_to_dict(instance, fields=scalar_names)
+    return {**base, **m2m_data, **provided_data}
 
 
 def _form_payload_cls(mutation_cls: type) -> type:

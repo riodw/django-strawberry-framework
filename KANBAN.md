@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-06-21
+Last refreshed: 2026-06-24
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -81,15 +81,15 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**61.7% complete** toward `1.0.0` - 37 of 60 cards done (63.3% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**63.3% complete** toward `1.0.0` - 38 of 60 cards done (65.6% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 37/44 (84.1%) | 83.8% |
+| Alpha (pre-0.1.0) | 38/44 (86.4%) | 86.8% |
 | Beta (pre-1.0.0) | 0/15 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
-To complete the Alpha (pre-0.1.0) milestone: **84.1%**.
+To complete the Alpha (pre-0.1.0) milestone: **86.4%**.
 
 ## Board columns
 
@@ -97,7 +97,7 @@ To complete the Alpha (pre-0.1.0) milestone: **84.1%**.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-038-0.0.12` - Form-based mutations (Django Forms / ModelForms) | [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md) |
+| `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms) | [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md) |
 | `DONE-037-0.0.11` - Upload scalar and file / image field mapping | [spec-037-upload_file_image_mapping-0_0_11.md](docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md) |
 | `DONE-036-0.0.11` - Mutations + auto-generated Input types | [spec-036-mutations-0_0_11.md](docs/SPECS/spec-036-mutations-0_0_11.md) |
 | `DONE-035-0.0.10` - Optimizer robustness hardening (upstream-comparison guards) | [spec-035-optimizer_hardening-0_0_10.md](docs/SPECS/spec-035-optimizer_hardening-0_0_10.md) |
@@ -139,72 +139,6 @@ To complete the Alpha (pre-0.1.0) milestone: **84.1%**.
 ## In progress
 
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
-
-<a id="form_based_mutations_django_forms_modelforms"></a>
-### [WIP-ALPHA-038-0.0.12 - Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)
-
-- Priority: High
-- Parity: ⚛️ graphene-django (Required)
-- Severity: Major
-- Status: In progress
-- Relative size: L
-- Labels: `forms`, `mutations`, `public-api`
-- Spec: [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md)
-
-#### Predicted files
-
-- `django_strawberry_framework/forms/` (planned)
-- `tests/forms/` (planned)
-
-#### Planning note
-
-needs spec
-
-#### Dependencies
-
-- `DONE-036-0.0.11` - Mutations + auto-generated Input types
-
-#### Definition of done
-
-- [ ] Add `docs/spec-form_mutations.md`.
-- [ ] Implement `django_strawberry_framework/forms/` on the DRF-style Meta surface (`Meta.form_class`, `Meta.return_field_name`, etc.) rather than graphene's `MutationOptions` pattern.
-- [ ] Form-field → Strawberry input mapping lives in `forms/converter.py` and reuses the scalar conversion registry where field types overlap.
-- [ ] Validation errors surface through the shared `errors: list[FieldError]` envelope defined in `DONE-036-0.0.11`, populated from `form.errors`.
-- [ ] Tests under `tests/forms/`.
-- [ ] Live HTTP coverage under `examples/fakeshop/test_query/` exercising both a plain `Form` mutation and a `ModelForm` mutation.
-
-#### Files likely touched
-
-- `django_strawberry_framework/forms/` (new)
-- `tests/forms/` (new)
-- `examples/fakeshop/apps/products/schema.py`
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/mutation.py` — `BaseDjangoFormMutation`, `DjangoFormMutationOptions`, `DjangoFormMutation`, `DjangoModelDjangoFormMutationOptions`, `DjangoModelFormMutation`, plus `fields_for_form(form, only_fields, exclude_fields)` helper.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/converter.py` — `convert_form_field` registry mapping Django form fields → GraphQL types.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/types.py` — `ErrorType` envelope shape.
-
-#### Why it matters
-
-- `graphene-django` ships `DjangoFormMutation` and `DjangoModelFormMutation`: mutation classes that consume a Django `Form` / `ModelForm` and translate field validation + `cleaned_data` into a GraphQL mutation surface. Many graphene-django consumers rely on this as their write-side abstraction because it reuses validation they already have.
-- Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `DONE-036-0.0.11`.
-
-#### Dependencies
-
-- `DONE-036-0.0.11` — general mutation infrastructure (input-type generation, mutation-field plumbing) is the foundation form mutations attach to.
-
-#### Other
-
-- graphene-django ships `DjangoFormMutation` / `DjangoModelFormMutation`.
-- no on-board predecessor.
-- new `forms/` subpackage (form-field converter + `Form`/`ModelForm` mutation classes) on the DRF-style Meta surface; reuses 036's mutation infra + shared error envelope. Spec + tests + live HTTP.
-
-#### Card references
-
-- Dependency: `DONE-036-0.0.11` — general mutation infrastructure (input-type generation, mutation-field plumbing) is the foundation form mutations attach to. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
-- Related: Validation errors surface through the shared `errors: list[FieldError]` envelope defined in `DONE-036-0.0.11`, populated from `form.errors`. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
-- Related: Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `DONE-036-0.0.11`. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
 
 ## To Do - Alpha (0.1.0)
 
@@ -648,7 +582,7 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 - [ ] Implement `django_strawberry_framework/fieldset/` (package, mirroring the `filters/` shape) with `base.py` (FieldSet class + metaclass), `factories.py` (resolver-binding factory), and a per-fieldset finalizer hook in `types/finalizer.py` phase 2.5.
 - [ ] `FieldSet` accepts `class Meta: model = Foo` only; field declarations are method-based (`resolve_<field>`, `check_<field>_permission`) plus class-level computed-field annotations. No `Meta.fields` on the FieldSet itself — the owning `DjangoType.Meta.fields` is the single source of truth for the model-field surface.
 - [ ] Optimizer `Meta.depends_on` contract: when a `resolve_<field>` reads model columns the owning type's `Meta.fields` does not surface, the FieldSet declares them via `Meta.depends_on`; the optimizer adds those columns to the `only_fields` projection.
-- [ ] Promote `Meta.fields_class` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the resolver-binding pipeline applies end-to-end (per `TODO-BETA-047-0.1.3`).
+- [ ] Promote `Meta.fields_class` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the resolver-binding pipeline applies end-to-end (per `TODO-BETA-050-0.1.3`).
 - [ ] Tests under `tests/fieldset/` mirror the source one-to-one. Live HTTP coverage under `examples/fakeshop/test_query/` exercises tiered visibility (staff vs perm-holder vs authenticated vs anonymous), redaction (non-staff sees `is_private = False`), denial (anonymous raises on `updated_date`), and a computed field (`display_name` resolves only for authenticated users).
 - [ ] Composability tests: `FieldSet` + `FilterSet` (a field with a `check_<field>_permission` gate is still filterable by an authorized user); `FieldSet` + `OrderSet` (same for ordering); `FieldSet` + `apply_cascade_permissions` (cascade narrows first, then field gates run — no existence leak).
 
@@ -656,7 +590,7 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 
 - `DjangoTypeDefinition.fields_class` is the forward-reserved slot the collection phase will populate.
 - `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
-- Phase-2.5 finalizer wiring follows the shipped `_bind_filtersets` / `_bind_ordersets` pattern. New helper `_bind_fieldsets` (or the equivalent dispatched form when `TODO-BETA-047-0.1.3` lands) binds each `Meta.fields_class` to its owning `DjangoTypeDefinition` so resolvers and gates are wired before schema construction.
+- Phase-2.5 finalizer wiring follows the shipped `_bind_filtersets` / `_bind_ordersets` pattern. New helper `_bind_fieldsets` (or the equivalent dispatched form when `TODO-BETA-050-0.1.3` lands) binds each `Meta.fields_class` to its owning `DjangoTypeDefinition` so resolvers and gates are wired before schema construction.
 - Per-field resolver attachment: the existing `_attach_relation_resolvers` already accepts a `skip_field_names` set so consumer-authored fields are not clobbered; FieldSet-bound `resolve_<field>` extends that skip-set so the FieldSet's resolver wins over the auto-generated scalar resolver.
 - Custom Strawberry field class — graphene's `AdvancedFieldSet` works with a custom field type that carries the `check_<field>_permission` gate at resolve time. Strawberry's `strawberry.field(...)` already supports a `permission_classes` argument; the spec must decide between mapping `check_<field>_permission` onto that machinery or carrying a parallel gate. See [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` direction.
 - Slot realized in `DONE-034-0.0.10`: `DjangoTypeDefinition.fields_class` is now declared as an inert `type | None = None` sidecar (spec-034 Decision 2 — the structural mirror of the shipped `filterset_class` / `orderset_class` slots). It has no populator yet and stays `None`; `Meta.fields_class` remains in `DEFERRED_META_KEYS` (still rejected at validation). This card's `_bind_fieldsets` is what populates the slot and promotes the key end-to-end.
@@ -683,6 +617,9 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 #### Card references
 
 - Dependency: `DjangoConnectionField` (`DONE-030-0.0.9`) - `FieldSet` composes on top of the shipped connection-field surface. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Related: `DONE-034-0.0.10` - Permissions subsystem
+- Related: `TODO-BETA-050-0.1.3` - Layer 3 Meta key promotion
+- Related: `TODO-BETA-051-0.1.4` - Opt-in node-sentinel redaction tier (`Meta.redaction_mode`)
 
 <a id="metasearch_fields_support"></a>
 ### [TODO-BETA-047-0.1.2 - `Meta.search_fields` support](KANBAN.html#metasearch_fields_support)
@@ -789,6 +726,7 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 - `SearchRankFilter`: `SearchRank` weighting with `weights` / `cover_density` / `normalization` options.
 - `TrigramFilter`: `pg_trgm` `TrigramSimilarity` / `TrigramWordSimilarity` with a `kind` selector and a similarity threshold.
 - Postgres-only: degrade with a clear `ConfigurationError` (or skip the filter) on non-Postgres backends; never emit a malformed query on SQLite.
+- Prefix-shortcut operators (parity watch-item, carried over from `docs/feedback.md`): `django_graphene_filters` also exposes single-character search shortcut operators (e.g. `^ = @ $`) over the full-text surface. This card describes the `SearchQuery` / `SearchRank` / `Trigram` filter classes but not the shortcut syntax — the spec must decide whether the shortcut operators are part of the ported surface or are intentionally left out.
 
 #### Definition of done
 
@@ -861,6 +799,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - `get_child_queryset(self, rel_name, rel_agg)` cascade hook on `AggregateSet` lets a parent aggregate enforce a cascade rule on its children (cookbook example: a shared `_private_aware_child_qs` that filters out `is_private=True` rows when traversing through a `RelatedAggregate`). Composes with `apply_cascade_permissions` (`DONE-034-0.0.10`).
 - Sync / async `compute(self, info, queryset) -> <Output>` and `async def acompute(self, info, queryset) -> <Output>` — same dual-shape contract `FilterSet.apply_sync` / `apply_async` ships. Selection-set-aware: only the aggregate output fields the GraphQL query actually selects are computed; the optimizer plan-cache infrastructure drives the selected-fields detection so a 20-stat aggregate output type does not eagerly compute all 20 when the consumer asked for 3.
 - Output-type emission: each `AggregateSet` emits a `@strawberry.type`-decorated output class named `<AggregateSet>OutputType` (e.g. `ObjectTypeAggregateOutputType`) materialized in a per-module `aggregates.outputs` namespace — disjoint from `filters.inputs` / `orders.inputs`, mirroring the per-module namespace pattern.
+- Config knobs (parity watch-item, carried over from `docs/feedback.md`): DGF's aggregate subsystem ships tunable safety limits and an async opt-in as settings — `AGGREGATE_MAX_VALUES`, `AGGREGATE_MAX_UNIQUES`, and `ASYNC_AGGREGATES` (`django_graphene_filters/conf.py`). This card captures the `compute` / `acompute` split and the stat surface but not these config knobs; the spec must confirm they are in scope when `spec-aggregates` is authored, or consciously drop them.
 
 #### Definition of done
 
@@ -881,6 +820,14 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - The cookbook reference (`AdvancedAggregateSet.compute` / `acompute`) splits sync and async paths; this lines up with the existing async-resolver support in the optimizer.
 - Selection-set-aware aggregate computation will reuse the optimizer plan-cache infrastructure, since the aggregate output type's selected fields drive which annotations are computed.
 
+#### Architectural posture
+
+- Concurrency / scatter-gather seam (design guidance carried over from `docs/feedback.md`; net-new value, **not** a DGF-parity item). The package has zero query concurrency today, partly deliberate — `relay.py::DjangoNodesField` chooses sequential awaits over `asyncio.gather`, citing Django async-ORM connection safety. Parallelism only pays for genuinely independent queries on separate connections, never naive fan-out over one shared connection/cursor. Hard constraints any gather seam must respect: (1) each thread worker opens a thread-local connection it must close (`close_old_connections`), so the sync pool is small and bounded (≈2–3), NOT `max_workers=NUM_CORES` — except the independent-DB shard case, where core-scaling is correct; (2) the `chunk_size = ceil(count / NUM_CORES)` PK-range partition is a win ONLY when the reduction runs in Python (mode / uniques / percentile / `Counter`), never for a SQL-native aggregate (`Count`/`Sum`/`Min`/`Max`/`Avg`), which adds round-trips and loses index efficiency; (3) the example project runs on SQLite (serializes), so any speedup must be benchmarked on Postgres/MySQL — the 100%-coverage suite cannot prove it under the default runner.
+- Where it pays to invest — the `AggregateSet` gather seam (this card). Independent stats that cannot fold into one `.aggregate()` (mode / uniques / percentile / the `Counter`-based custom `compute_*` stats above) are each their own scan, and the PK-range partition applies to their Python reduction; DB-native stats MUST stay single-query (let SQL do it). `acompute` already implies the async seam — build the gather seam (a sync bounded-pool plus the async `acompute` path) into this card from the start rather than retrofitting it. Design it once here: it is reused by the BACKLOG `matrix_dimensions_and_measures` (item 32 — per-measure fan-out + chunked-partition reduction over the heaviest 10M-row / percentile / pivot surface; design its executor with a parallel reduce from the start) and `sharding_aware_optimizer` (item 41 — multi-shard compose over independent DBs / connections: zero GIL contention, no shared-connection hazard, per-shard count/sum/min/max compose; the one place `max_workers=NUM_CORES` is literally correct) cards.
+- Async-path constraint. Every async path today wraps its sync body in `sync_to_async(..., thread_sensitive=True)` — `FilterSet.apply_async`, `OrderSet.apply_async`, `aapply_cascade_permissions`, `resolve_mutation_async` — which serializes them onto one asgiref worker. That is a deliberate connection / consumer-hook safety choice, not a bug, but it is the constraint the async `acompute` gather must design around: the gather must run genuinely independent units on their own connections and never re-enter the shared sensitive thread.
+- Adjacent optimizer seams investigated (non-aggregation, recorded here so they are not lost — both marginal / deferred): (a) root-connection `totalCount ∥ page slice` — when `Meta.connection` opts into `totalCount`, the count runs serially after the slice via `count()` / `acount()` on the same filtered queryset (`connection.py::_attach_count_sync` / `_attach_count_async`); the two are independent and package-owned, but it is the smallest standalone win and marginal unless the count rivals the page cost, on a parallelizing backend only. (b) parallel independent top-level `prefetch_related` — plain to-many list / M2M siblings still issue N serial `WHERE parent_id IN (...)` scans inside Django's `prefetch_related_objects`; `OptimizationPlan.apply` returns a lazy queryset and Strawberry/Django owns materialization, so parallelizing means the package takes over materialization in the resolvers it controls (per the root-cause rule — NOT monkeypatching `prefetch_related_objects`). High risk; defer behind a Postgres benchmark.
+- Ruled out, on the record: the single root list query (`list_field.py`, nothing to split); `resolve_nodes` (`relay.py`, already one `pk__in` per type — optimal within one DB, don't parallelize the single-DB case); `FilterSet` / `OrderSet` `apply_*` (queryset builders, no fan-out); the `0.0.11` mutations (single-row, single-transaction); `finalize_django_types()` (CPU/GIL-bound and contractually single-threaded); and DB-native aggregates. Do not retrofit concurrency onto shipped code without a Postgres benchmark.
+
 #### Other
 
 - full subsystem, parallel to Ordering: reuses `DONE-027-0.0.8`'s six-layer architecture but emits `strawberry.type` output types (not input) and adds the sync/async `compute` / `acompute` split. New `aggregates/` subpackage + `docs/spec-aggregates.md` + tests.
@@ -888,6 +835,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 #### Card references
 
 - Related: full subsystem, parallel to Ordering: reuses `DONE-027-0.0.8`'s six-layer architecture but emits `strawberry.type` output types (not input) and adds the sync/async `compute` / `acompute` split. New `aggregates/` subpackage + `docs/spec-aggregates.md` + tests. -> `DONE-027-0.0.8` - Filtering subsystem
+- Related: `DONE-034-0.0.10` - Permissions subsystem
 
 <a id="layer_3_meta_key_promotion"></a>
 ### [TODO-BETA-050-0.1.3 - Layer 3 Meta key promotion](KANBAN.html#layer_3_meta_key_promotion)
@@ -1115,12 +1063,12 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 
 #### Foundation-slice seam
 
-- `TODO-ALPHA-036-0.0.11` owns the base `DjangoMutation` class, generated input types, and shared `errors: list[FieldError]` envelope; this card layers safety semantics onto that lifecycle instead of inventing a separate mutation primitive.
+- `DONE-036-0.0.11` owns the base `DjangoMutation` class, generated input types, and shared `errors: list[FieldError]` envelope; this card layers safety semantics onto that lifecycle instead of inventing a separate mutation primitive.
 - DRF serializer and Form-based mutation cards inherit the same atomic/idempotency implementation through the shared mutation base once their adapters land.
 
 #### Files likely touched
 
-- `django_strawberry_framework/mutations/` or the mutation package introduced by `TODO-ALPHA-036-0.0.11`.
+- `django_strawberry_framework/mutations/` or the mutation package introduced by `DONE-036-0.0.11`.
 - `tests/mutations/` plus live fakeshop GraphQL mutation tests.
 - `docs/GLOSSARY.md` and the mutation spec when the feature ships.
 
@@ -1408,6 +1356,108 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
+<a id="form_based_mutations_django_forms_modelforms"></a>
+### [DONE-038-0.0.12 - Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)
+
+- Priority: High
+- Parity: ⚛️ graphene-django (Required)
+- Severity: Major
+- Status: In progress
+- Relative size: L
+- Labels: `forms`, `mutations`, `public-api`
+- Spec: [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | shipped (`0.0.12`) |
+| [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | shipped (`0.0.12`) |
+| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
+| [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) | shipped (`0.0.11`) |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
+| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
+| [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
+| [`DjangoModelPermission`](docs/GLOSSARY.md#djangomodelpermission) | shipped (`0.0.11`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
+| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
+| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
+| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | planned for `0.0.13` |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
+| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
+| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+
+#### Package files
+
+- `django_strawberry_framework/forms/` (historical)
+- `tests/forms/` (historical)
+
+#### Planning note
+
+needs spec
+
+#### Dependencies
+
+- `DONE-036-0.0.11` - Mutations + auto-generated Input types
+
+#### Definition of done
+
+- [x] Add `docs/SPECS/spec-038-form_mutations-0_0_12.md`.
+- [x] Implement `django_strawberry_framework/forms/` on the DRF-style Meta surface (`Meta.form_class`, `Meta.return_field_name`, etc.) rather than graphene's `MutationOptions` pattern.
+- [x] Form-field → Strawberry input mapping lives in `forms/converter.py` and reuses the scalar conversion registry where field types overlap.
+- [x] Validation errors surface through the shared `errors: list[FieldError]` envelope defined in `DONE-036-0.0.11`, populated from `form.errors`.
+- [x] Tests under `tests/forms/`.
+- [x] Live HTTP coverage under `examples/fakeshop/test_query/` exercising both a plain `Form` mutation and a `ModelForm` mutation.
+
+#### Files likely touched
+
+- `django_strawberry_framework/forms/` (new)
+- `tests/forms/` (new)
+- `examples/fakeshop/apps/products/schema.py`
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/mutation.py` — `BaseDjangoFormMutation`, `DjangoFormMutationOptions`, `DjangoFormMutation`, `DjangoModelDjangoFormMutationOptions`, `DjangoModelFormMutation`, plus `fields_for_form(form, only_fields, exclude_fields)` helper.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/converter.py` — `convert_form_field` registry mapping Django form fields → GraphQL types.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/forms/types.py` — `ErrorType` envelope shape.
+
+#### Why it matters
+
+- `graphene-django` ships `DjangoFormMutation` and `DjangoModelFormMutation`: mutation classes that consume a Django `Form` / `ModelForm` and translate field validation + `cleaned_data` into a GraphQL mutation surface. Many graphene-django consumers rely on this as their write-side abstraction because it reuses validation they already have.
+- Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `DONE-036-0.0.11`.
+
+#### Dependencies
+
+- `DONE-036-0.0.11` — general mutation infrastructure (input-type generation, mutation-field plumbing) is the foundation form mutations attach to.
+
+#### Other
+
+- graphene-django ships `DjangoFormMutation` / `DjangoModelFormMutation`.
+- no on-board predecessor.
+- new `forms/` subpackage (form-field converter + `Form`/`ModelForm` mutation classes) on the DRF-style Meta surface; reuses 036's mutation infra + shared error envelope. Spec + tests + live HTTP.
+
+#### Card references
+
+- Dependency: `DONE-036-0.0.11` — general mutation infrastructure (input-type generation, mutation-field plumbing) is the foundation form mutations attach to. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+- Related: Validation errors surface through the shared `errors: list[FieldError]` envelope defined in `DONE-036-0.0.11`, populated from `form.errors`. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+- Related: Without an equivalent, graphene-django migrants must rewrite every form-backed mutation against the lower-level mutation surface from `DONE-036-0.0.11`. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+
 <a id="upload_scalar_and_file_image_field_mapping"></a>
 ### [DONE-037-0.0.11 - Upload scalar and file / image field mapping](KANBAN.html#upload_scalar_and_file_image_field_mapping)
 
@@ -1532,8 +1582,8 @@ planned
 | [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
 | [`DjangoFileType`](docs/GLOSSARY.md#djangofiletype) | shipped (`0.0.11`) |
 | [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
-| [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | planned for `0.0.12` |
-| [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | planned for `0.0.12` |
+| [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | shipped (`0.0.12`) |
+| [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | shipped (`0.0.12`) |
 | [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | planned for `0.0.13` |
 | [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
 | [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
@@ -1560,7 +1610,7 @@ needs spec
 - [x] Add `docs/spec-mutations.md`.
 - [x] Implement `django_strawberry_framework/mutations/` (sets, fields, resolvers, input-type generation) on the DRF-style Meta surface (`Meta.input_class`, `Meta.partial_input_class`, etc.).
 - [x] Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`.
-- [x] Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `WIP-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
+- [x] Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
 - [x] Tests under `tests/mutations/`.
 - [x] Live HTTP coverage under `examples/fakeshop/test_query/` exercising the products write surface.
 
@@ -1596,9 +1646,9 @@ needs spec
 - Dependency: `DONE-018-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution. -> `DONE-018-0.0.6` - Multiple DjangoTypes per model with `Meta.primary`
 - Related: Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`. -> `DONE-010-0.0.4` - 0.0.4 foundation slice (definition-order independence)
 - Dependency: `DONE-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`. -> `DONE-034-0.0.10` - Permissions subsystem
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `WIP-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `WIP-ALPHA-038-0.0.12` - Form-based mutations (Django Forms / ModelForms)
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `WIP-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-039-0.0.13` - DRF serializer mutations (`SerializerMutation`)
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `WIP-ALPHA-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-040-0.0.13` - Auth mutations (login / logout / register)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-039-0.0.13` - DRF serializer mutations (`SerializerMutation`)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-040-0.0.13` - Auth mutations (login / logout / register)
 - Related: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by 038 / 039 / 040. -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="optimizer_robustness_hardening_upstream_comparison_guards"></a>
@@ -1791,7 +1841,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 
 #### Planning note
 
-Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, info)` from `django_graphene_filters.permissions`. The cookbook line `return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` is the canonical consumer surface — a single composable helper that walks the model graph at call time, runs each owner type's `get_queryset(qs, info)` against the related queryset, and returns a queryset that respects per-type row-level visibility across every traversed FK / OneToOne edge. Integrates with the optimizer's `Prefetch` downgrade so cascaded relations stay N+1-safe; per-field permission hooks via the reserved `Meta.fields_class` slot are deferred to the later FieldSet work (`TODO-BETA-044-0.1.1`), not shipped in this card.
+Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, info)` from `django_graphene_filters.permissions`. The cookbook line `return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)` is the canonical consumer surface — a single composable helper that walks the model graph at call time, runs each owner type's `get_queryset(qs, info)` against the related queryset, and returns a queryset that respects per-type row-level visibility across every traversed FK / OneToOne edge. Integrates with the optimizer's `Prefetch` downgrade so cascaded relations stay N+1-safe; per-field permission hooks via the reserved `Meta.fields_class` slot are deferred to the later FieldSet work (`TODO-BETA-046-0.1.1`), not shipped in this card.
 
 #### Dependencies
 
@@ -1800,7 +1850,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 #### Scope
 
 - `apply_cascade_permissions`
-- reserved `Meta.fields_class` slot for per-field permission hooks; the per-field read-gate itself ships with the later FieldSet work (`TODO-BETA-044-0.1.1`), not in this card
+- reserved `Meta.fields_class` slot for per-field permission hooks; the per-field read-gate itself ships with the later FieldSet work (`TODO-BETA-046-0.1.1`), not in this card
 - Optimizer cooperation: cascaded relations downgrade to `Prefetch(queryset=...)` so visibility filters survive the join (carries the existing `get_queryset` → `Prefetch` downgrade contract across the cascade walk).
 - composable permission rules that remain visible from the owning type/query surface
 - Public callable surface: `apply_cascade_permissions(cls, queryset, info, fields=None)` returns a queryset; optional `fields=` argument scopes the cascade to specific FK names. Both sync and async variants ship; async variant uses `sync_to_async` around the cascade walker to stay event-loop-safe.
@@ -1821,7 +1871,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - [x] `apply_cascade_permissions` exported from the public surface (`from django_strawberry_framework import apply_cascade_permissions`). Both sync and async-aware variants ship together.
 - [x] The four upstream invariants are each pinned by a dedicated test: ContextVar cycle guard; single-column FK/O2O scope; multi-DB pinning to the caller's alias; nullable-FK rows preserved.
 - [x] Reconcile open question: how the existing per-field FILTER-denial gate (`check_<field>_permission` on `FilterSet` / `OrderSet`) composes with the new cascade visibility. Decision recorded in `docs/spec-permissions.md` before the implementation pass starts; tests pin both shapes.
-- [x] Cascade composes with `DjangoConnectionField` (`TODO-ALPHA-030-0.0.9`): a connection field whose wrapped type's `get_queryset` calls `apply_cascade_permissions` produces a Relay connection where every edge's nested relations respect the same cascade rule.
+- [x] Cascade composes with `DjangoConnectionField` (`DONE-030-0.0.9`): a connection field whose wrapped type's `get_queryset` calls `apply_cascade_permissions` produces a Relay connection where every edge's nested relations respect the same cascade rule.
 - [x] Live HTTP coverage in `examples/fakeshop/test_query/` exercises real fakeshop permission users (via `services.create_users(1)`) across a 2-deep FK cascade. Real users, not mocked `info.context.user`.
 
 #### Foundation-slice seam
@@ -1849,11 +1899,12 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - Open question — hidden-FK semantics: when a parent row references a hidden target, choose between excluding the parent row, nulling the FK field, or returning a sentinel. The upstream uses sentinels; the Strawberry side has to pick before the cascade lands. Pinned in `docs/spec-permissions.md`.
 - Open question — cascade performance: subquery-per-FK (one extra round-trip per FK in the cascade) vs a single annotated pass (one query that joins every cascaded relation). The upstream is subquery-per-FK; benchmark both before committing.
 - Open question — M2M / reverse-relation visibility: the upstream cascade explicitly skips M2M and reverse FK. Decide whether to extend coverage here or defer to a sibling card; if deferring, name the follow-up card in the spec.
-- Open question — `check_permissions` API surface: does the existing per-field filter-denial `check_<field>_permission(self, request)` survive in its current form, get renamed to disambiguate from the new field-level read gate (`FieldSet.check_<field>_permission(info)` per `TODO-BETA-044-0.1.1`), or get deprecated in favor of a unified shape? Spec must answer before implementation.
+- Open question — `check_permissions` API surface: does the existing per-field filter-denial `check_<field>_permission(self, request)` survive in its current form, get renamed to disambiguate from the new field-level read gate (`FieldSet.check_<field>_permission(info)` per `TODO-BETA-046-0.1.1`), or get deprecated in favor of a unified shape? Spec must answer before implementation.
 
 #### Card references
 
 - Dependency: future `DjangoConnectionField` -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Related: `TODO-BETA-046-0.1.1` - `FieldSet`
 
 <a id="connection_aware_optimizer_planning"></a>
 ### [DONE-033-0.0.9 - Connection-aware optimizer planning](KANBAN.html#connection_aware_optimizer_planning)
@@ -2110,7 +2161,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 - Fakeshop product-catalog Relay activation (Goal 8)
 - Per-type `useFragment` / `useRefetchableFragment` patterns (mechanics; the schema-side `@refetchable` directive support lives in BETTER item 39 sub-feature 5)
 - Every BETTER item 39 sub-feature builds on this card's mechanics
-- Fakeshop products-app activation (`examples/fakeshop/apps/products/schema.py`): replace the four `Query` list resolvers (`all_categories` / `all_items` / `all_properties` / `all_entries`) with `DjangoConnectionField`s for the 1-to-1 `django-graphene-filters` cookbook mirror (connections-only — the cookbook Query is `all_object_types = AdvancedDjangoFilterConnectionField(ObjectTypeNode)` with no list resolvers). The four `*Type` classes are already Relay-Node-shaped with `filterset_class` / `orderset_class` wired, so only the root-field shape changes; `relay.node()` / root `Node.Field` refetch is the separate root-Node goal of this card. Deferred from the `DONE-030-0.0.9` (`DjangoConnectionField`) cycle and gated on `WIP-ALPHA-033-0.0.9` (connection-aware optimizer): a `0.0.9` `DjangoConnectionField` derives an empty optimizer plan, so a connections-only products conversion must land with 033 to avoid regressing the `test_products_optimizer_*` SQL-shape coverage.
+- Fakeshop products-app activation (`examples/fakeshop/apps/products/schema.py`): replace the four `Query` list resolvers (`all_categories` / `all_items` / `all_properties` / `all_entries`) with `DjangoConnectionField`s for the 1-to-1 `django-graphene-filters` cookbook mirror (connections-only — the cookbook Query is `all_object_types = AdvancedDjangoFilterConnectionField(ObjectTypeNode)` with no list resolvers). The four `*Type` classes are already Relay-Node-shaped with `filterset_class` / `orderset_class` wired, so only the root-field shape changes; `relay.node()` / root `Node.Field` refetch is the separate root-Node goal of this card. Deferred from the `DONE-030-0.0.9` (`DjangoConnectionField`) cycle and gated on `DONE-033-0.0.9` (connection-aware optimizer): a `0.0.9` `DjangoConnectionField` derives an empty optimizer plan, so a connections-only products conversion must land with 033 to avoid regressing the `test_products_optimizer_*` SQL-shape coverage.
 
 #### Card references
 
@@ -2240,6 +2291,7 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 
 - Related: This card should land before Full Relay because root `node(id:)`, `nodes(ids:)`, and refetch helpers make GlobalID encoding a public durability contract. -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
 - Related: `DjangoConnectionField` can land before this card because connection pagination does not require changing the Relay GlobalID payload. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Related: `DONE-015-0.0.5` - 0.0.5 Relay interfaces and Node foundation
 
 <a id="djangoconnectionfield"></a>
 ### [DONE-030-0.0.9 - `DjangoConnectionField`](KANBAN.html#djangoconnectionfield)
@@ -2321,7 +2373,7 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 
 #### Planning note
 
-Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. Wires the shipped Layer-3 sidecars into a Relay-shaped connection: accepts `filter:` from `Meta.filterset_class` (`DONE-027-0.0.8`), `orderBy:` from `Meta.orderset_class` (`DONE-028-0.0.8`), plus `first`/`after`/`last`/`before` cursor pagination and opt-in `totalCount`. The `search:` arg activates when `TODO-BETA-045-0.1.2` lands; `FieldSet` selection composition is layered in by `TODO-BETA-046-0.1.1`. Central read-side primitive — every Layer-3 argument composes through this field.
+Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. Wires the shipped Layer-3 sidecars into a Relay-shaped connection: accepts `filter:` from `Meta.filterset_class` (`DONE-027-0.0.8`), `orderBy:` from `Meta.orderset_class` (`DONE-028-0.0.8`), plus `first`/`after`/`last`/`before` cursor pagination and opt-in `totalCount`. The `search:` arg activates when `TODO-BETA-047-0.1.2` lands; `FieldSet` selection composition is layered in by `TODO-BETA-046-0.1.1`. Central read-side primitive — every Layer-3 argument composes through this field.
 
 #### Dependencies
 
@@ -2374,7 +2426,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 
 #### Other
 
-- Filtering and Ordering ship before this card lands, so `DjangoConnectionField` consumes the existing filter and order argument factories on day one. `FieldSet` selection composition is layered in by `TODO-BETA-046-0.1.1`; the `search:` arg activates when `TODO-BETA-045-0.1.2` lands.
+- Filtering and Ordering ship before this card lands, so `DjangoConnectionField` consumes the existing filter and order argument factories on day one. `FieldSet` selection composition is layered in by `TODO-BETA-046-0.1.1`; the `search:` arg activates when `TODO-BETA-047-0.1.2` lands.
 - both upstreams ship Relay-shaped connection fields.
 - the central read-side primitive — the Relay surface and all Layer-3 arguments compose through it.
 - central Relay-shaped connection field plus cursor-pagination math; the integration point that filters / orders / aggregation / field-selection / optimizer all compose through. New `connection.py` + `docs/spec-030-connection_field-0_0_9.md` + tests.
@@ -2386,6 +2438,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 - Dependency: `OrderSet` (`DONE-028-0.0.8`) -> `DONE-028-0.0.8` - Ordering subsystem
 - Related: once filters/orders are stable. FieldSet integration is deferred to `TODO-BETA-046-0.1.1` — `DjangoConnectionField` ships against the Layer-2 surface in 0.0.9 and gains field-selection composition when FieldSet lands. -> `TODO-BETA-046-0.1.1` - `FieldSet`
 - Dependency: `DjangoType` consumer-DX cleanup pass (`DONE-029-0.0.9`) - schema-construction examples are current before `DjangoConnectionField` becomes the new consumer pattern. -> `DONE-029-0.0.9` - `DjangoType` consumer-DX cleanup pass
+- Related: `TODO-BETA-047-0.1.2` - `Meta.search_fields` support
 
 <a id="djangotype_consumer_dx_cleanup_pass"></a>
 ### [DONE-029-0.0.9 - `DjangoType` consumer-DX cleanup pass](KANBAN.html#djangotype_consumer_dx_cleanup_pass)

@@ -159,6 +159,56 @@ def _audit_primary_ambiguity(multi_type_models: tuple[type[models.Model], ...]) 
     raise ConfigurationError(_format_ambiguity_error(offenders))
 
 
+def _audit_field_surface(type_cls: type, definition: DjangoTypeDefinition) -> None:
+    """Reject an empty or camel-colliding GraphQL field surface on ``type_cls``.
+
+    Two misconfigurations Strawberry only catches late - as a generic
+    ``ValueError`` or, worse, a SILENT field drop inside
+    ``strawberry.Schema(...)`` - surfaced here with DjangoType attribution:
+
+    * Empty surface - ``Meta.fields = ()`` (or a ``Meta.exclude`` that removes
+      every column) with no consumer-authored field leaves a type with zero
+      GraphQL fields. Strawberry then raises ``Type <X> must define one or more
+      fields`` with no DjangoType context.
+    * Name collision - two DISTINCT field names that default-camel-case to ONE
+      GraphQL name (``foo_bar`` + ``fooBar`` -> ``fooBar``). Strawberry keeps one
+      and silently drops the other. The synthesized-relation-connection guard in
+      ``_synthesize_relation_connections`` already covers a generated
+      ``<name>_connection`` colliding with an existing field; this covers the
+      remaining column-vs-column / field-vs-field case.
+
+    The surface set mirrors the connection guard's: declared annotations, the
+    definition's selected fields, and consumer-assigned ``StrawberryField``s. A
+    consumer override shares its column's NAME (e.g. ``name`` over ``name``), so
+    it is one entry, never a collision; only distinct names colliding under
+    ``to_camel_case`` raise.
+    """
+    names = (
+        set(type_cls.__annotations__)
+        | {f.name for f in definition.selected_fields}
+        | {k for k, v in vars(type_cls).items() if isinstance(v, StrawberryField)}
+    )
+    if not names:
+        raise ConfigurationError(
+            f"{definition.graphql_type_name}: DjangoType over "
+            f"{definition.model.__name__} has no GraphQL fields. Meta.fields is empty "
+            "(or Meta.exclude removes every column) and no field is consumer-authored; "
+            "declare at least one field.",
+        )
+    by_camel: dict[str, list[str]] = {}
+    for name in names:
+        by_camel.setdefault(to_camel_case(name), []).append(name)
+    collisions = {camel: sorted(ns) for camel, ns in by_camel.items() if len(ns) > 1}
+    if not collisions:
+        return
+    details = ", ".join(f"{camel!r} from {ns}" for camel, ns in sorted(collisions.items()))
+    raise ConfigurationError(
+        f"{definition.graphql_type_name}: distinct fields collide on the GraphQL surface "
+        f"under default camel-casing: {details}. Rename one side, or drop one via "
+        "Meta.fields / Meta.exclude.",
+    )
+
+
 def _format_model_label_routing_error(
     offenders: list[tuple[type[models.Model], type, str | None]],
 ) -> str:
@@ -723,6 +773,16 @@ def finalize_django_types() -> None:
     bind_form_mutations()
     _bind_filtersets()
     _bind_ordersets()
+
+    # Field-surface audit: after relation/connection synthesis has settled each
+    # type's annotation set and before Phase 3 freezes it. Catches an empty
+    # surface (``Meta.fields = ()``) and a camel-case name collision between two
+    # distinct fields - both of which Strawberry otherwise reports late and
+    # without DjangoType attribution (the latter as a silent field drop).
+    for type_cls, definition in registry.iter_definitions():
+        if definition.finalized:
+            continue
+        _audit_field_surface(type_cls, definition)
 
     for type_cls, definition in registry.iter_definitions():
         if definition.finalized:

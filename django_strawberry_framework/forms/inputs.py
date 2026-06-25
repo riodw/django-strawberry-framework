@@ -443,28 +443,45 @@ def _guard_input_attr_collisions(
     form_class: type[forms.BaseForm],
     field_specs: list[FormInputFieldSpec],
 ) -> None:
-    """Raise if two form fields generate the same input attr (the ``<name>_id`` clash).
+    """Raise if two form fields collide on the generated input attr OR GraphQL name.
 
-    A relation field ``foo`` remaps to input attr ``foo_id`` (the ``036`` scheme),
-    while a scalar / extra form field keeps its own name. A form that declares BOTH
-    a relation ``foo`` AND a field literally named ``foo_id`` produces two specs with
-    ``input_attr == "foo_id"``; ``build_strawberry_input_class`` writes the second
-    over the first in its annotations dict, SILENTLY dropping one generated input
-    field. The package is otherwise fail-loud, so this raises ``ConfigurationError``
-    naming the form and the two colliding form fields rather than losing a field.
+    Two distinct ways two form fields collapse to one generated input field, both
+    of which ``build_strawberry_input_class`` would resolve by SILENTLY dropping
+    one - so both fail loud here (the package's fail-loud contract):
+
+    * ``input_attr`` clash - a relation field ``foo`` remaps to input attr
+      ``foo_id`` (the ``036`` scheme), so a form declaring BOTH a relation ``foo``
+      AND a field literally named ``foo_id`` produces two specs with
+      ``input_attr == "foo_id"``; the second overwrites the first in the
+      annotations dict.
+    * ``graphql_name`` clash - two distinct field names that default-camel-case to
+      ONE GraphQL name (``foo_bar`` + ``fooBar`` -> ``fooBar``). The python attrs
+      differ (so the input-attr check above passes), but Strawberry collapses the
+      two onto one schema field. Mirrors the read-type guard in
+      ``types/finalizer.py::_audit_field_surface``.
     """
-    seen: dict[str, str] = {}
+    seen_attr: dict[str, str] = {}
+    seen_graphql: dict[str, str] = {}
     for spec in field_specs:
-        prior = seen.get(spec.input_attr)
-        if prior is not None:
+        prior_attr = seen_attr.get(spec.input_attr)
+        if prior_attr is not None:
             raise ConfigurationError(
                 f"Form {form_class.__name__!r} generates two input fields with the same "
-                f"attribute {spec.input_attr!r}: form fields {prior!r} and "
+                f"attribute {spec.input_attr!r}: form fields {prior_attr!r} and "
                 f"{spec.form_field_name!r} collide (a relation field remaps to "
                 f"'<name>_id', clashing with a field literally named that). Rename one "
                 "of the form fields, or drop one via Meta.fields / Meta.exclude.",
             )
-        seen[spec.input_attr] = spec.form_field_name
+        prior_graphql = seen_graphql.get(spec.graphql_name)
+        if prior_graphql is not None:
+            raise ConfigurationError(
+                f"Form {form_class.__name__!r} generates two input fields with the same "
+                f"GraphQL name {spec.graphql_name!r}: form fields {prior_graphql!r} and "
+                f"{spec.form_field_name!r} collide under default camel-casing. Rename one "
+                "of the form fields, or drop one via Meta.fields / Meta.exclude.",
+            )
+        seen_attr[spec.input_attr] = spec.form_field_name
+        seen_graphql[spec.graphql_name] = spec.form_field_name
 
 
 def build_form_input_class(

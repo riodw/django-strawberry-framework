@@ -644,6 +644,27 @@ def test_relation_id_attr_collision_is_fail_loud():
     assert "collide" in message
 
 
+def test_camel_case_graphql_name_collision_is_fail_loud():
+    """Two fields whose names default-camel-case to ONE GraphQL name raise rather than
+    silently dropping one input.
+
+    ``foo_bar`` and ``fooBar`` produce DISTINCT input attrs (so the input-attr guard
+    passes) but the SAME ``graphql_name`` ``fooBar``; Strawberry would collapse the two
+    onto one schema field. The graphql-name guard catches and names them, mirroring the
+    read-type guard ``types/finalizer.py::_audit_field_surface``.
+    """
+
+    class CamelCollideForm(forms.Form):
+        foo_bar = forms.IntegerField()
+        fooBar = forms.IntegerField()  # noqa: N815 - intentional collision fixture
+
+    with pytest.raises(ConfigurationError) as exc:
+        build_form_inputs(CamelCollideForm, operation_kind=FORM)
+    message = str(exc.value)
+    assert "fooBar" in message
+    assert "collide" in message
+
+
 def test_model_choice_field_with_none_queryset_is_fail_loud():
     """A model-less ``ModelChoiceField(queryset=None)`` (the queryset-in-``__init__`` idiom)
     raises a diagnosable ``ConfigurationError`` at schema build, not a bare ``AttributeError``.

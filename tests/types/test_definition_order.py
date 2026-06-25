@@ -331,6 +331,70 @@ def test_assigned_scalar_field_override_keeps_consumer_resolver():
 
 
 # ---------------------------------------------------------------------------
+# Field-surface audit (finalizer ``_audit_field_surface``): empty surface +
+# camel-case name collision between two distinct fields. Both are misconfigs
+# Strawberry catches only late - the empty case as a generic ``ValueError``, the
+# collision case as a SILENT field drop - so the finalizer fails loud first with
+# DjangoType attribution. Sibling of the synthesized-connection camel guard.
+# ---------------------------------------------------------------------------
+
+
+def test_camel_case_field_collision_raises():
+    """Two columns whose names default-camel-case to one GraphQL name fail loud.
+
+    ``foo_bar`` and ``fooBar`` are distinct Django columns that both camel-case to
+    ``fooBar``; Strawberry keeps one and SILENTLY drops the other. The field-surface
+    audit catches the collision at finalize and names both colliding fields.
+    """
+
+    class CamelCollide(models.Model):
+        foo_bar = models.IntegerField()
+        fooBar = models.IntegerField()  # noqa: N815 - intentional collision fixture
+
+        class Meta:
+            managed = False
+            app_label = "test_field_surface"
+
+    class CamelCollideType(DjangoType):
+        class Meta:
+            model = CamelCollide
+            fields = ("foo_bar", "fooBar")
+
+    with pytest.raises(ConfigurationError) as exc:
+        finalize_django_types()
+    message = str(exc.value)
+    assert "fooBar" in message
+    assert "foo_bar" in message
+    assert "collide" in message
+
+
+def test_empty_field_surface_raises():
+    """A DjangoType with no GraphQL fields (``Meta.fields = ()``) fails loud at finalize.
+
+    Strawberry would otherwise raise the generic ``Type <X> must define one or more
+    fields`` with no DjangoType attribution; the audit names the type and its model.
+    """
+
+    class EmptySurface(models.Model):
+        name = models.CharField(max_length=10)
+
+        class Meta:
+            managed = False
+            app_label = "test_field_surface"
+
+    class EmptySurfaceType(DjangoType):
+        class Meta:
+            model = EmptySurface
+            fields = ()
+
+    with pytest.raises(ConfigurationError) as exc:
+        finalize_django_types()
+    message = str(exc.value)
+    assert "EmptySurfaceType" in message
+    assert "no GraphQL fields" in message
+
+
+# ---------------------------------------------------------------------------
 # Spec-015 Slice 1: annotation-only scalar override matrix completion.
 #
 # Four core override tests pin the new annotation-only scalar override

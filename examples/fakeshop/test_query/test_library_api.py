@@ -4576,3 +4576,79 @@ def test_create_shelf_model_mutation_hidden_alt_branch_m2m_is_field_error():
     assert result["result"] is None
     assert [e["field"] for e in result["errors"]] == ["altBranches"]
     assert not models.Shelf.objects.filter(code="MM-2").exists()
+
+
+_UPDATE_BOOK_VIA_FORM = (
+    "mutation($id: ID!, $d: BookGenresModelFormPartialInput!){ updateBookViaForm(id:$id, data:$d){ "
+    "node{ title } errors{ field messages } } }"
+)
+
+
+@pytest.mark.django_db
+def test_update_book_via_form_partial_update_preserves_m2m_over_http():
+    """A ``title``-only ``updateBookViaForm`` preserves the OMITTED required ``genres`` M2M.
+
+    The live FORM partial-update M2M-preservation case (previously package-only): the
+    bound ``ModelForm`` would fail required-validation on ``genres`` unless the omitted
+    M2M is reconstructed from the located row (``_reconstruct_partial_data`` ->
+    ``_to_form_key_value``). ``BookType`` is Relay-Node so the update ``id`` is a
+    ``GlobalID``; ``title`` changes while the two genres survive untouched.
+    """
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    genre_one = models.Genre.objects.create(name="UpdGenreOne")
+    genre_two = models.Genre.objects.create(name="UpdGenreTwo")
+    book = models.Book.objects.create(title="BeforeFormTitle", shelf=shelf)
+    book.genres.set([genre_one, genre_two])
+
+    response = _post_graphql(
+        _UPDATE_BOOK_VIA_FORM,
+        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "AfterFormTitle"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateBookViaForm"]
+    assert result["errors"] == []
+    assert result["node"]["title"] == "AfterFormTitle"
+    book.refresh_from_db()
+    assert book.title == "AfterFormTitle"
+    # The OMITTED required M2M was reconstructed from the row (not cleared).
+    assert set(book.genres.values_list("pk", flat=True)) == {genre_one.pk, genre_two.pk}
+
+
+@pytest.mark.django_db
+def test_update_book_via_form_partial_update_preserves_optional_nullable_scalar_over_http():
+    """A ``title``-only ``updateBookViaForm`` preserves the OMITTED optional ``subtitle``.
+
+    The distinct live optional-scalar case: ``Book.subtitle`` is genuinely optional AND
+    nullable (``blank=True, null=True``), unlike the products ``description``
+    (``default=""``). Omitted on a partial update, it is reconstructed from the located
+    row (``_reconstruct_partial_data`` via ``model_to_dict``) rather than reset to null,
+    so the seeded subtitle survives a ``title``-only change.
+    """
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    genre = models.Genre.objects.create(name="SubtitleGenre")
+    book = models.Book.objects.create(
+        title="SubBeforeTitle",
+        subtitle="Original Subtitle",
+        shelf=shelf,
+    )
+    book.genres.set([genre])
+
+    response = _post_graphql(
+        _UPDATE_BOOK_VIA_FORM,
+        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "SubAfterTitle"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateBookViaForm"]
+    assert result["errors"] == []
+    book.refresh_from_db()
+    assert book.title == "SubAfterTitle"
+    # The OMITTED optional nullable scalar was reconstructed (not reset to null).
+    assert book.subtitle == "Original Subtitle"

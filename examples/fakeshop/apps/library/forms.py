@@ -7,7 +7,9 @@ and the ``to_field_name`` conversion. ``Shelf.branch`` / ``Shelf.alt_branches``
 relate to the NON-Relay ``BranchType`` primary, so their generated inputs are raw pk
 scalars (not ``GlobalID``); the ``branch`` field sets ``to_field_name="name"``
 (``Branch.name`` is unique), so the decode resolves the visible Branch by pk and
-binds it to the form by name.
+binds it to the form by name. ``BookGenresModelForm`` adds the live FORM
+partial-update M2M-preservation case over the Relay-Node ``BookType``: an omitted
+required ``genres`` M2M is reconstructed from the located row rather than cleared.
 """
 
 from __future__ import annotations
@@ -41,3 +43,23 @@ class ShelfRelationsForm(forms.ModelForm):
             "branch",
             "alt_branches",
         )
+
+
+class BookGenresModelForm(forms.ModelForm):
+    """A ``Book`` ``ModelForm`` carrying the required ``genres`` M2M + optional
+    ``subtitle``, for the live FORM partial-update preservation cases.
+
+    ``Book`` is the Relay-Node ``BookType`` primary (so the update ``id`` is a
+    decodable ``GlobalID`` - unlike the non-Relay ``Shelf``, which supports create
+    only). On a ``title``-only partial update two omitted shapes are reconstructed from
+    the located row by ``forms/resolvers.py::_reconstruct_partial_data`` rather than
+    cleared: the required ``genres`` M2M (no ``to_field_name``; the bound form would
+    otherwise fail required-validation - the M2M branch) and the genuinely-optional,
+    nullable ``subtitle`` scalar (``blank=True, null=True`` - distinct from a
+    ``default=""`` field). ``shelf`` is intentionally NOT a form field, so the located
+    row's shelf is preserved untouched by ``save()``.
+    """
+
+    class Meta:
+        model = models.Book
+        fields = ("title", "subtitle", "genres")

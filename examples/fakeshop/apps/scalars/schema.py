@@ -29,9 +29,10 @@ from typing import Any
 import strawberry
 from strawberry.types import Info
 
-from apps.scalars import filters, models, orders
+from apps.scalars import filters, forms, models, orders
 from django_strawberry_framework import (
     BigInt,
+    DjangoModelFormMutation,
     DjangoMutation,
     DjangoMutationField,
     DjangoType,
@@ -298,11 +299,29 @@ class CreateMediaSpecimen(DjangoMutation):
         operation = "create"
 
 
+class CreateMediaSpecimenImageViaForm(DjangoModelFormMutation):
+    """Create a ``MediaSpecimen`` via ``MediaSpecimenImageForm`` - the FORM ``ImageField`` path.
+
+    The spec-038 form-mutation twin of ``createMediaSpecimen`` (the spec-037 model path),
+    for the named ``ImageField -> Upload`` gap: the form's ``image`` ``ImageField`` maps to
+    the ``Upload`` scalar, the resolver routes the upload into the bound form's ``files=``,
+    and the bound ``ImageField`` validates it as a real image (Pillow). The live test
+    asserts the stored image's dimensions, which the products ``FileField`` form test
+    skips. ``permission_classes = []`` keeps write-auth out of the path under test.
+    """
+
+    class Meta:
+        form_class = forms.MediaSpecimenImageForm
+        operation = "create"
+        permission_classes = []
+
+
 @strawberry.type
 class Mutation:
     """Scalars coverage write surface - the live ``Upload`` mutation path (spec-037)."""
 
     create_media_specimen = DjangoMutationField(CreateMediaSpecimen)
+    create_media_specimen_image_via_form = DjangoMutationField(CreateMediaSpecimenImageViaForm)
 
 
 __all__ = ("Mutation", "Query")

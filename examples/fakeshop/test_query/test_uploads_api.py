@@ -259,3 +259,56 @@ def test_multipart_create_uploads_real_files_over_http(tmp_path):
     assert result["image"]["name"].endswith("up.png")
     assert result["image"]["width"] == _IMAGE_WIDTH
     assert result["image"]["height"] == _IMAGE_HEIGHT
+
+
+@pytest.mark.django_db
+def test_multipart_create_media_specimen_image_via_form_over_http(tmp_path):
+    """The spec-038 FORM path maps an ``ImageField`` to ``Upload`` over a live multipart request.
+
+    The form-mutation twin of ``test_multipart_create_uploads_real_files_over_http`` (the
+    spec-037 model path): ``createMediaSpecimenImageViaForm`` wraps ``MediaSpecimenImageForm``
+    (a ``ModelForm`` over the ``image`` ``ImageField``), so the converter maps ``image`` ->
+    ``Upload``, the resolver routes the upload into the bound form's ``files=``, and the bound
+    ``ImageField`` validates it as a real image (Pillow). Asserts the stored image's
+    width/height - the dimension proof the products ``FileField`` form test skips. The form
+    opts out of write-auth (``permission_classes = []``), so no perm / login is needed.
+    """
+    mutation = """
+    mutation Create($data: MediaSpecimenImageFormInput!) {
+      createMediaSpecimenImageViaForm(data: $data) {
+        result {
+          label
+          image { name width height }
+        }
+        errors { field messages }
+      }
+    }
+    """
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        operations = {
+            "query": mutation,
+            "variables": {"data": {"label": "form-uploaded", "image": None}},
+        }
+        file_map = {"0": ["variables.data.image"]}
+        response = Client().post(
+            "/graphql/",
+            data={
+                "operations": json.dumps(operations),
+                "map": json.dumps(file_map),
+                "0": SimpleUploadedFile("form.png", _png_bytes(), content_type="image/png"),
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert "errors" not in body, body
+        payload = body["data"]["createMediaSpecimenImageViaForm"]
+        assert payload["errors"] == []
+        result = payload["result"]
+
+        # The row landed via the FORM path with the image routed into ``files=``.
+        assert models.MediaSpecimen.objects.filter(label="form-uploaded").exists()
+
+    assert result["label"] == "form-uploaded"
+    assert result["image"]["name"].endswith("form.png")
+    assert result["image"]["width"] == _IMAGE_WIDTH
+    assert result["image"]["height"] == _IMAGE_HEIGHT

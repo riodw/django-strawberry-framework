@@ -253,6 +253,14 @@ def _decode_form_relation_multi(
     optional -> clear) and ``None`` is NEVER iterated - iterating it would raise a
     top-level ``TypeError`` instead of the field-keyed envelope
     (spec-038 Decision 8 step 1).
+
+    This DIVERGES, deliberately, from the model ``DjangoMutation`` path, which
+    rejects an explicit ``null`` M2M with a field-keyed error
+    (``mutations/resolvers.py::_relation_null_error`` - "use ``[]`` to clear, not
+    ``null``"). A bound ``ModelForm`` follows Django form semantics, where an empty
+    value clears an optional M2M (and a required one errors), so the form flavor
+    honors the form's own required-ness rather than imposing the model path's
+    stricter "null is never a valid replace-set" stance (spec-038 Decision 8 step 1).
     """
     if values in form_field.empty_values:
         return [], None

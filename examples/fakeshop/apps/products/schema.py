@@ -354,6 +354,21 @@ class SubmitContact(DjangoFormMutation):
         permission_classes = (AllowAny,)
 
 
+class SubmitPing(DjangoFormMutation):
+    """A model-less plain form that declares NO ``permission_classes`` (deny-by-default).
+
+    The sibling of ``SubmitContact`` that does NOT opt into ``AllowAny``: a plain
+    ``DjangoFormMutation`` has no model, so an unset ``Meta.permission_classes`` falls
+    to the ``DenyAll`` deny-by-default default (spec-038 Decision 11). Every live call
+    is rejected with a top-level ``GraphQLError`` before the form runs, so the deny
+    posture is earned over a real ``/graphql`` request rather than only in package
+    tests (``docs/feedback.md`` - live deny-default coverage).
+    """
+
+    class Meta:
+        form_class = forms.PingForm
+
+
 @strawberry.type
 class Mutation:
     """Fakeshop products app write surface - the `DjangoMutation` + form-mutation writes.
@@ -384,6 +399,7 @@ class Mutation:
     create_item_with_file_via_form = DjangoMutationField(CreateItemWithFileViaForm)
     create_stamped_item_via_form = DjangoMutationField(CreateStampedItemViaForm)
     submit_contact = DjangoMutationField(SubmitContact)
+    submit_ping = DjangoMutationField(SubmitPing)
 
 
 __all__ = ("Mutation", "Query")

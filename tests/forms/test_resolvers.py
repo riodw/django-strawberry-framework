@@ -1790,3 +1790,143 @@ def test_explicit_null_m2m_on_update_clears_not_crashes():
     payload = res.data["updateBook"]
     assert payload["node"] is None
     assert "genres" in [e["field"] for e in payload["errors"]]
+
+
+# ---------------------------------------------------------------------------
+# Relation-decode edge branches (no-primary fallback / uncoercible raw pk /
+# multi short-circuit) + plain-form decode error + plain async seam
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_visible_related_object_no_primary_uses_default_manager():
+    """With no registered primary type, ``_visible_related_object`` scopes via the default manager.
+
+    A relation whose related model has no primary ``DjangoType`` carries no
+    visibility contract, so existence is checked against the default manager.
+    Driven directly (the autouse fixture leaves the registry empty).
+    """
+    genre = library_models.Genre.objects.create(name=_uniq("G"))
+    assert form_resolvers._visible_related_object(library_models.Genre, genre.pk, None) == genre
+    assert (
+        form_resolvers._visible_related_object(library_models.Genre, genre.pk + 9999, None) is None
+    )
+
+
+@pytest.mark.django_db
+def test_decode_form_relation_single_uncoercible_raw_pk_is_field_error():
+    """A raw-pk relation value that does not coerce to the target pk is a field-keyed error.
+
+    The raw-pk branch coerces through the target pk field; an uncoercible value
+    (``"abc"`` for an integer pk) is the field-keyed ``FieldError`` BEFORE any
+    visibility query.
+    """
+    field = forms.ModelChoiceField(queryset=library_models.Genre.objects.all())
+    value, error = form_resolvers._decode_form_relation_single(
+        "abc",
+        graphql_name="genre",
+        form_field=field,
+        info=None,
+    )
+    assert value is None
+    assert error is not None
+    assert error.field == "genre"
+
+
+@pytest.mark.django_db
+def test_decode_form_relation_multi_collects_valid_then_short_circuits_on_bad():
+    """An M2M list collects each valid member's form key, and short-circuits on a bad element."""
+    genre = library_models.Genre.objects.create(name=_uniq("G"))
+    field = forms.ModelMultipleChoiceField(queryset=library_models.Genre.objects.all())
+    # A valid element is decoded, to_field_name-converted (default ``obj.pk``), and collected.
+    keys, error = form_resolvers._decode_form_relation_multi(
+        [genre.pk],
+        graphql_name="genres",
+        form_field=field,
+        info=None,
+    )
+    assert error is None
+    assert keys == [genre.pk]
+    # A bad element short-circuits to the field-keyed error.
+    keys, error = form_resolvers._decode_form_relation_multi(
+        ["abc"],
+        graphql_name="genres",
+        form_field=field,
+        info=None,
+    )
+    assert keys is None
+    assert error is not None
+    assert error.field == "genres"
+
+
+@pytest.mark.django_db
+def test_plain_form_relation_decode_error_yields_not_ok_envelope():
+    """A plain form's relation id that fails decode -> ``{ ok: false }`` with a field-keyed error.
+
+    The plain-form pipeline short-circuits a relation decode failure to the pinned
+    ``{ ok errors }`` envelope (never a top-level error), mirroring the ModelForm
+    body's decode-error path.
+    """
+
+    class GenreT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Genre
+            fields = ("id", "name")
+            primary = True
+
+    class PickForm(forms.Form):
+        genre = forms.ModelChoiceField(queryset=library_models.Genre.objects.all())
+
+    class Pick(DjangoFormMutation):
+        class Meta:
+            form_class = PickForm
+            permission_classes = []
+
+    @strawberry.type
+    class Mutation:
+        pick = DjangoMutationField(Pick)
+
+    finalize_django_types()
+    schema = _schema(Mutation)
+    library_models.Genre.objects.create(name=_uniq("G"))
+    res = schema.execute_sync(
+        "mutation($d: PickFormInput!){ pick(data:$d){ ok errors{ field messages } } }",
+        # A well-formed GlobalID for a NONEXISTENT genre: decode resolves the type +
+        # pk, then the visibility query finds no row -> field-keyed decode error.
+        variable_values={"d": {"genreId": global_id_for(GenreT, 999999)}},
+    )
+    assert res.errors is None, res.errors
+    payload = res.data["pick"]
+    assert payload["ok"] is False
+    assert [e["field"] for e in payload["errors"]] == ["genreId"]
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_plain_form_resolve_async_seam():
+    """The plain-form ``resolve_async`` seam resolves through the async pipeline.
+
+    The existing async form test covers the ``ModelForm`` flavor; this pins the
+    plain ``DjangoFormMutation.resolve_async`` delegation (the model-less
+    ``{ ok errors }`` flavor over the async surface).
+    """
+
+    class ContactForm(forms.Form):
+        message = forms.CharField()
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = ContactForm
+            permission_classes = []
+
+    @strawberry.type
+    class Mutation:
+        submit = DjangoMutationField(Submit)
+
+    finalize_django_types()
+    schema = _schema(Mutation)
+    res = await schema.execute(
+        "mutation($d: ContactFormInput!){ submit(data:$d){ ok errors{ field } } }",
+        variable_values={"d": {"message": "hi"}},
+    )
+    assert res.errors is None, res.errors
+    assert res.data["submit"]["ok"] is True

@@ -1527,6 +1527,48 @@ def test_single_fk_explicit_null_decodes_to_clear_not_relation_error():
     assert pk is None
 
 
+@pytest.mark.django_db
+def test_raw_pk_relation_with_no_registered_primary_falls_back_to_existence_or_fk_noop():
+    """A raw-pk relation to a model with NO registered primary type has no visibility contract.
+
+    ``_raw_pk_relation_error`` only visibility-scopes when ``registry.get`` returns a
+    primary type. With the registry empty (the autouse fixture clears it, so neither
+    ``Genre`` nor ``Shelf`` has a type), an M2M still gets the pre-``.set()``
+    existence check (a real pk passes, a missing one is a field error) while an FK
+    returns no decode error (``full_clean`` owns its existence). Driven directly:
+    reaching this branch end to end needs a mutated relation whose target has NO
+    registered type at all, which the read surface cannot expose.
+    """
+    genre = library_models.Genre.objects.create(name="Real")
+    m2m_field = library_models.Book._meta.get_field("genres")
+    fk_field = library_models.Book._meta.get_field("shelf")
+    # M2M, no primary -> existence check (default manager).
+    assert (
+        resolvers._raw_pk_relation_error(
+            "genres",
+            [genre.pk],
+            library_models.Genre,
+            m2m_field,
+            None,
+        )
+        is None
+    )
+    missing = resolvers._raw_pk_relation_error(
+        "genres",
+        [genre.pk + 9999],
+        library_models.Genre,
+        m2m_field,
+        None,
+    )
+    assert missing is not None
+    assert missing.field == "genres"
+    # FK, no primary -> no decode error (full_clean validates FK existence).
+    assert (
+        resolvers._raw_pk_relation_error("shelfId", [123], library_models.Shelf, fk_field, None)
+        is None
+    )
+
+
 # ---------------------------------------------------------------------------
 # Create-validation parity with Model.objects.create (feedback - empty-value
 # defaults #11) and naive-datetime tz-coercion (feedback #15).

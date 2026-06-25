@@ -4445,3 +4445,133 @@ def test_b8_consumer_exact_plus_descendant_prefetch_stays_flat_over_http():
         payload["data"]["allLibraryGenresConsumerExactPlusDescendantPrefetch"],
     )
     assert len(captured) == 3
+
+
+# ---------------------------------------------------------------------------
+# Raw-pk relation visibility + ``to_field_name`` over a LIVE request (spec-038 /
+# the test_query live-coverage rule). ``Shelf.branch`` / ``Shelf.alt_branches``
+# target the NON-Relay ``BranchType`` primary, so their inputs are raw pk (not
+# GlobalID); ``BranchType.get_queryset`` hides ``city="restricted"`` from non-staff,
+# so an anonymous (``AllowAny``) writer can write but cannot attach a hidden branch.
+# ``branch`` sets ``to_field_name="name"`` so the decode binds the resolved Branch
+# by its unique name.
+# ---------------------------------------------------------------------------
+
+
+_CREATE_SHELF_VIA_FORM = (
+    "mutation($d: ShelfRelationsFormInput!){ createShelfViaForm(data:$d){ "
+    "result{ code } errors{ field messages } } }"
+)
+_CREATE_SHELF_MODEL = (
+    "mutation($d: ShelfAltbranchesBranchCodeInput!){ createShelf(data:$d){ "
+    "result{ code } errors{ field messages } } }"
+)
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_form_hidden_branch_fk_is_relation_field_error():
+    """A raw-pk FK whose Branch is hidden by ``BranchType.get_queryset`` -> field error, no write.
+
+    The form relation decoder resolves the raw pk through the non-Relay primary's
+    visibility hook; a hidden (restricted) Branch is the same field-keyed error a
+    GlobalID relation gives - earned live (single FK, form path).
+    """
+    restricted = models.Branch.objects.create(name="FormRestrictedFK", city="restricted")
+    response = _post_graphql(
+        _CREATE_SHELF_VIA_FORM,
+        variables={"d": {"code": "RF-1", "branchId": restricted.pk}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaForm"]
+    assert result["result"] is None
+    assert [e["field"] for e in result["errors"]] == ["branchId"]
+    assert not models.Shelf.objects.filter(code="RF-1").exists()
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_form_hidden_branch_in_alt_branches_is_field_error():
+    """A raw-pk M2M element whose Branch is hidden -> field error, no write (multi, form path)."""
+    visible = models.Branch.objects.create(name="FormVisibleM2M", city="open")
+    restricted = models.Branch.objects.create(name="FormRestrictedM2M", city="restricted")
+    response = _post_graphql(
+        _CREATE_SHELF_VIA_FORM,
+        variables={"d": {"code": "RM-1", "branchId": visible.pk, "altBranches": [restricted.pk]}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaForm"]
+    assert result["result"] is None
+    assert [e["field"] for e in result["errors"]] == ["altBranches"]
+    assert not models.Shelf.objects.filter(code="RM-1").exists()
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_form_visible_branch_resolves_by_to_field_name_and_writes():
+    """A visible raw-pk FK resolves and binds by ``to_field_name="name"``, and the row writes.
+
+    Earns the success raw-pk decode AND the ``to_field_name`` conversion live: the
+    decode resolves the visible Branch by pk, converts it to its ``name``, and the
+    bound ``ModelChoiceField(to_field_name="name")`` validates by that key.
+    """
+    visible = models.Branch.objects.create(name="FormVisibleOK", city="open")
+    response = _post_graphql(
+        _CREATE_SHELF_VIA_FORM,
+        variables={"d": {"code": "OK-1", "branchId": visible.pk}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaForm"]
+    assert result["errors"] == []
+    assert result["result"]["code"] == "OK-1"
+    shelf = models.Shelf.objects.get(code="OK-1")
+    assert shelf.branch_id == visible.pk  # resolved by name (to_field_name) + written
+
+
+@pytest.mark.django_db
+def test_create_shelf_model_mutation_hidden_branch_is_field_error():
+    """The MODEL pipeline's raw-pk relation decode hides a Branch live (``_raw_pk_relation_error``).
+
+    The model-path twin of the form decoder's raw-pk visibility fix: a raw-pk FK to
+    the non-Relay ``BranchType`` is visibility-checked through its ``get_queryset``,
+    so a hidden Branch is a field-keyed error with no write.
+    """
+    restricted = models.Branch.objects.create(name="ModelRestrictedFK", city="restricted")
+    response = _post_graphql(
+        _CREATE_SHELF_MODEL,
+        variables={"d": {"code": "MM-1", "branchId": restricted.pk}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelf"]
+    assert result["result"] is None
+    assert [e["field"] for e in result["errors"]] == ["branchId"]
+    assert not models.Shelf.objects.filter(code="MM-1").exists()
+
+
+@pytest.mark.django_db
+def test_create_shelf_model_mutation_hidden_alt_branch_m2m_is_field_error():
+    """The MODEL pipeline's raw-pk M2M decode hides a Branch live (``_raw_pk_relation_error``, multi).
+
+    Rounds out the model-path raw-pk arm: ``createShelf`` accepts ``altBranches`` (a
+    raw-pk M2M to the non-Relay ``BranchType``), so a hidden (restricted) member is a
+    field-keyed error with no write - the M2M twin of the single-FK model-path case.
+    The provided ``branch`` is visible, so the only failure is the hidden M2M member.
+    """
+    visible = models.Branch.objects.create(name="ModelVisibleM2M", city="open")
+    restricted = models.Branch.objects.create(name="ModelRestrictedM2M", city="restricted")
+    response = _post_graphql(
+        _CREATE_SHELF_MODEL,
+        variables={"d": {"code": "MM-2", "branchId": visible.pk, "altBranches": [restricted.pk]}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelf"]
+    assert result["result"] is None
+    assert [e["field"] for e in result["errors"]] == ["altBranches"]
+    assert not models.Shelf.objects.filter(code="MM-2").exists()

@@ -504,6 +504,16 @@ def test_create_guard_waiver_does_not_raise():
     assert "confirm" not in _field_map(cre)
 
 
+def test_exclude_naming_unknown_field_raises():
+    """``Meta.exclude`` naming a field not on the form raises the Slice-1 narrowing fail-loud."""
+    with pytest.raises(ConfigurationError, match="unknown form field"):
+        build_form_inputs(
+            _item_model_form(),
+            operation_kind=CREATE,
+            exclude=("definitely_not_a_field",),
+        )
+
+
 # ---------------------------------------------------------------------------
 # Shape identity, naming, dedupe, collision
 # ---------------------------------------------------------------------------

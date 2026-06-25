@@ -6,11 +6,14 @@ import strawberry
 from strawberry import relay
 from strawberry.types import Info
 
-from apps.library import filters, filters_genre, models, orders, orders_genre
+from apps.library import filters, filters_genre, forms, models, orders, orders_genre
 from django_strawberry_framework import (
     DjangoConnection,
     DjangoConnectionField,
     DjangoListField,
+    DjangoModelFormMutation,
+    DjangoMutation,
+    DjangoMutationField,
     DjangoNodeField,
     DjangoNodesField,
     DjangoType,
@@ -440,4 +443,76 @@ class Query:
         return queryset
 
 
-__all__ = ("Query",)
+# --------------------------------------------------------------------------- #
+# Write surface - earns the raw-pk relation visibility + ``to_field_name``
+# framework branches over a LIVE ``/graphql`` request (the
+# ``test_query/README.md`` discipline). ``Shelf`` relations target the non-Relay
+# ``BranchType`` primary, so their inputs are raw pk (single FK + multi M2M); the
+# decode resolves each through ``BranchType.get_queryset`` (which hides
+# ``city="restricted"`` from non-staff), so an anonymous caller can write but
+# cannot attach a hidden branch.
+# --------------------------------------------------------------------------- #
+
+
+class _AllowAnyWrite:
+    """Allow-all permission for the library live write surface.
+
+    The raw-pk relation-visibility tests isolate the relation DECODE (a Branch
+    hidden by ``BranchType.get_queryset``), not the write-auth seam, so these
+    mutations open the write to any caller. An anonymous request is non-staff, so
+    ``BranchType`` still hides ``city="restricted"`` branches from it: the decode
+    rejects a hidden branch while the write itself is permitted. The signature
+    matches the seam (``has_permission(info, mutation, operation, data, instance)``).
+    """
+
+    def has_permission(
+        self,
+        info,
+        mutation,
+        operation,
+        data,
+        instance=None,
+    ):
+        del info, mutation, operation, data, instance
+        return True
+
+
+class CreateShelfViaForm(DjangoModelFormMutation):
+    """Create a ``Shelf`` via ``ShelfRelationsForm`` - the FORM raw-pk relation path.
+
+    ``branch`` (raw-pk FK) + ``alt_branches`` (raw-pk M2M) target the non-Relay
+    ``BranchType``; the form decoder resolves each through
+    ``apply_type_visibility_sync(BranchType.get_queryset(...))`` (single + multi
+    visibility) and converts ``branch`` by ``to_field_name="name"``.
+    """
+
+    class Meta:
+        form_class = forms.ShelfRelationsForm
+        operation = "create"
+        permission_classes = (_AllowAnyWrite,)
+
+
+class CreateShelf(DjangoMutation):
+    """Create a ``Shelf`` via the model pipeline - the MODEL raw-pk relation path.
+
+    The ``branch`` / ``alt_branches`` raw-pk inputs route through
+    ``mutations/resolvers.py::_raw_pk_relation_error`` - the model-path twin of the
+    form decoder's visibility-on-the-raw-pk-branch fix.
+    """
+
+    class Meta:
+        model = models.Shelf
+        operation = "create"
+        fields = ("code", "branch", "alt_branches")
+        permission_classes = (_AllowAnyWrite,)
+
+
+@strawberry.type
+class Mutation:
+    """Library write surface (live raw-pk relation visibility + ``to_field_name``)."""
+
+    create_shelf_via_form = DjangoMutationField(CreateShelfViaForm)
+    create_shelf = DjangoMutationField(CreateShelf)
+
+
+__all__ = ("Mutation", "Query")

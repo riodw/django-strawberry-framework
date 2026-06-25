@@ -2684,3 +2684,23 @@ def test_submit_contact_plain_form_validation_failure_shape():
     assert result["ok"] is False
     assert [e["field"] for e in result["errors"]] == ["subject"]
     assert result["errors"][0]["messages"]
+
+
+@pytest.mark.django_db
+def test_submit_ping_plain_form_denied_by_default_top_level_error():
+    """A plain ``DjangoFormMutation`` with NO ``permission_classes`` denies every caller live.
+
+    The model-less ``SubmitPing`` does not opt into ``AllowAny`` (unlike
+    ``submitContact``), so a model-less form falls to the ``DenyAll`` deny-by-default
+    posture: the live call is rejected with a top-level authorization ``GraphQLError``
+    (data nulled), never reaching the form - the deny default earned over real HTTP.
+    """
+    response = _post_graphql(
+        "mutation($d: PingFormInput!){ submitPing(data: $d) { ok errors { field } } }",
+        variables={"d": {"message": "hi"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload  # top-level authorization error
+    assert payload["data"] is None
+    assert "Not authorized" in payload["errors"][0]["message"]

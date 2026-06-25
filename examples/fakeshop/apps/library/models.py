@@ -61,6 +61,16 @@ class Shelf(models.Model):
         related_name="shelves",
         on_delete=models.CASCADE,
     )
+    # A shelf's additional/alternate branches. Exists to exercise a raw-pk M2M
+    # relation input over a LIVE /graphql request: the M2M target is the non-Relay
+    # ``BranchType`` primary, so the generated input is a raw pk list (not a
+    # GlobalID), and the form/model mutations decode it through the same
+    # visibility-scoped get_queryset path the single FK uses. Optional.
+    alt_branches = models.ManyToManyField(
+        Branch,
+        blank=True,
+        related_name="alt_shelves",
+    )
 
     class Meta:
         constraints = [

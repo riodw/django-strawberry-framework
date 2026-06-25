@@ -661,3 +661,26 @@ def test_modelform_no_registered_primary_type_raises_at_finalize():
     # No DjangoType declared for Item this build.
     with pytest.raises(ConfigurationError, match="no registered DjangoType|no type to return"):
         finalize_django_types()
+
+
+def test_plain_form_default_perform_mutate_calls_form_save():
+    """The default ``perform_mutate`` calls ``form.save()`` when the plain form defines one.
+
+    A plain ``forms.Form`` has no ``save`` by default (the no-op path); a form that
+    DOES define one has it invoked by the default ``perform_mutate`` hook.
+    """
+    called = {}
+
+    class SavingForm(forms.Form):
+        message = forms.CharField()
+
+        def save(self):
+            called["saved"] = True
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = SavingForm
+            permission_classes = []
+
+    Submit().perform_mutate(SavingForm(data={"message": "x"}), info=None)
+    assert called["saved"] is True

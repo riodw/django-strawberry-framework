@@ -77,6 +77,18 @@ class ContactForm(forms.Form):
         return subject
 
 
+class PingForm(forms.Form):
+    """A trivial model-less ``forms.Form`` for the deny-by-default live test.
+
+    Backs a ``DjangoFormMutation`` that declares NO ``Meta.permission_classes``, so a
+    model-less form falls to the ``DenyAll`` deny-by-default posture (spec-038
+    Decision 11): the live mutation must reject every caller with a top-level
+    authorization error, never run the form.
+    """
+
+    message = forms.CharField(max_length=200)
+
+
 class StampedItemModelForm(forms.ModelForm):
     """``ModelForm`` over ``Item`` whose ``__init__`` REQUIRES a ``user`` kwarg (P2 case).
 

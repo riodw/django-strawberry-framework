@@ -13,6 +13,7 @@ and is left out for now.
 import strawberry
 from apps.glossary.schema import Query as GlossaryQuery
 from apps.kanban.schema import Query as KanbanQuery
+from apps.library.schema import Mutation as LibraryMutation
 from apps.library.schema import Query as LibraryQuery
 from apps.products.schema import Mutation as ProductsMutation
 from apps.products.schema import Query as ProductsQuery
@@ -32,15 +33,19 @@ class Query(LibraryQuery, ProductsQuery, ScalarsQuery, KanbanQuery, GlossaryQuer
 
 
 @strawberry.type
-class Mutation(ProductsMutation, ScalarsMutation):
+class Mutation(ProductsMutation, ScalarsMutation, LibraryMutation):
     """Top-level Mutation - extends each app's Mutation.
 
     Products carries the create/update/delete write surface (spec-036 Slice 4);
     the scalars app adds the file-backed ``createMediaSpecimen`` so the spec-037
     ``Upload`` mutation-input mapping is exercised over a live multipart
-    ``/graphql/`` request. The mutation phase-2.5 bind runs inside
-    ``finalize_django_types()`` below, so the ``DjangoMutationField`` lazy payload
-    / ``data:`` refs resolve at ``Schema(...)`` build.
+    ``/graphql/`` request; the library app adds the raw-pk relation form/model
+    mutations (``Shelf`` relations target the non-Relay ``BranchType``) so the
+    raw-pk relation visibility + ``to_field_name`` branches are earned over a live
+    request (spec-038 / the ``test_query`` live-coverage rule). The mutation
+    phase-2.5 bind runs inside ``finalize_django_types()`` below, so the
+    ``DjangoMutationField`` lazy payload / ``data:`` refs resolve at ``Schema(...)``
+    build.
     """
 
 

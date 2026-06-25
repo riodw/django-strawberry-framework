@@ -317,6 +317,68 @@ def _default_get_form(
     )
 
 
+def _modelform_operation_kind(meta: _ValidatedMutationMeta) -> str:
+    """Map a ``DjangoModelFormMutation`` operation to its generator kind.
+
+    ``"create"`` -> the create-shaped ``CREATE`` input; ``"update"`` -> the
+    optional-widened ``PARTIAL`` input. Single-sourced so ``build_input`` and
+    ``input_type_name`` cannot drift on the mapping (the plain flavor carries the
+    fixed ``FORM`` sentinel and never consults this).
+    """
+    return CREATE if meta.operation == "create" else PARTIAL
+
+
+def _build_and_stash_form_input(
+    cls: type,
+    meta: _ValidatedMutationMeta,
+    *,
+    operation_kind: str,
+    base: type,
+) -> type:
+    """Build + materialize a form input and stash its reverse map (both flavors' ``build_input`` tail).
+
+    The shared body the two bases' ``build_input`` seams differ in only by their
+    ``operation_kind`` (``CREATE`` / ``PARTIAL`` for the ``ModelForm`` flavor, the
+    ``FORM`` sentinel for the plain flavor) and their waiver ``base`` (the framework
+    base whose default ``get_form_kwargs`` / ``get_form`` an override is detected
+    against). Routes through ``_cached_build_form_input`` (per-shape dedupe +
+    per-declaration create-required guard), materializes the class into
+    ``forms.inputs``, and stashes the reverse-map ``field_specs`` on the mutation
+    (``cls._input_field_specs``) for the Slice-3 decode. Single-sited so a future
+    change to the materialize-and-stash sequence touches one place.
+    """
+    input_cls, field_specs = _cached_build_form_input(
+        meta.form_class,
+        operation_kind=operation_kind,
+        fields=meta.fields,
+        exclude=meta.exclude,
+        guard_required=not _form_kwargs_overridden(cls, base),
+    )
+    materialize_form_input_class(input_cls.__name__, input_cls)
+    cls._input_field_specs = field_specs
+    return input_cls
+
+
+def _form_input_type_name_for(meta: _ValidatedMutationMeta, operation_kind: str) -> str:
+    """Derive a form input's generated class name (both flavors' ``input_type_name`` body).
+
+    The shared name derivation the two bases' ``input_type_name`` seams differ in
+    only by ``operation_kind``: resolve the effective field set (after
+    ``Meta.fields`` / ``Meta.exclude``), then defer to
+    ``forms/inputs.py::form_input_type_name`` for the ``<FormClass>Input`` /
+    ``<FormClass>PartialInput`` canonical name (or a shape-derived name for a
+    narrowing). Single-sited with ``_build_and_stash_form_input`` so the bind's name
+    choice and the field-factory's ``data:`` ref derive the name identically.
+    """
+    effective = _resolve_effective_form_field_names(
+        meta.form_class,
+        fields=meta.fields,
+        exclude=meta.exclude,
+    )
+    full = tuple(get_form_fields(meta.form_class))
+    return form_input_type_name(meta.form_class, operation_kind, effective, full_field_names=full)
+
+
 class DjangoModelFormMutation(DjangoMutation):
     """A ``ModelForm``-backed write mutation (spec-038 Decision 6).
 
@@ -467,17 +529,12 @@ class DjangoModelFormMutation(DjangoMutation):
         form-field-keyed payload (the P1 reverse map).
         """
         del primary_type  # the form input derives from the form, not the model primary.
-        operation_kind = CREATE if meta.operation == "create" else PARTIAL
-        input_cls, field_specs = _cached_build_form_input(
-            meta.form_class,
-            operation_kind=operation_kind,
-            fields=meta.fields,
-            exclude=meta.exclude,
-            guard_required=not _form_kwargs_overridden(cls, DjangoModelFormMutation),
+        return _build_and_stash_form_input(
+            cls,
+            meta,
+            operation_kind=_modelform_operation_kind(meta),
+            base=DjangoModelFormMutation,
         )
-        materialize_form_input_class(input_cls.__name__, input_cls)
-        cls._input_field_specs = field_specs
-        return input_cls
 
     get_form_kwargs = _default_get_form_kwargs
     get_form = _default_get_form
@@ -491,19 +548,7 @@ class DjangoModelFormMutation(DjangoMutation):
         shape-derived name for a narrowing), single-sourced with the bind's name
         choice in ``build_input``.
         """
-        operation_kind = CREATE if meta.operation == "create" else PARTIAL
-        effective = _resolve_effective_form_field_names(
-            meta.form_class,
-            fields=meta.fields,
-            exclude=meta.exclude,
-        )
-        full = tuple(get_form_fields(meta.form_class))
-        return form_input_type_name(
-            meta.form_class,
-            operation_kind,
-            effective,
-            full_field_names=full,
-        )
+        return _form_input_type_name_for(meta, _modelform_operation_kind(meta))
 
     @classmethod
     def resolve_sync(
@@ -733,16 +778,12 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         reverse-map ``field_specs`` are stashed on the mutation for the Slice-3
         decode (the P1 reverse map).
         """
-        input_cls, field_specs = _cached_build_form_input(
-            meta.form_class,
+        return _build_and_stash_form_input(
+            cls,
+            meta,
             operation_kind=FORM,
-            fields=meta.fields,
-            exclude=meta.exclude,
-            guard_required=not _form_kwargs_overridden(cls, DjangoFormMutation),
+            base=DjangoFormMutation,
         )
-        materialize_form_input_class(input_cls.__name__, input_cls)
-        cls._input_field_specs = field_specs
-        return input_cls
 
     get_form_kwargs = _default_get_form_kwargs
     get_form = _default_get_form
@@ -798,13 +839,7 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
     @classmethod
     def input_type_name(cls, meta: _ValidatedMutationMeta) -> str:
         """Return the generated form-input class name (the ``FORM``-sentinel create shape)."""
-        effective = _resolve_effective_form_field_names(
-            meta.form_class,
-            fields=meta.fields,
-            exclude=meta.exclude,
-        )
-        full = tuple(get_form_fields(meta.form_class))
-        return form_input_type_name(meta.form_class, FORM, effective, full_field_names=full)
+        return _form_input_type_name_for(meta, FORM)
 
     @classmethod
     def resolve_sync(cls, info: Any, *, data: Any) -> Any:

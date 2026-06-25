@@ -91,6 +91,7 @@ from ..utils.querysets import (
     initial_queryset,
     model_for,
     reject_async_in_sync_context,
+    visibility_scoped_related_queryset,
 )
 from ..utils.relations import is_forward_many_to_many
 from .inputs import NON_FIELD_ERROR_KEY, FieldError, payload_object_slot
@@ -449,6 +450,37 @@ def _relation_null_error(field_name: str) -> FieldError:
     )
 
 
+def _relation_membership_error(
+    field_name: str,
+    queryset: Any,
+    declared_pks: list[Any],
+    query_pks: list[Any],
+) -> FieldError | None:
+    """Return a ``_relation_error`` unless every ``declared_pks`` member is present in ``queryset``.
+
+    The single no-existence-leak membership check the three relation guards share -
+    visibility on the model path (``_relation_visibility_error``), visibility on the
+    raw-pk path (``_raw_pk_relation_error``), and existence on the no-primary raw-pk
+    M2M path (``_relation_existence_error``). The ONLY axes that vary are folded into
+    the two arguments:
+
+    - ``queryset`` - the visibility-scoped ``get_queryset`` queryset for the two
+      visibility checks, the target's ``_default_manager`` for the existence-only
+      check.
+    - ``declared_pks`` vs ``query_pks`` - the set whose presence is ASSERTED vs. the
+      set actually sent to ``pk__in``. They coincide for the already-coerced
+      ``GlobalID`` path; for a raw-pk set ``query_pks`` is the coerced subset (an
+      uncoercible / out-of-range pk dropped so it never hits the backend), while
+      ``declared_pks`` stays the full input - so a dropped pk is absent from the
+      present set and fails the subset check, the same not-found ``_relation_error``
+      a hidden / missing pk yields (no existence leak).
+    """
+    present = {str(pk) for pk in queryset.filter(pk__in=query_pks).values_list("pk", flat=True)}
+    if not {str(pk) for pk in declared_pks} <= present:
+        return _relation_error(field_name)
+    return None
+
+
 def _relation_visibility_error(
     field_name: str,
     pks: list[Any],
@@ -484,16 +516,10 @@ def _relation_visibility_error(
     only confirms visibility.
     """
     related_type = registry.get(related_model)
-    queryset = apply_type_visibility_sync(
-        related_type,
-        initial_queryset(related_type),
-        info,
-        _MUTATION_ASYNC_RECOURSE,
-    )
-    visible = {str(pk) for pk in queryset.filter(pk__in=pks).values_list("pk", flat=True)}
-    if not {str(pk) for pk in pks} <= visible:
-        return _relation_error(field_name)
-    return None
+    queryset = visibility_scoped_related_queryset(related_type, info, _MUTATION_ASYNC_RECOURSE)
+    # ``pks`` are already coerced (the GlobalID path), so the asserted + queried sets
+    # coincide.
+    return _relation_membership_error(field_name, queryset, pks, pks)
 
 
 def _coerce_relation_pk_or_none(related_model: type, pk: Any) -> Any:
@@ -556,16 +582,9 @@ def _relation_existence_error(
         for value in (_coerce_relation_pk_or_none(related_model, pk) for pk in pks)
         if value is not None
     ]
-    existing = {
-        str(pk)
-        for pk in related_model._default_manager.filter(pk__in=coerced).values_list(
-            "pk",
-            flat=True,
-        )
-    }
-    if not {str(pk) for pk in pks} <= existing:
-        return _relation_error(field_name)
-    return None
+    # Existence only (no visibility contract): query the default manager. The full
+    # input set is asserted against the coerced query set (a dropped pk fails it).
+    return _relation_membership_error(field_name, related_model._default_manager, pks, coerced)
 
 
 def _raw_pk_relation_error(
@@ -627,16 +646,8 @@ def _raw_pk_relation_error(
         for value in (_coerce_relation_pk_or_none(related_model, pk) for pk in real_pks)
         if value is not None
     ]
-    queryset = apply_type_visibility_sync(
-        related_type,
-        initial_queryset(related_type),
-        info,
-        _MUTATION_ASYNC_RECOURSE,
-    )
-    visible = {str(pk) for pk in queryset.filter(pk__in=coerced).values_list("pk", flat=True)}
-    if not {str(pk) for pk in real_pks} <= visible:
-        return _relation_error(field_name)
-    return None
+    queryset = visibility_scoped_related_queryset(related_type, info, _MUTATION_ASYNC_RECOURSE)
+    return _relation_membership_error(field_name, queryset, real_pks, coerced)
 
 
 def locate_instance(target_type: type, node_id: Any, info: Any) -> Any | None:
@@ -888,7 +899,7 @@ def _run_pipeline_sync(
     primary_type = mutation_cls._primary_type
     model = model_for(primary_type)
     slot = payload_object_slot(primary_type)
-    payload_cls = _payload_cls_for(mutation_cls)
+    payload_cls = payload_cls_for(mutation_cls)
 
     with transaction.atomic():
         if meta.operation == "create":
@@ -1208,14 +1219,20 @@ def _invalid_lookup_id_error() -> FieldError:
     return FieldError(field="id", messages=["Invalid id."])
 
 
-def _payload_cls_for(mutation_cls: type) -> type:
-    """Return the materialized ``<Name>Payload`` class for a bound mutation.
+def payload_cls_for(mutation_cls: type) -> type:
+    """Return the materialized ``<Name>Payload`` class for a bound mutation (all three pipelines).
 
     The Slice-2 bind stashes the payload class name on the mutation
     (``_payload_type_name``) and materializes the class as a module global of
     ``mutations.inputs``; the resolver reads it from there so the payload type the
     field's lazy ref resolves to and the type the resolver instantiates are the
     same object.
+
+    Promoted (underscore-dropped) so the form pipeline reuses it BY CALL rather than
+    re-spelling it: both form flavors materialize their ``<Name>Payload`` into
+    ``mutations.inputs`` too (the ``ModelForm`` via the ``036`` ``_bind_mutation``,
+    the plain via ``_bind_form_mutation``), so this one ``getattr`` serves the model,
+    ``ModelForm``, and plain-form pipelines alike (spec-038 DRY).
     """
     from . import inputs
 

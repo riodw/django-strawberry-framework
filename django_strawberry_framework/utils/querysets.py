@@ -181,6 +181,30 @@ def apply_type_visibility_sync(
     )
 
 
+def visibility_scoped_related_queryset(
+    related_type: type,
+    info: Any,
+    async_recourse: str = _RELAY_ASYNC_RECOURSE,
+) -> models.QuerySet:
+    """Return a related type's base queryset scoped by its ``get_queryset`` visibility hook.
+
+    The one-line composition of the two primitives every relation-visibility check
+    shares - ``apply_type_visibility_sync(related_type, initial_queryset(
+    related_type), info, recourse)``. Single-sourced so the model relation decode
+    (``mutations/resolvers.py``) and the form relation decode
+    (``forms/resolvers.py``) provably apply the SAME related-type ``get_queryset``
+    (the cross-flavor security invariant spec-038 claims), rather than re-spelling
+    the composition at each site. ``async_recourse`` stays a parameter: the model
+    and form paths pass their own surface-specific wording.
+    """
+    return apply_type_visibility_sync(
+        related_type,
+        initial_queryset(related_type),
+        info,
+        async_recourse,
+    )
+
+
 async def apply_type_visibility_async(
     type_cls: type,
     queryset: models.QuerySet,

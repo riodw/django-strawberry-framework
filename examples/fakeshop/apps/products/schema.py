@@ -260,30 +260,6 @@ class CreateCategory(DjangoMutation):
 # --------------------------------------------------------------------------- #
 
 
-class AllowAny:
-    """Allow-all permission class for the model-less plain ``DjangoFormMutation``.
-
-    A plain ``DjangoFormMutation`` has no model, so the ``DjangoModelPermission``
-    default cannot apply and an explicit ``Meta.permission_classes`` is required
-    (spec-038 Decision 11). The package ships no allow-all class, so the example
-    declares this 3-line one: a plain form's authorization is a consumer choice, and
-    the contact-form success path must be reachable for any caller. The
-    ``has_permission`` signature matches the seam
-    (``has_permission(info, mutation, operation, data, instance)``).
-    """
-
-    def has_permission(
-        self,
-        info,
-        mutation,
-        operation,
-        data,
-        instance=None,
-    ):
-        del info, mutation, operation, data, instance
-        return True
-
-
 class CreateItemViaForm(DjangoModelFormMutation):
     """Create an ``Item`` through ``ItemModelForm`` (the ``ModelForm`` create flavor)."""
 
@@ -344,20 +320,23 @@ class CreateStampedItemViaForm(DjangoModelFormMutation):
 class SubmitContact(DjangoFormMutation):
     """Submit a model-less ``ContactForm`` (the plain-form ``{ ok, errors }`` flavor).
 
-    No ``operation`` (a plain base rejects any ``Meta.operation``); an explicit
-    ``permission_classes`` is required (no model default), so the success path is open to
-    any caller via ``AllowAny``.
+    No ``operation`` (a plain base rejects any ``Meta.operation``). A plain form has no
+    model default, so the success path is opened to any caller with the framework-native
+    allow-any opt-out - an explicit empty ``permission_classes = []`` (spec-038 Decision 11
+    documents ``[]`` as the allow-any posture for both flavors) - rather than a hand-rolled
+    allow-all class.
     """
 
     class Meta:
         form_class = forms.ContactForm
-        permission_classes = (AllowAny,)
+        permission_classes = []
 
 
 class SubmitPing(DjangoFormMutation):
     """A model-less plain form that declares NO ``permission_classes`` (deny-by-default).
 
-    The sibling of ``SubmitContact`` that does NOT opt into ``AllowAny``: a plain
+    The sibling of ``SubmitContact`` that does NOT opt into the explicit ``[]`` allow-any
+    posture: a plain
     ``DjangoFormMutation`` has no model, so an unset ``Meta.permission_classes`` falls
     to the ``DenyAll`` deny-by-default default (spec-038 Decision 11). Every live call
     is rejected with a top-level ``GraphQLError`` before the form runs, so the deny
@@ -387,7 +366,7 @@ class Mutation:
     the `get_form_kwargs`-injects-`user` form (`createStampedItemViaForm`), and the
     model-less plain `DjangoFormMutation` (`submitContact`). The `ModelForm` flavors
     inherit the same `DjangoModelPermission` default (codenames `add_item` /
-    `change_item`); the plain form names an explicit `AllowAny`.
+    `change_item`); the plain form opts in with an explicit empty `permission_classes = []`.
     """
 
     create_item = DjangoMutationField(CreateItem)

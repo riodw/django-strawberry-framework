@@ -224,6 +224,55 @@ def test_filter_specimens_by_bigint_in_accepts_64bit_values():
 
 
 @pytest.mark.django_db
+def test_filter_specimens_by_bigint_in_drops_past_64bit_members_no_overflow():
+    """A past-signed-64-bit ``in`` member is dropped, never a raw backend ``OverflowError``.
+
+    A scalar ``__in`` lookup binds each element directly, so a value past the column's
+    signed-64-bit range (``2**63``) reached the backend as a raw ``Python int too large
+    to convert to SQLite INTEGER`` top-level error - unlike a scalar ``exact``, which
+    Django's range-aware integer lookups resolve to an empty match before binding.
+    ``filters/sets.py::_coerce_int_in_members`` now drops the out-of-range member (it can
+    identify no row), so the in-range member still filters. (An all-out-of-range list
+    empties and degrades to the same no-constraint behaviour as an explicit ``in: []`` -
+    a no-op, not a crash; covered by the second leg below.)
+    """
+    _seed_specimen(label="keep", signed_big=7)
+    _seed_specimen(label="other", signed_big=1)
+
+    # 9223372036854775808 == 2**63, one past the signed-64-bit maximum. The in-range
+    # member (7) must still select its row, proving the bad member was dropped (not the
+    # whole filter) and no OverflowError reached the backend.
+    mixed = _post_graphql(
+        """
+        query {
+          allScalarSpecimens(filter: { signedBig: { in: [9223372036854775808, 7] } }) {
+            label
+          }
+        }
+        """,
+    )
+    assert mixed.status_code == 200
+    mixed_body = mixed.json()
+    assert "errors" not in mixed_body, mixed_body
+    assert mixed_body["data"]["allScalarSpecimens"] == [{"label": "keep"}]
+
+    # An all-out-of-range list empties; the key contract is "no raw OverflowError",
+    # degrading to the same no-constraint result as an explicit empty ``in: []``.
+    only_bad = _post_graphql(
+        """
+        query {
+          allScalarSpecimens(filter: { signedBig: { in: [9223372036854775808] } }) {
+            label
+          }
+        }
+        """,
+    )
+    assert only_bad.status_code == 200
+    only_bad_body = only_bad.json()
+    assert "errors" not in only_bad_body, only_bad_body
+
+
+@pytest.mark.django_db
 def test_scalar_specimen_self_referential_parent_children_over_http():
     """Self-FK round-trip: parent + reverse-FK ``children`` traversal both work.
 

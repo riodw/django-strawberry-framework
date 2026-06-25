@@ -104,12 +104,13 @@ from ..mutations.resolvers import (
     coerce_lookup_id,
     locate_instance,
     not_found_error,
+    payload_cls_for,
     raw_choice_value,
     refetch_optimized,
     save_or_field_errors,
 )
 from ..relay import GlobalIDDecode, decode_model_global_id
-from ..utils.querysets import apply_type_visibility_sync, initial_queryset
+from ..utils.querysets import visibility_scoped_related_queryset
 from .converter import FILE, RELATION_MULTI, RELATION_SINGLE, FormInputFieldSpec
 from .inputs import get_form_fields
 
@@ -164,12 +165,7 @@ def _visible_related_object(related_model: type, pk: Any, info: Any) -> Any | No
         # No primary DjangoType: a raw-pk relation with no Relay-Node target. Scope
         # existence against the default manager (no visibility contract to apply).
         return related_model._default_manager.filter(pk=pk).first()
-    queryset = apply_type_visibility_sync(
-        related_type,
-        initial_queryset(related_type),
-        info,
-        _FORM_ASYNC_RECOURSE,
-    )
+    queryset = visibility_scoped_related_queryset(related_type, info, _FORM_ASYNC_RECOURSE)
     return queryset.filter(pk=pk).first()
 
 
@@ -400,20 +396,6 @@ def _reconstruct_partial_data(
     return {**base, **m2m_data, **provided_data}
 
 
-def _form_payload_cls(mutation_cls: type) -> type:
-    """Return the materialized ``<Name>Payload`` class for a bound form mutation.
-
-    Both flavors' payloads materialize into ``mutations.inputs`` (the ``ModelForm``
-    via the ``036`` ``_bind_mutation``, the plain via ``_bind_form_mutation``'s
-    ``materialize_mutation_input_class``) - the INPUT (``data:``) lives in
-    ``forms.inputs``, but the PAYLOAD lives in ``mutations.inputs`` for BOTH, so
-    the resolver reads it from there (the ``036`` ``_payload_cls_for`` shape).
-    """
-    from ..mutations import inputs
-
-    return getattr(inputs, mutation_cls._payload_type_name)
-
-
 def _form_errors_to_field_errors(form: Any) -> list[Any]:
     """Map a failed form's ``form.errors`` onto the ``FieldError`` envelope.
 
@@ -441,7 +423,7 @@ def _run_modelform_pipeline_sync(
     meta = mutation_cls._mutation_meta
     primary_type = mutation_cls._primary_type
     slot = payload_object_slot(primary_type)
-    payload_cls = _form_payload_cls(mutation_cls)
+    payload_cls = payload_cls_for(mutation_cls)
     is_update = meta.operation == "update"
 
     with transaction.atomic():
@@ -495,7 +477,7 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
     ``perform_mutate`` (default ``form.save()`` if present, else no-op), wrapped by
     the same ``save_or_field_errors`` ``IntegrityError`` mapper.
     """
-    payload_cls = _form_payload_cls(mutation_cls)
+    payload_cls = payload_cls_for(mutation_cls)
 
     with transaction.atomic():
         # Authorize BEFORE decoding (see the ModelForm body): a plain form with a

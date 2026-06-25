@@ -4452,7 +4452,8 @@ def test_b8_consumer_exact_plus_descendant_prefetch_stays_flat_over_http():
 # the test_query live-coverage rule). ``Shelf.branch`` / ``Shelf.alt_branches``
 # target the NON-Relay ``BranchType`` primary, so their inputs are raw pk (not
 # GlobalID); ``BranchType.get_queryset`` hides ``city="restricted"`` from non-staff,
-# so an anonymous (``AllowAny``) writer can write but cannot attach a hidden branch.
+# so an anonymous writer (the mutations use the explicit ``[]`` allow-any opt-out) can
+# write but cannot attach a hidden branch.
 # ``branch`` sets ``to_field_name="name"`` so the decode binds the resolved Branch
 # by its unique name.
 # ---------------------------------------------------------------------------

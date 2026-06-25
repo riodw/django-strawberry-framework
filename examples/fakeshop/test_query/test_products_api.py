@@ -2645,8 +2645,9 @@ def test_create_stamped_item_via_form_get_form_kwargs_injects_user():
 def test_submit_contact_plain_form_success_shape():
     """`submitContact` with valid data -> `ok: true`, empty `errors` (the plain-form success).
 
-    The model-less `DjangoFormMutation` flavor: `AllowAny` opens the success path to any
-    caller. Valid `ContactForm` data validates (no write - the form is model-less), so
+    The model-less `DjangoFormMutation` flavor: an explicit empty `permission_classes = []`
+    opens the success path to any caller. Valid `ContactForm` data validates (no write - the
+    form is model-less), so
     the payload is `{ ok: true, errors: [] }`.
     """
     create_users(1)
@@ -2690,8 +2691,8 @@ def test_submit_contact_plain_form_validation_failure_shape():
 def test_submit_ping_plain_form_denied_by_default_top_level_error():
     """A plain ``DjangoFormMutation`` with NO ``permission_classes`` denies every caller live.
 
-    The model-less ``SubmitPing`` does not opt into ``AllowAny`` (unlike
-    ``submitContact``), so a model-less form falls to the ``DenyAll`` deny-by-default
+    The model-less ``SubmitPing`` does not opt into the explicit ``[]`` allow-any posture
+    (unlike ``submitContact``), so a model-less form falls to the ``DenyAll`` deny-by-default
     posture: the live call is rejected with a top-level authorization ``GraphQLError``
     (data nulled), never reaching the form - the deny default earned over real HTTP.
     """

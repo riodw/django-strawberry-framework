@@ -449,32 +449,11 @@ class Query:
 # ``test_query/README.md`` discipline). ``Shelf`` relations target the non-Relay
 # ``BranchType`` primary, so their inputs are raw pk (single FK + multi M2M); the
 # decode resolves each through ``BranchType.get_queryset`` (which hides
-# ``city="restricted"`` from non-staff), so an anonymous caller can write but
-# cannot attach a hidden branch.
+# ``city="restricted"`` from non-staff). These writes isolate the relation DECODE,
+# not the write-auth seam, so they open the write to any caller via the
+# framework-native ``permission_classes = []`` allow-any opt-out (not a hand-rolled
+# allow-all class): an anonymous caller can write but cannot attach a hidden branch.
 # --------------------------------------------------------------------------- #
-
-
-class _AllowAnyWrite:
-    """Allow-all permission for the library live write surface.
-
-    The raw-pk relation-visibility tests isolate the relation DECODE (a Branch
-    hidden by ``BranchType.get_queryset``), not the write-auth seam, so these
-    mutations open the write to any caller. An anonymous request is non-staff, so
-    ``BranchType`` still hides ``city="restricted"`` branches from it: the decode
-    rejects a hidden branch while the write itself is permitted. The signature
-    matches the seam (``has_permission(info, mutation, operation, data, instance)``).
-    """
-
-    def has_permission(
-        self,
-        info,
-        mutation,
-        operation,
-        data,
-        instance=None,
-    ):
-        del info, mutation, operation, data, instance
-        return True
 
 
 class CreateShelfViaForm(DjangoModelFormMutation):
@@ -489,7 +468,7 @@ class CreateShelfViaForm(DjangoModelFormMutation):
     class Meta:
         form_class = forms.ShelfRelationsForm
         operation = "create"
-        permission_classes = (_AllowAnyWrite,)
+        permission_classes = []
 
 
 class CreateShelf(DjangoMutation):
@@ -504,7 +483,7 @@ class CreateShelf(DjangoMutation):
         model = models.Shelf
         operation = "create"
         fields = ("code", "branch", "alt_branches")
-        permission_classes = (_AllowAnyWrite,)
+        permission_classes = []
 
 
 @strawberry.type

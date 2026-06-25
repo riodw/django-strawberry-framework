@@ -615,3 +615,50 @@ def test_scalar_reverse_map_is_identity():
     assert name_spec.input_attr == "name"
     assert name_spec.graphql_name == "name"
     assert name_spec.kind == SCALAR
+
+
+# ---------------------------------------------------------------------------
+# Fail-loud guards - input-attr collision + None-queryset relation
+# ---------------------------------------------------------------------------
+
+
+def test_relation_id_attr_collision_is_fail_loud():
+    """A relation ``target`` (-> ``target_id``) colliding with a field literally named
+    ``target_id`` raises ``ConfigurationError`` rather than silently dropping one input.
+
+    Both generate ``input_attr == "target_id"``; ``build_strawberry_input_class`` would
+    write the second over the first in its annotations dict, losing a field. The package
+    is fail-loud, so the assembled-attr collision is caught and named instead.
+    """
+    plain_target, _ = _make_non_relay_target()
+
+    class CollidingForm(forms.Form):
+        target = forms.ModelChoiceField(queryset=plain_target.objects.all())
+        target_id = forms.CharField()
+
+    with pytest.raises(ConfigurationError) as exc:
+        build_form_inputs(CollidingForm, operation_kind=FORM)
+    message = str(exc.value)
+    assert "target_id" in message
+    assert "'target'" in message
+    assert "collide" in message
+
+
+def test_model_choice_field_with_none_queryset_is_fail_loud():
+    """A model-less ``ModelChoiceField(queryset=None)`` (the queryset-in-``__init__`` idiom)
+    raises a diagnosable ``ConfigurationError`` at schema build, not a bare ``AttributeError``.
+
+    Schema-time discovery reads ``base_fields`` without instantiating the form, so a
+    ``queryset`` assigned in ``__init__`` is ``None`` here and the related model cannot be
+    resolved; the guard names the form / field rather than failing on ``None.model``.
+    """
+
+    class LateQuerysetForm(forms.Form):
+        target = forms.ModelChoiceField(queryset=None)
+
+    with pytest.raises(ConfigurationError) as exc:
+        build_form_inputs(LateQuerysetForm, operation_kind=FORM)
+    message = str(exc.value)
+    assert "LateQuerysetForm" in message
+    assert "'target'" in message
+    assert "queryset is None" in message

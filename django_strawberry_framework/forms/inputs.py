@@ -313,7 +313,11 @@ def _model_column_for(form_class: type[forms.BaseForm], name: str) -> Any:
         return None
 
 
-def _model_less_relation_annotation(name: str, field: forms.Field) -> tuple[str, Any]:
+def _model_less_relation_annotation(
+    name: str,
+    field: forms.Field,
+    form_class: type[forms.BaseForm],
+) -> tuple[str, Any]:
     """Map a column-LESS relation form field to its ``(python_attr, annotation)``.
 
     A plain ``Form`` ``ModelChoiceField`` / ``ModelMultipleChoiceField`` has no
@@ -324,8 +328,25 @@ def _model_less_relation_annotation(name: str, field: forms.Field) -> tuple[str,
     Relay-Node-shaped, else the related model's raw pk scalar. The ``<name>_id``
     (single) / ``list[<id>]`` (multi) ``036`` scheme is reused so the wire
     contract is uniform across the model-backed and model-less relation paths.
+
+    A ``ModelChoiceField`` whose ``queryset`` is assigned in ``__init__`` (a valid
+    Django idiom) has ``queryset is None`` in the uninstantiated ``base_fields``
+    that schema-time discovery reads, so its related model cannot be resolved. That
+    is a fail-loud ``ConfigurationError`` naming the form / field rather than a bare
+    ``AttributeError`` on ``None.model``, keeping the package's fail-loud contract.
     """
-    related_model = field.queryset.model
+    related_qs = field.queryset
+    if related_qs is None:
+        raise ConfigurationError(
+            f"Form {form_class.__name__!r} field {name!r} is a "
+            f"{type(field).__name__} whose queryset is None at class definition. "
+            "Schema-time input generation reads base_fields WITHOUT instantiating the "
+            "form, so a queryset assigned in __init__ is not visible and the relation "
+            "id type cannot be resolved. Declare the field with a concrete queryset "
+            "(e.g. ModelChoiceField(queryset=Model.objects.all())), or drop it from "
+            "the generated input via Meta.fields / Meta.exclude.",
+        )
+    related_model = related_qs.model
     primary = registry.get(related_model)
     if primary is not None and implements_relay_node(primary):
         id_scalar: Any = relay.GlobalID
@@ -353,6 +374,7 @@ def _field_triple_and_spec(
     field: forms.Field,
     column: Any,
     type_name: str,
+    form_class: type[forms.BaseForm],
 ) -> tuple[str, Any, FormInputFieldSpec]:
     """Resolve one form field to its ``(python_attr, base_annotation, FormInputFieldSpec)``.
 
@@ -398,7 +420,7 @@ def _field_triple_and_spec(
         if conversion.kind == FILE:
             python_attr, graphql_name, annotation, kind = _simple_triple(name, Upload, FILE)
         elif conversion.kind in (RELATION_SINGLE, RELATION_MULTI):
-            python_attr, annotation = _model_less_relation_annotation(name, field)
+            python_attr, annotation = _model_less_relation_annotation(name, field, form_class)
             graphql_name = graphql_camel_name(python_attr)
             kind = conversion.kind
         else:
@@ -415,6 +437,34 @@ def _field_triple_and_spec(
         kind=kind,
     )
     return python_attr, annotation, spec
+
+
+def _guard_input_attr_collisions(
+    form_class: type[forms.BaseForm],
+    field_specs: list[FormInputFieldSpec],
+) -> None:
+    """Raise if two form fields generate the same input attr (the ``<name>_id`` clash).
+
+    A relation field ``foo`` remaps to input attr ``foo_id`` (the ``036`` scheme),
+    while a scalar / extra form field keeps its own name. A form that declares BOTH
+    a relation ``foo`` AND a field literally named ``foo_id`` produces two specs with
+    ``input_attr == "foo_id"``; ``build_strawberry_input_class`` writes the second
+    over the first in its annotations dict, SILENTLY dropping one generated input
+    field. The package is otherwise fail-loud, so this raises ``ConfigurationError``
+    naming the form and the two colliding form fields rather than losing a field.
+    """
+    seen: dict[str, str] = {}
+    for spec in field_specs:
+        prior = seen.get(spec.input_attr)
+        if prior is not None:
+            raise ConfigurationError(
+                f"Form {form_class.__name__!r} generates two input fields with the same "
+                f"attribute {spec.input_attr!r}: form fields {prior!r} and "
+                f"{spec.form_field_name!r} collide (a relation field remaps to "
+                f"'<name>_id', clashing with a field literally named that). Rename one "
+                "of the form fields, or drop one via Meta.fields / Meta.exclude.",
+            )
+        seen[spec.input_attr] = spec.form_field_name
 
 
 def build_form_input_class(
@@ -454,7 +504,13 @@ def build_form_input_class(
     field_specs: list[FormInputFieldSpec] = []
     for name, field in effective.items():
         column = _model_column_for(form_class, name)
-        python_attr, annotation, spec = _field_triple_and_spec(name, field, column, type_name)
+        python_attr, annotation, spec = _field_triple_and_spec(
+            name,
+            field,
+            column,
+            type_name,
+            form_class,
+        )
         field_specs.append(spec)
 
         # Requiredness: the create input honors ``field.required``; the partial
@@ -470,6 +526,7 @@ def build_form_input_class(
             field_kwargs["default"] = strawberry.UNSET
         triples.append((python_attr, annotation, field_kwargs))
 
+    _guard_input_attr_collisions(form_class, field_specs)
     input_cls = build_strawberry_input_class(type_name, triples)
     return input_cls, field_specs
 

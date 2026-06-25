@@ -336,6 +336,18 @@ def _model_less_relation_annotation(name: str, field: forms.Field) -> tuple[str,
     return f"{name}_id", id_scalar
 
 
+def _simple_triple(name: str, annotation: Any, kind: str) -> tuple[str, str, Any, str]:
+    """Return ``(input_attr, graphql_name, annotation, kind)`` for a NON-relation form field.
+
+    The scalar / file arms of ``_field_triple_and_spec`` all share one shape: the
+    input attr IS the form field's own name, and the wire name is its camelCase
+    (only a relation remaps to ``<name>_id``). Single-sources that
+    ``python_attr = name; graphql_name = graphql_camel_name(name)`` pair so it is
+    spelled once rather than in every non-relation arm.
+    """
+    return name, graphql_camel_name(name), annotation, kind
+
+
 def _field_triple_and_spec(
     name: str,
     field: forms.Field,
@@ -372,31 +384,29 @@ def _field_triple_and_spec(
             )
             kind = RELATION_MULTI if getattr(column, "many_to_many", False) else RELATION_SINGLE
         elif isinstance(column, (models.FileField, models.ImageField)):
-            python_attr = name
-            graphql_name = graphql_camel_name(python_attr)
-            annotation = Upload
-            kind = FILE
+            python_attr, graphql_name, annotation, kind = _simple_triple(name, Upload, FILE)
         else:
-            python_attr = name
-            graphql_name = graphql_camel_name(python_attr)
-            annotation = convert_scalar(column, type_name, force_nullable=False)
-            kind = SCALAR
+            python_attr, graphql_name, annotation, kind = _simple_triple(
+                name,
+                convert_scalar(column, type_name, force_nullable=False),
+                SCALAR,
+            )
     else:
         # Column-less form field: the model-less ``convert_form_field`` table owns
         # the kind; relation / file annotations are finalized here.
         conversion = convert_form_field(field)
-        kind = conversion.kind
-        if kind == FILE:
-            python_attr = name
-            graphql_name = graphql_camel_name(python_attr)
-            annotation = Upload
-        elif kind in (RELATION_SINGLE, RELATION_MULTI):
+        if conversion.kind == FILE:
+            python_attr, graphql_name, annotation, kind = _simple_triple(name, Upload, FILE)
+        elif conversion.kind in (RELATION_SINGLE, RELATION_MULTI):
             python_attr, annotation = _model_less_relation_annotation(name, field)
             graphql_name = graphql_camel_name(python_attr)
+            kind = conversion.kind
         else:
-            python_attr = name
-            graphql_name = graphql_camel_name(python_attr)
-            annotation = conversion.annotation
+            python_attr, graphql_name, annotation, kind = _simple_triple(
+                name,
+                conversion.annotation,
+                conversion.kind,
+            )
 
     spec = FormInputFieldSpec(
         input_attr=python_attr,

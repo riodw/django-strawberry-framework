@@ -90,7 +90,6 @@ from __future__ import annotations
 from typing import Any
 
 import strawberry
-from asgiref.sync import sync_to_async
 from django import forms
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -107,6 +106,7 @@ from ..mutations.resolvers import (
     payload_cls_for,
     raw_choice_value,
     refetch_optimized,
+    run_pipeline_async,
     save_or_field_errors,
 )
 from ..relay import GlobalIDDecode, decode_model_global_id
@@ -553,16 +553,11 @@ async def resolve_form_async(
 ) -> Any:
     """Async form-pipeline entry: the sync body in one ``sync_to_async(thread_sensitive=True)`` (Decision 8).
 
-    Does NOT re-implement the pipeline - it wraps the SAME
-    ``_run_form_pipeline_sync`` body (the same boundary shape ``036`` set) so the
-    ``transaction.atomic()`` + every ORM call run on one worker thread under
-    Django's async-safety contract, never interleaving ORM work with ``await``s. A
-    sync ``get_queryset`` runs synchronously inside the thread; an ``async def
-    get_queryset`` raises ``SyncMisuseError`` there.
+    Delegates to the shared ``mutations/resolvers.py::run_pipeline_async`` boundary
+    (single-sourced with the model flavor - the same ``036`` boundary shape) so the
+    ``transaction.atomic()`` + every ORM call run on one worker thread, never
+    interleaving ORM work with ``await``s. A sync ``get_queryset`` runs
+    synchronously inside that thread; an ``async def get_queryset`` raises
+    ``SyncMisuseError`` there.
     """
-    return await sync_to_async(_run_form_pipeline_sync, thread_sensitive=True)(
-        mutation_cls,
-        info,
-        data,
-        id,
-    )
+    return await run_pipeline_async(_run_form_pipeline_sync, mutation_cls, info, data, id)

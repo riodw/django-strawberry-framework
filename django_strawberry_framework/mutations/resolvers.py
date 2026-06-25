@@ -1239,6 +1239,28 @@ def payload_cls_for(mutation_cls: type) -> type:
     return getattr(inputs, mutation_cls._payload_type_name)
 
 
+async def run_pipeline_async(
+    sync_body: Any,
+    mutation_cls: type,
+    info: Any,
+    data: Any,
+    id: Any,  # noqa: A002
+) -> Any:
+    """Run a sync mutation/form pipeline body in one ``sync_to_async(thread_sensitive=True)`` call.
+
+    The shared async boundary both the model (``resolve_mutation_async``) and form
+    (``forms/resolvers.py::resolve_form_async``) entries delegate to - the
+    byte-identical ``sync_to_async(..., thread_sensitive=True)(mutation_cls, info,
+    data, id)`` wrapper, single-sourced so the two flavors cannot drift on the
+    boundary contract. ``sync_body`` is the flavor's ``_run_*_pipeline_sync``: it
+    runs on ONE worker thread so its ``transaction.atomic()`` + every ORM call never
+    interleave with ``await``s (spec-036 AR-M4); a sync ``get_queryset`` runs
+    synchronously inside that thread, while an ``async def get_queryset`` raises
+    ``SyncMisuseError`` there (no awaiting context - the standing discipline).
+    """
+    return await sync_to_async(sync_body, thread_sensitive=True)(mutation_cls, info, data, id)
+
+
 def resolve_mutation_sync(
     mutation_cls: type,
     info: Any,
@@ -1264,16 +1286,8 @@ async def resolve_mutation_async(
 ) -> Any:
     """Async pipeline entry: the sync body in one ``sync_to_async(thread_sensitive=True)`` (spec-036 AR-M4).
 
-    Does NOT re-implement the pipeline - it wraps the SAME ``_run_pipeline_sync``
-    body so the ``transaction.atomic()`` + every ORM call run on one worker thread
-    under Django's async-safety contract, never interleaving ORM work with
-    ``await``s. A sync ``get_queryset`` runs synchronously inside the thread; an
-    ``async def get_queryset`` raises ``SyncMisuseError`` there (no awaiting
-    context - the standing discipline).
+    Delegates to the shared ``run_pipeline_async`` boundary (single-sourced with the
+    form flavor) so the ``transaction.atomic()`` + every ORM call run on one worker
+    thread, never interleaving ORM work with ``await``s.
     """
-    return await sync_to_async(_run_pipeline_sync, thread_sensitive=True)(
-        mutation_cls,
-        info,
-        data,
-        id,
-    )
+    return await run_pipeline_async(_run_pipeline_sync, mutation_cls, info, data, id)

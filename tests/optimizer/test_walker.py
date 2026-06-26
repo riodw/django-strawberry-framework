@@ -43,6 +43,28 @@ from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.utils.strings import snake_case
 
+
+@pytest.fixture(autouse=True)
+def _isolate_registry():
+    """Clear the global registry around every walker test (order-independence).
+
+    ``plan_optimizations`` resolves a relation's target type - and that type's
+    ``get_queryset`` (the O6 ``Prefetch``-downgrade probe) - from the global registry,
+    so a test must not inherit registry state from a neighbour. The cardinality-
+    dispatch tests below assert the no-custom-``get_queryset`` path (forward FK ->
+    plain ``select_related``), which only holds when no real type is registered for the
+    target model. In serial collection that happened to be true, but under ``pytest -n
+    auto --dist loadscope`` a sibling module on the same worker can leave the real
+    ``apps.products.schema`` types registered, whose ``get_queryset`` reads
+    ``info.context`` - so ``plan_optimizations([_sel("category")], Item)`` would invoke
+    ``CategoryType.get_queryset(qs, None)`` and raise. Clearing before each test makes
+    every case deterministic regardless of order (and co-clears the node-field ledger).
+    """
+    registry.clear()
+    yield
+    registry.clear()
+
+
 # ---------------------------------------------------------------------------
 # Helpers: synthetic selection factories
 # ---------------------------------------------------------------------------

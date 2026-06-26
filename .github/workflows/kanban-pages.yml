@@ -47,6 +47,10 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
+          # Own cache namespace: this build runs on Python 3.12.3 like the django.yml
+          # lint job and would otherwise share its setup-uv cache key and race to save
+          # it whenever both workflows run on the same push.
+          cache-suffix: pages
 
       - name: Install dependencies
         run: uv sync --no-dev --python 3.12

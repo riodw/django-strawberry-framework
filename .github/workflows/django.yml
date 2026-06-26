@@ -17,6 +17,10 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
+          # Distinct cache namespace per setup-uv job: lint / test / pages otherwise
+          # share one key on Python 3.12.3 + the same uv.lock and race to save it
+          # (and overwrite each other's pruned cache content).
+          cache-suffix: lint
       - name: Set up Python 3.12
         run: uv python install 3.12
       - name: Install dependencies
@@ -73,6 +77,9 @@ jobs:
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
+          # One cache per matrix node: nodes sharing a Python (e.g. several 3.12
+          # combos on a full dispatch) would otherwise share a key and race / thrash.
+          cache-suffix: test-${{ matrix.python }}-${{ matrix.django }}-${{ matrix.fakeshop_sharded }}
 
       - name: Set up Python ${{ matrix.python }}
         run: uv python install ${{ matrix.python }}

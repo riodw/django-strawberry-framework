@@ -4,6 +4,7 @@ from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.http import HttpResponse
 from django.urls import path
+from django.views.decorators.csrf import ensure_csrf_cookie
 from strawberry.django.views import GraphQLView
 
 from config.schema import schema
@@ -49,12 +50,23 @@ urlpatterns = [
     # ``multipart_uploads_enabled=True`` lets the view accept GraphQL multipart
     # requests (off by default for security) so the spec-037 ``Upload`` scalar
     # can carry a real file in a live ``createMediaSpecimen`` mutation.
+    #
+    # ``ensure_csrf_cookie`` keeps CSRF protection ON while making the in-browser
+    # GraphiQL IDE work without a prior login. Strawberry's ``GraphQLView`` is a normal
+    # CSRF-protected Django view, so a browser POST is rejected ("CSRF cookie not set")
+    # unless a ``csrftoken`` cookie exists. This decorator forces the GET that serves
+    # GraphiQL to set that cookie; Strawberry's GraphiQL then reads it and sends it back
+    # as the ``x-csrftoken`` header on every POST (see its ``graphiql.html``), so the
+    # CsrfViewMiddleware check passes. The test suite never hit this (``django.test.Client``
+    # doesn't enforce CSRF). Unlike ``csrf_exempt``, the endpoint stays CSRF-protected.
     path(
         "graphql/",
-        GraphQLView.as_view(
-            schema=schema,
-            graphql_ide="graphiql",
-            multipart_uploads_enabled=True,
+        ensure_csrf_cookie(
+            GraphQLView.as_view(
+                schema=schema,
+                graphql_ide="graphiql",
+                multipart_uploads_enabled=True,
+            ),
         ),
     ),
     path("login/", auth_views.LoginView.as_view(template_name="admin/login.html"), name="login"),

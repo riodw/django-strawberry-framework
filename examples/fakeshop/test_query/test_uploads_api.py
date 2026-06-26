@@ -18,10 +18,8 @@ package-internal ``tests/types/test_resolvers.py`` (they need a mocked
 non-filesystem backend, unreachable from a live request).
 """
 
-import importlib
 import io
 import json
-import sys
 
 import pytest
 from apps.scalars import models
@@ -29,37 +27,20 @@ from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, override_settings
-from django.urls import clear_url_caches
-
-from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests():
+def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
     """Recreate imported DjangoType classes if package tests cleared the registry.
 
-    Mirrors the ``test_scalars_api.py`` fixture: reload the scalars schema, the
-    project schema, and the URL module (so the multipart-enabled GraphQLView is
-    rebound) without reloading ``apps.scalars.models`` (Django model classes stay
-    stable).
+    Rebuilds the FULL project schema (every contributing app + config + the
+    multipart-enabled GraphQLView via config.urls), not just ``apps.scalars.schema``:
+    ``config.schema`` aggregates all five apps, so a scalars-only reload left the
+    other apps unregistered after a package ``registry.clear()`` and the combined
+    build raised a ``LazyType`` ``KeyError`` under collection orders that did not
+    pre-materialize them. See ``conftest.py``. Django model classes stay stable.
     """
-    registry.clear()
-    scalars_schema = sys.modules.get("apps.scalars.schema")
-    if scalars_schema is None:
-        importlib.import_module("apps.scalars.schema")
-    else:
-        importlib.reload(scalars_schema)
-
-    project_schema = sys.modules.get("config.schema")
-    if project_schema is None:
-        importlib.import_module("config.schema")
-    else:
-        importlib.reload(project_schema)
-
-    urls = sys.modules.get("config.urls")
-    if urls is not None:
-        importlib.reload(urls)
-        clear_url_caches()
+    reload_all_project_app_schemas()
 
 
 # A 5x9 PNG so the live ``width`` / ``height`` assertions read distinct,

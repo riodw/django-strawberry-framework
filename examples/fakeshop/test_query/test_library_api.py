@@ -1,8 +1,6 @@
 """Live GraphQL HTTP tests for library relations, optimizer behavior, and Relay fields."""
 
 import base64
-import importlib
-import sys
 
 import pytest
 from apps.library import models
@@ -10,45 +8,31 @@ from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
-from django.urls import clear_url_caches
 from strawberry import relay
 
-from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
 
 
-def _reload_library_project_schema() -> None:
-    """Recreate imported DjangoType classes if package tests cleared the registry."""
-    # This reload is mandatory for order-independent suite isolation:
-    # package tests clear the global registry, while the example project
-    # schema finalizes import-time DjangoType classes. Reload only schema
-    # modules (not apps.library.models) so Django model classes stay stable and
-    # DjangoType subclasses are recreated against a fresh registry.
-    # Hidden invariant: tests must not module-level import classes from
-    # apps.library.schema, or they will hold stale class objects after reload.
-    registry.clear()
-    library_schema = sys.modules.get("apps.library.schema")
-    if library_schema is None:
-        importlib.import_module("apps.library.schema")
-    else:
-        importlib.reload(library_schema)
-
-    project_schema = sys.modules.get("config.schema")
-    if project_schema is None:
-        importlib.import_module("config.schema")
-    else:
-        importlib.reload(project_schema)
-
-    urls = sys.modules.get("config.urls")
-    if urls is not None:
-        importlib.reload(urls)
-        clear_url_caches()
-
-
 @pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests():
-    """Recreate the project schema around package-test registry clears."""
-    _reload_library_project_schema()
+def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
+    """Rebuild the FULL project schema around package-test registry clears.
+
+    Delegates to the shared ``conftest`` reload (via the
+    ``reload_all_project_app_schemas`` fixture) so the WHOLE project schema is
+    rebuilt - every contributing app + config, not just ``apps.library.schema``:
+    ``config.schema`` aggregates all five apps, so a library-only reload left the
+    other apps unregistered after a package ``registry.clear()`` and the combined
+    build raised a ``LazyType`` ``KeyError`` (e.g. ``CategoryFilterInputType`` from
+    products) under collection orders that did not pre-materialize them. Django model
+    classes are never reloaded so they stay stable; tests must not module-level
+    import classes from ``apps.library.schema`` or they hold stale class objects.
+
+    A test that must re-finalize under a changed setting requests the
+    ``reload_all_project_app_schemas`` fixture itself and calls it after applying the
+    setting (see ``test_*hide_flat_filters*``) - no module-level reload helper, so
+    there is no brittle ``import conftest`` boundary.
+    """
+    reload_all_project_app_schemas()
 
 
 def _seed_library_graph():
@@ -775,16 +759,19 @@ def test_library_branches_filter_by_name_icontains():
     )
 
 
-def test_hide_flat_filters_changes_library_filter_input_shape_over_http(settings):
+def test_hide_flat_filters_changes_library_filter_input_shape_over_http(
+    settings,
+    reload_all_project_app_schemas,
+):
     """``HIDE_FLAT_FILTERS`` changes the real GraphQL input shape exposed at ``/graphql/``."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": False}
-    _reload_library_project_schema()
+    reload_all_project_app_schemas()
     shown = _input_field_names("BranchFilterInputType")
     assert "shelves" in shown
     assert "shelvesCode" in shown
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
-    _reload_library_project_schema()
+    reload_all_project_app_schemas()
     hidden = _input_field_names("BranchFilterInputType")
     assert "shelves" in hidden
     assert "shelvesCode" not in hidden

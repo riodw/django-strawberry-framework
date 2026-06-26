@@ -1044,6 +1044,14 @@ def bind_mutations() -> None:
     classes (spec-036 Decision 12). Drains the declaration registry in
     registration order; each ``_bind_mutation`` materializes that mutation's
     generated classes.
+
+    ``_shape_build_cache`` is this pass's own (per-pass) build cache, cleared at the
+    top so each input is rebuilt fresh. The cross-pass materialization ledgers
+    (``mutations.inputs`` / ``forms.inputs`` - the ``ModelForm`` flavor rides this
+    pass but writes the FORM ledger) are reset ONCE by ``finalize_django_types``
+    before the bind sequence so a recover-in-place re-finalize is retry-idempotent
+    (feedback #6); they are NOT reset here, where a per-pass clear would wipe the
+    sibling pass's already-materialized entries.
     """
     _shape_build_cache.clear()
     for mutation_cls in iter_mutations():

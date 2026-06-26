@@ -40,10 +40,12 @@ and the form-specific invariants this module owns:
 - **``update`` reconstructs the full bound payload** (Decision 8 step 4, P1): for
   every non-file declared form field the input did not provide, supply the located
   row's value under the form field name, then overlay ``provided_data``; ``files =
-  provided_files``. Scalars + FK come from ``model_to_dict`` (a FK's stored
-  ``attname`` IS the ``to_field`` / pk key the bound form resolves), while M2M is
-  reconstructed as the field's ``to_field_name`` values (``_to_form_key_value``) so
-  an omitted M2M binds in the SAME shape a provided one decodes to (Decision 8). An
+  provided_files``. Scalars + a ``to_field_name``-less FK come
+  from ``model_to_dict`` (the FK's stored ``attname`` IS the ``to_field`` / pk key the
+  bound form resolves), while M2M and a ``ModelChoiceField`` with ``to_field_name`` set
+  are reconstructed from the related object(s) as ``to_field_name`` values
+  (``_to_form_key_value``) so an omitted relation binds in the SAME shape a provided one
+  decodes to (Decision 8 / feedback #5). An
   omitted file is preserved via the bound ``form_class(instance=...)``'s ``initial``
   (never re-supplied, never cleared). A required non-model extra field stays
   required in the Slice-1 partial input, so it is always present in
@@ -98,6 +100,7 @@ from strawberry import relay
 
 from ..mutations.resolvers import (
     _coerce_relation_pk_or_none,
+    _unencodable_text_error,
     authorize_or_raise,
     build_payload,
     coerce_lookup_id,
@@ -335,6 +338,21 @@ def _decode_form_data(
         elif spec.kind == FILE:
             provided_files[spec.form_field_name] = value
         else:
+            # Same invalid-Unicode preflight the model path applies in
+            # ``_decode_relations`` (feedback #2): a lone surrogate that graphql-core
+            # accepts as a ``String`` would otherwise reach the bound form's
+            # ``validate_unique`` lookup or ``save()`` INSERT and raise a raw
+            # ``UnicodeEncodeError`` - a ``ValueError`` neither the form's own
+            # validation nor ``save_or_field_errors`` maps - escaping the
+            # ``{ node: null, errors: [...] }`` envelope as a top-level error. Reject
+            # it here, keyed to the input's GraphQL field name (the relation branch's
+            # ``spec.graphql_name`` contract), before constructing the form. Only the
+            # storability check belongs here; the form owns its own null / datetime
+            # coercion (so the model path's ``_explicit_null_error`` /
+            # ``_make_aware_if_naive`` siblings are intentionally absent).
+            text_error = _unencodable_text_error(spec.graphql_name, value)
+            if text_error is not None:
+                return {}, {}, text_error
             provided_data[spec.form_field_name] = raw_choice_value(value)
 
     return provided_data, provided_files, None
@@ -358,11 +376,23 @@ def _reconstruct_partial_data(
     Two reconstruction shapes, each matching what the DECODE produces for a PROVIDED
     field so an omitted field binds byte-compatibly with a provided one:
 
-    - **Scalars + FK / OneToOne** come from ``model_to_dict``: a FK's value is its
-      ``attname`` (the stored ``to_field`` value - the pk by default, or the
+    - **Scalars + plain FK / OneToOne** come from ``model_to_dict``: a FK's value is
+      its ``attname`` (the stored ``to_field`` value - the pk by default, or the
       ``ForeignKey(to_field=...)`` value), which is exactly the key the bound
       ``ModelChoiceField`` resolves and what ``_to_form_key_value`` produces for a
-      provided FK. So FK / scalar need no special handling.
+      provided FK. So a ``to_field_name``-LESS FK / scalar needs no special handling.
+    - **A ``ModelChoiceField`` with ``to_field_name`` set** is reconstructed from the
+      related object via ``_to_form_key_value`` (the ``to_field_name`` value), NOT
+      ``model_to_dict`` (which yields the pk / model ``to_field`` value). The bound
+      form validates that single FK against ``to_field_name`` (``queryset.get(
+      <to_field_name>=value)``), so a ``model_to_dict`` pk would fail ``to_python``
+      for an OMITTED unchanged FK while a PROVIDED unchanged FK (decoded to the
+      ``to_field_name`` value) passes - the same omitted-vs-provided inconsistency
+      the M2M branch already fixes (feedback #5). Gated on ``to_field_name`` so the
+      common ``to_field_name``-less FK keeps its cheap ``model_to_dict`` path (no
+      per-FK related-object fetch); a nullable FK whose row value is ``None`` falls
+      through to ``model_to_dict`` (the form's empty value), never
+      ``_to_form_key_value(None, ...)``.
     - **M2M** is reconstructed as a list of ``_to_form_key_value(obj, form_field)``
       (the ``to_field_name`` value, default ``obj.pk``) - NOT ``model_to_dict``'s
       list of related INSTANCES. For a ``ModelMultipleChoiceField`` with
@@ -389,6 +419,7 @@ def _reconstruct_partial_data(
     m2m_field_names = {field.name for field in model._meta.many_to_many}
 
     m2m_data: dict[str, Any] = {}
+    relation_data: dict[str, Any] = {}
     scalar_names: list[str] = []
     for name, form_field in form_fields.items():
         if name in provided_data or isinstance(form_field, forms.FileField):
@@ -397,11 +428,23 @@ def _reconstruct_partial_data(
             m2m_data[name] = [
                 _to_form_key_value(obj, form_field) for obj in getattr(instance, name).all()
             ]
+        elif (
+            isinstance(form_field, forms.ModelChoiceField)
+            and not isinstance(form_field, forms.ModelMultipleChoiceField)
+            and form_field.to_field_name
+            and (related := getattr(instance, name, None)) is not None
+        ):
+            relation_data[name] = _to_form_key_value(related, form_field)
         else:
             scalar_names.append(name)
 
     base = model_to_dict(instance, fields=scalar_names)
-    return {**base, **m2m_data, **provided_data}
+    return {
+        **base,
+        **m2m_data,
+        **relation_data,
+        **provided_data,
+    }
 
 
 def _form_errors_to_field_errors(form: Any) -> list[Any]:

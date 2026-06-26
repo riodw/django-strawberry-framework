@@ -56,6 +56,7 @@ from django_strawberry_framework.forms.inputs import (
     clear_form_input_namespace,
     form_input_type_name,
     get_form_fields,
+    guard_partial_required_column_less_fields,
     materialize_form_input_class,
     resolve_effective_form_fields,
 )
@@ -502,6 +503,32 @@ def test_create_guard_waiver_does_not_raise():
         guard_required=False,
     )
     assert "confirm" not in _field_map(cre)
+
+
+def test_partial_guard_rejects_dropping_required_column_less_field():
+    """A partial (update) narrowing dropping a required COLUMN-LESS field raises naming it (feedback #4).
+
+    ``confirm`` is a non-model required extra; on update it cannot be reconstructed
+    from the row (``model_to_dict`` only returns columns), so dropping it would
+    finalize a form that fails required-validation on every request. The effective
+    set here keeps only the model-backed fields, dropping ``confirm``.
+    """
+    effective = resolve_effective_form_fields(_item_model_form(), exclude=("confirm",))
+    with pytest.raises(ConfigurationError, match="confirm"):
+        guard_partial_required_column_less_fields(_item_model_form(), effective)
+
+
+def test_partial_guard_allows_dropping_model_backed_required_field():
+    """Dropping a MODEL-BACKED required field on update does NOT raise (feedback #4 scoping).
+
+    The load-bearing column-less scoping: ``name`` is a required model column, so the
+    partial path widens it optional and reconstructs it from the located row - dropping
+    it from the input is harmless and must NOT trip the guard (a blanket reuse of the
+    create guard would wrongly reject it). Only ``confirm`` (column-less) would.
+    """
+    # Drop the model-backed required ``name`` but keep the column-less required ``confirm``.
+    effective = resolve_effective_form_fields(_item_model_form(), exclude=("name",))
+    guard_partial_required_column_less_fields(_item_model_form(), effective)  # no raise
 
 
 def test_exclude_naming_unknown_field_raises():

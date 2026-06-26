@@ -542,6 +542,50 @@ def test_bind_materializes_input_and_payload_globals():
     assert UpdateItem._primary_type is not None
 
 
+def test_bind_is_retry_idempotent_after_fixable_later_phase_failure(monkeypatch):
+    """A re-call after a fixable post-bind finalization failure succeeds, not a masked collision (feedback #6).
+
+    ``finalize_django_types()`` documents recover-in-place: fix the offending
+    cause and call again, no ``registry.clear()`` required. But phase 2.5 binds
+    mutations (materializing ``ItemInput`` into the ledger) BEFORE the later phases
+    that can fail. The prior bind cleared only ``_shape_build_cache``, leaving the
+    ledger populated with run-1's class object, so run-2 rebuilt a fresh
+    ``ItemInput`` and hit a spurious distinct-class collision in
+    ``materialize_generated_input_class`` - masking the original, now-fixed error.
+    Resetting the materialization ledgers in ``finalize_django_types`` before the
+    bind sequence makes the rerun clean.
+    """
+    from django_strawberry_framework.mutations.inputs import _materialized_names
+
+    _declare_products_primaries()
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+
+    # A fixable failure in a phase that runs AFTER the mutation bind (orderset bind
+    # sits just past ``bind_mutations`` / ``bind_form_mutations`` in phase 2.5).
+    def _boom() -> None:
+        raise RuntimeError("injected post-bind finalization failure")
+
+    monkeypatch.setattr("django_strawberry_framework.types.finalizer._bind_ordersets", _boom)
+    with pytest.raises(RuntimeError, match="injected post-bind"):
+        finalize_django_types()
+    # The bind already materialized the input before the later phase failed.
+    assert "ItemInput" in _materialized_names
+    assert registry.is_finalized() is False
+
+    # Fix the cause and re-finalize WITHOUT registry.clear(): the rerun must NOT
+    # raise the masking distinct-class collision.
+    monkeypatch.undo()
+    finalize_django_types()
+
+    assert registry.is_finalized() is True
+    assert "ItemInput" in _materialized_names
+    assert CreateItem._input_class is _materialized_names["ItemInput"]
+
+
 def test_bind_merges_consumer_input_class_with_generated_remainder():
     """A consumer ``input_class`` overriding ONE field is MERGED, not a wholesale replace (CR-2).
 

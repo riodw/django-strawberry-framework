@@ -755,8 +755,25 @@ def finalize_django_types() -> None:
     # missing / ambiguous primary target raises ``ConfigurationError``; no
     # ``DEFERRED_META_KEYS`` / ``ALLOWED_META_KEYS`` change (a mutation ``Meta`` is
     # its own namespace).
+    # Reset the cross-pass materialization ledgers ONCE before the bind sequence so
+    # finalize is retry-idempotent (feedback #6). Both bind passes clear their OWN
+    # per-pass build cache and then rebuild fresh input class objects, but the
+    # ``mutations.inputs`` / ``forms.inputs`` ledgers persist across passes (the
+    # ``ModelForm`` flavor rides ``bind_mutations`` yet writes the FORM ledger; the
+    # plain-form payload writes the MUTATION ledger), so neither pass can soundly
+    # clear them itself - a per-pass clear would wipe the sibling pass's entries.
+    # Without this, a re-call after a fixable later-phase failure (the documented
+    # recover-in-place path) hit a spurious distinct-class collision in
+    # ``materialize_generated_input_class`` that masked the original, now-fixed
+    # error. Parked module globals are overwritten in place by the next ``setattr``
+    # (the parked-globals lifecycle), so a ledger-only clear is safe. ``registry``
+    # is NOT cleared here - this resets only the emit ledgers, not declarations.
+    from ..forms.inputs import clear_form_input_namespace
+    from ..mutations.inputs import clear_mutation_input_namespace
     from ..mutations.sets import bind_mutations
 
+    clear_mutation_input_namespace()
+    clear_form_input_namespace()
     bind_mutations()
     # Bind plain ``DjangoFormMutation`` declarations (spec-038 Slice 2 / Decision
     # 6 / Decision 13) in the SAME phase-2.5 window. The model-less plain-form

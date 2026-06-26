@@ -34,7 +34,12 @@ from django_strawberry_framework import (
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.permissions import apply_cascade_permissions
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.relay import _coerce_pk_or_none, _stamp_node_type
+from django_strawberry_framework.relay import (
+    GlobalIDDecode,
+    _coerce_pk_or_none,
+    _stamp_node_type,
+    decode_model_global_id,
+)
 from django_strawberry_framework.types.relay import SyncMisuseError
 
 
@@ -346,6 +351,88 @@ def test_node_custom_node_id_attr_uncoercible_returns_null():
     )
     assert result.errors is None
     assert result.data == {"node": None}
+
+
+@pytest.mark.django_db
+def test_decode_model_global_id_resolves_custom_node_id_to_real_pk():
+    """Write-side decode maps a custom NodeID value to the REAL pk, not the attr value (feedback #1).
+
+    ``decode_model_global_id`` feeds every WRITE consumer (update/delete
+    ``locate_instance``'s ``get(pk=...)``, the relation ``pk__in`` visibility query,
+    and FK / M2M assignment), all of which treat ``result.pk`` as an actual primary
+    key. For a consumer ``id: relay.NodeID[str]`` over the non-pk ``name`` column,
+    the decoded value is the ``name`` string; handing that to a ``pk=`` lookup
+    targets the wrong column (the P1 bug). The fix resolves it to ``row.pk`` here.
+    """
+    services.seed_data(1)
+
+    class CategoryNode(DjangoType):
+        name: relay.NodeID[str]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+    finalize_django_types()
+    row = Category.objects.order_by("pk").first()
+    result = decode_model_global_id(_gid("products.category", row.name), Category)
+    assert result.status is GlobalIDDecode.OK
+    # The REAL integer pk, NOT the ``name`` string the GlobalID carried.
+    assert result.pk == row.pk
+    assert result.pk != row.name
+
+
+@pytest.mark.django_db
+def test_decode_model_global_id_custom_node_id_no_row_is_uncoercible():
+    """A custom NodeID value matching no row decodes as UNCOERCIBLE_PK, never a phantom pk (feedback #1).
+
+    A ``name`` that exists on no row resolves to ``None`` in ``_resolve_real_pk``,
+    which the caller maps to the same not-found surface a hidden row yields (no
+    existence leak) - rather than passing the literal through as a fake pk.
+    """
+    services.seed_data(1)
+
+    class CategoryNode(DjangoType):
+        name: relay.NodeID[str]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "CategoryNode"
+
+    finalize_django_types()
+    result = decode_model_global_id(_gid("products.category", "no-such-category-name"), Category)
+    assert result.status is GlobalIDDecode.UNCOERCIBLE_PK
+    assert result.pk is None
+
+
+@pytest.mark.django_db
+def test_decode_model_global_id_passes_raw_value_for_non_field_node_id():
+    """A NodeID over a non-concrete attr has no column to resolve, so the value passes through (feedback #1).
+
+    ``_resolve_real_pk`` mirrors ``_coerce_pk_or_none``'s ``FieldDoesNotExist``
+    fall-through: with no concrete column to map to a pk, the coerced literal is
+    returned unchanged rather than crashing on ``get_field`` (a downstream
+    ``pk=<literal>`` lookup then fails as not-found, the pre-032 behavior).
+    """
+    services.seed_data(1)
+
+    class SlugNode(DjangoType):
+        slug: relay.NodeID[str]
+
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            name = "SlugNode"
+
+    finalize_django_types()
+    result = decode_model_global_id(_gid("products.category", "abc-123"), Category)
+    assert result.status is GlobalIDDecode.OK
+    assert result.pk == "abc-123"
 
 
 def test_coerce_pk_or_none_passes_raw_string_for_non_field_node_id():

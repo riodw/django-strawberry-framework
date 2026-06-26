@@ -404,7 +404,7 @@ class CelestialBodyFieldSet(FieldSet):
         return _resolve_date(root.updated_date, info, "astronomy.view_celestialbody")
 ```
 
-That is the entire `astronomy` app. **Six files, ~270 lines of consumer code total**, and it ships a richly-shaped Relay-node GraphQL API with: filtering across all fields and the FK relation; ordering across all fields and the FK relation; per-field aggregates with a custom stat; per-field redaction, denial, and tiered visibility; cascade row-level permissions; full-text-like search across two fields plus the relation; choice-enum generation for `body_type`; FK-id elision for `{ celestialBody { galaxy { id } } }`; N+1-safe queryset planning across every nested selection. The shipped `0.0.5` foundation already does the `DjangoType` half of this; the Layer-3 cards in [`KANBAN.md`][kanban] bring the four sidecar files online between now and `1.0.0`.
+That is the entire `astronomy` app. **Six files, ~270 lines of consumer code total**, and it ships a richly-shaped Relay-node GraphQL API with: filtering across all fields and the FK relation; ordering across all fields and the FK relation; per-field aggregates with a custom stat; per-field redaction, denial, and tiered visibility; cascade row-level permissions; full-text-like search across two fields plus the relation; choice-enum generation for `body_type`; FK-id elision for `{ celestialBody { galaxy { id } } }`; N+1-safe queryset planning across every nested selection. The shipped `0.0.12` surface already does all but three of these — the per-field aggregates, the fieldset redaction / denial / tiered visibility, and the relation-aware search. The remaining Layer-3 cards in [`KANBAN.md`][kanban] bring those sidecars online between now and `1.0.0`.
 
 ## Migration shape
 
@@ -530,7 +530,7 @@ The destination is a Django-native, Strawberry-powered framework that makes rich
 
 Two example projects prove the goal:
 
-- **Fakeshop** (`examples/fakeshop/`) grows from today's bidirectional list-based products demo + the rich library demo into the full Relay-shaped showcase: per-model connection fields with filter / order / aggregate / fieldset / search / cascade-permission sidecars; create / update / delete mutations driven by both Django `ModelForm`s and DRF `ModelSerializer`s; file / image upload mutations; auth mutations exercised by the existing test users; sharded multi-database stress mode.
+- **Fakeshop** (`examples/fakeshop/`) extends today's shipped demo — `products` already runs connection fields with filter / order sidecars, cascade row-level visibility, and `ModelForm`-driven create / update / delete plus file-upload mutations, beside the `library` and `scalars` apps — into the full Relay-shaped showcase: the remaining aggregate / fieldset / search sidecars; `ModelSerializer`-driven mutations; image-upload mutations; auth mutations exercised by the existing test users; sharded multi-database stress mode.
 - **Cookbook parity**: a Strawberry version of `django-graphene-filters`'s `recipes/schema.py` should be a clean port — same node graph (object types, attributes, values), same sidecar shape, equivalent capabilities. The astronomy example above is the structural reduction of that port; the full cookbook is the proof.
 
 For the per-card sequencing of each capability, see [`KANBAN.md`][kanban].

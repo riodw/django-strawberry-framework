@@ -1747,7 +1747,7 @@ def test_products_categories_items_connection_fixed_query_count():
 
 # Slice 6 (spec-033) deliberately adds NO Meta.connection opt-in on the four
 # products types (no totalCount; minimal cookbook-mirror conversion) and NO root
-# node(id:) / nodes(ids:) entry points (those stay TODO-BETA-052-0.1.5).
+# node(id:) / nodes(ids:) entry points (those stay TODO-BETA-053-0.1.5).
 
 
 # =============================================================================

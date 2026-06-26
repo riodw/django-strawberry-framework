@@ -45,6 +45,7 @@ dev = [
     "pytest-asyncio>=1.0.0",
     "pytest-cov>=7.0.0",
     "pytest-django>=4.5.2",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.15.0",
 ]
 

@@ -21,7 +21,6 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
 
 from asgiref.sync import sync_to_async
-from django.core.exceptions import ValidationError
 from django.db import models
 from django_filters import filterset
 from django_filters.utils import get_model_field
@@ -59,7 +58,7 @@ from ..utils.querysets import (
     apply_type_visibility_sync,
 )
 from ..utils.relations import is_many_side_relation_kind, relation_kind
-from .base import GlobalIDFilter, GlobalIDMultipleChoiceFilter, RelatedFilter
+from .base import GlobalIDFilter, GlobalIDMultipleChoiceFilter, IntegerInFilter, RelatedFilter
 from .inputs import _LOGIC_KEYS, LOOKUP_NAME_MAP, _field_specs, normalize_input_value
 
 # Python-attr tokens of the logical operator keys (``and_`` / ``or_`` / ``not_``),
@@ -116,45 +115,6 @@ def _read_qs(filterset_instance: Any) -> models.QuerySet:
     exists because ``sync_to_async`` wants a callable, not an attribute read.
     """
     return filterset_instance.qs
-
-
-def _coerce_int_in_members(model: type, source_path: str, values: list[Any]) -> list[Any]:
-    """Drop ``__in`` members an integer column cannot store, so none reach the backend.
-
-    A scalar ``__in`` lookup (django-filter's ``BaseInFilter``) binds each list
-    element directly as a query parameter, so a value past the column's signed-64-bit
-    range reaches the backend as a raw ``OverflowError`` (``Python int too large to
-    convert to SQLite INTEGER``) escaping as a top-level error - unlike a scalar
-    ``exact`` / comparison, which Django's range-aware integer lookups resolve to
-    "matches nothing" BEFORE binding (so only the element-binding ``in`` is exposed).
-
-    Mirrors the relation path's ``mutations/resolvers.py::_coerce_relation_pk_or_none``:
-    each element is coerced through the column's ``to_python`` + ``run_validators`` and
-    an uncoercible / out-of-range element is DROPPED - it can identify no row, so the
-    common case (some valid members) still filters correctly and never reaches the
-    backend as a raw ``OverflowError``. The degenerate case where EVERY member is out of
-    range empties the list, which degrades to the SAME no-constraint behaviour as an
-    explicit empty ``in: []`` (django-filter skips an empty membership clause) - a no-op
-    rather than a crash. A no-op for a non-integer column (only integer columns carry the
-    binding-range limit) and for a missing model field (a custom ``method=`` filter with
-    no backing column resolves to ``None``). ``range`` is deliberately NOT coerced here:
-    dropping a bound would silently change the interval, and its bounds go through the
-    range-aware ``gte`` / ``lte`` lookups. The caller only invokes this for a
-    non-GlobalID ``in`` lookup on a model-backed FilterSet, so ``model`` is set and
-    ``values`` is the normalized list.
-    """
-    model_field = get_model_field(model, source_path)
-    if not isinstance(model_field, models.IntegerField):
-        return values
-    kept: list[Any] = []
-    for value in values:
-        try:
-            coerced = model_field.to_python(value)
-            model_field.run_validators(coerced)
-        except (ValidationError, ValueError, TypeError):
-            continue
-        kept.append(coerced)
-    return kept
 
 
 def _lookups_for_field(model_field: models.Field | None) -> list[str]:
@@ -606,6 +566,15 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 "only 'exact', 'in', and 'isnull'. Remove it from Meta.fields.",
             )
         if not field.is_relation:
+            if lookup_type == "in" and isinstance(field, models.IntegerField):
+                # An element-binding integer ``__in`` routes through IntegerInFilter:
+                # it drops out-of-range members (an out-of-range value overflows the
+                # backend at bind) and matches NOTHING when a non-empty list fully
+                # drops, instead of django-filter's empty-value skip that would widen
+                # a restrictive ``in`` to no constraint (feedback). Own-PK Relay ``in``
+                # is handled above (GlobalIDMultipleChoiceFilter); a non-integer column
+                # carries no binding-range limit so it keeps the upstream filter.
+                return IntegerInFilter, params
             return default_class, params
         target_type = cls._resolve_relation_target_type(field, getattr(field, "name", None))
         if target_type is None or not implements_relay_node(target_type):
@@ -810,22 +779,10 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                     if isinstance(normalized, dict):
                         data.update(normalized)
                     else:
-                        if django_lookup == "in" and not isinstance(
-                            filter_instance,
-                            GlobalIDMultipleChoiceFilter,
-                        ):
-                            # Element-binding raw-int ``__in``: drop members the
-                            # integer column cannot store so an out-of-range value
-                            # never overflows the backend (scalar exact/comparison
-                            # lookups are already Django range-aware). A GlobalID
-                            # ``in`` carries base64 strings (not raw pks) even though
-                            # the own-pk column is an integer, so it is excluded -
-                            # its values are decoded/validated in the filter itself.
-                            normalized = _coerce_int_in_members(
-                                cls._meta.model,
-                                base_path,
-                                normalized,
-                            )
+                        # An element-binding integer ``__in`` is range-coerced (and
+                        # empty-aware) by ``IntegerInFilter`` at filter time, not here
+                        # (``filter_for_lookup`` routes it there), so the normalized
+                        # list passes straight through.
                         data[form_key] = normalized
                 continue
             form_key = django_source_path or cls._form_key_for_python_attr(field.python_attr)

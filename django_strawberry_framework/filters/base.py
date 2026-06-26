@@ -26,10 +26,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.core.exceptions import ValidationError
+from django.db import models
 from django.forms import Field, MultipleChoiceField
-from django_filters import Filter, ModelChoiceFilter, MultipleChoiceFilter
+from django_filters import Filter, ModelChoiceFilter, MultipleChoiceFilter, NumberFilter
 from django_filters.constants import EMPTY_VALUES
-from django_filters.filters import FilterMethod
+from django_filters.filters import BaseInFilter, FilterMethod
+from django_filters.utils import get_model_field
 from graphql import GraphQLError
 from strawberry import relay
 
@@ -183,6 +185,65 @@ class ListFilter(TypedFilter):
         if value is not None and len(value) == 0:
             return qs if self.exclude else qs.none()
         return super().filter(qs, value)
+
+
+def _coerce_int_in_members(model_field: models.IntegerField, values: list) -> list:
+    """Drop ``__in`` members an integer column cannot store (range coercion).
+
+    A scalar ``__in`` lookup (`BaseInFilter`) binds each member directly as a query
+    parameter, so a value past the column's signed-64-bit range reaches the backend
+    as a raw ``OverflowError`` (`Python int too large to convert to SQLite INTEGER`)
+    escaping as a top-level error - unlike a scalar `exact` / comparison, which
+    Django's range-aware integer lookups resolve to "matches nothing" BEFORE binding.
+    Each element is coerced through the column (`to_python` + `run_validators`) and an
+    uncoercible / out-of-range element is DROPPED - it can identify no row - so the
+    common case (some valid members) still filters and never overflows the backend.
+    Mirrors `mutations/resolvers.py::_coerce_relation_pk_or_none`.
+    """
+    kept: list = []
+    for value in values:
+        try:
+            coerced = model_field.to_python(value)
+            model_field.run_validators(coerced)
+        except (ValidationError, ValueError, TypeError):
+            continue
+        kept.append(coerced)
+    return kept
+
+
+class IntegerInFilter(BaseInFilter, NumberFilter):
+    """Integer ``__in`` filter that drops out-of-range members and is empty-aware.
+
+    `filter_for_lookup` routes a non-relation integer column's `in` lookup here
+    instead of django-filter's plain `BaseInFilter`. Two behaviours layer onto the
+    default element-binding `__in`:
+
+    - **Range coercion** (the original overflow fix): each member is coerced through
+      the column and an out-of-range one is dropped, so it never reaches the backend
+      as a raw `OverflowError`.
+    - **Empty-aware match-nothing** (feedback): a NON-empty input whose members ALL
+      drop - every value is out of range and can identify no row - matches NOTHING,
+      so it short-circuits to `qs.none()` rather than degrading to django-filter's
+      empty-value SKIP, which would silently widen a restrictive `in` to no
+      constraint (return every visible row). An explicitly empty input (`in: []` - no
+      membership values provided) is NOT a restrictive filter that lost its members,
+      so it keeps the default skip. A mixed input keeps its valid members. For an
+      `exclude` filter the complement of "no row" is "every row", so it returns `qs`.
+    """
+
+    def filter(self, qs: Any, value: Any) -> Any:
+        """Coerce members, matching nothing when a non-empty input fully drops."""
+        if value in EMPTY_VALUES:
+            # Explicit empty / None (``in: []``): keep django-filter's skip (no
+            # membership values were supplied, so there is no constraint to honor).
+            return super().filter(qs, value)
+        model_field = get_model_field(self.parent._meta.model, self.field_name)
+        kept = _coerce_int_in_members(model_field, value)
+        if not kept:
+            # A non-empty membership list whose every value is out of range matches
+            # no row; never the empty-value skip that would return all rows.
+            return qs if self.exclude else qs.none()
+        return super().filter(qs, kept)
 
 
 def _target_definition_for(filter_instance: Filter) -> DjangoTypeDefinition | None:

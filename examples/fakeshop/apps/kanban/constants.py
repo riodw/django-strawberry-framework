@@ -90,6 +90,7 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/apps/scalars/tests/__init__.py",
     "examples/fakeshop/apps/scalars/tests/test_models.py",
     "examples/fakeshop/test_query/README.md",
+    "examples/fakeshop/test_query/conftest.py",
     "examples/fakeshop/test_query/test_glossary_api.py",
     "examples/fakeshop/test_query/test_kanban_api.py",
     "examples/fakeshop/test_query/test_library_api.py",

@@ -17,54 +17,28 @@ directly (not via the importer, so assertions stay independent of how the real
 * reverse-FK from a lookup (``status { cards }``).
 """
 
-import importlib
-import sys
-
 import pytest
 from apps.glossary import models as glossary_models
 from apps.kanban import models
 from django.test import Client
-from django.urls import clear_url_caches
 from strawberry import relay
 
 
 @pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests():
+def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
     """Recreate imported DjangoType classes if package tests cleared the registry.
 
-    Mirrors the ``test_products_api.py`` fixture: package tests clear the global
-    registry, while the example schema finalizes import-time ``DjangoType``
-    classes. Reload only schema modules (not ``apps.kanban.models``) so Django
-    model classes -- and the connected ``post_save`` UUID signal -- stay stable.
+    Rebuilds the FULL project schema (every contributing app + config), not just
+    glossary + kanban: ``config.schema`` aggregates all five apps, so reloading only
+    this app's chain left products/library/scalars unregistered after a package
+    ``registry.clear()`` and the combined build raised a ``LazyType`` ``KeyError``
+    (e.g. ``CategoryFilterInputType`` from products). The shared ``conftest.py``
+    helper reloads glossary before kanban (the ``CardGlossaryTermType.term`` FK to
+    ``glossary.GlossaryTerm``) and re-registers the remaining apps so the rebuild is
+    complete and order-independent. ``apps.kanban.models`` is never reloaded, so the
+    Django model classes -- and the connected ``post_save`` UUID signal -- stay stable.
     """
-    from django_strawberry_framework.registry import registry
-
-    registry.clear()
-    # Glossary must reload BEFORE kanban: CardGlossaryTermType.term is a FK to
-    # glossary.GlossaryTerm, and finalize_django_types() will reject the kanban
-    # registration if GlossaryTermType is not already in the registry.
-    glossary_schema = sys.modules.get("apps.glossary.schema")
-    if glossary_schema is None:
-        importlib.import_module("apps.glossary.schema")
-    else:
-        importlib.reload(glossary_schema)
-
-    kanban_schema = sys.modules.get("apps.kanban.schema")
-    if kanban_schema is None:
-        importlib.import_module("apps.kanban.schema")
-    else:
-        importlib.reload(kanban_schema)
-
-    project_schema = sys.modules.get("config.schema")
-    if project_schema is None:
-        importlib.import_module("config.schema")
-    else:
-        importlib.reload(project_schema)
-
-    urls = sys.modules.get("config.urls")
-    if urls is not None:
-        importlib.reload(urls)
-        clear_url_caches()
+    reload_all_project_app_schemas()
 
 
 def _seed_board():

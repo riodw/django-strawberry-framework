@@ -2148,14 +2148,17 @@ def test_nullability_override_acceptance_api_is_queryable():
 
 @pytest.mark.django_db
 def test_public_patron_exclude_deny_list_shapes_type_and_resolves():
-    """``PublicPatronType`` (``Meta.exclude``) drops PII/financial columns; ``PatronType`` keeps them.
+    """``PublicPatron`` (``Meta.exclude`` + ``Meta.name`` + ``Meta.description``) vs ``PatronType``.
 
     ``PublicPatronType`` selects via a deny-list ``Meta.exclude = ("email",
     "lifetime_fines_cents")`` over the same ``Patron`` model that the primary
-    ``PatronType`` selects via an allow-list ``Meta.fields``. This pins both halves
-    of the contrast: the excluded columns are absent from the GraphQL type
-    (selecting one is a query error), the kept columns resolve, and the primary
-    ``PatronType`` is unaffected.
+    ``PatronType`` selects via an allow-list ``Meta.fields``. It also renames the
+    GraphQL type to ``PublicPatron`` (``Meta.name``, decoupled from the
+    ``PublicPatronType`` class name) and carries a ``Meta.description``. This pins:
+    the renamed GraphQL type exists with the description and resolves; the original
+    class name is NOT a GraphQL type; the excluded columns are absent (selecting one
+    is a query error); the kept columns resolve; and the primary ``PatronType`` is
+    unaffected.
     """
     models.Patron.objects.create(
         name="Ada",
@@ -2163,12 +2166,15 @@ def test_public_patron_exclude_deny_list_shapes_type_and_resolves():
         lifetime_fines_cents=1234,
     )
 
-    # 1. Schema shape: the two excluded columns are gone from PublicPatronType,
-    #    while the allow-list primary PatronType still carries lifetimeFinesCents.
+    # 1. Schema shape: the type is exposed under its Meta.name ``PublicPatron`` (the
+    #    ``PublicPatronType`` class name is NOT a GraphQL type), carries the
+    #    Meta.description, drops the two excluded columns, and the allow-list primary
+    #    PatronType still carries lifetimeFinesCents.
     response = _post_graphql(
         """
         query {
-          public: __type(name: "PublicPatronType") { fields { name } }
+          public: __type(name: "PublicPatron") { description fields { name } }
+          renamedAway: __type(name: "PublicPatronType") { name }
           primary: __type(name: "PatronType") { fields { name } }
         }
         """,
@@ -2176,6 +2182,13 @@ def test_public_patron_exclude_deny_list_shapes_type_and_resolves():
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload
+    # Meta.name renamed the GraphQL type; the class-name type no longer resolves.
+    assert payload["data"]["public"] is not None
+    assert payload["data"]["renamedAway"] is None
+    # Meta.description surfaces verbatim through introspection.
+    assert payload["data"]["public"]["description"] == (
+        "A patron projection with PII (email) and financial (lifetime fines) columns removed."
+    )
     public_fields = {field["name"] for field in payload["data"]["public"]["fields"]}
     primary_fields = {field["name"] for field in payload["data"]["primary"]["fields"]}
     assert "email" not in public_fields
@@ -4652,3 +4665,294 @@ def test_update_book_via_form_partial_update_preserves_optional_nullable_scalar_
     assert book.title == "SubAfterTitle"
     # The OMITTED optional nullable scalar was reconstructed (not reset to null).
     assert book.subtitle == "Original Subtitle"
+
+
+# ---------------------------------------------------------------------------
+# spec-036 Meta.input_class / partial_input_class merge override (over Book).
+# ---------------------------------------------------------------------------
+
+
+def _input_fields_by_name(type_name: str) -> dict:
+    """Introspect a generated input type and index its inputFields by GraphQL name."""
+    response = _post_graphql(
+        'query { __type(name: "'
+        + type_name
+        + '") { inputFields { name type { kind name ofType { kind name } } } } }',
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    introspected = payload["data"]["__type"]
+    assert introspected is not None, f"{type_name} not in schema"
+    return {field["name"]: field["type"] for field in introspected["inputFields"]}
+
+
+@pytest.mark.django_db
+def test_book_input_class_override_merges_into_generated_create_input():
+    """``Meta.input_class`` merges a required ``subtitle`` into the generated ``BookInput``.
+
+    ``BookCreateFieldOverrides`` declares only ``subtitle`` (required); the merged
+    ``BookInput`` keeps the canonical name and carries that override ALONGSIDE the
+    generated remainder (``title`` / ``circulationStatus`` / ``shelfId`` / ``genres``) - so
+    the merge is proven by both the override's new requiredness AND the presence of every
+    generated column. ``Book.subtitle`` is ``blank/null``, so WITHOUT the override it would
+    be nullable; here it renders ``NON_NULL``.
+    """
+    by_name = _input_fields_by_name("BookInput")
+    assert set(by_name) == {
+        "title",
+        "subtitle",
+        "circulationStatus",
+        "shelfId",
+        "genres",
+    }
+    # The override took effect: subtitle is now required (NON_NULL String).
+    assert by_name["subtitle"]["kind"] == "NON_NULL"
+    assert by_name["subtitle"]["ofType"] == {"kind": "SCALAR", "name": "String"}
+    # Generated remainder unchanged: title + shelfId required, the rest optional.
+    assert by_name["title"]["kind"] == "NON_NULL"
+    assert by_name["shelfId"]["kind"] == "NON_NULL"
+    assert by_name["circulationStatus"]["kind"] != "NON_NULL"
+    assert by_name["genres"]["kind"] != "NON_NULL"
+
+
+@pytest.mark.django_db
+def test_book_partial_input_class_override_merges_into_generated_partial_input():
+    """``Meta.partial_input_class`` pins ``title`` required in the otherwise-all-optional partial.
+
+    The generated ``BookPartialInput`` makes every field optional; ``BookUpdateFieldOverrides``
+    overrides ``title`` to required. The merged ``BookPartialInput`` carries ``title:
+    String!`` while ``subtitle`` / ``circulationStatus`` / ``shelfId`` / ``genres`` stay
+    optional - the override plus the all-optional remainder.
+    """
+    by_name = _input_fields_by_name("BookPartialInput")
+    assert set(by_name) == {
+        "title",
+        "subtitle",
+        "circulationStatus",
+        "shelfId",
+        "genres",
+    }
+    # The override took effect: title is required even in the partial input.
+    assert by_name["title"]["kind"] == "NON_NULL"
+    # Generated remainder stays optional (the partial default).
+    assert by_name["subtitle"]["kind"] != "NON_NULL"
+    assert by_name["shelfId"]["kind"] != "NON_NULL"
+    assert by_name["circulationStatus"]["kind"] != "NON_NULL"
+    assert by_name["genres"]["kind"] != "NON_NULL"
+
+
+_CREATE_BOOK_VIA_CUSTOM_INPUT = (
+    "mutation($d: BookInput!){ createBookViaCustomInput(data:$d){ "
+    "node{ title subtitle } errors{ field messages } } }"
+)
+
+
+@pytest.mark.django_db
+def test_create_book_via_custom_input_happy_path():
+    """``createBookViaCustomInput`` creates a row through the merged ``BookInput``.
+
+    ``permission_classes = []`` opens the path (no login). The required-``subtitle``
+    override is supplied; ``shelfId`` is the raw pk (``ShelfType`` is non-Relay); the row
+    persists and the Relay payload ``node`` carries it back.
+    """
+    shelf = _seed_shelf()
+
+    response = _post_graphql(
+        _CREATE_BOOK_VIA_CUSTOM_INPUT,
+        variables={
+            "d": {
+                "title": "CustomBook",
+                "subtitle": "required by the input_class override",
+                "shelfId": shelf.pk,
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBookViaCustomInput"]
+    assert result["errors"] == []
+    assert result["node"] == {
+        "title": "CustomBook",
+        "subtitle": "required by the input_class override",
+    }
+    created = models.Book.objects.get(title="CustomBook", shelf=shelf)
+    assert created.subtitle == "required by the input_class override"
+
+
+@pytest.mark.django_db
+def test_create_book_via_custom_input_omitting_overridden_required_field_errors():
+    """Omitting the override-required ``subtitle`` is a top-level GraphQL coercion error.
+
+    The override has teeth at the wire: ``subtitle`` is ``String!`` in ``BookInput``, so
+    omitting it fails input coercion BEFORE execution (a top-level error, not a
+    ``FieldError`` envelope), and no row is written.
+    """
+    shelf = _seed_shelf()
+
+    response = _post_graphql(
+        _CREATE_BOOK_VIA_CUSTOM_INPUT,
+        variables={"d": {"title": "NoSubtitleBook", "shelfId": shelf.pk}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload  # top-level coercion error
+    assert "subtitle" in str(payload["errors"])
+    assert not models.Book.objects.filter(title="NoSubtitleBook").exists()
+
+
+@pytest.mark.django_db
+def test_update_book_via_custom_partial_input_happy_path():
+    """``updateBookViaCustomInput`` updates through the merged ``BookPartialInput``.
+
+    The ``partial_input_class`` makes ``title`` required on update; supplying it renames
+    the located row, which is located through ``BookType.get_queryset`` visibility (the
+    available book is visible to the anonymous caller) then re-fetched into the payload.
+    The omitted optional ``subtitle`` is reconstructed from the row, not reset.
+    """
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    book = models.Book.objects.create(title="OldBookTitle", subtitle="keep", shelf=shelf)
+
+    response = _post_graphql(
+        "mutation($id: ID!, $d: BookPartialInput!){ updateBookViaCustomInput(id:$id, data:$d){ "
+        "node{ title } errors{ field messages } } }",
+        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "NewBookTitle"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateBookViaCustomInput"]
+    assert result["errors"] == []
+    assert result["node"]["title"] == "NewBookTitle"
+    book.refresh_from_db()
+    assert book.title == "NewBookTitle"
+    assert book.subtitle == "keep"
+
+
+# ---------------------------------------------------------------------------
+# spec-015 custom (non-Relay) @strawberry.interface in Meta.interfaces.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_named_interface_is_implemented_by_library_types_over_http():
+    """``BranchType`` / ``GenreType`` / ``PatronType`` declare the consumer ``Named`` interface.
+
+    ``Meta.interfaces`` accepts any Strawberry interface, not only ``relay.Node``: the SDL
+    exposes ``Named`` as an INTERFACE carrying ``name``, all three types are among its
+    ``possibleTypes``, and each lists ``Named`` (``GenreType`` lists BOTH ``Node`` and
+    ``Named``) as an implemented interface.
+    """
+    response = _post_graphql(
+        """
+        query {
+          iface: __type(name: "Named") { kind fields { name } possibleTypes { name } }
+          genre: __type(name: "GenreType") { interfaces { name } }
+          branch: __type(name: "BranchType") { interfaces { name } }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    iface = payload["data"]["iface"]
+    assert iface is not None, "Named interface missing from the SDL"
+    assert iface["kind"] == "INTERFACE"
+    assert {"name"} <= {f["name"] for f in iface["fields"]}
+    possible = {pt["name"] for pt in iface["possibleTypes"]}
+    assert {"BranchType", "GenreType", "PatronType"} <= possible
+    assert {"Node", "Named"} <= {i["name"] for i in payload["data"]["genre"]["interfaces"]}
+    assert "Named" in {i["name"] for i in payload["data"]["branch"]["interfaces"]}
+
+
+@pytest.mark.django_db
+def test_named_library_records_returns_polymorphic_interface_list_over_http():
+    """``namedLibraryRecords`` returns a polymorphic ``list[Named]`` discriminated by ``__typename``.
+
+    The custom interface is genuinely a return type: the resolver mixes Branch / Genre /
+    Patron rows, ``is_type_of`` resolves each to its concrete ``DjangoType``, and the
+    shared ``name`` selects directly across all three.
+    """
+    models.Branch.objects.create(name="IfaceBranch", city="X")
+    models.Genre.objects.create(name="IfaceGenre")
+    models.Patron.objects.create(name="IfacePatron", email="iface@example.com")
+
+    response = _post_graphql("query { namedLibraryRecords { __typename name } }")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    pairs = {(r["__typename"], r["name"]) for r in payload["data"]["namedLibraryRecords"]}
+    assert ("BranchType", "IfaceBranch") in pairs
+    assert ("GenreType", "IfaceGenre") in pairs
+    assert ("PatronType", "IfacePatron") in pairs
+
+
+@pytest.mark.django_db
+def test_named_library_records_hides_restricted_branch_from_anonymous_over_http():
+    """``namedLibraryRecords`` routes Branch rows through ``BranchType.get_queryset`` (feedback #3).
+
+    The resolver materializes a plain list (no downstream queryset re-execution), so a
+    direct ``Branch.objects`` read would serialize ``city="restricted"`` rows that
+    ``BranchType.get_queryset`` hides from non-staff. Routing through the hook keeps the
+    visible branch and drops the restricted one for an anonymous caller, while a staff
+    caller (the ``get_queryset`` bypass) still sees it. Fails on the pre-fix direct read.
+    """
+    models.Branch.objects.create(name="NamedVisible", city="Boston")
+    models.Branch.objects.create(name="NamedRestricted", city="restricted")
+
+    response = _post_graphql("query { namedLibraryRecords { __typename name } }")
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    branch_names = {
+        r["name"]
+        for r in payload["data"]["namedLibraryRecords"]
+        if r["__typename"] == "BranchType"
+    }
+    assert "NamedVisible" in branch_names
+    assert "NamedRestricted" not in branch_names  # hidden by get_queryset for anonymous
+
+    # Staff bypasses the gate, so the restricted branch is visible to them.
+    staff_response = _post_graphql_as_staff("query { namedLibraryRecords { __typename name } }")
+    assert staff_response.status_code == 200
+    staff_payload = staff_response.json()
+    assert "errors" not in staff_payload, staff_payload
+    staff_branch_names = {
+        r["name"]
+        for r in staff_payload["data"]["namedLibraryRecords"]
+        if r["__typename"] == "BranchType"
+    }
+    assert {"NamedVisible", "NamedRestricted"} <= staff_branch_names
+
+
+# ---------------------------------------------------------------------------
+# spec-038 plain-form perform_mutate write hook (custom multi-row write).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_create_branch_with_shelf_perform_mutate_runs_custom_write():
+    """``createBranchWithShelf`` overrides ``perform_mutate`` to write two related rows.
+
+    A model-less plain ``DjangoFormMutation`` has no ``form.save()``, so its default
+    ``perform_mutate`` is a no-op. ``CreateBranchWithShelf`` overrides it to create a
+    ``Branch`` plus a starter ``Shelf`` under it from the validated form data. The payload
+    is the pinned ``{ ok, errors }``; both rows land in the DB.
+    """
+    response = _post_graphql(
+        "mutation($d: BranchWithShelfFormInput!){ createBranchWithShelf(data:$d){ "
+        "ok errors{ field messages } } }",
+        variables={"d": {"branchName": "HookBranch", "shelfCode": "H-1"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBranchWithShelf"]
+    assert result["ok"] is True
+    assert result["errors"] == []
+    # perform_mutate ran the custom multi-row write inside the mutation transaction.
+    branch = models.Branch.objects.get(name="HookBranch")
+    assert models.Shelf.objects.filter(code="H-1", branch=branch).exists()

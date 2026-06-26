@@ -280,6 +280,127 @@ def test_delete_snapshot_materializes_relation_before_delete():
     assert res.data["deleteItem"]["node"]["category"]["name"] == cat.name
 
 
+# ---------------------------------------------------------------------------
+# Custom ``relay.NodeID`` write-side (feedback #1)
+#
+# When a primary type encodes a NON-pk column as its Relay id
+# (``name: relay.NodeID[str]``), the GlobalID a client holds carries that column's
+# value, not the pk. ``decode_model_global_id`` -> ``_resolve_real_pk`` must map it
+# to the row's real pk BEFORE the write locate runs ``get(pk=...)``. The unit test
+# in ``tests/test_relay_node_field.py`` pins the decode in isolation; these pin a
+# real update / delete CONSUMER of that decoded pk end-to-end, with the decoy row
+# seeded so its pk's string form IS the target row's ``name`` - the exact pk/name
+# confusion the fix guards (the pre-fix value flowed straight into ``get(pk=...)``
+# and hit the wrong row).
+# ---------------------------------------------------------------------------
+
+# ``name`` is consumed as the Relay id (``relay.NodeID[str]``), so it surfaces as the
+# ``id`` field, not a ``name`` field - select ``id`` (the encoded GlobalID) + a plain
+# writable column (``description``).
+_CATEGORY_UPDATE = (
+    "mutation($id: ID!, $d: CategoryPartialInput!){ updateCategory(id:$id, data:$d){ "
+    "node{ id description } errors{ field messages } } }"
+)
+_CATEGORY_DELETE = (
+    "mutation($id: ID!){ deleteCategory(id:$id){ node{ id } errors{ field messages } } }"
+)
+
+
+def _build_category_node_schema():
+    """Category primary type with ``name: relay.NodeID[str]`` + update/delete mutations.
+
+    The Relay id encodes the non-pk ``name`` column, so the write-side locate must
+    resolve the GlobalID payload (a ``name`` string) to the row's real pk via
+    ``_resolve_real_pk`` before ``get(pk=...)`` runs. Returns ``(schema, CategoryNode)``
+    so the caller can mint the client-held GlobalID with ``global_id_for``.
+    """
+
+    class CategoryNode(DjangoType, relay.Node):
+        name: relay.NodeID[str]
+
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name", "description")
+            primary = True
+
+    class UpdateCategory(DjangoMutation):
+        class Meta:
+            model = product_models.Category
+            operation = "update"
+            permission_classes = [_AllowAll]
+
+    class DeleteCategory(DjangoMutation):
+        class Meta:
+            model = product_models.Category
+            operation = "delete"
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        update_category = DjangoMutationField(UpdateCategory)
+        delete_category = DjangoMutationField(DeleteCategory)
+
+    finalize_django_types()
+    return _schema(Mutation), CategoryNode
+
+
+@pytest.mark.django_db
+def test_update_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
+    """A write through a custom ``relay.NodeID[str]`` updates the NAME-matched row, not the pk-coincident one (feedback #1).
+
+    ``CategoryNode`` encodes the non-pk ``name`` column as its Relay id, so the
+    GlobalID a client holds carries the ``name`` string. The decoy is seeded so its
+    pk's STRING form is the target's ``name``: before ``_resolve_real_pk`` the decoded
+    ``name`` (``"<decoy.pk>"``) flowed straight into ``locate_instance``'s
+    ``get(pk=...)`` and updated the DECOY. The write must change the row whose ``name``
+    matches the payload (the target), never the row whose pk coincides with it.
+    """
+    schema, CategoryNode = _build_category_node_schema()
+    decoy = product_models.Category.objects.create(name="decoy", description="decoy-untouched")
+    target = product_models.Category.objects.create(name=str(decoy.pk), description="before")
+    assert target.pk != decoy.pk and target.name == str(decoy.pk)
+
+    gid = global_id_for(CategoryNode, target.name)
+    res = schema.execute_sync(
+        _CATEGORY_UPDATE,
+        variable_values={"id": gid, "d": {"description": "after"}},
+    )
+    assert res.errors is None, res.errors
+    node = res.data["updateCategory"]["node"]
+    assert node["description"] == "after"
+    # The returned id is rebuilt from the (unchanged) ``name``, so it round-trips to
+    # the same GlobalID - the node returned is the target, not the pk-coincident decoy.
+    assert node["id"] == gid
+
+    target.refresh_from_db()
+    decoy.refresh_from_db()
+    assert target.description == "after"  # the row whose NAME matched the payload
+    assert decoy.description == "decoy-untouched"  # the pk-coincident row is untouched
+
+
+@pytest.mark.django_db
+def test_delete_custom_node_id_resolves_payload_to_real_pk_not_wrong_row():
+    """A delete through a custom ``relay.NodeID[str]`` removes the NAME-matched row, not the pk-coincident one (feedback #1).
+
+    The delete twin of the update case: the located instance comes from the resolved
+    real pk, so deleting via a GlobalID whose payload is the target's ``name`` removes
+    the target - while the row whose pk's string form equals that ``name`` survives.
+    """
+    schema, CategoryNode = _build_category_node_schema()
+    decoy = product_models.Category.objects.create(name="decoy-del", description="x")
+    target = product_models.Category.objects.create(name=str(decoy.pk), description="doomed")
+    assert target.pk != decoy.pk and target.name == str(decoy.pk)
+
+    gid = global_id_for(CategoryNode, target.name)
+    res = schema.execute_sync(_CATEGORY_DELETE, variable_values={"id": gid})
+    assert res.errors is None, res.errors
+    # The snapshot id (preserved for cache eviction) decodes to the target's name.
+    assert res.data["deleteCategory"]["node"]["id"] == gid
+    # The NAME-matched target is gone; the row whose pk string equals that name survives.
+    assert not product_models.Category.objects.filter(pk=target.pk).exists()
+    assert product_models.Category.objects.filter(pk=decoy.pk).exists()
+
+
 @pytest.mark.django_db
 def test_full_clean_validation_error_yields_null_object_envelope():
     """A single-field validation failure -> one ``FieldError`` on that field, null object."""

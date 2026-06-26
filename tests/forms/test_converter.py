@@ -43,7 +43,12 @@ from django_strawberry_framework.forms.converter import (
         (forms.CharField(), str),
         (forms.EmailField(), str),
         (forms.SlugField(), str),
-        (forms.URLField(), str),
+        # ``assume_scheme="https"`` is required across Django 5.2-6.0: 5.x emits a
+        # RemovedInDjango60Warning without it (the http->https default flip), which the
+        # suite's -W error turns into a collection error; 6.0 accepts the argument and
+        # already defaults to https. Passing it explicitly is version-agnostic and the
+        # converter maps URLField -> str regardless of scheme.
+        (forms.URLField(assume_scheme="https"), str),
         (forms.RegexField(regex=r".*"), str),
         (forms.ChoiceField(), str),
         (forms.Field(), str),

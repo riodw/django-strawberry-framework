@@ -153,6 +153,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - Status: Planned
 - Relative size: L
 - Labels: `mutations`, `public-api`, `serializers`
+- Spec: [spec-039-serializer_mutations-0_0_13.md](docs/spec-039-serializer_mutations-0_0_13.md)
 
 #### Predicted files
 

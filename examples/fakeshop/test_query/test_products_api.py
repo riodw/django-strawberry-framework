@@ -2186,6 +2186,77 @@ def test_create_item_via_form_category_id_writes_through_form_category_field():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_surrogate_in_constraint_name_is_field_error_no_crash():
+    """An unpaired surrogate in `createItemViaForm` `name` -> `FieldError` on `name`, no 500 (feedback #2).
+
+    The form-path twin of `test_create_category_surrogate_in_unique_name_is_field_error_no_crash`:
+    the bound `ItemModelForm` would otherwise carry the unstorable `name` into the
+    `unique_item_per_category` `validate_constraints()` DB lookup and raise a raw
+    `UnicodeEncodeError` (an unmapped `ValueError`) that escapes the envelope as a
+    top-level error. The form decoder now applies the same pre-construction
+    storability guard the model path does, so the response is the in-band
+    `{ node: null, errors: [...] }` envelope keyed to `name`.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={
+            "d": {
+                "name": f"form-surrogate-{_LONE_SURROGATE}",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaForm"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["name"]
+    assert models.Item.objects.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_form_surrogate_in_description_is_field_error_no_crash():
+    """An unpaired surrogate in `createItemViaForm` `description` -> `FieldError`, no 500 (feedback #2).
+
+    The non-constraint save vector: a clean `name` passes constraint validation, so the
+    unstorable `description` would otherwise blow up at `form.save()`'s INSERT. The
+    decoder rejects it first as a `FieldError` on `description`; no row is written.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_FORM,
+        client=client,
+        variables={
+            "d": {
+                "name": "form-surrogate-description-only",
+                "description": _LONE_SURROGATE,
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaForm"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["description"]
+    assert models.Item.objects.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
 def test_update_item_via_form_non_colliding_partial_update():
     """A `name`-only `updateItemViaForm` persists `name`, leaving the row otherwise intact.
 

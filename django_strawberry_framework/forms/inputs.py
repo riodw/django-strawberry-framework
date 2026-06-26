@@ -585,6 +585,44 @@ def guard_create_required_fields(
         )
 
 
+def guard_partial_required_column_less_fields(
+    form_class: type[forms.BaseForm],
+    effective_field_names: Any,
+) -> None:
+    """Raise if a partial (update) narrowing drops a required COLUMN-LESS form field (feedback #4).
+
+    The partial counterpart to ``guard_create_required_fields``, but scoped to
+    column-less fields ONLY. On update the input maps to ``PARTIAL``: a model-backed
+    required field is widened optional and reconstructed from the located row by
+    ``_reconstruct_partial_data`` (``model_to_dict`` of the row), so dropping it from
+    the input via ``Meta.fields`` / ``Meta.exclude`` is harmless. But a required
+    field with NO backing model column - a declarative extra like ``confirm =
+    forms.CharField(required=True)`` - cannot be reconstructed from model state
+    (``model_to_dict`` only returns columns), so if it is dropped the bound form
+    fails its required validation on EVERY request while the schema still finalizes
+    cleanly. Reject that at bind, naming the field(s).
+
+    Scoping to ``_model_column_for(...) is None`` is load-bearing: a blanket reuse of
+    ``guard_create_required_fields`` here would wrongly reject reconstructable
+    model-backed required fields that the partial path legitimately drops. The
+    ``get_form_kwargs`` / ``get_form`` waiver (``guard_required=False``) suppresses
+    this the same way it suppresses the create guard.
+    """
+    dropped = sorted(
+        name
+        for name in _required_form_field_names(form_class)
+        if name not in set(effective_field_names) and _model_column_for(form_class, name) is None
+    )
+    if dropped:
+        raise ConfigurationError(
+            f"DjangoModelFormMutation update input for {form_class.__name__} drops required "
+            f"column-less form field(s) {dropped!r} via Meta.fields / Meta.exclude; they cannot "
+            "be reconstructed from the row, so a bound form can never validate without them. Keep "
+            "them in the input, or override get_form_kwargs / get_form to supply them (which "
+            "waives this guard).",
+        )
+
+
 def build_form_inputs(
     form_class: type[forms.BaseForm],
     *,

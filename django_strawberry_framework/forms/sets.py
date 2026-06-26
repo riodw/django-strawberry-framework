@@ -67,6 +67,7 @@ from .inputs import (
     form_input_type_name,
     get_form_fields,
     guard_create_required_fields,
+    guard_partial_required_column_less_fields,
     materialize_form_input_class,
     resolve_effective_form_fields,
 )
@@ -176,11 +177,17 @@ def _cached_build_form_input(
     # (``guard_required=False``, having overridden ``get_form_kwargs`` / ``get_form``)
     # that materializes this shape FIRST must not suppress the guard for a later
     # non-waiving mutation reusing the same cached shape - the guard is tied to the
-    # declaration, not the built input shape (spec-038 Decision 7 P2). The
-    # partial input is never create-required-guarded (it widens model-backed fields
-    # optional), so the guard is create-shaped only.
-    if guard_required and operation_kind != PARTIAL:
-        guard_create_required_fields(form_class, effective)
+    # declaration, not the built input shape (spec-038 Decision 7 P2). The create
+    # shape rejects ANY dropped required field; the partial (update) shape rejects
+    # only dropped required COLUMN-LESS fields (feedback #4) - a model-backed
+    # required field is widened optional and reconstructed from the row, but a
+    # column-less extra cannot be reconstructed, so dropping it finalizes a form that
+    # can never validate.
+    if guard_required:
+        if operation_kind == PARTIAL:
+            guard_partial_required_column_less_fields(form_class, effective)
+        else:
+            guard_create_required_fields(form_class, effective)
 
     cache_key = (form_class, operation_kind, frozenset(effective))
     cached = _form_shape_build_cache.get(cache_key)
@@ -900,6 +907,15 @@ def bind_form_mutations() -> None:
     input + its pinned ``{ ok errors }`` payload. The ``ModelForm`` flavor rides
     ``bind_mutations()`` (it is a ``DjangoMutation`` subclass), so it is NOT bound
     here - this drains only the model-less ledger.
+
+    ``_form_shape_build_cache`` is this pass's own (per-pass) build cache, cleared at
+    the top so each form input is rebuilt fresh. The cross-pass materialization
+    ledgers (the form-input ledger here, plus the mutation ledger the plain ``{ ok
+    errors }`` payload rides) are reset ONCE by ``finalize_django_types`` before the
+    bind sequence so a recover-in-place re-finalize is retry-idempotent (feedback
+    #6); they are NOT reset here, where a per-pass clear would wipe the
+    ``ModelForm``-flavor inputs ``bind_mutations()`` already materialized into the
+    form ledger.
     """
     _form_shape_build_cache.clear()
     for mutation_cls in iter_form_mutations():

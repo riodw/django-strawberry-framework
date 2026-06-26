@@ -619,6 +619,40 @@ def test_plain_form_bind_materializes_input_and_ok_errors_payload():
     assert slots == {"ok", "errors"}
 
 
+def test_form_bind_is_retry_idempotent_after_fixable_later_phase_failure(monkeypatch):
+    """A plain-form re-finalize after a fixable post-bind failure succeeds, not a masked collision (feedback #6).
+
+    The plain-form sibling of the mutation retry-idempotency guard. ``bind_form_mutations``
+    materializes ``ContactFormInput`` (form ledger) and ``SubmitPayload`` (the
+    mutation ledger, since the plain payload rides ``materialize_mutation_input_class``)
+    before the later phases. Resetting both ledgers in ``finalize_django_types``
+    before the bind sequence makes a recover-in-place re-finalize clean instead of
+    raising a spurious distinct-class collision that masks the original error.
+    """
+    form_cls = _contact_form()
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = form_cls
+
+    def _boom() -> None:
+        raise RuntimeError("injected post-bind finalization failure")
+
+    monkeypatch.setattr("django_strawberry_framework.types.finalizer._bind_ordersets", _boom)
+    with pytest.raises(RuntimeError, match="injected post-bind"):
+        finalize_django_types()
+    assert "ContactFormInput" in form_materialized_names
+    assert "SubmitPayload" in mutation_materialized_names
+    assert registry.is_finalized() is False
+
+    monkeypatch.undo()
+    finalize_django_types()
+
+    assert registry.is_finalized() is True
+    assert "ContactFormInput" in form_materialized_names
+    assert Submit._input_class is form_materialized_names["ContactFormInput"]
+
+
 def test_plain_form_input_dedupes_via_form_sentinel():
     """Two plain mutations over the SAME form + effective set dedupe to one input class.
 

@@ -189,14 +189,56 @@ class GlobalIDDecode(Enum):
 class DecodeResult(NamedTuple):
     """The structured result of ``decode_model_global_id`` (spec-036 DRY-2).
 
-    ``pk`` is the coerced primary-key value ONLY when ``status is
-    GlobalIDDecode.OK`` (``None`` otherwise); ``resolved_type`` is the decoded
-    ``DjangoType`` when decode itself succeeded (``None`` when ``DECODE_FAILED``).
+    ``pk`` is the resolved real primary-key value ONLY when ``status is
+    GlobalIDDecode.OK`` (``None`` otherwise) - the actual ``model._meta.pk`` value,
+    mapped from the decoded NodeID attr where those diverge (``_resolve_real_pk``,
+    feedback #1); ``resolved_type`` is the decoded ``DjangoType`` when decode itself
+    succeeded (``None`` when ``DECODE_FAILED``).
     """
 
     status: GlobalIDDecode
     pk: Any | None
     resolved_type: type | None
+
+
+def _resolve_real_pk(resolved_type: type, coerced_id: Any) -> Any | None:
+    """Map a coerced NodeID-attr value to the model's real primary key (feedback #1).
+
+    ``_coerce_pk_or_none`` coerces ``node_id`` against ``resolve_id_attr()`` - which
+    is ``"pk"`` for the default and a non-pk column for a consumer ``id:
+    relay.NodeID[...]`` annotation. The READ node field then filters
+    ``{id_attr: value}`` and works off the row, so it never needs the pk. The WRITE
+    consumers of ``decode_model_global_id`` instead use the returned value as an
+    actual primary key - ``locate_instance``'s ``get(pk=...)``, the relation
+    ``pk__in`` visibility query, and the FK / M2M assignment (``setattr(instance,
+    <fk>_id, pk)`` / ``instance.<m2m>.set(pks)``). Handing those the NodeID-attr
+    value (e.g. a ``slug``) looks up / assigns the wrong column - it usually fails
+    as not-found, and in the worst case targets a different row whose pk
+    representation coincides with the NodeID value (feedback #1).
+
+    So for a non-pk ``id_attr`` this resolves the value to the row's real ``pk``
+    through the model's **default manager**: a value matching no row returns
+    ``None``, which the caller maps to the SAME ``UNCOERCIBLE_PK`` not-found surface
+    an uncoercible literal yields. Visibility is intentionally NOT applied here - it
+    is enforced downstream by every consumer (the locate / relation / form
+    visibility ``get_queryset`` query), so a value matching a *hidden* row resolves
+    to its pk and is then rejected by that downstream hook, indistinguishable from
+    missing (no existence leak). The default (``id_attr == "pk"``: the coerced value
+    already IS the pk) and a NodeID over a non-concrete attr (no column to filter,
+    mirroring ``_coerce_pk_or_none``'s ``FieldDoesNotExist`` fall-through) both
+    return the value unchanged with no query.
+    """
+    id_attr = resolved_type.resolve_id_attr()
+    if id_attr == "pk":
+        return coerced_id
+    model = model_for(resolved_type)
+    try:
+        model._meta.get_field(id_attr)
+    except FieldDoesNotExist:
+        return coerced_id
+    return (
+        model._default_manager.filter(**{id_attr: coerced_id}).values_list("pk", flat=True).first()
+    )
 
 
 def decode_model_global_id(value: Any, expected_model: type) -> DecodeResult:
@@ -209,9 +251,15 @@ def decode_model_global_id(value: Any, expected_model: type) -> DecodeResult:
     ``expected_model``, and coerce ``node_id`` through the resolved type's id field
     via ``_coerce_pk_or_none`` (the SAME coercer the node field uses, so an
     uncoercible literal never reaches the ORM as a raw ``ValueError`` - feedback
-    CR-1). Returns a :class:`DecodeResult` whose :class:`GlobalIDDecode` status the
-    caller maps to its own error surface (this helper never raises a
-    ``GraphQLError`` - the node-field raising behavior stays in the node field).
+    CR-1). The coerced value is then mapped to the model's real primary key via
+    ``_resolve_real_pk`` (feedback #1): unlike the READ node field - which filters
+    ``{id_attr: value}`` and never needs the pk - every WRITE consumer here uses the
+    result as an actual pk (``get(pk=...)`` / ``pk__in`` / FK-M2M assignment), so a
+    consumer ``id: relay.NodeID[...]`` over a non-pk column must be resolved to the
+    real pk rather than handed its NodeID-attr value. Returns a :class:`DecodeResult`
+    whose :class:`GlobalIDDecode` status the caller maps to its own error surface
+    (this helper never raises a ``GraphQLError`` - the node-field raising behavior
+    stays in the node field).
     """
     try:
         resolved_type, node_id = decode_global_id(value)
@@ -222,7 +270,10 @@ def decode_model_global_id(value: Any, expected_model: type) -> DecodeResult:
     pk = _coerce_pk_or_none(resolved_type, node_id)
     if pk is None:
         return DecodeResult(GlobalIDDecode.UNCOERCIBLE_PK, None, resolved_type)
-    return DecodeResult(GlobalIDDecode.OK, pk, resolved_type)
+    real_pk = _resolve_real_pk(resolved_type, pk)
+    if real_pk is None:
+        return DecodeResult(GlobalIDDecode.UNCOERCIBLE_PK, None, resolved_type)
+    return DecodeResult(GlobalIDDecode.OK, real_pk, resolved_type)
 
 
 def _validate_node_target(target_type: type, *, field: str) -> None:

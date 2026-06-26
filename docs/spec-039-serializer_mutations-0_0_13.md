@@ -56,7 +56,11 @@ Status: **IN PROGRESS** — authored for [`TODO-ALPHA-039-0.0.13`][kanban] via t
 [`docs/SPECS/NEXT.md`][next] flow; no slice built yet. The card's hard dependency is
 satisfied: [`DONE-036-0.0.11`][kanban] (the mutation foundation this card subclasses)
 has shipped, and [`DONE-038-0.0.12`][kanban] (which generalized the field factory and
-proved the flavor-on-the-base pattern) has shipped too. Five slices: Slice 1
+proved the flavor-on-the-base pattern) has shipped too. **Four slices** (the resolver
+pipeline and the products live surface are **one** slice, so the resolver's
+consumer-reachable behavior is earned live in the same commit it lands — the
+[`examples/fakeshop/test_query/README.md`][test-query-readme] #"Coverage rule." /
+[`docs/TREE.md`][tree] #"Coverage priority." live-first mandate): Slice 1
 (**DRF-field → Strawberry input mapping** — `rest_framework/serializer_converter.py`
 + the serializer-derived input generator;
 [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)),
@@ -65,15 +69,18 @@ Slice 2 (**the `SerializerMutation` base + `Meta` validation + the phase-2.5 bin
 [Decision 5](#decision-5--public-surface-serializermutation-exported-from-the-root-the-038-generalized-factory-reused)
 /
 [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)),
-Slice 3 (**the serializer resolver pipeline** — `rest_framework/resolvers.py`;
+Slice 3 (**the serializer resolver pipeline + the products live serializer surface,
+earned live** — `rest_framework/resolvers.py` lands together with the products
+`ModelSerializer` mutation and its live `/graphql/` tests, which are the **primary**
+coverage harness; the package-internal `tests/rest_framework/test_resolvers.py` holds
+only genuinely-unreachable internals;
 [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
 /
-[Decision 9](#decision-9--optimizer-composition-the-modelserializer-payload-re-fetch-rides-the-spec-036-g2-path)),
-Slice 4 (**the products live serializer surface** — a `ModelSerializer` mutation over
-`/graphql/`;
+[Decision 9](#decision-9--optimizer-composition-the-modelserializer-payload-re-fetch-rides-the-spec-036-g2-path)
+/
 [Decision 13](#decision-13--live-coverage-products-grows-a-modelserializer-mutation)),
-and Slice 5 (**docs + the soft-dep wiring + card wrap, no version bump**; the per-card
-[`CHANGELOG.md`][changelog] edit must be named explicitly in the Slice 5 maintainer
+and Slice 4 (**docs + the soft-dep wiring + card wrap, no version bump**; the per-card
+[`CHANGELOG.md`][changelog] edit must be named explicitly in the Slice 4 maintainer
 prompt — this spec describes the edit but cannot grant the permission
 [`AGENTS.md`][agents] reserves for an explicit instruction).
 
@@ -103,7 +110,7 @@ visibility hook the `update` locate composes with);
 (the set-family subpackage layout / phase-2.5 binding / materialize-before-`Schema`
 discipline `mutations/` and `forms/` mirrored and `rest_framework/` mirrors again).
 [`docs/GLOSSARY.md`][glossary] carries [`SerializerMutation`][glossary-serializermutation]
-as `planned for 0.0.13`; Slice 5 promotes it to `shipped (0.0.13)`.
+as `planned for 0.0.13`; Slice 4 promotes it to `shipped (0.0.13)`.
 
 Revision history (kept inline so the spec is self-contained):
 
@@ -212,6 +219,29 @@ Revision history (kept inline so the spec is self-contained):
   and the root `__getattr__` is pinned to **not memoize** `SerializerMutation`, with the
   absent-DRF test also evicting the root attribute
   ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)).
+- **Revision 4** — applied a third code-review pass (test-placement, verified against
+  [`examples/fakeshop/test_query/README.md`][test-query-readme] #"Coverage rule.",
+  [`docs/TREE.md`][tree] #"Coverage priority.", the existing
+  [`test_uploads_api.py`][test-uploads-api] live-multipart precedent, and the
+  [`Item.attachment`][products-models] `FileField`). **Foundational restructuring:** the
+  five-slice plan collapses to **four** — the serializer resolver pipeline and the
+  products live serializer surface now land in **one** slice (Slice 3), so every
+  consumer-reachable resolver line is earned by a real `/graphql/` request *at the commit
+  it appears* (a separate live slice would leave reachable lines package-covered at the
+  resolver commit, the inverse of the live-first rule)
+  ([Decision 13](#decision-13--live-coverage-products-grows-a-modelserializer-mutation)).
+  [`test_products_api.py`][test-products-api] becomes the **primary** harness for every
+  reachable branch (happy paths, envelopes, reverse-map, partial-update, visibility,
+  write-auth, authorize-before-decode, **the multipart `Upload` write**, **the
+  request-context `validate()` path**, and the G2 query shape — the last two are shipped
+  `0.0.13` runtime branches, so they move from package tests to live), and
+  [`tests/rest_framework/test_resolvers.py`][test-rest-framework] is narrowed to the
+  residue a live query cannot drive (recursive-flattener shapes, raw-pk/non-Relay +
+  many-relation decode, call-once save, `IntegrityError`, sync/async + `SyncMisuseError`,
+  hermetic kwargs seams). The [Test plan](#test-plan) now states the **explicit
+  package-test boundary** so the new `tests/rest_framework/` tree cannot accrete
+  resolver-acceptance coverage. The old Slice 5 (docs + soft-dep + card wrap) is now
+  Slice 4 throughout.
 
 ## Key glossary references
 
@@ -224,7 +254,7 @@ vocabulary used throughout the spec:
   `Meta.model_operations`, `Meta.optional_fields`), an input-type factory deriving the
   Strawberry input from the serializer's fields, a soft `rest_framework` dependency,
   and validation through the shared [`FieldError` envelope][glossary-fielderror-envelope].
-  Slice 5 promotes the entry from `planned for 0.0.13` to `shipped (0.0.13)` and
+  Slice 4 promotes the entry from `planned for 0.0.13` to `shipped (0.0.13)` and
   reconciles the surface keys this spec pins (`Meta.operation` over `model_operations`,
   the `id:`-decode locate over `lookup_field` — [Risks](#risks-and-open-questions)).
 - [`DjangoMutation`][glossary-djangomutation] /
@@ -316,7 +346,7 @@ Project conventions to follow:
   the settings-keys-only-when-needed rule (this card adds no settings key); the
   no-pytest-after-edits rule; the CHANGELOG-edit-permission rule at
   [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly instructed" —
-  Slice 5's release-note edit must be named in its maintainer prompt.
+  Slice 4's release-note edit must be named in its maintainer prompt.
 - [`START.md`][start] — "Meta classes everywhere on consumer surfaces. If you find
   yourself writing stacked Strawberry decorators on a consumer-facing class, stop."
   This is the decisive rule for
@@ -343,12 +373,15 @@ Project conventions to follow:
 
 ## Slice checklist
 
-Each top-level item maps to one commit / PR. **Five slices: serializer-field
-converter + input generation (Slice 1), the base class (Slice 2), the resolver
-pipeline (Slice 3), the products live serializer surface (Slice 4), and the docs +
-soft-dep wiring + card wrap (Slice 5).** Slices 1–3 are package-internal and staged
-(each builds on the prior); Slice 4 is the live consumer surface; Slice 5 is doc +
-soft-dep + card-wrap only (no version bump — [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
+Each top-level item maps to one commit / PR. **Four slices: serializer-field
+converter + input generation (Slice 1), the base class (Slice 2), the resolver pipeline
+**+ the products live serializer surface, landed together** (Slice 3), and the docs +
+soft-dep wiring + card wrap (Slice 4).** Slices 1–2 are package-internal and staged
+(each builds on the prior); **Slice 3 lands the resolver and its live consumer surface
+in one commit** — required by the [`examples/fakeshop/test_query/README.md`][test-query-readme]
+#"Coverage rule." live-first mandate, so the resolver's reachable lines are earned by a
+real `/graphql/` request (not a package test) at the commit they appear; Slice 4 is
+doc + soft-dep + card-wrap only (no version bump — [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
 
 - [ ] Slice 1: DRF-field → Strawberry input mapping + the serializer-derived input
   generator (per
@@ -532,10 +565,18 @@ soft-dep + card-wrap only (no version bump — [Decision 14](#decision-14--versi
     `fields` + `exclude` both set, unknown key), registration, finalizer binding (the
     `bind_mutations()` path), the no-registered-primary-type error, and — proving the
     base is unregressed — the model-flavor seam defaults unchanged.
-- [ ] Slice 3: the serializer resolver pipeline (per
+- [ ] Slice 3: the serializer resolver pipeline **+ the products live serializer
+  surface, landed in one commit** (per
   [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
   /
-  [Decision 9](#decision-9--optimizer-composition-the-modelserializer-payload-re-fetch-rides-the-spec-036-g2-path))
+  [Decision 9](#decision-9--optimizer-composition-the-modelserializer-payload-re-fetch-rides-the-spec-036-g2-path)
+  /
+  [Decision 13](#decision-13--live-coverage-products-grows-a-modelserializer-mutation)).
+  **The resolver code and its consumer surface ship together** so every
+  consumer-reachable resolver line is earned by a real `/graphql/` request the moment it
+  lands — the [`examples/fakeshop/test_query/README.md`][test-query-readme]
+  #"Coverage rule." live-first mandate; splitting them would force package tests to cover
+  reachable lines at the resolver commit, the inverse of the rule.
   - [ ] [`rest_framework/resolvers.py`][rf-resolvers]: the sync + async pipeline, in
     the **locate → authorize → decode → construct → validate → write → re-fetch** order
     (`036` / `038` security invariant — authorize **before** any relation decode) —
@@ -594,39 +635,56 @@ soft-dep + card-wrap only (no version bump — [Decision 14](#decision-14--versi
     `0.0.13` serializer flavor". Slice 3 **verifies** the generalization holds for
     `SerializerMutation` (a `tests/mutations/test_fields.py` extension); no field-factory
     edit is needed ([Decision 5](#decision-5--public-surface-serializermutation-exported-from-the-root-the-038-generalized-factory-reused)).
-  - [ ] Package coverage: [`tests/rest_framework/test_resolvers.py`][test-rest-framework]
-    — create / update happy paths, the `serializer.errors` → envelope (incl. a
-    `validate()`-level `non_field_errors` → `"__all__"`), the **decode** (`categoryId`
-    → `{"category": pk}` in `data`, an `Upload` value passed in `data`), the
-    **partial-update via `partial=True`** (omitted fields preserved by DRF's partial
-    semantics; a one-field change that trips a serializer / model `UniqueValidator`),
-    the **visibility-scoped `update` locate** (hidden row → not-found), the
-    `IntegrityError` envelope, the `get_serializer_kwargs` override, write-auth denial
-    vs success, sync + async, and the G2 plan-shape (the re-fetch keeps
-    `select_related` / `prefetch_related`, no `.only(...)`).
-- [ ] Slice 4: the products live serializer surface (per
-  [Decision 13](#decision-13--live-coverage-products-grows-a-modelserializer-mutation))
-  - [ ] [`examples/fakeshop/apps/products/serializers.py`][products-serializers] (new):
-    an `ItemSerializer` (`serializers.ModelSerializer` over `Item`, with a
-    `validate_<field>` / `validate`); [`products/schema.py`][products-schema] gains a
-    `SerializerMutation` (create + update); `config/schema.py` already wires
-    `mutation=Mutation` ([`spec-036`][spec-036] Slice 4). The example settings add
-    `"rest_framework"` to `INSTALLED_APPS` if a serializer needs the app registry
-    (most flat `ModelSerializer`s do not). Because DRF is a dev-group dependency
-    ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)),
-    the example always has it in the dev / test context (the [`spec-037`][spec-037]
-    `pillow` / `MediaSpecimen` precedent).
-  - [ ] [`test_products_api.py`][test-products-api] (seeded via `seed_data` /
-    `create_users`): live `/graphql/` create / update through the `ModelSerializer`
-    mutation; `categoryId` validating + writing through the serializer's `category`
-    `PrimaryKeyRelatedField`; **partial-update preservation** (a `name`-only update
-    preserves `category` / `description` via `partial=True`, and a
-    `UniqueValidator` / `unique_item_per_category` fires on a one-field change); the
-    `serializer.errors` envelope (`validate_<field>` keyed to its field; a
-    cross-field `validate()` error keyed to `"__all__"`); write authorization; the
-    visibility-scoped `update`; **a hidden-`Category` `GlobalID` → field-keyed
-    `FieldError`** (the relation-visibility invariant).
-- [ ] Slice 5: doc updates + soft-dep wiring + card wrap (per
+  - [ ] **Products live serializer surface (same commit).**
+    [`examples/fakeshop/apps/products/serializers.py`][products-serializers] (new): an
+    `ItemSerializer` (`serializers.ModelSerializer` over `Item`, with a
+    `validate_<field>` and a cross-field `validate()`) and a second serializer mutation
+    (or fields on `ItemSerializer`) exposing the two **shipped runtime branches** that
+    are real `/graphql/` behavior, not future-`TestClient` work: the
+    [`Item.attachment`][products-models] `FileField` as an [`Upload`][glossary-upload-scalar]
+    input (a real multipart create — the [`test_uploads_api.py`][test-uploads-api]
+    `MediaSpecimen` multipart precedent proves `django.test.Client` drives this today),
+    and an **observable request-context path** — a `validate()` (or
+    `HiddenField(default=CurrentUserDefault())`) that reads
+    `self.context["request"].user`, proving the injected `context={"request": …}` lands.
+    [`products/schema.py`][products-schema] gains the `SerializerMutation`(s)
+    (create + update); `config/schema.py` already wires `mutation=Mutation`
+    ([`spec-036`][spec-036] Slice 4). The example settings add `"rest_framework"` to
+    `INSTALLED_APPS` only if a serializer needs the app registry (most flat
+    `ModelSerializer`s do not). DRF being a dev-group dependency
+    ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy))
+    keeps it present in the test context (the [`spec-037`][spec-037] `pillow` /
+    `MediaSpecimen` precedent).
+  - [ ] **Live coverage is the primary harness** ([`test_products_api.py`][test-products-api],
+    seeded via `seed_data` / `create_users`): **every consumer-reachable resolver branch
+    is earned here over real `/graphql/`** — create / update happy paths;
+    field-level (`validate_<field>`) and `"__all__"` (cross-field `validate()` /
+    `unique_item_per_category`) `serializer.errors` envelopes; `categoryId` reverse-map
+    validate-and-write through the serializer's `category` `PrimaryKeyRelatedField`;
+    **partial-update preservation** (`name`-only update preserves `category` /
+    `description` via `partial=True`) and the unique-together fire on a one-field change;
+    the **visibility-scoped `update`** (hidden row → not-found); **write authorization**
+    (anonymous / missing-perm denied, permitted succeeds); **a hidden-`Category`
+    `GlobalID` → field-keyed `FieldError`** (relation visibility) and
+    **authorize-before-decode** (an unpermitted caller submitting that hidden id gets the
+    auth denial, not the relation error); the **multipart `Upload` → `Item.attachment`**
+    write; the **request-context** `validate()` path; and the **G2 optimizer re-fetch
+    query shape** (assert the SQL keeps `select_related` / `prefetch_related`, no
+    `.only(...)`).
+  - [ ] **Package-internal, genuinely-unreachable internals only**
+    ([`tests/rest_framework/test_resolvers.py`][test-rest-framework]): the residue a live
+    fakeshop query **cannot** drive — the **recursive flattener** shapes no products
+    serializer emits (deeply nested `ListField` / dict child errors, `<path>.__all__`
+    normalization); **raw-pk / non-Relay** relation decoding and **many-relation**
+    decoding (products' `Category` is Relay-`GlobalID` and single, so these need a
+    synthetic non-Relay / many fixture); the **call-once save capture** (a save spy);
+    the **sync + async** boundary (`sync_to_async(thread_sensitive=True)`) and the
+    [`SyncMisuseError`][glossary-syncmisuseerror] async-hook-from-sync path; and hermetic
+    `get_serializer_kwargs` / constructor seams not observable over HTTP. **No
+    create/update happy path, envelope, reverse-map, partial-update, visibility, or
+    write-auth test is duplicated here** — those are owned by the live suite above
+    (the [`examples/fakeshop/test_query/README.md`][test-query-readme] #"Coverage rule.").
+- [ ] Slice 4: doc updates + soft-dep wiring + card wrap (per
   [Doc updates](#doc-updates) /
   [Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)
   / [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut))
@@ -651,7 +709,7 @@ soft-dep + card-wrap only (no version bump — [Decision 14](#decision-14--versi
     [`TODAY.md`][today] (note the serializer mutation as a package capability),
     [`docs/TREE.md`][tree] (fill the planned `rest_framework/` /
     [`tests/rest_framework/`][test-rest-framework] summary lines), [`CHANGELOG.md`][changelog]
-    (only if the Slice 5 maintainer prompt explicitly requests it), [`KANBAN.md`][kanban]
+    (only if the Slice 4 maintainer prompt explicitly requests it), [`KANBAN.md`][kanban]
     (card → Done via the kanban DB + re-render).
 
 ## Problem statement
@@ -787,11 +845,11 @@ A true description of the repo as this spec is authored:
    dependency so the suite covers `rest_framework/` and hits 100%, and the DRF-absent
    import guard is itself covered by simulated absence
    ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)).
-7. **Ship the products live serializer surface** (Slice 4).
+7. **Ship the products live serializer surface** (folded into Slice 3).
 8. **Keep package version state owned by the joint `0.0.13` cut.** No slice edits
    `pyproject.toml`'s `[project].version`, `__version__`, or
    [`tests/base/test_init.py::test_version`][test-base-init] — these stay `0.0.12` until
-   the joint cut. `uv.lock` **is** updated in Slice 5 (regenerated for the
+   the joint cut. `uv.lock` **is** updated in Slice 4 (regenerated for the
    `[dependency-groups].dev` DRF add), but its `django-strawberry-framework` package
    `version` entry stays `0.0.12` — the lockfile's dependency graph changes, the package
    version does not ([Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
@@ -1753,7 +1811,7 @@ but added to the dev group so the suite covers the image path):
 
 1. **DRF stays out of `[project].dependencies`** — it remains a soft runtime dep. A
    consumer who never writes a serializer mutation never needs DRF.
-2. **`djangorestframework` is added to `[dependency-groups].dev`** (Slice 5) so the
+2. **`djangorestframework` is added to `[dependency-groups].dev`** (Slice 4) so the
    test environment has it; the suite exercises every `rest_framework/` branch and the
    live products serializer surface, meeting `fail_under = 100`.
 3. **The DRF-absent import-guard path is covered by simulated absence** — a package
@@ -1793,30 +1851,57 @@ Alternatives considered (and rejected):
 - **Skip the absent-path test.** Rejected: the guard's raise is a reachable line under
   the 100% gate; simulated absence covers it.
 
-### Decision 13 — Live coverage: products grows a `ModelSerializer` mutation
+### Decision 13 — Live coverage: products grows a `ModelSerializer` mutation, landed with the resolver
 
 Products gains a [`serializers.py`][products-serializers] with an `ItemSerializer`
 (`serializers.ModelSerializer` over `Item`, with a `validate_<field>` /
 `validate()`), and [`products/schema.py`][products-schema] gains a
 `SerializerMutation` create + update over `Item`; `config/schema.py` already wires
-`mutation=Mutation`. [`test_products_api.py`][test-products-api] (seeded via
-`seed_data` / `create_users`) proves the live `/graphql/` create / update happy paths,
-`categoryId` validating + writing through the serializer's `category`
-`PrimaryKeyRelatedField`, partial-update preservation (a `name`-only update preserves
+`mutation=Mutation`. **This surface lands in the SAME slice (Slice 3) as
+[`rest_framework/resolvers.py`][rf-resolvers]** — not a later slice — because the
+[`examples/fakeshop/test_query/README.md`][test-query-readme] #"Coverage rule." /
+[`docs/TREE.md`][tree] #"Coverage priority." mandate is absolute: a
+`django_strawberry_framework/` line reachable by a real fakeshop `/graphql/` request
+**must** be earned in [`test_products_api.py`][test-products-api], and earned *at the
+commit the line appears*. Shipping the resolver in one slice and the live tests in the
+next would leave the resolver's reachable lines covered by package tests at the resolver
+commit — the exact inversion the rule forbids. So [`test_products_api.py`][test-products-api]
+(seeded via `seed_data` / `create_users`) is the **primary** harness and proves, live,
+**every consumer-reachable resolver branch**: create / update happy paths; `categoryId`
+reverse-map validate-and-write through the serializer's `category`
+`PrimaryKeyRelatedField`; partial-update preservation (a `name`-only update preserves
 `category` / `description` via `partial=True`, and a `UniqueTogetherValidator` /
-`unique_item_per_category` fires on a one-field change), the `serializer.errors`
+`unique_item_per_category` fires on a one-field change); the `serializer.errors`
 envelope (`validate_<field>` keyed to its field; a cross-field `validate()` error keyed
-to `"__all__"`), write authorization, the visibility-scoped `update`, and the
-hidden-`Category` relation-visibility `FieldError`.
+to `"__all__"`); write authorization; the visibility-scoped `update`; the
+hidden-`Category` relation-visibility `FieldError` and **authorize-before-decode**; the
+**multipart `Upload` → [`Item.attachment`][products-models]** write (real
+`django.test.Client` multipart, the [`test_uploads_api.py`][test-uploads-api]
+precedent); the **request-context** `validate()` path (proving the injected
+`context={"request": …}` lands); and the **G2 re-fetch query shape**. The
+package-internal [`tests/rest_framework/test_resolvers.py`][test-rest-framework] keeps
+**only** the residue a live query cannot drive
+([Test plan](#test-plan)).
 
 Justification: the card DoD mandates "live HTTP coverage … exercising a
-`ModelSerializer` mutation"; products is the established write-surface example
-(the `036` / `038` precedent). DRF being a dev-group dependency
+`ModelSerializer` mutation", and the test-query README makes live the **first** home for
+any reachable line — so the resolver and its live surface are one deliverable, not two
+slices. Products is the established write-surface example (the `036` / `038` precedent),
+already carries the `unique_item_per_category` constraint, the seeded fixtures, and the
+[`Item.attachment`][products-models] `FileField` the `Upload` path needs. DRF being a
+dev-group dependency
 ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy))
-makes the example always have it in the test context.
+keeps it present in the test context.
 
 Alternatives considered (and rejected):
 
+- **Keep the resolver and the products live surface as separate commits** (the prior
+  draft split them across two slices). Rejected: it violates the
+  [`test_query/README.md`][test-query-readme] #"Coverage rule." — at the resolver
+  commit, the resolver's reachable lines would be earned by `tests/rest_framework/`
+  package tests, then duplicated by live tests in the next slice. Merging them into
+  Slice 3 is the reviewer-pinned fix; the resolver's reachable behavior is earned live,
+  once.
 - **A dedicated `test_serializer_api.py` against a fresh app.** Rejected: products
   already carries the `unique_item_per_category` constraint and the seeded fixtures;
   extending `test_products_api.py` matches the `036` / `038` precedent (a dedicated
@@ -1833,22 +1918,22 @@ No slice in this card edits the **package-version state**: `[project].version` i
 ([Auth mutations][glossary-auth-mutations]); the version bump from `0.0.12` to `0.0.13`
 is owned by the **joint `0.0.13` cut**, not by either individual card — the same posture
 [`spec-036`][spec-036] Decision 13 took for the joint `0.0.11` cut it shared with
-[`spec-037`][spec-037]. (The Slice 5 doc edits do move feature-status text — the
+[`spec-037`][spec-037]. (The Slice 4 doc edits do move feature-status text — the
 [`docs/GLOSSARY.md`][glossary] `SerializerMutation` entry to `shipped (0.0.13)` — but
 the version line and the version files stay at `0.0.12` until the joint cut.)
 
 **`uv.lock` is NOT a version file — it is updated in this card, deliberately.** The
-repository commits a `uv.lock` (verified, `git`-tracked), and Slice 5 adds
+repository commits a `uv.lock` (verified, `git`-tracked), and Slice 4 adds
 `djangorestframework` to `[dependency-groups].dev`
 ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)).
 Changing a dev dependency **without** regenerating the lockfile leaves the declared and
 locked environments out of sync, so the clean cut is to **edit `pyproject.toml` and
-regenerate `uv.lock` together** in Slice 5 (`uv lock` after the dev-group add). The
+regenerate `uv.lock` together** in Slice 4 (`uv lock` after the dev-group add). The
 distinction the version policy must keep is: the **DRF dependency entries** in `uv.lock`
 *do* change here; the **package's own version** — `[project].version` *and* the
 `[[package]] name = "django-strawberry-framework"` `version` entry inside `uv.lock` —
 stays `0.0.12` until the joint cut. (An earlier draft lumped `uv.lock` with the version
-files, which contradicted the Slice 5 dev-group add; this reconciliation resolves it.)
+files, which contradicted the Slice 4 dev-group add; this reconciliation resolves it.)
 
 Justification: per [`docs/SPECS/NEXT.md`][next] Step 3 / Step 6, when multiple cards
 target one patch version the bump belongs to the joint cut, not any individual card's
@@ -1856,23 +1941,24 @@ spec. `039` and `040` both target `0.0.13`.
 
 Alternatives considered (and rejected):
 
-- **Bump to `0.0.13` in this card's Slice 5.** Rejected: `040` also ships into
+- **Bump to `0.0.13` in this card's Slice 4.** Rejected: `040` also ships into
   `0.0.13`; a per-card bump races the joint cut and would have to be reconciled when
   the sibling lands.
 
 ## Implementation plan
 
-Five slices. Slices 1–3 are package-internal and staged; Slice 4 is the live products
-serializer surface; Slice 5 is doc + soft-dep + card-wrap only. Line deltas are
-planning estimates.
+Four slices. Slices 1–2 are package-internal and staged; **Slice 3 lands the resolver
+pipeline AND the products live serializer surface in one commit** (so reachable resolver
+lines are earned live, not by package tests — the
+[`test_query/README.md`][test-query-readme] #"Coverage rule."); Slice 4 is doc +
+soft-dep + card-wrap only. Line deltas are planning estimates.
 
 | Slice | Files touched | New / changed tests | Approx. delta |
 | --- | --- | --- | --- |
 | 1 — serializer-field converter + reverse map + the two serializer-derived inputs | [`rest_framework/serializer_converter.py`][rf-converter] (new; `convert_serializer_field` fail-loud MRO dispatch + the `input_attr → (serializer_field_name, source, kind)` reverse map, renamed-field `source` resolution + id-like-suffix rule), [`rest_framework/inputs.py`][rf-inputs] (new; `<Serializer>Input` + `<Serializer>PartialInput` from the `get_serializer_for_schema()` field set, `SerializerInputShape` descriptor identity, `guard_create_required_serializer_fields`, `read_only` / `optional_fields` handling, narrowing fail-loud), [`rest_framework/__init__.py`][rf-init] (new; DRF soft-import guard) | [`tests/rest_framework/test_converter.py`][test-rest-framework] + [`tests/rest_framework/test_inputs.py`][test-rest-framework] (~40 — every serializer-field class, id mapping, `Upload`, the reverse-map + `kind` flag, renamed-`source` + id-like-suffix + dotted-`source` raise, custom-field raise, schema-hook (kwargs-serializer reject + override), `read_only` dropped, `optional_fields` (+ `"__all__"` reject), descriptor identity (optional_fields / hook-vary → distinct names), create-required-guard (+ waiver, per-declaration), collision/dedupe, `Meta.fields`/`exclude` fail-loud + empty-set) | `+500 / 0` |
 | 2 — the base class + `Meta` validation + the bind + the export guard | [`rest_framework/sets.py`][rf-sets] (new; `SerializerMutation` subclassing `DjangoMutation`, the `_validate_meta` / `_resolve_model` / `build_input` / `input_type_name` / `input_module_path` / `resolve_*` overrides), [`rest_framework/inputs.py`][rf-inputs] (`clear_serializer_input_namespace()`), [`types/finalizer.py`][types-finalizer] (call it in the pre-bind reset block alongside the mutation / form clears — no new bind, rides `bind_mutations()`), [`registry.py`][registry] (one `_clear_if_importable` co-clear row in `TypeRegistry.clear()`), [`__init__.py`][init] (guarded `SerializerMutation` export via root `__getattr__`) | [`tests/rest_framework/test_sets.py`][test-rest-framework] (~18 — `Meta` matrix incl. `delete`-rejected + plain-`Serializer`-rejected + no-model + `permission_classes` kept, both bind, retry-idempotence, no-primary error, model-flavor seam defaults unchanged) | `+340 / -10` |
-| 3 — serializer relation decoder + resolver pipeline + factory verification | [`rest_framework/resolvers.py`][rf-resolvers] (new; the visibility-on-every-branch serializer relation decoder + the `partial=True` update + the sync/async pipeline reusing the `036`/`038` promoted helpers), [`mutations/resolvers.py`][mutations-resolvers] (no change — reuse the already-promoted helpers by call) | [`tests/rest_framework/test_resolvers.py`][test-rest-framework] + [`tests/mutations/test_fields.py`][test-mutations] extend (~30 — create/update, decode + relation visibility (Relay + raw-pk, single + multi), `Upload` in `data`, `partial=True` preservation + `UniqueTogetherValidator`, `IntegrityError` envelope, `get_serializer_kwargs`, envelope + `"__all__"`, visibility locate, write-auth, sync+async, G2 plan-shape, **the `DjangoMutationField` generalization verified for `SerializerMutation`**) | `+520 / 0` |
-| 4 — products live serializer surface | [`examples/fakeshop/apps/products/serializers.py`][products-serializers] (new), [`products/schema.py`][products-schema] (serializer mutations), `config/settings.py` (`rest_framework` in `INSTALLED_APPS` if needed), [`test_products_api.py`][test-products-api] | live create/update via `ModelSerializer`, `categoryId`-through-serializer, partial-update preservation, `serializer.errors` envelope, write-auth, visibility, hidden-relation `FieldError` | `+220 / -0` |
-| 5 — docs + soft-dep wiring + card wrap (no version bump) | [`pyproject.toml`][pyproject] (DRF → dev group), [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], [`README.md`][readme], [`GOAL.md`][goal], [`TODAY.md`][today], [`docs/TREE.md`][tree], [`CHANGELOG.md`][changelog], [`KANBAN.md`][kanban] | 0 (doc + dep only) | `+110 / -40` |
+| 3 — resolver pipeline **+ products live surface (one commit)** | [`rest_framework/resolvers.py`][rf-resolvers] (new; visibility-on-every-branch relation decoder + `partial=True` update + value-preserving save + sync/async pipeline reusing the `036`/`038` promoted helpers), [`examples/fakeshop/apps/products/serializers.py`][products-serializers] (new; `ItemSerializer` + the `Upload`/`Item.attachment` + request-context branches), [`products/schema.py`][products-schema] (serializer mutations), `config/settings.py` (`rest_framework` in `INSTALLED_APPS` if needed), [`mutations/resolvers.py`][mutations-resolvers] (no change) | **Primary: [`test_products_api.py`][test-products-api]** (~16 live `/graphql/` — create/update, field + `"__all__"` envelopes, `categoryId` reverse-map write, partial-update + unique-together, hidden update row, write-auth, hidden-relation `FieldError`, authorize-before-decode, multipart `Upload`, request-context, G2 query shape). **Internals-only: [`tests/rest_framework/test_resolvers.py`][test-rest-framework]** (~12 — recursive-flattener shapes, raw-pk/non-Relay + many-relation decode, call-once save, sync/async + `SyncMisuseError`, hermetic kwargs seams) + [`tests/mutations/test_fields.py`][test-mutations] factory-generalization verification | `+560 / 0` |
+| 4 — docs + soft-dep wiring + card wrap (no version bump) | [`pyproject.toml`][pyproject] (DRF → dev group) + `uv.lock`, [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], [`README.md`][readme], [`GOAL.md`][goal], [`TODAY.md`][today], [`docs/TREE.md`][tree], [`CHANGELOG.md`][changelog], [`KANBAN.md`][kanban] | 0 (doc + dep only) | `+110 / -40` |
 
 Total expected delta: ~`+1590 / -50` — an L cut, matching the card's relative size. The
 near-zero edit to `mutations/` (the `036` helpers are reused by call; the
@@ -1982,28 +2068,60 @@ the slice that ships it).
 
 ## Test plan
 
-Test placement follows the [`AGENTS.md`][agents] mirror rule; the live surface owns
-behavior reachable through `/graphql/`, package tests own internals. **DRF is a
+Test placement obeys the [`examples/fakeshop/test_query/README.md`][test-query-readme]
+#"Coverage rule." / [`docs/TREE.md`][tree] #"Coverage priority." **live-first** mandate,
+not just the mirror rule: **any `django_strawberry_framework/` line a real fakeshop
+`/graphql/` request can reach is earned in [`test_products_api.py`][test-products-api]
+first**, and `tests/rest_framework/` carries **only** the residue a live query cannot
+drive. Because the resolver lands together with the products surface (Slice 3), there is
+**no window** where a reachable resolver line is covered by a package test. The
+**package-internal boundary** (`tests/rest_framework/`) is therefore narrow and explicit
+— it owns exactly:
+
+- **schema / build-time invalid configurations** (the `Meta` matrix, narrowing
+  fail-loud, the create-required guard, descriptor-collision raises) — these never reach
+  a resolver;
+- **converter field-class matrix rows fakeshop does not expose** (every supported DRF
+  field → annotation, the custom-field raise, dotted-`source` raise);
+- **registry / finalizer lifecycle** (binding, retry-idempotence, no-primary error);
+- **soft-dependency import simulation** (the DRF-absent guard);
+- **pure flattening-helper edge cases** (nested `serializer.errors` shapes no products
+  serializer emits);
+- **runtime branches impossible to drive through the sync `/graphql/` view**
+  (raw-pk / non-Relay + many-relation decode with synthetic fixtures, the call-once save
+  spy, the `sync_to_async` boundary + `SyncMisuseError`, hermetic constructor seams).
+
+If a planned `tests/rest_framework/test_resolvers.py` case turns out to be drivable by a
+real products query, it **moves to the live suite** — that direction only. **DRF is a
 dev-group dependency** so the test env has it
 ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)).
 
-- **Live, over `/graphql/`** (Slice 4, [`test_products_api.py`][test-products-api],
-  seeded via `seed_data` / `create_users`): `createItemViaSerializer` /
-  `updateItemViaSerializer` happy paths; the `serializer.errors` envelope (a
-  `validate_<field>` error keyed to the serializer field, the `UniqueTogetherValidator`
-  / `validate()` error keyed to `"__all__"`); **`categoryId` validates and writes
-  through the serializer's `category` `PrimaryKeyRelatedField`** (proving the reverse
-  map); **partial-update preservation** — a `name`-only `updateItemViaSerializer`
-  preserves `description` and `category`, and the unique constraint fires when only
-  `name` changes to a value already taken under the unchanged `category` (the
-  `partial=True` contract); a non-colliding partial update; write authorization
-  (anonymous denied, a caller missing the model perm denied, a permitted caller
-  succeeds); the visibility-scoped `update` (a caller who cannot see a private `Item`
-  gets not-found); **relation visibility** — a permitted writer submitting a **hidden**
-  `Category` `GlobalID` as `categoryId` gets a field-keyed `FieldError`; and
+- **Live, over `/graphql/`** (Slice 3, [`test_products_api.py`][test-products-api],
+  seeded via `seed_data` / `create_users`) — **the primary harness for every reachable
+  resolver branch**: `createItemViaSerializer` / `updateItemViaSerializer` happy paths;
+  the `serializer.errors` envelope (a `validate_<field>` error keyed to the serializer
+  field, the `UniqueTogetherValidator` / `validate()` error keyed to `"__all__"`);
+  **`categoryId` validates and writes through the serializer's `category`
+  `PrimaryKeyRelatedField`** (proving the reverse map); **partial-update preservation** —
+  a `name`-only `updateItemViaSerializer` preserves `description` and `category`, and the
+  unique constraint fires when only `name` changes to a value already taken under the
+  unchanged `category` (the `partial=True` contract); a non-colliding partial update;
+  write authorization (anonymous denied, a caller missing the model perm denied, a
+  permitted caller succeeds); the visibility-scoped `update` (a caller who cannot see a
+  private `Item` gets not-found); **relation visibility** — a permitted writer submitting
+  a **hidden** `Category` `GlobalID` as `categoryId` gets a field-keyed `FieldError`;
   **authorize-before-decode** — an *un*permitted writer submitting that same hidden
   `categoryId` is denied with a top-level error (the auth failure, not the relation
-  `FieldError` — relation visibility is never probed before authorization).
+  `FieldError` — relation visibility is never probed before authorization); **the
+  multipart `Upload` write** — a real multipart `/graphql/` request uploads a file to
+  [`Item.attachment`][products-models] through the serializer's `Upload` field (the
+  [`test_uploads_api.py`][test-uploads-api] transport precedent), proving the
+  `Upload`-into-`data` routing; **the request-context path** — a `validate()` that reads
+  `self.context["request"].user` observably fires (proving the injected
+  `context={"request": …}` reaches the serializer); and **the G2 optimizer re-fetch query
+  shape** — asserting (via `CaptureQueriesContext` / the optimizer's plan) the payload
+  re-fetch keeps `select_related` / `prefetch_related` and emits no `.only(...)` column
+  deferral.
 - **Package-internal** ([`tests/rest_framework/`][test-rest-framework]):
   - `test_converter.py` — each supported serializer-field class → annotation +
     required-ness; `PrimaryKeyRelatedField` / `ManyRelatedField` id mapping
@@ -2048,33 +2166,27 @@ dev-group dependency** so the test env has it
     (proving `clear_serializer_input_namespace()` runs in the pre-bind reset block, not
     a per-pass clear); the no-registered-primary-type error; the model-flavor seam
     defaults unchanged.
-  - `test_resolvers.py` — create / update happy paths; `is_valid()` failure → envelope
-    (null object), incl. a `non_field_errors` `validate()` error → `"__all__"`; **the
-    recursive error flattener** — a `ListField` / `MultipleChoiceField` **indexed child
-    error** maps to a dotted-path `FieldError` (`tags.2`), a nested dict-shaped error
-    maps to its joined path, and a nested non-field error normalizes to `<path>.__all__`
-    (no structure stringified, no leaf dropped); the decode (`categoryId` →
-    `{"category": pk}` in `data`, an `Upload` value in `data`); **relation visibility on
-    every branch** — a hidden target → field-keyed `FieldError` before the serializer,
-    for **both** a Relay-`GlobalID` primary AND a **non-Relay raw-pk** primary, and for
-    **both** single and many relations; a raw-pk / wrong-model relation id →
-    `FieldError`; **authorize-before-decode** — a caller denied write authorization who
-    submits an **invalid / hidden / wrong-type** relation id still gets the
-    **authorization** failure (top-level `GraphQLError`), **not** a relation-specific
-    `FieldError` (proving decode runs after authorize; the `create` case, which has no
-    instance locate, is the sharpest); **write-time `IntegrityError`** → `FieldError`
-    envelope, not a top-level error; **the value-preserving save** — `serializer.save()`
-    is called **exactly once** (spy / call-count) and the payload re-fetch uses the
-    object that call returned (not a second save, not a stale `serializer.instance`); the
-    `get_serializer_kwargs` override (injecting a non-default `context`); the default
-    `context={"request": …}` resolved via `request_from_info` (a bare-`HttpRequest`
-    `info.context` resolves too);
-    **partial-update via `partial=True`** (omitted fields preserved, a
-    `UniqueTogetherValidator` validating on a one-field change); the visibility-scoped
-    `update` locate (hidden row → not-found); write-auth denial vs success; sync + async
-    (one `sync_to_async(thread_sensitive=True)`); the
-    [`SyncMisuseError`][glossary-syncmisuseerror] async-hook-from-sync path; the G2
-    re-fetch plan-shape.
+  - `test_resolvers.py` — **genuinely-unreachable internals only** (the create/update
+    happy paths, `validate_<field>` / flat `validate()` → `"__all__"` envelopes,
+    `categoryId` reverse-map, partial-update, visibility-scoped update, write-auth,
+    authorize-before-decode, `Upload`, request-context, and G2 query shape are **owned by
+    the live suite above** and are **not** repeated here): **the recursive error
+    flattener** — a `ListField` / `MultipleChoiceField` **indexed child error** maps to a
+    dotted-path `FieldError` (`tags.2`), a nested dict-shaped error maps to its joined
+    path, and a nested non-field error normalizes to `<path>.__all__` (no structure
+    stringified, no leaf dropped) — shapes no products serializer emits; **non-Relay
+    raw-pk and many-relation decode** — a hidden target → field-keyed `FieldError` for a
+    **non-Relay raw-pk** primary and for a **many** relation, plus a raw-pk / wrong-model
+    id → `FieldError` (synthetic fixtures; products' `Category` is Relay-`GlobalID` and
+    single, so these are unreachable live); **write-time `IntegrityError`** → `FieldError`
+    envelope (a monkeypatched `save()` race, not deterministically drivable over HTTP);
+    **the value-preserving save** — `serializer.save()` is called **exactly once** (a
+    save spy) and the re-fetch uses the returned object (not a second save, not a stale
+    `serializer.instance`); the **hermetic `get_serializer_kwargs` override** (injecting a
+    non-default `context` / constructor kwargs) and the bare-`HttpRequest` `info.context`
+    fallback of `request_from_info`; **sync + async** (one
+    `sync_to_async(thread_sensitive=True)`) and the
+    [`SyncMisuseError`][glossary-syncmisuseerror] async-`get_queryset`-from-sync path.
   - **The DRF-absent import guard** ([`tests/rest_framework/test_soft_dependency.py`][test-rest-framework]
     or in `test_sets.py`): with DRF's import simulated-absent (monkeypatched
     `builtins.__import__`, **module caches for both `rest_framework*` and
@@ -2100,17 +2212,17 @@ dev-group dependency** so the test env has it
 Each slice owns its doc edits. [`AGENTS.md`][agents] #"Do not update CHANGELOG.md
 unless explicitly instructed" requires `CHANGELOG.md` edits to be explicitly
 instructed — and a standing design doc cannot itself grant that permission. This spec
-only *describes* the release-note work; the **Slice 5 maintainer prompt must explicitly
+only *describes* the release-note work; the **Slice 4 maintainer prompt must explicitly
 include the `CHANGELOG.md` edit** for it to be authorized.
 
-- **Slice 5 — soft-dep wiring** ([`pyproject.toml`][pyproject] + `uv.lock`): add
+- **Slice 4 — soft-dep wiring** ([`pyproject.toml`][pyproject] + `uv.lock`): add
   `djangorestframework` to `[dependency-groups].dev` (NOT `[project].dependencies`),
   pinning a floor matching the guard's install hint, and regenerate `uv.lock` so the
   lockfile matches. **No package-version edits** (the `[project].version` /
   `__version__` / `test_version` and the `uv.lock` package-version entry stay `0.0.12`;
   only the DRF dependency entries change)
   ([Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
-- **Slice 5 — GLOSSARY** ([`docs/GLOSSARY.md`][glossary]): promote
+- **Slice 4 — GLOSSARY** ([`docs/GLOSSARY.md`][glossary]): promote
   [`SerializerMutation`][glossary-serializermutation] from `planned for 0.0.13` to
   `shipped (0.0.13)` (updating the body to the shipped contract — the
   `Meta.serializer_class` surface, the serializer-derived input, the `serializer.errors`
@@ -2120,7 +2232,7 @@ include the `CHANGELOG.md` edit** for it to be authorized.
   the `id:`-decode locate rather than `lookup_field` (both recorded as deliberate
   non-adoptions). Add `SerializerMutation` to **Public exports**, the **Index** (status
   column), and the **Mutations** browse-by-category row.
-- **Slice 5 — package docs**: [`docs/README.md`][docs-readme] / [`README.md`][readme]
+- **Slice 4 — package docs**: [`docs/README.md`][docs-readme] / [`README.md`][readme]
   move the serializer flavor from "Coming next (`0.0.13`)" to "Shipped today" in the
   "Coming from DRF + django-filter?" paragraph (the README **Status** version line
   moves to `0.0.13` at the joint cut, not here); [`GOAL.md`][goal] — criterion 6's
@@ -2129,7 +2241,7 @@ include the `CHANGELOG.md` edit** for it to be authorized.
   the planned `rest_framework/` / [`tests/rest_framework/`][test-rest-framework]
   summary lines; [`CHANGELOG.md`][changelog] carries the bullets **only when the Slice
   5 maintainer prompt explicitly requests it**.
-- **Slice 5 — card wrap**: [`KANBAN.md`][kanban] moves [`TODO-ALPHA-039-0.0.13`][kanban]
+- **Slice 4 — card wrap**: [`KANBAN.md`][kanban] moves [`TODO-ALPHA-039-0.0.13`][kanban]
   to Done with the next `DONE-NNN-0.0.13` id, keeping its `SpecDoc` pointing at the
   canonical card spec (a `SpecDoc` DB edit re-rendered via `scripts/build_kanban_md.py`,
   never a hand-edit).
@@ -2310,7 +2422,7 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
    / [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)
    / [Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)).
 
-**Slice 3 — resolver pipeline + factory verification**
+**Slice 3 — resolver pipeline + products live serializer surface (one commit)**
 
 4. [`rest_framework/resolvers.py`][rf-resolvers] runs the **locate → authorize → decode
    → `is_valid()` → `save()` → re-fetch → payload** pipeline (sync + async, one
@@ -2344,18 +2456,24 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
    / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
    / [Decision 9](#decision-9--optimizer-composition-the-modelserializer-payload-re-fetch-rides-the-spec-036-g2-path)).
 
-**Slice 4 — products live serializer surface**
-
-5. Products exposes a `SerializerMutation` (create + update over `Item`) backed by an
-   [`ItemSerializer`][products-serializers], and [`test_products_api.py`][test-products-api]
-   (seeded via `seed_data` / `create_users`) proves the create / update happy paths,
-   `categoryId` validating through the serializer's `category` field, **a
-   hidden-`Category` `GlobalID` → field-keyed `FieldError`** (the relation-visibility
-   invariant), **partial-update preservation** (a `name`-only update preserves
-   `category` / `description` via `partial=True`, and the unique constraint fires on a
-   one-field change), the `serializer.errors` envelope (field-level + the `"__all__"`
-   case), write authorization, and the visibility-scoped `update`
-   ([Decision 13](#decision-13--live-coverage-products-grows-a-modelserializer-mutation)).
+5. **In the same commit**, products exposes the `SerializerMutation`(s) (create + update
+   over `Item`) backed by an [`ItemSerializer`][products-serializers], and
+   [`test_products_api.py`][test-products-api] (seeded via `seed_data` / `create_users`)
+   is the **primary coverage harness** — every consumer-reachable resolver branch is
+   earned over real `/graphql/`: create / update happy paths, `categoryId` reverse-map
+   validate-and-write through the serializer's `category` field, a **hidden-`Category`
+   `GlobalID` → field-keyed `FieldError`** and **authorize-before-decode** (an unpermitted
+   caller submitting that hidden id gets the auth denial, not the relation error),
+   **partial-update preservation** + unique-together on a one-field change, the
+   `serializer.errors` envelope (field-level + `"__all__"`), write authorization, the
+   visibility-scoped `update`, the **multipart `Upload` → [`Item.attachment`][products-models]**
+   write, the **request-context** `validate()` path, and the **G2 re-fetch query shape**.
+   `tests/rest_framework/test_resolvers.py` holds **only** the genuinely-unreachable
+   internals (recursive-flattener shapes, raw-pk/non-Relay + many-relation decode,
+   call-once save, `IntegrityError`, sync/async + `SyncMisuseError`, hermetic kwargs
+   seams) — **no reachable behavior is duplicated across the two trees**
+   ([Decision 13](#decision-13--live-coverage-products-grows-a-modelserializer-mutation),
+   the [`test_query/README.md`][test-query-readme] #"Coverage rule.").
 
 **Cross-cutting — no regression**
 
@@ -2364,7 +2482,7 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
    `ruff check` are clean; the `036` / `038` mutation surfaces and the read side are
    unchanged.
 
-**Slice 5 — docs + soft-dep + card wrap (no version bump)**
+**Slice 4 — docs + soft-dep + card wrap (no version bump)**
 
 7. [`pyproject.toml`][pyproject] adds `djangorestframework` to `[dependency-groups].dev`
    (NOT `[project].dependencies`) **and `uv.lock` is regenerated to match** (the DRF
@@ -2374,7 +2492,7 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
    (`Meta.operation`, the `id:`-decode locate); [`docs/README.md`][docs-readme] /
    [`README.md`][readme] move the serializer flavor to "Shipped today"; [`GOAL.md`][goal]
    / [`TODAY.md`][today] / [`docs/TREE.md`][tree] reflect the shipped flavor;
-   [`CHANGELOG.md`][changelog] carries the bullets **only when the Slice 5 maintainer
+   [`CHANGELOG.md`][changelog] carries the bullets **only when the Slice 4 maintainer
    prompt explicitly requests the edit**; [`KANBAN.md`][kanban] records the card
    `DONE-NNN-0.0.13` with the `SpecDoc` reference at the canonical card spec (kanban DB
    + re-render).
@@ -2478,9 +2596,12 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
 [test-rest-framework]: ../tests/rest_framework/
 
 <!-- examples/ -->
+[products-models]: ../examples/fakeshop/apps/products/models.py
 [products-schema]: ../examples/fakeshop/apps/products/schema.py
 [products-serializers]: ../examples/fakeshop/apps/products/serializers.py
 [test-products-api]: ../examples/fakeshop/test_query/test_products_api.py
+[test-query-readme]: ../examples/fakeshop/test_query/README.md
+[test-uploads-api]: ../examples/fakeshop/test_query/test_uploads_api.py
 
 <!-- scripts/ -->
 

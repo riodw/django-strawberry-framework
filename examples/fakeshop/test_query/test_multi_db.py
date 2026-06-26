@@ -30,9 +30,7 @@ Critical contract pins (do not violate without an explicit spec revision):
 # rev4 V6 - sys.modules.get(...), importlib.reload(...) /
 # importlib.import_module(...). os is the env-var gate.
 
-import importlib
 import os
-import sys
 
 import pytest
 
@@ -55,7 +53,6 @@ from strawberry.django.views import GraphQLView
 from strawberry.types import Info
 
 from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config
-from django_strawberry_framework.registry import registry
 
 # ---------------------------------------------------------------------------
 # Autouse reload fixture (copied verbatim from
@@ -64,32 +61,20 @@ from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests():
-    """Recreate imported DjangoType classes if package tests cleared the registry."""
-    # This reload is mandatory for order-independent suite isolation:
-    # package tests clear the global registry, while the example project
-    # schema finalizes import-time DjangoType classes. Reload only schema
-    # modules (not apps.library.models) so Django model classes stay stable and
-    # DjangoType subclasses are recreated against a fresh registry.
-    # Hidden invariant: tests must not module-level import classes from
-    # apps.library.schema, or they will hold stale class objects after reload.
-    registry.clear()
-    library_schema = sys.modules.get("apps.library.schema")
-    if library_schema is None:
-        importlib.import_module("apps.library.schema")
-    else:
-        importlib.reload(library_schema)
+def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
+    """Recreate imported DjangoType classes if package tests cleared the registry.
 
-    project_schema = sys.modules.get("config.schema")
-    if project_schema is None:
-        importlib.import_module("config.schema")
-    else:
-        importlib.reload(project_schema)
-
-    urls = sys.modules.get("config.urls")
-    if urls is not None:
-        importlib.reload(urls)
-        clear_url_caches()
+    Rebuilds the FULL project schema (every contributing app + config), not just
+    ``apps.library.schema``: ``config.schema`` aggregates all five apps, so a
+    library-only reload left the other apps unregistered after a package
+    ``registry.clear()`` and the combined build raised a ``LazyType`` ``KeyError``
+    under collection orders that did not pre-materialize them. See ``conftest.py``.
+    Reload is mandatory for order-independent suite isolation; Django model classes
+    are never reloaded so they stay stable. Hidden invariant: tests must not
+    module-level import classes from ``apps.library.schema`` or they hold stale
+    class objects after reload.
+    """
+    reload_all_project_app_schemas()
 
 
 # ---------------------------------------------------------------------------

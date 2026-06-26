@@ -13,10 +13,10 @@ test imported but never finalized that app's schema.
 
 ``reload_all_project_app_schemas`` rebuilds the full project schema by reloading
 every contributing app in a dependency-safe order, so the rebuild is complete and
-order-independent. The per-file fixtures that only need their own app keep their
-narrower reloads; the suites whose fixture must reconstruct the WHOLE combined
-schema (kanban / glossary, which sit downstream of the products/library/scalars
-types in ``config.schema``) use this helper.
+order-independent. EVERY acceptance suite's autouse fixture delegates to it - there
+are no per-file narrower reloads left: the combined ``config.schema`` build needs
+all five apps registered no matter which app a given file targets, so each file
+reconstructs the WHOLE project rather than only its own app.
 """
 
 from __future__ import annotations
@@ -50,25 +50,30 @@ def _reload_or_import(module_name: str) -> None:
         importlib.reload(module)
 
 
-@pytest.fixture
-def reload_all_project_app_schemas():
-    """Return a callable that clears the registry and rebuilds the FULL project schema.
+def reload_all_project_schemas() -> None:
+    """Clear the registry and rebuild the FULL project schema (every app + config).
 
     Re-registers every contributing app schema (dependency-safe order) before
     reloading ``config.schema`` + ``config.urls``, so the combined schema build can
     resolve every app's lazy input refs after a package-test ``registry.clear()``.
+    Backs the ``reload_all_project_app_schemas`` fixture below; the per-file autouse
+    fixtures (and the few tests that re-finalize under an ``override_settings``)
+    request that FIXTURE rather than importing this function, so there is no
+    ``import conftest`` boundary in the test modules.
     """
+    from django_strawberry_framework.registry import registry
 
-    def _reload() -> None:
-        from django_strawberry_framework.registry import registry
+    registry.clear()
+    for module_name in _PROJECT_APP_SCHEMA_MODULES:
+        _reload_or_import(module_name)
+    _reload_or_import("config.schema")
+    urls = sys.modules.get("config.urls")
+    if urls is not None:
+        importlib.reload(urls)
+        clear_url_caches()
 
-        registry.clear()
-        for module_name in _PROJECT_APP_SCHEMA_MODULES:
-            _reload_or_import(module_name)
-        _reload_or_import("config.schema")
-        urls = sys.modules.get("config.urls")
-        if urls is not None:
-            importlib.reload(urls)
-            clear_url_caches()
 
-    return _reload
+@pytest.fixture
+def reload_all_project_app_schemas():
+    """Return the :func:`reload_all_project_schemas` callable for an autouse fixture to invoke."""
+    return reload_all_project_schemas

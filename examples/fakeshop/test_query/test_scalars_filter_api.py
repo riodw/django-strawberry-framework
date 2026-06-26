@@ -12,16 +12,11 @@ visibility through a relation traversal.
 """
 
 import datetime
-import importlib
-import sys
 import uuid
 
 import pytest
 from apps.scalars import models
 from django.test import Client
-from django.urls import clear_url_caches
-
-from django_strawberry_framework.registry import registry
 
 _DATE = datetime.date(2021, 6, 15)
 _DATETIME = datetime.datetime(2021, 6, 15, 9, 30, tzinfo=datetime.timezone.utc)
@@ -30,25 +25,16 @@ _UUID = uuid.UUID("12345678-1234-5678-1234-567812345678")
 
 
 @pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests():
-    """Recreate imported DjangoType classes if package tests cleared the registry."""
-    registry.clear()
-    scalars_schema = sys.modules.get("apps.scalars.schema")
-    if scalars_schema is None:
-        importlib.import_module("apps.scalars.schema")
-    else:
-        importlib.reload(scalars_schema)
+def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
+    """Recreate imported DjangoType classes if package tests cleared the registry.
 
-    project_schema = sys.modules.get("config.schema")
-    if project_schema is None:
-        importlib.import_module("config.schema")
-    else:
-        importlib.reload(project_schema)
-
-    urls = sys.modules.get("config.urls")
-    if urls is not None:
-        importlib.reload(urls)
-        clear_url_caches()
+    Rebuilds the FULL project schema (every contributing app + config), not just
+    ``apps.scalars.schema``: ``config.schema`` aggregates all five apps, so a
+    scalars-only reload left the other apps unregistered after a package
+    ``registry.clear()`` and the combined build raised a ``LazyType`` ``KeyError``
+    under collection orders that did not pre-materialize them. See ``conftest.py``.
+    """
+    reload_all_project_app_schemas()
 
 
 def _seed_specimen(label: str, **overrides):
@@ -117,12 +103,14 @@ def test_scalars_filter_by_flag_exact():
 
 @pytest.mark.django_db
 def test_scalars_filter_by_non_relay_pk_in_list():
-    """Non-Relay ``id: { in: [...] }`` resolves to the CSV ``list[int]`` path (H5c).
+    """Non-Relay ``id: { in: [...] }`` resolves to the integer CSV path (H5c).
 
-    The scalar types are not Relay nodes, so ``id`` is a plain integer and
-    the django-filter-generated ``BaseInFilter`` converts to ``list[int]``
-    rather than the own-PK ``GlobalIDMultipleChoiceFilter`` the Relay apps
-    use. This pins the non-Relay counterpart of that fix end to end.
+    The scalar types are not Relay nodes, so ``id`` is a plain integer column.
+    Its ``in`` lookup routes through the framework's ``IntegerInFilter`` (a
+    ``BaseInFilter`` subclass that also drops out-of-range members and matches
+    nothing on a fully-dropped non-empty list) and converts to a ``list[Int]``
+    CSV input rather than the own-PK ``GlobalIDMultipleChoiceFilter`` the Relay
+    apps use. This pins the non-Relay counterpart of that fix end to end.
     """
     alpha = _seed_specimen("alpha")
     _seed_specimen("beta")

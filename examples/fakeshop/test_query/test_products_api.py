@@ -22,9 +22,7 @@ against the GraphQL result, which both pins the filter behaviour and stays
 robust across Faker versions.
 """
 
-import importlib
 import json
-import sys
 
 import pytest
 from apps.products import models
@@ -35,47 +33,28 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
-from django.urls import clear_url_caches
 from strawberry import relay
-
-from django_strawberry_framework.registry import registry
-
-
-def _reload_products_project_schema() -> None:
-    """Recreate imported DjangoType classes if package tests cleared the registry.
-
-    Mirrors ``test_library_api.py::_reload_library_project_schema``: package
-    tests clear the global registry, while the example schema finalizes
-    import-time ``DjangoType`` classes. Reload only schema modules (not
-    ``apps.products.models``) so Django model classes stay stable.
-
-    Lifted out of the autouse fixture so a test can drive the reload itself
-    after applying ``override_settings`` (e.g. the ``type``-strategy opt-out),
-    ensuring the override is active *before* the schema finalizes.
-    """
-    registry.clear()
-    products_schema = sys.modules.get("apps.products.schema")
-    if products_schema is None:
-        importlib.import_module("apps.products.schema")
-    else:
-        importlib.reload(products_schema)
-
-    project_schema = sys.modules.get("config.schema")
-    if project_schema is None:
-        importlib.import_module("config.schema")
-    else:
-        importlib.reload(project_schema)
-
-    urls = sys.modules.get("config.urls")
-    if urls is not None:
-        importlib.reload(urls)
-        clear_url_caches()
 
 
 @pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests():
-    """Recreate the project schema around package-test registry clears."""
-    _reload_products_project_schema()
+def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
+    """Rebuild the FULL project schema around package-test registry clears.
+
+    Delegates to the shared ``conftest`` reload (via the
+    ``reload_all_project_app_schemas`` fixture) so the WHOLE project schema is
+    rebuilt - every contributing app + config, not just ``apps.products.schema``:
+    ``config.schema`` aggregates all five apps, so a products-only reload left the
+    other apps unregistered after a package ``registry.clear()`` and the combined
+    build raised a ``LazyType`` ``KeyError`` under collection orders that did not
+    pre-materialize them. Django model classes are never reloaded so they stay stable.
+
+    A test that must re-finalize under an ``override_settings`` (e.g. the
+    ``type``-strategy opt-out) requests the ``reload_all_project_app_schemas`` fixture
+    itself and calls it inside the override, so the override is active before the
+    schema finalizes - no module-level reload helper, so there is no brittle
+    ``import conftest`` boundary.
+    """
+    reload_all_project_app_schemas()
 
 
 def _post_graphql(query: str, *, client: Client | None = None, variables: dict | None = None):
@@ -1096,11 +1075,11 @@ def test_globalid_filter_round_trip():
 
 
 @pytest.mark.django_db
-def test_type_strategy_opt_out_reproduces_type_name():
+def test_type_strategy_opt_out_reproduces_type_name(reload_all_project_app_schemas):
     """``RELAY_GLOBALID_STRATEGY = "type"`` opts back into the GraphQL-type-name payload.
 
     Ordering matters here: the override is applied *before*
-    ``_reload_products_project_schema()`` finalizes the schema (the fakeshop
+    ``reload_all_project_app_schemas()`` finalizes the schema (the fakeshop
     fixtures reload at finalization, so a strategy override must precede the
     reload or the test silently exercises the default schema). Under the ``type``
     strategy ``ItemType``'s ``id`` reproduces the GraphQL type name ``ItemType``
@@ -1117,7 +1096,7 @@ def test_type_strategy_opt_out_reproduces_type_name():
     with override_settings(
         DJANGO_STRAWBERRY_FRAMEWORK={"RELAY_GLOBALID_STRATEGY": "type"},
     ):
-        _reload_products_project_schema()
+        reload_all_project_app_schemas()
         response = _post_graphql(
             "query { allItems { edges { node { id name } } } }",
             client=client,

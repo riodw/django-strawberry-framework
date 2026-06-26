@@ -10,8 +10,6 @@ round-trip as a JSON number.
 """
 
 import datetime
-import importlib
-import sys
 from decimal import Decimal
 from uuid import UUID
 
@@ -20,37 +18,21 @@ from apps.scalars import models
 from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
-from django.urls import clear_url_caches
-
-from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests():
+def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
     """Recreate imported DjangoType classes if package tests cleared the registry.
 
-    Mirrors the ``test_library_api.py`` fixture: package tests clear the
-    global registry, while the example schema finalizes import-time
-    ``DjangoType`` classes. Reload only schema modules (not
-    ``apps.scalars.models``) so Django model classes stay stable.
+    Rebuilds the FULL project schema (every contributing app + config), not just
+    ``apps.scalars.schema``: ``config.schema`` aggregates all five apps, so a
+    scalars-only reload left the other apps unregistered after a package
+    ``registry.clear()`` and the combined build raised a ``LazyType`` ``KeyError``
+    (e.g. ``CategoryFilterInputType`` from products) under collection orders that
+    did not pre-materialize them. See the ``conftest.py`` helper. Django model
+    classes are never reloaded, so they stay stable.
     """
-    registry.clear()
-    scalars_schema = sys.modules.get("apps.scalars.schema")
-    if scalars_schema is None:
-        importlib.import_module("apps.scalars.schema")
-    else:
-        importlib.reload(scalars_schema)
-
-    project_schema = sys.modules.get("config.schema")
-    if project_schema is None:
-        importlib.import_module("config.schema")
-    else:
-        importlib.reload(project_schema)
-
-    urls = sys.modules.get("config.urls")
-    if urls is not None:
-        importlib.reload(urls)
-        clear_url_caches()
+    reload_all_project_app_schemas()
 
 
 # Sentinel values chosen so each wire format is unambiguous in the response.
@@ -231,10 +213,9 @@ def test_filter_specimens_by_bigint_in_drops_past_64bit_members_no_overflow():
     signed-64-bit range (``2**63``) reached the backend as a raw ``Python int too large
     to convert to SQLite INTEGER`` top-level error - unlike a scalar ``exact``, which
     Django's range-aware integer lookups resolve to an empty match before binding.
-    ``filters/sets.py::_coerce_int_in_members`` now drops the out-of-range member (it can
-    identify no row), so the in-range member still filters. (An all-out-of-range list
-    empties and degrades to the same no-constraint behaviour as an explicit ``in: []`` -
-    a no-op, not a crash; covered by the second leg below.)
+    ``filters/base.py::IntegerInFilter`` now drops the out-of-range member (it can
+    identify no row), so the in-range member still filters; a NON-empty list whose
+    members ALL drop matches NOTHING (``qs.none()``), not every row (the second leg).
     """
     _seed_specimen(label="keep", signed_big=7)
     _seed_specimen(label="other", signed_big=1)
@@ -256,8 +237,11 @@ def test_filter_specimens_by_bigint_in_drops_past_64bit_members_no_overflow():
     assert "errors" not in mixed_body, mixed_body
     assert mixed_body["data"]["allScalarSpecimens"] == [{"label": "keep"}]
 
-    # An all-out-of-range list empties; the key contract is "no raw OverflowError",
-    # degrading to the same no-constraint result as an explicit empty ``in: []``.
+    # A NON-empty ``in`` whose only member is out of range identifies no row, so the
+    # correct result is ``[]`` (match nothing) - NOT every visible row. ``IntegerInFilter``
+    # short-circuits a fully-dropped non-empty list to ``qs.none()`` rather than letting
+    # django-filter SKIP the coerced-empty list (which would silently widen the
+    # restrictive filter to no constraint). No ``OverflowError`` reaches the backend.
     only_bad = _post_graphql(
         """
         query {
@@ -270,6 +254,80 @@ def test_filter_specimens_by_bigint_in_drops_past_64bit_members_no_overflow():
     assert only_bad.status_code == 200
     only_bad_body = only_bad.json()
     assert "errors" not in only_bad_body, only_bad_body
+    assert only_bad_body["data"]["allScalarSpecimens"] == []
+
+
+@pytest.mark.django_db
+def test_filter_specimens_by_bigint_explicit_empty_in_is_noop_no_constraint():
+    """An EXPLICIT ``in: []`` (no membership values supplied) is a no-op, returning all rows.
+
+    The deliberate counterpart to the all-out-of-range leg above: a client that supplies
+    NO membership values is not expressing a restrictive filter that lost its members, so
+    ``IntegerInFilter`` keeps django-filter's empty-value SKIP (no constraint) - distinct
+    from a non-empty list whose values all drop, which matches nothing. Pinning this
+    guards the ``in: []`` boundary the coercion fix deliberately preserves.
+    """
+    _seed_specimen(label="keep", signed_big=7)
+    _seed_specimen(label="other", signed_big=1)
+
+    response = _post_graphql(
+        "query { allScalarSpecimens(filter: { signedBig: { in: [] } }) { label } }",
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert "errors" not in body, body
+    assert {row["label"] for row in body["data"]["allScalarSpecimens"]} == {"keep", "other"}
+
+
+@pytest.mark.django_db
+def test_filter_specimens_by_unsigned_bigint_in_drops_below_zero_members():
+    """A negative ``in`` member on a ``PositiveBigIntegerField`` is dropped by the LOWER-bound validator.
+
+    ``unsigned_big`` is a ``PositiveBigIntegerField`` whose range validators reject
+    any value below 0, so ``IntegerInFilter``'s per-member coercion (``to_python`` +
+    ``run_validators``) drops a negative member through the MIN-value path - the
+    unsigned counterpart to the signed upper-bound overflow drop above. The in-range
+    member still filters; a NON-empty list whose members ALL drop matches NOTHING
+    (``qs.none()``), not every row. Pins ``IntegerInFilter``'s application to
+    ``PositiveBigIntegerField`` (``apps/scalars/filters.py``), not only the signed
+    ``BigIntegerField`` upper-bound case.
+    """
+    _seed_specimen(label="keep", unsigned_big=7)
+    _seed_specimen(label="other", unsigned_big=3)
+
+    # -1 is below the PositiveBigIntegerField minimum (0) and is dropped by the
+    # lower-bound validator; 7 still selects its row, proving only the bad member
+    # was dropped (not the whole filter).
+    mixed = _post_graphql(
+        """
+        query {
+          allScalarSpecimens(filter: { unsignedBig: { in: [-1, 7] } }) {
+            label
+          }
+        }
+        """,
+    )
+    assert mixed.status_code == 200
+    mixed_body = mixed.json()
+    assert "errors" not in mixed_body, mixed_body
+    assert mixed_body["data"]["allScalarSpecimens"] == [{"label": "keep"}]
+
+    # A NON-empty ``in`` whose only member is below the minimum identifies no row, so
+    # the result is ``[]`` (match nothing) - the lower-bound twin of the all-out-of-
+    # range signed leg, never django-filter's empty-value skip that returns all rows.
+    only_bad = _post_graphql(
+        """
+        query {
+          allScalarSpecimens(filter: { unsignedBig: { in: [-1] } }) {
+            label
+          }
+        }
+        """,
+    )
+    assert only_bad.status_code == 200
+    only_bad_body = only_bad.json()
+    assert "errors" not in only_bad_body, only_bad_body
+    assert only_bad_body["data"]["allScalarSpecimens"] == []
 
 
 @pytest.mark.django_db

@@ -1,37 +1,22 @@
 """Live GraphQL HTTP tests for the glossary docs-as-data API."""
 
-import importlib
-import sys
-
 import pytest
 from apps.glossary import models
 from apps.kanban import models as kanban_models
 from django.test import Client
-from django.urls import clear_url_caches
 
 
 @pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests():
-    """Recreate imported DjangoType classes if package tests cleared the registry."""
-    from django_strawberry_framework.registry import registry
+def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
+    """Recreate imported DjangoType classes if package tests cleared the registry.
 
-    registry.clear()
-    glossary_schema = sys.modules.get("apps.glossary.schema")
-    if glossary_schema is None:
-        importlib.import_module("apps.glossary.schema")
-    else:
-        importlib.reload(glossary_schema)
-
-    project_schema = sys.modules.get("config.schema")
-    if project_schema is None:
-        importlib.import_module("config.schema")
-    else:
-        importlib.reload(project_schema)
-
-    urls = sys.modules.get("config.urls")
-    if urls is not None:
-        importlib.reload(urls)
-        clear_url_caches()
+    Rebuilds the FULL project schema (every contributing app + config), not just
+    ``apps.glossary.schema``: ``config.schema`` aggregates all five apps, so a
+    glossary-only reload left products/library/scalars unregistered after a package
+    ``registry.clear()`` and the combined build raised a ``LazyType`` ``KeyError``
+    (e.g. ``CategoryFilterInputType``). See the ``conftest.py`` helper.
+    """
+    reload_all_project_app_schemas()
 
 
 def _seed_glossary():

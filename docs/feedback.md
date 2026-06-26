@@ -1,142 +1,124 @@
-# Code review — spec-038 form mutations (`0.0.12`)
+# Release review feedback - 0.0.12
 
-Scope: a thorough correctness review of the implemented `DjangoModelFormMutation`
-(model-backed) and plain `DjangoFormMutation` (model-less) feature against
-`docs/SPECS/spec-038-form_mutations-0_0_12.md`. Files read in full:
-`forms/inputs.py`, `forms/converter.py`, `forms/resolvers.py`, `forms/sets.py`,
-the `mutations/` integration points they call, the example schemas/forms, and the
-package + live test suites.
+## Findings
 
-## Verdict
+1. [P1] Write-side GlobalID decoding treats a custom Relay NodeID value as a pk.
 
-**Solid. No high- or medium-severity correctness bugs found.** The pipeline does
-the hard things right: `data=`/`files=` split, partial-update reconstruction from
-the located row, relation reverse-map (`categoryId` → form field `category`),
-per-branch relation visibility, write-auth before relation decode, deny-by-default
-for plain forms, and sync/async parity through the shared `run_pipeline_async`.
-The findings below are all **low-severity** edge-case robustness / cross-flavor
-consistency notes plus some live-HTTP coverage gaps. None block the release.
+   The read-side node path correctly treats the decoded id value as whatever
+   `resolved_type.resolve_id_attr()` names: `django_strawberry_framework/relay.py::_coerce_pk_or_none`
+   explicitly coerces against that field, and
+   `django_strawberry_framework/types/relay.py::_resolve_node_default #"id_attr = cls.resolve_id_attr()"`
+   filters by that id attr. The write-side helper then returns that same value as
+   `DecodeResult.pk` from
+   `django_strawberry_framework/relay.py::decode_model_global_id #"pk = _coerce_pk_or_none(resolved_type, node_id)"`,
+   but its consumers use it as an actual primary key:
+   `django_strawberry_framework/mutations/resolvers.py::coerce_lookup_id #"return result.pk, None"`,
+   `django_strawberry_framework/mutations/resolvers.py::locate_instance #"queryset.get(pk=node_id)"`,
+   `django_strawberry_framework/mutations/resolvers.py::_relation_membership_error #"queryset.filter(pk__in=query_pks)"`,
+   and `django_strawberry_framework/forms/resolvers.py::_visible_related_object #"queryset.filter(pk=pk).first()"`.
 
-### One prior-review candidate, disproven
+   A valid GlobalID for a type declaring something like `name: relay.NodeID[str]`
+   is therefore looked up as `pk=<name>` on update/delete and relation writes. It
+   usually fails as hidden/missing; worse, if a custom id value overlaps another
+   row's pk representation it can target the wrong row. Root fix: do not expose
+   the decoded NodeID value as `pk`. Return the resolved type/id attr/coerced id
+   value or resolve the visible object through the same id attr, then convert that
+   object to the write target's actual assignment value.
 
-The earlier draft review flagged a HIGH "partial update clears stored files."
-**I tested this empirically and it is a false positive.** A bound `ModelForm`
-with an omitted `FileField` (excluded from both `data=` and `files=`,
-`forms/resolvers.py:386`) does **not** clear the stored file: Django's
-`FileField.clean(data, initial)` returns `initial` when no new upload arrives,
-and the bound form's `initial` carries the instance's existing file. I built an
-`Item` with an attachment, ran the exact `_reconstruct_partial_data` shape
-(`name`-only change, `files={}`, `instance=item`) through the real
-`ItemFileModelForm`, saved, and the attachment was **preserved**. The docstring's
-`initial`-preservation claim (`forms/resolvers.py:345-348`) is correct.
+2. [P1] Form mutations miss the model mutation path's invalid-Unicode preflight.
 
-## Findings (all Low)
+   The model mutation decoder rejects unencodable text before any DB-bound
+   validation or save via
+   `django_strawberry_framework/mutations/resolvers.py::_decode_relations #"text_error = _unencodable_text_error(graphql_name, value)"`.
+   The form decoder sends scalar values straight into the bound form at
+   `django_strawberry_framework/forms/resolvers.py::_decode_form_data #"provided_data[spec.form_field_name] = raw_choice_value(value)"`.
+   For `ModelForm` fields such as
+   `examples/fakeshop/apps/products/forms.py::ItemModelForm.Meta #"fields = (\"name\", \"description\", \"category\")"`,
+   a lone surrogate can reach `form.is_valid()` constraint queries or `form.save()`
+   and raise a raw `UnicodeEncodeError`, bypassing the `{ node: null, errors: [...] }`
+   envelope.
 
-### [L1] Cross-flavor divergence: `null` for an M2M relation — FieldError vs silent clear
+   Root fix: apply the same string encodability guard in form scalar decode before
+   constructing the form, returning a field-keyed `FieldError` under the input's
+   GraphQL field name.
 
-A model `DjangoMutation` rejects an explicit `null` M2M with a field-keyed error
-(`_relation_null_error`, `mutations/resolvers.py:425-426`: `if value is None:
-return [], _relation_null_error(field_name)`). The form path instead treats the
-same `null` as an empty replace-set / clear (`forms/resolvers.py:257`:
-`if values in form_field.empty_values: return [], None`).
+3. [P1] `namedLibraryRecords` leaks restricted branches.
 
-So the identical input — `genreIds: null` — yields a `FieldError` on a model
-mutation but a **successful clear** on a `ModelFormMutation`. Each behavior is
-internally documented (the form path notes that iterating `None` would raise a
-top-level `TypeError`, and lets the bound form decide required-ness), so neither
-is wrong in isolation — but a consumer using both mutation flavors will hit two
-different contracts for the same wire value. Pick one, or document the split.
+   `examples/fakeshop/apps/library/schema.py::Query.named_library_records` reads
+   `models.Branch.objects.order_by("id")` directly and materializes those rows
+   into the interface list. That bypasses
+   `examples/fakeshop/apps/library/schema.py::BranchType.get_queryset`, which hides
+   `city="restricted"` branches from non-staff callers. The current live test only
+   seeds visible rows, so it does not catch the bypass.
 
-### [L2] No fail-loud guard against a `<name>_id` input-attr collision
+   Root fix: accept `info` on the resolver and route Branch rows through
+   `BranchType.get_queryset(..., info)` before materializing. Add a live
+   `/graphql/` regression with a restricted branch.
 
-A relation field `foo` is remapped to input attr `foo_id`
-(`relation_input_annotation` / `forms/inputs.py:336`), while a non-relation field
-keeps its own name (`_simple_triple`, `forms/inputs.py:348`). A `ModelForm` that
-both includes FK `foo` (→ `foo_id`) **and** declares an extra form field literally
-named `foo_id` produces two specs with `python_attr == "foo_id"`; the input
-namespace build (`utils/inputs.py`) writes the second over the first, silently
-dropping one input field. Contrived but reachable. The package is otherwise
-fail-loud (`ConfigurationError`); a collision check on the assembled
-`python_attr` set would keep that contract instead of silently losing a field.
+4. [P2] A `DjangoModelFormMutation` update can finalize an input that can never
+   validate when narrowing drops a required non-model form field.
 
-### [L3] `ModelChoiceField(queryset=None)` at class level raises `AttributeError`, not `ConfigurationError`
+   The create-shaped path guards this with
+   `django_strawberry_framework/forms/sets.py::_cached_build_form_input #"guard_create_required_fields(form_class, effective)"`.
+   The update path maps to `PARTIAL`, skips that guard, and
+   `django_strawberry_framework/forms/inputs.py::build_form_input_class #"required = False if (is_partial and column is not None) else field.required"`
+   only keeps required extra fields required if they remain in the generated
+   effective input. If `Meta.fields` or `Meta.exclude` removes a required
+   column-less field, `_reconstruct_partial_data` cannot reconstruct it because it
+   only has model state. The schema finalizes, but every request fails form
+   validation.
 
-`_model_less_relation_annotation` does `related_model = field.queryset.model`
-unguarded (`forms/inputs.py:328`). Because schema-time discovery reads
-`base_fields` without instantiating the form (by design), a perfectly valid Django
-idiom — a `ModelChoiceField` whose `queryset` is assigned in `__init__` — has
-`queryset is None` in `base_fields` and raises a bare
-`AttributeError: 'NoneType' object has no attribute 'model'` at schema build,
-breaking the otherwise-consistent fail-loud contract. A `None` check raising
-`ConfigurationError` with the form/field name would make this diagnosable.
+   Root fix: for `DjangoModelFormMutation` update, fail at bind time when
+   narrowing drops a required non-model form field unless `get_form_kwargs` or
+   `get_form` is overridden to supply it.
 
-### [L4] Plain-form `ChoiceField` becomes `String`, dropping the enum contract
+5. [P2] Partial `ModelForm` reconstruction ignores `ModelChoiceField.to_field_name`
+   for omitted FK fields.
 
-`forms/converter.py` maps a model-less `forms.ChoiceField` to `str`, so a plain
-`forms.Form` choice field generates a free-form `String` input rather than a
-generated GraphQL enum — asymmetric with the ModelForm path, where a column's
-`choices` is routed through the read-side enum. It's documented as intentional,
-but the wire contract for a plain-form choice loses schema-level value safety
-(clients can submit any string and rely on form validation to reject it). Worth
-either generating an enum for plain-form choices or noting the asymmetry in the
-form-mutation docs.
+   Provided relation inputs are decoded through
+   `django_strawberry_framework/forms/resolvers.py::_to_form_key_value`, so a
+   `ModelChoiceField(to_field_name="slug")` receives the slug value the form will
+   validate against. But when that same FK field is omitted on update,
+   `django_strawberry_framework/forms/resolvers.py::_reconstruct_partial_data`
+   falls through to `model_to_dict(instance, fields=scalar_names)`. For a normal FK,
+   that reconstructs the stored pk, not the form field's `to_field_name` value, so
+   an omitted FK can fail validation while an explicitly provided unchanged FK
+   succeeds.
 
-## Live-HTTP coverage gaps (logic is unit-tested; only end-to-end exercise is missing)
+   Root fix: reconstruct omitted `ModelChoiceField` FK/OneToOne fields from the
+   related object and `_to_form_key_value`, the same way the M2M branch already
+   reconstructs omitted values.
 
-The package tests in `tests/forms/test_resolvers.py` are strong and cover the
-subtle paths — partial-update FK preservation + constraint
-(`:931`), omitted-M2M preservation (`:963`), and the `to_field_name` M2M
-reconstruction edge (`:1018`). The gaps below are about the **live `/graphql/`**
-matrix the spec test plan calls for, not the logic:
+6. [P2] Mutation/form binding is not retry-idempotent after a later finalization
+   failure.
 
-- **M2M preservation on partial update — no live test.** `CreateShelfViaForm` is
-  create-only and the products `ItemModelForm` has no M2M, so the M2M
-  reconstruction branch (`forms/resolvers.py:388-391`) is never exercised over
-  HTTP. Covered at the schema/unit level only. Add an `updateShelfViaForm` (or
-  M2M-bearing update form) live test.
-- **`ImageField` → `Upload` — only a text `FileField` is tested live.**
-  `test_create_item_with_file_via_form_multipart_upload_over_http`
-  (`test_products_api.py:2536`) is a strong multipart test but uses a plain-text
-  `FileField` and explicitly skips image-dimension assertions. The spec names
-  `ImageField → Upload`; no live image test exists.
-- **Optional/blank field NOT cleared on omission — no distinct live case.** The
-  preservation test covers a required-blank scalar (`description`); a genuinely
-  optional field left non-cleared on a partial update isn't asserted live.
+   `django_strawberry_framework/types/finalizer.py::finalize_django_types` documents
+   partial-failure recovery, but Phase 2.5 binds mutations before filter/order
+   binding and Phase 3. `django_strawberry_framework/mutations/sets.py::bind_mutations`
+   clears `_shape_build_cache`, and
+   `django_strawberry_framework/forms/sets.py::bind_form_mutations` clears
+   `_form_shape_build_cache`, then both rebuild fresh class objects while the
+   materialization ledgers in `mutations.inputs` / `forms.inputs` remain populated.
+   On rerun, `django_strawberry_framework/utils/inputs.py::materialize_generated_input_class #"if existing is not None:"`
+   sees the same generated name backed by a different class object and raises a
+   collision, masking the original now-fixed finalization error.
 
-## Things I checked and found correct (not bugs)
+   Root fix: make mutation and form bind reruns reuse the already materialized
+   class objects, or clear the relevant materialization ledgers at the start of a
+   retry-safe bind pass before re-emitting parked globals. Add a regression where
+   finalization fails after mutation binding, the configuration is fixed, and
+   `finalize_django_types()` succeeds without `registry.clear()`.
 
-- **`to_field_name` relations work.** The decode resolves the object by pk/GlobalID
-  then re-keys via `_to_form_key_value` → `obj.serializable_value(to_field_name)`
-  (`forms/resolvers.py:172-183`), so the bound form receives the right key. The
-  wire id being pk/GlobalID (not the `to_field_name` value) is a deliberate,
-  consistent choice across the read and write surfaces.
-- **Write-auth runs before relation decode** on both flavors
-  (`forms/resolvers.py:443→445`, `:486→494`) — an unauthorized caller cannot probe
-  related-object visibility.
-- **Relation visibility on every branch** via `visibility_scoped_related_queryset`
-  (`_visible_related_object`, `forms/resolvers.py:142-169`); a hidden FK target
-  becomes a field-keyed `FieldError`. Live-tested for both GlobalID
-  (`test_products_api.py:2475`) and raw-pk (`test_library_api.py:4473`) paths.
-- **`data=`/`files=` split** is correct (`forms/resolvers.py:327-328`, `:453-458`).
-- **Plain-form deny-by-default + `{ ok, errors }`** envelope is correct
-  (`forms/sets.py:747-751`; live `test_products_api.py:2645,2691`).
-- **Sync/async parity** — `resolve_form_async` delegates the identical sync body
-  (incl. `transaction.atomic()`) through `run_pipeline_async`; no divergence.
-- **Error envelope** reuses the `036` `validation_error_to_field_errors` so a
-  form's `NON_FIELD_ERRORS` keys to `"__all__"` identically to a model
-  `full_clean()` failure.
+## Sub-agent coverage
 
-## Already addressed
+- Form construction/input generation reviewer found Finding 4.
+- Mutation runtime reviewer found Finding 2.
+- Cross-cutting registry/relay/finalizer reviewer found Findings 1 and 6.
+- Fakeshop integration reviewer found Finding 3.
+- Integrator pass added Finding 5 while reconciling the relation reconstruction
+  paths.
 
-The prior review's only actionable item (example schemas hand-rolling allow-all
-permission classes) was resolved in commit `639a3012` — examples now use the
-framework-native `permission_classes = []` opt-out.
+## Review commands
 
-## Bottom line
-
-No high- or medium-severity correctness problems. The write-side now behaves like
-the same package as the read-side: declarative `Meta`, generated inputs,
-shared permission/visibility seams, and a shared error envelope. Recommended
-follow-ups are all low-priority: decide the L1 `null`-M2M contract split, add the
-three fail-loud / asymmetry guards (L2–L4), and close the live-HTTP coverage gaps
-(M2M-update, ImageField, optional-blank).
+- `uv run python scripts/review_changed_python_diffs_against_head.py 0.0.11`
+- `uv run python scripts/review_historical_package_snapshot_at_commit.py HEAD`

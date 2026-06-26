@@ -10,6 +10,7 @@ scalars (not ``GlobalID``); the ``branch`` field sets ``to_field_name="name"``
 binds it to the form by name. ``BookGenresModelForm`` adds the live FORM
 partial-update M2M-preservation case over the Relay-Node ``BookType``: an omitted
 required ``genres`` M2M is reconstructed from the located row rather than cleared.
+``BranchWithShelfForm`` adds the model-less plain-form ``perform_mutate`` write-hook case.
 """
 
 from __future__ import annotations
@@ -63,3 +64,17 @@ class BookGenresModelForm(forms.ModelForm):
     class Meta:
         model = models.Book
         fields = ("title", "subtitle", "genres")
+
+
+class BranchWithShelfForm(forms.Form):
+    """A model-less plain ``forms.Form`` whose mutation overrides ``perform_mutate``.
+
+    Backs ``CreateBranchWithShelf`` (a plain ``DjangoFormMutation``). A plain form has no
+    ``Meta.model`` and no ``form.save()``, so the default ``perform_mutate`` is a no-op.
+    The mutation overrides it to run a real multi-row ORM write - a ``Branch`` plus a
+    starter ``Shelf`` under it from these two ``CharField`` values - the model-less write
+    the hook exists for (a single ``ModelForm.save()`` cannot create two related rows).
+    """
+
+    branch_name = forms.CharField(max_length=200)
+    shelf_code = forms.CharField(max_length=200)

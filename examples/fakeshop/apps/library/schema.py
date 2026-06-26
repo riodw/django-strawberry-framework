@@ -10,6 +10,7 @@ from apps.library import filters, filters_genre, forms, models, orders, orders_g
 from django_strawberry_framework import (
     DjangoConnection,
     DjangoConnectionField,
+    DjangoFormMutation,
     DjangoListField,
     DjangoModelFormMutation,
     DjangoMutation,
@@ -52,6 +53,24 @@ def _user_is_staff(info: Info) -> bool:
     request = getattr(context, "request", None) or context
     user = getattr(request, "user", None)
     return user is not None and getattr(user, "is_staff", False)
+
+
+@strawberry.interface
+class Named:
+    """Consumer-defined non-Relay ``@strawberry.interface`` (spec-015 demonstration).
+
+    ``Meta.interfaces`` accepts ANY Strawberry interface, not only ``relay.Node``.
+    ``Branch`` / ``Genre`` / ``Patron`` each carry a unique ``name`` column, so
+    ``BranchType`` / ``GenreType`` / ``PatronType`` list ``Named`` in ``Meta.interfaces``
+    (``GenreType`` alongside ``relay.Node``): the package injects ``Named`` into each
+    type's MRO with NO Relay resolver wiring (it is not ``relay.Node``), the SDL renders
+    ``implements ... & Named``, and ``name`` resolves from the model column through the
+    normal auto-conversion. The ``namedLibraryRecords`` root field returns a polymorphic
+    ``list[Named]`` mixing all three so a client selects the shared ``name`` across them,
+    with ``__typename`` discriminating the concrete type.
+    """
+
+    name: str
 
 
 # The DjangoType declaration order is intentionally awkward. Several
@@ -182,7 +201,7 @@ class GenreType(DjangoType):
     class Meta:
         model = models.Genre
         fields = ("id", "name", "books")
-        interfaces = (relay.Node,)
+        interfaces = (relay.Node, Named)
         filterset_class = filters_genre.GenreFilter
         orderset_class = orders_genre.GenreOrder
         connection = {"total_count": True}
@@ -216,6 +235,7 @@ class BranchType(DjangoType):
             "city",
             "shelves",
         )
+        interfaces = (Named,)
         filterset_class = filters.BranchFilter
         orderset_class = orders.BranchOrder
 
@@ -239,6 +259,7 @@ class PatronType(DjangoType):
             "card",
             "loans",
         )
+        interfaces = (Named,)
         filterset_class = filters.PatronFilter
         orderset_class = orders.PatronOrder
 
@@ -258,12 +279,23 @@ class PublicPatronType(DjangoType):
     includes the reverse relations (``card`` / ``loans``); only the two named
     scalar columns are removed from the GraphQL type. ``primary = False`` leaves
     ``PatronType`` the relation-resolution target.
+
+    This is also the example's ``Meta.name`` / ``Meta.description`` demonstration:
+    a public-facing secondary view is exactly where renaming the GraphQL type
+    (``name = "PublicPatron"``, decoupled from the ``PublicPatronType`` class name)
+    and attaching a schema-visible ``description`` is natural. Both surface through
+    introspection; renaming a secondary is safe because a non-Relay type carries no
+    model-anchored ``GlobalID`` to invalidate.
     """
 
     class Meta:
         model = models.Patron
         primary = False
         exclude = ("email", "lifetime_fines_cents")
+        name = "PublicPatron"
+        description = (
+            "A patron projection with PII (email) and financial (lifetime fines) columns removed."
+        )
 
 
 @strawberry.type
@@ -287,6 +319,31 @@ class Query:
         BranchType,
         resolver=_branches_manager_resolver,
     )
+
+    @strawberry.field
+    def named_library_records(self, info: strawberry.Info) -> list[Named]:
+        """Polymorphic ``list[Named]`` mixing Branch / Genre / Patron rows (spec-015).
+
+        The custom-interface demonstration: the field's declared type is the consumer
+        ``Named`` interface, and the resolver returns a materialized mix of all three
+        implementing models. ``is_type_of`` (installed on every ``DjangoType``)
+        discriminates the concrete type per row, so a client selects the shared ``name``
+        directly and narrows with ``__typename`` / inline fragments. Returns a plain list
+        (already materialized), so it is outside the optimizer's queryset fast path.
+
+        Each model's rows are routed through its primary type's ``get_queryset``
+        visibility hook before materializing (feedback #3) - the SAME hook every other
+        Branch resolver applies (e.g. ``all_library_branches``). A materialized list has
+        no downstream queryset re-execution, so reading ``Branch.objects`` directly here
+        would leak ``city="restricted"`` rows ``BranchType.get_queryset`` hides from
+        non-staff callers. Genre / Patron route through the (default, no-op) hook too, so
+        the field stays correct if either later gains a visibility rule.
+        """
+        records: list[Any] = []
+        records.extend(BranchType.get_queryset(models.Branch.objects.order_by("id"), info))
+        records.extend(GenreType.get_queryset(models.Genre.objects.order_by("id"), info))
+        records.extend(PatronType.get_queryset(models.Patron.objects.order_by("id"), info))
+        return records
 
     @strawberry.field
     def all_library_branches(
@@ -503,6 +560,98 @@ class UpdateBookViaForm(DjangoModelFormMutation):
         permission_classes = []
 
 
+# --------------------------------------------------------------------------- #
+# Custom mutation-input overrides (spec-036 Meta.input_class / partial_input_class)
+# over the Relay-Node ``Book`` (which carries no other model-backed mutation, so the
+# merged inputs keep the canonical ``BookInput`` / ``BookPartialInput`` names).
+# --------------------------------------------------------------------------- #
+
+
+@strawberry.input
+class BookCreateFieldOverrides:
+    """Consumer ``Meta.input_class`` override merged into the generated ``BookInput``.
+
+    Declares ONLY the customized field, using the generated naming scheme.
+    ``Book.subtitle`` is ``blank=True, null=True``, so the generated ``BookInput`` makes
+    ``subtitle`` optional; this consumer requires it. The package merges this field with
+    the generated remainder (``title`` / ``circulationStatus`` / ``shelfId`` / ``genres``)
+    by class inheritance under the canonical ``BookInput`` name, so the live ``BookInput``
+    carries a required ``subtitle: String!`` alongside every other generated column. Only
+    a scalar is overridden, so the relation-id type-lock (which pins ``shelfId`` /
+    ``genres`` to their generated id shapes) does not apply.
+    """
+
+    subtitle: str
+
+
+@strawberry.input
+class BookUpdateFieldOverrides:
+    """Consumer ``Meta.partial_input_class`` override merged into ``BookPartialInput``.
+
+    The generated ``BookPartialInput`` makes every field optional; this consumer pins
+    ``title`` as always-required on update. The merged ``BookPartialInput`` carries
+    ``title: String!`` while ``subtitle`` / ``circulationStatus`` / ``shelfId`` / ``genres``
+    stay optional.
+    """
+
+    title: str
+
+
+class CreateBookViaCustomInput(DjangoMutation):
+    """Create a ``Book`` through a consumer ``Meta.input_class`` merge override.
+
+    ``Book`` carries no other model-backed mutation (``updateBookViaForm`` is form-backed
+    with its own form-derived input name), so the merged create input keeps the canonical
+    ``BookInput`` name. ``permission_classes = []`` (the allow-any opt-out) keeps the path
+    under test the input shape, not write-auth.
+    """
+
+    class Meta:
+        model = models.Book
+        operation = "create"
+        input_class = BookCreateFieldOverrides
+        permission_classes = []
+
+
+class UpdateBookViaCustomInput(DjangoMutation):
+    """Update a ``Book`` through a consumer ``Meta.partial_input_class`` merge override.
+
+    ``BookType`` is Relay-Node, so the update ``id`` is a decodable ``GlobalID``; the row
+    is located through ``BookType.get_queryset`` (which hides ``circulation_status=repair``
+    from non-staff) before the optimizer re-fetch.
+    """
+
+    class Meta:
+        model = models.Book
+        operation = "update"
+        partial_input_class = BookUpdateFieldOverrides
+        permission_classes = []
+
+
+class CreateBranchWithShelf(DjangoFormMutation):
+    """A plain ``DjangoFormMutation`` whose ``perform_mutate`` runs a custom multi-row write.
+
+    The plain-form write-hook demonstration (spec-038): a model-less ``forms.Form`` has no
+    ``form.save()``, so the default ``perform_mutate`` is a no-op. This override creates a
+    ``Branch`` plus a starter ``Shelf`` under it from the validated form data - the
+    model-less, multi-row write the hook exists for, which a single ``ModelForm.save()``
+    cannot express - inside the mutation's ``transaction.atomic()`` boundary, then returns
+    the pinned ``{ ok, errors }`` payload. ``permission_classes = []`` (the allow-any
+    opt-out) opens the success path so the live test needs no login.
+    """
+
+    class Meta:
+        form_class = forms.BranchWithShelfForm
+        permission_classes = []
+
+    def perform_mutate(self, form, info):
+        branch = models.Branch.objects.create(name=form.cleaned_data["branch_name"])
+        models.Shelf.objects.create(
+            code=form.cleaned_data["shelf_code"],
+            branch=branch,
+        )
+
+
 @strawberry.type
 class Mutation:
     """Library write surface (live raw-pk relation visibility + ``to_field_name``)."""
@@ -510,6 +659,9 @@ class Mutation:
     create_shelf_via_form = DjangoMutationField(CreateShelfViaForm)
     create_shelf = DjangoMutationField(CreateShelf)
     update_book_via_form = DjangoMutationField(UpdateBookViaForm)
+    create_book_via_custom_input = DjangoMutationField(CreateBookViaCustomInput)
+    update_book_via_custom_input = DjangoMutationField(UpdateBookViaCustomInput)
+    create_branch_with_shelf = DjangoMutationField(CreateBranchWithShelf)
 
 
 __all__ = ("Mutation", "Query")

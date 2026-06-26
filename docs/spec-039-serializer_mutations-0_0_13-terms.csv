@@ -1,0 +1,31 @@
+term,anchor,notes
+SerializerMutation,serializermutation,the card subject; planned for 0.0.13 -> shipped at Slice 5
+DjangoMutation,djangomutation,the 036 base SerializerMutation subclasses (rides the seams)
+DjangoMutationField,djangomutationfield,reused unchanged (038 already generalized the factory)
+DjangoModelFormMutation,djangomodelformmutation,the structural twin SerializerMutation mirrors
+DjangoFormMutation,djangoformmutation,the model-less form sibling; the fallback shape for a plain-Serializer flavor
+DjangoModelPermission,djangomodelpermission,inherited write-auth default for the ModelSerializer flavor
+FieldError,fielderror-envelope,the frozen 036 envelope serializer.errors maps onto
+DjangoType,djangotype,the primary type the payload node/result slot resolves
+DjangoOptimizerExtension,djangooptimizerextension,the post-save re-fetch rides the 036 G2 path
+FilterSet,filterset,prior set-family precedent for the subpackage layout
+OrderSet,orderset,prior set-family precedent for the subpackage layout
+FieldSet,fieldset,0.1.1 field-level read gates (out of scope, composes on top)
+finalize_django_types,finalize_django_types,phase 2.5 bind via bind_mutations()
+ConfigurationError,configurationerror,raised at serializer-mutation-class creation / finalization
+SyncMisuseError,syncmisuseerror,sync pipeline meeting an async get_queryset
+Upload,upload-scalar,serializer FileField/ImageField input scalar
+apply_cascade_permissions,apply_cascade_permissions,the visibility seam the update locate composes with
+get_queryset,get_queryset-visibility-hook,the visibility hook the update locate / relation decode run through
+Input type generation,input-type-generation,the 036 model-column generator (serializer generator is separate)
+Auth mutations,auth-mutations,the sibling 0.0.13 card sharing the joint cut
+TestClient,testclient,0.0.14 ergonomic multipart helper (out of scope)
+only() projection,only-projection,suppressed under the mutation operation (G2)
+Scalar field conversion,scalar-field-conversion,read-side converters reused where the serializer field overlaps a column
+Choice enum generation,choice-enum-generation,a ModelSerializer choices column routes through the read-side enum
+Per-field permission hooks,per-field-permission-hooks,0.1.1 read gates, distinct from write authorization
+Cross-subsystem invariants,cross-subsystem-invariants,the 1.0.0 deferred-Meta-key invariant this card does not touch
+Meta.model,metamodel,resolved via _resolve_model -> serializer_class.Meta.model
+Meta.primary,metaprimary,the return-payload type resolves the model's primary DjangoType
+Meta.fields,metafields,narrows which serializer fields become input fields
+Meta.exclude,metaexclude,narrows which serializer fields become input fields

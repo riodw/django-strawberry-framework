@@ -406,6 +406,32 @@ vocabulary used throughout the spec:
   promoted only when its subsystem applies it end-to-end). A serializer mutation adds
   **no** `DjangoType` `Meta` key, so [`DEFERRED_META_KEYS`][types-base] is untouched
   ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)).
+- [Relation handling][glossary-relation-handling] /
+  [Relay Node integration][glossary-relay-node-integration] /
+  [`DjangoNodeField`][glossary-djangonodefield] — the relation-decode substrate. The
+  serializer relation decoder type- and visibility-checks each `PrimaryKeyRelatedField` /
+  `ManyRelatedField` id — a `GlobalID` **or** a raw pk — against the relation's target
+  model, reusing the same server-side [`DjangoNodeField`][glossary-djangonodefield] decode
+  the `id:` `update` locate rides, across the FK / OneToOne / M2M shapes
+  [Relation handling][glossary-relation-handling] spans
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+- [RELAY_GLOBALID_STRATEGY][glossary-relay_globalid_strategy] /
+  [`Meta.globalid_strategy`][glossary-metaglobalid_strategy] — the registry-wide / per-type
+  strategy fixing whether a relation id is a Relay `GlobalID` or a raw pk, so the decoder
+  accepts **both** forms against the target's primary [`DjangoType`][glossary-djangotype]
+  ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
+- [Scalar field conversion][glossary-scalar-field-conversion] /
+  [Specialized scalar conversions][glossary-specialized-scalar-conversions] /
+  [`BigInt` scalar][glossary-bigint-scalar] — the read-side scalar registries the
+  serializer-field converter reuses where a serializer field overlaps a model column
+  (`DecimalField` → `Decimal`, `UUIDField` → `uuid.UUID`, a `BigIntegerField`-backed
+  field → [`BigInt`][glossary-bigint-scalar]) rather than re-deriving the scalar
+  ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
+- [Definition-order independence][glossary-definition-order-independence] — the
+  finalize-time, materialize-before-`Schema` discipline the serializer-input bind rides:
+  `SerializerMutation` registers at class creation and its inputs materialize during
+  `bind_mutations()` at [`finalize_django_types`][glossary-finalize_django_types]
+  phase 2.5 ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)).
 
 Project conventions to follow:
 
@@ -2825,14 +2851,17 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
 [docs-readme]: README.md
 [glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
 [glossary-auth-mutations]: GLOSSARY.md#auth-mutations
+[glossary-bigint-scalar]: GLOSSARY.md#bigint-scalar
 [glossary-choice-enum-generation]: GLOSSARY.md#choice-enum-generation
 [glossary-configurationerror]: GLOSSARY.md#configurationerror
 [glossary-cross-subsystem-invariants]: GLOSSARY.md#cross-subsystem-invariants
+[glossary-definition-order-independence]: GLOSSARY.md#definition-order-independence
 [glossary-djangoformmutation]: GLOSSARY.md#djangoformmutation
 [glossary-djangomodelformmutation]: GLOSSARY.md#djangomodelformmutation
 [glossary-djangomodelpermission]: GLOSSARY.md#djangomodelpermission
 [glossary-djangomutation]: GLOSSARY.md#djangomutation
 [glossary-djangomutationfield]: GLOSSARY.md#djangomutationfield
+[glossary-djangonodefield]: GLOSSARY.md#djangonodefield
 [glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
 [glossary-djangotype]: GLOSSARY.md#djangotype
 [glossary-fielderror-envelope]: GLOSSARY.md#fielderror-envelope
@@ -2843,13 +2872,18 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
 [glossary-input-type-generation]: GLOSSARY.md#input-type-generation
 [glossary-metaexclude]: GLOSSARY.md#metaexclude
 [glossary-metafields]: GLOSSARY.md#metafields
+[glossary-metaglobalid_strategy]: GLOSSARY.md#metaglobalid_strategy
 [glossary-metamodel]: GLOSSARY.md#metamodel
 [glossary-metaprimary]: GLOSSARY.md#metaprimary
 [glossary-only-projection]: GLOSSARY.md#only-projection
 [glossary-orderset]: GLOSSARY.md#orderset
 [glossary-per-field-permission-hooks]: GLOSSARY.md#per-field-permission-hooks
+[glossary-relation-handling]: GLOSSARY.md#relation-handling
+[glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
+[glossary-relay_globalid_strategy]: GLOSSARY.md#relay_globalid_strategy
 [glossary-scalar-field-conversion]: GLOSSARY.md#scalar-field-conversion
 [glossary-serializermutation]: GLOSSARY.md#serializermutation
+[glossary-specialized-scalar-conversions]: GLOSSARY.md#specialized-scalar-conversions
 [glossary-syncmisuseerror]: GLOSSARY.md#syncmisuseerror
 [glossary-testclient]: GLOSSARY.md#testclient
 [glossary-upload-scalar]: GLOSSARY.md#upload-scalar

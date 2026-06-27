@@ -283,6 +283,36 @@ Revision history (kept inline so the spec is self-contained):
   child raises); the `rest_framework/` name-collision test cost is named at
   [Decision 4](#decision-4--module-and-test-locations-rest_framework-subpackage-mirroring-forms);
   and the stale "Slice 5" CHANGELOG reference is corrected to Slice 4.
+- **Revision 6** — applied a [`GOAL.md`][goal] + working-reference cross-reference pass
+  (every claim verified first: [`GOAL.md`][goal]'s crit-6 serializer example really does
+  show the `DjangoMutation` base with **no** `operation`, while the model sibling and
+  prose carry an explicit `operation = "create"`; and the shipped `DjangoMutation`
+  **requires** an explicit `operation` — a missing key is a `ConfigurationError`,
+  [`spec-036`][spec-036] — so defaulting it for the serializer flavor would make it the
+  only write flavor that infers the op). **Foundational (surface-reconciliation) fixes:**
+  the spec's public surface (`SerializerMutation` base + mandatory `operation`) and
+  GOAL.md's crit-6 example diverged, and nothing in Slice 4 reconciled them — now (1)
+  [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)
+  weighs the GOAL-literal "`DjangoMutation` detects `serializer_class`" alternative and
+  justifies the `SerializerMutation` base on **by-name `graphene-django` migration
+  parity** (crit 7); (2)
+  [Decision 10](#decision-10--operations-create--update-no-serializer-delete) pins
+  `operation` mandatory (uniform with the family that already requires it) and frames the
+  real crit-7 friction (the migrant adds an `operation` key + splits one auto-dispatching
+  mutation into two); (3) the **Slice-4 GOAL.md edit now explicitly corrects the crit-6
+  example** to the `SerializerMutation` base + `operation = "create"`, asserting the
+  read-only-`id`-dropped `CategorySerializerInput { name: String! }` shape; and (4) the
+  [Risks](#risks-and-open-questions) `model_operations`-alias fallback is elevated to the
+  named near-term crit-7 affordance. Plus: a note that the `django-graphene-filters`
+  cookbook is **query/filter-only**, so reference parity for this card is graphene-django's
+  `rest_framework`, not the cookbook ([Borrowing posture](#borrowing-posture)); the
+  `get_serializer_kwargs` parity row reflagged **name-borrowed, not signature-compatible**
+  (a graphene override can't carry over verbatim); the serializer flavor framed as the
+  deliberate **crit-7 exception that keeps its source package** (`djangorestframework` is
+  the reused validation engine, not a runtime to shed); and the fail-loud converter's
+  relation/file mapping pinned as **mandated by [`GOAL.md`][goal]'s "don't silently weaken
+  rich relations" non-goal**, not stylistic
+  ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
 
 ## Key glossary references
 
@@ -816,6 +846,17 @@ serializer-field → input mapping, the `is_valid()` → `serializer.errors` →
 and must not become one, yet the suite gates 100% coverage and the card mandates a
 live `ModelSerializer` test.
 
+This soft-dep posture is also the **deliberate crit-7 exception**. Crit 7's slogan is
+"migrate … without bringing the source package along," and for `graphene-django` /
+`strawberry-graphql-django` migrants that holds literally — the GraphQL runtime is
+dropped. The DRF migrant is the **one** case that *keeps* its source package:
+`djangorestframework` stays because the consumer's `ModelSerializer` is the **reused
+validation engine** ([`GOAL.md`][goal]'s `CategorySerializer` carries a "no changes"
+annotation), not a GraphQL runtime to shed — "GraphQL becomes another transport for the
+same business logic." That is precisely why DRF is a *soft* dependency the package guards
+rather than a runtime it replaces, and the framing keeps the crit-7 migration story
+coherent rather than looking like a contradiction.
+
 ## Current state
 
 A true description of the repo as this spec is authored:
@@ -969,6 +1010,16 @@ surface the package replaces with a nested `class Meta`.
 
 ### Reference-package parity checkpoint
 
+[`GOAL.md`][goal] elevates the `django-graphene-filters` `recipes` cookbook as the
+working reference and names "Cookbook parity" a success measure — but that cookbook (and
+the entire `django-graphene-filters` repo) is **query / filter-only: it has no mutation
+surface of any kind**. The cookbook is therefore the parity yardstick for the *read-side*
+sidecars (filters / orders / aggregates / fieldsets / search) and is **orthogonal to this
+card**. Reference parity for serializer mutations is measured against **graphene-django's
+`rest_framework` subpackage** (the rows below) — there is no cookbook mutation port to
+match, so "why doesn't the cookbook port show this?" has a one-line answer: it never had
+one.
+
 | Upstream | `django-strawberry-framework` | Status |
 | --- | --- | --- |
 | [`graphene_django.rest_framework.mutation.SerializerMutation`][upstream-serializer-mutation] (`ClientIDMutation`, `SerializerMutationOptions`) | [`SerializerMutation`][glossary-serializermutation] base subclassing [`DjangoMutation`][glossary-djangomutation] + nested `Meta.serializer_class` ([Decision 3](#decision-3--class-meta-surface-not-graphenes-mutationoptions) / [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)) | this card — borrow the capability, reject the `MutationOptions` surface |
@@ -980,7 +1031,7 @@ surface the package replaces with a nested `class Meta`.
 | graphene `Meta.lookup_field` (non-pk update locate) + `get_object_or_404` | the `id:` `GlobalID` server-side decode → target `get_queryset` locate ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)) | deliberate non-adoption (card-body tension, [Risks](#risks-and-open-questions)) |
 | graphene `Meta.optional_fields` (force specific fields optional) | `Meta.optional_fields` adopted as a force-optional override on the serializer-derived input ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)) | this card — adopted (clean semantics) |
 | graphene relation visibility (none — serializer's own queryset only) | every relation id (Relay + raw pk) visibility-checked through the related primary `get_queryset` before the serializer ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)) | package security invariant beyond graphene parity (mirrors the per-branch visibility check `036`'s model path and `038`'s form path already enforce, raw pk included) |
-| graphene [`get_serializer_kwargs`][upstream-serializer-mutation] (constructor-kwarg seam) | `get_serializer_kwargs(info, *, data, instance=None)` hook (defaults the package kwargs + `context={"request": …}` + `partial=True` on update) ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)) | this card — parity seam |
+| graphene [`get_serializer_kwargs(cls, root, info, **input)`][upstream-serializer-mutation] (classmethod constructor-kwarg seam) | `get_serializer_kwargs(info, *, data, instance=None)` hook (defaults the package kwargs + `context={"request": …}` + `partial=True` on update) ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)) | this card — **name-borrowed** seam, not signature-compatible (the graphene signature differs; an existing graphene override can't carry over verbatim — a crit-7 "Meta mental model carries over" wrinkle, not a drop-in) |
 | graphene optional `rest_framework` dependency | DRF a **soft runtime dependency** (out of `[project].dependencies`, in the dev group, guarded import) ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)) | this card — required parity |
 | graphene `MutationOptions` / `ClientIDMutation` / `__init_subclass_with_meta__` / `clientMutationId` | rejected for a nested `class Meta` base ([Decision 3](#decision-3--class-meta-surface-not-graphenes-mutationoptions)) | deliberately not borrowed |
 
@@ -1234,7 +1285,12 @@ the serializer flavor is uniform with them (and with [`DjangoType`][glossary-dja
 *capabilities* of graphene-django's `SerializerMutation` are borrowed at the outcome
 level; the `MutationOptions` / `ClientIDMutation` mechanism is not. [`GOAL.md`][goal]'s
 DRF-migration diff spells the surface as
-`class CreateCategoryFromSerializer(DjangoMutation): class Meta: serializer_class = …`.
+`class CreateCategoryFromSerializer(DjangoMutation): class Meta: serializer_class = …`;
+the card ships the **`SerializerMutation` base** instead (for the by-name
+`graphene-django` migration carry-over weighed in
+[Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)),
+and Slice 4 updates that GOAL.md example to the shipped base so the two stop disagreeing
+in print.
 
 Alternatives considered (and rejected):
 
@@ -1382,10 +1438,29 @@ Justification: this is the exact shape [`DjangoModelFormMutation`][glossary-djan
 proved in `038`, and the [`_resolve_model`][spec-036] seam was frozen in `036`
 "for the `0.0.13` serializer flavor (`Meta.serializer_class.Meta.model`)". Riding the
 base maximizes reuse (permission, locate, re-fetch, payload, bind all come free) and
-keeps the serializer flavor uniform with the form flavor.
+keeps the serializer flavor uniform with the form flavor. A **dedicated
+[`SerializerMutation`][glossary-serializermutation] base** (rather than teaching
+[`DjangoMutation`][glossary-djangomutation] itself to detect `serializer_class` — the
+shape [`GOAL.md`][goal]'s crit-6 example literally shows) also buys the strongest
+**crit-7 migration ergonomics**: a `graphene-django` serializer-mutation consumer
+already writes `class FooMutation(SerializerMutation): ...`, so exporting a
+`SerializerMutation` base lets that declaration carry over **by name** — only the import
+line changes ([`GOAL.md`][goal] crit 7), strictly better than GOAL's literal
+`DjangoMutation` shape. GOAL.md's crit-6 example currently depicts the `DjangoMutation`
+base; Slice 4 reconciles it to this shipped base so the north star stops advertising a
+declaration that will not dispatch.
 
 Alternatives considered (and rejected):
 
+- **`DjangoMutation` itself detects `Meta.serializer_class`** (no dedicated
+  `SerializerMutation` base — the literal shape [`GOAL.md`][goal]'s crit-6 example shows,
+  `class CreateCategoryFromSerializer(DjangoMutation): class Meta: serializer_class = …`).
+  Rejected: it forfeits the by-name `graphene-django` migration carry-over above (a
+  migrant's `class FooMutation(SerializerMutation)` would have to be rewritten to
+  `(DjangoMutation)`), and folds serializer-specific `Meta` validation / `build_input`
+  branching into the model-driven base's hot path instead of isolating it in a subclass.
+  The base is reused **by subclassing**, not by overloading one class with both flavors.
+  Slice 4 updates GOAL.md's example to the `SerializerMutation` base.
 - **A standalone `SerializerMutation` not subclassing `DjangoMutation`** (its own
   metaclass + registry + bind, the model-less [`DjangoFormMutation`][glossary-djangoformmutation]
   shape). Rejected for the `ModelSerializer`-driven contract: it would re-implement the
@@ -1440,10 +1515,17 @@ catch-all (which would shadow the raise so every custom serializer field silentl
 became `String`, losing the `ImproperlyConfigured` parity). Relation / file kinds are
 matched first by `isinstance` (`PrimaryKeyRelatedField` / `ManyRelatedField`,
 `FileField` / `ImageField`), then the scalar registry MRO walk, then a raising
-default. The mapping (graphene's `convert_serializer_field` table is the scalar-row
-reference, but graphene degrades relation / file fields to `String` via its base-`Field`
-catch-all — the relation / file rows below are package extensions graphene lacks, not
-parity):
+default. **This fail-loud posture — and the explicit relation / file rows in particular —
+is mandated by [`GOAL.md`][goal]'s non-goal**, not merely the package's house style:
+[`GOAL.md`][goal] forbids "a system that silently weakens rich relations into generic
+placeholders," yet graphene-django's own `convert_serializer_field` has **no** relation
+registration, so related fields fall through its `serializers.Field → String` catch-all
+and degrade to bare strings. Typing `PrimaryKeyRelatedField` / `ManyRelatedField` to a
+target id (and raising on the unmapped) makes the package **strictly more faithful to
+GOAL than the upstream it borrows from** — the divergence is required, not optional. The
+mapping (graphene's `convert_serializer_field` table is the scalar-row reference, but
+graphene degrades relation / file fields to `String` via its base-`Field` catch-all —
+the relation / file rows below are package extensions graphene lacks, not parity):
 
 - `CharField` (and `EmailField` / `SlugField` / `URLField` / `RegexField` via MRO) →
   `str`; `ChoiceField` → `str` (model-less default; over a `ModelSerializer` column's
@@ -1838,6 +1920,22 @@ graphene's runtime-dispatched `Meta.model_operations` list (one mutation handlin
 dispatched by whether the lookup field is in the input) — the uniform-with-`DjangoMutation`
 convention. graphene's `Meta.model_operations` / `Meta.lookup_field` keys are recorded
 as deliberate non-adoptions in [Risks](#risks-and-open-questions).
+
+**`Meta.operation` stays mandatory** (no default), and [`GOAL.md`][goal]'s crit-6
+serializer example omits it. This is **not** a divergence to paper over by defaulting:
+the shipped model-driven base **already requires** an explicit `operation` —
+`DjangoMutation`'s `_validate_meta` rejects a missing key
+(`getattr(meta, "operation", None)` must be in `{"create", "update", "delete"}`,
+[`spec-036`][spec-036]), and the `038` `DjangoModelFormMutation` follows suit. Defaulting
+`operation = "create"` for the serializer flavor alone would make it the **only** write
+flavor that infers the operation — breaking the "Meta mental model carries over" (crit 7)
+uniformity the spec leans on. So the fix is to make GOAL.md match the package, not the
+other way around: **Slice 4 adds `operation = "create"` to GOAL.md's example.** The real
+crit-7 friction this leaves for a `graphene-django` serializer-mutation migrant — who
+runs one auto-dispatching `model_operations = ["create", "update"]` mutation — is that
+they must (i) add an `operation` key and (ii) split that one mutation into two. That
+friction, and the `model_operations`-alias affordance that would soften it, are owned by
+the [Risks](#risks-and-open-questions) `model_operations` item.
 
 Justification: `create` / `update` are the operations a serializer expresses; `delete`
 has no serializer step; one-mutation-per-operation is the package's settled shape (the
@@ -2421,15 +2519,26 @@ implementation reveals it is wrong.
   shape (its own metaclass + `{ ok, errors }` payload + `bind_serializer_mutations()`),
   if a consumer needs a serializer-validated non-model write — never weaken the
   `ModelSerializer` contract.
-- **Card key `Meta.model_operations` vs the package's `Meta.operation`.** The card
-  lists `Meta.model_operations` (graphene's runtime-dispatched list); the package uses
-  per-operation `Meta.operation`
+- **Card key `Meta.model_operations` vs the package's `Meta.operation` — the real
+  crit-7 friction point.** The card lists `Meta.model_operations` (graphene's
+  runtime-dispatched list); the package uses per-operation `Meta.operation`
   ([Decision 10](#decision-10--operations-create--update-no-serializer-delete)).
   Preferred reading: honor `Meta.operation` (uniform with
-  [`DjangoMutation`][glossary-djangomutation] / [`DjangoModelFormMutation`][glossary-djangomodelformmutation]);
-  the fallback is to accept `model_operations` as an alias that expands to per-operation
-  mutations if a migrant needs the graphene key verbatim. Recorded per the
-  [`docs/SPECS/NEXT.md`][next] "prefer the card, surface the conflict" rule.
+  [`DjangoMutation`][glossary-djangomutation] / [`DjangoModelFormMutation`][glossary-djangomodelformmutation]
+  — both of which already **require** an explicit `operation`, so the serializer flavor
+  cannot quietly default it without becoming the odd one out). This is where the
+  `graphene-django` serializer-mutation migrant feels crit-7 most: their one
+  auto-dispatching `model_operations = ["create", "update"]` mutation must become **two**
+  package mutations, each with an `operation` key their old code never had — a
+  declaration-shape change, not "only the import line changes." The base-class swap
+  ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven))
+  carries over by name; this key does not. The **near-term affordance** (preferred over
+  leaving the migrant to hand-split) is to accept `Meta.model_operations` as an alias
+  that **expands to the per-operation mutations** under the hood — a contained
+  metaclass-time desugaring that keeps the package's one-mutation-per-op internals while
+  letting the graphene key migrate verbatim; sequence it right after `0.0.13` if the
+  migration friction proves real. Recorded per the [`docs/SPECS/NEXT.md`][next] "prefer
+  the card, surface the conflict" rule.
 - **Card key `Meta.lookup_field` vs the `id:`-decode locate.** The card lists
   `Meta.lookup_field` (graphene's non-pk update locate via `get_object_or_404`); the
   package locates an `update` row by decoding the `id:` `GlobalID` server-side and
@@ -2666,7 +2775,19 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
    Public-exports + Index + Mutations-category rows) and reconciles its surface keys
    (`Meta.operation`, the `id:`-decode locate); [`docs/README.md`][docs-readme] /
    [`README.md`][readme] move the serializer flavor to "Shipped today"; [`GOAL.md`][goal]
-   / [`TODAY.md`][today] / [`docs/TREE.md`][tree] reflect the shipped flavor;
+   / [`TODAY.md`][today] / [`docs/TREE.md`][tree] reflect the shipped flavor — and the
+   [`GOAL.md`][goal] crit-6 "Coming from DRF + `django-filter`" example is **corrected to
+   the shipped surface**: `class CreateCategoryFromSerializer(SerializerMutation):` (not
+   `DjangoMutation`,
+   [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven))
+   with an explicit `operation = "create"` (mandatory, not inferred,
+   [Decision 10](#decision-10--operations-create--update-no-serializer-delete)), so the
+   north star stops depicting a declaration that fails validation under the shipped
+   package. The edit may assert the generated shape inline for the depicted
+   `CategorySerializer(fields=("id", "name"))` — `CategorySerializerInput { name: String! }`
+   (the read-only `id` dropped,
+   [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)) —
+   so GOAL.md's declaration and its generated schema visibly agree;
    [`CHANGELOG.md`][changelog] carries the bullets **only when the Slice 4 maintainer
    prompt explicitly requests the edit**; [`KANBAN.md`][kanban] records the card
    `DONE-NNN-0.0.13` with the `SpecDoc` reference at the canonical card spec (kanban DB

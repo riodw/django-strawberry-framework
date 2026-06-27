@@ -1,5 +1,5 @@
 term,anchor,notes
-SerializerMutation,serializermutation,the card subject; planned for 0.0.13 -> shipped at Slice 5
+SerializerMutation,serializermutation,the card subject; planned for 0.0.13 -> shipped at Slice 4
 DjangoMutation,djangomutation,the 036 base SerializerMutation subclasses (rides the seams)
 DjangoMutationField,djangomutationfield,reused unchanged (038 already generalized the factory)
 DjangoModelFormMutation,djangomodelformmutation,the structural twin SerializerMutation mirrors
@@ -29,3 +29,11 @@ Meta.model,metamodel,resolved via _resolve_model -> serializer_class.Meta.model
 Meta.primary,metaprimary,the return-payload type resolves the model's primary DjangoType
 Meta.fields,metafields,narrows which serializer fields become input fields
 Meta.exclude,metaexclude,narrows which serializer fields become input fields
+DjangoNodeField,djangonodefield,the server-side GlobalID decode the update id: locate and the relation decoder reuse (GlobalID or raw pk)
+Relay Node integration,relay-node-integration,the GlobalID encode/decode subsystem the relation decode and update locate run through
+RELAY_GLOBALID_STRATEGY,relay_globalid_strategy,the strategy fixing whether a relation id is a Relay GlobalID or a raw pk
+Meta.globalid_strategy,metaglobalid_strategy,per-type GlobalID strategy; sets the id form a serializer relation field maps to
+Relation handling,relation-handling,read-side FK/O2O/M2M conversion the PrimaryKeyRelatedField/ManyRelatedField mapping mirrors
+Specialized scalar conversions,specialized-scalar-conversions,Decimal/UUID/date/JSON conversions reused where a serializer field overlaps a column
+BigInt scalar,bigint-scalar,a serializer IntegerField over a BigIntegerField column resolves to BigInt via read-side reuse
+Definition-order independence,definition-order-independence,the finalize/materialize-before-Schema discipline the serializer input bind rides (phase 2.5)

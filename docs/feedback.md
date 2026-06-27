@@ -1,342 +1,268 @@
-# Review - `spec-039-serializer_mutations-0_0_13.md` deep architecture pass
+# Review - `spec-039-serializer_mutations-0_0_13.md` architecture pass
 
 Date: 2026-06-27.
 
-This pass assumes the current spec-039 revision plus the source-site
-`TODO(spec-039 Slice N)` anchors added across the core, fakeshop, and package-test
-surfaces. The spec is materially stronger than the earlier drafts: it respects the
-Meta-class public surface, uses the existing `DjangoMutation` seams, keeps DRF soft,
-folds the resolver and live products surface into one slice, and names the DRY
-promotions that would otherwise become third copies.
+This review is based on the current `spec-039` revision plus the source-site
+`TODO(spec-039 Slice N)` anchors and pseudo-code pass. The spec is now broadly
+architecturally sound: it keeps the public surface DRF-shaped and `class Meta`-driven,
+keeps DRF soft, reuses the `036` / `038` mutation contracts, folds the resolver and live
+products surface into one slice, and makes the main DRY promotions explicit.
 
-There are still several issues to fix in the spec before production code starts.
+There are still several spec corrections to make before production code starts. Most are
+not design-fatal, but they are exactly the kind of stale summary wording that causes an
+implementer to build the older draft.
 
-## Bottom line
+## Bottom Line
 
-Architecturally, the card is viable. The largest remaining risks are not "can this be
-built?" risks; they are contract precision risks:
+Proceed with the architecture after the corrections below. The highest-risk remaining
+items are:
 
-- the soft-dependency export plan can break `from django_strawberry_framework import *`
-  for consumers without DRF;
-- the save-time `ValidationError` handling conflates DRF and Django exception shapes;
-- relation-id input wording promises more than GraphQL can actually accept for one
-  generated field;
-- serializer-only relation fields sit between two contradictory rules;
-- the shared write-pipeline abstraction is underspecified enough to become a leaky
-  generic framework instead of a small create/update skeleton;
-- release docs say "shipped" while the version policy says the package remains
-  `0.0.12` until the joint cut.
+- the Slice 0 dependency gate is contradicted by older Slice 4 wording;
+- one edge-case section still sends Django `ValidationError` down the wrong flattener;
+- relation-id summaries still imply a dual-shape GraphQL input instead of the
+  one-annotation contract;
+- `get_serializer_kwargs` request ownership is ambiguous enough to create actor drift;
+- DRF null/default semantics are under-specified.
 
-The `RELAY_GLOBALID_STRATEGY` setting location is not a problem if the implementation
-keeps the existing pattern: domain validation in `types/relay.py`, resolved once at
-finalization, then read from recorded definition state during query execution.
+The `RELAY_GLOBALID_STRATEGY` placement in `types/relay.py` is acceptable if the
+implementation follows the current Decision 8 rule: validate once at type/finalization
+time, record the effective strategy, and never read or re-validate the setting on the
+request path.
 
 ## Findings
 
-### F1 - High: soft dependency conflicts with adding `SerializerMutation` to `__all__`
-
-The spec pins all three statements:
-
-- `import django_strawberry_framework` succeeds without DRF;
-- `SerializerMutation` is added to root `__all__`;
-- `from django_strawberry_framework import *` with DRF absent raises the guarded
-  `ImportError`.
+### H1 - Slice 0 vs Slice 4 is still contradictory
 
-That is a breaking regression for a consumer who does a star import today and never uses
-DRF. The spec's own soft-dependency story says "a consumer who never writes a serializer
-mutation never needs DRF"; putting a DRF-gated symbol in `__all__` makes that false for
-star imports.
-
-Recommended spec update:
-
-- Do not add `SerializerMutation` to root `__all__` while DRF is a soft dependency.
-- Keep `from django_strawberry_framework import SerializerMutation` working through
-  root `__getattr__`; named imports do not require `__all__`.
-- Add a soft-dependency test for `from django_strawberry_framework import *` under
-  simulated DRF absence, asserting it still succeeds and omits `SerializerMutation`.
-- Document `SerializerMutation` as a public lazy export, but not a star-import export
-  unless DRF becomes a hard dependency.
-
-If the maintainer intentionally wants star import to fail when DRF is absent, the spec
-should call that out as an accepted breaking behavior. I do not recommend that.
-
-### F2 - High: save-time `ValidationError` handling conflates DRF and Django shapes
+The spec now correctly defines a pre-Slice-1 dependency gate, but older prose remains:
+the status block still says "Four slices" and describes Slice 4 as "docs + the soft-dep
+wiring + card wrap"; the Goals section still says `uv.lock` is updated in Slice 4. Later
+sections say the opposite: Slice 0 adds DRF to the dev group, regenerates `uv.lock`, and
+Slice 4 is doc/card-wrap only.
 
-Decision 8 correctly adds save-time validation to the envelope, but the prose says a
-DRF `serializers.ValidationError` and a `django.core.exceptions.ValidationError` both
-route through the recursive DRF flattener via `.detail`.
-
-That is only true for DRF's exception. Django's `ValidationError` has `message_dict`,
-`messages`, and `error_dict` style shapes, not DRF's `.detail` contract. Routing both
-through one `.detail` path will either crash or silently lose structure.
+Impact: a worker following the spec top-down could defer the DRF dev dependency until
+after Slice 1, then hit import failures or coverage holes in the converter/input tests.
 
-Recommended spec update:
-
-- Split save-time validation handling by exception class.
-- `rest_framework.exceptions.ValidationError` and `serializers.ValidationError`:
-  route `.detail` through `serializer_errors_to_field_errors(...)`.
-- `django.core.exceptions.ValidationError`: route through the existing flat
-  `mutations/resolvers.py::validation_error_to_field_errors` where possible, or through
-  a small adapter that first normalizes Django's `message_dict` / `messages` shape.
-- Keep `IntegrityError` on the existing `save_or_field_errors(...)` path.
-- Add separate package tests for DRF save-time validation and Django save-time
-  validation. They are not the same branch.
-
-### F3 - High: "GlobalID or raw pk" is over-promised for generated relation inputs
-
-The spec repeatedly says a relation id accepts a `GlobalID` or a raw pk. Internally, a
-decoder can support both. Publicly, a generated GraphQL input field has one annotation.
-If the related primary `DjangoType` is Relay-shaped and the input annotation is
-`GlobalID`, a raw integer pk cannot pass GraphQL variable coercion in a live HTTP
-request. Existing products tests already show malformed `GlobalID` strings becoming
-top-level coercion errors before the resolver sees them.
-
-Recommended spec update:
-
-- Reword the public contract to: the generated annotation is strategy dependent:
-  Relay targets expose `GlobalID`; non-Relay/raw-pk targets expose the raw pk scalar.
-- The resolver helper may accept both shapes because it is shared and package tests can
-  exercise synthetic direct-call branches, but live GraphQL only reaches the shape
-  admitted by the generated annotation.
-- Keep raw-pk / non-Relay relation decode tests in `tests/rest_framework/`, not live
-  products, unless fakeshop adds a real non-Relay relation field.
-- Update Decision 7, Decision 8, and the test plan so "accepts both" never reads like a
-  promise for one generated GraphQL field.
-
-### F4 - Medium: serializer-only relation fields are not defined
-
-The spec says serializer-only fields with no model column become input fields and are
-validated by the serializer. It also says relation fields need a backing Django model
-field resolved through one-segment `source`, and dotted/source-star relation fields fail
-because the backing column cannot be resolved.
-
-That leaves a real DRF pattern undefined: a write-only `PrimaryKeyRelatedField` with a
-`queryset` that is not a model field and is consumed by custom `create()` / `update()`.
-That is a serializer-only field, but it is also a relation.
-
-Recommended spec update, choose one explicitly:
-
-- Preferred: support serializer-only relation fields when the DRF field has a concrete
-  `queryset.model`; use that model as the relation target for id annotation and
-  visibility checks, while preserving the declared serializer field name for
-  `provided_data`.
-- Alternative: reject serializer-only relation fields for `0.0.13` and say
-  "serializer-only fields are supported for scalar/file fields only; relation fields
-  must resolve to a one-segment model source."
-
-The current text implies both support and rejection.
-
-### F5 - Medium: serializer error field names are ambiguous
-
-The reverse map records GraphQL input name, generated input attr, serializer field name,
-source, and kind. The resolver uses it to decode `categoryId` into serializer key
-`category`. But the error-flattener section does not decide whether a serializer error
-on `category` should return:
-
-- `FieldError(field="category")`, matching DRF/form field names; or
-- `FieldError(field="categoryId")`, matching what the GraphQL client sent.
-
-Both can be defended. The spec must choose. Leaving it implicit will cause drift between
-decode errors, serializer validation errors, and renamed-field errors.
-
-Recommended spec update:
-
-- Preferred: map serializer error paths back to GraphQL input paths when an input field
-  exists in the reverse map. That gives clients errors keyed to their submitted field
-  names (`categoryId`, `fullName`) and aligns with relation decode errors.
-- Preserve `"__all__"` for non-field errors.
-- If an error references a serializer field not present in the input surface, keep the
-  serializer path because there is no GraphQL input path to report.
-- Add live tests for a renamed scalar or relation field error, not only a plain `name`
-  error, so the choice is locked.
-
-If the spec chooses serializer names instead, state that explicitly and test it.
-
-### F6 - Medium: `run_write_pipeline_sync` risks becoming an over-broad abstraction
-
-The DRY goal is right: the authorize-before-decode order is security-sensitive and
-should not be copied a third time. The current P1.5 wording, however, sometimes reads as
-if one skeleton should cover model create/update/delete, model-form create/update, plain
-form, and serializer create/update.
-
-Those are not all the same shape:
-
-- delete has no `data`, no relation decode, and a snapshot-before-delete payload;
-- plain form has no model instance, no primary type, and no optimizer re-fetch;
-- model mutations run `full_clean()` and M2M assignment;
-- serializer mutations run `is_valid()` and `serializer.save()`.
-
-Recommended spec update:
-
-- Scope `run_write_pipeline_sync(...)` to model-backed create/update flavors only.
-- Exclude delete and plain form from the shared skeleton unless a smaller common
-  helper naturally falls out.
-- Define a precise callback contract:
-  - `decode_step(ctx) -> decoded data | list[FieldError]`;
-  - `write_step(ctx, decoded) -> saved instance | list[FieldError]`;
-  - the skeleton owns atomicity, locate, not-found payload, authorization before
-    `decode_step`, refetch, and payload construction.
-- Require existing model and form behavior to stay byte-equivalent under their current
-  tests before serializer code lands.
+Correction:
 
-Without that boundary, the abstraction could become technical debt even though the DRY
-intent is correct.
+- Change the status block to "Slice 0 gate plus four implementation/doc slices."
+- Remove "soft-dep wiring" from the Slice 4 status sentence.
+- Change the Goals item that says `uv.lock` updates in Slice 4 to say Slice 0.
+- Keep Slice 4 limited to implemented-on-main docs, GOAL correction, KANBAN/card wrap,
+  and deferred joint-cut release docs.
 
-### F7 - Medium: `get_serializer_kwargs`, `partial=True`, and `context` precedence are underspecified
-
-Decision 8 says construction goes through `get_serializer_kwargs(...)`, injects
-`context={"request": ...}`, and injects `partial=True` on update. It does not say what
-happens when a consumer override returns its own `context`, omits `data`, passes
-`partial=False`, or passes `instance`.
-
-`partial=True` is not just a default; it is the update contract. Context is less rigid
-but is the default path for request-aware validators and `CurrentUserDefault`.
-
-Recommended spec update:
-
-- Define the default hook return shape exactly: `data`, optional `instance`, and
-  `context` containing the request.
-- State whether a consumer override owns the entire kwargs dict or whether framework
-  kwargs are merged after the hook.
-- Preferred: the resolver enforces `partial=True` for update after calling the hook,
-  and raises `ConfigurationError` if the hook tries to set `partial=False`.
-- Preferred: merge default request context with any override-provided `context`, with
-  override keys winning except for `request` unless explicitly documented otherwise.
-- Add tests for an override that adds a custom kwarg while preserving request context,
-  and an override that tries to disable partial update.
-
-### F8 - Medium: Slice 4 public docs conflict with the joint version-bump policy
-
-Decision 14 says no version file changes in this card because the `0.0.13` version bump
-belongs to the joint cut with auth mutations. Slice 4 still says README/docs move the
-serializer flavor to "Shipped today" and glossary status to `shipped (0.0.13)`.
-
-That can leave the repository advertising a shipped `0.0.13` public feature while
-`pyproject.toml`, `__version__`, and `tests/base/test_init.py::test_version` still say
-`0.0.12`.
-
-Recommended spec update:
-
-- Split "implementation docs" from "release docs".
-- In this card's Slice 4, update internal architecture docs (`docs/TREE.md`,
-  `TODAY.md`, possibly `docs/GLOSSARY.md`) to "implemented for upcoming 0.0.13" or
-  equivalent if the feature is merged before the joint cut.
-- Defer public README "shipped today", glossary `shipped (0.0.13)`, and changelog
-  release language to the joint `0.0.13` cut, unless the maintainer explicitly wants
-  unreleased-main docs to advertise future-version behavior.
-- Keep the GOAL.md example correction in this card, because the current example would
-  be wrong once the code lands.
-
-### F9 - Medium: HiddenField behavior under partial update should not be a live proof
-
-The spec mentions `HiddenField(default=CurrentUserDefault())` as a possible request
-context proof. DRF hidden fields are subtle under `partial=True`; they are not a stable
-way to prove update-time request context in a serializer mutation.
-
-Recommended spec update:
-
-- Use an explicit `validate()` or `validate_<field>()` branch that reads
-  `self.context["request"]` for the required live context test.
-- Keep `HiddenField` covered as an input-generation/drop rule and, if desired, a
-  create-only serializer behavior.
-- Do not make the live update context proof depend on HiddenField default behavior.
-
-### F10 - Low: `register_subsystem_clear` registration timing needs a precise rule
-
-The registration seam is the right direction, but "the serializer input namespace
-registers at import" leaves a timing edge: a clear target only exists after the module
-that registers it has been imported. That is usually okay because stale serializer
-ledger state implies `rest_framework.inputs` was already imported in a previous failed
-bind, but the spec should make the invariant explicit.
-
-Recommended spec update:
-
-- Either define the subsystem-clear targets centrally as static `(module_path, attr)`
-  rows that do not require importing DRF modules at registration time; or
-- state the import-time registration invariant: once a subsystem has created state that
-  must be cleared, its module has been imported and has registered its clear function.
-- Add retry-idempotence tests that fail after serializer input materialization, rerun
-  finalization, and prove the serializer ledger was cleared.
-
-### F11 - Low: DRF version floor must be a precondition, not a Slice 4 surprise
-
-The spec now names the CI matrix and `filterwarnings = error`, which is good. The
-implementation table still places the dev dependency in Slice 4, after Slice 1-3 code
-and tests conceptually exist.
-
-Recommended spec update:
-
-- Treat the DRF version-floor probe as a Slice 0 / pre-Slice-1 gate.
-- Record the exact tested floor before writing converter code.
-- If a targeted warning ignore is needed for DRF-origin warnings, add it in the same
-  dependency-change slice before code imports DRF in tests.
-
-Otherwise Slice 1 can be blocked late by dependency support rather than design.
-
-## Configuration and performance assessment
-
-The existing `RELAY_GLOBALID_STRATEGY` placement is sound:
-
-- `django_strawberry_framework/conf.py` is a generic settings reader. It validates the
-  top-level `DJANGO_STRAWBERRY_FRAMEWORK` shape, not domain-specific values.
-- `django_strawberry_framework/types/relay.py::_resolve_globalid_strategy` owns the
-  Relay-domain validation. That is the right layer because it shares the same validator
-  as `Meta.globalid_strategy`.
-- The setting branch is called during finalization by
-  `types/relay.py::install_globalid_typename_resolver`, then the effective strategy is
-  recorded on the type definition.
-- Query-time encode/decode paths use the captured strategy or
-  `definition.effective_globalid_strategy`; they do not need to re-read or re-validate
-  `conf.settings`.
-
-So the lazy read does not introduce meaningful runtime overhead or query-time
-thread-safety risk as long as serializer relation decoding follows the existing Relay
-decode APIs and does not call `_resolve_globalid_strategy(...)` during request handling.
-
-Recommended spec update:
-
-- Add a sentence to Decision 7 or Decision 8: serializer relation decode must consume
-  the recorded GlobalID strategy through existing Relay helpers and must not read
-  `conf.settings.RELAY_GLOBALID_STRATEGY` or call `_resolve_globalid_strategy(...)` on
-  the query path.
-- Add a test only if new serializer code touches GlobalID decode directly: monkeypatch
-  `_resolve_globalid_strategy` to fail after finalization and assert a serializer
-  relation mutation still resolves through recorded strategy state.
-
-Do not move `RELAY_GLOBALID_STRATEGY` domain validation into `conf.py`; that would make
-the generic settings layer aware of Relay semantics and duplicate the per-type
-`Meta.globalid_strategy` validator.
-
-## Test and documentation gaps
-
-The test plan is mostly consistent with `examples/fakeshop/test_query/README.md`, but
-these updates should be made before implementation:
-
-- Add the star-import soft-dependency test from F1.
-- Split DRF and Django save-time validation tests from F2.
-- Clarify which relation-id shapes can be live-tested versus package-tested from F3.
-- Add at least one renamed-field error-path test from F5.
-- Add hook precedence tests from F7.
-- Keep request-context proof on explicit `validate()` logic, not HiddenField partial
-  behavior, per F9.
-- Split release documentation wording per F8 so public docs do not claim a released
-  `0.0.13` feature while the package still reports `0.0.12`.
-
-## Proposed spec patch list
-
-1. Decision 12: remove `SerializerMutation` from `__all__` or explicitly accept the
-   star-import break. Preferred: omit it from `__all__` while keeping named lazy import.
-2. Decision 8: split save-time DRF `ValidationError` from Django `ValidationError`.
-3. Decisions 7/8: reword relation id "GlobalID or raw pk" as generated-shape-specific
-   public behavior plus broader internal helper behavior.
-4. Decision 7: decide serializer-only relation fields: support via `field.queryset.model`
-   or reject explicitly.
-5. Decision 8: decide and test serializer error path names, preferably GraphQL input
-   names when reverse-map data exists.
-6. DRY obligations P1.5: scope `run_write_pipeline_sync` to model-backed create/update
-   and define callback contracts.
-7. Decision 8: define `get_serializer_kwargs` merge and `partial=True` precedence.
-8. Slice 4 docs: separate implemented-on-main docs from released-version docs.
-9. Decision 13/test plan: use `validate()` for request-context live proof.
-10. Decision 6/P1.6: pin subsystem-clear registration timing.
-11. Decision 12/implementation plan: move DRF floor verification to a pre-Slice-1 gate.
+### H2 - The save-time `ValidationError` edge case still contradicts Decision 8
+
+Decision 8 correctly says save-time validation splits by exception class:
+
+- DRF `rest_framework.exceptions.ValidationError` / `serializers.ValidationError` uses
+  `.detail` and the recursive serializer-error flattener.
+- Django `django.core.exceptions.ValidationError` uses the flat `036`
+  `validation_error_to_field_errors` path over `error_dict` / `messages`.
+
+But the Edge cases section still says a serializer raising DRF or Django
+`ValidationError` at `serializer.save()` returns via the recursive flattener and refers
+to `.detail`. Django `ValidationError` has no `.detail`.
+
+Impact: this would either raise `AttributeError` or lose Django model-validation
+structure if implemented from the edge-case summary.
+
+Correction: rewrite that edge-case bullet to mirror Decision 8 exactly. Add the same
+split to the DoD Slice 3 resolver item where it currently summarizes save-time
+validation generically.
+
+### H3 - `context["request"]` ownership is ambiguous and can drift from permission auth
+
+Decision 8 says request context is framework-owned, but also allows an override to supply
+its own `context["request"]` as an "escape hatch." Those two statements conflict. The
+write permission check has already used `request_from_info(info)` as the actor; letting
+the serializer validate against a different request object means permission and
+validation can disagree about the user/tenant.
+
+Impact: custom validators could see a different actor than the write-auth seam, causing
+hard-to-debug authorization inconsistencies and making request-context tests less
+meaningful.
+
+Correction: make request ownership strict. The framework should merge context after the
+hook and set `context["request"] = request_from_info(...)` unconditionally. If an
+override supplies a different `request`, raise `ConfigurationError`; if it supplies the
+same object, tolerate it. Consumer-specific context belongs under other keys.
+
+### M1 - Relation-id summaries still imply a dual-shape GraphQL input
+
+Decision 7 / Decision 8 now correctly say generated relation fields carry exactly one
+annotation: Relay `GlobalID` for a Relay-shaped target, otherwise the raw-pk scalar. The
+shared decode helper accepts both only because package-internal tests need to exercise
+the raw-pk/non-Relay branch.
+
+Older wording remains in the Slice 3 and DoD summaries: "each relation id — `GlobalID`
+or raw pk" without the generated-field qualifier. Those same summaries also mention
+target resolution only via backing FK `source`, omitting serializer-only relation fields
+whose target comes from `field.queryset.model`.
+
+Impact: implementers may over-permissively accept both id shapes on one live GraphQL
+field, or skip serializer-only relation support despite Decision 7 requiring it.
+
+Correction:
+
+- In Slice 3 and DoD summaries, say "the generated input exposes one strategy-dependent
+  shape; the shared decoder helper accepts both for reused/package-only branches."
+- Include both relation-target sources everywhere relation decode is summarized:
+  backing FK via one-segment `source`, or serializer-only `field.queryset.model`.
+
+### M2 - DRF null/default semantics are under-specified
+
+The converter/input sections derive requiredness from `field.required`, but do not pin
+`allow_null`, visible serializer `default`, `CreateOnlyDefault`, or `allow_blank`.
+These are important because GraphQL input nullability and DRF requiredness are not the
+same axis.
+
+Examples:
+
+- `required=True, allow_null=True` means "the client must provide the key, but may send
+  null" in DRF. Plain GraphQL input types cannot express that exactly as both required
+  and nullable without careful Strawberry/default handling; omission must still reach
+  DRF as "missing" so the serializer can raise the required error.
+- `required=False, default=...` should be omittable and let DRF apply the default.
+- `allow_blank=True` is a serializer validation rule for strings, not GraphQL
+  nullability.
+
+Impact: the generated SDL can either reject valid DRF `null` values too early or
+silently allow omission that only fails later, depending on how the builder interprets
+annotation vs default.
+
+Correction: add a dedicated "Nullability and defaults" paragraph to Decision 7:
+
+- annotation nullability follows `allow_null`;
+- omission/default behavior follows `field.required` and DRF defaults;
+- omitted fields are stripped/left absent so DRF can distinguish missing from explicit
+  `None`;
+- explicit `None` is preserved;
+- `allow_blank` is not encoded in GraphQL and remains serializer validation;
+- add tests for `required=True + allow_null=True`, `required=False + default`, and
+  `allow_blank=True`.
+
+### M3 - Relation targets without a primary `DjangoType` are not pinned
+
+The spec repeatedly says relation visibility is enforced through the related primary
+`DjangoType.get_queryset`, but the promoted form helper currently has a fallback path for
+no registered primary type: it uses the model default manager. For serializer relations,
+the converter must decide at build time whether a target without a primary type is
+allowed.
+
+Impact: if a relation write silently falls back to the default manager, the spec's
+"visibility-scoped relation decode" promise is overstated. If implementation instead
+raises, tests based on the promoted helper may surprise the worker.
+
+Correction: pin the contract. Preferred high-quality answer: serializer relation fields
+require a registered primary `DjangoType` for the target model; otherwise class creation
+raises `ConfigurationError` naming the serializer field and target model. If preserving
+the form fallback is required, add an explicit helper parameter so serializer decode can
+choose the stricter contract without changing form behavior.
+
+### M4 - The `register_subsystem_clear` fallback invites the debt the spec is trying to remove
+
+The DRY section makes `register_subsystem_clear(module_path, attr)` a P1 promotion, and
+the TODO anchors now point at the static clear-target registry. But the Slice 2 text still
+allows a fallback where finalizer and registry receive two hand-edits if the seam is "out
+of slice budget."
+
+Impact: this is a permanent two-list synchronization hazard, and adding the serializer
+would make it a third subsystem relying on manually mirrored clears. That is exactly the
+technical debt the spec identifies.
+
+Correction: remove the fallback. Make the static `(module_path, attr)` clear registry a
+Slice 2 requirement. The registry must store strings only and resolve through
+`_clear_if_importable` so DRF is not imported while absent.
+
+### M5 - Current-state prose understates the cross-module DRY work
+
+The "Context" section says this card creates `rest_framework/` and
+`tests/rest_framework/` and "adds no module outside them beyond products-example wiring
+and the soft-dep edit." That is no longer true. The spec requires `utils/converters.py`,
+`utils/inputs.py`, `mutations/sets.py`, `mutations/resolvers.py`, `utils/querysets.py`,
+`forms/*`, `registry.py`, and `types/finalizer.py` edits for the DRY promotions.
+
+Impact: reviewers can underestimate the blast radius or reject required changes as
+scope creep.
+
+Correction: replace that sentence with the accurate boundary: the new consumer-facing
+subpackage is `rest_framework/`, but the card deliberately promotes shared internals in
+`utils/`, `mutations/`, `forms/`, `registry.py`, and `types/finalizer.py` to avoid third
+copies.
+
+## Missing Edge Cases
+
+- **Nullable required serializer fields:** covered in M2; needs explicit mapping and
+  tests.
+- **Serializer relation target with no primary type:** covered in M3; needs a pinned
+  build-time result.
+- **Context mutation by hooks:** covered in H3; the hook must not be able to change the
+  request actor.
+- **Serializer field name collisions after GraphQL camel/id suffixing:** the spec covers
+  id-like suffixes, but should explicitly say two declared serializer fields that produce
+  the same GraphQL input name raise `ConfigurationError` before materialization. This is
+  the serializer analog of the form collision guard.
+- **`source` collisions:** if two serializer fields have distinct declared names but the
+  same one-segment `source`, both may be valid DRF patterns for read/write customization.
+  The spec should state whether the reverse map allows this and lets DRF resolve it, or
+  rejects duplicate writable `source` paths to avoid double-writing one model attr.
+
+## Configuration And Performance Assessment
+
+The `RELAY_GLOBALID_STRATEGY` setting location is not a runtime performance problem in
+the architecture currently described.
+
+The safe model is:
+
+- `types/relay.py` validates/resolves the strategy when the `DjangoType` definition is
+  built/finalized.
+- The resolved value is recorded as `effective_globalid_strategy` on the type/definition.
+- Serializer relation decode receives the target type/definition and consumes that
+  recorded value.
+- The resolver never reads `conf.settings.RELAY_GLOBALID_STRATEGY` and never calls
+  `_resolve_globalid_strategy(...)` during query execution.
+
+Under that model there is no per-request setting lookup, no repeated validation, and no
+new thread-safety issue. The setting object remains a configuration-time concern, not a
+request-path dependency.
+
+The risk is implementation drift, not the anchor location. Keep the test already planned:
+after finalization, monkeypatch `types/relay.py::_resolve_globalid_strategy` to fail and
+assert serializer relation decode still works from recorded state. Also grep the
+serializer resolver for `conf.settings` and `_resolve_globalid_strategy` in Slice 3.
+
+## Test And Documentation Gaps
+
+- **The DRF floor check is not a normal pytest assertion.** The spec requires proving a
+  DRF version imports and runs warning-free across Python 3.10-3.14 and Django
+  5.2-6.0/latest under `filterwarnings = error`. The current test suite will not prove
+  that without running the CI matrix or a dedicated probe. Add a Slice 0 acceptance
+  artifact: either a small script or explicit `uv` commands, and state where the chosen
+  floor is recorded.
+- **Live-vs-package resolver split is feasible.** Existing fakeshop live tests already
+  cover `/graphql/`, auth users, seeded products data, multipart upload precedent, and
+  query capture. No major rewrite is needed, but the spec should keep repeating that
+  reachable create/update branches belong in `examples/fakeshop/test_query`, not
+  `tests/rest_framework`.
+- **Soft-dependency absent tests are feasible but need isolation discipline.** The spec
+  correctly requires evicting both `rest_framework*` namespaces and deleting any bound
+  root `SerializerMutation`. Keep the non-memoization requirement; otherwise a passing
+  test can be a stale import.
+- **Docs must not advertise release status early.** The F8 split is correct. The stale
+  Slice 4 wording is the doc gap to fix, not the underlying policy.
+
+## Recommended Spec Edits Before Code
+
+1. Normalize all Slice 0 / Slice 4 wording across Status, Goals, Slice checklist,
+   Implementation plan, Doc updates, and DoD.
+2. Fix the write-time `ValidationError` edge-case bullet to split DRF and Django
+   exception classes.
+3. Tighten `get_serializer_kwargs` context merging so `context["request"]` cannot drift
+   from the permission actor.
+4. Update all relation-id summaries to the one-generated-shape contract and include
+   serializer-only `queryset.model` target resolution.
+5. Add null/default semantics for `allow_null`, `required`, DRF defaults, explicit
+   `None`, omission, and `allow_blank`.
+6. Pin relation-target behavior when no primary `DjangoType` exists.
+7. Make `register_subsystem_clear` mandatory, not a budget-dependent fallback.
+8. Correct the current-state prose to include the shared-helper promotion blast radius.

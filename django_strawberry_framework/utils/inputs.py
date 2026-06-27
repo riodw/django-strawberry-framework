@@ -59,7 +59,8 @@ class GeneratedInputFieldSpec:
 #     ledger and returns the ledger, a materializer that calls
 #     `materialize_generated_input_class(...)`, and a ledger-only clear function.
 #   - `make_shape_build_cache()` owns one cache dict and returns it with a clear
-#     callback so registry/finalizer cleanup can be registered consistently.
+#     callback so registry/finalizer cleanup can be registered consistently via
+#     static `(module_path, attr)` clear targets.
 #
 # Existing mutation/form helpers should re-point here so
 # `rest_framework/inputs.py` does not become a third ledger/cache copy.

@@ -5,10 +5,13 @@
 #   - read-only and hidden fields are dropped;
 #   - `optional_fields` makes create fields optional and rejects bare strings;
 #   - serializer-only fields remain included;
+#   - serializer-only relation fields resolve target shape through `queryset.model`;
 #   - request-dependent serializer kwargs fail without a schema hook;
-#   - context-dependent fields fail during materialization;
+#   - context-dependent fields fail during `.fields` materialization, not only
+#     serializer construction;
 #   - schema hooks can supply a stable request-independent shape;
-#   - shape identity differs by requiredness, source, and conversion kind;
+#   - shape identity differs by annotation, requiredness, source, conversion kind,
+#     and normalized `optional_fields`;
 #   - identical shapes dedupe while same-name distinct shapes raise;
 #   - create-required guards run per declaration before cache lookup.
 #

@@ -41,9 +41,10 @@ Issues = "https://github.com/riodw/django-strawberry-framework/issues"
 dev = [
     "faker>=33.0.0",
     "pillow>=10.0.0",
-    # TODO(spec-039 Slice 4): Add `djangorestframework` to the dev group only,
-    # never `[project].dependencies`, after confirming the pinned floor imports
-    # warning-free across the Django/Python CI matrix under `filterwarnings=error`.
+    # TODO(spec-039 Slice 0): Add `djangorestframework` to the dev group only,
+    # never `[project].dependencies`, before Slice 1 imports DRF. Regenerate
+    # `uv.lock`, keep the package version at 0.0.12, and add only targeted
+    # DRF-origin warning ignores needed by the verified Django/Python CI floor.
     "pytest>=9.0.2",
     "pytest-asyncio>=1.0.0",
     "pytest-cov>=7.0.0",

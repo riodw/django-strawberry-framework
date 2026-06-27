@@ -56,7 +56,9 @@ from . import filters, forms, models, orders
 # `apps.products.serializers` when the serializer resolver lands in the same
 # commit as the live products surface.
 # Pseudo flow:
-#   - Import `SerializerMutation` from the package root.
+#   - Import `SerializerMutation` by name from the package root; do not rely on
+#     star import because the root `__all__` intentionally omits it while DRF is
+#     soft.
 #   - Import the products `serializers` module beside the existing forms/models.
 #
 # Keep this in products, not a new acceptance app: the live `/graphql/` suite
@@ -366,6 +368,8 @@ class SubmitPing(DjangoFormMutation):
 #     `serializers.ItemSerializer` and `operation = "create"`.
 #   - Define `UpdateItemViaSerializer` with the same serializer and
 #     `operation = "update"`.
+#   - Do not accept graphene's `model_operations` / `lookup_field` keys here; this
+#     package keeps one explicit `Meta.operation` mutation per write operation.
 #
 # The resolver and this live surface must land together so reachable resolver
 # lines are covered by `test_products_api.py`, not package-only tests.
@@ -402,7 +406,8 @@ class Mutation:
     submit_ping = DjangoMutationField(SubmitPing)
     # TODO(spec-039 Slice 3): Add `create_item_via_serializer` and
     # `update_item_via_serializer` fields here in the same commit as
-    # `rest_framework/resolvers.py`.
+    # `rest_framework/resolvers.py` so reachable resolver behavior is live-tested
+    # over `/graphql/`, not duplicated in package-only tests.
 
 
 __all__ = ("Mutation", "Query")

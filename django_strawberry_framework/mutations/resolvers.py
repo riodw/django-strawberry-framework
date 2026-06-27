@@ -122,6 +122,8 @@ _MUTATION_ASYNC_RECOURSE = (
 #
 # The authorize-before-decode ordering is the security invariant; model, form,
 # and serializer flavors must not each hand-roll it.
+# Scope is model-backed create/update only. Do not fold model delete or the
+# model-less plain-form pipeline into this skeleton.
 
 
 def _decode_relations(
@@ -804,6 +806,8 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
 #
 # The serializer flattener is new and recursive, but the `"__all__"` sentinel and
 # leaf construction must not drift from this flat Django `ValidationError` mapper.
+# Save-time DRF and Django `ValidationError` classes still take separate paths:
+# DRF errors expose `.detail`; Django errors use `error_dict` / `messages` here.
 def _integrity_error_field_errors() -> list[FieldError]:
     """Map a save-time ``IntegrityError`` to the ``"__all__"`` envelope (spec-036 Major-2).
 

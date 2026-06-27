@@ -149,10 +149,12 @@ _CREATE_CATEGORY = (
 # Required live cases:
 #   - create/update happy paths and `categoryId` reverse-map write;
 #   - field-level and `"__all__"` serializer error envelopes;
+#   - a renamed/relation field error reports the GraphQL input name
+#     (`categoryId`), not the serializer field name (`category`);
 #   - partial update preservation plus unique-together on a one-field change;
 #   - hidden update row, write auth, relation visibility, authorize-before-decode;
 #   - multipart Upload to `Item.attachment`;
-#   - request-context `validate()` path;
+#   - explicit request-context `validate()` path, not a HiddenField-only proof;
 #   - G2 re-fetch SQL shape with no `.only(...)` projection.
 
 

@@ -4,7 +4,10 @@
 #   - root `SerializerMutation` lookup raises the install hint when DRF is absent;
 #   - `django_strawberry_framework.rest_framework` import raises the same hint;
 #   - `rest_framework.sets` import raises the same hint;
-#   - root lookup does not memoize `SerializerMutation` after a guarded failure.
+#   - `from django_strawberry_framework import *` succeeds without DRF and binds
+#     no `SerializerMutation`;
+#   - `SerializerMutation` is absent from root `__all__` while DRF is soft;
+#   - root lookup does not memoize `SerializerMutation` after success or failure.
 #
 # Test setup obligations:
 #   - simulate absent DRF by monkeypatching import, not uninstalling the dev dep;

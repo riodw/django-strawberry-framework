@@ -2,10 +2,12 @@
 # not owned by the live products API.
 # Pseudo cases:
 #   - supported serializer fields map annotation and requiredness;
-#   - primary-key relation fields accept Relay GlobalID and raw pk input;
+#   - primary-key relation fields generate one strategy-dependent annotation
+#     (Relay GlobalID or raw-pk scalar), not a dual-shape GraphQL field;
 #   - many-relation fields map to a list of ids;
 #   - file/image serializer fields map to `Upload`;
 #   - renamed `source` fields preserve the declared serializer name in reverse map;
+#   - serializer-only relations resolve targets from `field.queryset.model`;
 #   - id-like suffix rules avoid `categoryIdId`;
 #   - dotted source and `source="*"` fail for model-column conversion;
 #   - unknown custom serializer fields raise `ConfigurationError`;

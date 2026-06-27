@@ -3,13 +3,16 @@
 # Pseudo flow:
 #   - Import DRF serializers and the products `Item` model.
 #   - Define a reusable rejected-name sentinel for field-level validation tests.
-#   - `ItemSerializer` exposes `name`, `description`, `category`, and `attachment`.
+#   - `ItemSerializer` exposes `name`, `description`, `category`, and `attachment`;
+#     `category` is a `PrimaryKeyRelatedField` so GraphQL `categoryId` maps back to
+#     the serializer field name and target visibility uses `CategoryType`.
 #   - `validate_name(...)` rejects the sentinel with a DRF validation error.
 #   - Object-level `validate(...)` reads `self.context["request"]` and rejects an
 #     item name equal to the authenticated username.
 #
 # Live-test obligations:
 #   - `attachment` proves Upload values are routed into serializer `data`.
-#   - `validate()` proves `context={"request": ...}` reaches the serializer.
+#   - explicit `validate()` proves `context={"request": ...}` reaches the
+#     serializer; do not use a `HiddenField` as the live request-context proof.
 #   - The model's `unique_item_per_category` validator supplies the `"__all__"`
 #     envelope case during partial update.

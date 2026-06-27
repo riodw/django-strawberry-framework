@@ -110,7 +110,9 @@ visibility hook the `update` locate composes with);
 (the set-family subpackage layout / phase-2.5 binding / materialize-before-`Schema`
 discipline `mutations/` and `forms/` mirrored and `rest_framework/` mirrors again).
 [`docs/GLOSSARY.md`][glossary] carries [`SerializerMutation`][glossary-serializermutation]
-as `planned for 0.0.13`; Slice 4 promotes it to `shipped (0.0.13)`.
+as `planned for 0.0.13`; Slice 4 updates its **body** to the implemented contract
+(status **"implemented on main, releasing in 0.0.13"**), and the `shipped (0.0.13)` flip
+defers to the joint cut (**F8**, [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
 
 Revision history (kept inline so the spec is self-contained):
 
@@ -313,6 +315,73 @@ Revision history (kept inline so the spec is self-contained):
   relation/file mapping pinned as **mandated by [`GOAL.md`][goal]'s "don't silently weaken
   rich relations" non-goal**, not stylistic
   ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
+- **Revision 7** — applied a DRY / cross-flavor reuse pass (every reuse claim verified
+  against the source first — the relation-decode fork, `_VALID_FORM_OPERATIONS`, the
+  shape-cache "twin of" comment, the sync-pipeline orchestration copies, the two
+  hand-maintained ledger-clear lists, the `build_input` seam cluster, the field-spec /
+  namespace / typo-guard duplications, and the absence of any `register_subsystem_clear`
+  seam were all confirmed; corrections folded in: the form bases normalize via
+  `forms/sets.py::_resolve_effective_form_field_names` not `_normalize_field_sequence`, no
+  `field_error(...)` ctor exists yet, `_form_kwargs_overridden` is the helper to
+  generalize). Added a **[Cross-flavor reuse and DRY obligations](#cross-flavor-reuse-and-dry-obligations)**
+  section: the confirmed reuses locked as import obligations, **seven third-copy-fork
+  promotions** to single-site now (**P1.1** relation-decode core → `_visible_related_object`
+  in `utils/querysets.py`; **P1.2** `NON_DELETE_WRITE_OPERATIONS`; **P1.3** shape-build cache
+  plumbing; **P1.4** fail-loud converter dispatch skeleton → `utils/converters.py`; **P1.5**
+  the sync write-pipeline orchestration — a **security** ordering, the highest-value
+  promotion; **P1.6** a `register_subsystem_clear` seam collapsing the two hand-edited clear
+  lists; **P1.7** the `build_input` build/stash/name cluster), **seven single-siting items**
+  (**P2.1**–**P2.7**: unified field-spec, the one-ledger namespace trio, `_pascalize_token`,
+  the leaf-error sentinel/ctor, the `_validate_meta` sub-validators, `_hook_overridden`, the
+  `reject_unknown_meta_keys` typo-guard), the **P3** pin-as-import list + a deliberately
+  NOT-applicable list, and a per-`rest_framework/`-module **import manifest** (the DoD-checkable
+  DRY contract). Each promotion is pinned into its Decision
+  ([4](#decision-4--module-and-test-locations-rest_framework-subpackage-mirroring-forms) /
+  [6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) /
+  [7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) /
+  [8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) /
+  [10](#decision-10--operations-create--update-no-serializer-delete)) and its Slice DoD
+  line, and the [Implementation plan](#implementation-plan) (the per-slice file lists +
+  the "no regression" item) is reconciled to show the promotions touch `mutations/` /
+  `utils/` / `forms/` / `types/finalizer.py` / `registry.py` **net-near-zero**
+  (extract-and-re-point), behavior-preservingly (the `036` / `038` suites stay green).
+- **Revision 8** — applied a deep-architecture review (11 findings, each verified against
+  the source + the new `TODO(spec-039 Slice N)` anchors before editing). **Contract-precision
+  fixes:** **(F1)** `SerializerMutation` is **removed from `__all__`** while DRF is soft — a
+  star import consults `__all__` and would trip the `__getattr__` DRF guard, breaking
+  `from … import *` for DRF-absent consumers (verified: the root has eager `__all__` + no
+  lazy precedent); it stays a **named** lazy export, with a star-import soft-dep test added
+  ([Decision 5](#decision-5--public-surface-serializermutation-exported-from-the-root-the-038-generalized-factory-reused) /
+  [Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)).
+  **(F2)** save-time `ValidationError` is **split by class** — DRF's `.detail` → the
+  recursive flattener, Django's `error_dict` / `messages` → the flat `036`
+  `validation_error_to_field_errors` (verified: the `036` mapper reads Django's shape, not
+  `.detail`), two separate tests
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+  **(F3)** the generated relation input carries **one** strategy-dependent annotation
+  (Relay → `GlobalID`, else raw-pk scalar; verified via products'
+  malformed-`GlobalID`-is-top-level-coercion test); "accepts both" is the shared decode
+  *helper*'s contract, package-tested by direct call (Decisions 7/8). **(F4)** serializer-only
+  relation fields are **supported via `field.queryset.model`** (else rejected) — the
+  previously-undefined write-only-`PrimaryKeyRelatedField` case (Decision 7). **(F5)** the
+  error flattener keys `FieldError.field` to the **GraphQL input name** via the reverse map
+  (serializer name only when no input field exists), with a live renamed-field test
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)).
+  **(F6)** `run_write_pipeline_sync` is **scoped to model-backed create/update only** (delete +
+  plain form excluded) with a precise `decode_step` / `write_step` callback contract and a
+  byte-equivalence requirement on the existing model/form suites
+  ([P1.5](#cross-flavor-reuse-and-dry-obligations)). **(F7)** `get_serializer_kwargs`
+  precedence pinned — framework-owned `partial=True` (`ConfigurationError` on `partial=False`),
+  merged request `context`. **(F8)** Slice 4 splits **implemented-on-main** docs from
+  **release** ("shipped (0.0.13)" / README "Shipped today" / changelog) docs, the latter
+  deferred to the joint cut ([Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
+  **(F9)** the live request-context proof is an explicit `validate()`, not a `HiddenField`
+  (subtle under `partial=True`). **(F10)** `register_subsystem_clear` uses static
+  `(module_path, attr)` rows (no DRF import at registration), with the import-time invariant
+  stated. **(F11)** the DRF dev-dependency wiring + floor probe moves to a **pre-Slice-1
+  gate (Slice 0)**, since Slice 1–3 tests import DRF. Plus the config assessment: serializer
+  relation decode consumes the recorded `effective_globalid_strategy`, never
+  `conf.settings` / `_resolve_globalid_strategy` on the query path.
 
 ## Key glossary references
 
@@ -325,9 +394,11 @@ vocabulary used throughout the spec:
   `Meta.model_operations`, `Meta.optional_fields`), an input-type factory deriving the
   Strawberry input from the serializer's fields, a soft `rest_framework` dependency,
   and validation through the shared [`FieldError` envelope][glossary-fielderror-envelope].
-  Slice 4 promotes the entry from `planned for 0.0.13` to `shipped (0.0.13)` and
-  reconciles the surface keys this spec pins (`Meta.operation` over `model_operations`,
-  the `id:`-decode locate over `lookup_field` — [Risks](#risks-and-open-questions)).
+  Slice 4 updates the entry's **body** to the implemented contract (status **"implemented
+  on main, releasing in 0.0.13"**, the `shipped (0.0.13)` flip deferred to the joint cut —
+  **F8**) and reconciles the surface keys this spec pins (`Meta.operation` over
+  `model_operations`, the `id:`-decode locate over `lookup_field` —
+  [Risks](#risks-and-open-questions)).
 - [`DjangoMutation`][glossary-djangomutation] /
   [Input type generation][glossary-input-type-generation] /
   [`DjangoMutationField`][glossary-djangomutationfield] — the shipped
@@ -470,16 +541,30 @@ Project conventions to follow:
 
 ## Slice checklist
 
-Each top-level item maps to one commit / PR. **Four slices: serializer-field
-converter + input generation (Slice 1), the base class (Slice 2), the resolver pipeline
-**+ the products live serializer surface, landed together** (Slice 3), and the docs +
-soft-dep wiring + card wrap (Slice 4).** Slices 1–2 are package-internal and staged
-(each builds on the prior); **Slice 3 lands the resolver and its live consumer surface
-in one commit** — required by the [`examples/fakeshop/test_query/README.md`][test-query-readme]
+Each top-level item maps to one commit / PR. **A pre-Slice-1 dependency gate (Slice 0)
+plus four slices: serializer-field converter + input generation (Slice 1), the base
+class (Slice 2), the resolver pipeline **+ the products live serializer surface, landed
+together** (Slice 3), and docs + card wrap (Slice 4).** Slices 1–2 are package-internal
+and staged (each builds on the prior); **Slice 3 lands the resolver and its live consumer
+surface in one commit** — required by the [`examples/fakeshop/test_query/README.md`][test-query-readme]
 #"Coverage rule." live-first mandate, so the resolver's reachable lines are earned by a
 real `/graphql/` request (not a package test) at the commit they appear; Slice 4 is
-doc + soft-dep + card-wrap only (no version bump — [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
+doc + card-wrap only (no version bump — [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
 
+- [ ] Slice 0 (pre-Slice-1 dependency gate, **F11**): verify + pin the DRF floor **before**
+  any converter code, since Slice 1–3 tests import DRF.
+  - [ ] **Verify the floor:** confirm a `djangorestframework` release that imports and runs
+    **warning-free** across the [`django.yml`][django-workflow] CI matrix (Python
+    3.10 → 3.14 × Django 5.2 → 6.0 / `latest`) under [`pytest.ini`][pytest-ini]'s
+    `filterwarnings = error` (DRF's Django support lags Django, so a 6.0 / `latest`-clean
+    release must be confirmed to exist), and record the **exact pinned floor**
+    ([Risks](#risks-and-open-questions)).
+  - [ ] **Wire the dev dependency:** add `djangorestframework` to
+    `[dependency-groups].dev` (NOT `[project].dependencies` — it stays a soft runtime dep)
+    in [`pyproject.toml`][pyproject], regenerate `uv.lock` (`uv lock`), and add any
+    **targeted DRF-origin `ignore::` line** to [`pytest.ini`][pytest-ini] the verified
+    release still needs — all **before** Slice 1. **No package-version edits** (stays
+    `0.0.12`, [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
 - [ ] Slice 1: DRF-field → Strawberry input mapping + the serializer-derived input
   generator (per
   [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)
@@ -591,6 +676,20 @@ doc + soft-dep + card-wrap only (no version bump — [Decision 14](#decision-14-
     (`guard_required=False`) suppresses it; the guard runs **per declaration** (a waiving
     mutation materializing a shape first does not suppress it for a later non-waiving
     mutation on the same shape).
+  - [ ] **DRY / reuse** ([Cross-flavor reuse and DRY obligations](#cross-flavor-reuse-and-dry-obligations)):
+    `convert_serializer_field` rides the shared fail-loud dispatch **skeleton** promoted to
+    `utils/converters.py` (supplying only its precheck table + scalar registry — the
+    no-silent-`String`-catch-all contract single-sited with
+    [`forms/converter.py`][forms-converter], **P1.4**); the reverse-map field spec is the
+    unified `InputFieldSpec` sited in [`utils/inputs.py`][utils-inputs] (the `038`
+    `FormInputFieldSpec` analog + the `source` axis, with the conversion result a shared
+    shape too — **P2.1**); the input namespace is the promoted `make_input_namespace(...)`
+    **one-ledger** trio (the form/mutation clear shape, NOT the heavier
+    `clear_generated_input_namespace` — **P2.2**); the `SerializerInputShape` cache + clear is
+    the promoted `make_shape_build_cache()` plumbing (**P1.3**); and the divergent-shape
+    suffix reuses `mutations/inputs.py::_pascalize_token` (**P2.3**). A grep guard that
+    `rest_framework/serializer_converter.py` + `rest_framework/inputs.py` **import** these
+    and do not redefine them is the DoD check.
 - [ ] Slice 2: the `SerializerMutation` base + `Meta` validation + the phase-2.5 bind
   (per
   [Decision 5](#decision-5--public-surface-serializermutation-exported-from-the-root-the-038-generalized-factory-reused)
@@ -665,16 +764,41 @@ doc + soft-dep + card-wrap only (no version bump — [Decision 14](#decision-14-
        "clear_serializer_input_namespace", …)` co-clear row alongside the existing
        mutation / form co-clears, so a full registry reset wipes serializer inputs too.
 
+    **Preferred DRY path (P1.6, [DRY obligations](#cross-flavor-reuse-and-dry-obligations)):**
+    the two hand-edits above (an import-guarded pre-bind clear **and** a `_clear_if_importable`
+    co-clear row) are the *no-seam fallback*. The single-siting this card prefers is a
+    `register_subsystem_clear(module_path, attr)` seam feeding **one** canonical list that
+    **both** the finalizer pre-bind reset and `TypeRegistry.clear()` iterate via
+    `_clear_if_importable`; `rest_framework/inputs.py` registers its
+    `clear_serializer_input_namespace` at import, and because every entry is import-guarded
+    **by construction**, the place-#1 soft-dep asymmetry (the `try/except ImportError`
+    special-case) **vanishes** — the whole import-guarded-clear caveat collapses to a
+    one-line registration. If the seam is out of slice budget, the two hand-edits ship as
+    specified above. **Registration timing is pinned (F10):** the canonical list holds
+    **static `(module_path, attr)` string rows** that do **not** import the target module
+    at registration time (the rows can be declared centrally — e.g. the serializer row is a
+    literal `("…rest_framework.inputs", "clear_serializer_input_namespace")` — and resolved
+    lazily by `_clear_if_importable`, which already tolerates an absent module). This makes
+    the order-of-import edge a non-issue; the backstop invariant either way is: **a
+    subsystem that has created clearable state has, by definition, been imported and
+    registered its clear** (stale serializer ledger state implies `rest_framework.inputs`
+    was imported in a prior failed bind), so a registered-but-not-yet-imported gap cannot
+    leave dirty state. A **retry-idempotence test** (materialize serializer input, fail a
+    later type, rerun finalization, assert the serializer ledger was cleared) locks it.
+
     **No new bind entry point** (no `bind_serializer_mutations()`) — that is the dividend
     of the `ModelSerializer`-rides-`DjangoMutation` choice
     ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)).
   - [ ] [`__init__.py`][init]: export `SerializerMutation` (one net-new public symbol)
-    via a **root-level `__getattr__`** (PEP 562) — `SerializerMutation` is added to
-    `__all__` but **not** eagerly imported, so `import django_strawberry_framework`
-    succeeds without DRF and resolving the name lazily routes through the shared
-    `require_drf()` guard (DRF absent → `ImportError` with the install hint). This is the
-    one root edit; the eager-import + explicit-`__all__` style of the existing root is
-    otherwise preserved
+    via a **root-level `__getattr__`** (PEP 562) — `SerializerMutation` is resolvable by
+    **name** (`from django_strawberry_framework import SerializerMutation`) through the
+    shared `require_drf()` guard (DRF absent → `ImportError` with the install hint), but is
+    **NOT added to `__all__`** while DRF is soft, so `from django_strawberry_framework
+    import *` stays DRF-free and never trips the guard (**F1** — a star import consults
+    `__all__` and would otherwise break for DRF-absent consumers). `import
+    django_strawberry_framework` succeeds without DRF (the root never eagerly imports
+    `rest_framework/`). This is the one root edit; the eager-import + explicit-`__all__`
+    style of the existing root is otherwise preserved
     ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)).
   - [ ] Package coverage: [`tests/rest_framework/test_sets.py`][test-rest-framework] —
     the `Meta` validation matrix (missing / wrong-type `serializer_class`, a plain
@@ -683,6 +807,24 @@ doc + soft-dep + card-wrap only (no version bump — [Decision 14](#decision-14-
     `fields` + `exclude` both set, unknown key), registration, finalizer binding (the
     `bind_mutations()` path), the no-registered-primary-type error, and — proving the
     base is unregressed — the model-flavor seam defaults unchanged.
+  - [ ] **DRY / reuse** ([Cross-flavor reuse and DRY obligations](#cross-flavor-reuse-and-dry-obligations)):
+    `_validate_meta` reuses `mutations/sets.py::_validate_permission_classes`, the shared
+    non-delete ops set (a promoted `NON_DELETE_WRITE_OPERATIONS` both flavors import — NOT a
+    new `_VALID_SERIALIZER_OPERATIONS`, **P1.2**), and the promoted
+    `reject_unknown_meta_keys(name, meta, allowed)` typo-guard called with
+    `_ALLOWED_SERIALIZER_META_KEYS`, then returns a `_ValidatedMutationMeta` (**P2.5** /
+    **P2.7**); the field-sequence call is
+    `utils/inputs.py::normalize_field_name_sequence(..., flavor="SerializerMutation")`
+    **directly** — no third re-binding wrapper (**P2.7**); the `build_input` /
+    `input_type_name` cluster rides the promoted `cached_build_input` +
+    `build_and_stash_input` core (guard-before-cache-lookup ordering single-sited — NOT a
+    byte-parallel `_cached_build_serializer_input` / `_build_and_stash_serializer_input`,
+    **P1.7**); the `get_serializer_kwargs` waiver reuses the generalized
+    `_hook_overridden(cls, base, name)` (**P2.6**); and the input-ledger clear registers
+    through `register_subsystem_clear` (**P1.6**, the finalizer item above). The serializer's
+    only genuinely-new `_validate_meta` logic is the `serializer_class`
+    is-a-`ModelSerializer` (+ resolvable `Meta.model`) check and `optional_fields`
+    normalization.
 - [ ] Slice 3: the serializer resolver pipeline **+ the products live serializer
   surface, landed in one commit** (per
   [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)
@@ -762,9 +904,14 @@ doc + soft-dep + card-wrap only (no version bump — [Decision 14](#decision-14-
     [`Item.attachment`][products-models] `FileField` as an [`Upload`][glossary-upload-scalar]
     input (a real multipart create — the [`test_uploads_api.py`][test-uploads-api]
     `MediaSpecimen` multipart precedent proves `django.test.Client` drives this today),
-    and an **observable request-context path** — a `validate()` (or
-    `HiddenField(default=CurrentUserDefault())`) that reads
-    `self.context["request"].user`, proving the injected `context={"request": …}` lands.
+    and an **observable request-context path** — an explicit `validate()` /
+    `validate_<field>()` that reads `self.context["request"].user`, proving the injected
+    `context={"request": …}` lands. **The live proof must be a `validate()` branch, not a
+    `HiddenField(default=CurrentUserDefault())`** (**F9**): DRF hidden-field defaults are
+    subtle under `partial=True` (a hidden field's default behavior differs between full and
+    partial validation), so they are not a stable way to prove update-time request context.
+    `HiddenField` stays covered only as an input-generation / drop rule (and, if desired, a
+    create-only behavior), never as the request-context proof.
     [`products/schema.py`][products-schema] gains the `SerializerMutation`(s)
     (create + update); `config/schema.py` already wires `mutation=Mutation`
     ([`spec-036`][spec-036] Slice 4). The example settings add `"rest_framework"` to
@@ -802,33 +949,46 @@ doc + soft-dep + card-wrap only (no version bump — [Decision 14](#decision-14-
     create/update happy path, envelope, reverse-map, partial-update, visibility, or
     write-auth test is duplicated here** — those are owned by the live suite above
     (the [`examples/fakeshop/test_query/README.md`][test-query-readme] #"Coverage rule.").
-- [ ] Slice 4: doc updates + soft-dep wiring + card wrap (per
+  - [ ] **DRY / reuse** ([Cross-flavor reuse and DRY obligations](#cross-flavor-reuse-and-dry-obligations)):
+    the sync pipeline rides the promoted `run_write_pipeline_sync(...)` skeleton **scoped to
+    model-backed create/update only** (delete + model-less plain form excluded, **F6**) —
+    the serializer supplies only `decode_step` + `write_step` callbacks (construct /
+    `is_valid()` / `save()`), and the `transaction.atomic()` boundary + the
+    **authorize-before-decode security ordering** is single-sited across the three
+    model-backed flavors, not hand-copied a third time, with the existing model / model-form
+    suites staying byte-equivalent (**P1.5**); the relation decoder re-keys over the promoted `_visible_related_object`
+    in [`utils/querysets.py`][utils-querysets] rather than forking a third object-returning
+    decoder (**P1.1**); and `serializer_errors_to_field_errors` (recursive, legitimately new)
+    imports the shared `mutations/inputs.py::NON_FIELD_ERROR_KEY` sentinel — and ideally a
+    promoted `field_error(path, messages)` leaf ctor both flatteners call — so the DRF
+    `non_field_errors` → `"__all__"` mapping cannot drift from the flat `036` mapper
+    (**P2.4**). The promotions themselves edit `mutations/resolvers.py` / `utils/querysets.py`
+    (with `forms/resolvers.py` re-pointed to the shared sites); the `036` leaf helpers stay
+    reused-by-call.
+- [ ] Slice 4: doc updates + card wrap (per
   [Doc updates](#doc-updates) /
   [Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)
-  / [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut))
-  - [ ] **Soft-dep wiring** ([`pyproject.toml`][pyproject] **+ `uv.lock`**): add
-    `djangorestframework` to `[dependency-groups].dev` (NOT `[project].dependencies` —
-    it stays a soft runtime dep), pinning a floor that matches the install hint the
-    guard prints, and **regenerate `uv.lock`** (`uv lock`) so the committed lockfile
-    matches the manifest. **No package-version edits** — the `[project].version` /
-    `__version__` / `test_version` stay `0.0.12`, and so does the
-    `django-strawberry-framework` `version` entry inside `uv.lock`
-    ([Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
-  - [ ] [`docs/GLOSSARY.md`][glossary] (promote
-    [`SerializerMutation`][glossary-serializermutation] to `shipped (0.0.13)`; add it
-    to **Public exports** + the **Index** status column + the **Mutations**
-    browse-by-category row; reconcile the entry's surface keys with what this card
-    actually pins — `Meta.operation` over `model_operations`, the `id:`-decode locate
-    over `lookup_field`), [`docs/README.md`][docs-readme] / [`README.md`][readme]
-    (move the serializer flavor from "Coming next (`0.0.13`)" to "Shipped today" in
-    the "Coming from DRF + django-filter?" paragraph; the README **Status** line moves
-    to `0.0.13` only at the joint cut, not here), [`GOAL.md`][goal] (criterion 6's
-    `ModelSerializer` flavor now ships — all three named flavors shipped),
-    [`TODAY.md`][today] (note the serializer mutation as a package capability),
-    [`docs/TREE.md`][tree] (fill the planned `rest_framework/` /
-    [`tests/rest_framework/`][test-rest-framework] summary lines), [`CHANGELOG.md`][changelog]
-    (only if the Slice 4 maintainer prompt explicitly requests it), [`KANBAN.md`][kanban]
-    (card → Done via the kanban DB + re-render).
+  / [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
+  **Soft-dep wiring is NOT here — it landed in the pre-Slice-1 gate (Slice 0, F11), since
+  Slice 1–3 tests import DRF.** Release-status wording is **split from implementation
+  docs** (**F8**):
+  - [ ] **Implemented-on-main docs (land now):** [`docs/TREE.md`][tree] (fill the
+    `rest_framework/` / [`tests/rest_framework/`][test-rest-framework] summary lines),
+    [`TODAY.md`][today] (note the serializer mutation as an implemented capability),
+    [`docs/GLOSSARY.md`][glossary] (update the
+    [`SerializerMutation`][glossary-serializermutation] **body** to the implemented
+    contract + add it to **Public exports** + the **Index** + the **Mutations**
+    browse-by-category row; reconcile the surface keys — `Meta.operation` over
+    `model_operations`, the `id:`-decode locate over `lookup_field`; mark status
+    **"implemented on main, releasing in 0.0.13"**, **not** `shipped (0.0.13)` yet),
+    [`GOAL.md`][goal] (criterion 6's crit-6 example corrected to the shipped surface —
+    `SerializerMutation` base + `operation = "create"`).
+  - [ ] **Joint-cut docs (deferred to the `0.0.13` release):** flip the GLOSSARY status to
+    `shipped (0.0.13)`; [`docs/README.md`][docs-readme] / [`README.md`][readme] move the
+    flavor from "Coming next (`0.0.13`)" to "Shipped today" (README **Status** line →
+    `0.0.13`); [`CHANGELOG.md`][changelog] release bullets — all at the joint cut, only
+    when its maintainer prompt explicitly requests the `CHANGELOG.md` edit.
+  - [ ] **Card wrap:** [`KANBAN.md`][kanban] (card → Done via the kanban DB + re-render).
 
 ## Problem statement
 
@@ -1374,10 +1534,30 @@ Alternatives considered (and rejected):
   `rest_framework/`, it matches graphene-django's layout, and it names the dependency
   boundary the soft-import guard wraps.
 
+**Shared-helper homes (the DRY promotions land outside `rest_framework/`).** The
+[Cross-flavor reuse and DRY obligations](#cross-flavor-reuse-and-dry-obligations) section
+single-sites the helpers the form flavor already forked from the model flavor, so the
+serializer flavor imports rather than re-implements: the **fail-loud converter dispatch
+skeleton** (**P1.4**) lands in a new `utils/converters.py`; the **relation-decode core**
+(`_visible_related_object`, **P1.1**) is promoted into [`utils/querysets.py`][utils-querysets];
+the **shape-build cache** (**P1.3**), **build/stash core** (**P1.7**), **non-delete ops
+constant** (**P1.2**), and the **`reject_unknown_meta_keys`** typo-guard (**P2.7**) land in
+[`mutations/sets.py`][mutations-sets] (or a sibling `mutations/bind_helpers.py`); the
+**sync write-pipeline skeleton** (**P1.5**) in [`mutations/resolvers.py`][mutations-resolvers];
+the unified **input-namespace trio / field-spec** (**P2.1** / **P2.2**) in
+[`utils/inputs.py`][utils-inputs]; and the **`register_subsystem_clear`** seam (**P1.6**)
+spans [`types/finalizer.py`][types-finalizer] + [`registry.py`][registry]. These promotions
+edit `mutations/` / `utils/` (and `forms/` re-points to the shared site), so the
+"near-zero edit to `mutations/`" estimate elsewhere is the *no-DRY-promotion* floor; the
+promotions are the cheap-now single-siting this card chooses to pay.
+
 ### Decision 5 — Public surface: `SerializerMutation` exported from the root, the `038`-generalized factory reused
 
-One net-new public symbol, re-exported from [`__init__.py`][init] and added to
-`__all__`:
+One net-new public symbol, re-exported from [`__init__.py`][init] as a **lazy export via
+the root `__getattr__`** — and, while DRF is a soft dependency, **deliberately NOT added
+to `__all__`** (so `from … import *` stays DRF-free for consumers who never write a
+serializer mutation; the named `from django_strawberry_framework import SerializerMutation`
+still resolves through `__getattr__`, [Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy), F1):
 
 - `SerializerMutation` — the `ModelSerializer` mutation base.
 
@@ -1498,6 +1678,27 @@ Alternatives considered (and rejected):
   `ModelSerializer` flavor is the headline and the `038` form card already
   established the two-flavor split lands across cards, not within one.
 
+**Cross-flavor reuse ([DRY obligations](#cross-flavor-reuse-and-dry-obligations)).**
+Because this base is "the **exact** override set `DjangoModelFormMutation` uses," its
+`_validate_meta` and `build_input` overrides are on track to be a third byte-parallel
+copy of the form cluster. The spec instead requires the serializer to ride shared sites:
+`_validate_meta` reuses `mutations/sets.py::_validate_permission_classes`, the shared
+field-sequence normalize, the shared non-delete ops set, and returns a
+`_ValidatedMutationMeta` (**P2.5**); the `declared - allowed` typo-guard is the promoted
+`reject_unknown_meta_keys(name, meta, allowed)` called with the serializer's own
+`_ALLOWED_SERIALIZER_META_KEYS`, and the field-sequence call is
+`normalize_field_name_sequence(..., flavor="SerializerMutation")` **directly** — no third
+re-binding wrapper (**P2.7**); the build/stash/name seam rides the promoted
+`cached_build_input` + `build_and_stash_input` core rather than spelling
+`_cached_build_serializer_input` / `_build_and_stash_serializer_input` (**P1.7**); and the
+input-namespace clear **registers through the proposed `register_subsystem_clear` seam**
+instead of being hand-added to both the finalizer pre-bind reset and `registry.clear()` —
+which, because every entry routes through `_clear_if_importable`, **collapses the
+import-guarded-clear asymmetry** the Slice-2 checklist below otherwise spells out by hand
+(**P1.6**). The serializer's only genuinely-new `_validate_meta` logic is then the
+`serializer_class` is-a-`ModelSerializer` (+ resolvable `Meta.model`) check and the
+`Meta.optional_fields` normalization.
+
 ### Decision 7 — Serializer-field → Strawberry input mapping: the serializer is the input source of truth
 
 [`rest_framework/serializer_converter.py`][rf-converter] maps each DRF serializer
@@ -1569,9 +1770,12 @@ the relation / file rows below are package extensions graphene lacks, not parity
   serializer is the `036` nested-write non-goal — a `ListField` must not become a
   back-door to either). `MultipleChoiceField` → `list[str]`.
 - `PrimaryKeyRelatedField` → the target's id (`relation_single`), `many=True` /
-  `ManyRelatedField` → `list[<id>]` (`relation_multi`); the id type is the target
-  primary [`DjangoType`][glossary-djangotype]'s `GlobalID` (Relay-Node) or raw pk,
-  resolved at the build site.
+  `ManyRelatedField` → `list[<id>]` (`relation_multi`); the generated field carries
+  **exactly one** id annotation, **strategy-dependent on the target** — the target primary
+  [`DjangoType`][glossary-djangotype]'s `GlobalID` when it is Relay-Node-shaped, else the
+  target's **raw-pk scalar** — decided at the build site (a live request can only submit
+  the one shape that annotation admits; "accepts both `GlobalID` and raw pk" is the shared
+  decode *helper*'s contract, not a single generated field's, [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) step 3 / F3).
 - `FileField` / `ImageField` → [`Upload`][glossary-upload-scalar] (`file`).
 - A nested `ModelSerializer` / `ListSerializer` field → **out of scope**
   (the `036` nested-write non-goal), surfaced as a `ConfigurationError` (nested writes
@@ -1613,11 +1817,31 @@ courts serializers that rename fields. The supported `source` scope for `0.0.13`
   declared key and maps it to `source` internally, so the resolver must **not**
   pre-apply `source`.
 - A **dotted `source`** (`source="user.email"`) or **`source="*"`** is **rejected** for
-  any field that needs model-column conversion (a relation, or a `choices`-enum
-  overlap): a [`ConfigurationError`][glossary-configurationerror] naming the field,
-  since the backing column is not a single resolvable `models.Field`. A plain scalar
-  serializer-only field (no model-column conversion) is unaffected — it is a scalar
-  input validated by the serializer, keyed by its declared name.
+  any field that resolves its target from a model column (a `ModelSerializer` FK-backed
+  relation, or a `choices`-enum overlap): a [`ConfigurationError`][glossary-configurationerror]
+  naming the field, since the backing column is not a single resolvable `models.Field`. A
+  plain scalar serializer-only field (no model-column conversion) is unaffected — it is a
+  scalar input validated by the serializer, keyed by its declared name.
+
+**Serializer-only relation fields — supported via `field.queryset.model` (F4).** A real
+DRF pattern sits between "serializer-only fields are scalar inputs" and "relation targets
+resolve through `source`": a **write-only `PrimaryKeyRelatedField` (or `many=True`) whose
+`queryset` is not a model column** and is consumed by a custom `create()` / `update()`.
+That field is *both* serializer-only *and* a relation, so the relation **target model is
+resolved from the DRF field's `queryset.model`** (not from a backing FK via `source`), and
+that target drives the id annotation (Relay `GlobalID` vs raw-pk scalar, the same
+strategy-dependent rule) and the decode-time visibility check through the target's primary
+`DjangoType.get_queryset`. The **declared serializer field name is preserved** in
+`provided_data` (DRF hands it to the custom `create()` / `update()`). So a relation field
+resolves its target from **either** the backing FK (a `ModelSerializer` mapped relation,
+via one-segment `source`) **or** `field.queryset.model` (a serializer-only relation); a
+relation field with **neither** a resolvable backing column **nor** a concrete
+`queryset.model` (e.g. a dotted / `source="*"` relation with no queryset, or a relation
+field with `queryset=None` outside a `ModelSerializer` mapping) is a
+[`ConfigurationError`][glossary-configurationerror] naming the field — there is no target
+to type or visibility-check. (`PrimaryKeyRelatedField.queryset.model` is a standard DRF
+attribute; assert it against the installed DRF when Slice 1 lands, the
+`ManyRelatedField.child_relation` precedent.)
 
 **Requiredness, `read_only`, `optional_fields`.** A create-input field's requiredness
 is the serializer field's `field.required`, minus the `Meta.optional_fields` override
@@ -1735,6 +1959,27 @@ Alternatives considered (and rejected):
   uniform `node` / `result` slot is the one cross-flavor output contract; a
   serializer-derived output would fork it.
 
+**Cross-flavor reuse ([DRY obligations](#cross-flavor-reuse-and-dry-obligations)).** The
+converter + input generator is where the form flavor forked the most from the model
+flavor, so the serializer is on track to be the third copy of each. The spec pins the
+reuse: the fail-loud dispatch is the shared `(field, isinstance_prechecks,
+scalar_registry, fallthrough_error_factory) → conversion` **skeleton** in a new
+`utils/converters.py` — `convert_serializer_field` supplies only its precheck table +
+scalar registry, so the **GOAL-mandated no-silent-`String`-catch-all contract is
+single-sited** across `forms/converter.py` and the serializer converter (**P1.4**); the
+reverse-map field spec is the unified `InputFieldSpec` (the `038` `FormInputFieldSpec`
+analog plus the `source` axis) sited in [`utils/inputs.py`][utils-inputs], not a third
+ad-hoc dataclass (**P2.1**); the `SerializerInputShape` descriptor identity is
+legitimately new, but its **cache + clear plumbing** is the promoted
+`make_shape_build_cache()` (**P1.3**) and its **build/stash procedure** the promoted
+`cached_build_input` / `build_and_stash_input` (**P1.7**); the input namespace is the
+promoted `make_input_namespace(...)` **one-ledger** trio — the form / mutation clear
+shape, **not** the heavier `clear_generated_input_namespace` (**P2.2**); the
+divergent-shape suffix reuses `mutations/inputs.py::_pascalize_token` (**P2.3**); and the
+`get_serializer_kwargs` create-required **waiver** reuses the generalized
+`_hook_overridden(cls, base, name)` rather than re-deriving the `cls.<name> is base.<name>`
+test (**P2.6**).
+
 ### Decision 8 — Resolver pipeline: instantiate → `is_valid()` → `serializer.errors` → `save()` → optimizer re-fetch → payload
 
 [`rest_framework/resolvers.py`][rf-resolvers] runs the sync + async pipeline, reusing
@@ -1767,10 +2012,21 @@ the `036` / `038` promoted helpers (`locate_instance` / `coerce_lookup_id` /
 3. **Decode** the (now-authorized) `data:` input via the reverse map into a
    serializer-field-keyed `provided_data`, using a **dedicated serializer relation
    decoder** that mirrors the `038` form decoder (serializer-field-keyed, NOT the
-   model-attr-keyed `036` `_decode_relation_id_set`): each relation id — `GlobalID` *or*
-   **raw pk** — is type-checked against the relation's target model (resolved from the
-   backing FK via the serializer field's `source`,
-   [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)),
+   model-attr-keyed `036` `_decode_relation_id_set`). **The generated input field carries
+   exactly ONE annotation, strategy-dependent** (Decision 7): a relation whose target
+   primary [`DjangoType`][glossary-djangotype] is Relay-shaped exposes a `GlobalID`; a
+   non-Relay / raw-pk target exposes the target's raw-pk scalar. So a *live* GraphQL
+   request can only ever deliver the **one shape the annotation admits** — a raw integer
+   against a `GlobalID`-typed field is a **top-level variable-coercion error before the
+   resolver runs** (verified: products' `test_create_item_malformed_category_id_is_top_level_coercion_error`,
+   because relation inputs are typed `GlobalID`, not `ID!`). The **shared decode helper**
+   accepts **both** a `GlobalID` and a raw pk because it is reused and package tests
+   exercise the raw-pk / non-Relay branch by **direct call** (no live HTTP shape exists for
+   it unless fakeshop grows a real non-Relay relation field). Each id the decoder does see
+   is type-checked against the relation's **target model** — resolved from the backing FK
+   via the serializer field's `source`, or, for a serializer-only relation, from the DRF
+   field's `queryset.model`
+   ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)) —
    resolved to the **visible** object through the related primary
    `DjangoType.get_queryset` — the same per-branch raw-pk visibility check both `036`'s
    model-path decoder (`_decode_relation_id_set` → `_raw_pk_relation_error`) and the
@@ -1779,23 +2035,43 @@ the `036` / `038` promoted helpers (`locate_instance` / `coerce_lookup_id` /
    field name** (the public `data` key DRF maps to `source` internally,
    [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth));
    a hidden / wrong-type target → field-keyed
-   [`FieldError`][glossary-fielderror-envelope]. A `FileField` / `ImageField` value
+   [`FieldError`][glossary-fielderror-envelope]. **The decode consumes the recorded Relay
+   GlobalID strategy, never the live setting:** a `GlobalID` is decoded through the
+   existing Relay decode helpers against the target type's recorded
+   `effective_globalid_strategy` ([`types/relay.py`][types-relay] /
+   [`types/definition.py`][types-definition], resolved once at finalization), and the
+   decoder must **not** read `conf.settings.RELAY_GLOBALID_STRATEGY` or call
+   `_resolve_globalid_strategy(...)` on the query path — that domain validation belongs to
+   finalization, not request handling (no per-request re-read / re-validate). A
+   `FileField` / `ImageField` value
    (an [`Upload`][glossary-upload-scalar]) lands in `provided_data` like any other
    value — DRF serializers read files from `data`, the deliberate contrast with the
    `038` form flavor's `data=` / `files=` split (a bound Django form reads files from
    `files=`).
 4. **Construct** the serializer via the overridable
    `get_serializer_kwargs(info, *, data, instance=None)` hook (the graphene
-   `get_serializer_kwargs` parity seam) — `create`:
-   `serializer_class(**get_serializer_kwargs(info, data=provided_data))`; `update`:
-   `serializer_class(**get_serializer_kwargs(info, data=provided_data,
-   instance=<row>))` with **`partial=True`** injected. The default kwargs inject
-   `context={"request": request_from_info(info, family_label="SerializerMutation")}` —
-   the package's shared request-extraction helper
-   ([`utils/permissions.py`][utils-permissions] `request_from_info`, which resolves both
-   `info.context.request` and a bare `HttpRequest` `info.context`, the same helper the
-   permission seam uses) — so the serializer's own validators and
-   `HiddenField(default=CurrentUserDefault())` resolve.
+   `get_serializer_kwargs` parity seam). **The hook + framework precedence is pinned
+   exactly** (it is the update contract, not a soft default):
+   - **Default hook return shape:** `{"data": provided_data}` on `create`;
+     `{"data": provided_data, "instance": <row>}` on `update`; plus
+     `"context": {"request": request_from_info(info, family_label="SerializerMutation")}`
+     in both — the package's shared request-extraction helper
+     ([`utils/permissions.py`][utils-permissions] `request_from_info`, which resolves both
+     `info.context.request` and a bare `HttpRequest` `info.context`, the same helper the
+     permission seam uses) — so the serializer's own request-aware validators resolve.
+   - **The hook does not own the whole kwargs dict — the framework merges over it.** A
+     consumer override may add or replace kwargs (e.g. a custom `context` key, an extra
+     constructor kwarg), but the framework applies two **non-overridable** rules after the
+     hook returns: (i) **`partial`** is framework-owned — the resolver injects
+     `partial=True` for `update` (and never sets it for `create`); a hook that returns
+     `partial=False` (or `partial=True` on a create) is a
+     [`ConfigurationError`][glossary-configurationerror] (`partial` is the update
+     contract, not a knob); and (ii) the **`context["request"]`** entry is merged in and
+     framework-owned — an override's `context` dict is *merged* (its other keys win), but
+     `request` is set by the framework unless the override **explicitly** supplies its own
+     `request` (documented escape hatch). A hook that omits `data` is filled with
+     `provided_data`. This makes "override adds a kwarg" and "override cannot disable
+     partial / cannot accidentally drop the request" both well-defined.
 5. **Validate** via `serializer.is_valid()` — a failure maps the nested
    `serializer.errors` structure onto the
    [`FieldError` envelope][glossary-fielderror-envelope] via a **dedicated recursive
@@ -1825,21 +2101,36 @@ the `036` / `038` promoted helpers (`locate_instance` / `coerce_lookup_id` /
    The re-fetch (step 7) then keys off `saved.pk`. (`serializer.instance` *is* `saved`
    after a successful DRF `save()`, but pinning the captured return value keeps the
    contract explicit and the call-once guarantee testable.)
-   **A save-time `ValidationError` is routed through the flattener, not raised.** DRF
-   explicitly supports a custom `create()` / `update()` / `save()` raising
-   `serializers.ValidationError` (and a model-level
-   `django.core.exceptions.ValidationError` can surface from `save()` too). Left
-   unhandled it would escape as a **top-level `GraphQLError`**, contradicting this card's
-   own "validation → [`FieldError`][glossary-fielderror-envelope] envelope, not
+   **A save-time `ValidationError` is routed to the envelope, not raised — but DRF and
+   Django `ValidationError`s have DIFFERENT shapes and take different paths.** A custom
+   `create()` / `update()` / `save()` can raise either a DRF
+   `rest_framework.exceptions.ValidationError` (== `serializers.ValidationError`, carrying
+   a `.detail` that is the **same** arbitrarily-nested structure as `serializer.errors`)
+   **or** a model-level `django.core.exceptions.ValidationError` (from a `full_clean()`
+   inside `save()`, carrying Django's `error_dict` / `messages` shape — **no `.detail`**).
+   Left unhandled either would escape as a **top-level `GraphQLError`**, contradicting this
+   card's own "validation → [`FieldError`][glossary-fielderror-envelope] envelope, not
    `GraphQLError`" contract ([Error shapes](#error-shapes)). So the resolver wraps the
-   `save_or_field_errors(_do_save)` call to **also catch a save-time `ValidationError`**
-   and route its `.detail` — the **same** nested structure as `serializer.errors` — through
-   the **same** `serializer_errors_to_field_errors` flattener, returning the null-object
-   envelope. The split is explicit and by exception type: a **`ValidationError`**
-   (validation, expected, possibly raised from a custom `create()` / `update()`) → the
-   recursive flattener; an **`IntegrityError`** (a concurrent-uniqueness race / residual
-   db constraint) → the `036` `save_or_field_errors` mapper. Both stay inside the one
-   `transaction.atomic()`; neither becomes a top-level error.
+   `save_or_field_errors(_do_save)` call and routes by **exception class** — they are
+   **not** one branch:
+   - **DRF `ValidationError`** (`rest_framework.exceptions.ValidationError` /
+     `serializers.ValidationError`): route its `.detail` through the **recursive**
+     `serializer_errors_to_field_errors` flattener (the same nested structure
+     `serializer.errors` produces).
+   - **Django `ValidationError`** (`django.core.exceptions.ValidationError`): route through
+     the flat `036` [`mutations/resolvers.py`][mutations-resolvers]`::validation_error_to_field_errors`,
+     which already reads Django's `error_dict` / `messages` shape (verified — it does **not**
+     read `.detail`); pushing a Django error through the DRF `.detail` path would
+     `AttributeError` or silently lose structure.
+   - **`IntegrityError`** (a concurrent-uniqueness race / residual db constraint): the `036`
+     `save_or_field_errors` mapper.
+
+   The two `ValidationError` classes are caught **separately** (DRF's first, since both
+   subclass `Exception` but neither subclasses the other) so a Django error never reaches
+   the `.detail` path and a DRF error never reaches the flat mapper. All three stay inside
+   the one `transaction.atomic()`; none becomes a top-level error. (The non-field bucket
+   maps to `"__all__"` in **both** flatteners via the shared `NON_FIELD_ERROR_KEY`, so the
+   envelope key convention is uniform regardless of which path fired.)
 7. **Re-fetch** the saved object (by `saved.pk`) + optimizer-plan
    ([Decision 9](#decision-9--optimizer-composition-the-modelserializer-payload-re-fetch-rides-the-spec-036-g2-path)),
    and **return** the `<Name>Payload` (`node` / `result`).
@@ -1877,6 +2168,25 @@ would hit. The flattener is the serializer-flavor analog of the model/form
 `validation_error_to_field_errors`, but recursive; both terminate in the same frozen
 envelope.
 
+**Error field names are keyed to the GraphQL input path, not the serializer path.**
+`serializer.errors` keys are **serializer field names** (`category`, `name`), but a
+client submitted **GraphQL input names** (`categoryId`, `fullName`). The flattener maps
+each leaf path's **root segment back through the reverse map** to the GraphQL input name
+when that serializer field has a generated input field — so a validation error on
+`category` is reported as `FieldError(field="categoryId")` and a renamed `name`
+(`source`-renamed `fullName`) as `FieldError(field="fullName")`, **aligning the envelope
+with the relation-decode errors of step 3** (which already key by the submitted input
+name) and with what the client can act on. The `"__all__"` non-field sentinel is
+preserved as-is (it has no input field). **If an error references a serializer field with
+no input field in the surface** — a field the serializer still validates but the mutation
+did not expose (narrowed out, or read-only-but-still-validated) — the **serializer field
+name is kept**, because there is no GraphQL input path to report; this is the one case the
+envelope key is a serializer name. Nested sub-paths below the root segment (a `ListField`
+index, a `JSONField` key) keep DRF's structure — they have no separate input identity. The
+choice is locked by a **live renamed-field error test** ([Test plan](#test-plan)), not only
+a plain `name` error, so decode errors, validation errors, and renamed-field errors all
+agree on the key space.
+
 **`update` is DRF-native partial, not a reconstruction (the divergence from `038`).**
 Where the `038` form flavor reconstructs the full bound payload from the located
 instance (a bound Django form re-validates the whole field set), a DRF serializer with
@@ -1905,6 +2215,35 @@ Alternatives considered (and rejected):
   (not request-scoped), so a hidden target would be writable — the package's
   relation-visibility invariant (the `036` / `038` contract) requires the decode-time
   `get_queryset` check.
+
+**Cross-flavor reuse ([DRY obligations](#cross-flavor-reuse-and-dry-obligations)).** This
+pipeline carries the package's load-bearing **security ordering** (authorize → decode), so
+its DRY promotions matter most. The whole **sync orchestration** — the
+`transaction.atomic()` boundary, the create-vs-update branch, the `coerce_lookup_id →
+locate_instance → not_found_error → authorize_or_raise` preamble, and the
+`refetch_optimized → build_payload` tail — rides the promoted
+`run_write_pipeline_sync(...)` skeleton, **scoped to the model-backed create/update
+flavors only** (model `DjangoMutation` create/update, `DjangoModelFormMutation`, and this
+serializer flavor) — **not** a universal write skeleton. `delete` (no `data`, no relation
+decode, snapshot-before-delete payload) and the **model-less plain form** (no instance, no
+primary type, no optimizer re-fetch) are **excluded**; folding them in would make the
+skeleton a leaky generic framework instead of a small create/update helper. The callback
+contract is precise: the skeleton owns atomicity, locate, the not-found payload,
+**authorization before `decode_step`**, the optimizer re-fetch, and payload construction;
+each flavor supplies only `decode_step(ctx) -> decoded data | list[FieldError]` and
+`write_step(ctx, decoded) -> saved instance | list[FieldError]` (the serializer's
+`write_step` is construct / `is_valid()` / `save()`). The **authorize-before-decode
+invariant is single-sited** across the three model-backed flavors rather than hand-copied
+a third time, and the existing model + model-form behavior must stay **byte-equivalent
+under their current tests** before serializer code lands (**P1.5**, **F6**). The relation
+decoder re-keys over the
+promoted `_visible_related_object` (in [`utils/querysets.py`][utils-querysets]) instead of
+forking a third object-returning, field-keyed decoder (**P1.1**). And the recursive
+`serializer_errors_to_field_errors` flattener — legitimately new — imports the shared
+`mutations/inputs.py::NON_FIELD_ERROR_KEY` sentinel (and, ideally, a promoted
+`field_error(path, messages)` leaf ctor both flatteners call), so the DRF
+`non_field_errors` → `"__all__"` convention cannot drift between the flat `036` mapper and
+this recursive one (**P2.4**, step 5).
 
 ### Decision 9 — Optimizer composition: the `ModelSerializer` payload re-fetch rides the `spec-036` G2 path
 
@@ -1963,6 +2302,15 @@ they must (i) add an `operation` key and (ii) split that one mutation into two. 
 friction, and the `model_operations`-alias affordance that would soften it, are owned by
 the [Risks](#risks-and-open-questions) `model_operations` item.
 
+**Cross-flavor reuse ([DRY obligations](#cross-flavor-reuse-and-dry-obligations)).** The
+`{create, update}` set the serializer `_validate_meta` checks against is **byte-identical**
+to `forms/sets.py::_VALID_FORM_OPERATIONS` (both being "a validating write flavor that does
+not delete"), and `mutations/sets.py::_VALID_OPERATIONS` is the `{create, update, delete}`
+superset. The serializer must **not** define a `_VALID_SERIALIZER_OPERATIONS`: a single
+`NON_DELETE_WRITE_OPERATIONS` constant is promoted (to [`mutations/sets.py`][mutations-sets])
+and **both** the form and serializer `_validate_meta` overrides import it, so the rule and
+the "no serializer/form delete" message single-site (**P1.2**).
+
 Justification: `create` / `update` are the operations a serializer expresses; `delete`
 has no serializer step; one-mutation-per-operation is the package's settled shape (the
 `036` / `038` precedent).
@@ -2019,15 +2367,31 @@ a root-level `__getattr__`** (PEP 562). The exact, pinned behavior:
 | `import django_strawberry_framework` | **Always succeeds** — DRF absent or present. The root never eagerly imports `rest_framework/`. |
 | `from django_strawberry_framework import SerializerMutation` | Triggers the root `__getattr__("SerializerMutation")`, which imports `rest_framework.sets`. DRF present → the class; **DRF absent → `ImportError` with the install hint**. |
 | `import django_strawberry_framework.rest_framework` (or any submodule) | The `rest_framework/__init__.py` guard runs `require_drf()` first — DRF absent → `ImportError` with the hint. |
-| `from django_strawberry_framework import *` | `SerializerMutation` **is** in `__all__` (so the name is documented / discoverable), but a `*`-import only binds names the module can resolve; with DRF absent, resolving `SerializerMutation` via `__getattr__` raises the same actionable `ImportError` rather than silently dropping it. |
+| `from django_strawberry_framework import *` | **Always succeeds and omits `SerializerMutation`** — the name is **not** in `__all__` while DRF is soft, so a star import never resolves it through `__getattr__` and never trips the DRF guard. A DRF-absent consumer who does `import *` today keeps working unchanged (no breaking regression). |
 
 One shared **`require_drf()`** helper (in `rest_framework/__init__.py`) owns the single
 install-hint message and is the one place every `rest_framework/` module and the root
 `__getattr__` route the guard through (no duplicated try/except message strings) — the
 [`types/converters.py`][types-converters] soft-import precedent (`_resolve_array_field`
 / `_resolve_hstore_field`, which return `None` on `ImportError`) generalized to a
-*raising* guard with an actionable message. `SerializerMutation` stays in the root
-`__all__` (the `0.0.14` `channels` / `debug_toolbar` soft-dep posture).
+*raising* guard with an actionable message.
+
+**`SerializerMutation` is a public lazy export but is NOT added to `__all__` while DRF is
+a soft dependency (F1).** Star import (`from … import *`) consults `__all__` and accesses
+each listed name — so a name in `__all__` that only resolves through a DRF-guarded
+`__getattr__` would make `from django_strawberry_framework import *` **raise `ImportError`
+for a DRF-absent consumer who never touches serializers** (verified: Python binds every
+`__all__` name via `__getattr__`, and the root has no lazy-`__all__` precedent today — all
+current `__all__` names are eagerly bound). That is a breaking regression against the very
+soft-dep promise ("a consumer who never writes a serializer mutation never needs DRF"), so
+`SerializerMutation` stays **out of `__all__`**: the **named** import
+(`from django_strawberry_framework import SerializerMutation`) still works through the root
+`__getattr__` — named imports do not consult `__all__` — and `SerializerMutation` is
+documented as a public lazy export in the GLOSSARY. (If DRF ever becomes a hard dependency,
+it joins `__all__` then; until then, star-import membership is the one thing that would
+re-break the soft-dep contract.) This reverses the earlier draft's "stays in `__all__`"
+choice, which assumed a `0.0.14` `channels` / `debug_toolbar` hard-dep posture that does
+not hold while DRF is soft.
 
 **The root `__getattr__` does not memoize.** It must **not** bind the resolved
 `SerializerMutation` into the root module's globals (no
@@ -2053,18 +2417,21 @@ but added to the dev group so the suite covers the image path):
 
 1. **DRF stays out of `[project].dependencies`** — it remains a soft runtime dep. A
    consumer who never writes a serializer mutation never needs DRF.
-2. **`djangorestframework` is added to `[dependency-groups].dev`** (Slice 4) so the
-   test environment has it; the suite exercises every `rest_framework/` branch and the
-   live products serializer surface, meeting `fail_under = 100`. **The dev-group floor
-   must clear the CI matrix under `-W error`:** [`django.yml`][django-workflow] runs
-   Django 5.2.0 → 6.0.\* → `latest` on Python 3.10 → 3.14 and [`pytest.ini`][pytest-ini]
-   sets `filterwarnings = error`, so the pinned DRF release must **import and run
-   warning-free** on (Python 3.14, Django 6.0 / `latest`) — DRF's Django support lags
-   Django releases, so confirm such a release exists before pinning, and budget a
-   targeted DRF-origin `ignore::` line (sanctioned by [`pytest.ini`][pytest-ini]'s own
-   third-party comment) for any deprecation that release still emits. This is the
-   pre-Slice-1 floor check in [Risks](#risks-and-open-questions), not an
-   implementation-time discovery.
+2. **`djangorestframework` is added to `[dependency-groups].dev`** in the
+   **pre-Slice-1 dependency gate (Slice 0), not Slice 4** (**F11**) — because the Slice 1–3
+   package tests and the live products surface all import DRF, the dev-dep and its verified
+   floor must exist *before* Slice 1 code lands, or Slice 1 is blocked late by dependency
+   support rather than design. The test environment then has it; the suite exercises every
+   `rest_framework/` branch and the live products serializer surface, meeting
+   `fail_under = 100`. **The dev-group floor must clear the CI matrix under `-W error`:**
+   [`django.yml`][django-workflow] runs Django 5.2.0 → 6.0.\* → `latest` on Python
+   3.10 → 3.14 and [`pytest.ini`][pytest-ini] sets `filterwarnings = error`, so the pinned
+   DRF release must **import and run warning-free** on (Python 3.14, Django 6.0 / `latest`)
+   — DRF's Django support lags Django releases, so confirm such a release exists before
+   pinning, and add any **targeted DRF-origin `ignore::` line** (sanctioned by
+   [`pytest.ini`][pytest-ini]'s own third-party comment) **in the same gate**, before code
+   imports DRF in tests. This is the pre-Slice-1 floor check in
+   [Risks](#risks-and-open-questions), not an implementation-time discovery.
 3. **The DRF-absent import-guard path is covered by simulated absence** — a package
    test forces the `ImportError` branch (monkeypatching `builtins.__import__` so the
    guarded `import rest_framework` fails) and asserts the install-hint message on **all
@@ -2172,22 +2539,29 @@ No slice in this card edits the **package-version state**: `[project].version` i
 ([Auth mutations][glossary-auth-mutations]); the version bump from `0.0.12` to `0.0.13`
 is owned by the **joint `0.0.13` cut**, not by either individual card — the same posture
 [`spec-036`][spec-036] Decision 13 took for the joint `0.0.11` cut it shared with
-[`spec-037`][spec-037]. (The Slice 4 doc edits do move feature-status text — the
-[`docs/GLOSSARY.md`][glossary] `SerializerMutation` entry to `shipped (0.0.13)` — but
-the version line and the version files stay at `0.0.12` until the joint cut.)
+[`spec-037`][spec-037]. **Release-status wording is split from implementation docs
+(F8):** Slice 4 updates **implemented-on-main** docs ([`docs/TREE.md`][tree],
+[`TODAY.md`][today], and the [`docs/GLOSSARY.md`][glossary] body to the implemented
+contract) but the **public "shipped (0.0.13)" status, the README "Shipped today" prose,
+and the release changelog defer to the joint cut** — otherwise the repo would advertise a
+released `0.0.13` feature while `[project].version` / `__version__` / `test_version` still
+report `0.0.12`. The version line and the version files stay at `0.0.12` until the joint
+cut. (The [`GOAL.md`][goal] crit-6 example correction lands in this card regardless — the
+current example is wrong the moment the code lands.)
 
 **`uv.lock` is NOT a version file — it is updated in this card, deliberately.** The
-repository commits a `uv.lock` (verified, `git`-tracked), and Slice 4 adds
-`djangorestframework` to `[dependency-groups].dev`
+repository commits a `uv.lock` (verified, `git`-tracked), and the **pre-Slice-1 dependency
+gate (Slice 0, F11)** adds `djangorestframework` to `[dependency-groups].dev`
 ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)).
 Changing a dev dependency **without** regenerating the lockfile leaves the declared and
 locked environments out of sync, so the clean cut is to **edit `pyproject.toml` and
-regenerate `uv.lock` together** in Slice 4 (`uv lock` after the dev-group add). The
-distinction the version policy must keep is: the **DRF dependency entries** in `uv.lock`
-*do* change here; the **package's own version** — `[project].version` *and* the
-`[[package]] name = "django-strawberry-framework"` `version` entry inside `uv.lock` —
-stays `0.0.12` until the joint cut. (An earlier draft lumped `uv.lock` with the version
-files, which contradicted the Slice 4 dev-group add; this reconciliation resolves it.)
+regenerate `uv.lock` together** in that gate (`uv lock` after the dev-group add) — before
+Slice 1 imports DRF in tests. The distinction the version policy must keep is: the **DRF
+dependency entries** in `uv.lock` *do* change here; the **package's own version** —
+`[project].version` *and* the `[[package]] name = "django-strawberry-framework"` `version`
+entry inside `uv.lock` — stays `0.0.12` until the joint cut. (An earlier draft lumped
+`uv.lock` with the version files, which contradicted the dev-group add; this reconciliation
+resolves it.)
 
 Justification: per [`docs/SPECS/NEXT.md`][next] Step 3 / Step 6, when multiple cards
 target one patch version the bump belongs to the joint cut, not any individual card's
@@ -2199,28 +2573,241 @@ Alternatives considered (and rejected):
   `0.0.13`; a per-card bump races the joint cut and would have to be reconciled when
   the sibling lands.
 
+## Cross-flavor reuse and DRY obligations
+
+The spec is **already reuse-first by design** — it routes the resolver pipeline through
+the `036` promoted helpers by call, reuses the `038`-generalized
+[`DjangoMutationField`][glossary-djangomutationfield], and builds inputs through
+[`utils/inputs.py`][utils-inputs]'s `build_strawberry_input_class` /
+`materialize_generated_input_class`. That reuse is good and is not re-litigated here.
+
+The residual DRY risk is narrower and concrete: a **handful of places where
+[`forms/`][forms-sets] ALREADY re-implemented a [`mutations/`][mutations-sets] helper
+rather than sharing it** — so the serializer flavor is on track to be the **third**
+divergent copy. The package's own source carries the receipts: [`forms/sets.py`][forms-sets]
+comments its shape cache a *"twin of"* `mutations/sets.py::_shape_build_cache`,
+[`forms/resolvers.py`][forms-resolvers]'s `_visible_related_object` exists because the
+`036` `_relation_visibility_error` *"does not return"* the object, and
+[`registry.py`][registry]'s clear block documents a *"same two-block shape"* mirrored per
+flavor. Each is a chance to **promote to a shared site now**, while the second consumer
+([`forms/`][forms-sets]) and the third ([`rest_framework/`][rf-sets]) are both in view —
+the cheapest moment to single-site. The promotion targets below are the spec's binding
+implementation obligations; each is pinned into its Decision and its Slice DoD line, and
+the per-module import manifest at the end is the DoD-checkable "DRY contract."
+
+Reuse claims here were verified against the source first; corrections to the originating
+review are folded in (the form bases normalize their field sequence through
+`forms/sets.py::_resolve_effective_form_field_names`, **not** `_normalize_field_sequence`,
+so the serializer follows the *model* flavor's `_normalize_field_sequence` precedent for
+that piece (**P2.5** / **P2.7**); no `field_error(...)` constructor exists yet — `FieldError`
+is a `@strawberry.type` built directly, so **P2.4** is a *promotion proposal*, with the
+already-shared `mutations/inputs.py::NON_FIELD_ERROR_KEY` sentinel the hard reuse;
+`forms/sets.py::_form_kwargs_overridden` already exists as the helper **P2.6** generalizes;
+and no `register_subsystem_clear` seam exists today — both clear lists in **P1.6** are
+hand-maintained, confirmed).
+
+### Confirmed reuse — lock as import obligations
+
+These the spec already states in prose. A prose "reuses the `036` helper" does not stop an
+implementer quietly re-spelling it, so each becomes a Slice DoD line of the form
+**"imported from `<module>`, not re-implemented"** (ideally backed by a one-line import /
+identity guard that the symbol is imported and not redefined under `rest_framework/`):
+
+- **By call from [`mutations/resolvers.py`][mutations-resolvers]** (Decision 8):
+  `locate_instance`, `coerce_lookup_id`, `authorize_or_raise`, `refetch_optimized`,
+  `build_payload`, `not_found_error`, `save_or_field_errors`, `payload_cls_for`,
+  `run_pipeline_async`, `_coerce_relation_pk_or_none`, `raw_choice_value`.
+- **By call from [`utils/`][utils-permissions]:**
+  `utils/permissions.py::request_from_info(info, family_label="SerializerMutation")`
+  (already accepts a family label — no edit), `utils/inputs.py::build_strawberry_input_class`
+  + `materialize_generated_input_class`.
+- **Conceptual contracts reused:** the [`FieldError`][glossary-fielderror-envelope]
+  envelope + the `mutations/inputs.py::NON_FIELD_ERROR_KEY` (`"__all__"`) sentinel, the
+  `<Name>Payload` `node` / `result` slot (`payload_object_slot` / `build_payload_type`),
+  the `_resolve_model` / `_validate_meta` / `build_input` / `input_type_name` /
+  `input_module_path` / `resolve_sync` / `resolve_async` seams, `bind_mutations()`, and the
+  [`DjangoModelPermission`][glossary-djangomodelpermission] write-auth seam.
+- **The `038`-generalized field factory:**
+  [`mutations/fields.py`][mutations-fields]'s [`DjangoMutationField`][glossary-djangomutationfield]
+  is duck-typed (`_has_mutation_protocol`), so the serializer base passes with **no factory
+  edit** (Decision 5).
+- **No bespoke declaration registry / factory call.** `mutations/sets.py::make_declaration_registry`
+  is a **shared factory** the model path itself instantiates (the model-less plain
+  `DjangoFormMutation` instantiates the same factory over a second disjoint store), and a
+  `DjangoMutation`-subclass serializer rides `register_mutation` / `bind_mutations()` — so
+  there is **no** `register_serializer_mutation` / `bind_serializer_mutations` to add
+  (Decision 6). A plain model-less serializer flavor (the only case that would want its own
+  store) is out of scope.
+
+### Promotions to single-site now (P1 — third-copy forks)
+
+| # | Duplicated today (`mutations/` ↔ `forms/`) | Promote to | Serializer obligation | Pin |
+| --- | --- | --- | --- | --- |
+| **P1.1** | The relation-decode core: `mutations/resolvers.py::_decode_relation_id_set` (+ `_relation_membership_error` / `_relation_visibility_error` / `_raw_pk_relation_error` / `_relation_existence_error`) returns *errors*; [`forms/resolvers.py`][forms-resolvers] rolled its own object-returning, field-keyed `_visible_related_object` / `_decode_form_relation_single` / `_decode_form_relation_multi` because the `036` helper *"does not return"* the object | `_visible_related_object(related_model, pk, info) -> obj \| None` to [`utils/querysets.py`][utils-querysets] (beside `visibility_scoped_related_queryset`, whose composition it already uses); better, the whole one-id *decode-or-coerce → visible-object → no-leak `FieldError`* shape into a shared core taking a small per-flavor descriptor | Re-key the serializer relation decoder over the promoted `_visible_related_object`; do **not** re-implement the visibility / membership check (third copy avoided) | [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) + Slice 3 resolver checklist |
+| **P1.2** | `forms/sets.py::_VALID_FORM_OPERATIONS = {"create", "update"}` is byte-identical to the serializer need; `mutations/sets.py::_VALID_OPERATIONS` is the `{create, update, delete}` superset | A single `NON_DELETE_WRITE_OPERATIONS` constant (to [`mutations/sets.py`][mutations-sets]) both the form and serializer `_validate_meta` import | Import `NON_DELETE_WRITE_OPERATIONS`; do **not** define a `_VALID_SERIALIZER_OPERATIONS`; the "no serializer/form delete" message single-sites too | [Decision 10](#decision-10--operations-create--update-no-serializer-delete) + Slice 2 `_validate_meta` |
+| **P1.3** | The per-declaration shape-build cache: `mutations/sets.py::_shape_build_cache` and `forms/sets.py::_form_shape_build_cache` (commented *"twin of"*) + `clear_form_shape_build_cache` | A `make_shape_build_cache()` helper returning the module-level dict + a registered `clear()` wired into the finalizer's pre-bind reset | The `SerializerInputShape` descriptor identity stays legitimately new; only the cache **+ clear plumbing** is shared — do not hand-mirror a third dict + clear | [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) + Slice 2 finalizer-reset checklist |
+| **P1.4** | The fail-loud converter dispatch skeleton: [`forms/converter.py`][forms-converter]'s `convert_form_field` (isinstance pre-checks → `type(field).__mro__` walk over `_SCALAR_FORM_FIELDS` → exact-base-`Field` case → raising `ConfigurationError` fallthrough) imports **nothing** from `utils/` — a free-standing skeleton | A shared dispatch skeleton — `(field, isinstance_prechecks, scalar_registry, fallthrough_error_factory) → conversion` — to a new `utils/converters.py`; the unified conversion / field-spec dataclass (**P2.1**) rides with it | `convert_serializer_field` supplies only its precheck table + scalar registry; the **GOAL-mandated fail-loud contract** (no silent `String` catch-all) is single-sited and cannot drift between the two converters | [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) (converter) + [Decision 4](#decision-4--module-and-test-locations-rest_framework-subpackage-mirroring-forms) (skeleton home) + Slice 1 |
+| **P1.5** | The **sync write-pipeline orchestration**: `mutations/resolvers.py::_run_pipeline_sync` → `_run_create` / `_run_update` (one `transaction.atomic()`; tail partly factored as `_validate_save_assign_refetch_payload`) is re-spelled by `forms/resolvers.py::_run_modelform_pipeline_sync` (model-backed) — each re-writing the atomic block + the `coerce_lookup_id → locate_instance → not_found_error` preamble + the **authorize-before-decode** ordering | `run_write_pipeline_sync(...)` to [`mutations/resolvers.py`][mutations-resolvers], **scoped to model-backed create/update only** — owning atomicity, the create-vs-update branch, the locate→authorize preamble, **authorization before `decode_step`**, and the `refetch_optimized → build_payload` tail; extend `_validate_save_assign_refetch_payload` into the full preamble+tail. **Exclude `delete`** (no data / no decode / snapshot payload) **and the model-less plain form** (no instance / no primary type / no re-fetch) — not a universal skeleton (**F6**) | The serializer supplies only `decode_step(ctx) -> decoded \| list[FieldError]` and `write_step(ctx, decoded) -> saved \| list[FieldError]` (construct / `is_valid()` / `save()`); it does **not** re-spell the atomic block or the **authorize-before-decode security ordering** — the audit's single highest-value promotion (a security invariant, not just a shape). The existing model + model-form behavior must stay **byte-equivalent under their current tests** before serializer code lands | [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) + Slice 3 resolver checklist |
+| **P1.6** | Two hand-maintained ledger-clear lists with no registration seam: the [`finalize_django_types`][types-finalizer] pre-bind reset (direct, unconditional `clear_mutation_input_namespace()` + `clear_form_input_namespace()` before `bind_mutations()`) **and** `registry.py::TypeRegistry.clear()`'s `_clear_if_importable` co-clear rows (incl. the form shape cache; the block's own comment notes a *"same two-block shape"* mirrored per flavor) | A `register_subsystem_clear(module_path, attr)` seam feeding **one** canonical list that **both** the finalizer pre-bind reset and `registry.clear()` iterate via `_clear_if_importable` (import-guarded by construction) | The serializer's `clear_serializer_input_namespace` is registered as a **static `(module_path, attr)` row** (resolved lazily by `_clear_if_importable` — no DRF import at registration, so the import-timing edge is a non-issue, **F10**) instead of being hand-added to both lists — and because every entry routes through `_clear_if_importable`, the soft-dep import-guarded **asymmetry vanishes**, collapsing the spec's whole Decision-6 / Slice-2 "import-guarded clear" caveat to a one-line registration. Invariant: a subsystem with clearable state has by definition been imported + registered | [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) + Slice 2 finalizer-reset checklist |
+| **P1.7** | The `build_input` build/stash/name seam **implementation cluster**: the model does it inline (`DjangoMutation.build_input` → `_materialize_input_for`; `input_type_name`); [`forms/sets.py`][forms-sets] grew a private mirror — `_cached_build_form_input` (per-shape dedupe + the load-bearing **guard-before-cache-lookup** ordering), `_build_and_stash_form_input` (materialize-then-stash `_input_field_specs`), `_form_input_type_name_for`, `_modelform_operation_kind` | `cached_build_input(shape_key, *, guard, build_fn) -> (input_cls, field_specs)` (owns the per-pass lookup + the **guard-before-lookup** ordering) + `build_and_stash_input(cls, *, build, materialize)` to [`mutations/sets.py`][mutations-sets] (or a new `mutations/bind_helpers.py`) | The serializer supplies only its generator, materialize fn, and shape descriptor; it does **not** spell `_cached_build_serializer_input` / `_build_and_stash_serializer_input` byte-parallel to the form trio. (Layering: **P1.3** is the cache *dict*, **P2.1** the spec *shape*, **P1.7** the build *procedure* — promoting all three is what stops `rest_framework/sets.py` being a line-for-line `forms/sets.py`) | [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) / [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) + Slice 2 `sets.py` checklist |
+
+### Single-siting that prevents drift (P2)
+
+- **P2.1 — unify the field-spec / conversion types.** `utils/inputs.py::GeneratedInputFieldSpec`
+  (`@dataclass`), `forms/converter.py::FormInputFieldSpec` (`@dataclass`) +
+  `FormFieldConversion` (a `__slots__` class, **not** a dataclass), and the planned
+  serializer reverse-map are the same idea with flavor-specific extra axes (the serializer's
+  is "the `038` `FormInputFieldSpec` analog **plus the `source` axis**"). Define **one**
+  generic `InputFieldSpec` in [`utils/inputs.py`][utils-inputs] (shared core +
+  optional `source`), or subclass `FormInputFieldSpec`; at minimum **site the serializer
+  spec in `utils/inputs.py`** so all three live in one module. Unify the conversion result
+  (`annotation` + `kind` + `required`) into one shared shape too. ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth).)
+- **P2.2 — the input-namespace clear is a third one-ledger lifecycle.** The four-part
+  per-flavor lifecycle (module-path const + `_materialized_names` ledger +
+  `materialize_*_input_class` wrapper + `clear_*_input_namespace`) is hand-mirrored across
+  [`mutations/inputs.py`][mutations-inputs] and [`forms/inputs.py`][forms-inputs]. Promote
+  `make_input_namespace(module_path, family_label) -> (ledger, materialize_fn, clear_fn)` to
+  [`utils/inputs.py`][utils-inputs]. **The serializer clear is the one-ledger
+  `_materialized_names.clear()` (the form / mutation shape), NOT the heavier
+  `utils/inputs.py::clear_generated_input_namespace`** (which also resets factory caches +
+  per-subclass binding state the filter / order families have and the
+  mutation / form / serializer flavors do not) — state this so an implementer does not reach
+  for the wrong helper. ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) / Slice 2.)
+- **P2.3 — reuse `_pascalize_token`.** The descriptor-derived names for narrowed / divergent
+  shapes reuse the injective single-token encoder `mutations/inputs.py::_pascalize_token`
+  (which `forms/inputs.py::form_input_type_name` already imports), not a third suffix
+  encoder; the canonical `<Serializer>Input` / `<Serializer>PartialInput` names need no
+  helper. ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth).)
+- **P2.4 — share the error-flattener leaf primitive.** `serializer_errors_to_field_errors`
+  is legitimately new (recursive — the flat `036`
+  `mutations/resolvers.py::validation_error_to_field_errors` cannot walk DRF's nested tree).
+  But its **base case** — construct a `FieldError(field=<path>, messages=[...])` and map
+  DRF's `non_field_errors` bucket to the package's `"__all__"` sentinel — is the convention
+  the `036` mapper already encodes (`NON_FIELD_ERRORS` → `mutations/inputs.py::NON_FIELD_ERROR_KEY`).
+  The hard reuse is **importing that shared `NON_FIELD_ERROR_KEY`** (no re-spelling
+  `"__all__"`); the optional promotion is a small `field_error(path, messages)` leaf ctor
+  (no such ctor exists yet — `FieldError` is built directly) that **both** the flat and
+  recursive flatteners call so the sentinel convention cannot drift.
+  ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) step 5.)
+- **P2.5 — `_validate_meta` reuses the base sub-validators.** Call
+  `mutations/sets.py::_validate_permission_classes`, the non-delete ops check against the
+  shared **P1.2** set, and the field-sequence normalize, then return a
+  `_ValidatedMutationMeta` — do not re-spell the typo-guard / mutual-exclusion logic. The
+  serializer follows the **model** flavor's `mutations/sets.py::_normalize_field_sequence`
+  precedent for field-sequence normalization (the form bases route theirs through the
+  Slice-1 `forms/sets.py::_resolve_effective_form_field_names` machinery instead). The
+  serializer's only genuinely-new validation is `serializer_class`
+  is-a-`ModelSerializer` (+ resolvable `Meta.model`) and `Meta.optional_fields`
+  normalization. ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) / Slice 2.)
+- **P2.6 — share the override-detection helper.** `get_serializer_kwargs` / `get_serializer`
+  default bodies and the override-detection that waives the create-required guard parallel
+  `forms/sets.py::_default_get_form_kwargs` / `_default_get_form` + the existing
+  `_form_kwargs_overridden`. The bodies differ (the serializer injects
+  `context={"request": …}`), but the **override-detection** is generic: **generalize the
+  existing `_form_kwargs_overridden` into a shared `_hook_overridden(cls, base, name)`**
+  identity check the serializer's `get_serializer_kwargs` waiver reuses rather than
+  re-deriving `cls.<name> is base.<name>`. ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) guard-waiver / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload).)
+- **P2.7 — promote the `Meta` typo-guard, do not add a third normalize wrapper.** Every
+  `_validate_meta` computes `unknown = sorted(declared - _ALLOWED_<FLAVOR>_META_KEYS)` and
+  raises (`mutations/sets.py::_ALLOWED_MUTATION_META_KEYS`, and both form bases). Promote
+  `reject_unknown_meta_keys(name, meta, allowed)` to [`mutations/sets.py`][mutations-sets],
+  called by every `_validate_meta` with its own frozenset (the serializer's
+  `_ALLOWED_SERIALIZER_META_KEYS` **adds** `serializer_class` / `optional_fields`, **drops**
+  `model` / `input_class` / `partial_input_class`). And the serializer calls
+  `utils/inputs.py::normalize_field_name_sequence(..., flavor="SerializerMutation")`
+  **directly** (the required keyword-only `flavor` arg exists for exactly this) rather than
+  add a third thin re-binding wrapper alongside `mutations/sets.py::_normalize_field_sequence`
+  and `forms/inputs.py::normalize_form_field_sequence`. ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) / Slice 2; companion to P2.5.)
+
+### Small reuses to pin; deliberately not applicable (P3)
+
+Pin as named import obligations (Slice DoD lines): `utils/inputs.py::graphql_camel_name`
+(the `categoryId` alias naming — do not hand-roll camel-casing);
+`utils/inputs.py::normalize_field_name_sequence(flavor="SerializerMutation")`;
+`utils/permissions.py::request_from_info(family_label="SerializerMutation")`;
+`utils/relations.py::{relation_kind, is_forward_many_to_many, is_many_side_relation_kind}`
+(for the **backing** model-relation read the converter does via `source`, not re-derived
+from DRF's `many` / `source` flags); the
+`utils/querysets.py::{model_for, initial_queryset, apply_type_visibility_sync,
+apply_type_visibility_async, visibility_scoped_related_queryset, reject_async_in_sync_context}`
+locate + relation-visibility + async-guard substrate (a re-spell here is a data-leak risk,
+not just a DRY nit); and the read-side
+[`types/converters.py`][types-converters]`::{convert_scalar, scalar_for_field, convert_choices_to_enum}`
+keyed on the backing `models.Field` via `source` (Decision 7).
+
+**Deliberately NOT applicable** — stated so a future reader does not hunt for a phantom
+reuse:
+
+- **`utils/connections.py`** (`derive_connection_window_bounds`,
+  `CONNECTION_SIDECAR_KWARGS`, …) — read-side pagination windowing. The serializer
+  payload's `node` is a single re-fetched object, not a connection.
+- **`utils/input_values.py`** (`iter_active_fields`, `SetInputTraversal`, `ActiveField`, …)
+  and the active-input permission walkers in [`utils/permissions.py`][utils-permissions]
+  (`active_permission_field_paths`, `run_active_input_permission_checks`, …) — the
+  FilterSet / OrderSet set-input traversal substrate. The serializer write path has no
+  set-input dataclass traversal and no per-field `check_<field>_permission` walk (its
+  authorization is the inherited [`DjangoModelPermission`][glossary-djangomodelpermission]
+  row gate). `request_from_info` is the **only** member of `utils/permissions.py` the
+  serializer flavor consumes.
+- **`utils/typing.py`** — `is_async_callable` is unneeded (async dispatch is owned by
+  [`DjangoMutationField`][glossary-djangomutationfield]'s `in_async_context()` check, not
+  the serializer base); `unwrap_return_type` / `unwrap_graphql_type` apply only to a
+  consumer `input_class` override, which is out of scope for `0.0.13`
+  ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)).
+- **`utils/strings.py`** (`snake_case` / `pascal_case`) — the GraphQL↔Django input-name
+  boundary is `graphql_camel_name`; `snake_case` is an optimizer-walk helper, not a
+  serializer-input reuse (do not conflate it with `graphql_camel_name`).
+
+### Import manifest — the DRY contract per `rest_framework/` module
+
+The DoD-checkable summary. Each module's allowed imports; anything outside this list that
+duplicates a listed symbol's logic is a finding:
+
+| `rest_framework/` module | Imports (do **not** re-implement) |
+| --- | --- |
+| [`serializer_converter.py`][rf-converter] | the shared dispatch skeleton (**P1.4**), the unified conversion / field-spec dataclass (**P2.1**), `utils/inputs.py::graphql_camel_name`, `utils/relations.py::{relation_kind, is_forward_many_to_many, is_many_side_relation_kind}`, the [`Upload`][glossary-upload-scalar] scalar, the read-side `types/converters.py::{convert_scalar, scalar_for_field, convert_choices_to_enum}`, `exceptions.ConfigurationError` |
+| [`inputs.py`][rf-inputs] | `utils/inputs.py::{build_strawberry_input_class, materialize_generated_input_class, normalize_field_name_sequence, graphql_camel_name}`, the shared input-namespace trio (**P2.2**), the shared shape-build cache (**P1.3**), the shared build/stash core (**P1.7**), `mutations/inputs.py::{_pascalize_token, build_payload_type, payload_object_slot, relation_input_annotation}` |
+| [`sets.py`][rf-sets] | `mutations/sets.py::{DjangoMutation, _validate_permission_classes, _normalize_field_sequence, _ValidatedMutationMeta, register_mutation}`, the shared non-delete ops constant (**P1.2**), `reject_unknown_meta_keys` (**P2.7**), `mutations/inputs.py::{CREATE, PARTIAL}`, the `_hook_overridden` helper (**P2.6**) |
+| [`resolvers.py`][rf-resolvers] | `mutations/resolvers.py::{locate_instance, coerce_lookup_id, authorize_or_raise, refetch_optimized, build_payload, not_found_error, save_or_field_errors, payload_cls_for, run_pipeline_async, _coerce_relation_pk_or_none, raw_choice_value}`, the promoted `_visible_related_object` (**P1.1**), the promoted sync-pipeline skeleton (**P1.5**), `utils/querysets.py::{visibility_scoped_related_queryset, apply_type_visibility_async}`, `utils/permissions.py::request_from_info`, the shared leaf-error sentinel / ctor (**P2.4**) |
+| [`__init__.py`][rf-init] | `require_drf()` guard only (Decision 12) |
+
+**Cross-module (not `rest_framework/`):** **P1.6** touches [`types/finalizer.py`][types-finalizer]
+(the pre-bind reset block) and [`registry.py`][registry] (the `TypeRegistry.clear()`
+co-clear block) — `clear_serializer_input_namespace` should register through the proposed
+`register_subsystem_clear` seam rather than be hand-added to both lists.
+
 ## Implementation plan
 
-Four slices. Slices 1–2 are package-internal and staged; **Slice 3 lands the resolver
-pipeline AND the products live serializer surface in one commit** (so reachable resolver
-lines are earned live, not by package tests — the
+A **pre-Slice-1 dependency gate** plus four slices. Slices 1–2 are package-internal and
+staged; **Slice 3 lands the resolver pipeline AND the products live serializer surface in
+one commit** (so reachable resolver lines are earned live, not by package tests — the
 [`test_query/README.md`][test-query-readme] #"Coverage rule."); Slice 4 is doc +
-soft-dep + card-wrap only. Line deltas are planning estimates.
+card-wrap only — **the DRF dev-dependency wiring moves to the gate, not Slice 4** (**F11**:
+Slices 1–3 tests import DRF, so the dev-dep + verified floor must exist *before* Slice 1
+code lands). Line deltas are planning estimates.
 
 | Slice | Files touched | New / changed tests | Approx. delta |
 | --- | --- | --- | --- |
-| 1 — serializer-field converter + reverse map + the two serializer-derived inputs | [`rest_framework/serializer_converter.py`][rf-converter] (new; `convert_serializer_field` fail-loud MRO dispatch + the `input_attr → (serializer_field_name, source, kind)` reverse map, renamed-field `source` resolution + id-like-suffix rule), [`rest_framework/inputs.py`][rf-inputs] (new; `<Serializer>Input` + `<Serializer>PartialInput` from the `get_serializer_for_schema()` field set, `SerializerInputShape` descriptor identity, `guard_create_required_serializer_fields`, `read_only` / `optional_fields` handling, narrowing fail-loud), [`rest_framework/__init__.py`][rf-init] (new; DRF soft-import guard) | [`tests/rest_framework/test_converter.py`][test-rest-framework] + [`tests/rest_framework/test_inputs.py`][test-rest-framework] (~40 — every serializer-field class, id mapping, `Upload`, the reverse-map + `kind` flag, renamed-`source` + id-like-suffix + dotted-`source` raise, custom-field raise, schema-hook (kwargs-serializer reject + override), `read_only` dropped, `optional_fields` (+ `"__all__"` reject), descriptor identity (optional_fields / hook-vary → distinct names), create-required-guard (+ waiver, per-declaration), collision/dedupe, `Meta.fields`/`exclude` fail-loud + empty-set) | `+500 / 0` |
-| 2 — the base class + `Meta` validation + the bind + the export guard | [`rest_framework/sets.py`][rf-sets] (new; `SerializerMutation` subclassing `DjangoMutation`, the `_validate_meta` / `_resolve_model` / `build_input` / `input_type_name` / `input_module_path` / `resolve_*` overrides), [`rest_framework/inputs.py`][rf-inputs] (`clear_serializer_input_namespace()`), [`types/finalizer.py`][types-finalizer] (call it **import-guarded** in the pre-bind reset block — `try/except ImportError` / `_clear_if_importable`, NOT a literal mirror of the direct mutation / form clears, since `rest_framework/inputs.py` is behind the DRF soft-import guard and the finalizer runs on every DRF-absent build too — no new bind, rides `bind_mutations()`), [`registry.py`][registry] (one `_clear_if_importable` co-clear row in `TypeRegistry.clear()`), [`__init__.py`][init] (guarded `SerializerMutation` export via root `__getattr__`) | [`tests/rest_framework/test_sets.py`][test-rest-framework] (~18 — `Meta` matrix incl. `delete`-rejected + plain-`Serializer`-rejected + no-model + `permission_classes` kept, both bind, retry-idempotence, no-primary error, model-flavor seam defaults unchanged) | `+340 / -10` |
-| 3 — resolver pipeline **+ products live surface (one commit)** | [`rest_framework/resolvers.py`][rf-resolvers] (new; visibility-on-every-branch relation decoder + `partial=True` update + value-preserving save + sync/async pipeline reusing the `036`/`038` promoted helpers), [`examples/fakeshop/apps/products/serializers.py`][products-serializers] (new; `ItemSerializer` + the `Upload`/`Item.attachment` + request-context branches), [`products/schema.py`][products-schema] (serializer mutations), `config/settings.py` (`rest_framework` in `INSTALLED_APPS` if needed), [`mutations/resolvers.py`][mutations-resolvers] (no change) | **Primary: [`test_products_api.py`][test-products-api]** (~16 live `/graphql/` — create/update, field + `"__all__"` envelopes, `categoryId` reverse-map write, partial-update + unique-together, hidden update row, write-auth, hidden-relation `FieldError`, authorize-before-decode, multipart `Upload`, request-context, G2 query shape). **Internals-only: [`tests/rest_framework/test_resolvers.py`][test-rest-framework]** (~13 — recursive-flattener shapes, raw-pk/non-Relay + many-relation decode, call-once save, write-time `IntegrityError` + save-time `ValidationError`, sync/async + `SyncMisuseError`, hermetic kwargs seams) + [`tests/mutations/test_fields.py`][test-mutations] factory-generalization verification | `+560 / 0` |
-| 4 — docs + soft-dep wiring + card wrap (no version bump) | [`pyproject.toml`][pyproject] (DRF → dev group) + `uv.lock`, [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], [`README.md`][readme], [`GOAL.md`][goal], [`TODAY.md`][today], [`docs/TREE.md`][tree], [`CHANGELOG.md`][changelog], [`KANBAN.md`][kanban] | 0 (doc + dep only) | `+110 / -40` |
+| **0 — pre-Slice-1 dependency gate** (**F11**) | [`pyproject.toml`][pyproject] (`djangorestframework` → `[dependency-groups].dev`, NOT `[project].dependencies`) + `uv.lock` (`uv lock`), [`pytest.ini`][pytest-ini] (a **targeted DRF-origin `ignore::` line** only if the verified floor still emits a deprecation under the CI matrix). **No package-version edit** (stays `0.0.12`, [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)) | the gate is a **precondition**, not a test deliverable: confirm a DRF release imports + runs warning-free across the [`django.yml`][django-workflow] matrix (Python 3.10→3.14 × Django 5.2→6.0/`latest`) under `-W error`, and record the exact pinned floor before converter code | `+5 / 0` (manifest + lock) |
+| 1 — serializer-field converter + reverse map + the two serializer-derived inputs | [`rest_framework/serializer_converter.py`][rf-converter] (new; `convert_serializer_field` fail-loud MRO dispatch + the `input_attr → (serializer_field_name, source, kind)` reverse map, renamed-field `source` resolution + id-like-suffix rule), [`rest_framework/inputs.py`][rf-inputs] (new; `<Serializer>Input` + `<Serializer>PartialInput` from the `get_serializer_for_schema()` field set, `SerializerInputShape` descriptor identity, `guard_create_required_serializer_fields`, `read_only` / `optional_fields` handling, narrowing fail-loud), [`rest_framework/__init__.py`][rf-init] (new; DRF soft-import guard), **+ the DRY promotions** ([DRY obligations](#cross-flavor-reuse-and-dry-obligations)): `utils/converters.py` (new; shared dispatch skeleton, **P1.4**) + [`utils/inputs.py`][utils-inputs] (`InputFieldSpec` / `make_input_namespace` / `make_shape_build_cache`, **P2.1** / **P2.2** / **P1.3**) with [`forms/converter.py`][forms-converter] + [`forms/inputs.py`][forms-inputs] re-pointed | [`tests/rest_framework/test_converter.py`][test-rest-framework] + [`tests/rest_framework/test_inputs.py`][test-rest-framework] (~40 — every serializer-field class, id mapping, `Upload`, the reverse-map + `kind` flag, renamed-`source` + id-like-suffix + dotted-`source` raise, custom-field raise, schema-hook (kwargs-serializer reject + override), `read_only` dropped, `optional_fields` (+ `"__all__"` reject), descriptor identity (optional_fields / hook-vary → distinct names), create-required-guard (+ waiver, per-declaration), collision/dedupe, `Meta.fields`/`exclude` fail-loud + empty-set) | `+500 / 0` |
+| 2 — the base class + `Meta` validation + the bind + the export guard | [`rest_framework/sets.py`][rf-sets] (new; `SerializerMutation` subclassing `DjangoMutation`, the `_validate_meta` / `_resolve_model` / `build_input` / `input_type_name` / `input_module_path` / `resolve_*` overrides), [`rest_framework/inputs.py`][rf-inputs] (`clear_serializer_input_namespace()`), [`types/finalizer.py`][types-finalizer] (call it **import-guarded** in the pre-bind reset block — `try/except ImportError` / `_clear_if_importable`, NOT a literal mirror of the direct mutation / form clears, since `rest_framework/inputs.py` is behind the DRF soft-import guard and the finalizer runs on every DRF-absent build too — no new bind, rides `bind_mutations()`), [`registry.py`][registry] (one `_clear_if_importable` co-clear row in `TypeRegistry.clear()`), [`__init__.py`][init] (guarded `SerializerMutation` export via root `__getattr__`), **+ the DRY promotions** ([DRY obligations](#cross-flavor-reuse-and-dry-obligations)): [`mutations/sets.py`][mutations-sets] (`NON_DELETE_WRITE_OPERATIONS` / `reject_unknown_meta_keys` / `cached_build_input` + `build_and_stash_input` / generalized `_hook_overridden` — **P1.2** / **P2.7** / **P1.7** / **P2.6**) with [`forms/sets.py`][forms-sets] re-pointed, and a `register_subsystem_clear` seam across [`types/finalizer.py`][types-finalizer] + [`registry.py`][registry] (**P1.6**) replacing the two hand-edits | [`tests/rest_framework/test_sets.py`][test-rest-framework] (~18 — `Meta` matrix incl. `delete`-rejected + plain-`Serializer`-rejected + no-model + `permission_classes` kept, both bind, retry-idempotence, no-primary error, model-flavor seam defaults unchanged) | `+340 / -10` |
+| 3 — resolver pipeline **+ products live surface (one commit)** | [`rest_framework/resolvers.py`][rf-resolvers] (new; visibility-on-every-branch relation decoder + `partial=True` update + value-preserving save + sync/async pipeline reusing the `036`/`038` promoted helpers), [`examples/fakeshop/apps/products/serializers.py`][products-serializers] (new; `ItemSerializer` + the `Upload`/`Item.attachment` + request-context branches), [`products/schema.py`][products-schema] (serializer mutations), `config/settings.py` (`rest_framework` in `INSTALLED_APPS` if needed), [`mutations/resolvers.py`][mutations-resolvers] + [`utils/querysets.py`][utils-querysets] + [`forms/resolvers.py`][forms-resolvers] (the **P1.1** / **P1.5** promotions — `run_write_pipeline_sync` skeleton + `_visible_related_object` promoted, `forms/` re-pointed; [DRY obligations](#cross-flavor-reuse-and-dry-obligations)) | **Primary: [`test_products_api.py`][test-products-api]** (~16 live `/graphql/` — create/update, field + `"__all__"` envelopes, `categoryId` reverse-map write, partial-update + unique-together, hidden update row, write-auth, hidden-relation `FieldError`, authorize-before-decode, multipart `Upload`, request-context, G2 query shape). **Internals-only: [`tests/rest_framework/test_resolvers.py`][test-rest-framework]** (~13 — recursive-flattener shapes, raw-pk/non-Relay + many-relation decode, call-once save, write-time `IntegrityError` + save-time `ValidationError`, sync/async + `SyncMisuseError`, hermetic kwargs seams) + [`tests/mutations/test_fields.py`][test-mutations] factory-generalization verification | `+560 / 0` |
+| 4 — docs + card wrap (no version bump; dep wiring already done in the gate) | [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], [`README.md`][readme], [`GOAL.md`][goal], [`TODAY.md`][today], [`docs/TREE.md`][tree], [`CHANGELOG.md`][changelog], [`KANBAN.md`][kanban] — **implemented-on-main docs land now; the public "shipped (0.0.13)" / "Shipped today" / release-changelog wording defers to the joint cut** (**F8**) | 0 (doc only) | `+110 / -40` |
 
 Total expected delta: ~`+1590 / -50` — an L cut, matching the card's relative size. The
-near-zero edit to `mutations/` (the `036` helpers are reused by call; the
-[`DjangoMutationField`][glossary-djangomutationfield] generalization is reused
-unchanged) is the dividend of the `036` freeze + the `038` generalization.
-Staged-but-not-implemented seams follow the [`AGENTS.md`][agents] design-doc anchor
-discipline (a source-site `TODO(spec-039 Slice N)` comment naming this spec, removed in
-the slice that ships it).
+resolver-helper reuse-by-call (the `036` helpers) and the
+[`DjangoMutationField`][glossary-djangomutationfield] generalization reused unchanged are
+the dividend of the `036` freeze + the `038` generalization. The
+[Cross-flavor reuse and DRY obligations](#cross-flavor-reuse-and-dry-obligations)
+**promotions** are the one deliberate, contained exception to "near-zero edit to
+`mutations/`": they touch `mutations/` / `utils/` / `forms/` / [`types/finalizer.py`][types-finalizer]
+/ [`registry.py`][registry], but are **net-near-zero** — each *extracts* a shared helper,
+*re-points* the existing [`forms/`][forms-sets] copy to it, and *deletes* that duplicate
+body (the serializer would otherwise have written a third copy), the one genuinely-new
+file being `utils/converters.py`. The above per-slice deltas fold these in; treat the
+"no DRY promotion" figures as the floor. Staged-but-not-implemented seams follow the
+[`AGENTS.md`][agents] design-doc anchor discipline (a source-site
+`TODO(spec-039 Slice N)` comment naming this spec, removed in the slice that ships it).
 
 ## Edge cases and constraints
 
@@ -2235,6 +2822,15 @@ the slice that ships it).
   via the converter and is validated by the serializer; `serializer.save()` handles
   what reaches the model. This is why the input derives from the serializer, not the
   model.
+- **Serializer-only RELATION fields (F4).** A write-only `PrimaryKeyRelatedField` (or
+  `many=True`) whose `queryset` is **not** a model column — consumed by a custom
+  `create()` / `update()` — is both serializer-only and a relation. Its relation **target
+  comes from `field.queryset.model`** (driving the id annotation and the decode-time
+  visibility check), and the declared serializer field name is preserved in
+  `provided_data`. A relation field with **neither** a resolvable backing column **nor** a
+  concrete `queryset.model` is a class-creation
+  [`ConfigurationError`][glossary-configurationerror]
+  ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
 - **Renamed serializer fields (`source`).** A field declared as
   `category_pk = PrimaryKeyRelatedField(source="category", …)` or
   `full_name = CharField(source="name")` gets its GraphQL input name from the **declared
@@ -2259,7 +2855,11 @@ the slice that ships it).
 - **`read_only` / `HiddenField` fields.** Dropped from the input (graphene's
   `fields_for_serializer` `is_input` rule); a `HiddenField(default=CurrentUserDefault())`
   resolves at runtime from the injected `context={"request": …}`, never as client
-  input.
+  input. **`HiddenField` defaults are subtle under `partial=True`** (a hidden default may
+  not fire on a partial update the way it does on create), so the **live request-context
+  proof is an explicit `validate()` branch, not a `HiddenField`** ([Decision 13](#decision-13--live-coverage-products-grows-a-modelserializer-mutation), F9);
+  `HiddenField` is exercised only for the input-drop rule (and optionally a create-only
+  behavior).
 - **Serializer `validate()` / `non_field_errors`.** A cross-field `validate()` error or
   a `UniqueTogetherValidator` error surfaces in `serializer.errors` under DRF's
   `non_field_errors` key (`api_settings.NON_FIELD_ERRORS_KEY`), mapped to the
@@ -2364,9 +2964,13 @@ dev-group dependency** so the test env has it
 - **Live, over `/graphql/`** (Slice 3, [`test_products_api.py`][test-products-api],
   seeded via `seed_data` / `create_users`) — **the primary harness for every reachable
   resolver branch**: `createItemViaSerializer` / `updateItemViaSerializer` happy paths;
-  the `serializer.errors` envelope (a `validate_<field>` error keyed to the serializer
-  field, the `UniqueTogetherValidator` / `validate()` error keyed to `"__all__"`);
-  **`categoryId` validates and writes through the serializer's `category`
+  the `serializer.errors` envelope — a `validate_<field>` error is keyed to the **GraphQL
+  input name** (not the serializer field name), the `UniqueTogetherValidator` /
+  `validate()` error keyed to `"__all__"`; **a renamed-field error path (F5)** — a
+  `validate_<field>` error on a `source`-renamed field (or the relation field) is returned
+  as `FieldError(field="<graphQLInputName>")` (e.g. `categoryId`, not `category`), locking
+  the reverse-map error keying against decode errors and plain-`name` errors; **`categoryId`
+  validates and writes through the serializer's `category`
   `PrimaryKeyRelatedField`** (proving the reverse map); **partial-update preservation** —
   a `name`-only `updateItemViaSerializer` preserves `description` and `category`, and the
   unique constraint fires when only `name` changes to a value already taken under the
@@ -2452,16 +3056,30 @@ dev-group dependency** so the test env has it
     id → `FieldError` (synthetic fixtures; products' `Category` is Relay-`GlobalID` and
     single, so these are unreachable live); **write-time `IntegrityError`** → `FieldError`
     envelope (a monkeypatched `save()` race, not deterministically drivable over HTTP);
-    **a save-time `ValidationError`** — a serializer whose custom `create()` / `update()`
-    raises `serializers.ValidationError` from `save()` routes through the recursive
-    flattener into the envelope (the split-by-exception-type; products' flat
-    `ItemSerializer` has no custom `save()`, so this needs a synthetic serializer);
+    **save-time validation — DRF and Django are SEPARATE branches (F2):** a serializer
+    whose custom `create()` / `update()` raises a **DRF**
+    `serializers.ValidationError` from `save()` routes its `.detail` through the
+    **recursive** `serializer_errors_to_field_errors` flattener; a serializer (or model
+    `full_clean()`) raising a **Django** `django.core.exceptions.ValidationError` from
+    `save()` routes through the **flat `036` `validation_error_to_field_errors`** (its
+    `error_dict` / `messages` shape — **not** `.detail`). Both land in the envelope, never a
+    top-level error; two distinct synthetic serializers (products' flat `ItemSerializer`
+    has no custom `save()`), asserting a Django error never hits the `.detail` path and a
+    DRF error never hits the flat mapper; **write-time `IntegrityError`** → `FieldError`
+    envelope (a monkeypatched `save()` race) stays the third branch;
     **the value-preserving save** — `serializer.save()` is called **exactly once** (a
     save spy) and the re-fetch uses the returned object (not a second save, not a stale
-    `serializer.instance`); the **hermetic `get_serializer_kwargs` override** (injecting a
-    non-default `context` / constructor kwargs) and the bare-`HttpRequest` `info.context`
-    fallback of `request_from_info`; **sync + async** (one
-    `sync_to_async(thread_sensitive=True)`) and the
+    `serializer.instance`); **`get_serializer_kwargs` precedence (F7)** — an override that
+    **adds a kwarg while preserving the request context** constructs correctly; an override
+    that returns `partial=False` (or `partial=True` on create) raises
+    [`ConfigurationError`][glossary-configurationerror]; an override `context` dict is
+    **merged** (its non-`request` keys win, the framework `request` is preserved); plus the
+    bare-`HttpRequest` `info.context` fallback of `request_from_info`; **the recorded
+    GlobalID strategy is consumed, not the live setting (config assessment)** — monkeypatch
+    `types/relay.py::_resolve_globalid_strategy` to fail **after** finalization and assert a
+    serializer relation mutation still resolves through the recorded
+    `effective_globalid_strategy` (only if new serializer code touches GlobalID decode
+    directly); **sync + async** (one `sync_to_async(thread_sensitive=True)`) and the
     [`SyncMisuseError`][glossary-syncmisuseerror] async-`get_queryset`-from-sync path.
   - **The DRF-absent import guard** ([`tests/rest_framework/test_soft_dependency.py`][test-rest-framework]
     or in `test_sets.py`): with DRF's import simulated-absent (monkeypatched
@@ -2471,17 +3089,25 @@ dev-group dependency** so the test env has it
     stale submodule import nor a bound root symbol can mask the path), all three raising
     entry points — the root `__getattr__("SerializerMutation")`, an `…rest_framework`
     import, and an `…rest_framework.sets` import — raise `ImportError` with the install
-    hint, while `import django_strawberry_framework` still succeeds; and a
-    **non-memoization** assertion (a successful `SerializerMutation` access does not bind
-    the name into the root module globals)
+    hint, while `import django_strawberry_framework` still succeeds. **Star-import stays
+    DRF-free (F1):** `from django_strawberry_framework import *` under simulated DRF-absence
+    **succeeds and binds no `SerializerMutation`** (the name is not in `__all__`, so the
+    star import never resolves it through `__getattr__` and never trips the guard) — the
+    regression test for the soft-dep promise. A **non-memoization** assertion (a successful
+    `SerializerMutation` access does not bind the name into the root module globals)
     ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)).
   - [`tests/mutations/test_fields.py`][test-mutations] (extend) — the
     `038`-generalized [`DjangoMutationField`][glossary-djangomutationfield] target
     check + dispatch + `data:` ref accept a `SerializerMutation` unchanged (the
     verification, not an edit).
 - **Cross-cutting — no regression.** The full suite is green at the 100% coverage gate
-  (`fail_under = 100`); `ruff format` + `ruff check` are clean; the `036` / `038`
-  mutation surfaces and the read side are unchanged.
+  (`fail_under = 100`); `ruff format` + `ruff check` are clean; the **observable behavior**
+  of the `036` / `038` mutation surfaces and the read side is unchanged. The
+  [Cross-flavor reuse and DRY obligations](#cross-flavor-reuse-and-dry-obligations)
+  promotions refactor shared internals (extract a helper, re-point the `forms/` copy, delete
+  its duplicate body) **behavior-preservingly** — the existing `036` / `038` mutation and
+  form-mutation test suites stay green unchanged, which is the regression check that the
+  promotion did not alter the form/model paths.
 
 ## Doc updates
 
@@ -2491,32 +3117,40 @@ instructed — and a standing design doc cannot itself grant that permission. Th
 only *describes* the release-note work; the **Slice 4 maintainer prompt must explicitly
 include the `CHANGELOG.md` edit** for it to be authorized.
 
-- **Slice 4 — soft-dep wiring** ([`pyproject.toml`][pyproject] + `uv.lock`): add
-  `djangorestframework` to `[dependency-groups].dev` (NOT `[project].dependencies`),
-  pinning a floor matching the guard's install hint, and regenerate `uv.lock` so the
-  lockfile matches. **No package-version edits** (the `[project].version` /
-  `__version__` / `test_version` and the `uv.lock` package-version entry stay `0.0.12`;
-  only the DRF dependency entries change)
+- **Pre-Slice-1 gate (Slice 0) — soft-dep wiring** ([`pyproject.toml`][pyproject] +
+  `uv.lock` + [`pytest.ini`][pytest-ini], **F11**): add `djangorestframework` to
+  `[dependency-groups].dev` (NOT `[project].dependencies`), pinning the **verified** floor
+  matching the guard's install hint, regenerate `uv.lock` so the lockfile matches, and add
+  any targeted DRF-origin `ignore::` line — **before Slice 1 imports DRF in tests** (not
+  Slice 4). **No package-version edits** (the `[project].version` / `__version__` /
+  `test_version` and the `uv.lock` package-version entry stay `0.0.12`; only the DRF
+  dependency entries change)
   ([Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)).
-- **Slice 4 — GLOSSARY** ([`docs/GLOSSARY.md`][glossary]): promote
-  [`SerializerMutation`][glossary-serializermutation] from `planned for 0.0.13` to
-  `shipped (0.0.13)` (updating the body to the shipped contract — the
-  `Meta.serializer_class` surface, the serializer-derived input, the `serializer.errors`
-  → [`FieldError`][glossary-fielderror-envelope] mapping, the soft DRF dependency, the
-  `036` reuse) and **reconcile the surface keys** to what this card pins:
-  `Meta.operation` (the package convention) rather than graphene's `model_operations`,
-  the `id:`-decode locate rather than `lookup_field` (both recorded as deliberate
-  non-adoptions). Add `SerializerMutation` to **Public exports**, the **Index** (status
-  column), and the **Mutations** browse-by-category row.
-- **Slice 4 — package docs**: [`docs/README.md`][docs-readme] / [`README.md`][readme]
-  move the serializer flavor from "Coming next (`0.0.13`)" to "Shipped today" in the
-  "Coming from DRF + django-filter?" paragraph (the README **Status** version line
-  moves to `0.0.13` at the joint cut, not here); [`GOAL.md`][goal] — criterion 6's
-  `ModelSerializer` flavor now ships (all three named flavors shipped); [`TODAY.md`][today]
-  notes the serializer mutation as a package capability; [`docs/TREE.md`][tree] fills
-  the planned `rest_framework/` / [`tests/rest_framework/`][test-rest-framework]
-  summary lines; [`CHANGELOG.md`][changelog] carries the bullets **only when the Slice
-  4 maintainer prompt explicitly requests it**.
+- **Release vs implementation docs are split (F8).** Because this card does **not** bump
+  the version (the joint `0.0.13` cut owns it,
+  [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)), Slice 4 must
+  not leave the repo advertising a **released** `0.0.13` feature while the package still
+  reports `0.0.12`. So:
+  - **Slice 4 — implemented-on-main docs (land now):** [`docs/TREE.md`][tree] fills the
+    `rest_framework/` / [`tests/rest_framework/`][test-rest-framework] summary lines;
+    [`TODAY.md`][today] notes the serializer mutation as an implemented capability;
+    [`docs/GLOSSARY.md`][glossary] updates the [`SerializerMutation`][glossary-serializermutation]
+    **body** to the implemented contract (the `Meta.serializer_class` surface, the
+    serializer-derived input, the `serializer.errors` → [`FieldError`][glossary-fielderror-envelope]
+    mapping, the soft DRF dependency, the `036` reuse) and **reconciles the surface keys** —
+    `Meta.operation` over graphene's `model_operations`, the `id:`-decode locate over
+    `lookup_field` (both recorded as deliberate non-adoptions) — marking the status
+    **"implemented on main, releasing in 0.0.13"** (not `shipped (0.0.13)` yet). The
+    [`GOAL.md`][goal] crit-6 example correction lands now (it is wrong the moment the code
+    lands).
+  - **Joint-cut docs (deferred to the `0.0.13` release):** the GLOSSARY status flips to
+    `shipped (0.0.13)`, [`docs/README.md`][docs-readme] / [`README.md`][readme] move the
+    serializer flavor from "Coming next (`0.0.13`)" to "Shipped today" (and the README
+    **Status** version line moves to `0.0.13`), and [`CHANGELOG.md`][changelog] carries the
+    release bullets — all at the joint cut, **only when the cut's maintainer prompt
+    explicitly requests the `CHANGELOG.md` edit**. (If the maintainer explicitly wants
+    unreleased-main docs to advertise the future version, that is an accepted override
+    stated in the Slice 4 prompt; the default is the split.)
 - **Slice 4 — card wrap**: [`KANBAN.md`][kanban] moves [`TODO-ALPHA-039-0.0.13`][kanban]
   to Done with the next `DONE-NNN-0.0.13` id, keeping its `SpecDoc` pointing at the
   canonical card spec (a `SpecDoc` DB edit re-rendered via `scripts/build_kanban_md.py`,
@@ -2601,16 +3235,20 @@ implementation reveals it is wrong.
   does not, the Django-6.0 / `latest` matrix nodes fail at `uv sync` / import time.
   Preferred answer
   ([Decision 12](#decision-12--soft-djangorestframework-dependency-and-the-100-coverage-strategy)):
-  **before Slice 1**, verify a `djangorestframework` release exists that imports and runs
-  **warning-free on (Python 3.14, Django 6.0 / `latest`)** as well as the floor
-  (`Python>=3.10`, `Django>=5.2`); record the **exact** floor pinned in the dev group
-  (and matched in the guard's install hint), plus **any DRF-origin `ignore::` line** that
-  release still needs — [`pytest.ini`][pytest-ini]'s own comment already sanctions a
-  targeted `ignore::` for "warnings originating in third-party packages we cannot fix"
-  (never a blanket ignore). Secondary (API-availability) constraint: bump the floor if a
-  needed serializer API (e.g. `api_settings.NON_FIELD_ERRORS_KEY`) is only present in a
-  later release. Settled during implementation against the actually-installed DRF, but the
-  matrix-warning check is the one that gates the floor.
+  **this is a pre-Slice-1 dependency gate (Slice 0), not a Slice 4 surprise (F11)** —
+  because Slice 1–3 tests import DRF, the dev-dep add + `uv.lock` regen + any `ignore::`
+  line and the verified floor must all land in the gate *before* converter code. In that
+  gate, verify a `djangorestframework` release exists that imports and runs **warning-free
+  on (Python 3.14, Django 6.0 / `latest`)** as well as the floor (`Python>=3.10`,
+  `Django>=5.2`); record the **exact** floor pinned in the dev group (and matched in the
+  guard's install hint), plus **any DRF-origin `ignore::` line** that release still needs —
+  [`pytest.ini`][pytest-ini]'s own comment already sanctions a targeted `ignore::` for
+  "warnings originating in third-party packages we cannot fix" (never a blanket ignore).
+  Secondary (API-availability) constraint: bump the floor if a needed serializer API (e.g.
+  `api_settings.NON_FIELD_ERRORS_KEY`) is only present in a later release. The probe runs
+  against the actually-installed DRF in the gate; the matrix-warning check is the one that
+  gates the floor, and if no compatible release exists the card blocks at the gate rather
+  than mid-Slice-1.
 - **`serializer.save()` create-vs-update + M2M.** Preferred answer
   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)):
   `serializer.save()` runs `create()` (no instance) / `update()` (with instance)
@@ -2792,18 +3430,20 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
    `ruff check` are clean; the `036` / `038` mutation surfaces and the read side are
    unchanged.
 
-**Slice 4 — docs + soft-dep + card wrap (no version bump)**
+**Pre-Slice-1 gate (Slice 0) — soft-dep wiring (F11); Slice 4 — docs + card wrap (no version bump)**
 
-7. [`pyproject.toml`][pyproject] adds `djangorestframework` to `[dependency-groups].dev`
-   (NOT `[project].dependencies`) **and `uv.lock` is regenerated to match** (the DRF
-   dependency entries only); [`docs/GLOSSARY.md`][glossary] promotes
-   [`SerializerMutation`][glossary-serializermutation] to `shipped (0.0.13)` (with
-   Public-exports + Index + Mutations-category rows) and reconciles its surface keys
-   (`Meta.operation`, the `id:`-decode locate); [`docs/README.md`][docs-readme] /
-   [`README.md`][readme] move the serializer flavor to "Shipped today"; [`GOAL.md`][goal]
-   / [`TODAY.md`][today] / [`docs/TREE.md`][tree] reflect the shipped flavor — and the
-   [`GOAL.md`][goal] crit-6 "Coming from DRF + `django-filter`" example is **corrected to
-   the shipped surface**: `class CreateCategoryFromSerializer(SerializerMutation):` (not
+7. **Gate (before Slice 1):** [`pyproject.toml`][pyproject] adds `djangorestframework` to
+   `[dependency-groups].dev` (NOT `[project].dependencies`) **and `uv.lock` is regenerated
+   to match** (the DRF dependency entries only), with any verified-floor DRF-origin
+   `ignore::` line added to [`pytest.ini`][pytest-ini]. **Slice 4 (implemented-on-main):**
+   [`docs/GLOSSARY.md`][glossary] updates the
+   [`SerializerMutation`][glossary-serializermutation] body to the implemented contract
+   (status **"implemented on main, releasing in 0.0.13"**, with Public-exports + Index +
+   Mutations-category rows) and reconciles its surface keys (`Meta.operation`, the
+   `id:`-decode locate); [`TODAY.md`][today] / [`docs/TREE.md`][tree] reflect the
+   implemented flavor — and the [`GOAL.md`][goal] crit-6 "Coming from DRF + `django-filter`"
+   example is **corrected to the shipped surface**:
+   `class CreateCategoryFromSerializer(SerializerMutation):` (not
    `DjangoMutation`,
    [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven))
    with an explicit `operation = "create"` (mandatory, not inferred,
@@ -2813,11 +3453,14 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
    `CategorySerializer(fields=("id", "name"))` — `CategorySerializerInput { name: String! }`
    (the read-only `id` dropped,
    [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)) —
-   so GOAL.md's declaration and its generated schema visibly agree;
-   [`CHANGELOG.md`][changelog] carries the bullets **only when the Slice 4 maintainer
-   prompt explicitly requests the edit**; [`KANBAN.md`][kanban] records the card
-   `DONE-NNN-0.0.13` with the `SpecDoc` reference at the canonical card spec (kanban DB
-   + re-render).
+   so GOAL.md's declaration and its generated schema visibly agree. **The public
+   release-status wording defers to the joint cut (F8):** the GLOSSARY `shipped (0.0.13)`
+   flip, the [`docs/README.md`][docs-readme] / [`README.md`][readme] "Coming next" →
+   "Shipped today" move (and README **Status** → `0.0.13`), and the
+   [`CHANGELOG.md`][changelog] release bullets land at the `0.0.13` cut — `CHANGELOG.md`
+   **only when the cut's maintainer prompt explicitly requests the edit**; [`KANBAN.md`][kanban]
+   records the card `DONE-NNN-0.0.13` with the `SpecDoc` reference at the canonical card
+   spec (kanban DB + re-render).
 8. **No version bump lands in this card**
    ([Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)):
    `[project].version`, `__version__`, and
@@ -2827,8 +3470,9 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
    stay in sync; only the DRF dependency entries change). No [`CHANGELOG.md`][changelog]
    release heading is promoted (the joint `0.0.13` cut shared with
    [`TODO-ALPHA-040-0.0.13`][kanban] owns the bump). The one net-new public symbol
-   (`SerializerMutation`) is added to `__all__` (resolved lazily via the root
-   `__getattr__` under the DRF soft-import guard).
+   (`SerializerMutation`) is a **named lazy export** resolved via the root `__getattr__`
+   under the DRF soft-import guard, and is **NOT in `__all__`** while DRF is soft (so
+   `from … import *` stays DRF-free, F1).
 
 <!-- LINK DEFINITIONS -->
 
@@ -2920,9 +3564,12 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
 [rf-sets]: ../django_strawberry_framework/rest_framework/sets.py
 [types-base]: ../django_strawberry_framework/types/base.py
 [types-converters]: ../django_strawberry_framework/types/converters.py
+[types-definition]: ../django_strawberry_framework/types/definition.py
+[types-relay]: ../django_strawberry_framework/types/relay.py
 [types-finalizer]: ../django_strawberry_framework/types/finalizer.py
 [utils-inputs]: ../django_strawberry_framework/utils/inputs.py
 [utils-permissions]: ../django_strawberry_framework/utils/permissions.py
+[utils-querysets]: ../django_strawberry_framework/utils/querysets.py
 
 <!-- tests/ -->
 [test-base-init]: ../tests/base/test_init.py

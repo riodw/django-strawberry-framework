@@ -152,6 +152,8 @@ _form_shape_build_cache: dict[tuple, tuple[type, list]] = {}
 #   - Route form input construction through `cached_build_input(...)`.
 #   - Pass the create-required guard and `build_form_input_class(...)` as callables
 #     so guard-before-cache-lookup remains one shared rule.
+#   - Register the clear callback through the shared static clear-target registry,
+#     not a hand-added finalizer/registry pair.
 #
 # Guard-before-cache-lookup is load-bearing and must remain single-sited.
 

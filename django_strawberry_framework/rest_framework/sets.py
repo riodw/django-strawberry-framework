@@ -5,10 +5,12 @@
 # Pseudo flow:
 #   - Guard DRF import, then define `SerializerMutation` as an abstract
 #     `DjangoMutation` subclass.
-#   - Resolve the backing model from `serializer_class.Meta.model`.
+#   - Resolve the backing model from `serializer_class.Meta.model`; reject a
+#     plain model-less `Serializer` for this ModelSerializer-only flavor.
 #   - Validate Meta by rejecting unknown keys, requiring a `ModelSerializer` with
 #     a concrete model, accepting only shared non-delete operations, normalizing
-#     `fields`/`exclude` and `optional_fields`, and validating permission classes.
+#     `fields`/`exclude` and `optional_fields` (including bare-string
+#     `"__all__"` rejection), and validating permission classes.
 #   - Reuse `_ValidatedMutationMeta` rather than introducing a parallel serializer
 #     metadata carrier.
 #   - Delegate input naming/building to `rest_framework.inputs` and resolver entry
@@ -18,4 +20,5 @@
 #   - Do not create `bind_serializer_mutations`; this rides `bind_mutations()`.
 #   - Do not create `_VALID_SERIALIZER_OPERATIONS`; import the shared non-delete
 #     operation set.
+#   - Do not reimplement the Meta typo guard; use `reject_unknown_meta_keys(...)`.
 #   - Do not fork `_cached_build_form_input`; use the promoted build/cache helpers.

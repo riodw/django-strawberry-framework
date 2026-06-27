@@ -6,9 +6,11 @@
 #   - `ModelSerializer` without `Meta.model` is rejected;
 #   - delete operation is rejected;
 #   - `permission_classes` remains an allowed key;
-#   - `fields`/`exclude` mutual exclusion and unknown-key errors are preserved;
+#   - `fields`/`exclude` mutual exclusion, bare-string `optional_fields`, and
+#     unknown-key errors are preserved;
 #   - serializer mutations register and ride `bind_mutations()`;
-#   - retry idempotence clears serializer input namespace before bind;
+#   - retry idempotence clears serializer input namespace before bind through the
+#     shared import-guarded clear registry;
 #   - no registered primary type raises the existing model-flavor error;
 #   - model-flavor seam defaults remain unchanged.
 #

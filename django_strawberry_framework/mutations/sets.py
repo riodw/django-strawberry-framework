@@ -110,6 +110,8 @@ _OPERATION_INPUT_KIND: dict[str, str] = {"create": CREATE, "update": PARTIAL}
 #   - Centralize guard-first input cache lookup behind `cached_build_input(...)`.
 #   - Centralize input-class parking on the mutation class behind
 #     `build_and_stash_input(...)`.
+#   - Expose clear callbacks as static clear-target registrations so mutation,
+#     form, and serializer ledgers reset through one import-guarded path.
 #
 # `forms/sets.py` and `rest_framework/sets.py` should import these helpers rather
 # than maintain byte-parallel `_VALID_*`, shape-cache, typo-guard, and

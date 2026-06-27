@@ -5,18 +5,22 @@
 # Pseudo flow:
 #   - `resolve_serializer_mutation_sync(...)` calls `run_write_pipeline_sync(...)`
 #     with the mutation class, info, input data, optional lookup id, and serializer
-#     write-step callback.
-#   - The serializer write step decodes input through the reverse map, builds
-#     serializer kwargs through `get_serializer_kwargs(...)`, sets `partial` for
-#     update operations, and always supplies request context.
-#   - Invalid serializers return flattened `FieldError` leaves.
+#     `decode_step` / `write_step` callbacks.
+#   - The decode step runs only after authorization, maps GraphQL input names back
+#     to declared serializer field names, and resolves relation targets through
+#     the recorded effective GlobalID strategy, not live settings reads.
+#   - The write step builds serializer kwargs through `get_serializer_kwargs(...)`,
+#     merges request context, rejects `partial=False` on update or `partial=True`
+#     on create, and injects framework-owned `partial=True` for updates.
+#   - Invalid serializers return flattened `FieldError` leaves keyed to GraphQL
+#     input names where a reverse-map entry exists.
 #   - Valid serializers call `save()` exactly once, capturing the returned object
-#     for optimized refetch, while save-time validation/integrity exceptions pass
-#     through the same field-error envelope.
+#     for optimized refetch. Save-time DRF `ValidationError`, Django
+#     `ValidationError`, and `IntegrityError` are three separate envelope paths.
 #
 # Security and coverage obligations:
 #   - Locate -> authorize -> decode; relation decode never runs before write auth.
-#   - Relation ids accept GlobalID or raw pk, are type checked, then visibility
-#     checked through the related primary DjangoType.
+#   - The generated relation field exposes one shape, but the shared decoder
+#     helper accepts GlobalID or raw pk for non-live/package-only branches.
 #   - Upload values land in serializer `data`, not a form-style `files`.
 #   - Consumer-reachable branches are covered live in products over `/graphql/`.

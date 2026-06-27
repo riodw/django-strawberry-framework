@@ -335,6 +335,8 @@ def test_model_flavor_dispatch_unchanged():
 # Pseudo flow:
 #   - Declare a minimal create serializer mutation over the products item
 #     serializer.
+#   - Import `SerializerMutation` by name from the package root; do not depend on
+#     root `__all__` because star import stays DRF-free while DRF is soft.
 #   - Wrap it with `DjangoMutationField(...)`, finalize types, and inspect the
 #     generated create argument.
 #   - Assert the mutation class routes sync resolution to

@@ -776,6 +776,8 @@ def finalize_django_types() -> None:
     #   - Iterate the registered subsystem-clear targets from `registry.py`.
     #   - For each target, call `_clear_if_importable(...)` and invoke the clear
     #     callback only when its module can be imported under current dependencies.
+    #   - Do not special-case serializer clears; registering static strings keeps
+    #     DRF out of the finalizer import path.
     from ..forms.inputs import clear_form_input_namespace
     from ..mutations.inputs import clear_mutation_input_namespace
     from ..mutations.sets import bind_mutations

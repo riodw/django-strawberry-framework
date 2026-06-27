@@ -38,13 +38,17 @@ __version__ = "0.0.12"
 
 # TODO(spec-039 Slice 2): Export `SerializerMutation` through a root `__getattr__`
 # instead of an eager import so `import django_strawberry_framework` keeps working
-# without DRF installed.
+# without DRF installed. Keep it OUT of `__all__` while DRF is a soft dependency:
+# named imports resolve lazily, but star imports must stay DRF-free and must not
+# bind `SerializerMutation`.
 # Pseudo flow:
 #   - On root `__getattr__`, reject every name except `SerializerMutation` with
 #     the normal `AttributeError`.
 #   - Import and run `rest_framework.require_drf()` before importing the class.
 #   - Import `rest_framework.sets.SerializerMutation` only after the guard passes,
 #     then return that class to the caller.
+#   - Leave `__all__` unchanged; do not add `SerializerMutation` until DRF becomes
+#     a hard runtime dependency.
 #
 # Do not memoize the resolved class into `globals()`; the absent-DRF test must be
 # able to evict modules and re-hit the guard on every access.

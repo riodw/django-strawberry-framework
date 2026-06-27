@@ -181,7 +181,8 @@ def _visible_related_object(related_model: type, pk: Any, info: Any) -> Any | No
 #     `_FORM_ASYNC_RECOURSE` into that shared helper.
 #
 # This keeps raw-pk relation visibility single-sited across form and serializer
-# mutations.
+# mutations. A live serializer GraphQL field still exposes only the generated id
+# annotation; raw-pk coverage for Relay targets remains a package-only helper path.
 def _to_form_key_value(obj: Any, form_field: Any) -> Any:
     """Convert a resolved relation object to its form-key value via ``to_field_name`` (P2 #6).
 

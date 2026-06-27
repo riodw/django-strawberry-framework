@@ -326,8 +326,10 @@ def _pascalize_token(name: str) -> str:
 # TODO(spec-039 Slice 1): Keep serializer divergent-shape naming on this token
 # helper, or promote it to `utils.inputs` before `rest_framework/inputs.py` lands.
 # Pseudo flow:
-#   - Build divergent-shape suffixes by sorting the shape fields and joining each
-#     field through this same `_pascalize_token(...)` helper.
+#   - Build descriptor-derived suffixes from stable shape tokens, using this same
+#     `_pascalize_token(...)` for every human field-name component.
+#   - Include enough descriptor state to distinguish same-field-name shapes whose
+#     annotation, requiredness, `source`, kind, or `optional_fields` differ.
 #
 # Do not add a third PascalCase encoder in the serializer module; the injective
 # token shape is subtle and must stay shared.

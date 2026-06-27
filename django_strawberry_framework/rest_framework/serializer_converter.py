@@ -11,6 +11,8 @@
 #   - Convert `ManyRelatedField` from its child relation, `PrimaryKeyRelatedField`
 #     as a single id, file/image fields as `Upload`, and scalar list children
 #     recursively.
+#   - Resolve relation targets from either a backing model field via one-segment
+#     `source` or a serializer-only relation's `field.queryset.model`.
 #   - Reject nested serializer children and relation children inside `ListField`.
 #   - Delegate scalar fallback to `convert_with_mro(...)` with a fail-loud
 #     unsupported handler.
@@ -23,3 +25,6 @@
 #       category_pk -> categoryPk
 #   - Backing Django fields are resolved through one-segment `source`.
 #   - Dotted `source` and `source="*"` fail loudly for model-column conversions.
+#   - A relation field with neither a resolvable backing field nor
+#     `queryset.model` fails loudly because it cannot be typed or visibility
+#     checked.

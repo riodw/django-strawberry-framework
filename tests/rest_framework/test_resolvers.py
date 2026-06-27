@@ -8,9 +8,15 @@
 #   - wrong-model and uncoercible raw-pk relation ids become field errors;
 #   - integrity errors map to the field-error envelope;
 #   - save-time DRF validation errors use the recursive flattener;
+#   - save-time Django validation errors use the flat model/form flattener, never
+#     the DRF `.detail` path;
 #   - serializer `save()` is called once and refetch uses the returned object;
-#   - `get_serializer_kwargs(...)` remains the constructor seam;
+#   - serializer errors map root paths back to GraphQL input names when possible;
+#   - `get_serializer_kwargs(...)` merges context and cannot disable update
+#     `partial=True`;
 #   - bare `HttpRequest` context fallback works;
+#   - relation decode consumes recorded `effective_globalid_strategy`, not live
+#     `conf.settings` validation;
 #   - async boundary and sync misuse errors match existing mutation behavior.
 #
 # Explicit exclusions: do not duplicate live happy paths, envelopes,

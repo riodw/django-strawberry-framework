@@ -215,7 +215,9 @@ def visibility_scoped_related_queryset(
 #     visible queryset by pk and return the first matching object.
 #
 # The serializer decoder and form decoder should both call this helper so raw-pk
-# relation visibility cannot drift between write flavors.
+# relation visibility cannot drift between write flavors. The helper accepts raw
+# pks after a flavor-specific decoder chooses that branch; it does not imply every
+# generated GraphQL relation input accepts both raw pk and GlobalID.
 async def apply_type_visibility_async(
     type_cls: type,
     queryset: models.QuerySet,

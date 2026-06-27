@@ -50,6 +50,16 @@ def _clear_if_importable(module_path: str, attr_name: str, action: Callable[[Any
     action(target)
 
 
+# TODO(spec-039 Slice 2): Add a `register_subsystem_clear(module_path, attr)`
+# seam that feeds one canonical import-guarded clear list for both
+# `TypeRegistry.clear()` and the finalizer pre-bind reset.
+# Pseudo flow:
+#   - Keep an ordered internal collection of `(module_path, attr)` clear targets.
+#   - `register_subsystem_clear(...)` appends one target at module import time.
+#   - `iter_subsystem_clears()` returns an immutable snapshot for clear callers.
+#
+# Then mutation/form/serializer input namespaces and shape caches register once,
+# and `rest_framework.inputs` stays safe when DRF is absent.
 class TypeRegistry:
     """Process-global registry of generated GraphQL types and enums.
 

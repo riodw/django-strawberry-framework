@@ -113,6 +113,17 @@ class FormFieldConversion:
         self.required = required
 
 
+# TODO(spec-039 Slice 1): Re-point this module to
+# `utils/converters.py::convert_with_mro` once the shared fail-loud dispatch
+# skeleton lands for the serializer converter.
+# Pseudo flow:
+#   - Delegate `convert_form_field(...)` to `convert_with_mro(...)`.
+#   - Keep the form prechecks ordered as relation, file, then multiple-choice.
+#   - Pass `_SCALAR_FORM_FIELDS` as the registry and `_unsupported_form_field`
+#     as the fail-loud fallback.
+#
+# Keep the exact current behavior: base `forms.Field` remains an exact-type
+# special case, and unsupported custom subclasses still raise `ConfigurationError`.
 # Each supported ``forms.Field`` class -> the scalar annotation it maps to.
 # Registered individually (not via a base-``Field`` catch-all) so subclasses map
 # through the MRO walk in ``convert_form_field`` - ``EmailField`` / ``SlugField``

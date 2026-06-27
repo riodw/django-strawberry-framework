@@ -327,3 +327,18 @@ def test_model_flavor_dispatch_unchanged():
 
     assert CreateItem.resolve_sync.__func__ is DjangoMutation.resolve_sync.__func__
     assert mutation_resolvers.resolve_mutation_sync is not None
+
+
+# TODO(spec-039 Slice 3): Extend the `DjangoMutationField` generalization tests
+# to cover `SerializerMutation` after the DRF soft dependency is installed for
+# the dev environment.
+# Pseudo flow:
+#   - Declare a minimal create serializer mutation over the products item
+#     serializer.
+#   - Wrap it with `DjangoMutationField(...)`, finalize types, and inspect the
+#     generated create argument.
+#   - Assert the mutation class routes sync resolution to
+#     `rest_framework.resolvers`.
+#
+# This is the factory verification only; serializer resolver behavior that can
+# run through fakeshop `/graphql/` belongs in `test_products_api.py`.

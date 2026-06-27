@@ -137,6 +137,24 @@ _CREATE_CATEGORY = (
     "node { name } errors { field messages } } }"
 )
 
+# TODO(spec-039 Slice 3): Add live serializer-mutation query strings and tests
+# here, not under `tests/rest_framework`, for every consumer-reachable resolver
+# branch.
+# Pseudo flow:
+#   - Add a create serializer mutation document using the generated
+#     `ItemSerializerInput`.
+#   - Add an update serializer mutation document using the generated
+#     `ItemSerializerPartialInput`.
+#
+# Required live cases:
+#   - create/update happy paths and `categoryId` reverse-map write;
+#   - field-level and `"__all__"` serializer error envelopes;
+#   - partial update preservation plus unique-together on a one-field change;
+#   - hidden update row, write auth, relation visibility, authorize-before-decode;
+#   - multipart Upload to `Item.attachment`;
+#   - request-context `validate()` path;
+#   - G2 re-fetch SQL shape with no `.only(...)` projection.
+
 
 @pytest.mark.django_db(transaction=True)
 def test_create_item_happy_path():

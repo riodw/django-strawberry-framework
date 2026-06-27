@@ -101,6 +101,19 @@ _VALID_OPERATIONS: frozenset[str] = frozenset({"create", "update", "delete"})
 # materialize per operation.
 _OPERATION_INPUT_KIND: dict[str, str] = {"create": CREATE, "update": PARTIAL}
 
+# TODO(spec-039 Slice 2): Promote shared mutation-family bind helpers here before
+# implementing `rest_framework/sets.py`.
+# Pseudo flow:
+#   - Add `NON_DELETE_WRITE_OPERATIONS` for create/update-only mutation families.
+#   - Centralize Meta typo rejection behind `reject_unknown_meta_keys(...)`.
+#   - Centralize hook identity checks behind `_hook_overridden(...)`.
+#   - Centralize guard-first input cache lookup behind `cached_build_input(...)`.
+#   - Centralize input-class parking on the mutation class behind
+#     `build_and_stash_input(...)`.
+#
+# `forms/sets.py` and `rest_framework/sets.py` should import these helpers rather
+# than maintain byte-parallel `_VALID_*`, shape-cache, typo-guard, and
+# build/stash implementations.
 
 # Per-finalize-pass build cache keyed by generated-input shape identity
 # (``(model, operation_kind, frozenset(effective field names))``, spec-036

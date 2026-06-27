@@ -323,6 +323,14 @@ def _pascalize_token(name: str) -> str:
     return name.replace("_", "").capitalize()
 
 
+# TODO(spec-039 Slice 1): Keep serializer divergent-shape naming on this token
+# helper, or promote it to `utils.inputs` before `rest_framework/inputs.py` lands.
+# Pseudo flow:
+#   - Build divergent-shape suffixes by sorting the shape fields and joining each
+#     field through this same `_pascalize_token(...)` helper.
+#
+# Do not add a third PascalCase encoder in the serializer module; the injective
+# token shape is subtle and must stay shared.
 def mutation_input_type_name(
     model: type[models.Model],
     operation_kind: str,

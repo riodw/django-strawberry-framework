@@ -36,6 +36,18 @@ from .types.converters import DjangoFileType, DjangoImageType  # noqa: E402
 
 __version__ = "0.0.12"
 
+# TODO(spec-039 Slice 2): Export `SerializerMutation` through a root `__getattr__`
+# instead of an eager import so `import django_strawberry_framework` keeps working
+# without DRF installed.
+# Pseudo flow:
+#   - On root `__getattr__`, reject every name except `SerializerMutation` with
+#     the normal `AttributeError`.
+#   - Import and run `rest_framework.require_drf()` before importing the class.
+#   - Import `rest_framework.sets.SerializerMutation` only after the guard passes,
+#     then return that class to the caller.
+#
+# Do not memoize the resolved class into `globals()`; the absent-DRF test must be
+# able to evict modules and re-hit the guard on every access.
 __all__ = (
     "BigInt",
     "DjangoConnection",

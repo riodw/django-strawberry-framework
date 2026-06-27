@@ -205,6 +205,17 @@ def visibility_scoped_related_queryset(
     )
 
 
+# TODO(spec-039 Slice 3): Promote the object-returning related-visibility helper
+# currently local to `forms/resolvers.py` into this module before serializer
+# relation decoding lands.
+# Pseudo flow:
+#   - Resolve the related model's registered Django type.
+#   - If no primary type exists, fall back to the model default manager and pk.
+#   - Otherwise apply `visibility_scoped_related_queryset(...)`, then filter that
+#     visible queryset by pk and return the first matching object.
+#
+# The serializer decoder and form decoder should both call this helper so raw-pk
+# relation visibility cannot drift between write flavors.
 async def apply_type_visibility_async(
     type_cls: type,
     queryset: models.QuerySet,

@@ -768,6 +768,14 @@ def finalize_django_types() -> None:
     # error. Parked module globals are overwritten in place by the next ``setattr``
     # (the parked-globals lifecycle), so a ledger-only clear is safe. ``registry``
     # is NOT cleared here - this resets only the emit ledgers, not declarations.
+    # TODO(spec-039 Slice 2): Replace these hand-maintained direct clears with
+    # the registered subsystem-clear list from `registry.py`, iterated through
+    # `_clear_if_importable`. The serializer input namespace is behind the DRF
+    # soft-import guard, so the new mechanism must be import-guarded by default.
+    # Pseudo flow:
+    #   - Iterate the registered subsystem-clear targets from `registry.py`.
+    #   - For each target, call `_clear_if_importable(...)` and invoke the clear
+    #     callback only when its module can be imported under current dependencies.
     from ..forms.inputs import clear_form_input_namespace
     from ..mutations.inputs import clear_mutation_input_namespace
     from ..mutations.sets import bind_mutations

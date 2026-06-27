@@ -172,6 +172,16 @@ def _visible_related_object(related_model: type, pk: Any, info: Any) -> Any | No
     return queryset.filter(pk=pk).first()
 
 
+# TODO(spec-039 Slice 3): Move `_visible_related_object` to
+# `utils/querysets.py::visible_related_object` and re-point this module before
+# adding the serializer relation decoder.
+# Pseudo flow:
+#   - Import the promoted `visible_related_object(...)` helper.
+#   - Resolve form relation pks by passing `related_model`, the pk, `info`, and
+#     `_FORM_ASYNC_RECOURSE` into that shared helper.
+#
+# This keeps raw-pk relation visibility single-sited across form and serializer
+# mutations.
 def _to_form_key_value(obj: Any, form_field: Any) -> Any:
     """Convert a resolved relation object to its form-key value via ``to_field_name`` (P2 #6).
 

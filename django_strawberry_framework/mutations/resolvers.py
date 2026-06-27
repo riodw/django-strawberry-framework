@@ -109,6 +109,20 @@ _MUTATION_ASYNC_RECOURSE = (
     "get_queryset hook; redefine the target type's get_queryset as a sync method."
 )
 
+# TODO(spec-039 Slice 3): Promote the create/update write orchestration into a
+# shared `run_write_pipeline_sync(...)` skeleton before serializer resolvers land.
+# Pseudo flow:
+#   - Open one atomic transaction for create/update writes.
+#   - Locate the update instance first; return the existing not-found payload when
+#     the target row is absent.
+#   - Authorize against operation, input data, and located instance before any
+#     flavor-specific relation decoding.
+#   - Run the supplied write step, return payload errors when it reports errors,
+#     otherwise refetch the saved object through the optimized query path.
+#
+# The authorize-before-decode ordering is the security invariant; model, form,
+# and serializer flavors must not each hand-roll it.
+
 
 def _decode_relations(
     model: type,
@@ -780,6 +794,16 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
     return [FieldError(field=NON_FIELD_ERROR_KEY, messages=list(exc.messages))]
 
 
+# TODO(spec-039 Slice 3): Before adding the recursive DRF serializer flattener,
+# promote the `FieldError(field=..., messages=...)` leaf construction into a
+# small shared helper and keep importing `NON_FIELD_ERROR_KEY`.
+# Pseudo flow:
+#   - Normalize an empty path to `NON_FIELD_ERROR_KEY`.
+#   - Coerce serializer/form/Django message containers into a list.
+#   - Return the shared `FieldError` leaf from one helper.
+#
+# The serializer flattener is new and recursive, but the `"__all__"` sentinel and
+# leaf construction must not drift from this flat Django `ValidationError` mapper.
 def _integrity_error_field_errors() -> list[FieldError]:
     """Map a save-time ``IntegrityError`` to the ``"__all__"`` envelope (spec-036 Major-2).
 

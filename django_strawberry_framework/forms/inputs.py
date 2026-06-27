@@ -109,6 +109,18 @@ CREATE_SHAPED_KINDS: frozenset[str] = frozenset({CREATE, FORM})
 # namespace.
 _materialized_names: dict[str, type] = {}
 
+# TODO(spec-039 Slice 1): Replace this hand-maintained form input namespace with
+# `utils.inputs.make_input_namespace(...)`, then let the serializer input
+# namespace use the same helper.
+# Pseudo flow:
+#   - Ask `make_input_namespace(INPUTS_MODULE_PATH, "DjangoFormMutation")` for the
+#     form materialized-name ledger, materializer, and clear callback.
+#   - Reuse the returned callbacks in this module without changing the public
+#     `materialize_form_input_class(...)` and `clear_form_input_namespace()` names.
+#
+# Preserve the parked-globals lifecycle: clearing resets the ledger only, not
+# module attributes already resolved by `strawberry.lazy`.
+
 
 def materialize_form_input_class(name: str, input_cls: type) -> None:
     """Set ``input_cls`` as a real module global of ``forms.inputs`` under ``name``.

@@ -52,6 +52,16 @@ from django_strawberry_framework import (
 
 from . import filters, forms, models, orders
 
+# TODO(spec-039 Slice 3): Import `SerializerMutation` and
+# `apps.products.serializers` when the serializer resolver lands in the same
+# commit as the live products surface.
+# Pseudo flow:
+#   - Import `SerializerMutation` from the package root.
+#   - Import the products `serializers` module beside the existing forms/models.
+#
+# Keep this in products, not a new acceptance app: the live `/graphql/` suite
+# already owns package-reachable write behavior for model and form mutations.
+
 
 class CategoryType(DjangoType):
     class Meta:
@@ -348,6 +358,17 @@ class SubmitPing(DjangoFormMutation):
         form_class = forms.PingForm
 
 
+# TODO(spec-039 Slice 3): Add create/update serializer mutations over
+# `serializers.ItemSerializer` here, then expose both via `DjangoMutationField`
+# below.
+# Pseudo flow:
+#   - Define `CreateItemViaSerializer` with `SerializerMutation.Meta` pointing to
+#     `serializers.ItemSerializer` and `operation = "create"`.
+#   - Define `UpdateItemViaSerializer` with the same serializer and
+#     `operation = "update"`.
+#
+# The resolver and this live surface must land together so reachable resolver
+# lines are covered by `test_products_api.py`, not package-only tests.
 @strawberry.type
 class Mutation:
     """Fakeshop products app write surface - the `DjangoMutation` + form-mutation writes.
@@ -379,6 +400,9 @@ class Mutation:
     create_stamped_item_via_form = DjangoMutationField(CreateStampedItemViaForm)
     submit_contact = DjangoMutationField(SubmitContact)
     submit_ping = DjangoMutationField(SubmitPing)
+    # TODO(spec-039 Slice 3): Add `create_item_via_serializer` and
+    # `update_item_via_serializer` fields here in the same commit as
+    # `rest_framework/resolvers.py`.
 
 
 __all__ = ("Mutation", "Query")

@@ -50,6 +50,19 @@ class GeneratedInputFieldSpec:
     django_source_path: str
 
 
+# TODO(spec-039 Slice 1): Promote mutation/form/serializer input field specs and
+# namespace lifecycle helpers here before adding the serializer input generator.
+# Pseudo flow:
+#   - Define one frozen `InputFieldSpec` carrying `input_attr`, `graphql_name`,
+#     `target_name`, `kind`, and optional `source`.
+#   - `make_input_namespace(module_path, family_label)` owns the materialized-name
+#     ledger and returns the ledger, a materializer that calls
+#     `materialize_generated_input_class(...)`, and a ledger-only clear function.
+#   - `make_shape_build_cache()` owns one cache dict and returns it with a clear
+#     callback so registry/finalizer cleanup can be registered consistently.
+#
+# Existing mutation/form helpers should re-point here so
+# `rest_framework/inputs.py` does not become a third ledger/cache copy.
 def graphql_camel_name(name: str) -> str:
     """Lowercase the head, then ``PascalCase`` the rest (``galaxy_name`` -> ``galaxyName``).
 

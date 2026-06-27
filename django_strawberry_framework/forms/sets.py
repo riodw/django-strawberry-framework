@@ -103,6 +103,14 @@ _ALLOWED_PLAIN_FORM_META_KEYS: frozenset[str] = frozenset(
 # rejected even though the ``036`` model flavor accepts it.
 _VALID_FORM_OPERATIONS: frozenset[str] = frozenset({"create", "update"})
 
+# TODO(spec-039 Slice 2): Replace `_VALID_FORM_OPERATIONS` with shared
+# `mutations/sets.py::NON_DELETE_WRITE_OPERATIONS`; the serializer flavor must
+# import that same set rather than define `_VALID_SERIALIZER_OPERATIONS`.
+# Pseudo flow:
+#   - Import `NON_DELETE_WRITE_OPERATIONS` from `mutations.sets`.
+#   - Reject any form or serializer operation outside that shared set with one
+#     common configuration error message.
+
 # The model-less declaration registry for the plain ``DjangoFormMutation`` flavor
 # (spec-038 Decision 13). A SECOND, disjoint ledger from the ``036``
 # ``_mutation_registry`` - the dedup / post-finalize reject / clear mechanics are
@@ -135,6 +143,17 @@ _form_mutation_registry = _form_mutation_declaration_registry.store
 # from a prior (failed or re-run) finalize never leaks. Both flavors' ``build_input``
 # consult it via ``_cached_build_form_input``.
 _form_shape_build_cache: dict[tuple, tuple[type, list]] = {}
+
+# TODO(spec-039 Slice 2): Replace this form-local shape cache and
+# `_cached_build_form_input` procedure with the promoted shared cache/build
+# helpers before adding serializer inputs.
+# Pseudo flow:
+#   - Create the form cache and clear callback through `make_shape_build_cache()`.
+#   - Route form input construction through `cached_build_input(...)`.
+#   - Pass the create-required guard and `build_form_input_class(...)` as callables
+#     so guard-before-cache-lookup remains one shared rule.
+#
+# Guard-before-cache-lookup is load-bearing and must remain single-sited.
 
 
 def clear_form_shape_build_cache() -> None:
@@ -324,6 +343,15 @@ def _default_get_form(
     )
 
 
+# TODO(spec-039 Slice 2): Generalize `_form_kwargs_overridden` into
+# `mutations/sets.py::_hook_overridden(cls, base, name)` and re-point this form
+# waiver before `SerializerMutation.get_serializer_kwargs` lands.
+# Pseudo flow:
+#   - Move the identity comparison behind `_hook_overridden(cls, base, name)`.
+#   - Have the form waiver call that helper for `get_form_kwargs`.
+#
+# Serializer create-required narrowing must reuse the same override-detection
+# primitive rather than duplicate this identity check.
 def _modelform_operation_kind(meta: _ValidatedMutationMeta) -> str:
     """Map a ``DjangoModelFormMutation`` operation to its generator kind.
 

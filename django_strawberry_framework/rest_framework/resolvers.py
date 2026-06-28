@@ -32,9 +32,12 @@ The serializer-specific invariants this module owns:
 - **The dedicated serializer relation decoder mirrors the ``038`` form decoder**
   (serializer-field-keyed, NOT the model-attr-keyed ``036``
   ``_decode_relation_id_set``). Each relation id - a ``relay.GlobalID`` *or* a raw
-  pk - is type-checked against the relation's **target model** (resolved from the
-  backing FK via the serializer field's ``source``, or ``field.queryset.model``
-  for a serializer-only relation), then **resolved to the visible object through
+  pk - is type-checked against the relation's **target model**, which is recorded on
+  the bind-stashed reverse map (``InputFieldSpec.related_model``, resolved once at
+  build from the backing FK via the serializer field's ``source``, or
+  ``field.queryset.model`` for a serializer-only relation - spec-039 H4, so the
+  query path never re-discovers the serializer field set), then **resolved to the
+  visible object through
   the related primary ``DjangoType.get_queryset``** via the promoted
   ``utils/querysets.py::visible_related_object`` (P1.1 - the SAME object-returning
   visibility query the form decoder re-keys over), reduced to the pk a
@@ -128,7 +131,6 @@ from ..mutations.resolvers import (
 from ..relay import GlobalIDDecode, decode_model_global_id
 from ..utils.permissions import request_from_info
 from ..utils.querysets import visible_related_object
-from .inputs import get_serializer_for_schema
 from .serializer_converter import FILE, RELATION_MULTI, RELATION_SINGLE
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
@@ -160,32 +162,6 @@ def _relation_field_error(graphql_name: str) -> FieldError:
     (spec-039 integration), byte-identical across all three write flavors.
     """
     return relation_field_error(graphql_name)
-
-
-def _relation_target_models(mutation_cls: type) -> dict[str, type]:
-    """Map each relation serializer-field name to its Django target model (Decision 7).
-
-    Re-reads the serializer's SCHEMA-TIME field set (the same
-    ``get_serializer_for_schema`` discovery the Slice-1 converter used at build) and,
-    for each relation field, resolves the target model the way the converter
-    recorded it: a ``PrimaryKeyRelatedField`` exposes ``field.queryset.model``; a
-    ``ManyRelatedField`` exposes ``field.child_relation.queryset.model``. This is the
-    SAME basis the converter's ``serializer_only_relation_annotation`` /
-    ``backing_model_field`` resolution used, so the decode type-checks each id
-    against the model the build site typed the input over. Keyed by the declared
-    serializer field name (``spec.target_name``).
-    """
-    fields = get_serializer_for_schema(mutation_cls._mutation_meta.serializer_class)
-    target_models: dict[str, type] = {}
-    for name, field in fields.items():
-        related_field = (
-            field.child_relation if isinstance(field, serializers.ManyRelatedField) else field
-        )
-        queryset = getattr(related_field, "queryset", None)
-        model = getattr(queryset, "model", None)
-        if model is not None:
-            target_models[name] = model
-    return target_models
 
 
 def _decode_relation_single(
@@ -285,7 +261,6 @@ def _decode_serializer_data(
     A relation decode ``FieldError`` short-circuits.
     """
     spec_by_attr = {spec.input_attr: spec for spec in mutation_cls._input_field_specs}
-    target_models = _relation_target_models(mutation_cls)
     provided_data: dict[str, Any] = {}
 
     for field in data.__strawberry_definition__.fields:
@@ -302,7 +277,7 @@ def _decode_serializer_data(
             decoded, error = decoder(
                 value,
                 graphql_name=spec.graphql_name,
-                related_model=target_models[spec.target_name],
+                related_model=spec.related_model,
                 info=info,
             )
             if error is not None:

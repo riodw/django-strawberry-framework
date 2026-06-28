@@ -197,24 +197,22 @@ def test_context_reading_get_fields_rejected_at_fields_access():
         get_serializer_for_schema(CtxSer)
 
 
-def test_schema_hook_override_supplying_stable_map_generates_input(monkeypatch):
-    """An override of the discovery supplying a stable field map generates the input.
+def test_schema_hook_stable_field_map_generates_input():
+    """A stable ``field_map`` supplied to the generator builds the input without no-arg discovery.
 
-    The Slice-2 ``get_serializer_for_schema()`` classmethod hook delegates to this
-    module-level function by default; an override returns a stable map. Here we
-    patch the module-level discovery to simulate the override's stable map for a
-    context-requiring serializer, and the generators build off it.
+    The Slice-2 ``get_serializer_for_schema()`` classmethod hook returns a stable map
+    for a context-requiring serializer; the generators build off the supplied
+    ``field_map`` directly (no monkeypatching of the module-level discovery - the
+    bind threads the hook's result through this parameter).
     """
-    from django_strawberry_framework.rest_framework import inputs as inputs_module
 
     class CtxSer(serializers.Serializer):
-        def get_fields(self):  # pragma: no cover - never called; discovery is patched.
+        def get_fields(self):  # pragma: no cover - never called; field_map is supplied.
             _ = self.context["tenant"]
             return {}
 
     stable = {"name": _bound(serializers.CharField(), "name")}
-    monkeypatch.setattr(inputs_module, "get_serializer_for_schema", lambda _cls: dict(stable))
-    cre, _shape, _par, _pshape = build_serializer_inputs(CtxSer)
+    cre, _shape, _par, _pshape = build_serializer_inputs(CtxSer, field_map=dict(stable))
     assert set(_field_map(cre)) == {"name"}
 
 
@@ -426,32 +424,47 @@ def test_empty_effective_field_set_raises():
 
 
 def test_optional_fields_forces_create_field_optional():
-    """``Meta.optional_fields`` forces a create field optional regardless of ``field.required``."""
+    """The ``optional_fields`` PARAMETER forces a create field optional regardless of ``field.required``.
+
+    ``optional_fields`` is the MUTATION's ``Meta`` key (spec-039 Critical-1), threaded
+    into the generator as a parameter - NOT read off the serializer's own ``Meta``.
+    """
+
+    class S(serializers.Serializer):
+        a = serializers.CharField()
+        b = serializers.CharField()
+
+    cre, _, _, _ = build_serializer_inputs(S, optional_fields=("a",))
+    fields = _field_map(cre)
+    assert _is_optional(fields["a"])
+    assert not _is_optional(fields["b"])
+
+
+def test_serializer_meta_optional_fields_is_not_the_api():
+    """``optional_fields`` on the SERIALIZER's own ``Meta`` is ignored - it is the mutation key (Critical-1)."""
 
     class S(serializers.Serializer):
         a = serializers.CharField()
         b = serializers.CharField()
 
         class Meta:
-            optional_fields = ("a",)
+            optional_fields = ("a",)  # the serializer's own Meta - NOT the input API
 
-    cre, _, _, _ = build_serializer_inputs(S)
+    cre, _, _, _ = build_serializer_inputs(S)  # no optional_fields parameter passed
     fields = _field_map(cre)
-    assert _is_optional(fields["a"])
+    # ``a`` stays REQUIRED: the serializer-level Meta key has no effect on the input.
+    assert not _is_optional(fields["a"])
     assert not _is_optional(fields["b"])
 
 
 def test_optional_fields_all_bare_string_rejected():
-    """``optional_fields = "__all__"`` (a bare string) is rejected (no field-selector sentinel)."""
+    """``optional_fields = "__all__"`` (a bare string parameter) is rejected (no field-selector sentinel)."""
 
     class S(serializers.Serializer):
         a = serializers.CharField()
 
-        class Meta:
-            optional_fields = "__all__"
-
     with pytest.raises(ConfigurationError, match="bare string"):
-        build_serializer_inputs(S)
+        build_serializer_inputs(S, optional_fields="__all__")
 
 
 # ---------------------------------------------------------------------------
@@ -460,26 +473,19 @@ def test_optional_fields_all_bare_string_rejected():
 
 
 def test_optional_fields_difference_yields_distinct_names():
-    """Two create inputs over the same fields but different ``optional_fields`` get distinct names."""
+    """Two create inputs over the same serializer but different ``optional_fields`` get distinct names."""
 
-    class WithOpt(serializers.Serializer):
+    class Pair(serializers.Serializer):
         a = serializers.CharField()
         b = serializers.CharField()
 
-        class Meta:
-            optional_fields = ("a",)
-
-    class NoOpt(serializers.Serializer):
-        a = serializers.CharField()
-        b = serializers.CharField()
-
-    cre_opt, _, _, _ = build_serializer_inputs(WithOpt)
-    cre_noopt, _, _, _ = build_serializer_inputs(NoOpt)
+    cre_opt, _, _, _ = build_serializer_inputs(Pair, optional_fields=("a",))
+    cre_noopt, _, _, _ = build_serializer_inputs(Pair)
     # The full no-optional shape takes the canonical name; the optional_fields
-    # divergence takes a deterministic descriptor-derived name. (Different class
-    # names too, but the load-bearing point is the optional_fields shape diverges.)
-    assert cre_noopt.__name__ == "NoOptInput"
-    assert cre_opt.__name__ != "WithOptInput"
+    # divergence takes a deterministic descriptor-derived name - so the SAME
+    # serializer + field set under different optional_fields never collides.
+    assert cre_noopt.__name__ == "PairInput"
+    assert cre_opt.__name__ != "PairInput"
 
 
 def test_differing_annotations_yield_distinct_descriptor_names():
@@ -488,17 +494,11 @@ def test_differing_annotations_yield_distinct_descriptor_names():
     class StrSer(serializers.Serializer):
         x = serializers.CharField()
 
-        class Meta:
-            optional_fields = ("x",)
-
     class IntSer(serializers.Serializer):
         x = serializers.IntegerField()
 
-        class Meta:
-            optional_fields = ("x",)
-
-    cre_str, _, _, _ = build_serializer_inputs(StrSer)
-    cre_int, _, _, _ = build_serializer_inputs(IntSer)
+    cre_str, _, _, _ = build_serializer_inputs(StrSer, optional_fields=("x",))
+    cre_int, _, _, _ = build_serializer_inputs(IntSer, optional_fields=("x",))
     # Both are divergent shapes (optional_fields set); their descriptor-derived
     # suffixes encode the differing annotation, so the names differ.
     assert cre_str.__name__ != cre_int.__name__
@@ -608,8 +608,15 @@ def test_guard_runs_per_declaration():
 # ---------------------------------------------------------------------------
 
 
-def test_allow_null_field_is_nullable_even_when_required():
-    """``required=True, allow_null=True`` -> nullable annotation, NO default (must be provided)."""
+def test_required_allow_null_field_is_nullable_and_omittable():
+    """``required=True, allow_null=True`` -> nullable annotation AND omittable (UNSET default), spec-039 H3.
+
+    GraphQL cannot express required-AND-nullable, so the field is OMITTABLE (default
+    ``UNSET``): omission is stripped by the resolver so DRF sees the key MISSING and
+    raises its own field-keyed required error IN-BAND, rather than a top-level coercion
+    error from a required nullable field with no default (the bug H3 flags). An explicit
+    ``null`` still reaches DRF as ``None``.
+    """
 
     class S(serializers.Serializer):
         nick = serializers.CharField(allow_null=True)  # required=True by default
@@ -617,7 +624,21 @@ def test_allow_null_field_is_nullable_even_when_required():
     cre, _, _, _ = build_serializer_inputs(S)
     field = _field_map(cre)["nick"]
     assert _is_optional(field)  # annotation is T | None (allow_null)
-    # required (no UNSET default): the field must be provided.
+    # OMITTABLE (UNSET default): the must-provide half is enforced by DRF, not GraphQL,
+    # so omitting the key cannot fail at input-dataclass construction (H3).
+    assert field.default is UNSET
+
+
+def test_required_non_null_field_is_required_with_no_default():
+    """``required=True, allow_null=False`` -> bare (non-null) annotation, NO default (GraphQL enforces presence)."""
+
+    class S(serializers.Serializer):
+        nick = serializers.CharField()  # required=True, allow_null=False
+
+    cre, _, _, _ = build_serializer_inputs(S)
+    field = _field_map(cre)["nick"]
+    assert not _is_optional(field)  # bare T (non-null)
+    # No UNSET default: GraphQL itself enforces presence + non-null for this field.
     assert field.default is not UNSET
 
 

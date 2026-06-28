@@ -74,6 +74,11 @@ class InputFieldSpec:
       ``category_pk`` field declared ``source="category"``). ``None`` for a flavor
       with no ``source`` concept (forms) or a serializer field whose ``source``
       equals its declared name.
+    - ``related_model`` - the Django target model a relation field decodes its
+      id(s) against (``Category`` for a ``category`` / ``category_pk`` relation),
+      recorded at BIND time so the Slice-3 decode never re-discovers the
+      serializer's schema-time field set per request (spec-039 H4). ``None`` for a
+      non-relation (``scalar`` / ``file``) field.
 
     The form flavor keeps its own ``FormInputFieldSpec`` (no ``source`` axis, its
     suite stays byte-equivalent); the serializer reverse-map uses this directly
@@ -86,6 +91,7 @@ class InputFieldSpec:
     target_name: str
     kind: str
     source: str | None = None
+    related_model: type | None = None
 
 
 def make_input_namespace(

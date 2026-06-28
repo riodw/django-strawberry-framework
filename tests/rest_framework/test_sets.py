@@ -262,30 +262,22 @@ def test_fields_and_exclude_both_raises():
                 exclude = ("description",)
 
 
-def test_optional_fields_bare_string_rejected():
-    """A bare-string ``Meta.optional_fields`` (incl. ``"__all__"``) on the serializer is rejected.
+def test_optional_fields_bare_string_rejected_at_class_creation():
+    """A bare-string mutation ``Meta.optional_fields`` (incl. ``"__all__"``) is rejected at class creation.
 
-    ``optional_fields`` is read off the serializer's own ``Meta`` and validated at
-    bind via ``resolve_optional_fields`` (a bare string would iterate as
-    characters; there is no ``"__all__"`` sentinel for field SELECTORS). The reject
-    surfaces at ``finalize_django_types()`` since ``optional_fields`` is consumed by
-    the generator, not class-creation validation.
+    ``optional_fields`` is the MUTATION's ``Meta`` key (spec-039 Critical-1 - NOT the
+    serializer's own ``Meta``); it is normalized at class creation (a bare string would
+    iterate as characters; there is no ``"__all__"`` sentinel for field SELECTORS), so
+    the reject is immediate, not deferred to finalize.
     """
-    _declare_products_primaries()
-
-    class _OptionalAllSerializer(serializers.ModelSerializer):
-        class Meta:
-            model = product_models.Item
-            fields = ("name", "description")
-            optional_fields = "__all__"
-
-    class CreateItem(SerializerMutation):
-        class Meta:
-            serializer_class = _OptionalAllSerializer
-            operation = "create"
-
+    serializer_cls = _item_serializer()
     with pytest.raises(ConfigurationError, match="bare string|optional_fields"):
-        finalize_django_types()
+
+        class CreateItem(SerializerMutation):
+            class Meta:
+                serializer_class = serializer_cls
+                operation = "create"
+                optional_fields = "__all__"
 
 
 def test_unknown_meta_key_raises():
@@ -507,10 +499,10 @@ def _item_serializer_with_required_extra():
 def test_create_required_guard_fires_through_build_input():
     """Narrowing a required writable field away on create raises at finalize via ``build_input``.
 
-    The genuinely-new Slice-2 wiring: ``build_input``'s ``_guard()`` closure runs
-    ``guard_create_required_serializer_fields`` (only on ``CREATE``) through the
-    promoted ``cached_build_input``, BEFORE the per-shape cache lookup. Dropping the
-    required column-less ``confirm`` via ``Meta.fields`` makes the guard fire.
+    The genuinely-new Slice-2 wiring: ``build_input``'s ``_build`` closure runs
+    ``guard_create_required_serializer_fields`` (only on ``CREATE``) BEFORE the
+    per-shape descriptor dedupe. Dropping the required column-less ``confirm`` via
+    ``Meta.fields`` makes the guard fire.
     """
     _declare_products_primaries()
     serializer_cls = _item_serializer_with_required_extra()
@@ -561,19 +553,18 @@ def test_build_input_runs_required_guard_per_declaration():
 
     The serializer twin of
     ``tests/forms/test_sets.py::test_cached_build_form_input_runs_required_guard_per_declaration``.
-    The per-shape build cache (``_serializer_shape_build_cache``) is keyed on
-    ``(serializer_class, operation_kind, effective set)`` - NOT on whether the guard
-    is waived. ``build_input`` runs the create-required ``_guard`` PER declaration,
-    BEFORE the cache lookup, so a WAIVING declaration (overriding
-    ``get_serializer_kwargs``) that materializes the narrowed shape FIRST must not
-    poison the cache for a later NON-waiving declaration over the SAME serializer +
-    effective set: the second still raises. Were the guard tied to the built shape
-    instead of the declaration, the cache hit would silently skip it.
+    The per-shape build cache (``_serializer_shape_build_cache``) is keyed on the
+    ``SerializerInputShape`` DESCRIPTOR - NOT on whether the guard is waived.
+    ``build_input`` runs the create-required guard PER declaration, BEFORE building +
+    deduping the shape, so a WAIVING declaration (overriding ``get_serializer_kwargs``)
+    that materializes the narrowed shape FIRST must not poison the cache for a later
+    NON-waiving declaration over the SAME serializer + effective set: the second still
+    raises (its guard runs before its build, so the cached waived shape is irrelevant).
+    Were the guard tied to the built shape instead of the declaration, the cache hit
+    would silently skip it.
 
-    Driven at the ``finalize_django_types()`` integration level (the serializer
-    flavor has no per-flavor ``_cached_build_*`` wrapper to drive directly - it
-    rides the promoted ``cached_build_input``), with BOTH declarations in the same
-    build so they share the per-shape cache.
+    Driven at the ``finalize_django_types()`` integration level, with BOTH declarations
+    in the same build so they share the per-shape cache.
     """
     _declare_products_primaries()
     serializer_cls = _item_serializer_with_required_extra()
@@ -607,6 +598,155 @@ def test_build_input_runs_required_guard_per_declaration():
 
     with pytest.raises(ConfigurationError, match="confirm"):
         finalize_django_types()
+
+
+# ---------------------------------------------------------------------------
+# Meta.optional_fields is the MUTATION's key (Critical-1)
+# ---------------------------------------------------------------------------
+
+
+def _input_fields(input_cls):
+    """Return ``python_name -> StrawberryField`` for a materialized input class."""
+    return {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
+
+
+def test_mutation_optional_fields_forces_create_field_optional():
+    """``Meta.optional_fields`` on the MUTATION forces a create input field optional (Critical-1)."""
+    _declare_products_primaries()
+
+    class S(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    class CreateItem(SerializerMutation):
+        class Meta:
+            serializer_class = S
+            operation = "create"
+            optional_fields = ("name",)
+
+    finalize_django_types()
+    fields = _input_fields(CreateItem._input_class)
+    # ``name`` (a normally-required CharField) is forced optional by the MUTATION's
+    # Meta.optional_fields - it carries the UNSET (omittable) default.
+    assert fields["name"].default is strawberry.UNSET
+
+
+def test_serializer_meta_optional_fields_is_not_the_public_api():
+    """``optional_fields`` on the SERIALIZER's own ``Meta`` is IGNORED at bind (Critical-1).
+
+    The masking the original implementation relied on: the spec documents
+    ``optional_fields`` on the MUTATION's ``Meta``, so a serializer-level key must have
+    NO effect on the generated input.
+    """
+    _declare_products_primaries()
+
+    class S(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+            optional_fields = ("name",)  # the serializer's own Meta - NOT the input API
+
+    class CreateItem(SerializerMutation):
+        class Meta:
+            serializer_class = S
+            operation = "create"  # no optional_fields on the MUTATION
+
+    finalize_django_types()
+    fields = _input_fields(CreateItem._input_class)
+    # ``name`` stays REQUIRED: the serializer-level optional_fields has no effect.
+    assert fields["name"].default is not strawberry.UNSET
+
+
+def test_mutation_optional_fields_unknown_name_raises_at_class_creation():
+    """A mutation ``Meta.optional_fields`` naming a field not in the effective set raises (Critical-1)."""
+    serializer_cls = _item_serializer()
+    with pytest.raises(ConfigurationError, match="optional_fields"):
+
+        class CreateItem(SerializerMutation):
+            class Meta:
+                serializer_class = serializer_cls
+                operation = "create"
+                optional_fields = ("does_not_exist",)
+
+
+# ---------------------------------------------------------------------------
+# get_serializer_for_schema() classmethod hook + descriptor identity (Critical-2)
+# ---------------------------------------------------------------------------
+
+
+def test_get_serializer_for_schema_classmethod_override_drives_bind():
+    """A concrete ``get_serializer_for_schema()`` override drives validation + bind (Critical-2).
+
+    ``CtxItemSerializer.get_fields()`` reads ``self.context``, so DEFAULT no-arg
+    discovery raises - overriding the classmethod to return a stable, context-supplied
+    field map lets BOTH class-creation validation AND the phase-2.5 bind generate the
+    input, proving they consult the OVERRIDABLE classmethod (no monkeypatching of the
+    module-level discovery).
+    """
+    _declare_products_primaries()
+
+    class CtxItemSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+        def get_fields(self):
+            _ = self.context["tenant"]  # KeyError under no-arg default discovery
+            return super().get_fields()
+
+    class CreateCtxItem(SerializerMutation):
+        class Meta:
+            serializer_class = CtxItemSerializer
+            operation = "create"
+
+        @classmethod
+        def get_serializer_for_schema(cls):
+            # The override supplies the context the default no-arg discovery lacks.
+            return dict(CtxItemSerializer(context={"tenant": "t"}).fields)
+
+    finalize_django_types()
+    assert CreateCtxItem._input_class is not None
+    field_names = set(_input_fields(CreateCtxItem._input_class))
+    assert "name" in field_names
+    assert "category_id" in field_names  # FK relation, the 036 <name>_id scheme
+
+
+def test_distinct_optional_fields_on_one_serializer_get_distinct_inputs():
+    """Two create mutations on the SAME serializer + names but different ``optional_fields`` -> DISTINCT inputs (Critical-2).
+
+    The per-shape build cache keys on the FULL ``SerializerInputShape`` descriptor
+    (which folds in ``optional_fields``), NOT a pre-build ``(class, op, names)`` tuple,
+    so the second declaration does NOT reuse the first's stale cached class: it gets its
+    own deterministically-named input with the correct requiredness.
+    """
+    _declare_products_primaries()
+
+    class S(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    class CreatePlain(SerializerMutation):
+        class Meta:
+            serializer_class = S
+            operation = "create"
+
+    class CreateNameOptional(SerializerMutation):
+        class Meta:
+            serializer_class = S
+            operation = "create"
+            optional_fields = ("name",)
+
+    finalize_django_types()
+    # Distinct class objects + distinct names (no stale cache reuse on a shared key).
+    assert CreatePlain._input_class is not CreateNameOptional._input_class
+    assert CreatePlain._input_class.__name__ != CreateNameOptional._input_class.__name__
+    # And the requiredness differs: the optional_fields declaration forced `name` optional.
+    plain = _input_fields(CreatePlain._input_class)["name"]
+    opt = _input_fields(CreateNameOptional._input_class)["name"]
+    assert plain.default is not strawberry.UNSET  # required
+    assert opt.default is strawberry.UNSET  # forced optional
 
 
 # ---------------------------------------------------------------------------

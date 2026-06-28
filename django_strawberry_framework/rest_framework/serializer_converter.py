@@ -145,6 +145,44 @@ def _reject_nested_serializer(field: serializers.Field) -> None:
         )
 
 
+def _reject_unsupported_relation_field(field: serializers.Field) -> None:
+    """Raise unless ``field`` is a PK relation (spec-039 Decision 7 / H5).
+
+    The package types every relation input as a ``GlobalID`` / raw-pk that decodes
+    to a PRIMARY KEY, so only ``serializers.PrimaryKeyRelatedField`` (single) and a
+    ``serializers.ManyRelatedField`` whose ``child_relation`` is a
+    ``PrimaryKeyRelatedField`` (``many=True``) have matching decode semantics. A
+    ``SlugRelatedField`` / ``HyperlinkedRelatedField`` / custom writable
+    ``RelatedField`` expects a slug / URL / custom representation, NOT a pk -
+    accepting it would emit a GraphQL contract that silently misdecodes (a decoded
+    pk fed into a slug-expecting field). It fails loud here (the package's
+    no-silent-degrade contract, ``GOAL.md``) until the spec defines an input shape +
+    decode for those kinds. ``read_only`` relations are dropped before this is
+    reached, so only a WRITABLE non-PK relation raises.
+    """
+    if isinstance(field, serializers.ManyRelatedField):
+        child = field.child_relation
+        if not isinstance(child, serializers.PrimaryKeyRelatedField):
+            raise ConfigurationError(
+                f"Serializer field {field.field_name!r} is a ManyRelatedField wrapping a "
+                f"{type(child).__name__}; only PrimaryKeyRelatedField(many=True) is supported "
+                "(the relation input decodes to a primary key). A slug / URL / custom related "
+                "field has no pk-based input shape - drop it via Meta.fields / Meta.exclude, or "
+                "model the relation with PrimaryKeyRelatedField(many=True).",
+            )
+        return
+    if isinstance(field, serializers.RelatedField) and not isinstance(
+        field,
+        serializers.PrimaryKeyRelatedField,
+    ):
+        raise ConfigurationError(
+            f"Serializer relation field {field.field_name!r} is a {type(field).__name__}; only "
+            "PrimaryKeyRelatedField is supported (the relation input decodes to a primary key). "
+            "A slug / URL / custom related field has no pk-based input shape - drop it via "
+            "Meta.fields / Meta.exclude, or use a PrimaryKeyRelatedField.",
+        )
+
+
 def _list_child_conversion(field: serializers.ListField) -> SerializerFieldConversion:
     """Map a ``ListField`` to ``list[<scalar child>]``, or raise for a non-scalar child.
 
@@ -223,10 +261,16 @@ def convert_serializer_field(
     del is_input  # graphene-parity, accepted-and-ignored (spec-039 SR-3).
     required = field.required
 
-    def _relation_multi(_field: serializers.Field) -> SerializerFieldConversion:
+    def _relation_multi(field_: serializers.Field) -> SerializerFieldConversion:
+        # H5: only PrimaryKeyRelatedField(many=True) (a ManyRelatedField of a PK
+        # child) is a supported relation input; a non-PK child raises here.
+        _reject_unsupported_relation_field(field_)
         return SerializerFieldConversion(annotation=None, kind=RELATION_MULTI, required=required)
 
-    def _relation_single(_field: serializers.Field) -> SerializerFieldConversion:
+    def _relation_single(field_: serializers.Field) -> SerializerFieldConversion:
+        # H5: only PrimaryKeyRelatedField is a supported single relation input; a
+        # SlugRelatedField / HyperlinkedRelatedField / custom RelatedField raises.
+        _reject_unsupported_relation_field(field_)
         return SerializerFieldConversion(annotation=None, kind=RELATION_SINGLE, required=required)
 
     def _file(_field: serializers.Field) -> SerializerFieldConversion:
@@ -377,8 +421,11 @@ def _require_relation_primary(field_name: str, related_model: type[models.Model]
     return primary
 
 
-def serializer_only_relation_annotation(field: serializers.Field, kind: str) -> tuple[str, Any]:
-    """Map a column-LESS serializer relation field to its ``(python_attr, annotation)`` (F4).
+def serializer_only_relation_annotation(
+    field: serializers.Field,
+    kind: str,
+) -> tuple[str, Any, type[models.Model]]:
+    """Map a column-LESS serializer relation field to ``(python_attr, annotation, related_model)`` (F4).
 
     The serializer-flavor analog of
     ``forms/inputs.py::_model_less_relation_annotation``: a relation field with no
@@ -414,8 +461,8 @@ def serializer_only_relation_annotation(field: serializers.Field, kind: str) -> 
         id_scalar = scalar_for_field(related_model._meta.pk)
     input_attr, _ = serializer_field_graphql_name(field.field_name, kind)
     if kind == RELATION_MULTI:
-        return input_attr, list[id_scalar]
-    return input_attr, id_scalar
+        return input_attr, list[id_scalar], related_model
+    return input_attr, id_scalar, related_model
 
 
 def resolve_serializer_field(
@@ -449,6 +496,10 @@ def resolve_serializer_field(
     # ``source`` axis: the resolved one-segment source (``None`` when it equals
     # the declared name - keeps the reverse map terse and form-symmetric).
     source = field.source if (field.source and field.source != field_name) else None
+    # The relation target model recorded on the spec (``None`` for a non-relation),
+    # so the Slice-3 decode reads it off the bind-stashed reverse map instead of
+    # re-discovering the serializer field set per request (spec-039 H4).
+    related_model: type[models.Model] | None = None
 
     if column is not None and getattr(column, "is_relation", False):
         # Model-backed relation: the read-side ``relation_input_annotation`` owns the
@@ -456,6 +507,13 @@ def resolve_serializer_field(
         # though, follows the DECLARED serializer name (id-like-suffix rule), so a
         # renamed ``category_pk = PrimaryKeyRelatedField(source="category")`` exposes
         # ``categoryPk`` while the column is resolved via ``source``.
+        #
+        # H5: only a PK relation (``PrimaryKeyRelatedField`` / ``ManyRelatedField``
+        # of a PK child) decodes to a primary key, so a ``SlugRelatedField`` /
+        # ``HyperlinkedRelatedField`` / custom related field over a relation column
+        # fails loud here rather than silently misdecoding a pk into a slug-expecting
+        # field.
+        _reject_unsupported_relation_field(field)
         kind = RELATION_MULTI if getattr(column, "many_to_many", False) else RELATION_SINGLE
         # M3: the serializer flavor requires a registered primary DjangoType for
         # the target (stricter than the model fallback). Resolve + validate it
@@ -463,7 +521,8 @@ def resolve_serializer_field(
         # SAME Relay-vs-raw-pk decision the read side makes (a non-Relay target
         # still legitimately uses the raw pk - M3 forbids a MISSING primary, not a
         # non-Relay one).
-        primary = _require_relation_primary(field_name, column.related_model)
+        related_model = column.related_model
+        primary = _require_relation_primary(field_name, related_model)
         _, _, annotation = relation_input_annotation(column, related_primary_type=primary)
         python_attr, graphql_name = serializer_field_graphql_name(field_name, kind)
     elif column is not None and isinstance(column, (models.FileField, models.ImageField)):
@@ -483,7 +542,10 @@ def resolve_serializer_field(
             annotation = Upload
             python_attr, graphql_name = serializer_field_graphql_name(field_name, kind)
         elif kind in (RELATION_SINGLE, RELATION_MULTI):
-            python_attr, annotation = serializer_only_relation_annotation(field, kind)
+            python_attr, annotation, related_model = serializer_only_relation_annotation(
+                field,
+                kind,
+            )
             graphql_name = graphql_camel_name(python_attr)
         else:
             annotation = conversion.annotation
@@ -495,5 +557,6 @@ def resolve_serializer_field(
         target_name=field_name,
         kind=kind,
         source=source,
+        related_model=related_model,
     )
     return python_attr, annotation, spec

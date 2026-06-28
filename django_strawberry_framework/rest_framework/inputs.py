@@ -173,8 +173,9 @@ def _serializer_meta_value(serializer_class: type[serializers.BaseSerializer], n
     """Return ``serializer_class.Meta.<name>`` if declared, else ``None``.
 
     DRF serializers carry their own ``Meta`` (``model`` / ``fields`` / ``exclude``);
-    the package overlays ``optional_fields`` (and re-reads ``fields`` / ``exclude``
-    for the input narrowing). A serializer with no ``Meta`` (a bare ``Serializer``)
+    the package reads only the backing ``model`` from it (the narrowing /
+    ``optional_fields`` keys are the MUTATION's ``Meta``, not the serializer's -
+    spec-039 Critical-1). A serializer with no ``Meta`` (a bare ``Serializer``)
     yields ``None`` for every key.
     """
     meta = getattr(serializer_class, "Meta", None)
@@ -213,12 +214,17 @@ def resolve_effective_serializer_fields(
     *,
     fields: Any = None,
     exclude: Any = None,
+    field_map: dict[str, serializers.Field] | None = None,
 ) -> dict[str, serializers.Field]:
     """Return the effective ``{name: serializers.Field}`` dict after dropping + narrowing.
 
     Builds the input field set (spec-039 Decision 7):
 
-    1. discover the schema-time field set via ``get_serializer_for_schema``;
+    1. discover the schema-time field set - the caller-supplied ``field_map`` (the
+       ``SerializerMutation.get_serializer_for_schema()`` classmethod hook's result,
+       threaded so the bind consults the OVERRIDABLE hook once rather than each
+       helper re-instantiating the serializer), else the default module-level
+       ``get_serializer_for_schema`` discovery when called in isolation;
     2. DROP ``read_only`` and ``HiddenField`` fields (graphene's
        ``fields_for_serializer(is_input=True)`` parity - they are not input
        fields);
@@ -239,7 +245,7 @@ def resolve_effective_serializer_fields(
             "`exclude`; supply at most one.",
         )
 
-    discovered = get_serializer_for_schema(serializer_class)
+    discovered = get_serializer_for_schema(serializer_class) if field_map is None else field_map
     # Drop read-only + HiddenField: neither is an input field. ``read_only``
     # covers explicit ``read_only=True`` fields; ``HiddenField`` is read_only=False
     # but never accepts client input (it injects a fixed value), so it is dropped
@@ -282,19 +288,22 @@ def resolve_effective_serializer_fields(
 
 def resolve_optional_fields(
     serializer_class: type[serializers.BaseSerializer],
+    optional_fields: Any,
     effective_field_names: tuple[str, ...],
 ) -> frozenset[str]:
-    """Return the normalized ``Meta.optional_fields`` set (create-only requiredness override).
+    """Return the normalized ``optional_fields`` set (create-only requiredness override).
 
-    ``Meta.optional_fields`` forces the named create fields optional regardless of
-    ``field.required`` (spec-039 Decision 7). Normalized + fail-loud via
-    ``normalize_serializer_field_sequence``: a bare string (incl. ``"__all__"`` -
-    no ``"__all__"`` sentinel for field SELECTORS) and a duplicate are rejected; an
-    unknown name (not in the effective field set) raises. ``None`` (unset) yields
-    the empty set.
+    The mutation's ``Meta.optional_fields`` (spec-039 Decision 7 / Critical-1 - the
+    PUBLIC key lives on ``SerializerMutation.Meta``, NOT the serializer's own
+    ``Meta``) forces the named create fields optional regardless of
+    ``field.required``. ``optional_fields`` is the consumer value (or the
+    ``_ValidatedMutationMeta``-stored normalized tuple); it is normalized + fail-loud
+    via ``normalize_serializer_field_sequence`` (a bare string incl. ``"__all__"`` -
+    no ``"__all__"`` sentinel for field SELECTORS - and a duplicate are rejected),
+    then an unknown name (not in the effective field set) raises. ``None`` (unset)
+    yields the empty set.
     """
-    value = _serializer_meta_value(serializer_class, "optional_fields")
-    names = normalize_serializer_field_sequence(value, label="optional_fields")
+    names = normalize_serializer_field_sequence(optional_fields, label="optional_fields")
     if names is None:
         return frozenset()
     unknown = [name for name in names if name not in set(effective_field_names)]
@@ -417,6 +426,8 @@ def serializer_input_type_name(
 
 def _required_writable_field_names(
     serializer_class: type[serializers.BaseSerializer],
+    *,
+    field_map: dict[str, serializers.Field] | None = None,
 ) -> set[str]:
     """Return the names of every WRITABLE serializer field that is required-with-no-default.
 
@@ -424,9 +435,10 @@ def _required_writable_field_names(
     derives ``required`` from ``required`` / ``default`` / ``read_only`` itself, so
     a field with a ``default`` reports ``required=False``). ``read_only`` /
     ``HiddenField`` fields are excluded (they are not input fields). This is the
-    create-required-narrowing guard's basis.
+    create-required-narrowing guard's basis. ``field_map`` is the schema-time hook's
+    result threaded from the bind (else the default module discovery in isolation).
     """
-    discovered = get_serializer_for_schema(serializer_class)
+    discovered = get_serializer_for_schema(serializer_class) if field_map is None else field_map
     return {
         name
         for name, field in discovered.items()
@@ -439,6 +451,8 @@ def _required_writable_field_names(
 def guard_create_required_serializer_fields(
     serializer_class: type[serializers.BaseSerializer],
     effective_field_names: Any,
+    *,
+    field_map: dict[str, serializers.Field] | None = None,
 ) -> None:
     """Raise if a create narrowing drops a still-declared required writable serializer field.
 
@@ -460,7 +474,8 @@ def guard_create_required_serializer_fields(
     (the ``forms/inputs.py::guard_create_required_fields`` per-declaration precedent).
     """
     dropped_required = sorted(
-        _required_writable_field_names(serializer_class) - set(effective_field_names),
+        _required_writable_field_names(serializer_class, field_map=field_map)
+        - set(effective_field_names),
     )
     if dropped_required:
         raise ConfigurationError(
@@ -541,16 +556,27 @@ def build_serializer_input_class(
     operation_kind: str,
     fields: Any = None,
     exclude: Any = None,
+    optional_fields: Any = None,
+    field_map: dict[str, serializers.Field] | None = None,
 ) -> tuple[type, SerializerInputShape]:
     """Build ONE ``@strawberry.input`` class from a serializer's schema-time fields.
 
     ``operation_kind`` is ``CREATE`` (each field's requiredness from
     ``field.required`` minus the ``optional_fields`` override) or ``PARTIAL`` (the
-    update-shaped input - every field optional). Optional fields widen
-    ``annotation | None`` + a ``strawberry.UNSET`` default (the ``036`` shape). A
-    field whose ``allow_null`` is True is also nullable (orthogonal to
-    requiredness, M2): a required+``allow_null`` field stays omittable-as-missing
-    but its annotation is ``T | None``.
+    update-shaped input - every field optional). ``optional_fields`` is the
+    mutation's ``Meta.optional_fields`` value (spec-039 Critical-1 - the PUBLIC key
+    lives on the mutation, NOT the serializer's own ``Meta``); ``field_map`` is the
+    ``get_serializer_for_schema()`` hook's result threaded from the bind (else the
+    default module discovery when called in isolation).
+
+    A nullable input field (``allow_null=True`` OR optional) widens to
+    ``annotation | None`` AND carries a ``strawberry.UNSET`` default so the key is
+    OMITTABLE at GraphQL coercion (spec-039 M2 / H3): a ``required=True,
+    allow_null=True`` field is nullable-but-must-provide, so the GraphQL field is
+    omittable (the resolver strips ``UNSET`` -> DRF sees the key MISSING and raises
+    its own field-keyed required error) while still accepting an explicit ``null``.
+    A non-nullable required field (``required=True, allow_null=False``) gets NO
+    default, so GraphQL itself enforces presence + non-null.
 
     Returns ``(input_cls, shape)`` - the UNMATERIALIZED ``@strawberry.input`` class
     and the ``SerializerInputShape`` descriptor (which carries the reverse-map
@@ -561,10 +587,18 @@ def build_serializer_input_class(
         serializer_class,
         fields=fields,
         exclude=exclude,
+        field_map=field_map,
     )
-    full_writable = resolve_effective_serializer_fields(serializer_class)
-    optional_fields = resolve_optional_fields(serializer_class, tuple(effective))
+    full_writable = resolve_effective_serializer_fields(serializer_class, field_map=field_map)
+    optional_fields = resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
     is_partial = operation_kind == PARTIAL
+    if is_partial:
+        # ``optional_fields`` is a NO-OP on update (spec-039 Decision 7): the partial
+        # input is already all-optional, so it must not perturb the partial shape's
+        # descriptor identity / name (an update mutation that sets ``optional_fields``
+        # still dedupes to the canonical ``<Serializer>PartialInput``). Names were
+        # validated above before this is zeroed.
+        optional_fields = frozenset()
     model = _serializer_model(serializer_class)
 
     # The provisional type name (for the choice-enum ``<TypeName><Field>Enum``
@@ -590,16 +624,21 @@ def build_serializer_input_class(
         # Nullability (M2): the annotation is widened ``T | None`` when the field
         # is ``allow_null`` OR is optional (an optional field must accept omission
         # via the ``strawberry.UNSET`` default, so its annotation is nullable). The
-        # two reasons are OR-ed once so the annotation is widened at most once. A
-        # required+``allow_null`` field is nullable WITHOUT a default (it must be
-        # provided, but its value may be null).
+        # two reasons are OR-ed once so the annotation is widened at most once.
         nullable = getattr(field, "allow_null", False) or not required
         field_kwargs: dict[str, Any] = {}
         if python_attr != spec.graphql_name:
             field_kwargs["name"] = spec.graphql_name
         if nullable:
             annotation = annotation | None
-        if not required:
+            # A nullable field is ALWAYS omittable (default ``UNSET``), even when DRF
+            # ``required=True`` (spec-039 M2 / H3): GraphQL cannot express
+            # required-AND-nullable, so omission is allowed at coercion and the
+            # resolver strips ``UNSET`` -> DRF sees the key MISSING and raises its own
+            # field-keyed required error in-band, rather than a top-level coercion
+            # error from a required nullable field with no default. An explicit
+            # ``null`` still reaches DRF as ``None``. A non-nullable required field
+            # gets NO default below, so GraphQL enforces presence + non-null itself.
             field_kwargs["default"] = strawberry.UNSET
         triples.append((python_attr, annotation, field_kwargs))
 
@@ -643,14 +682,19 @@ def build_serializer_inputs(
     *,
     fields: Any = None,
     exclude: Any = None,
+    optional_fields: Any = None,
     guard_required: bool = True,
+    field_map: dict[str, serializers.Field] | None = None,
 ) -> tuple[type, SerializerInputShape, type, SerializerInputShape]:
     """Build BOTH the create + partial inputs for a serializer, with the create-required guard.
 
     Single entry point producing ``(<Serializer>Input, create_shape,
     <Serializer>PartialInput, partial_shape)``. The create input honors
-    ``field.required`` minus ``optional_fields``; the partial input is always
-    every-field-optional.
+    ``field.required`` minus ``optional_fields`` (the mutation's
+    ``Meta.optional_fields`` value, spec-039 Critical-1); the partial input is
+    always every-field-optional. ``field_map`` is the
+    ``get_serializer_for_schema()`` hook's result threaded from the bind (else the
+    default module discovery when called in isolation).
 
     **The create-required-narrowing guard (spec-039 Decision 7).** When
     ``guard_required`` is True, raises ``ConfigurationError`` naming any required
@@ -666,21 +710,26 @@ def build_serializer_inputs(
         serializer_class,
         fields=fields,
         exclude=exclude,
+        field_map=field_map,
     )
     if guard_required:
-        guard_create_required_serializer_fields(serializer_class, effective)
+        guard_create_required_serializer_fields(serializer_class, effective, field_map=field_map)
 
     create_cls, create_shape = build_serializer_input_class(
         serializer_class,
         operation_kind=CREATE,
         fields=fields,
         exclude=exclude,
+        optional_fields=optional_fields,
+        field_map=field_map,
     )
     partial_cls, partial_shape = build_serializer_input_class(
         serializer_class,
         operation_kind=PARTIAL,
         fields=fields,
         exclude=exclude,
+        optional_fields=optional_fields,
+        field_map=field_map,
     )
     return create_cls, create_shape, partial_cls, partial_shape
 

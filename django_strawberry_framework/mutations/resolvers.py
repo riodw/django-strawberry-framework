@@ -156,7 +156,11 @@ def run_write_pipeline_sync(
     -> M2M step; the form passes a form-decode + partial-reconstruction step and a
     ``get_form`` -> ``is_valid`` -> ``form.save`` step; the serializer passes a
     serializer-field-keyed decode step and a ``serializer.is_valid`` -> ``save`` step.
-    A step returning a ``list[FieldError]`` short-circuits to a null-object payload.
+    A step returning a ``list[FieldError]`` short-circuits to a null-object payload AND
+    marks the ``transaction.atomic()`` block for rollback (spec-039 H6) - so a
+    ``write_step`` that made a partial write and THEN raised a validation error (a
+    custom ``serializer.save()`` that inserts a row, then raises) never commits the
+    partial write; the error envelope is the no-effect outcome.
     """
     meta = mutation_cls._mutation_meta
     primary_type = mutation_cls._primary_type
@@ -165,14 +169,32 @@ def run_write_pipeline_sync(
     is_update = meta.operation == "update"
 
     with transaction.atomic():
+
+        def _error_payload(errors: list[FieldError]) -> Any:
+            """Roll back, then return the null-object error envelope (spec-039 H6).
+
+            A ``FieldError`` envelope means the mutation did NOT succeed, so nothing it
+            wrote may persist. A flavor ``write_step`` whose write made a partial change
+            and THEN raised a validation error - the custom ``serializer.save()`` that
+            inserts a row then raises ``serializers.ValidationError``, mapped to the
+            envelope inside this atomic block - would otherwise COMMIT on the normal
+            return. Mark the transaction for rollback BEFORE building the payload so the
+            partial write is discarded (``build_payload`` runs no ORM query, so it is
+            safe after ``set_rollback``). Harmless on the read-only locate / decode
+            failure paths (nothing was written), keeping the invariant uniform: an error
+            envelope never commits.
+            """
+            transaction.set_rollback(True)
+            return build_payload(payload_cls, slot, None, errors)
+
         instance = None
         if is_update:
             node_id, id_error = coerce_lookup_id(id, primary_type)
             if id_error is not None:
-                return build_payload(payload_cls, slot, None, [id_error])
+                return _error_payload([id_error])
             instance = locate_instance(primary_type, node_id, info)
             if instance is None:
-                return build_payload(payload_cls, slot, None, [not_found_error()])
+                return _error_payload([not_found_error()])
 
         # Authorize BEFORE the flavor decode (the security invariant): the decode
         # issues visibility-scoped ``get_queryset`` queries, so running it pre-auth
@@ -181,11 +203,11 @@ def run_write_pipeline_sync(
 
         decoded = decode_step(instance)
         if isinstance(decoded, list):
-            return build_payload(payload_cls, slot, None, decoded)
+            return _error_payload(decoded)
 
         saved = write_step(instance, decoded)
         if isinstance(saved, list):
-            return build_payload(payload_cls, slot, None, saved)
+            return _error_payload(saved)
 
         obj = refetch_optimized(primary_type, saved.pk, info, force_load=False)
         return build_payload(payload_cls, slot, obj, [])

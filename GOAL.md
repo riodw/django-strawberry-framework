@@ -488,9 +488,11 @@ class CreateCategory(DjangoMutation):
 
 
 # Coming in 0.0.13 — the DRF-serializer flavor on the same base:
-class CreateCategoryFromSerializer(DjangoMutation):
+class CreateCategoryFromSerializer(SerializerMutation):
     class Meta:
         serializer_class = CategorySerializer
+        operation = "create"
+    # Generated input drops the read-only `id`: CategorySerializerInput { name: String! }
 ```
 
 GraphQL becomes another transport for the same business logic — no parallel field definitions, no re-validated payloads, no duplicate filter declarations.

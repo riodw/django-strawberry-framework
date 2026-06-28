@@ -9,7 +9,6 @@ Per AGENTS.md, catalog tests seed via ``services.seed_data`` and never hand-roll
 they hold regardless of the exact Faker provider list.
 """
 
-import importlib
 import sys
 from collections import defaultdict
 
@@ -17,46 +16,33 @@ import pytest
 
 from apps.products import models as products_models
 from apps.products.services import seed_data
-from django_strawberry_framework.registry import registry
 
 
 @pytest.fixture
-def project_schema():
-    """Recompose ``config.schema.schema`` against a products-registered registry.
+def project_schema(reload_all_project_app_schemas):
+    """Recompose ``config.schema.schema`` against a fully re-registered registry.
 
     The sibling live HTTP suites under ``test_query/`` clear the global registry
-    and reload ``config.schema`` between tests. Crucially, the *non-products*
-    suites (e.g. ``test_library_api.py``) reload only their own app schema before
-    ``config.schema``, so the cached ``config.schema`` module they leave behind is
-    composed with a products ``Item`` type that LACKS its activated cascade
-    ``get_queryset`` hook (spec-034 Slice 4). A bare
-    ``importlib.import_module("config.schema")`` here would return that stale
-    cached module - the activated cascade would not narrow, and items under
-    private categories would leak.
+    and reload ``config.schema`` between tests, and worker-sharing package tests
+    (e.g. ``examples/fakeshop/tests/test_inspect_django_type.py``) evict the schema
+    modules from ``sys.modules`` without restoring them. A products-only partial
+    reload here would leave the *non-products* apps either unregistered (cascade
+    hooks missing, items under private categories leaking) or duplicated (a
+    re-imported ``apps.library.schema`` colliding at the aggregate build ->
+    ``DuplicatedTypeName: BookInputCirculationStatusEnum``).
 
-    So this fixture mirrors the proven reload discipline in
-    ``test_query/test_products_api.py::_reload_products_project_schema``: clear the
-    registry, reload ``apps.products.schema`` to re-register the products
-    ``DjangoType`` classes (with their cascade hooks) FIRST, then reload
-    ``config.schema`` so the composed schema binds the activated products types -
-    regardless of which suite ran before this one. Reload only schema modules (not
-    ``apps.products.models``) so Django model classes stay stable.
+    So this fixture rebuilds the WHOLE project schema via the shared
+    ``schema_reload.reload_all_project_schemas`` complete-reload discipline (the
+    same single-sited helper every ``test_query/`` acceptance file uses, exposed
+    here through the ``apps.products.tests`` conftest's
+    ``reload_all_project_app_schemas`` fixture): clear the registry and re-register
+    ALL five apps in dependency-safe order before reloading ``config.schema``, so
+    the composed schema binds the activated products types and resolves every app's
+    inputs exactly once - regardless of which suite ran before this one. Model
+    modules are never reloaded so Django model classes stay stable.
     """
-    registry.clear()
-
-    products_schema = sys.modules.get("apps.products.schema")
-    if products_schema is None:
-        importlib.import_module("apps.products.schema")
-    else:
-        importlib.reload(products_schema)
-
-    config_schema = sys.modules.get("config.schema")
-    if config_schema is None:
-        config_schema = importlib.import_module("config.schema")
-    else:
-        importlib.reload(config_schema)
-
-    return config_schema.schema
+    reload_all_project_app_schemas()
+    return sys.modules["config.schema"].schema
 
 
 @pytest.mark.django_db

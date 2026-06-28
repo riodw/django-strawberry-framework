@@ -36,22 +36,35 @@ from .types.converters import DjangoFileType, DjangoImageType  # noqa: E402
 
 __version__ = "0.0.12"
 
-# TODO(spec-039 Slice 2): Export `SerializerMutation` through a root `__getattr__`
-# instead of an eager import so `import django_strawberry_framework` keeps working
-# without DRF installed. Keep it OUT of `__all__` while DRF is a soft dependency:
-# named imports resolve lazily, but star imports must stay DRF-free and must not
-# bind `SerializerMutation`.
-# Pseudo flow:
-#   - On root `__getattr__`, reject every name except `SerializerMutation` with
-#     the normal `AttributeError`.
-#   - Import and run `rest_framework.require_drf()` before importing the class.
-#   - Import `rest_framework.sets.SerializerMutation` only after the guard passes,
-#     then return that class to the caller.
-#   - Leave `__all__` unchanged; do not add `SerializerMutation` until DRF becomes
-#     a hard runtime dependency.
-#
-# Do not memoize the resolved class into `globals()`; the absent-DRF test must be
-# able to evict modules and re-hit the guard on every access.
+
+def __getattr__(name: str) -> type:
+    """Resolve ``SerializerMutation`` lazily through the DRF soft-import guard (spec-039 Decision 12).
+
+    PEP 562 module-level ``__getattr__``: ``from django_strawberry_framework import
+    SerializerMutation`` resolves by NAME through ``rest_framework.require_drf()``
+    (the shared DRF guard), so a DRF-absent consumer gets the install-hint
+    ``ImportError`` only when they reach for the name - ``import
+    django_strawberry_framework`` itself never eagerly imports ``rest_framework/`` and
+    succeeds without DRF. Every OTHER attribute miss raises the normal
+    ``AttributeError`` so unrelated typos behave as usual.
+
+    **Non-memoizing (Decision 12).** The resolved class is NOT written into the
+    module ``globals()`` - each access re-fires the guard, so the absent-DRF test can
+    evict ``rest_framework*`` / ``django_strawberry_framework.rest_framework*`` from
+    ``sys.modules`` and re-hit the guard on the next access without a stale binding.
+    ``SerializerMutation`` is deliberately ABSENT from ``__all__`` (F1) so ``from
+    django_strawberry_framework import *`` stays DRF-free and never trips the guard.
+    """
+    if name == "SerializerMutation":
+        from .rest_framework import require_drf
+
+        require_drf()
+        from .rest_framework.sets import SerializerMutation
+
+        return SerializerMutation
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 __all__ = (
     "BigInt",
     "DjangoConnection",

@@ -54,11 +54,18 @@ from ..mutations.inputs import (
 )
 from ..mutations.permissions import _PERMISSION_ASYNC_RECOURSE, DenyAll
 from ..mutations.sets import (
+    NON_DELETE_WRITE_OPERATIONS,
     DjangoMutation,
+    _hook_overridden,
     _validate_permission_classes,
     _ValidatedMutationMeta,
+    build_and_stash_input,
+    cached_build_input,
     make_declaration_registry,
+    non_delete_operation_error,
+    reject_unknown_meta_keys,
 )
+from ..utils.inputs import make_shape_build_cache
 from ..utils.querysets import reject_async_in_sync_context
 from .inputs import (
     FORM,
@@ -98,19 +105,6 @@ _ALLOWED_PLAIN_FORM_META_KEYS: frozenset[str] = frozenset(
     },
 )
 
-# The two ``ModelForm`` operations (spec-038 Decision 10): a form mutation has NO
-# ``delete`` pipeline (delete is id-only, no form to bind), so ``"delete"`` is
-# rejected even though the ``036`` model flavor accepts it.
-_VALID_FORM_OPERATIONS: frozenset[str] = frozenset({"create", "update"})
-
-# TODO(spec-039 Slice 2): Replace `_VALID_FORM_OPERATIONS` with shared
-# `mutations/sets.py::NON_DELETE_WRITE_OPERATIONS`; the serializer flavor must
-# import that same set rather than define `_VALID_SERIALIZER_OPERATIONS`.
-# Pseudo flow:
-#   - Import `NON_DELETE_WRITE_OPERATIONS` from `mutations.sets`.
-#   - Reject any form or serializer operation outside that shared set with one
-#     common configuration error message.
-
 # The model-less declaration registry for the plain ``DjangoFormMutation`` flavor
 # (spec-038 Decision 13). A SECOND, disjoint ledger from the ``036``
 # ``_mutation_registry`` - the dedup / post-finalize reject / clear mechanics are
@@ -142,25 +136,14 @@ _form_mutation_registry = _form_mutation_declaration_registry.store
 # ``bind_form_mutations()`` and co-cleared from ``registry.clear()`` so a stale class
 # from a prior (failed or re-run) finalize never leaks. Both flavors' ``build_input``
 # consult it via ``_cached_build_form_input``.
-_form_shape_build_cache: dict[tuple, tuple[type, list]] = {}
-
-# TODO(spec-039 Slice 2): Replace this form-local shape cache and
-# `_cached_build_form_input` procedure with the promoted shared cache/build
-# helpers before adding serializer inputs.
-# Pseudo flow:
-#   - Create the form cache and clear callback through `make_shape_build_cache()`.
-#   - Route form input construction through `cached_build_input(...)`.
-#   - Pass the create-required guard and `build_form_input_class(...)` as callables
-#     so guard-before-cache-lookup remains one shared rule.
-#   - Register the clear callback through the shared static clear-target registry,
-#     not a hand-added finalizer/registry pair.
 #
-# Guard-before-cache-lookup is load-bearing and must remain single-sited.
-
-
-def clear_form_shape_build_cache() -> None:
-    """Reset the per-pass form-input build cache (the ``registry.clear()`` co-clear hook)."""
-    _form_shape_build_cache.clear()
+# The ``(cache, clear)`` pair rides the promoted ``utils/inputs.py::make_shape_build_cache``
+# plumbing (spec-039 P1.3 / SR-1), the SAME factory the serializer cache uses, so the
+# form + serializer + mutation caches share one dict-plus-clear shape while staying
+# disjoint (separate dicts, registered + cleared separately). ``clear_form_shape_build_cache``
+# is co-cleared from ``registry.clear()`` (a ``registry.clear()``-only reset, NOT a
+# pre-bind input clear - it is a per-pass build cache).
+_form_shape_build_cache, clear_form_shape_build_cache = make_shape_build_cache()
 
 
 def _cached_build_form_input(
@@ -194,7 +177,8 @@ def _cached_build_form_input(
     effective = _resolve_effective_form_field_names(form_class, fields=fields, exclude=exclude)
 
     # Run the create-required-narrowing guard PER declaration, BEFORE the per-shape
-    # cache lookup: the cache key excludes ``guard_required``, so a waiving mutation
+    # cache lookup (the load-bearing ordering ``cached_build_input`` enforces): the
+    # cache key excludes ``guard_required``, so a waiving mutation
     # (``guard_required=False``, having overridden ``get_form_kwargs`` / ``get_form``)
     # that materializes this shape FIRST must not suppress the guard for a later
     # non-waiving mutation reusing the same cached shape - the guard is tied to the
@@ -204,24 +188,22 @@ def _cached_build_form_input(
     # required field is widened optional and reconstructed from the row, but a
     # column-less extra cannot be reconstructed, so dropping it finalizes a form that
     # can never validate.
-    if guard_required:
+    def _guard() -> None:
+        if not guard_required:
+            return
         if operation_kind == PARTIAL:
             guard_partial_required_column_less_fields(form_class, effective)
         else:
             guard_create_required_fields(form_class, effective)
 
-    cache_key = (form_class, operation_kind, frozenset(effective))
-    cached = _form_shape_build_cache.get(cache_key)
-    if cached is not None:
-        return cached
-    if operation_kind == PARTIAL:
-        input_cls, field_specs = build_form_input_class(
-            form_class,
-            operation_kind=PARTIAL,
-            fields=fields,
-            exclude=exclude,
-        )
-    else:
+    def _build() -> tuple[type, list]:
+        if operation_kind == PARTIAL:
+            return build_form_input_class(
+                form_class,
+                operation_kind=PARTIAL,
+                fields=fields,
+                exclude=exclude,
+            )
         # The guard already ran per-declaration above; ``build_form_inputs`` would
         # otherwise re-run it only on a cache MISS (the bypass this fix closes).
         input_cls, field_specs, _partial_cls, _partial_specs = build_form_inputs(
@@ -231,8 +213,15 @@ def _cached_build_form_input(
             exclude=exclude,
             guard_required=False,
         )
-    _form_shape_build_cache[cache_key] = (input_cls, field_specs)
-    return input_cls, field_specs
+        return input_cls, field_specs
+
+    cache_key = (form_class, operation_kind, frozenset(effective))
+    return cached_build_input(
+        _form_shape_build_cache,
+        cache_key,
+        guard=_guard,
+        build_fn=_build,
+    )
 
 
 def _require_form_class(name: str, meta: type, *, base_label: str) -> type:
@@ -275,10 +264,16 @@ def _form_kwargs_overridden(cls: type, base: type) -> bool:
     """Return whether ``cls`` overrides ``get_form_kwargs`` / ``get_form`` (the waiver detection).
 
     The ``get_form_kwargs`` / ``get_form`` waiver (spec-038 Decision 7 / Slice 3):
-    when a consumer overrides the form-construction hook to inject fields the
-    generated input does not carry (a ``user``, a tenant, a defaulted column), the
-    create-required-narrowing guard cannot know WHICH fields the override supplies,
-    so it trusts the override and waives the guard.
+    True when the concrete mutation re-defines EITHER construction hook relative to
+    its framework ``base``. When a consumer overrides the form-construction hook to
+    inject fields the generated input does not carry (a ``user``, a tenant, a
+    defaulted column), the create-required-narrowing guard cannot know WHICH fields
+    the override supplies, so it trusts the override and waives the guard.
+
+    Rides the promoted ``mutations/sets.py::_hook_overridden(cls, base, name)``
+    (spec-039 P2.6) for each hook - the per-hook identity comparison is single-sited
+    there (the serializer ``get_serializer_kwargs`` waiver rides the same primitive),
+    so the form / serializer waivers cannot drift on how an override is detected.
 
     **Caveat (deliberate trade-off, spec-038 Decision 7).** The waiver is COARSE: it
     trusts that the override supplies any required field a ``Meta.fields`` /
@@ -289,14 +284,13 @@ def _form_kwargs_overridden(cls: type, base: type) -> bool:
     catch. The strict alternative (only waive for fields the override demonstrably
     injects) would reject legitimate kwarg-injection forms, so the spec accepts the
     trust; a consumer who hits the hole keeps the narrowed-away field in the input
-    instead. Detection is an identity check
-    against the framework base's default ``get_form_kwargs`` / ``get_form`` - a
-    concrete subclass that re-defines either resolves to a different function
-    object on ``cls`` than on ``base``. (Both methods are plain instance methods, so
-    ``cls.<name>`` resolves to the unbound function; an override makes it ``is not``
-    the base's.)
+    instead.
     """
-    return cls.get_form_kwargs is not base.get_form_kwargs or cls.get_form is not base.get_form
+    return _hook_overridden(cls, base, "get_form_kwargs") or _hook_overridden(
+        cls,
+        base,
+        "get_form",
+    )
 
 
 def _default_get_form_kwargs(
@@ -345,15 +339,6 @@ def _default_get_form(
     )
 
 
-# TODO(spec-039 Slice 2): Generalize `_form_kwargs_overridden` into
-# `mutations/sets.py::_hook_overridden(cls, base, name)` and re-point this form
-# waiver before `SerializerMutation.get_serializer_kwargs` lands.
-# Pseudo flow:
-#   - Move the identity comparison behind `_hook_overridden(cls, base, name)`.
-#   - Have the form waiver call that helper for `get_form_kwargs`.
-#
-# Serializer create-required narrowing must reuse the same override-detection
-# primitive rather than duplicate this identity check.
 def _modelform_operation_kind(meta: _ValidatedMutationMeta) -> str:
     """Map a ``DjangoModelFormMutation`` operation to its generator kind.
 
@@ -379,21 +364,27 @@ def _build_and_stash_form_input(
     ``FORM`` sentinel for the plain flavor) and their waiver ``base`` (the framework
     base whose default ``get_form_kwargs`` / ``get_form`` an override is detected
     against). Routes through ``_cached_build_form_input`` (per-shape dedupe +
-    per-declaration create-required guard), materializes the class into
-    ``forms.inputs``, and stashes the reverse-map ``field_specs`` on the mutation
-    (``cls._input_field_specs``) for the Slice-3 decode. Single-sited so a future
-    change to the materialize-and-stash sequence touches one place.
+    per-declaration create-required guard) and the promoted
+    ``mutations/sets.py::build_and_stash_input`` (spec-039 P1.7), which materializes
+    the class into ``forms.inputs`` and stashes the reverse-map ``field_specs`` on
+    the mutation (``cls._input_field_specs``) for the Slice-3 decode. The form's
+    per-flavor stash value (``build_and_stash_input``'s ``payload``) IS the
+    ``field_specs`` list, so ``specs_of`` is identity. Single-sited (with the
+    serializer flavor) so a future change to the materialize-and-stash sequence
+    touches one place.
     """
-    input_cls, field_specs = _cached_build_form_input(
-        meta.form_class,
-        operation_kind=operation_kind,
-        fields=meta.fields,
-        exclude=meta.exclude,
-        guard_required=not _form_kwargs_overridden(cls, base),
+    return build_and_stash_input(
+        cls,
+        build=lambda: _cached_build_form_input(
+            meta.form_class,
+            operation_kind=operation_kind,
+            fields=meta.fields,
+            exclude=meta.exclude,
+            guard_required=not _form_kwargs_overridden(cls, base),
+        ),
+        materialize=materialize_form_input_class,
+        specs_of=lambda field_specs: field_specs,
     )
-    materialize_form_input_class(input_cls.__name__, input_cls)
-    cls._input_field_specs = field_specs
-    return input_cls
 
 
 def _form_input_type_name_for(meta: _ValidatedMutationMeta, operation_kind: str) -> str:
@@ -475,12 +466,11 @@ class DjangoModelFormMutation(DjangoMutation):
         when unset). The snapshot carries ``form_class`` + the resolved ``model``.
         """
         name = cls.__name__
-        declared = {key for key in vars(meta) if not key.startswith("_")}
-        unknown = sorted(declared - _ALLOWED_MODELFORM_META_KEYS)
-        if unknown:
-            raise ConfigurationError(
-                f"DjangoModelFormMutation {name}.Meta has unknown keys: {unknown}.",
-            )
+        reject_unknown_meta_keys(
+            f"DjangoModelFormMutation {name}",
+            meta,
+            _ALLOWED_MODELFORM_META_KEYS,
+        )
 
         form_class = _require_form_class(name, meta, base_label="DjangoModelFormMutation")
         if not (isinstance(form_class, type) and issubclass(form_class, forms.ModelForm)):
@@ -498,12 +488,8 @@ class DjangoModelFormMutation(DjangoMutation):
             )
 
         operation = getattr(meta, "operation", None)
-        if operation not in _VALID_FORM_OPERATIONS:
-            raise ConfigurationError(
-                f"DjangoModelFormMutation {name}.Meta.operation must be one of "
-                f"{sorted(_VALID_FORM_OPERATIONS)}; got {operation!r}. (A form mutation has no "
-                "delete pipeline - declare a 036 DjangoMutation with operation='delete' instead.)",
-            )
+        if operation not in NON_DELETE_WRITE_OPERATIONS:
+            raise non_delete_operation_error("DjangoModelFormMutation", name, operation)
 
         fields = getattr(meta, "fields", None)
         exclude = getattr(meta, "exclude", None)
@@ -729,7 +715,6 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         form carries in place of a model operation).
         """
         name = cls.__name__
-        declared = {key for key in vars(meta) if not key.startswith("_")}
         # ``operation`` is RECOGNIZED-but-rejected on the plain base (not merely an
         # unknown key): a model-less mutation has no model operation (Decision 10).
         # Reject it by KEY PRESENCE, not value, so an explicit ``operation = None``
@@ -738,19 +723,21 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         # ``None`` slip through as if absent). Reject it FIRST with a targeted
         # message naming the reason, so a consumer who copied a
         # ``DjangoModelFormMutation`` ``Meta`` sees "operation is not supported"
-        # rather than a generic "unknown keys: ['operation']" - then run the typo
-        # guard over the genuinely-unknown remainder.
-        if "operation" in declared:
+        # rather than a generic "unknown keys: ['operation']" - then run the
+        # promoted typo guard over the genuinely-unknown remainder (``operation`` is
+        # added to the allowed set passed there so a stray ``operation`` cannot
+        # double-report; it is already rejected above by the key-presence check).
+        if "operation" in vars(meta):
             raise ConfigurationError(
                 f"DjangoFormMutation {name}.Meta.operation is not supported; a model-less form "
                 "mutation has no model operation (Decision 10). Remove Meta.operation.",
             )
 
-        unknown = sorted(declared - _ALLOWED_PLAIN_FORM_META_KEYS - {"operation"})
-        if unknown:
-            raise ConfigurationError(
-                f"DjangoFormMutation {name}.Meta has unknown keys: {unknown}.",
-            )
+        reject_unknown_meta_keys(
+            f"DjangoFormMutation {name}",
+            meta,
+            _ALLOWED_PLAIN_FORM_META_KEYS | {"operation"},
+        )
 
         form_class = _require_form_class(name, meta, base_label="DjangoFormMutation")
         # Check ``ModelForm`` FIRST (Edge case P2): ``forms.ModelForm`` is NOT a

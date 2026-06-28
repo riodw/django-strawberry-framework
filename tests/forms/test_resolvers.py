@@ -49,7 +49,7 @@ from django_strawberry_framework.forms import resolvers as form_resolvers
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
-from django_strawberry_framework.utils.querysets import SyncMisuseError
+from django_strawberry_framework.utils.querysets import SyncMisuseError, visible_related_object
 
 
 @pytest.fixture(autouse=True)
@@ -1866,17 +1866,17 @@ def test_explicit_null_m2m_on_update_clears_not_crashes():
 
 @pytest.mark.django_db
 def test_visible_related_object_no_primary_uses_default_manager():
-    """With no registered primary type, ``_visible_related_object`` scopes via the default manager.
+    """With no registered primary type, ``visible_related_object`` scopes via the default manager.
 
     A relation whose related model has no primary ``DjangoType`` carries no
     visibility contract, so existence is checked against the default manager.
-    Driven directly (the autouse fixture leaves the registry empty).
+    Driven directly (the autouse fixture leaves the registry empty). The helper was
+    promoted to ``utils/querysets.py`` in spec-039 Slice 3 (P1.1) so the form +
+    serializer relation decoders share one object-returning visibility query.
     """
     genre = library_models.Genre.objects.create(name=_uniq("G"))
-    assert form_resolvers._visible_related_object(library_models.Genre, genre.pk, None) == genre
-    assert (
-        form_resolvers._visible_related_object(library_models.Genre, genre.pk + 9999, None) is None
-    )
+    assert visible_related_object(library_models.Genre, genre.pk, None) == genre
+    assert visible_related_object(library_models.Genre, genre.pk + 9999, None) is None
 
 
 @pytest.mark.django_db

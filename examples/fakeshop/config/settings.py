@@ -39,9 +39,10 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     # Third-party
     "django_strawberry_framework",
-    # TODO(spec-039 Slice 3): Add `"rest_framework"` here only if the products
-    # `ItemSerializer` live surface needs DRF's app registry. Flat
-    # `ModelSerializer` validation may not require it; decide during implementation.
+    # NOTE(spec-039 Slice 3): `"rest_framework"` is intentionally NOT installed. The
+    # products `ItemSerializer` is a flat `ModelSerializer` whose validation +
+    # `UniqueTogetherValidator` need no DRF app registry (Decision 13 / spec line
+    # 969); DRF being a dev-group dependency keeps it importable in the test context.
     # Local
     "apps.library.apps.LibraryConfig",
     "apps.products.apps.ProductsConfig",

@@ -50,20 +50,126 @@ class GeneratedInputFieldSpec:
     django_source_path: str
 
 
-# TODO(spec-039 Slice 1): Promote mutation/form/serializer input field specs and
-# namespace lifecycle helpers here before adding the serializer input generator.
-# Pseudo flow:
-#   - Define one frozen `InputFieldSpec` carrying `input_attr`, `graphql_name`,
-#     `target_name`, `kind`, and optional `source`.
-#   - `make_input_namespace(module_path, family_label)` owns the materialized-name
-#     ledger and returns the ledger, a materializer that calls
-#     `materialize_generated_input_class(...)`, and a ledger-only clear function.
-#   - `make_shape_build_cache()` owns one cache dict and returns it with a clear
-#     callback so registry/finalizer cleanup can be registered consistently via
-#     static `(module_path, attr)` clear targets.
-#
-# Existing mutation/form helpers should re-point here so
-# `rest_framework/inputs.py` does not become a third ledger/cache copy.
+@dataclass(frozen=True)
+class InputFieldSpec:
+    """Unified per-generated-input-field reverse-map record (spec-039 P2.1).
+
+    The ``038`` ``forms/converter.py::FormInputFieldSpec`` generalized with the
+    serializer-only ``source`` axis. Where ``FormInputFieldSpec`` carried a
+    ``form_field_name`` (the bound form's own key), this carries the neutral
+    ``target_name`` - the per-flavor write-back key the Slice 3 resolver decodes
+    the generated GraphQL field back to:
+
+    - ``input_attr`` - the generated Strawberry dataclass attr (``category_id``
+      for an FK relation, ``name`` for a scalar).
+    - ``graphql_name`` - the camel-cased GraphQL wire name (``categoryId``).
+    - ``target_name`` - the per-flavor decode key. For the serializer flavor this
+      is the DECLARED serializer field name (``category_pk``), the key a built
+      ``validated_data`` payload is keyed by; for a form it would be the form
+      field name. Never the ``<name>_id`` relation attr.
+    - ``kind`` - one of the flavor's decode kinds (``scalar`` /
+      ``relation_single`` / ``relation_multi`` / ``file``).
+    - ``source`` - the serializer-only extra axis: the one-segment ``source`` the
+      backing ``models.Field`` was resolved through (``category`` for a
+      ``category_pk`` field declared ``source="category"``). ``None`` for a flavor
+      with no ``source`` concept (forms) or a serializer field whose ``source``
+      equals its declared name.
+
+    The form flavor keeps its own ``FormInputFieldSpec`` (no ``source`` axis, its
+    suite stays byte-equivalent); the serializer reverse-map uses this directly
+    (spec-039 D1 - the minimal-blast-radius unification: site the serializer spec
+    here, leave the form spec untouched).
+    """
+
+    input_attr: str
+    graphql_name: str
+    target_name: str
+    kind: str
+    source: str | None = None
+
+
+def make_input_namespace(
+    module_path: str,
+    family_label: str,
+) -> tuple[dict[str, type], Callable[[str, type], None], Callable[[], None]]:
+    """Return the ``(ledger, materialize_fn, clear_fn)`` trio for a generated-input namespace.
+
+    The promoted ONE-LEDGER lifecycle the mutation + form + serializer input
+    modules share (spec-039 P2.2). Before spec-039 ``mutations/inputs.py`` and
+    ``forms/inputs.py`` hand-mirrored the same four-part shape (a module-level
+    ``_materialized_names`` dict, a ``materialize_*`` wrapper over
+    ``materialize_generated_input_class``, a ``clear_*`` that calls
+    ``_materialized_names.clear()``); a serializer flavor would have been the
+    third copy. This single-sites it:
+
+    - ``ledger`` - a fresh ``name -> input_class`` dict the caller stores as its
+      module-level ledger (so any direct ``_materialized_names`` reference in the
+      caller's tests keeps addressing the same object).
+    - ``materialize_fn(name, cls)`` - pins ``cls`` as a real global of
+      ``module_path`` under ``name`` via
+      ``materialize_generated_input_class(..., family_label=family_label,
+      ledger=ledger)``. Inherits that helper's ``(name, cls)`` idempotency clause
+      and distinct-class collision raise (the finalize-time collision, named by
+      ``family_label``).
+    - ``clear_fn()`` - resets the ledger via ``ledger.clear()`` ONLY.
+
+    This is deliberately the LIGHT clear shape, NOT
+    ``clear_generated_input_namespace`` (which also resets an arguments-factory
+    cache + per-set ``_lifecycle`` binding state): the mutation / form / serializer
+    flavors derive their input fields from one declaration's field set, not a
+    related-set BFS graph, so they have neither a factory cache nor per-set
+    lifecycle state to reset. Materialized class objects stay PARKED in the
+    module ``__dict__`` per the shared parked-globals lifecycle - ``materialize_fn``
+    overwrites the global via ``setattr`` on the next finalize, so stripping it
+    via ``delattr`` would break any ``strawberry.lazy(...)`` LazyType a consumer
+    module still holds.
+    """
+    ledger: dict[str, type] = {}
+
+    def materialize_fn(name: str, cls: type) -> None:
+        materialize_generated_input_class(
+            name,
+            cls,
+            module_path=module_path,
+            family_label=family_label,
+            ledger=ledger,
+        )
+
+    def clear_fn() -> None:
+        ledger.clear()
+
+    return ledger, materialize_fn, clear_fn
+
+
+def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
+    """Return the ``(cache, clear_fn)`` pair for a per-shape build cache (spec-039 P1.3).
+
+    The promoted plumbing the mutation + form (Slice 2) + serializer (Slice 2)
+    bind caches share: ``mutations/sets.py::_shape_build_cache`` and
+    ``forms/sets.py::_form_shape_build_cache`` hand-mirror a module-level cache
+    dict plus a ``clear`` that empties it. This single-sites that pair:
+
+    - ``cache`` - a fresh dict the bind keys on its shape identity
+      (``(declaration_class, operation_kind, effective field set)`` for the
+      forms / mutation flavors; the ``SerializerInputShape`` descriptor for the
+      serializer flavor) so identical shapes build once.
+    - ``clear_fn()`` - empties the cache (registered into ``registry.clear()`` via
+      ``register_subsystem_clear`` by the CONSUMING slice, not here).
+
+    Pure plumbing; no registration. Slice 1 authors the helper (and unit-tests
+    it); the serializer cache CONSUMER (``rest_framework/sets.py``) and the
+    ``forms/sets.py`` re-point are Slice 2 (spec-039 SR-1 - the helper is
+    authored here, the serializer cache is consumed there, matching the spec-038
+    "generators in the inputs slice, cache consumer in the sets slice" split).
+    """
+    cache: dict[Any, Any] = {}
+
+    def clear_fn() -> None:
+        cache.clear()
+
+    return cache, clear_fn
+
+
 def graphql_camel_name(name: str) -> str:
     """Lowercase the head, then ``PascalCase`` the rest (``galaxy_name`` -> ``galaxyName``).
 

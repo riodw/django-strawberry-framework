@@ -39,6 +39,10 @@ present `filters.py` / `orders.py` modules; `aggregate_class` /
 import strawberry
 from strawberry import relay
 
+# ``SerializerMutation`` is imported BY NAME (never via star import): the root
+# ``__all__`` intentionally omits it while DRF is a soft dependency (F1), so the
+# root ``__getattr__`` resolves it on demand. DRF is present in the test context
+# (the dev-group dependency, Decision 12), so this import succeeds here.
 from django_strawberry_framework import (
     DjangoConnection,
     DjangoConnectionField,
@@ -47,22 +51,11 @@ from django_strawberry_framework import (
     DjangoMutation,
     DjangoMutationField,
     DjangoType,
+    SerializerMutation,
     apply_cascade_permissions,
 )
 
-from . import filters, forms, models, orders
-
-# TODO(spec-039 Slice 3): Import `SerializerMutation` and
-# `apps.products.serializers` when the serializer resolver lands in the same
-# commit as the live products surface.
-# Pseudo flow:
-#   - Import `SerializerMutation` by name from the package root; do not rely on
-#     star import because the root `__all__` intentionally omits it while DRF is
-#     soft.
-#   - Import the products `serializers` module beside the existing forms/models.
-#
-# Keep this in products, not a new acceptance app: the live `/graphql/` suite
-# already owns package-reachable write behavior for model and form mutations.
+from . import filters, forms, models, orders, serializers
 
 
 class CategoryType(DjangoType):
@@ -360,19 +353,38 @@ class SubmitPing(DjangoFormMutation):
         form_class = forms.PingForm
 
 
-# TODO(spec-039 Slice 3): Add create/update serializer mutations over
-# `serializers.ItemSerializer` here, then expose both via `DjangoMutationField`
-# below.
-# Pseudo flow:
-#   - Define `CreateItemViaSerializer` with `SerializerMutation.Meta` pointing to
-#     `serializers.ItemSerializer` and `operation = "create"`.
-#   - Define `UpdateItemViaSerializer` with the same serializer and
-#     `operation = "update"`.
-#   - Do not accept graphene's `model_operations` / `lookup_field` keys here; this
-#     package keeps one explicit `Meta.operation` mutation per write operation.
-#
-# The resolver and this live surface must land together so reachable resolver
-# lines are covered by `test_products_api.py`, not package-only tests.
+# --------------------------------------------------------------------------- #
+# Serializer-mutation write surface (spec-039 Slice 3 / Decision 13)
+# --------------------------------------------------------------------------- #
+
+
+class CreateItemViaSerializer(SerializerMutation):
+    """Create an ``Item`` through ``ItemSerializer`` (the serializer create flavor).
+
+    One explicit ``Meta.operation`` per write operation (the package keeps no
+    graphene-style ``model_operations`` / ``lookup_field`` keys). Inherits the default
+    ``DjangoModelPermission`` write authorization (codename ``add_item``) and the
+    post-write optimizer re-fetch under the ``spec-035`` G2 mutation gate.
+    """
+
+    class Meta:
+        serializer_class = serializers.ItemSerializer
+        operation = "create"
+
+
+class UpdateItemViaSerializer(SerializerMutation):
+    """Update an ``Item`` through ``ItemSerializer`` (the partial-update flavor).
+
+    DRF's native ``partial=True`` is injected by the framework, so a ``name``-only
+    update preserves the row's other fields. Inherits the default
+    ``DjangoModelPermission`` (codename ``change_item``).
+    """
+
+    class Meta:
+        serializer_class = serializers.ItemSerializer
+        operation = "update"
+
+
 @strawberry.type
 class Mutation:
     """Fakeshop products app write surface - the `DjangoMutation` + form-mutation writes.
@@ -392,6 +404,14 @@ class Mutation:
     model-less plain `DjangoFormMutation` (`submitContact`). The `ModelForm` flavors
     inherit the same `DjangoModelPermission` default (codenames `add_item` /
     `change_item`); the plain form opts in with an explicit empty `permission_classes = []`.
+
+    The serializer-mutation surface (spec-039 Slice 3) adds the `SerializerMutation`
+    create / update over `Item` via `ItemSerializer` (`createItemViaSerializer` /
+    `updateItemViaSerializer`), inheriting the same `DjangoModelPermission` default
+    (codenames `add_item` / `change_item`). The serializer's `validate_<field>` /
+    object `validate()` feed the `serializer.errors` envelope, its `attachment`
+    `FileField` accepts a multipart `Upload`, and its object `validate()` reads the
+    framework-injected `context["request"].user`.
     """
 
     create_item = DjangoMutationField(CreateItem)
@@ -404,10 +424,8 @@ class Mutation:
     create_stamped_item_via_form = DjangoMutationField(CreateStampedItemViaForm)
     submit_contact = DjangoMutationField(SubmitContact)
     submit_ping = DjangoMutationField(SubmitPing)
-    # TODO(spec-039 Slice 3): Add `create_item_via_serializer` and
-    # `update_item_via_serializer` fields here in the same commit as
-    # `rest_framework/resolvers.py` so reachable resolver behavior is live-tested
-    # over `/graphql/`, not duplicated in package-only tests.
+    create_item_via_serializer = DjangoMutationField(CreateItemViaSerializer)
+    update_item_via_serializer = DjangoMutationField(UpdateItemViaSerializer)
 
 
 __all__ = ("Mutation", "Query")

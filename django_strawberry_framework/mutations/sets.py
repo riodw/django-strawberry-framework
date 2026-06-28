@@ -41,6 +41,7 @@ declared in this slice is inert: registered + bound at finalize, never resolved.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple, get_origin
 
 import strawberry
@@ -101,21 +102,124 @@ _VALID_OPERATIONS: frozenset[str] = frozenset({"create", "update", "delete"})
 # materialize per operation.
 _OPERATION_INPUT_KIND: dict[str, str] = {"create": CREATE, "update": PARTIAL}
 
-# TODO(spec-039 Slice 2): Promote shared mutation-family bind helpers here before
-# implementing `rest_framework/sets.py`.
-# Pseudo flow:
-#   - Add `NON_DELETE_WRITE_OPERATIONS` for create/update-only mutation families.
-#   - Centralize Meta typo rejection behind `reject_unknown_meta_keys(...)`.
-#   - Centralize hook identity checks behind `_hook_overridden(...)`.
-#   - Centralize guard-first input cache lookup behind `cached_build_input(...)`.
-#   - Centralize input-class parking on the mutation class behind
-#     `build_and_stash_input(...)`.
-#   - Expose clear callbacks as static clear-target registrations so mutation,
-#     form, and serializer ledgers reset through one import-guarded path.
-#
-# `forms/sets.py` and `rest_framework/sets.py` should import these helpers rather
-# than maintain byte-parallel `_VALID_*`, shape-cache, typo-guard, and
-# build/stash implementations.
+# The create/update-only write operations the form + serializer flavors share
+# (spec-039 P1.2). A ``DjangoModelFormMutation`` and a ``SerializerMutation`` both
+# reject ``"delete"`` (a form has no delete pipeline; DRF serializers do not
+# delete - spec-039 Decision 10), so the create/update set is promoted here and
+# BOTH flavors import it rather than each defining a byte-identical
+# ``_VALID_*_OPERATIONS`` local. The ``036`` model flavor keeps the broader
+# ``_VALID_OPERATIONS`` (it DOES accept ``delete``), so the two sets coexist.
+NON_DELETE_WRITE_OPERATIONS: frozenset[str] = frozenset({"create", "update"})
+
+
+def non_delete_operation_error(base_label: str, name: str, got: Any) -> ConfigurationError:
+    """Build the shared "operation must be create/update" reject (spec-039 P1.2 / D3).
+
+    Single-sites the create/update-only operation reject message both the form and
+    serializer ``_validate_meta`` raise for a bad / ``"delete"`` ``Meta.operation``:
+    the SET (``NON_DELETE_WRITE_OPERATIONS``) is single-sourced AND the message
+    string is too, so the two flavors cannot drift on the wording. ``base_label``
+    names the offending base (``"DjangoModelFormMutation"`` /
+    ``"SerializerMutation"``); ``got`` is the rejected value. Names the no-delete
+    reason so a consumer who copied a ``036`` ``Meta.operation = "delete"`` gets a
+    clear redirect rather than a bare allowed-values list.
+    """
+    return ConfigurationError(
+        f"{base_label} {name}.Meta.operation must be one of "
+        f"{sorted(NON_DELETE_WRITE_OPERATIONS)}; got {got!r}. (This flavor has no delete "
+        "pipeline - declare a 036 DjangoMutation with operation='delete' instead.)",
+    )
+
+
+def reject_unknown_meta_keys(name: str, meta: type, allowed: frozenset[str]) -> None:
+    """Raise the ``Meta``-typo guard if ``meta`` declares a key outside ``allowed`` (spec-039 P2.7).
+
+    The ``unknown = sorted(declared - allowed)`` typo guard every ``_validate_meta``
+    computes inline (model / modelform / plain-form / serializer): promoted so each
+    flavor calls it with its OWN allowed-key frozenset rather than re-spelling the
+    own-keys-only (no MRO walk) ``vars(meta)`` scan + the reject. ``declared`` is the
+    public own-keys of ``meta`` (skipping dunders); a declared key outside ``allowed``
+    raises ``ConfigurationError`` naming the offending key(s). Mirrors
+    ``types/base.py::_validate_meta``'s own-keys-only posture.
+    """
+    declared = {key for key in vars(meta) if not key.startswith("_")}
+    unknown = sorted(declared - allowed)
+    if unknown:
+        raise ConfigurationError(f"{name}.Meta has unknown keys: {unknown}.")
+
+
+def _hook_overridden(cls: type, base: type, name: str) -> bool:
+    """Return whether ``cls`` overrides the ``name`` method relative to ``base`` (spec-039 P2.6).
+
+    The identity check generalizing ``forms/sets.py::_form_kwargs_overridden``: a
+    construction-hook waiver (the form ``get_form_kwargs`` / ``get_form``, the
+    serializer ``get_serializer_kwargs`` / ``get_serializer``) needs to know whether
+    a concrete subclass re-defined the hook. Both are plain instance methods, so
+    ``getattr(cls, name)`` resolves to the unbound function; a concrete override
+    makes it ``is not`` the base's. Single-sites the comparison so the form and
+    serializer waivers share one override-detection primitive.
+    """
+    return getattr(cls, name) is not getattr(base, name)
+
+
+def cached_build_input(
+    cache: dict[Any, tuple[type, Any]],
+    shape_key: Any,
+    *,
+    guard: Callable[[], None],
+    build_fn: Callable[[], tuple[type, Any]],
+) -> tuple[type, Any]:
+    """Run the per-declaration guard, THEN the per-shape cache lookup (spec-039 P1.7).
+
+    The promoted guard-before-cache-lookup core the form + serializer ``build_input``
+    seams share. The load-bearing ordering (spec-038 Decision 7 P2 / spec-039
+    Decision 7): the create-required-narrowing ``guard`` runs PER declaration,
+    BEFORE the per-shape cache lookup, so a waiving mutation (guard a no-op, having
+    overridden the construction hook) that materializes a narrowed shape FIRST cannot
+    suppress the guard for a later non-waiving mutation reusing the cached shape -
+    the cache key (``shape_key``) excludes the waiver, so the guard is tied to the
+    declaration, not the built shape.
+
+    On a cache miss ``build_fn()`` returns ``(input_cls, payload)`` where ``payload``
+    is the per-flavor stash value (the form's ``field_specs`` list, the serializer's
+    ``SerializerInputShape`` descriptor); the pair is cached under ``shape_key`` so
+    identical shapes reuse one class object and the materialize ledger dedupes
+    idempotently. ``cache`` is the FLAVOR's own per-pass ``make_shape_build_cache()``
+    dict (passed in, not owned here) so the mutation / form / serializer caches stay
+    disjoint - each is registered + cleared separately.
+    """
+    guard()
+    cached = cache.get(shape_key)
+    if cached is not None:
+        return cached
+    built = build_fn()
+    cache[shape_key] = built
+    return built
+
+
+def build_and_stash_input(
+    cls: type,
+    *,
+    build: Callable[[], tuple[type, Any]],
+    materialize: Callable[[str, type], None],
+    specs_of: Callable[[Any], Any],
+) -> type:
+    """Materialize a built input + stash its reverse map on the mutation (spec-039 P1.7).
+
+    The materialize-then-stash tail the form + serializer ``build_input`` seams
+    share: ``build()`` returns ``(input_cls, payload)`` (the per-flavor stash value),
+    ``materialize(input_cls.__name__, input_cls)`` pins it as a module global of the
+    flavor's input namespace, ``cls._input_field_specs = specs_of(payload)`` records
+    the Slice-1 reverse map for the Slice-3 decode, and the class is returned.
+    ``specs_of`` extracts the reverse-map specs from the per-flavor payload (the form
+    payload IS the specs list - identity; the serializer payload is the shape, from
+    which ``shape.field_specs`` is read), so the one tail serves both flavors.
+    """
+    input_cls, payload = build()
+    materialize(input_cls.__name__, input_cls)
+    cls._input_field_specs = specs_of(payload)
+    return input_cls
+
 
 # Per-finalize-pass build cache keyed by generated-input shape identity
 # (``(model, operation_kind, frozenset(effective field names))``, spec-036
@@ -302,6 +406,7 @@ class _ValidatedMutationMeta:
         "operation",
         "partial_input_class",
         "permission_classes",
+        "serializer_class",
     )
 
     def __init__(
@@ -315,6 +420,7 @@ class _ValidatedMutationMeta:
         exclude: tuple[str, ...] | None,
         permission_classes: list[Any],
         form_class: Any = None,
+        serializer_class: Any = None,
     ) -> None:
         self.model = model
         self.operation = operation
@@ -330,6 +436,15 @@ class _ValidatedMutationMeta:
         # byte-unchanged - the slot is net-new state never read by the model
         # bind/resolver.
         self.form_class = form_class
+        # The serializer-flavor snapshot (spec-039 Slice 2): a ``SerializerMutation``
+        # records its ``Meta.serializer_class`` here so the serializer ``build_input``
+        # / resolver read one snapshot shape (mirroring ``form_class``). The model +
+        # form flavors leave it ``None`` (net-new state, never read off the model /
+        # form paths), so they stay byte-unchanged. ``Meta.optional_fields`` is NOT
+        # carried on the snapshot - the Slice-1 ``build_serializer_input_class``
+        # re-reads it off the serializer's own ``Meta`` via ``resolve_optional_fields``
+        # (D2: minimal blast radius - the generator already owns the re-read).
+        self.serializer_class = serializer_class
 
 
 def _normalize_field_sequence(value: Any, *, label: str = "fields") -> tuple[str, ...] | None:
@@ -512,10 +627,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         write-auth seam; the enforcement runs in Slice 3's resolver).
         """
         name = cls.__name__
-        declared = {key for key in vars(meta) if not key.startswith("_")}
-        unknown = sorted(declared - _ALLOWED_MUTATION_META_KEYS)
-        if unknown:
-            raise ConfigurationError(f"DjangoMutation {name}.Meta has unknown keys: {unknown}.")
+        reject_unknown_meta_keys(f"DjangoMutation {name}", meta, _ALLOWED_MUTATION_META_KEYS)
 
         model = cls._resolve_model(meta)
         if model is None:

@@ -44,14 +44,14 @@ from django.db import models
 from strawberry import relay
 
 from ..exceptions import ConfigurationError
-from ..registry import registry
+from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
 from ..types.converters import convert_scalar, scalar_for_field
 from ..types.relay import implements_relay_node
 from ..utils.inputs import (
     build_strawberry_input_class,
     graphql_camel_name,
-    materialize_generated_input_class,
+    make_input_namespace,
 )
 from ..utils.relations import is_forward_many_to_many
 
@@ -94,57 +94,67 @@ class FieldError:
     messages: list[str]
 
 
-# Ledger of materialized mutation-input class names. ``materialize_mutation_input_class``
-# writes a ``name -> input_class`` entry; ``registry.clear()`` (wired in Slice 2)
-# routes through ``clear_mutation_input_namespace`` to reset it. Module globals
-# stay parked per the shared parked-globals lifecycle. Mirrors
-# ``orders/inputs.py::_materialized_names`` but in a disjoint per-subsystem
-# namespace.
-_materialized_names: dict[str, type] = {}
+# The mutation-input namespace lifecycle trio, single-sited via
+# ``utils/inputs.py::make_input_namespace`` (spec-039 P2.2 - the one-ledger shape
+# the mutation, form, and serializer flavors share). ``_materialized_names`` is
+# the ``name -> input_class`` ledger ``materialize_mutation_input_class`` writes;
+# ``registry.clear()`` (wired in Slice 2) routes through
+# ``clear_mutation_input_namespace`` to reset it. Module globals stay parked per
+# the shared parked-globals lifecycle. The public ``materialize_*`` / ``clear_*``
+# names below stay thin wrappers so callers + tests address them unchanged.
+_materialized_names, _materialize_input, _clear_input_namespace = make_input_namespace(
+    INPUTS_MODULE_PATH,
+    "DjangoMutation",
+)
 
 
 def materialize_mutation_input_class(name: str, input_cls: type) -> None:
     """Set ``input_cls`` as a real module global of ``mutations.inputs`` under ``name``.
 
-    Thin family wrapper over ``utils/inputs.py::materialize_generated_input_class``
-    pinning the mutation-side module path, family label, and ledger. See that
-    helper for the Strawberry ``LazyType.resolve_type`` contract, the
-    ``(name, input_cls)`` idempotency clause (re-materializing the same class
-    under the same name is a no-op, so identical shapes dedupe), and the
-    distinct-class collision raise (a second, DIFFERENT class under one name
-    raises ``ConfigurationError`` - the spec-036 AR-H1 / AR-M6 collision raise).
+    Thin family wrapper over the ``make_input_namespace`` materializer (which
+    delegates to ``utils/inputs.py::materialize_generated_input_class`` pinning
+    the mutation-side module path, family label, and ledger). See that helper for
+    the Strawberry ``LazyType.resolve_type`` contract, the ``(name, input_cls)``
+    idempotency clause (re-materializing the same class under the same name is a
+    no-op, so identical shapes dedupe), and the distinct-class collision raise (a
+    second, DIFFERENT class under one name raises ``ConfigurationError`` - the
+    spec-036 AR-H1 / AR-M6 collision raise).
 
     Defined here; called only by Slice 2's phase-2.5 bind.
     """
-    materialize_generated_input_class(
-        name,
-        input_cls,
-        module_path=INPUTS_MODULE_PATH,
-        family_label="DjangoMutation",
-        ledger=_materialized_names,
-    )
+    _materialize_input(name, input_cls)
 
 
 def clear_mutation_input_namespace() -> None:
     """Reset the mutation-input ledger for a fresh build.
 
-    Clears ``_materialized_names`` so ``materialize_mutation_input_class``
-    re-emits on the next finalize. **Materialized class objects are
-    intentionally left parked** in ``mutations.inputs.__dict__`` per the shared
-    parked-globals lifecycle: ``materialize_mutation_input_class`` overwrites the
-    module global via ``setattr`` on the next finalize, so a parked class is
-    replaced in place once the rebuild runs. Stripping it via ``delattr`` would
-    break any ``strawberry.lazy(...)`` LazyType held by a consumer module whose
-    autouse-reload fixture did NOT also reload the holder.
+    Clears ``_materialized_names`` (via the ``make_input_namespace`` clear) so
+    ``materialize_mutation_input_class`` re-emits on the next finalize.
+    **Materialized class objects are intentionally left parked** in
+    ``mutations.inputs.__dict__`` per the shared parked-globals lifecycle:
+    ``materialize_mutation_input_class`` overwrites the module global via
+    ``setattr`` on the next finalize, so a parked class is replaced in place once
+    the rebuild runs. Stripping it via ``delattr`` would break any
+    ``strawberry.lazy(...)`` LazyType held by a consumer module whose autouse-reload
+    fixture did NOT also reload the holder.
 
-    Unlike ``orders/inputs.py::clear_order_input_namespace``, this does NOT
-    delegate to ``utils/inputs.py::clear_generated_input_namespace``: that helper
-    resets an arguments-factory cache and per-set ``_lifecycle`` binding state,
-    and the mutation subsystem has neither (input fields come from one model's
-    columns, not a related-set graph). Reuse the *pattern* (ledger-only,
-    best-effort), not the helper. Slice 2 wires this into ``registry.clear()``.
+    The one-ledger shape (``ledger.clear()``) is deliberately NOT
+    ``utils/inputs.py::clear_generated_input_namespace``: that helper resets an
+    arguments-factory cache and per-set ``_lifecycle`` binding state, and the
+    mutation subsystem has neither (input fields come from one model's columns,
+    not a related-set graph). Slice 2 wires this into ``registry.clear()``.
     """
-    _materialized_names.clear()
+    _clear_input_namespace()
+
+
+# Register the mutation input-namespace clear as a canonical PRE-BIND clear
+# (spec-039 P1.6): the ``finalize_django_types`` pre-bind reset AND
+# ``TypeRegistry.clear()`` both iterate ``registry.iter_subsystem_clears()`` and
+# run each row via ``_clear_if_importable``, so this clear is single-sited as a
+# static string row rather than hand-mirrored in both call sites. Registered at
+# import time of this module (the module that owns the clear); idempotent by value
+# under a reload.
+register_subsystem_clear(INPUTS_MODULE_PATH, "clear_mutation_input_namespace")
 
 
 def editable_input_fields(
@@ -323,16 +333,12 @@ def _pascalize_token(name: str) -> str:
     return name.replace("_", "").capitalize()
 
 
-# TODO(spec-039 Slice 1): Keep serializer divergent-shape naming on this token
-# helper, or promote it to `utils.inputs` before `rest_framework/inputs.py` lands.
-# Pseudo flow:
-#   - Build descriptor-derived suffixes from stable shape tokens, using this same
-#     `_pascalize_token(...)` for every human field-name component.
-#   - Include enough descriptor state to distinguish same-field-name shapes whose
-#     annotation, requiredness, `source`, kind, or `optional_fields` differ.
-#
-# Do not add a third PascalCase encoder in the serializer module; the injective
-# token shape is subtle and must stay shared.
+# spec-039 Slice 1: ``_pascalize_token`` stays SITED here (P2.3). The form flavor
+# (``forms/inputs.py::form_input_type_name``) already imports it; the serializer
+# flavor (``rest_framework/inputs.py``) imports it the same way for its
+# ``SerializerInputShape``-derived divergent-shape name. No third PascalCase
+# encoder is added under ``rest_framework/`` - the injective single-leading-capital
+# token shape is subtle + injectivity-critical and must stay shared.
 def mutation_input_type_name(
     model: type[models.Model],
     operation_kind: str,

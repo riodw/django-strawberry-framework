@@ -230,6 +230,12 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
+├── rest_framework/    # DRF-serializer mutation subsystem - ``SerializerMutation`` over a DRF ``Serializer`` / ``ModelSerializer`` (``Meta.serializer_class``); behind the soft ``djangorestframework`` guard.
+│   ├── __init__.py               # Soft-DRF guard (``require_drf()`` + the single install-hint string) gating every ``rest_framework/`` module and the lazy root ``SerializerMutation`` re-export.
+│   ├── serializer_converter.py   # ``convert_serializer_field`` registry - DRF serializer field -> Strawberry input annotation + required-ness (reuses the read-side scalar / choice-enum / ``Upload`` converters at the model-column-backed sites).
+│   ├── inputs.py                 # Serializer-derived ``@strawberry.input`` generation (``<SerializerClass>Input`` / ``<SerializerClass>PartialInput``) from the serializer's schema-time fields.
+│   ├── resolvers.py              # The serializer mutation pipeline - ``is_valid()`` -> ``serializer.errors`` -> ``FieldError`` envelope -> ``save()`` (sync + async), supplying the decode / write callbacks to the shared write skeleton.
+│   └── sets.py                   # ``SerializerMutation`` base + ``Meta`` validation; rides ``DjangoMutation`` via ``_resolve_model`` returning ``Meta.serializer_class.Meta.model``.
 ├── testing/    # Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
 │   ├── _wrap.py                  # Cooperative connection-method wrapping for consumer test instrumentation.
 │   └── relay.py                  # Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
@@ -307,7 +313,12 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
-├── rest_framework/    # planned by TODO-ALPHA-039-0.0.13 - DRF serializer mutations (`SerializerMutation`)
+├── rest_framework/    # DRF-serializer mutation subsystem - ``SerializerMutation`` over a DRF ``Serializer`` / ``ModelSerializer`` (``Meta.serializer_class``); behind the soft ``djangorestframework`` guard.
+│   ├── __init__.py               # Soft-DRF guard (``require_drf()`` + the single install-hint string) gating every ``rest_framework/`` module and the lazy root ``SerializerMutation`` re-export.
+│   ├── serializer_converter.py   # ``convert_serializer_field`` registry - DRF serializer field -> Strawberry input annotation + required-ness (reuses the read-side scalar / choice-enum / ``Upload`` converters at the model-column-backed sites).
+│   ├── inputs.py                 # Serializer-derived ``@strawberry.input`` generation (``<SerializerClass>Input`` / ``<SerializerClass>PartialInput``) from the serializer's schema-time fields.
+│   ├── resolvers.py              # The serializer mutation pipeline - ``is_valid()`` -> ``serializer.errors`` -> ``FieldError`` envelope -> ``save()`` (sync + async), supplying the decode / write callbacks to the shared write skeleton.
+│   └── sets.py                   # ``SerializerMutation`` base + ``Meta`` validation; rides ``DjangoMutation`` via ``_resolve_model`` returning ``Meta.serializer_class.Meta.model``.
 ├── testing/    # Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
 │   ├── _wrap.py                  # Cooperative connection-method wrapping for consumer test instrumentation.
 │   ├── client.py                 # planned by TODO-ALPHA-043-0.0.14 - Test client helper
@@ -391,6 +402,12 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_finalizer.py         # Finalizer tests for order binding, Meta.orderset_class promotion, and orphan validation.
 │   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
+├── rest_framework/    # Package tests for the DRF-serializer mutation subsystem.
+│   ├── test_converter.py         # ``convert_serializer_field`` tests - each supported serializer field -> annotation + required-ness, relation id mapping, ``Upload`` mapping, and the unknown-field raise.
+│   ├── test_inputs.py            # Serializer-derived input tests - shape from the serializer's schema-time fields, ``Meta.fields`` / ``Meta.exclude`` narrowing, and materialization as a module global.
+│   ├── test_resolvers.py         # Serializer pipeline tests - create / update happy paths, ``serializer.errors`` -> envelope, decode split, partial-update reconstruction, and the G2 re-fetch shape.
+│   ├── test_sets.py              # ``SerializerMutation`` base tests - the ``Meta`` validation matrix, registration / finalizer binding, and the model-flavor seam defaults.
+│   └── test_soft_dependency.py   # Soft-DRF tests - package import succeeds without DRF, the install-hint ``ImportError`` raises on access, and ``from … import *`` stays DRF-free.
 ├── testing/    # Package tests for public consumer testing utilities.
 │   ├── test_relay.py             # Public Relay helper tests for global_id_for and decode_global_id.
 │   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.
@@ -534,7 +551,12 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_finalizer.py         # Finalizer tests for order binding, Meta.orderset_class promotion, and orphan validation.
 │   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
-├── rest_framework/    # planned by TODO-ALPHA-039-0.0.13 - DRF serializer mutations (`SerializerMutation`)
+├── rest_framework/    # Package tests for the DRF-serializer mutation subsystem.
+│   ├── test_converter.py         # ``convert_serializer_field`` tests - each supported serializer field -> annotation + required-ness, relation id mapping, ``Upload`` mapping, and the unknown-field raise.
+│   ├── test_inputs.py            # Serializer-derived input tests - shape from the serializer's schema-time fields, ``Meta.fields`` / ``Meta.exclude`` narrowing, and materialization as a module global.
+│   ├── test_resolvers.py         # Serializer pipeline tests - create / update happy paths, ``serializer.errors`` -> envelope, decode split, partial-update reconstruction, and the G2 re-fetch shape.
+│   ├── test_sets.py              # ``SerializerMutation`` base tests - the ``Meta`` validation matrix, registration / finalizer binding, and the model-flavor seam defaults.
+│   └── test_soft_dependency.py   # Soft-DRF tests - package import succeeds without DRF, the install-hint ``ImportError`` raises on access, and ``from … import *`` stays DRF-free.
 ├── testing/    # Package tests for public consumer testing utilities.
 │   ├── test_relay.py             # Public Relay helper tests for global_id_for and decode_global_id.
 │   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.

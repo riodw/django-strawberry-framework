@@ -205,19 +205,51 @@ def visibility_scoped_related_queryset(
     )
 
 
-# TODO(spec-039 Slice 3): Promote the object-returning related-visibility helper
-# currently local to `forms/resolvers.py` into this module before serializer
-# relation decoding lands.
-# Pseudo flow:
-#   - Resolve the related model's registered Django type.
-#   - If no primary type exists, fall back to the model default manager and pk.
-#   - Otherwise apply `visibility_scoped_related_queryset(...)`, then filter that
-#     visible queryset by pk and return the first matching object.
-#
-# The serializer decoder and form decoder should both call this helper so raw-pk
-# relation visibility cannot drift between write flavors. The helper accepts raw
-# pks after a flavor-specific decoder chooses that branch; it does not imply every
-# generated GraphQL relation input accepts both raw pk and GlobalID.
+def visible_related_object(
+    related_model: type,
+    pk: Any,
+    info: Any,
+    async_recourse: str = _RELAY_ASYNC_RECOURSE,
+) -> Any | None:
+    """Resolve the VISIBLE related object by pk through the related primary's ``get_queryset``.
+
+    The object-returning visibility-on-every-branch query, promoted from
+    ``forms/resolvers.py::_visible_related_object`` (spec-039 P1.1) so the form AND
+    serializer relation decoders share ONE implementation rather than forking a
+    second object-returning decoder. Resolves the related model's primary
+    ``DjangoType`` via the registry and runs the SAME visibility hook every read
+    surface applies (``visibility_scoped_related_queryset`` =
+    ``apply_type_visibility_sync(initial_queryset(...))``), so a writer cannot
+    attach a row they could not *see*. Returns the visible object or ``None``
+    (hidden / missing - the caller maps ``None`` to the field-keyed ``FieldError``,
+    indistinguishable). The decoder needs the OBJECT (the form converts it to its
+    ``to_field_name`` key; the serializer reduces it to the pk), which the ``036``
+    ``_relation_visibility_error`` does not return, so it cannot call that helper -
+    but it reuses the same primitives so the query shape is identical. An ``async
+    def get_queryset`` met here raises ``SyncMisuseError``.
+
+    The related model has a primary type only when a typed relation input was
+    generated for it; a raw-pk relation's primary is resolved the same way
+    (``registry.get``), and a model with no primary still resolves via the default
+    manager (no visibility contract to apply). ``async_recourse`` stays a parameter:
+    the form and serializer paths pass their own surface-specific wording, matching
+    ``visibility_scoped_related_queryset``.
+
+    The helper accepts a raw pk AFTER a flavor-specific decoder has chosen that
+    branch; it does NOT imply every generated GraphQL relation input accepts both a
+    raw pk and a GlobalID (the input exposes one strategy-dependent shape).
+    """
+    from ..registry import registry
+
+    related_type = registry.get(related_model)
+    if related_type is None:
+        # No primary DjangoType: a raw-pk relation with no Relay-Node target. Scope
+        # existence against the default manager (no visibility contract to apply).
+        return related_model._default_manager.filter(pk=pk).first()
+    queryset = visibility_scoped_related_queryset(related_type, info, async_recourse)
+    return queryset.filter(pk=pk).first()
+
+
 async def apply_type_visibility_async(
     type_cls: type,
     queryset: models.QuerySet,

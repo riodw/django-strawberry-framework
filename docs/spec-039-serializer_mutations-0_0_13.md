@@ -1,6 +1,7 @@
 # Spec: DRF serializer mutations — `SerializerMutation` on the DRF-shaped `class Meta` surface, reusing the frozen `FieldError` envelope and the `DjangoMutation` foundation, with `djangorestframework` as a soft dependency
 
-Planned for `0.0.13` (card [`TODO-ALPHA-039-0.0.13`][kanban]). This card adds the
+Implemented on main; release deferred to the joint `0.0.13` cut (card
+[`DONE-039-0.0.13`][kanban]). This card adds the
 **serializer-validated** write flavor on top of the model-driven mutation
 foundation [`DONE-036-0.0.11`][kanban] ([`spec-036`][spec-036]) and the form-validated
 flavor [`DONE-038-0.0.12`][kanban] ([`spec-038`][spec-038]) already shipped: one new
@@ -52,8 +53,15 @@ card [`TODO-ALPHA-040-0.0.13`][kanban] (which reuses the same envelope and
 [`spec-036`][spec-036] Decision 13 took for the joint `0.0.11` cut it shared with
 [`spec-037`][spec-037]. No slice in this card bumps the version.
 
-Status: **IN PROGRESS** — authored for [`TODO-ALPHA-039-0.0.13`][kanban] via the
-[`docs/SPECS/NEXT.md`][next] flow; no slice built yet. The card's hard dependency is
+Status: **IMPLEMENTED ON MAIN** — all five slices (Slice 0 + Slices 1-4) are
+final-accepted and on main; the implemented-on-main docs + the card wrap landed in
+Slice 4 ([`DONE-039-0.0.13`][kanban]). **Release deferred to the joint `0.0.13` cut**
+shared with [`WIP-ALPHA-040-0.0.13`][kanban], which still owns the version bump
+(`0.0.12` → `0.0.13`) and the public release-status flip (the GLOSSARY `shipped (0.0.13)`
+status, the `README.md` / [`docs/README.md`][docs-readme] "Shipped today" move, the
+`CHANGELOG.md` bullets) — **F8** / [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut).
+The card was authored for `TODO-ALPHA-039-0.0.13` via the
+[`docs/SPECS/NEXT.md`][next] flow. The card's hard dependency was
 satisfied: [`DONE-036-0.0.11`][kanban] (the mutation foundation this card subclasses)
 has shipped, and [`DONE-038-0.0.12`][kanban] (which generalized the field factory and
 proved the flavor-on-the-base pattern) has shipped too. **A pre-Slice-1 dependency gate
@@ -418,6 +426,19 @@ Revision history (kept inline so the spec is self-contained):
   artifact** (probe script / explicit `uv` commands; the floor recorded in `pyproject.toml`
   + the `require_drf()` hint + Risks) and a **Slice 3 grep-guard** that the serializer
   resolver reads neither `conf.settings` nor `_resolve_globalid_strategy` on the query path.
+- **Revision 10** — Slice 4 final-verification reconciliation (Worker 1, build-039). All
+  five slices (Slice 0 + Slices 1-4) are final-accepted and on main; the implemented-on-main
+  docs (TREE / TODAY / GOAL crit-6 / the GLOSSARY body marked **"implemented on main,
+  releasing in 0.0.13"** with the `status` FK kept `planned`) and the card wrap
+  ([`DONE-039-0.0.13`][kanban] → Done, all 7 DoD items ticked) landed in Slice 4 (F8 /
+  [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)). Reconciled
+  the stale header to reality: the body line 3 "Planned for `0.0.13`" and the Status block
+  "**IN PROGRESS** … no slice built yet" now read **IMPLEMENTED ON MAIN; release deferred
+  to the joint `0.0.13` cut** shared with [`WIP-ALPHA-040-0.0.13`][kanban], which still owns
+  the version bump and the public release-status flip (GLOSSARY `shipped (0.0.13)`,
+  `README.md` / `docs/README.md` "Shipped today", `CHANGELOG.md` bullets). No version bump,
+  no `CHANGELOG.md` / `README.md` Status / `docs/README.md` edit (joint-cut deferrals, F8 —
+  confirmed absent from the build diff).
 
 ## Key glossary references
 
@@ -3441,6 +3462,13 @@ implementation reveals it is wrong.
   against the actually-installed DRF in the gate; the matrix-warning check is the one that
   gates the floor, and if no compatible release exists the card blocks at the gate rather
   than mid-Slice-1.
+  **Recorded floor (Slice 0, verified): `djangorestframework>=3.17.0`** — the first release
+  adding Django 6.0 + Python 3.14 support (released 2026-03-18; resolves to 3.17.1), proven to
+  import warning-free under `-W error` across all 9 [`django.yml`][django-workflow] matrix
+  cells (Python 3.10→3.14 × Django 5.2→6.0 / `latest`) with **no** `ignore::` line needed.
+  This is place 3 of the three-places-that-must-agree; the `[dependency-groups].dev` pin in
+  [`pyproject.toml`][pyproject] is place 1 (landed) and the `require_drf()` install hint
+  (Slice 2) is place 2 and must name this same floor.
 - **`serializer.save()` create-vs-update + M2M.** Preferred answer
   ([Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload)):
   `serializer.save()` runs `create()` (no instance) / `update()` (with instance)

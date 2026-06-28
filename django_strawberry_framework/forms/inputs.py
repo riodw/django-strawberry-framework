@@ -57,14 +57,14 @@ from ..mutations.inputs import (
     _pascalize_token,
     relation_input_annotation,
 )
-from ..registry import registry
+from ..registry import register_subsystem_clear, registry
 from ..scalars import Upload
 from ..types.converters import convert_scalar, scalar_for_field
 from ..types.relay import implements_relay_node
 from ..utils.inputs import (
     build_strawberry_input_class,
     graphql_camel_name,
-    materialize_generated_input_class,
+    make_input_namespace,
     normalize_field_name_sequence,
 )
 from .converter import (
@@ -102,32 +102,29 @@ FORM: str = "form"
 # address the form generator's full kind vocabulary on this module.
 CREATE_SHAPED_KINDS: frozenset[str] = frozenset({CREATE, FORM})
 
-# Ledger of materialized form-input class names. ``materialize_form_input_class``
-# writes a ``name -> input_class`` entry; ``registry.clear()`` (wired in Slice 2)
-# routes through ``clear_form_input_namespace`` to reset it. Mirrors
-# ``mutations/inputs.py::_materialized_names`` but in a disjoint per-subsystem
-# namespace.
-_materialized_names: dict[str, type] = {}
-
-# TODO(spec-039 Slice 1): Replace this hand-maintained form input namespace with
-# `utils.inputs.make_input_namespace(...)`, then let the serializer input
-# namespace use the same helper.
-# Pseudo flow:
-#   - Ask `make_input_namespace(INPUTS_MODULE_PATH, "DjangoFormMutation")` for the
-#     form materialized-name ledger, materializer, and clear callback.
-#   - Reuse the returned callbacks in this module without changing the public
-#     `materialize_form_input_class(...)` and `clear_form_input_namespace()` names.
-#
-# Preserve the parked-globals lifecycle: clearing resets the ledger only, not
-# module attributes already resolved by `strawberry.lazy`.
+# The form-input namespace lifecycle trio, single-sited via
+# ``utils/inputs.py::make_input_namespace`` (spec-039 P2.2 - the one-ledger shape
+# the mutation, form, and serializer flavors share). ``_materialized_names`` is
+# the ``name -> input_class`` ledger ``materialize_form_input_class`` writes;
+# ``registry.clear()`` (wired in Slice 2) routes through
+# ``clear_form_input_namespace`` to reset it - a namespace disjoint from
+# ``mutations.inputs`` so the ``036`` ``<Model>Input`` and the form
+# ``<FormClass>Input`` never share a module ``__dict__`` slot. The public
+# ``materialize_*`` / ``clear_*`` names below stay thin wrappers so callers + tests
+# address them unchanged.
+_materialized_names, _materialize_input, _clear_input_namespace = make_input_namespace(
+    INPUTS_MODULE_PATH,
+    "DjangoFormMutation",
+)
 
 
 def materialize_form_input_class(name: str, input_cls: type) -> None:
     """Set ``input_cls`` as a real module global of ``forms.inputs`` under ``name``.
 
-    Thin family wrapper over ``utils/inputs.py::materialize_generated_input_class``
-    pinning the form-side module path, family label, and ledger. See that helper
-    for the Strawberry ``LazyType.resolve_type`` contract, the ``(name, input_cls)``
+    Thin family wrapper over the ``make_input_namespace`` materializer (which
+    delegates to ``utils/inputs.py::materialize_generated_input_class`` pinning
+    the form-side module path, family label, and ledger). See that helper for the
+    Strawberry ``LazyType.resolve_type`` contract, the ``(name, input_cls)``
     idempotency clause (re-materializing the same class under the same name is a
     no-op, so identical shapes dedupe), and the distinct-class collision raise (a
     second, DIFFERENT class under one name raises ``ConfigurationError`` - the
@@ -137,22 +134,17 @@ def materialize_form_input_class(name: str, input_cls: type) -> None:
 
     Defined here; called by Slice 2's phase-2.5 bind.
     """
-    materialize_generated_input_class(
-        name,
-        input_cls,
-        module_path=INPUTS_MODULE_PATH,
-        family_label="DjangoFormMutation",
-        ledger=_materialized_names,
-    )
+    _materialize_input(name, input_cls)
 
 
 def clear_form_input_namespace() -> None:
     """Reset the form-input ledger for a fresh build.
 
-    Clears ``_materialized_names`` so ``materialize_form_input_class`` re-emits
-    on the next finalize. **Materialized class objects are intentionally left
-    parked** in ``forms.inputs.__dict__`` per the shared parked-globals
-    lifecycle (see ``mutations/inputs.py::clear_mutation_input_namespace``):
+    Clears ``_materialized_names`` (via the ``make_input_namespace`` clear) so
+    ``materialize_form_input_class`` re-emits on the next finalize. **Materialized
+    class objects are intentionally left parked** in ``forms.inputs.__dict__`` per
+    the shared parked-globals lifecycle (see
+    ``mutations/inputs.py::clear_mutation_input_namespace``):
     ``materialize_form_input_class`` overwrites the module global via ``setattr``
     on the next finalize, so a parked class is replaced in place once the rebuild
     runs. Stripping it via ``delattr`` would break any ``strawberry.lazy(...)``
@@ -164,7 +156,16 @@ def clear_form_input_namespace() -> None:
     arguments-factory cache and no per-set ``_lifecycle`` binding state. Wired
     into ``registry.clear()`` in Slice 2 (spec-038).
     """
-    _materialized_names.clear()
+    _clear_input_namespace()
+
+
+# Register the form input-namespace clear as a canonical PRE-BIND clear (spec-039
+# P1.6): the ``finalize_django_types`` pre-bind reset AND ``TypeRegistry.clear()``
+# both iterate ``registry.iter_subsystem_clears()`` and run each row via
+# ``_clear_if_importable``, so this clear is single-sited as a static string row
+# rather than hand-mirrored in both call sites. Registered at import time of this
+# module (the module that owns the clear); idempotent by value under a reload.
+register_subsystem_clear(INPUTS_MODULE_PATH, "clear_form_input_namespace")
 
 
 def get_form_fields(form_class: type[forms.BaseForm]) -> dict[str, forms.Field]:

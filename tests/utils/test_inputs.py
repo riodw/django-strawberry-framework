@@ -14,9 +14,12 @@ import pytest
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.inputs import (
     GeneratedInputFieldSpec,
+    InputFieldSpec,
     build_strawberry_input_class,
     graphql_camel_name,
     iter_set_subclasses,
+    make_input_namespace,
+    make_shape_build_cache,
     materialize_generated_input_class,
 )
 
@@ -178,3 +181,81 @@ def test_safe_import_returns_none_for_unimportable_module():
             sys.modules.pop(fake_name, None)
         else:
             sys.modules[fake_name] = saved
+
+
+# ---------------------------------------------------------------------------
+# spec-039 promotions: InputFieldSpec / make_input_namespace / make_shape_build_cache
+# ---------------------------------------------------------------------------
+
+
+def test_input_field_spec_carries_five_axes_and_optional_source():
+    """``InputFieldSpec`` (P2.1) carries the five axes + the optional ``source`` (default ``None``)."""
+    # Default source is None (the form-symmetric shape, no source axis).
+    no_source = InputFieldSpec(
+        input_attr="name",
+        graphql_name="name",
+        target_name="name",
+        kind="scalar",
+    )
+    assert no_source.source is None
+    # The serializer-only ``source`` axis carries the resolved one-segment source.
+    with_source = InputFieldSpec(
+        input_attr="category_pk",
+        graphql_name="categoryPk",
+        target_name="category_pk",
+        kind="relation_single",
+        source="category",
+    )
+    assert with_source.source == "category"
+    assert with_source.input_attr == "category_pk"
+    assert with_source.graphql_name == "categoryPk"
+    assert with_source.target_name == "category_pk"
+    assert with_source.kind == "relation_single"
+    # Frozen.
+    with pytest.raises((AttributeError, TypeError)):
+        with_source.source = "other"
+
+
+def test_make_input_namespace_returns_ledger_materialize_clear_trio():
+    """``make_input_namespace`` (P2.2) returns ``(ledger, materialize, clear)``; clear empties the ledger.
+
+    ``materialize`` writes a real module global; ``clear`` empties only the ledger
+    (the one-ledger shape, NOT the heavy ``clear_generated_input_namespace``). Uses
+    THIS test module as the ``setattr`` target so the global slot exists.
+    """
+    module_path = __name__
+    module = sys.modules[module_path]
+    ledger, materialize, clear = make_input_namespace(module_path, "ProbeFamily")
+    assert ledger == {}
+
+    class _ProbeInput:
+        pass
+
+    materialize("ProbeNamespaceInputType", _ProbeInput)
+    assert ledger["ProbeNamespaceInputType"] is _ProbeInput
+    assert module.ProbeNamespaceInputType is _ProbeInput
+    # Idempotent on the same pair; a distinct class under one name raises (the
+    # ledger collision, named by the family label).
+    materialize("ProbeNamespaceInputType", _ProbeInput)
+
+    class _OtherProbe:
+        pass
+
+    with pytest.raises(ConfigurationError, match="two distinct ProbeFamily input classes"):
+        materialize("ProbeNamespaceInputType", _OtherProbe)
+
+    clear()
+    assert ledger == {}
+    # The materialized global stays PARKED (not delattr'd) per the lifecycle.
+    assert module.ProbeNamespaceInputType is _ProbeInput
+    delattr(module, "ProbeNamespaceInputType")
+
+
+def test_make_shape_build_cache_returns_dict_and_clear():
+    """``make_shape_build_cache`` (P1.3) returns a ``(dict, clear)`` pair; clear empties the dict."""
+    cache, clear = make_shape_build_cache()
+    assert cache == {}
+    cache[("Model", "create", frozenset({"a"}))] = object()
+    assert len(cache) == 1
+    clear()
+    assert cache == {}

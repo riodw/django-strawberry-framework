@@ -27,6 +27,7 @@ import json
 import pytest
 from apps.products import models
 from apps.products.forms import REJECTED_ITEM_NAME
+from apps.products.serializers import REJECTED_SERIALIZER_ITEM_NAME
 from apps.products.services import create_users, delete_data, seed_cascade_split, seed_data
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -137,25 +138,21 @@ _CREATE_CATEGORY = (
     "node { name } errors { field messages } } }"
 )
 
-# TODO(spec-039 Slice 3): Add live serializer-mutation query strings and tests
-# here, not under `tests/rest_framework`, for every consumer-reachable resolver
-# branch.
-# Pseudo flow:
-#   - Add a create serializer mutation document using the generated
-#     `ItemSerializerInput`.
-#   - Add an update serializer mutation document using the generated
-#     `ItemSerializerPartialInput`.
-#
-# Required live cases:
-#   - create/update happy paths and `categoryId` reverse-map write;
-#   - field-level and `"__all__"` serializer error envelopes;
-#   - a renamed/relation field error reports the GraphQL input name
-#     (`categoryId`), not the serializer field name (`category`);
-#   - partial update preservation plus unique-together on a one-field change;
-#   - hidden update row, write auth, relation visibility, authorize-before-decode;
-#   - multipart Upload to `Item.attachment`;
-#   - explicit request-context `validate()` path, not a HiddenField-only proof;
-#   - G2 re-fetch SQL shape with no `.only(...)` projection.
+# The live serializer-mutation query strings (the wire contract the SDL renders -
+# verified: ``createItemViaSerializer(data: ItemSerializerInput!)``,
+# ``updateItemViaSerializer(id: ID!, data: ItemSerializerPartialInput!)``). The
+# generated input exposes ``categoryId`` (the ``category``
+# ``PrimaryKeyRelatedField`` reverse map) + ``attachment`` (the ``FileField`` ->
+# ``Upload``).
+_CREATE_ITEM_VIA_SERIALIZER = (
+    "mutation($d: ItemSerializerInput!) { createItemViaSerializer(data: $d) { "
+    "node { name category { name } } errors { field messages } } }"
+)
+_UPDATE_ITEM_VIA_SERIALIZER = (
+    "mutation($id: ID!, $d: ItemSerializerPartialInput!) { "
+    "updateItemViaSerializer(id: $id, data: $d) { "
+    "node { name } errors { field messages } } }"
+)
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2775,3 +2772,593 @@ def test_submit_ping_plain_form_denied_by_default_top_level_error():
     assert payload.get("errors"), payload  # top-level authorization error
     assert payload["data"] is None
     assert "Not authorized" in payload["errors"][0]["message"]
+
+
+# ===========================================================================
+# Serializer-mutation live surface (spec-039 Slice 3 / Decision 13)
+# ===========================================================================
+# Every consumer-reachable resolver branch is earned HERE over real `/graphql/`
+# (the README "Coverage rule." live-first mandate); `tests/rest_framework/
+# test_resolvers.py` holds ONLY the genuinely-unreachable residue. Each test's
+# first line is `create_users(N)` / `seed_data(N)` (AGENTS.md). The serializer
+# wire envelope is `{ node { ... } errors { field messages } }` (the same
+# `<Name>Payload` shape the model + form flavors return); the request-context
+# proof is the serializer's object `validate()` reading
+# `self.context["request"].user` (F9 - NOT a HiddenField).
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_serializer_happy_path():
+    """`createItemViaSerializer` writes through the serializer and returns the optimizer node.
+
+    A permitted caller (`add_item`) creates an `Item`; the payload `node` is the
+    optimizer re-fetch with `category { name }` resolvable, and the row persists.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={
+            "d": {
+                "name": "SerializerWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaSerializer"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "SerializerWidget", "category": {"name": category.name}}
+    created = models.Item.objects.get(name="SerializerWidget", category=category)
+    assert created.description == ""
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_via_serializer_happy_path():
+    """`updateItemViaSerializer` changing only `name` persists via DRF `partial=True`."""
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="SerBefore", category=category)
+    client = _login_with_perm("staff_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk), "d": {"name": "SerAfter"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaSerializer"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "SerAfter"}
+    item.refresh_from_db()
+    assert item.name == "SerAfter"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_serializer_category_id_reverse_map_writes():
+    """`categoryId` (GlobalID) resolves through the serializer's `category` field and writes.
+
+    Locks the reverse map: the wire `categoryId` decodes to the serializer's
+    `category` `PrimaryKeyRelatedField`, and the item is written under the resolved
+    category (the FK reads the visibility-resolved pk).
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.order_by("pk").last()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={
+            "d": {
+                "name": "SerReverseMapWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaSerializer"]
+    assert result["errors"] == []
+    created = models.Item.objects.get(name="SerReverseMapWidget")
+    assert created.category_id == category.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_serializer_validate_field_error_is_field_keyed():
+    """A `name` failing `validate_name` is a `FieldError(field="name")`, `node: null`, no top-level error."""
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={
+            "d": {
+                "name": REJECTED_SERIALIZER_ITEM_NAME,
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload  # in-band envelope, NOT a top-level error
+    result = payload["data"]["createItemViaSerializer"]
+    assert result["node"] is None
+    assert result["errors"] == [
+        {"field": "name", "messages": ["This serializer name is not allowed."]},
+    ]
+    assert not models.Item.objects.filter(name=REJECTED_SERIALIZER_ITEM_NAME).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_serializer_object_validate_all_sentinel_and_request_context():
+    """A `name` equal to the username trips the object `validate()` -> `"__all__"` (request-context proof).
+
+    The serializer's object `validate()` reads `self.context["request"].user` and
+    rejects a `name == user.username`. This proves BOTH the `"__all__"` cross-field
+    envelope AND that the framework-injected `context["request"]` lands (F9 - the
+    request-context proof is a `validate()` branch, not a HiddenField). Driven as a
+    user whose username is a legal `Item.name`.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={
+            "d": {
+                "name": "view_item_1",  # equals the authenticated username
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaSerializer"]
+    assert result["node"] is None
+    assert result["errors"] == [
+        {"field": "__all__", "messages": ["Item name must not equal the requesting username."]},
+    ]
+    # The injected request context reached the validator (no row written).
+    assert not models.Item.objects.filter(name="view_item_1").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_serializer_unique_together_error_uses_all_sentinel():
+    """The `unique_item_per_category` `UniqueTogetherValidator` surfaces under `"__all__"`.
+
+    DRF's `UniqueTogetherValidator` raises its error under the `non_field_errors`
+    bucket (DRF's model-wide bucket, not keyed to either constituent field), which
+    the recursive flattener normalizes to the package's `"__all__"` sentinel at the
+    top level - byte-identical to the model / form flavors' multi-field-constraint
+    envelope. (The relation-error-keys-to-`categoryId` reverse-map proof, F5, is the
+    hidden-category relation-decode test below, where DRF DOES key to the field.)
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    models.Item.objects.create(name="SerDup", category=category)
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={
+            "d": {"name": "SerDup", "categoryId": _global_id("products.category", category.pk)},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaSerializer"]
+    assert result["node"] is None
+    fields = {err["field"] for err in result["errors"]}
+    assert fields == {"__all__"}, result["errors"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_via_serializer_partial_update_preserves_other_fields():
+    """A `name`-only `updateItemViaSerializer` preserves `description` / `category` via `partial=True`."""
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(
+        name="SerPreserveBefore",
+        description="keep this",
+        category=category,
+    )
+    client = _login_with_perm("staff_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk), "d": {"name": "SerPreserveAfter"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaSerializer"]
+    assert result["errors"] == []
+    item.refresh_from_db()
+    assert item.name == "SerPreserveAfter"
+    assert item.description == "keep this"
+    assert item.category_id == category.pk
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_via_serializer_partial_unique_together_fires_on_name_only_change():
+    """Changing only `name` to a value already taken under the unchanged `category` -> `"__all__"`.
+
+    DRF's `UniqueTogetherValidator` backfills the unchanged `category` from
+    `serializer.instance` under `partial=True`, so a one-field `name` change that
+    collides surfaces under `"__all__"` (the partial-update unique-together fire,
+    tied to the verified DRF floor >=3.17.0).
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    models.Item.objects.create(name="SerTakenName", category=category)
+    item = models.Item.objects.create(name="SerOriginal", category=category)
+    client = _login_with_perm("staff_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk), "d": {"name": "SerTakenName"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaSerializer"]
+    assert result["node"] is None
+    # DRF backfills the unchanged `category` from `serializer.instance` under
+    # `partial=True` and surfaces the unique-together violation under `"__all__"`.
+    fields = {err["field"] for err in result["errors"]}
+    assert fields == {"__all__"}, result["errors"]
+    item.refresh_from_db()
+    assert item.name == "SerOriginal"  # unchanged - the write rolled back
+
+
+@pytest.mark.django_db(transaction=True)
+def test_update_item_via_serializer_visibility_scoped_hidden_row_is_not_found():
+    """A caller who cannot see a private `Item` gets not-found (`FieldError(field="id")`)."""
+    create_users(1)
+    chain = seed_cascade_split()
+    private_gid = _global_id("products.item", chain["item_under_private"].pk)
+    public_gid = _global_id("products.item", chain["item_under_public"].pk)
+    client = _login_with_perm("view_item_1", "change_item")
+
+    # The hidden (private-category) row is not located through CategoryType /
+    # ItemType.get_queryset -> not-found, indistinguishable from missing.
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={"id": private_gid, "d": {"name": "SerHiddenAttempt"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItemViaSerializer"]
+    assert result["node"] is None
+    assert result["errors"] == [{"field": "id", "messages": ["No matching row found."]}]
+
+    # A visible (public) row updates normally for the same caller.
+    response = _post_graphql(
+        _UPDATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={"id": public_gid, "d": {"name": "SerVisibleUpdated"}},
+    )
+    payload = response.json()
+    assert payload["data"]["updateItemViaSerializer"]["errors"] == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_serializer_anonymous_is_denied_top_level_error_no_write():
+    """An anonymous caller is denied with a top-level `GraphQLError`, no row written."""
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        variables={
+            "d": {
+                "name": "SerAnonWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("errors"), payload
+    # The denial RAISES on the non-null payload field, so GraphQL nulls the whole
+    # `data` - the authorization-failure surface, not a present-payload FieldError.
+    assert payload["data"] is None
+    assert "Not authorized" in payload["errors"][0]["message"]
+    assert not models.Item.objects.filter(name="SerAnonWidget").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_serializer_missing_model_perm_is_denied_no_write():
+    """A logged-in caller missing `add_item` is denied; a permitted caller succeeds."""
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+
+    # `view_item_1` holds only `view_item`, not `add_item`.
+    denied_client = Client()
+    denied_client.force_login(get_user_model().objects.get(username="view_item_1"))
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=denied_client,
+        variables={
+            "d": {
+                "name": "SerNoPermWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    payload = response.json()
+    assert payload.get("errors"), payload
+    assert payload["data"] is None
+    assert not models.Item.objects.filter(name="SerNoPermWidget").exists()
+
+    # A permitted caller succeeds (the codename path).
+    permitted = _login_with_perm("view_item_1", "add_item")
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=permitted,
+        variables={
+            "d": {
+                "name": "SerPermittedWidget",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    payload = response.json()
+    assert payload["data"]["createItemViaSerializer"]["errors"] == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_serializer_hidden_category_id_is_field_keyed_relation_error():
+    """A permitted writer submitting a HIDDEN `Category` GlobalID -> `FieldError(field="categoryId")`."""
+    create_users(1)
+    chain = seed_cascade_split()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    # The private category is hidden to `view_item_1` through CategoryType.get_queryset.
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={
+            "d": {
+                "name": "SerHiddenCatWidget",
+                "categoryId": _global_id("products.category", chain["private_cat"].pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaSerializer"]
+    assert result["node"] is None
+    assert result["errors"] == [
+        {"field": "categoryId", "messages": ["Invalid id for relation 'categoryId'."]},
+    ]
+    assert not models.Item.objects.filter(name="SerHiddenCatWidget").exists()
+
+    # The public category resolves and writes for the same caller.
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={
+            "d": {
+                "name": "SerVisibleCatWidget",
+                "categoryId": _global_id("products.category", chain["public_cat"].pk),
+            },
+        },
+    )
+    payload = response.json()
+    assert payload["data"]["createItemViaSerializer"]["errors"] == []
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_serializer_authorize_before_decode_unpermitted_gets_auth_denial():
+    """An UNpermitted writer submitting the hidden `categoryId` gets the AUTH denial, NOT the relation error.
+
+    The security-ordering proof: authorize runs BEFORE the relation decode, so an
+    unauthorized caller submitting a hidden `Category` GlobalID cannot probe its
+    visibility - they get the top-level authorization `GraphQLError` (no in-band
+    relation `FieldError`). Contrast the permitted-caller case above, which DOES
+    see the relation `FieldError`.
+    """
+    create_users(1)
+    chain = seed_cascade_split()
+
+    # `view_item_1` is logged in but lacks `add_item` (no write authorization).
+    denied_client = Client()
+    denied_client.force_login(get_user_model().objects.get(username="view_item_1"))
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=denied_client,
+        variables={
+            "d": {
+                "name": "SerOrderingWidget",
+                "categoryId": _global_id("products.category", chain["private_cat"].pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    # The AUTH denial (top-level, nulling the whole `data`), NOT the in-band
+    # relation FieldError - the security-ordering proof.
+    assert payload.get("errors"), payload
+    assert payload["data"] is None
+    assert "Not authorized" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_serializer_multipart_upload_to_attachment(tmp_path):
+    """A real multipart `/graphql/` request routes an `Upload` into the serializer's `data`.
+
+    Mirrors `test_create_item_with_file_via_form_multipart_upload_over_http`'s
+    transport (the `MediaSpecimen`/`operations`/`map`/`SimpleUploadedFile`
+    precedent), but for the serializer flavor: the `Upload` lands in the
+    serializer's `data` (NOT a `files=` split), and the row is created with the
+    attachment.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    from django.contrib.auth.models import Permission
+
+    user = get_user_model().objects.get(username="view_item_1")
+    user.user_permissions.add(
+        Permission.objects.get(codename="add_item", content_type__app_label="products"),
+    )
+    user = get_user_model().objects.get(pk=user.pk)  # drop the stale perm cache
+
+    mutation = (
+        "mutation($d: ItemSerializerInput!) { createItemViaSerializer(data: $d) { "
+        "node { name } errors { field messages } } }"
+    )
+    operations = {
+        "query": mutation,
+        "variables": {
+            "d": {
+                "name": "SerUploadedWidget",
+                "categoryId": _global_id("products.category", category.pk),
+                "attachment": None,
+            },
+        },
+    }
+    file_map = {"0": ["variables.d.attachment"]}
+
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        client = Client()
+        client.force_login(user)
+        response = client.post(
+            "/graphql/",
+            data={
+                "operations": json.dumps(operations),
+                "map": json.dumps(file_map),
+                "0": SimpleUploadedFile(
+                    "serdoc.txt",
+                    b"serializer upload bytes",
+                    content_type="text/plain",
+                ),
+            },
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert "errors" not in body, body
+        result = body["data"]["createItemViaSerializer"]
+        assert result["errors"] == []
+        assert result["node"] == {"name": "SerUploadedWidget"}
+
+        created = models.Item.objects.get(name="SerUploadedWidget")
+        assert created.attachment.name.endswith("serdoc.txt")
+        with created.attachment.open("rb") as handle:
+            assert handle.read() == b"serializer upload bytes"
+
+
+@pytest.mark.django_db(transaction=True)
+def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count():
+    """G2 behavioral tier for the serializer flavor: the re-fetch keeps the relation, no `.only(...)`.
+
+    A `createItemViaSerializer` selecting `node { name category { name } }` is
+    wrapped in `CaptureQueriesContext`. The post-write re-fetch is one
+    optimizer-planned `products_item` queryset keeping `select_related` /
+    `prefetch_related` for `category`, so the relation renders with no N+1 and no
+    deferred-field lazy refetch. The absolute count is DERIVED from a real run
+    (BUILD.md forbids guessing); the serializer count differs from the model flavor
+    (no `full_clean` - DRF's `is_valid()` runs the unique validator instead), so it
+    is derived + annotated below.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            _CREATE_ITEM_VIA_SERIALIZER,
+            client=client,
+            variables={
+                "d": {
+                    "name": "SerG2Widget",
+                    "categoryId": _global_id("products.category", category.pk),
+                },
+            },
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaSerializer"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "SerG2Widget", "category": {"name": category.name}}
+
+    # Bounded count = 12, DERIVED from a real run (BUILD.md forbids guessing it;
+    # the serializer flavor differs from the model flavor's 12 by composition - no
+    # `full_clean`, instead DRF's `is_valid()` runs the FK re-fetch + the unique
+    # validator). Per-query breakdown:
+    #   BEGIN + COMMIT                                       = 2 (the resolver's one
+    #                                                            transaction.atomic())
+    #   session + auth_user + user_perms + group_perms       = 4 (authorized-caller
+    #                                                            machinery)
+    #   relation-id visibility decode: products_category     = 1 (the resolver
+    #                                                            resolves categoryId
+    #                                                            through CategoryType.
+    #                                                            get_queryset before write)
+    #   is_valid(): PrimaryKeyRelatedField FK re-fetch       = 1 (products_category -
+    #                                                            DRF validates the pk)
+    #   is_valid(): UniqueTogetherValidator                  = 1 (SELECT 1 EXISTS on
+    #                                                            products_item)
+    #   INSERT products_item                                 = 1
+    #   post-write re-fetch: products_item                   = 1 (optimizer-planned)
+    #   the `category` relation: products_category           = 1 (select_related /
+    #                                                            prefetch; no N+1, no
+    #                                                            lazy refetch)
+    sql = [query["sql"] for query in captured]
+    assert len(captured) == 12, sql
+    # G2 load-bearing property (NOT a column-exact snapshot - that is the package
+    # mirror's job): the re-fetch reads the item once (the `SELECT 1` EXISTS is the
+    # unique validator, not a row read) and the relation through select_related /
+    # prefetch. A deferred-field lazy refetch or an N+1 would add EXTRA products
+    # SELECTs.
+    item_selects = [
+        s for s in sql if "products_item" in s.lower() and s.strip().upper().startswith("SELECT")
+    ]
+    category_selects = [
+        s
+        for s in sql
+        if "products_category" in s.lower() and s.strip().upper().startswith("SELECT")
+    ]
+    # The re-fetch reads products_item exactly once (the `SELECT 1` unique EXISTS
+    # excluded); no deferred-field lazy refetch fires.
+    assert len([s for s in item_selects if "select 1" not in s.lower()]) == 1, sql
+    # THREE real category SELECTs: the relation-id visibility decode, DRF's FK
+    # validation re-fetch in is_valid(), and the post-write re-fetch relation -
+    # none an N+1 / lazy refetch.
+    assert len([s for s in category_selects if "select 1" not in s.lower()]) == 3, sql
+    # G2 NO `.only(...)` projection: the post-write re-fetch selects the full item
+    # row (no SQL names a strict deferred column subset), so the row reads back whole.
+    assert "SerG2Widget" in models.Item.objects.values_list("name", flat=True)

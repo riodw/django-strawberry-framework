@@ -26,12 +26,18 @@ Decision-13 live matrix:
 
 from rest_framework import serializers
 
-from .models import Item
+from .models import Category, Item
 
 # The sentinel value ``ItemSerializer.validate_name`` rejects - drives the
 # field-level ``serializer.errors`` keyed-to-``name`` live case (a
 # ``validate_<field>`` error).
 REJECTED_SERIALIZER_ITEM_NAME = "__serializer_rejected__"
+
+# The sentinel value ``RenamedRelationItemSerializer.validate_display_name`` rejects -
+# drives the renamed-SCALAR validation live case (a ``validate_<field>`` error keyed to
+# the serializer field ``display_name`` must surface under the GraphQL wire name
+# ``displayName``, the reverse-map re-key).
+REJECTED_RENAMED_DISPLAY_NAME = "__renamed_rejected__"
 
 
 class ItemSerializer(serializers.ModelSerializer):
@@ -73,3 +79,36 @@ class ItemSerializer(serializers.ModelSerializer):
         if name is not None and user is not None and getattr(user, "username", None) == name:
             raise serializers.ValidationError("Item name must not equal the requesting username.")
         return attrs
+
+
+class RenamedRelationItemSerializer(serializers.ModelSerializer):
+    """``Item`` serializer with RENAMED scalar + relation fields (spec-039 Decision-13 renamed-field live matrix).
+
+    Proves the reverse map keys errors to the GraphQL WIRE name - not the serializer
+    field name, nor the backing model column:
+
+    * ``display_name = CharField(source="name")`` is exposed as the GraphQL input
+      ``displayName`` and writes through to the ``name`` column;
+      ``validate_display_name`` rejects ``REJECTED_RENAMED_DISPLAY_NAME`` so a
+      ``serializer.errors`` entry keyed to the serializer field ``display_name``
+      surfaces under ``displayName`` (the renamed-SCALAR validation case).
+    * ``category_pk = PrimaryKeyRelatedField(source="category")`` is exposed as
+      ``categoryPk`` (the id-like-suffix rule) and writes through to the ``category``
+      FK; a hidden / wrong-model / uncoercible id is a relation ``FieldError`` keyed to
+      ``categoryPk`` (the renamed-RELATION decode case).
+    """
+
+    display_name = serializers.CharField(source="name")
+    category_pk = serializers.PrimaryKeyRelatedField(
+        source="category",
+        queryset=Category.objects.all(),
+    )
+
+    class Meta:
+        model = Item
+        fields = ("display_name", "category_pk")
+
+    def validate_display_name(self, value):
+        if value == REJECTED_RENAMED_DISPLAY_NAME:
+            raise serializers.ValidationError("This renamed name is not allowed.")
+        return value

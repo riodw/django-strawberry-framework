@@ -27,7 +27,10 @@ import json
 import pytest
 from apps.products import models
 from apps.products.forms import REJECTED_ITEM_NAME
-from apps.products.serializers import REJECTED_SERIALIZER_ITEM_NAME
+from apps.products.serializers import (
+    REJECTED_RENAMED_DISPLAY_NAME,
+    REJECTED_SERIALIZER_ITEM_NAME,
+)
 from apps.products.services import create_users, delete_data, seed_cascade_split, seed_data
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -152,6 +155,17 @@ _UPDATE_ITEM_VIA_SERIALIZER = (
     "mutation($id: ID!, $d: ItemSerializerPartialInput!) { "
     "updateItemViaSerializer(id: $id, data: $d) { "
     "node { name } errors { field messages } } }"
+)
+
+# The renamed-field serializer mutation (spec-039 Decision-13 reverse-map matrix):
+# ``RenamedRelationItemSerializer`` renames its scalar (``display_name`` ->
+# ``displayName``, source ``name``) and relation (``category_pk`` -> ``categoryPk``,
+# source ``category``), so the generated input exposes ``displayName`` / ``categoryPk``
+# and the payload errors must key to those WIRE names.
+_CREATE_ITEM_VIA_RENAMED_SERIALIZER = (
+    "mutation($d: RenamedRelationItemSerializerInput!) { "
+    "createItemViaRenamedSerializer(data: $d) { "
+    "node { name category { name } } errors { field messages } } }"
 )
 
 
@@ -3362,3 +3376,106 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
     # G2 NO `.only(...)` projection: the post-write re-fetch selects the full item
     # row (no SQL names a strict deferred column subset), so the row reads back whole.
     assert "SerG2Widget" in models.Item.objects.values_list("name", flat=True)
+
+
+# ---------------------------------------------------------------------------
+# Renamed-field reverse map (spec-039 Decision-13 / Medium-8): a renamed scalar +
+# a renamed relation, errors keyed to the GraphQL WIRE name through the envelope.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_via_renamed_serializer_happy_path():
+    """A renamed scalar (`displayName`->`name`) + relation (`categoryPk`->`category`) write through.
+
+    Proves the generated input exposes the RENAMED wire names and the source-renamed
+    fields write through to the backing columns: `displayName` -> `name`, `categoryPk`
+    -> `category`.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_RENAMED_SERIALIZER,
+        client=client,
+        variables={
+            "d": {
+                "displayName": "RenamedWidget",
+                "categoryPk": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaRenamedSerializer"]
+    assert result["errors"] == []
+    assert result["node"] == {"name": "RenamedWidget", "category": {"name": category.name}}
+    assert models.Item.objects.filter(name="RenamedWidget", category=category).exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_renamed_serializer_relation_error_keys_to_graphql_wire_name():
+    """A wrong-type id on the RENAMED `categoryPk` -> `FieldError` keyed to `categoryPk` (Medium-8).
+
+    `categoryPk` (serializer field `category_pk`, source `category`) is fed a wrong-type
+    `Item` GlobalID. The relation decode type-checks against the target `Category` and
+    returns a `FieldError` keyed to the GraphQL WIRE name `categoryPk` - NOT the
+    serializer field `category_pk` nor the model column `category`. `node` is null and
+    no row is written.
+    """
+    create_users(1)
+    seed_data(1)
+    some_item = models.Item.objects.first()
+    wrong_gid = _global_id("products.item", some_item.pk)  # an Item gid; a Category is expected
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_RENAMED_SERIALIZER,
+        client=client,
+        variables={"d": {"displayName": "BadRelRenamed", "categoryPk": wrong_gid}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaRenamedSerializer"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["categoryPk"]
+    assert models.Item.objects.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
+def test_renamed_serializer_scalar_validation_error_keys_to_graphql_wire_name():
+    """A `validate_display_name` rejection on the RENAMED `displayName` -> error keyed to `displayName` (Medium-8).
+
+    A `validate_<field>` error DRF keys to the serializer field `display_name` must
+    surface under the GraphQL WIRE name `displayName` (the recursive flattener re-keys
+    the root segment through the reverse map) - NOT `display_name` nor the model column
+    `name`. `node` is null and no row is written.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_RENAMED_SERIALIZER,
+        client=client,
+        variables={
+            "d": {
+                "displayName": REJECTED_RENAMED_DISPLAY_NAME,
+                "categoryPk": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaRenamedSerializer"]
+    assert result["node"] is None
+    assert [e["field"] for e in result["errors"]] == ["displayName"]
+    assert "not allowed" in result["errors"][0]["messages"][0]
+    assert not models.Item.objects.filter(name=REJECTED_RENAMED_DISPLAY_NAME).exists()

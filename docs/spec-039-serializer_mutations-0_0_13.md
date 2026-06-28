@@ -2841,14 +2841,20 @@ identity guard that the symbol is imported and not redefined under `rest_framewo
   serializer's only genuinely-new validation is `serializer_class`
   is-a-`ModelSerializer` (+ resolvable `Meta.model`) and `Meta.optional_fields`
   normalization. ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) / Slice 2.)
-- **P2.6 — share the override-detection helper.** `get_serializer_kwargs` / `get_serializer`
-  default bodies and the override-detection that waives the create-required guard parallel
-  `forms/sets.py::_default_get_form_kwargs` / `_default_get_form` + the existing
-  `_form_kwargs_overridden`. The bodies differ (the serializer injects
-  `context={"request": …}`), but the **override-detection** is generic: **generalize the
-  existing `_form_kwargs_overridden` into a shared `_hook_overridden(cls, base, name)`**
-  identity check the serializer's `get_serializer_kwargs` waiver reuses rather than
-  re-deriving `cls.<name> is base.<name>`. ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) guard-waiver / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload).)
+- **P2.6 — share the override-detection helper.** The `get_serializer_kwargs` default
+  body and the override-detection that waives the create-required guard parallel
+  `forms/sets.py::_default_get_form_kwargs` + the existing `_form_kwargs_overridden`. The
+  serializer flavor ships **only** the finer `get_serializer_kwargs` hook — it has **no**
+  coarse `get_serializer` constructor hook (unlike the form flavor's `get_form`): its
+  H3 invariants (`partial` and the authorized-actor `context["request"]`) are
+  framework-owned in `_merged_serializer_kwargs` and cannot be entrusted to a
+  consumer-overridable constructor (a `get_serializer()` override could subvert them),
+  so the default body sets **neither** `partial` **nor** `context`
+  (spec-039 Medium-7 — the dead-hook removal). The **override-detection** is generic:
+  **generalize the existing `_form_kwargs_overridden` into a shared
+  `_hook_overridden(cls, base, name)`** identity check the serializer's
+  `get_serializer_kwargs` waiver reuses rather than re-deriving `cls.<name> is
+  base.<name>`. ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) guard-waiver / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload).)
 - **P2.7 — promote the `Meta` typo-guard, do not add a third normalize wrapper.** Every
   `_validate_meta` computes `unknown = sorted(declared - _ALLOWED_<FLAVOR>_META_KEYS)` and
   raises (`mutations/sets.py::_ALLOWED_MUTATION_META_KEYS`, and both form bases). Promote

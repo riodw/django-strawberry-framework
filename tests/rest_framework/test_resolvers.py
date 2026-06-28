@@ -437,6 +437,99 @@ def test_save_time_integrity_error_maps_to_all_sentinel_envelope():
 
 
 # ===========================================================================
+# M2 / H3 - required+allow_null omission vs explicit null at the decode
+# ===========================================================================
+
+
+@pytest.mark.django_db
+def test_decode_strips_omission_but_preserves_explicit_null():
+    """A `required=True, allow_null=True` field: omission is stripped (DRF sees MISSING); explicit null is preserved (spec-039 H3).
+
+    The input field is GraphQL-omittable (UNSET default), so the input dataclass
+    constructs WITHOUT the key (no top-level coercion error - the bug H3 flags). The
+    decode then strips `UNSET` so DRF sees the key MISSING (and `is_valid()` raises its
+    own field-keyed required error in-band), while an explicit `null` is preserved as
+    `None` so DRF applies its `allow_null` rule.
+    """
+
+    class ReqNullSerializer(serializers.ModelSerializer):
+        name = serializers.CharField(allow_null=True)  # required=True, allow_null=True
+
+        class Meta:
+            model = product_models.Category
+            fields = ("name",)
+
+    mutation_cls = _bind_item_serializer_mutation(ReqNullSerializer)
+
+    # Omission: the input constructs without `name` (UNSET default proves it is
+    # omittable, so no top-level construction error), and the decode strips it.
+    omitted = mutation_cls._input_class()
+    provided_omit, err_omit = serializer_resolvers._decode_serializer_data(
+        mutation_cls,
+        omitted,
+        info=None,
+    )
+    assert err_omit is None
+    assert "name" not in provided_omit  # DRF sees the key MISSING -> its required error
+
+    # Explicit null: preserved as None (reaches DRF, which applies allow_null).
+    explicit = mutation_cls._input_class(name=None)
+    provided_null, err_null = serializer_resolvers._decode_serializer_data(
+        mutation_cls,
+        explicit,
+        info=None,
+    )
+    assert err_null is None
+    assert provided_null["name"] is None
+
+
+# ===========================================================================
+# H6 - a save-time validation error after a partial write rolls back
+# ===========================================================================
+
+
+@pytest.mark.django_db
+def test_save_time_validation_after_partial_write_is_rolled_back():
+    """A serializer whose `save()` writes a row then raises validation -> the partial write is rolled back (spec-039 H6).
+
+    The shared write skeleton wraps the pipeline in `transaction.atomic()`; a
+    `write_step` that made a partial DB write and THEN raised a validation error
+    (mapped to the envelope inside the atomic block) marks the transaction for rollback
+    so the partial write never commits. Driven through the full `resolve_serializer_sync`
+    pipeline (the atomic boundary lives in the shared skeleton, not the write step).
+    """
+    sentinel = "SIDE_EFFECT_ROW_H6"
+
+    class PartialWriteSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Category
+            fields = ("name",)
+
+        def save(self, **kwargs):
+            # A partial write BEFORE the failure: insert a side-effect row, then raise.
+            product_models.Category.objects.create(name=sentinel)
+            raise serializers.ValidationError({"name": ["rejected after a partial write"]})
+
+    mutation_cls = _bind_item_serializer_mutation(PartialWriteSerializer)
+    request = HttpRequest()
+    request.user = SimpleNamespace(username="u", is_authenticated=True)
+    info = SimpleNamespace(context=SimpleNamespace(request=request))
+    data = mutation_cls._input_class(name="NewCat")
+
+    result = serializer_resolvers.resolve_serializer_sync(
+        mutation_cls,
+        info,
+        data=data,
+        id=strawberry.UNSET,
+    )
+
+    # The mutation returns the error envelope (null object + the field error)...
+    assert [fe.field for fe in result.errors] == ["name"]
+    # ...and the side-effect row is NOT persisted: the atomic block was rolled back (H6).
+    assert not product_models.Category.objects.filter(name=sentinel).exists()
+
+
+# ===========================================================================
 # get_serializer_kwargs precedence / framework merge / H3 (hermetic)
 # ===========================================================================
 

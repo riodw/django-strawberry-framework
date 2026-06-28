@@ -404,6 +404,7 @@ class _ValidatedMutationMeta:
         "input_class",
         "model",
         "operation",
+        "optional_fields",
         "partial_input_class",
         "permission_classes",
         "serializer_class",
@@ -421,6 +422,7 @@ class _ValidatedMutationMeta:
         permission_classes: list[Any],
         form_class: Any = None,
         serializer_class: Any = None,
+        optional_fields: tuple[str, ...] | None = None,
     ) -> None:
         self.model = model
         self.operation = operation
@@ -440,11 +442,16 @@ class _ValidatedMutationMeta:
         # records its ``Meta.serializer_class`` here so the serializer ``build_input``
         # / resolver read one snapshot shape (mirroring ``form_class``). The model +
         # form flavors leave it ``None`` (net-new state, never read off the model /
-        # form paths), so they stay byte-unchanged. ``Meta.optional_fields`` is NOT
-        # carried on the snapshot - the Slice-1 ``build_serializer_input_class``
-        # re-reads it off the serializer's own ``Meta`` via ``resolve_optional_fields``
-        # (D2: minimal blast radius - the generator already owns the re-read).
+        # form paths), so they stay byte-unchanged.
         self.serializer_class = serializer_class
+        # The serializer-flavor ``Meta.optional_fields`` (spec-039 Critical-1): the
+        # create-only force-optional override lives on the MUTATION's ``Meta`` (the
+        # documented public key), NOT the serializer's own ``Meta``. Normalized at
+        # class creation and stored here as the validated tuple (``None`` when unset);
+        # the serializer ``build_input`` threads it into
+        # ``build_serializer_input_class`` so it participates in the input shape +
+        # descriptor identity. The model + form flavors leave it ``None``.
+        self.optional_fields = optional_fields
 
 
 def _normalize_field_sequence(value: Any, *, label: str = "fields") -> tuple[str, ...] | None:

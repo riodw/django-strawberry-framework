@@ -385,6 +385,21 @@ class UpdateItemViaSerializer(SerializerMutation):
         operation = "update"
 
 
+class CreateItemViaRenamedSerializer(SerializerMutation):
+    """Create an ``Item`` through ``RenamedRelationItemSerializer`` (the renamed-field reverse-map matrix).
+
+    The serializer renames its scalar (``display_name`` -> ``displayName``, source
+    ``name``) and relation (``category_pk`` -> ``categoryPk``, source ``category``), so
+    the live test proves a relation-decode ``FieldError`` and a ``validate_<field>``
+    error key to the GraphQL WIRE name (``categoryPk`` / ``displayName``) through the
+    payload envelope - not the serializer field name or the model column.
+    """
+
+    class Meta:
+        serializer_class = serializers.RenamedRelationItemSerializer
+        operation = "create"
+
+
 @strawberry.type
 class Mutation:
     """Fakeshop products app write surface - the `DjangoMutation` + form-mutation writes.
@@ -411,7 +426,10 @@ class Mutation:
     (codenames `add_item` / `change_item`). The serializer's `validate_<field>` /
     object `validate()` feed the `serializer.errors` envelope, its `attachment`
     `FileField` accepts a multipart `Upload`, and its object `validate()` reads the
-    framework-injected `context["request"].user`.
+    framework-injected `context["request"].user`. `createItemViaRenamedSerializer`
+    (via `RenamedRelationItemSerializer`) adds the renamed-field reverse-map matrix - a
+    renamed scalar (`displayName`) and a renamed relation (`categoryPk`) whose decode /
+    validation errors key to the GraphQL wire name.
     """
 
     create_item = DjangoMutationField(CreateItem)
@@ -426,6 +444,7 @@ class Mutation:
     submit_ping = DjangoMutationField(SubmitPing)
     create_item_via_serializer = DjangoMutationField(CreateItemViaSerializer)
     update_item_via_serializer = DjangoMutationField(UpdateItemViaSerializer)
+    create_item_via_renamed_serializer = DjangoMutationField(CreateItemViaRenamedSerializer)
 
 
 __all__ = ("Mutation", "Query")

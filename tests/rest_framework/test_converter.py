@@ -266,6 +266,39 @@ def test_many_related_field_is_relation_multi():
     assert conversion.annotation is None
 
 
+def test_slug_related_field_raises_non_pk_relation():
+    """A writable ``SlugRelatedField`` (a non-PK relation) fails loud (spec-039 H5).
+
+    Only ``PrimaryKeyRelatedField`` decodes to a primary key; a slug-expecting field has
+    no pk-based input shape, so it raises rather than silently misdecoding a pk.
+    """
+    _register_products_types()
+    field = _bind(
+        serializers.SlugRelatedField(
+            slug_field="name",
+            queryset=product_models.Category.objects.all(),
+        ),
+        "category",
+    )
+    with pytest.raises(ConfigurationError, match="PrimaryKeyRelatedField"):
+        convert_serializer_field(field)
+
+
+def test_many_related_field_non_pk_child_raises():
+    """A ``ManyRelatedField`` wrapping a non-PK child (``SlugRelatedField(many=True)``) fails loud (H5)."""
+    _register_products_types()
+    field = _bind(
+        serializers.SlugRelatedField(
+            many=True,
+            slug_field="name",
+            queryset=product_models.Category.objects.all(),
+        ),
+        "cats",
+    )
+    with pytest.raises(ConfigurationError, match="PrimaryKeyRelatedField"):
+        convert_serializer_field(field)
+
+
 def test_file_and_image_fields_are_file_kind():
     """``FileField`` / ``ImageField`` -> kind ``file`` (the ``Upload`` annotation is build-site)."""
     assert convert_serializer_field(_bind(serializers.FileField(), "f")).kind == FILE
@@ -377,6 +410,33 @@ def test_renamed_relation_resolves_backing_column_and_id_like_name():
     assert spec.target_name == "category_pk"
     assert spec.source == "category"
     assert spec.kind == RELATION_SINGLE
+    # H4: the relation's target model is recorded on the spec at build time so the
+    # Slice-3 decode never re-discovers the serializer field set per request.
+    assert spec.related_model is product_models.Category
+
+
+def test_model_backed_slug_related_field_raises():
+    """A ``SlugRelatedField`` over a model RELATION column fails loud at resolve (spec-039 H5).
+
+    The model-backed relation branch (``column.is_relation``) would otherwise type the
+    field as a pk-decoding GlobalID / raw-pk input, silently misdecoding a pk into a
+    slug-expecting field. It fails loud instead.
+    """
+    _register_products_types()
+
+    class SlugSer(serializers.ModelSerializer):
+        category = serializers.SlugRelatedField(
+            slug_field="name",
+            queryset=product_models.Category.objects.all(),
+        )
+
+        class Meta:
+            model = product_models.Item
+            fields = ("category",)
+
+    field = SlugSer().fields["category"]
+    with pytest.raises(ConfigurationError, match="PrimaryKeyRelatedField"):
+        resolve_serializer_field(field, product_models.Item, "X")
 
 
 def test_dotted_source_on_model_column_field_raises():

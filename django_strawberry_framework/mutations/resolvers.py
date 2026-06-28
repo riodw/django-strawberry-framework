@@ -3,7 +3,7 @@
 The write-side runtime: one pipeline per operation, in a sync and an async form
 (spec-036 Decision 8). The pipeline is
 
-    decode -> locate -> authorize -> validate -> write -> re-fetch/snapshot -> payload
+    (update) locate -> authorize -> decode -> validate -> write -> re-fetch/snapshot -> payload
 
 and the load-bearing invariants this module owns:
 

@@ -1885,7 +1885,7 @@ courts serializers that rename fields. The supported `source` scope for `0.0.13`
   is derived from the declared serializer field name** by the cross-flavor rule, with an
   **id-like-suffix normalization** so the relation convention does not double-suffix:
   the relation `Id` suffix is appended **only when the declared field name is not
-  already id-like** (`*_id` / `*_pk` / `*Id` / `*Pk`); an already-id-like name is just
+  already id-like** (`*_id` / `*_pk`); an already-id-like name is just
   camel-cased. So a relation field `category` → `categoryId` (suffix appended, the
   package convention that surfaces FK `category` as `categoryId`), `category_id` →
   `categoryId` (already id-like — camel-cased, **no** doubled `…IdId`), and

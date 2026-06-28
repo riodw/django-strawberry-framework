@@ -102,18 +102,15 @@ from ..mutations.resolvers import (
     _coerce_relation_pk_or_none,
     _unencodable_text_error,
     authorize_or_raise,
-    build_payload,
-    coerce_lookup_id,
-    locate_instance,
-    not_found_error,
     payload_cls_for,
     raw_choice_value,
-    refetch_optimized,
+    relation_field_error,
     run_pipeline_async,
+    run_write_pipeline_sync,
     save_or_field_errors,
 )
 from ..relay import GlobalIDDecode, decode_model_global_id
-from ..utils.querysets import visibility_scoped_related_queryset
+from ..utils.querysets import visible_related_object
 from .converter import FILE, RELATION_MULTI, RELATION_SINGLE, FormInputFieldSpec
 from .inputs import get_form_fields
 
@@ -135,54 +132,13 @@ def _relation_field_error(graphql_name: str) -> Any:
     Keys to the input field's GraphQL wire name (``categoryId``) - what the client
     sent - matching the ``036`` relation decode's AR-H4 contract. Hidden, missing,
     wrong-model, and uncoercible all collapse to this one shape (no existence
-    leak).
+    leak). The form-path alias for the shared ``relation_field_error`` leaf ctor:
+    the message + leaf shape are single-sourced in ``mutations/resolvers.py``
+    (spec-039 integration), byte-identical across all three write flavors.
     """
-    from ..mutations.inputs import FieldError
-
-    return FieldError(field=graphql_name, messages=[f"Invalid id for relation {graphql_name!r}."])
+    return relation_field_error(graphql_name)
 
 
-def _visible_related_object(related_model: type, pk: Any, info: Any) -> Any | None:
-    """Resolve the VISIBLE related object by pk through the related primary's ``get_queryset``.
-
-    The visibility-on-every-branch query (the net-new security code). Resolves the
-    related model's primary ``DjangoType`` via the registry and runs the SAME
-    visibility hook every read surface applies
-    (``apply_type_visibility_sync(initial_queryset(...))``), so a writer cannot
-    attach a row they could not *see*. Returns the visible object or ``None``
-    (hidden / missing - the caller maps ``None`` to the field-keyed ``FieldError``,
-    indistinguishable). The decoder needs the OBJECT (to apply ``to_field_name``),
-    which the ``036`` ``_relation_visibility_error`` does not return, so it cannot
-    call that helper - but it reuses the same primitives so the query shape is
-    identical. An ``async def get_queryset`` met here raises ``SyncMisuseError``.
-
-    The related model has a primary type only when a ``GlobalID``-typed relation
-    input was generated for it; a raw-pk relation's primary is resolved the same
-    way (``registry.get``), and a model with no primary still resolves via the
-    default manager scoped by the (no-op) visibility hook.
-    """
-    from ..registry import registry
-
-    related_type = registry.get(related_model)
-    if related_type is None:
-        # No primary DjangoType: a raw-pk relation with no Relay-Node target. Scope
-        # existence against the default manager (no visibility contract to apply).
-        return related_model._default_manager.filter(pk=pk).first()
-    queryset = visibility_scoped_related_queryset(related_type, info, _FORM_ASYNC_RECOURSE)
-    return queryset.filter(pk=pk).first()
-
-
-# TODO(spec-039 Slice 3): Move `_visible_related_object` to
-# `utils/querysets.py::visible_related_object` and re-point this module before
-# adding the serializer relation decoder.
-# Pseudo flow:
-#   - Import the promoted `visible_related_object(...)` helper.
-#   - Resolve form relation pks by passing `related_model`, the pk, `info`, and
-#     `_FORM_ASYNC_RECOURSE` into that shared helper.
-#
-# This keeps raw-pk relation visibility single-sited across form and serializer
-# mutations. A live serializer GraphQL field still exposes only the generated id
-# annotation; raw-pk coverage for Relay targets remains a package-only helper path.
 def _to_form_key_value(obj: Any, form_field: Any) -> Any:
     """Convert a resolved relation object to its form-key value via ``to_field_name`` (P2 #6).
 
@@ -241,7 +197,7 @@ def _decode_form_relation_single(
         if pk is None:
             return None, _relation_field_error(graphql_name)
 
-    obj = _visible_related_object(related_model, pk, info)
+    obj = visible_related_object(related_model, pk, info, _FORM_ASYNC_RECOURSE)
     if obj is None:
         return None, _relation_field_error(graphql_name)
     return _to_form_key_value(obj, form_field), None
@@ -473,61 +429,94 @@ def _form_errors_to_field_errors(form: Any) -> list[Any]:
     return validation_error_to_field_errors(ValidationError(form.errors.as_data()))
 
 
+def _modelform_decode_step(
+    mutation_cls: type,
+    data: Any,
+    info: Any,
+    *,
+    instance: Any,
+) -> tuple[dict[str, Any], dict[str, Any]] | list[Any]:
+    """The ``ModelForm`` ``decode_step``: form-decode + partial reconstruction (spec-039 P1.5).
+
+    Decodes the bound input into a FORM-field-keyed ``(provided_data,
+    provided_files)`` (the ``038`` ``_decode_form_data`` contract: visibility on
+    every relation branch), then - for update - reconstructs the full bound
+    ``data=`` so a one-field change validates against the row's unchanged values.
+    Returns ``(form_data, provided_files)`` for the write step, or a
+    ``list[FieldError]`` on a decode failure (the shared skeleton maps it to a
+    null-object payload).
+    """
+    provided_data, provided_files, decode_error = _decode_form_data(mutation_cls, data, info)
+    if decode_error is not None:
+        return [decode_error]
+    if instance is not None:
+        form_data = _reconstruct_partial_data(mutation_cls, instance, provided_data)
+    else:
+        form_data = provided_data
+    return form_data, provided_files
+
+
+def _modelform_write_step(
+    mutation_cls: type,
+    info: Any,
+    instance: Any,
+    decoded: tuple[dict[str, Any], dict[str, Any]],
+) -> Any | list[Any]:
+    """The ``ModelForm`` ``write_step``: ``get_form`` -> ``is_valid`` -> ``form.save`` (spec-039 P1.5).
+
+    Constructs the form via the overridable ``get_form`` hook over the decoded bound
+    data, runs ``is_valid()`` once (a failure maps ``form.errors`` onto the envelope
+    via the reused ``validation_error_to_field_errors``), then writes via
+    ``form.save()`` wrapped by the reused ``save_or_field_errors`` ``IntegrityError``
+    mapper. Returns the saved instance (the skeleton's ``refetch_optimized``
+    re-fetches it by pk under the G2 plan) or a ``list[FieldError]`` on a validation
+    / write failure.
+    """
+    form_data, provided_files = decoded
+    form = mutation_cls().get_form(info, data=form_data, files=provided_files, instance=instance)
+
+    if not form.is_valid():
+        return _form_errors_to_field_errors(form)
+
+    write_error = save_or_field_errors(form.save)
+    if write_error is not None:
+        return write_error
+    return form.instance
+
+
 def _run_modelform_pipeline_sync(
     mutation_cls: type,
     info: Any,
     data: Any,
     id: Any,  # noqa: A002
 ) -> Any:
-    """The ``ModelForm`` flavor body (locate -> authorize -> decode -> validate -> save -> refetch)."""
-    from ..mutations.inputs import payload_object_slot
+    """The ``ModelForm`` flavor body (locate -> authorize -> decode -> validate -> save -> refetch).
 
-    meta = mutation_cls._mutation_meta
-    primary_type = mutation_cls._primary_type
-    slot = payload_object_slot(primary_type)
-    payload_cls = payload_cls_for(mutation_cls)
-    is_update = meta.operation == "update"
-
-    with transaction.atomic():
-        instance = None
-        if is_update:
-            node_id, id_error = coerce_lookup_id(id, primary_type)
-            if id_error is not None:
-                return build_payload(payload_cls, slot, None, [id_error])
-            instance = locate_instance(primary_type, node_id, info)
-            if instance is None:
-                return build_payload(payload_cls, slot, None, [not_found_error()])
-
-        # Authorize BEFORE decoding relations: the decode issues visibility-scoped
-        # ``get_queryset`` queries, so running it pre-auth would let an unauthorized
-        # caller probe related-object visibility by id (denial vs relation FieldError).
-        # Matches the ``036`` model path's locate -> authorize -> decode order.
-        authorize_or_raise(mutation_cls, info, meta.operation, data, instance=instance)
-
-        provided_data, provided_files, decode_error = _decode_form_data(mutation_cls, data, info)
-        if decode_error is not None:
-            return build_payload(payload_cls, slot, None, [decode_error])
-
-        if is_update:
-            form_data = _reconstruct_partial_data(mutation_cls, instance, provided_data)
-        else:
-            form_data = provided_data
-        form = mutation_cls().get_form(
+    Rides the promoted shared ``run_write_pipeline_sync`` skeleton (spec-039 P1.5):
+    the ``transaction.atomic()`` boundary + the locate preamble + the
+    authorize-before-decode security ordering + the optimizer re-fetch tail are
+    single-sited there, and this flavor supplies only the form ``decode_step`` (form
+    decode + partial reconstruction) and ``write_step`` (``get_form`` ->
+    ``is_valid`` -> ``form.save``) callbacks.
+    """
+    return run_write_pipeline_sync(
+        mutation_cls,
+        info,
+        data,
+        id,
+        decode_step=lambda instance: _modelform_decode_step(
+            mutation_cls,
+            data,
             info,
-            data=form_data,
-            files=provided_files,
             instance=instance,
-        )
-
-        if not form.is_valid():
-            return build_payload(payload_cls, slot, None, _form_errors_to_field_errors(form))
-
-        write_error = save_or_field_errors(form.save)
-        if write_error is not None:
-            return build_payload(payload_cls, slot, None, write_error)
-
-        obj = refetch_optimized(primary_type, form.instance.pk, info, force_load=False)
-        return build_payload(payload_cls, slot, obj, [])
+        ),
+        write_step=lambda instance, decoded: _modelform_write_step(
+            mutation_cls,
+            info,
+            instance,
+            decoded,
+        ),
+    )
 
 
 def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> Any:

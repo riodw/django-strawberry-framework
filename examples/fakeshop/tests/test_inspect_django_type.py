@@ -119,20 +119,32 @@ def test_inspect_with_schema_option(selector):
     ``import_module_symbol`` returns the cached module without re-running its
     import-time side effects. Evict the schema modules from ``sys.modules`` so
     the ``--schema`` import re-executes class registration + finalize.
+
+    The eviction strands a half-registered ``apps.library.schema`` (re-imported by
+    the ``--schema`` load but never reset to a complete project schema) in
+    ``sys.modules``, which can collide at a later same-worker aggregate build ->
+    ``DuplicatedTypeName``. Restore the FULL project schema on teardown via the
+    shared ``schema_reload.reload_all_project_schemas`` discipline so this cold-start
+    simulation leaves the worker clean for the next test.
     """
     for name in _SCHEMA_MODULES:
         sys.modules.pop(name, None)
     registry.clear()
 
-    out = StringIO()
-    call_command("inspect_django_type", "BookType", "--schema", selector, stdout=out)
-    text = out.getvalue()
-    assert "BookType" in text
-    assert "title" in text
-    assert "String!" in text
-    assert "subtitle" in text
-    assert "circulation_status" in text
-    assert "choice enum" in text
+    try:
+        out = StringIO()
+        call_command("inspect_django_type", "BookType", "--schema", selector, stdout=out)
+        text = out.getvalue()
+        assert "BookType" in text
+        assert "title" in text
+        assert "String!" in text
+        assert "subtitle" in text
+        assert "circulation_status" in text
+        assert "choice enum" in text
+    finally:
+        from schema_reload import reload_all_project_schemas
+
+        reload_all_project_schemas()
 
 
 def test_inspect_choice_field_row(reload_inspect_schema):

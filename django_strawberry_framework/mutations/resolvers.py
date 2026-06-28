@@ -109,21 +109,86 @@ _MUTATION_ASYNC_RECOURSE = (
     "get_queryset hook; redefine the target type's get_queryset as a sync method."
 )
 
-# TODO(spec-039 Slice 3): Promote the create/update write orchestration into a
-# shared `run_write_pipeline_sync(...)` skeleton before serializer resolvers land.
-# Pseudo flow:
-#   - Open one atomic transaction for create/update writes.
-#   - Locate the update instance first; return the existing not-found payload when
-#     the target row is absent.
-#   - Authorize against operation, input data, and located instance before any
-#     flavor-specific relation decoding.
-#   - Run the supplied write step, return payload errors when it reports errors,
-#     otherwise refetch the saved object through the optimized query path.
-#
-# The authorize-before-decode ordering is the security invariant; model, form,
-# and serializer flavors must not each hand-roll it.
-# Scope is model-backed create/update only. Do not fold model delete or the
-# model-less plain-form pipeline into this skeleton.
+
+def run_write_pipeline_sync(
+    mutation_cls: type,
+    info: Any,
+    data: Any,
+    id: Any,  # noqa: A002
+    *,
+    decode_step: Any,
+    write_step: Any,
+) -> Any:
+    """The shared model-backed create / update write orchestration (spec-039 P1.5).
+
+    The single-sited skeleton the model (``_run_create`` / ``_run_update``), the
+    ``ModelForm`` (``forms/resolvers.py::_run_modelform_pipeline_sync``), and the
+    serializer (``rest_framework/resolvers.py``) write flavors all ride, so the
+    ``transaction.atomic()`` boundary + the **authorize-before-decode security
+    ordering** is owned in ONE place rather than hand-copied a third time. Scoped to
+    **model-backed create / update only** (F6): the ``delete`` snapshot-before-delete
+    body (``_run_delete``) and the model-less plain-form body
+    (``_run_plain_form_pipeline_sync``) keep their own orchestration (no instance /
+    no re-fetch / no object slot).
+
+    The order is the ``036`` / ``038`` security invariant, in ONE place:
+
+    1. open one ``transaction.atomic()``;
+    2. (update) ``coerce_lookup_id`` -> ``locate_instance`` -> ``not_found_error``
+       through the target type's visibility ``get_queryset`` (a malformed id is a
+       ``FieldError`` on ``id``; a hidden / missing row is not-found - no existence
+       leak; ``create`` has no locate, ``instance is None``);
+    3. **authorize BEFORE decode** (``authorize_or_raise(... instance=instance)``):
+       the decode issues visibility-scoped relation queries, so running it pre-auth
+       would let an unauthorized caller probe relation visibility by id;
+    4. ``decode_step(instance) -> decoded | list[FieldError]`` - the flavor's
+       relation-decode + payload build (returns a ``list[FieldError]`` on a decode
+       failure, mapped to a null-object payload here);
+    5. ``write_step(instance, decoded) -> saved | list[FieldError]`` - the flavor's
+       construct / validate / ``save()`` (M2M assignment etc.), returning the saved
+       object or a ``list[FieldError]`` on a validation / write failure;
+    6. ``refetch_optimized(primary_type, saved.pk, info, force_load=False)`` ->
+       ``build_payload`` - the optimizer-planned re-fetch by pk (G2) + the success
+       payload.
+
+    ``decode_step`` / ``write_step`` are the ONLY per-flavor seams: the model passes
+    a relation-decode + ``setattr`` / construct step and a ``full_clean`` -> ``save``
+    -> M2M step; the form passes a form-decode + partial-reconstruction step and a
+    ``get_form`` -> ``is_valid`` -> ``form.save`` step; the serializer passes a
+    serializer-field-keyed decode step and a ``serializer.is_valid`` -> ``save`` step.
+    A step returning a ``list[FieldError]`` short-circuits to a null-object payload.
+    """
+    meta = mutation_cls._mutation_meta
+    primary_type = mutation_cls._primary_type
+    slot = payload_object_slot(primary_type)
+    payload_cls = payload_cls_for(mutation_cls)
+    is_update = meta.operation == "update"
+
+    with transaction.atomic():
+        instance = None
+        if is_update:
+            node_id, id_error = coerce_lookup_id(id, primary_type)
+            if id_error is not None:
+                return build_payload(payload_cls, slot, None, [id_error])
+            instance = locate_instance(primary_type, node_id, info)
+            if instance is None:
+                return build_payload(payload_cls, slot, None, [not_found_error()])
+
+        # Authorize BEFORE the flavor decode (the security invariant): the decode
+        # issues visibility-scoped ``get_queryset`` queries, so running it pre-auth
+        # would let an unauthorized caller probe related-object visibility by id.
+        authorize_or_raise(mutation_cls, info, meta.operation, data, instance=instance)
+
+        decoded = decode_step(instance)
+        if isinstance(decoded, list):
+            return build_payload(payload_cls, slot, None, decoded)
+
+        saved = write_step(instance, decoded)
+        if isinstance(saved, list):
+            return build_payload(payload_cls, slot, None, saved)
+
+        obj = refetch_optimized(primary_type, saved.pk, info, force_load=False)
+        return build_payload(payload_cls, slot, obj, [])
 
 
 def _decode_relations(
@@ -444,11 +509,14 @@ def _decode_relation_id_list(
 
 
 def _relation_error(field_name: str) -> FieldError:
-    """Build the uniform wrong/invalid/hidden relation-id ``FieldError`` for ``field_name``."""
-    return FieldError(
-        field=field_name,
-        messages=[f"Invalid id for relation {field_name!r}."],
-    )
+    """Build the uniform wrong/invalid/hidden relation-id ``FieldError`` for ``field_name``.
+
+    The model-path alias for the shared ``relation_field_error`` leaf ctor: the
+    message text + leaf shape are single-sourced there (spec-039 integration), so
+    the ``036`` model path, the ``038`` form decoder, and the ``039`` serializer
+    decoder all render the identical ``"Invalid id for relation ..."`` envelope.
+    """
+    return relation_field_error(field_name)
 
 
 def _relation_null_error(field_name: str) -> FieldError:
@@ -775,6 +843,40 @@ def _unique_constraint_groups(model: type) -> list[set[str]]:
     return groups
 
 
+def field_error(path: str, messages: Any) -> FieldError:
+    """Build ONE ``FieldError`` leaf for the shared envelope (spec-039 P2.4).
+
+    The single leaf constructor BOTH the flat Django mapper
+    (``validation_error_to_field_errors``) and the recursive DRF serializer
+    flattener (``rest_framework/resolvers.py::serializer_errors_to_field_errors``)
+    call, so the ``"__all__"`` sentinel + the message-container coercion cannot
+    drift between the two flatteners. An empty ``path`` (a model-wide / non-field
+    error) is normalized to the ``NON_FIELD_ERROR_KEY`` sentinel (pinned to Django's
+    ``"__all__"`` in ``mutations/inputs.py`` - AR-M3, single source). ``messages`` is
+    coerced to a ``list[str]``: a bare string becomes a one-element list, any other
+    iterable (a DRF ``ErrorDetail`` list, a tuple) is materialized as a list.
+    """
+    key = path if path else NON_FIELD_ERROR_KEY
+    message_list = [messages] if isinstance(messages, str) else [str(m) for m in messages]
+    return FieldError(field=key, messages=message_list)
+
+
+def relation_field_error(graphql_name: str) -> FieldError:
+    """Build the uniform invalid / hidden / wrong-model relation ``FieldError`` (spec-039 integration).
+
+    The single leaf constructor for the relation-decode error all three write
+    flavors raise - the ``036`` model path (``_relation_error``), the ``038`` form
+    decoder (``forms/resolvers.py::_relation_field_error``), and the ``039``
+    serializer decoder (``rest_framework/resolvers.py::_relation_field_error``). A
+    wrong-model, hidden, missing, or uncoercible id all collapse to this one
+    field-keyed shape (no existence leak), keyed to the GraphQL wire name the
+    client sent (``categoryId``). Siblings the ``field_error`` leaf ctor above so
+    the ``"Invalid id for relation ..."`` message + leaf construction are single
+    sourced across every flavor (AR-H4).
+    """
+    return FieldError(field=graphql_name, messages=[f"Invalid id for relation {graphql_name!r}."])
+
+
 def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
     """Map a Django ``ValidationError`` to the ``FieldError`` envelope (spec-036 Decision 7 / AR-M3).
 
@@ -784,30 +886,20 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
     multi-field-constraint error surfaces under ``"__all__"``. Falls back to
     ``exc.messages`` under the sentinel for a non-dict ``ValidationError``. The
     single source for both the ``full_clean()`` failure and the
-    ``IntegrityError``-race fallback mapping.
+    ``IntegrityError``-race fallback mapping. Both leaves are built through the
+    shared ``field_error`` leaf ctor (P2.4) so the sentinel + message coercion stay
+    single-sited with the recursive DRF flattener.
     """
     if hasattr(exc, "error_dict"):
         errors: list[FieldError] = []
         for field_name, field_errors in exc.error_dict.items():
-            key = NON_FIELD_ERROR_KEY if field_name == NON_FIELD_ERRORS else field_name
+            path = "" if field_name == NON_FIELD_ERRORS else field_name
             messages = [message for error in field_errors for message in error.messages]
-            errors.append(FieldError(field=key, messages=messages))
+            errors.append(field_error(path, messages))
         return errors
-    return [FieldError(field=NON_FIELD_ERROR_KEY, messages=list(exc.messages))]
+    return [field_error("", list(exc.messages))]
 
 
-# TODO(spec-039 Slice 3): Before adding the recursive DRF serializer flattener,
-# promote the `FieldError(field=..., messages=...)` leaf construction into a
-# small shared helper and keep importing `NON_FIELD_ERROR_KEY`.
-# Pseudo flow:
-#   - Normalize an empty path to `NON_FIELD_ERROR_KEY`.
-#   - Coerce serializer/form/Django message containers into a list.
-#   - Return the shared `FieldError` leaf from one helper.
-#
-# The serializer flattener is new and recursive, but the `"__all__"` sentinel and
-# leaf construction must not drift from this flat Django `ValidationError` mapper.
-# Save-time DRF and Django `ValidationError` classes still take separate paths:
-# DRF errors expose `.detail`; Django errors use `error_dict` / `messages` here.
 def _integrity_error_field_errors() -> list[FieldError]:
     """Map a save-time ``IntegrityError`` to the ``"__all__"`` envelope (spec-036 Major-2).
 
@@ -918,159 +1010,100 @@ def _run_pipeline_sync(
     """Run the synchronous decode -> ... -> payload pipeline inside one ``transaction.atomic()``.
 
     The single sync body the async path wraps in ``sync_to_async(...,
-    thread_sensitive=True)`` (spec-036 AR-M4). Dispatches on ``meta.operation`` to
-    the create / update / delete branch; authorize -> snapshot run inside one
-    ``transaction.atomic()`` so a failure after ``save()`` (relation assignment or
-    the snapshot) rolls the write back.
+    thread_sensitive=True)`` (spec-036 AR-M4). Dispatches on ``meta.operation``: the
+    model-backed create / update branches ride the promoted shared
+    ``run_write_pipeline_sync`` skeleton (spec-039 P1.5 - the ``transaction.atomic()``
+    boundary + authorize-before-decode ordering single-sited across the model, form,
+    and serializer flavors), supplying only the model ``decode_step`` / ``write_step``
+    callbacks; the ``delete`` branch keeps its own snapshot-before-delete body (F6 -
+    no data, no decode, a snapshot re-fetch BEFORE the row is deleted, so it is
+    excluded from the create/update skeleton).
     """
     meta = mutation_cls._mutation_meta
     primary_type = mutation_cls._primary_type
+
+    if meta.operation == "delete":
+        slot = payload_object_slot(primary_type)
+        payload_cls = payload_cls_for(mutation_cls)
+        with transaction.atomic():
+            return _run_delete(mutation_cls, info, id, primary_type, slot, payload_cls)
+
     model = model_for(primary_type)
-    slot = payload_object_slot(primary_type)
-    payload_cls = payload_cls_for(mutation_cls)
-
-    with transaction.atomic():
-        if meta.operation == "create":
-            return _run_create(mutation_cls, info, data, model, primary_type, slot, payload_cls)
-        if meta.operation == "update":
-            return _run_update(
-                mutation_cls,
-                info,
-                data,
-                id,
-                model,
-                primary_type,
-                slot,
-                payload_cls,
-            )
-        return _run_delete(mutation_cls, info, id, primary_type, slot, payload_cls)
+    return run_write_pipeline_sync(
+        mutation_cls,
+        info,
+        data,
+        id,
+        decode_step=lambda instance: _model_decode_step(model, data, info, instance=instance),
+        write_step=lambda instance, decoded: _model_write_step(instance, decoded),
+    )
 
 
-def _validate_save_assign_refetch_payload(
-    instance: Any,
-    *,
-    exclude: list[str] | None,
-    m2m_assignments: list[Any],
-    primary_type: type,
+def _model_decode_step(
+    model: type,
+    data: Any,
     info: Any,
-    slot: str,
-    payload_cls: type,
-) -> Any:
-    """The shared create / update write-finalization tail (spec-036 Decision 8 / DRY-3).
+    *,
+    instance: Any,
+) -> tuple[dict[str, Any], list[Any], list[str] | None] | list[FieldError]:
+    """The model ``decode_step``: relation-decode + construct / ``setattr`` (spec-039 P1.5).
 
-    ``create`` and ``update`` necessarily differ in their PRELUDE (authorization
-    placement, instance construction vs. visibility-located + ``setattr``, and the
-    partial-update ``exclude`` calculation), but from validation onward they run an
-    IDENTICAL tail: ``full_clean(exclude=...)`` into the envelope, ``save()`` (race
-    ``IntegrityError`` into the envelope), M2M assignment, the optimizer-planned
-    re-fetch by pk, and the success payload. Single-sourcing it here means a future
-    change to write finalization, save-error mapping, M2M timing, or the post-write
-    re-fetch is made ONCE rather than patched in both branches. ``exclude`` is the
-    AR-H2-aware unprovided-field list for BOTH create and update: create excludes
-    unprovided fields so their model defaults are not validated (mirroring
+    Decodes the input relations (the ``036`` ``_decode_relations`` contract:
+    type-check + visibility on every branch), then either CONSTRUCTS a fresh
+    ``model(**attrs)`` (create, ``instance is None``) or sets the provided attrs on
+    the located row (update). Returns ``(constructed_instance, m2m_assignments,
+    exclude)`` for the write step, or a ``list[FieldError]`` on a decode failure
+    (the skeleton maps it to a null-object payload). ``exclude`` is the AR-H2-aware
+    unprovided-field list for BOTH create and update - create excludes unprovided
+    fields so their model defaults are not validated (mirroring
     ``Model.objects.create()``), update excludes unprovided fields so an unsent
-    column keeps its stored value - both keep validating any unprovided field
+    column keeps its stored value, both keep validating any unprovided field
     co-participating in a unique constraint with a provided one.
     """
-    error_payload = _full_clean_or_payload(
-        instance,
-        exclude=exclude,
-        slot=slot,
-        payload_cls=payload_cls,
-    )
-    if error_payload is not None:
-        return error_payload
-
-    write_error = save_or_field_errors(instance.save)
-    if write_error is not None:
-        return build_payload(payload_cls, slot, None, write_error)
-    _assign_m2m(instance, m2m_assignments)
-
-    obj = refetch_optimized(primary_type, instance.pk, info, force_load=False)
-    return build_payload(payload_cls, slot, obj, [])
-
-
-def _run_create(
-    mutation_cls: type,
-    info: Any,
-    data: Any,
-    model: type,
-    primary_type: type,
-    slot: str,
-    payload_cls: type,
-) -> Any:
-    """The ``create`` branch: authorize -> build -> [validate -> save -> M2M -> re-fetch -> payload].
-
-    ``full_clean`` excludes the fields the input did NOT provide (the AR-H2-aware
-    set, minus any unprovided field co-participating in a unique constraint with a
-    provided field). An unprovided field gets its MODEL default, which
-    ``Model.objects.create()`` applies WITHOUT validation; validating it here is
-    stricter than the contract and rejects a legitimate omission - e.g. a
-    ``JSONField(default=dict)`` (``blank=False``) fails ``full_clean`` ("cannot be
-    blank") on its own empty default when omitted (feedback - empty-value defaults).
-    Excluding unprovided fields mirrors ``create()`` while still validating every
-    PROVIDED value and every uniqueness constraint a provided field touches. A
-    genuinely required field (no default, ``null=False``, ``blank=False``) is
-    input-required, so it can never be unprovided here.
-    """
-    authorize_or_raise(mutation_cls, info, "create", data, instance=None)
-
     scalar_and_fk_attrs, m2m_assignments, decode_error = _decode_relations(model, data, info)
     if decode_error is not None:
-        return build_payload(payload_cls, slot, None, [decode_error])
+        return [decode_error]
 
-    instance = model(**scalar_and_fk_attrs)
-    provided = _provided_attr_names(model, scalar_and_fk_attrs, m2m_assignments)
-    exclude = _unprovided_exclude(model, provided)
-    return _validate_save_assign_refetch_payload(
-        instance,
-        exclude=exclude,
-        m2m_assignments=m2m_assignments,
-        primary_type=primary_type,
-        info=info,
-        slot=slot,
-        payload_cls=payload_cls,
-    )
-
-
-def _run_update(
-    mutation_cls: type,
-    info: Any,
-    data: Any,
-    id: Any,  # noqa: A002
-    model: type,
-    primary_type: type,
-    slot: str,
-    payload_cls: type,
-) -> Any:
-    """The ``update`` branch: locate -> authorize -> set provided -> [validate -> save -> re-fetch]."""
-    node_id, id_error = coerce_lookup_id(id, primary_type)
-    if id_error is not None:
-        return build_payload(payload_cls, slot, None, [id_error])
-    instance = locate_instance(primary_type, node_id, info)
     if instance is None:
-        return build_payload(payload_cls, slot, None, [not_found_error()])
-
-    authorize_or_raise(mutation_cls, info, "update", data, instance=instance)
-
-    scalar_and_fk_attrs, m2m_assignments, decode_error = _decode_relations(model, data, info)
-    if decode_error is not None:
-        return build_payload(payload_cls, slot, None, [decode_error])
-
-    for attr, value in scalar_and_fk_attrs.items():
-        setattr(instance, attr, value)
+        target = model(**scalar_and_fk_attrs)
+    else:
+        target = instance
+        for attr, value in scalar_and_fk_attrs.items():
+            setattr(target, attr, value)
 
     provided = _provided_attr_names(model, scalar_and_fk_attrs, m2m_assignments)
     exclude = _unprovided_exclude(model, provided)
-    return _validate_save_assign_refetch_payload(
-        instance,
-        exclude=exclude,
-        m2m_assignments=m2m_assignments,
-        primary_type=primary_type,
-        info=info,
-        slot=slot,
-        payload_cls=payload_cls,
-    )
+    return target, m2m_assignments, exclude
+
+
+def _model_write_step(
+    instance: Any,
+    decoded: tuple[Any, list[Any], list[str] | None],
+) -> Any | list[FieldError]:
+    """The model ``write_step``: ``full_clean`` -> ``save`` -> M2M (spec-039 P1.5).
+
+    From validation onward create and update run an IDENTICAL tail (the prior
+    ``_validate_save_assign_refetch_payload``): ``full_clean(exclude=...)`` mapped to
+    the envelope, ``save()`` (race ``IntegrityError`` into the envelope), then the
+    M2M ``.set(...)`` assignment. Returns the saved instance (the skeleton's
+    ``refetch_optimized`` re-fetches it by pk under the G2 plan) or a
+    ``list[FieldError]`` on a validation / write failure. ``instance`` is the located
+    update row (ignored - the constructed target rides in ``decoded`` so create's
+    fresh instance is used), kept in the signature for the skeleton's
+    ``write_step(instance, decoded)`` contract.
+    """
+    del instance  # the constructed / mutated target is ``decoded[0]``.
+    target, m2m_assignments, exclude = decoded
+
+    clean_errors = _full_clean_or_field_errors(target, exclude=exclude)
+    if clean_errors is not None:
+        return clean_errors
+
+    write_error = save_or_field_errors(target.save)
+    if write_error is not None:
+        return write_error
+    _assign_m2m(target, m2m_assignments)
+    return target
 
 
 def _run_delete(
@@ -1153,25 +1186,26 @@ def authorize_or_raise(
         raise GraphQLError(f"Not authorized to {operation} {target_name}.")
 
 
-def _full_clean_or_payload(
+def _full_clean_or_field_errors(
     instance: Any,
     *,
     exclude: list[str] | None,
-    slot: str,
-    payload_cls: type,
-) -> Any | None:
-    """Run ``full_clean(exclude=...)``; return a null-object payload on ``ValidationError`` else ``None``.
+) -> list[FieldError] | None:
+    """Run ``full_clean(exclude=...)``; return the mapped ``FieldError``s on failure else ``None``.
 
     ``full_clean()`` runs ``validate_constraints()``, so a ``UniqueConstraint``
     duplicate is caught here as a ``ValidationError`` BEFORE ``save()`` (Major-2);
     its field-keyed messages populate the envelope (multi-field constraint ->
     ``"__all__"`` sentinel, AR-M3). ``exclude=None`` for create (validate all
-    fields); the AR-H2-aware exclude list for update.
+    fields); the AR-H2-aware exclude list for update. Returns the
+    ``list[FieldError]`` (the model ``write_step`` short-circuits to a null-object
+    payload through the shared skeleton) so the payload build stays single-sited in
+    ``run_write_pipeline_sync`` (spec-039 P1.5).
     """
     try:
         instance.full_clean(exclude=exclude)
     except ValidationError as exc:
-        return build_payload(payload_cls, slot, None, validation_error_to_field_errors(exc))
+        return validation_error_to_field_errors(exc)
     return None
 
 

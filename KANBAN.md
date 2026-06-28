@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-06-24
+Last refreshed: 2026-06-27
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -81,15 +81,15 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**63.3% complete** toward `1.0.0` - 38 of 60 cards done (65.6% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**65.0% complete** toward `1.0.0` - 39 of 60 cards done (67.8% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 38/44 (86.4%) | 86.8% |
+| Alpha (pre-0.1.0) | 39/44 (88.6%) | 89.7% |
 | Beta (pre-1.0.0) | 0/15 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
-To complete the Alpha (pre-0.1.0) milestone: **86.4%**.
+To complete the Alpha (pre-0.1.0) milestone: **88.6%**.
 
 ## Board columns
 
@@ -97,6 +97,8 @@ To complete the Alpha (pre-0.1.0) milestone: **86.4%**.
 
 | Card | Spec file |
 | --- | --- |
+| `WIP-ALPHA-040-0.0.13` - Auth mutations (login / logout / register) | No dedicated spec |
+| `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`) | [spec-039-serializer_mutations-0_0_13.md](docs/spec-039-serializer_mutations-0_0_13.md) |
 | `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms) | [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md) |
 | `DONE-037-0.0.11` - Upload scalar and file / image field mapping | [spec-037-upload_file_image_mapping-0_0_11.md](docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md) |
 | `DONE-036-0.0.11` - Mutations + auto-generated Input types | [spec-036-mutations-0_0_11.md](docs/SPECS/spec-036-mutations-0_0_11.md) |
@@ -140,83 +142,13 @@ To complete the Alpha (pre-0.1.0) milestone: **86.4%**.
 
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
 
-## To Do - Alpha (0.1.0)
-
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
-
-<a id="drf_serializer_mutations_serializermutation"></a>
-### [TODO-ALPHA-039-0.0.13 - DRF serializer mutations (`SerializerMutation`)](KANBAN.html#drf_serializer_mutations_serializermutation)
-
-- Priority: High
-- Parity: ⚛️ graphene-django (Required)
-- Severity: Major
-- Status: Planned
-- Relative size: L
-- Labels: `mutations`, `public-api`, `serializers`
-- Spec: [spec-039-serializer_mutations-0_0_13.md](docs/spec-039-serializer_mutations-0_0_13.md)
-
-#### Predicted files
-
-- `django_strawberry_framework/rest_framework/` (planned)
-- `tests/rest_framework/` (planned)
-
-#### Planning note
-
-needs spec
-
-#### Dependencies
-
-- `DONE-036-0.0.11` - Mutations + auto-generated Input types
-
-#### Definition of done
-
-- [ ] Add `docs/spec-serializer_mutations.md`.
-- [ ] Implement `django_strawberry_framework/rest_framework/` exposing `SerializerMutation` (final name pinned during implementation) on the DRF-style Meta surface: `Meta.serializer_class`, `Meta.lookup_field`, `Meta.model_operations`, `Meta.optional_fields`.
-- [ ] Serializer-field → Strawberry input mapping lives in `rest_framework/serializer_converter.py`, dual-purposed for inputs and outputs (mirroring graphene's `is_input=True` flag).
-- [ ] `rest_framework` is a soft dependency: package import must succeed without DRF installed; the helper raises `ImportError` with an install hint when actually called.
-- [ ] Validation errors surface through the shared `errors: list[FieldError]` envelope from `DONE-036-0.0.11`, populated from `serializer.errors`.
-- [ ] Tests under `tests/rest_framework/`.
-- [ ] Live HTTP coverage under `examples/fakeshop/test_query/` exercising a `ModelSerializer` mutation.
-
-#### Files likely touched
-
-- `django_strawberry_framework/rest_framework/` (new)
-- `tests/rest_framework/` (new)
-- `examples/fakeshop/apps/products/schema.py`
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/mutation.py` — `SerializerMutationOptions` carrying `lookup_field`, `model_class`, `model_operations=["create", "update"]`, `serializer_class`, `optional_fields`; `SerializerMutation` class; `fields_for_serializer(serializer, only_fields, exclude_fields, is_input=False, convert_choices_to_enum=True, lookup_field=None, optional_fields=())` helper.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/serializer_converter.py` — DRF-field → GraphQL-type registry; same module covers input and output via `is_input` flag.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/types.py` — shared `ErrorType` envelope.
-
-#### Why it matters
-
-- `graphene-django` ships `SerializerMutation`, which builds a mutation from a DRF `Serializer` / `ModelSerializer`. This is the highest-leverage write-side feature for DRF migrants — they already have serializers defined and want to reuse them in GraphQL.
-- [`GOAL.md`][goal] explicitly names DRF as a target migration source ("keep the public API familiar to Django, DRF, and django-filter users"). Shipping `SerializerMutation` is on-mission, not just a parity item.
-
-#### Dependencies
-
-- `DONE-036-0.0.11` — general mutation infrastructure (including the shared `errors` envelope).
-
-#### Other
-
-- graphene-django ships `SerializerMutation`; the highest-leverage write-side feature for DRF migrants.
-- no on-board predecessor.
-- new `rest_framework/` subpackage (serializer converter dual-purposed for inputs + outputs, plus `SerializerMutation`); soft DRF dependency. Reuses DONE-036-0.0.11's infra + error envelope. Spec + tests + live HTTP.
-
-#### Card references
-
-- Dependency: `DONE-036-0.0.11` — general mutation infrastructure (including the shared `errors` envelope). -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
-- Related: Validation errors surface through the shared `errors: list[FieldError]` envelope from `DONE-036-0.0.11`, populated from `serializer.errors`. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
-
 <a id="auth_mutations_login_logout_register"></a>
-### [TODO-ALPHA-040-0.0.13 - Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
+### [WIP-ALPHA-040-0.0.13 - Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
 - Severity: Medium
-- Status: Planned
+- Status: In progress
 - Relative size: M
 - Labels: `auth`, `mutations`, `public-api`
 
@@ -247,6 +179,10 @@ planned
 #### Card references
 
 - Related: depends on `DONE-036-0.0.11`. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+
+## To Do - Alpha (0.1.0)
+
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 <a id="channels_asgi_router_migration_aid"></a>
 ### [TODO-ALPHA-041-0.0.14 - Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
@@ -1363,6 +1299,115 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
+<a id="drf_serializer_mutations_serializermutation"></a>
+### [DONE-039-0.0.13 - DRF serializer mutations (`SerializerMutation`)](KANBAN.html#drf_serializer_mutations_serializermutation)
+
+- Priority: High
+- Parity: ⚛️ graphene-django (Required)
+- Severity: Major
+- Status: In progress
+- Relative size: L
+- Labels: `mutations`, `public-api`, `serializers`
+- Spec: [spec-039-serializer_mutations-0_0_13.md](docs/spec-039-serializer_mutations-0_0_13.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | implemented on main, releasing in `0.0.13` |
+| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
+| [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) | shipped (`0.0.11`) |
+| [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | shipped (`0.0.12`) |
+| [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | shipped (`0.0.12`) |
+| [`DjangoModelPermission`](docs/GLOSSARY.md#djangomodelpermission) | shipped (`0.0.11`) |
+| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
+| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
+| [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
+| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
+| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.exclude`](docs/GLOSSARY.md#metaexclude) | shipped |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
+| [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
+| [RELAY_GLOBALID_STRATEGY](docs/GLOSSARY.md#relay_globalid_strategy) | shipped (`0.0.9`) |
+| [`Meta.globalid_strategy`](docs/GLOSSARY.md#metaglobalid_strategy) | shipped (`0.0.9`) |
+| [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
+| [Specialized scalar conversions](docs/GLOSSARY.md#specialized-scalar-conversions) | shipped (`0.0.6`) |
+| [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+
+#### Package files
+
+- `django_strawberry_framework/rest_framework/` (historical)
+- `tests/rest_framework/` (historical)
+
+#### Planning note
+
+needs spec
+
+#### Dependencies
+
+- `DONE-036-0.0.11` - Mutations + auto-generated Input types
+
+#### Definition of done
+
+- [x] Add `docs/spec-serializer_mutations.md`.
+- [x] Implement `django_strawberry_framework/rest_framework/` exposing `SerializerMutation` (final name pinned during implementation) on the DRF-style Meta surface: `Meta.serializer_class`, `Meta.lookup_field`, `Meta.model_operations`, `Meta.optional_fields`.
+- [x] Serializer-field → Strawberry input mapping lives in `rest_framework/serializer_converter.py`, dual-purposed for inputs and outputs (mirroring graphene's `is_input=True` flag).
+- [x] `rest_framework` is a soft dependency: package import must succeed without DRF installed; the helper raises `ImportError` with an install hint when actually called.
+- [x] Validation errors surface through the shared `errors: list[FieldError]` envelope from `DONE-036-0.0.11`, populated from `serializer.errors`.
+- [x] Tests under `tests/rest_framework/`.
+- [x] Live HTTP coverage under `examples/fakeshop/test_query/` exercising a `ModelSerializer` mutation.
+
+#### Files likely touched
+
+- `django_strawberry_framework/rest_framework/` (new)
+- `tests/rest_framework/` (new)
+- `examples/fakeshop/apps/products/schema.py`
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/mutation.py` — `SerializerMutationOptions` carrying `lookup_field`, `model_class`, `model_operations=["create", "update"]`, `serializer_class`, `optional_fields`; `SerializerMutation` class; `fields_for_serializer(serializer, only_fields, exclude_fields, is_input=False, convert_choices_to_enum=True, lookup_field=None, optional_fields=())` helper.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/serializer_converter.py` — DRF-field → GraphQL-type registry; same module covers input and output via `is_input` flag.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/types.py` — shared `ErrorType` envelope.
+
+#### Why it matters
+
+- `graphene-django` ships `SerializerMutation`, which builds a mutation from a DRF `Serializer` / `ModelSerializer`. This is the highest-leverage write-side feature for DRF migrants — they already have serializers defined and want to reuse them in GraphQL.
+- [`GOAL.md`][goal] explicitly names DRF as a target migration source ("keep the public API familiar to Django, DRF, and django-filter users"). Shipping `SerializerMutation` is on-mission, not just a parity item.
+
+#### Dependencies
+
+- `DONE-036-0.0.11` — general mutation infrastructure (including the shared `errors` envelope).
+
+#### Other
+
+- graphene-django ships `SerializerMutation`; the highest-leverage write-side feature for DRF migrants.
+- no on-board predecessor.
+- new `rest_framework/` subpackage (serializer converter dual-purposed for inputs + outputs, plus `SerializerMutation`); soft DRF dependency. Reuses DONE-036-0.0.11's infra + error envelope. Spec + tests + live HTTP.
+
+#### Card references
+
+- Dependency: `DONE-036-0.0.11` — general mutation infrastructure (including the shared `errors` envelope). -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+- Related: Validation errors surface through the shared `errors: list[FieldError]` envelope from `DONE-036-0.0.11`, populated from `serializer.errors`. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+
 <a id="form_based_mutations_django_forms_modelforms"></a>
 ### [DONE-038-0.0.12 - Form-based mutations (Django Forms / ModelForms)](KANBAN.html#form_based_mutations_django_forms_modelforms)
 
@@ -1400,7 +1445,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | planned for `0.0.13` |
+| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | implemented on main, releasing in `0.0.13` |
 | [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
 | [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
 | [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
@@ -1591,7 +1636,7 @@ planned
 | [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
 | [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | shipped (`0.0.12`) |
 | [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | shipped (`0.0.12`) |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | planned for `0.0.13` |
+| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | implemented on main, releasing in `0.0.13` |
 | [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
 | [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 | [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
@@ -1617,7 +1662,7 @@ needs spec
 - [x] Add `docs/spec-mutations.md`.
 - [x] Implement `django_strawberry_framework/mutations/` (sets, fields, resolvers, input-type generation) on the DRF-style Meta surface (`Meta.input_class`, `Meta.partial_input_class`, etc.).
 - [x] Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`.
-- [x] Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
+- [x] Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `WIP-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
 - [x] Tests under `tests/mutations/`.
 - [x] Live HTTP coverage under `examples/fakeshop/test_query/` exercising the products write surface.
 
@@ -1646,17 +1691,17 @@ needs spec
 
 - mutations are the single largest unscoped gap vs strawberry-graphql-django (create / update / delete + auto-generated Input / PartialInput types).
 - no on-board predecessor.
-- `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by DONE-038-0.0.12 / TODO-ALPHA-039-0.0.13 / TODO-ALPHA-040-0.0.13.
+- `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by DONE-038-0.0.12 / DONE-039-0.0.13 / WIP-ALPHA-040-0.0.13.
 
 #### Card references
 
 - Dependency: `DONE-018-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution. -> `DONE-018-0.0.6` - Multiple DjangoTypes per model with `Meta.primary`
 - Related: Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`. -> `DONE-010-0.0.4` - 0.0.4 foundation slice (definition-order independence)
 - Dependency: `DONE-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`. -> `DONE-034-0.0.10` - Permissions subsystem
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms)
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-039-0.0.13` - DRF serializer mutations (`SerializerMutation`)
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `TODO-ALPHA-039-0.0.13`, and `TODO-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `TODO-ALPHA-040-0.0.13` - Auth mutations (login / logout / register)
-- Related: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by DONE-038-0.0.12 / TODO-ALPHA-039-0.0.13 / TODO-ALPHA-040-0.0.13. -> `DONE-027-0.0.8` - Filtering subsystem
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `WIP-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `WIP-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `WIP-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `WIP-ALPHA-040-0.0.13` - Auth mutations (login / logout / register)
+- Related: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by DONE-038-0.0.12 / DONE-039-0.0.13 / WIP-ALPHA-040-0.0.13. -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="optimizer_robustness_hardening_upstream_comparison_guards"></a>
 ### [DONE-035-0.0.10 - Optimizer robustness hardening (upstream-comparison guards)](KANBAN.html#optimizer_robustness_hardening_upstream_comparison_guards)

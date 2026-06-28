@@ -329,18 +329,61 @@ def test_model_flavor_dispatch_unchanged():
     assert mutation_resolvers.resolve_mutation_sync is not None
 
 
-# TODO(spec-039 Slice 3): Extend the `DjangoMutationField` generalization tests
-# to cover `SerializerMutation` after the DRF soft dependency is installed for
-# the dev environment.
-# Pseudo flow:
-#   - Declare a minimal create serializer mutation over the products item
-#     serializer.
-#   - Import `SerializerMutation` by name from the package root; do not depend on
-#     root `__all__` because star import stays DRF-free while DRF is soft.
-#   - Wrap it with `DjangoMutationField(...)`, finalize types, and inspect the
-#     generated create argument.
-#   - Assert the mutation class routes sync resolution to
-#     `rest_framework.resolvers`.
-#
-# This is the factory verification only; serializer resolver behavior that can
-# run through fakeshop `/graphql/` belongs in `test_products_api.py`.
+@pytest.mark.django_db
+def test_django_mutation_field_generalizes_to_serializer_mutation():
+    """`DjangoMutationField` accepts a `SerializerMutation` and routes its resolver seam (Decision 5).
+
+    The spec-038-generalized factory was "for the 0.0.13 serializer flavor"; Slice 3
+    VERIFIES the generalization holds with NO `mutations/fields.py` edit: a create
+    `SerializerMutation` over the products `ItemSerializer`, wrapped with
+    `DjangoMutationField`, finalizes and exposes the `data: ItemSerializerInput!`
+    argument (the lazy ref resolves the serializer-derived input in
+    `rest_framework.inputs`), and the class routes `resolve_sync` to
+    `rest_framework.resolvers`.
+
+    `SerializerMutation` is imported BY NAME from the package root (NOT via the root
+    `__all__` / star import, which stays DRF-free while DRF is soft - F1).
+    """
+    from rest_framework import serializers
+
+    from django_strawberry_framework import SerializerMutation
+
+    _declare_item_primaries()
+
+    class ItemSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    class CreateItemViaSerializer(SerializerMutation):
+        class Meta:
+            serializer_class = ItemSerializer
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        create_item_via_serializer = DjangoMutationField(CreateItemViaSerializer)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+
+    # The serializer `data:` input materializes in `rest_framework.inputs` (NOT
+    # `mutations.inputs`); the generated create argument is the serializer input.
+    from django_strawberry_framework.rest_framework.inputs import SERIALIZER_INPUTS_MODULE_PATH
+
+    serializer_inputs_module = sys.modules[SERIALIZER_INPUTS_MODULE_PATH]
+    assert hasattr(serializer_inputs_module, "ItemSerializerInput")
+    assert _field_arg_map(schema, "createItemViaSerializer") == {"data": "ItemSerializerInput!"}
+
+    # The serializer seam routes to the serializer resolver pipeline (NOT the model
+    # default), and the resolver module exposes the entry the seam delegates to.
+    from django_strawberry_framework.rest_framework import resolvers as serializer_resolvers
+
+    assert (
+        CreateItemViaSerializer.resolve_sync.__func__ is SerializerMutation.resolve_sync.__func__
+    )
+    assert (
+        CreateItemViaSerializer.resolve_sync.__func__ is not DjangoMutation.resolve_sync.__func__
+    )
+    assert serializer_resolvers.resolve_serializer_sync is not None

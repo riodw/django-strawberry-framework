@@ -50,6 +50,7 @@ from typing import Any
 from django import forms
 
 from ..exceptions import ConfigurationError
+from ..utils.converters import convert_with_mro
 
 # The four decode kinds the reverse-map record carries. Pinned as module
 # constants so the Slice 3 resolver and the tests address ONE source of truth
@@ -113,17 +114,6 @@ class FormFieldConversion:
         self.required = required
 
 
-# TODO(spec-039 Slice 1): Re-point this module to
-# `utils/converters.py::convert_with_mro` once the shared fail-loud dispatch
-# skeleton lands for the serializer converter.
-# Pseudo flow:
-#   - Delegate `convert_form_field(...)` to `convert_with_mro(...)`.
-#   - Keep the form prechecks ordered as relation, file, then multiple-choice.
-#   - Pass `_SCALAR_FORM_FIELDS` as the registry and `_unsupported_form_field`
-#     as the fail-loud fallback.
-#
-# Keep the exact current behavior: base `forms.Field` remains an exact-type
-# special case, and unsupported custom subclasses still raise `ConfigurationError`.
 # Each supported ``forms.Field`` class -> the scalar annotation it maps to.
 # Registered individually (not via a base-``Field`` catch-all) so subclasses map
 # through the MRO walk in ``convert_form_field`` - ``EmailField`` / ``SlugField``
@@ -191,54 +181,80 @@ def convert_form_field(field: forms.Field) -> FormFieldConversion:
     """
     required = field.required
 
-    # Relation kinds first: ``ModelMultipleChoiceField`` subclasses
-    # ``ModelChoiceField`` subclasses ``ChoiceField``, so check the multi case
-    # before the single before any ``ChoiceField`` scalar mapping. The relation
-    # annotation is finalized at the build site (Relay-vs-raw-pk id type needs
-    # the related primary ``DjangoType``), so ``annotation=None`` here.
-    if isinstance(field, forms.ModelMultipleChoiceField):
+    # Delegate the ordered-precheck -> MRO-walk -> raise control flow to the
+    # shared ``utils/converters.py::convert_with_mro`` skeleton (spec-039 P1.4) so
+    # the no-silent-catch-all contract is single-sited with the serializer
+    # converter. The prechecks below are the relation / file / multi-choice /
+    # bare-``Field`` cases that must win BEFORE the scalar registry walk reaches a
+    # parent class (``ModelChoiceField`` subclasses ``ChoiceField`` -> ``str``,
+    # etc.). Each precheck returns the finished ``FormFieldConversion``; the scalar
+    # registry returns a bare annotation the wrap below turns into a
+    # ``SCALAR``-kind conversion. Behavior is byte-identical to the prior inline
+    # walk: same precheck order, same registry, same fail-loud raise.
+
+    def _relation_multi(_field: forms.Field) -> FormFieldConversion:
+        # ``ModelMultipleChoiceField`` subclasses ``ModelChoiceField``; the relation
+        # annotation is finalized at the build site, so ``annotation=None`` here.
         return FormFieldConversion(annotation=None, kind=RELATION_MULTI, required=required)
-    if isinstance(field, forms.ModelChoiceField):
+
+    def _relation_single(_field: forms.Field) -> FormFieldConversion:
         return FormFieldConversion(annotation=None, kind=RELATION_SINGLE, required=required)
 
-    # File kinds -> the ``Upload`` scalar (annotation finalized at the build
-    # site alongside the scalar/relation branches, for a single ``kind``-driven
-    # build loop). ``ImageField`` subclasses ``FileField``.
-    if isinstance(field, forms.FileField):
+    def _file(_field: forms.Field) -> FormFieldConversion:
+        # File kinds -> the ``Upload`` scalar, finalized at the build site
+        # (``ImageField`` subclasses ``FileField``).
         return FormFieldConversion(annotation=None, kind=FILE, required=required)
 
-    # ``MultipleChoiceField`` (non-model) -> ``list[str]``; subclasses
-    # ``ChoiceField`` so it must precede the scalar ``ChoiceField`` -> ``str``.
-    if isinstance(field, forms.MultipleChoiceField):
+    def _multiple_choice(_field: forms.Field) -> FormFieldConversion:
+        # ``MultipleChoiceField`` (non-model) -> ``list[str]``; subclasses
+        # ``ChoiceField`` so it must precede the scalar ``ChoiceField`` -> ``str``.
         return FormFieldConversion(annotation=list[str], kind=SCALAR, required=required)
 
-    # Scalar registry: walk ``type(field).__mro__`` so the MOST-specific
-    # registered class wins (``NullBooleanField`` -> ``bool | None`` before its
-    # ``BooleanField`` parent; ``FloatField`` / ``DecimalField`` / ``UUIDField``
-    # before the ``IntegerField`` / ``CharField`` they subclass) while a
-    # supported field's UNregistered subclass still resolves to its parent's
-    # scalar (``EmailField`` / ``SlugField`` / ``URLField`` / ``RegexField`` under
-    # ``CharField``). Mirrors ``types/converters.py::scalar_for_field``.
-    for klass in type(field).__mro__:
-        if klass in _SCALAR_FORM_FIELDS:
-            return FormFieldConversion(
-                annotation=_SCALAR_FORM_FIELDS[klass],
-                kind=SCALAR,
-                required=required,
-            )
+    def _bare_field(field_: forms.Field) -> FormFieldConversion | None:
+        # The base ``forms.Field`` is an explicit EXACT-type special case ->
+        # ``str``, NOT a catch-all: an ``isinstance`` precheck would match every
+        # subclass and shadow the raise. Returning ``None`` for a non-exact match
+        # lets the skeleton continue to the scalar walk / fallthrough raise. This
+        # precheck is ordered LAST so the scalar registry has already been
+        # consulted for supported subclasses before the exact-type test - matching
+        # the prior inline "walk, then exact-type ``forms.Field``" order.
+        if type(field_) is forms.Field:
+            return FormFieldConversion(annotation=str, kind=SCALAR, required=required)
+        return None
 
-    # The base ``forms.Field`` is an explicit exact-type special case -> ``str``
-    # (the listed "base ``Field`` -> ``str``"), NOT a catch-all registration:
-    # registering it in ``_SCALAR_FORM_FIELDS`` would make the MRO walk match
-    # EVERY ``forms.Field`` subclass, shadowing the raise below.
-    if type(field) is forms.Field:
-        return FormFieldConversion(annotation=str, kind=SCALAR, required=required)
+    result = convert_with_mro(
+        field,
+        isinstance_prechecks=[
+            (forms.ModelMultipleChoiceField, _relation_multi),
+            (forms.ModelChoiceField, _relation_single),
+            (forms.FileField, _file),
+            (forms.MultipleChoiceField, _multiple_choice),
+            (forms.Field, _bare_field),
+        ],
+        scalar_registry=_SCALAR_FORM_FIELDS,
+        fallthrough_error_factory=_unsupported_form_field,
+    )
+    if isinstance(result, FormFieldConversion):
+        return result
+    # The scalar registry MRO walk returned a bare annotation (``EmailField`` /
+    # ``SlugField`` / ``URLField`` / ``RegexField`` under ``CharField``;
+    # ``NullBooleanField`` -> ``bool | None`` before ``BooleanField``; ``FloatField``
+    # / ``DecimalField`` / ``UUIDField`` before the ``IntegerField`` / ``CharField``
+    # they subclass) - wrap it as a ``SCALAR``-kind conversion.
+    return FormFieldConversion(annotation=result, kind=SCALAR, required=required)
 
-    # Fallthrough: an unregistered ``forms.Field`` subclass with no supported
-    # ancestor. Raise (the graphene-django ``ImproperlyConfigured`` parity,
-    # raised as the package's own ``ConfigurationError``) rather than silently
-    # coercing to ``str`` - the load-bearing fail-loud contract.
-    raise ConfigurationError(
+
+def _unsupported_form_field(field: forms.Field) -> ConfigurationError:
+    """Build the fail-loud ``ConfigurationError`` for an unmapped ``forms.Field``.
+
+    The fallthrough factory ``convert_with_mro`` raises when a field is matched by
+    neither a precheck nor the scalar registry: an unregistered ``forms.Field``
+    subclass with no supported ancestor (the graphene-django
+    ``ImproperlyConfigured`` parity, raised as the package's own
+    ``ConfigurationError``). Spelt as a factory so the no-catch-all contract -
+    raise, never silently coerce to ``str`` - stays in this module's wording.
+    """
+    return ConfigurationError(
         f"Unsupported form field type {type(field).__name__!r} on form field "
         f"{field!r}. convert_form_field has no mapping for it and no supported "
         "ancestor; register a supported base class, or supply a custom input_class "

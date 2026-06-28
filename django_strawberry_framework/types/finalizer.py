@@ -768,22 +768,23 @@ def finalize_django_types() -> None:
     # error. Parked module globals are overwritten in place by the next ``setattr``
     # (the parked-globals lifecycle), so a ledger-only clear is safe. ``registry``
     # is NOT cleared here - this resets only the emit ledgers, not declarations.
-    # TODO(spec-039 Slice 2): Replace these hand-maintained direct clears with
-    # the registered subsystem-clear list from `registry.py`, iterated through
-    # `_clear_if_importable`. The serializer input namespace is behind the DRF
-    # soft-import guard, so the new mechanism must be import-guarded by default.
-    # Pseudo flow:
-    #   - Iterate the registered subsystem-clear targets from `registry.py`.
-    #   - For each target, call `_clear_if_importable(...)` and invoke the clear
-    #     callback only when its module can be imported under current dependencies.
-    #   - Do not special-case serializer clears; registering static strings keeps
-    #     DRF out of the finalizer import path.
-    from ..forms.inputs import clear_form_input_namespace
-    from ..mutations.inputs import clear_mutation_input_namespace
+    # The pre-bind input-namespace reset is wired through the ``register_subsystem_clear``
+    # seam (spec-039 P1.6 / M4): iterate the canonical clear list ``registry.py``
+    # owns and run each static ``(module_path, attr)`` row via ``_clear_if_importable``,
+    # so the mutation + form + serializer input ledgers all reset here through ONE
+    # mechanism rather than three hand-written direct calls. ``_clear_if_importable``
+    # tolerates an absent module (``ImportError`` -> skip), so a DRF-absent build
+    # silently no-ops the serializer row - a correct no-op (DRF absent => no
+    # ``SerializerMutation`` declared => the serializer ledger is empty), and the
+    # finalizer never imports ``rest_framework.inputs`` (which would raise for a
+    # DRF-absent consumer and break schema construction for everyone). Each
+    # owning ``inputs`` module registered its row at import time, so the rows
+    # present here are exactly the subsystems the consumer actually imported.
     from ..mutations.sets import bind_mutations
+    from ..registry import _clear_if_importable, iter_subsystem_clears
 
-    clear_mutation_input_namespace()
-    clear_form_input_namespace()
+    for module_path, attr in iter_subsystem_clears():
+        _clear_if_importable(module_path, attr, lambda clear: clear())
     bind_mutations()
     # Bind plain ``DjangoFormMutation`` declarations (spec-038 Slice 2 / Decision
     # 6 / Decision 13) in the SAME phase-2.5 window. The model-less plain-form

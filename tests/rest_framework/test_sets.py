@@ -749,6 +749,117 @@ def test_distinct_optional_fields_on_one_serializer_get_distinct_inputs():
     assert opt.default is strawberry.UNSET  # forced optional
 
 
+def test_hook_varied_relation_targets_bind_to_distinct_input_names():
+    """Two mutations over ONE serializer whose hook returns the same field NAMES but different relation TARGETS bind to DISTINCT names (spec-039 High).
+
+    Before the fix both hook-returned "full" shapes claimed the canonical
+    ``<Serializer>Input`` name, so two distinct descriptors collided at materialize
+    (``'HookSerInput' is materialized by two distinct SerializerMutation input
+    classes``). The canonical name is now reserved for the DEFAULT discovery's full
+    shape; a hook-varied shape takes a deterministic descriptor-derived name that folds
+    in the relation ``related_model``, so the two finalize cleanly to distinct names.
+    """
+    _declare_products_primaries()
+
+    class HookSer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name",)
+
+        def get_fields(self):
+            _ = self.context["tenant"]  # default no-arg discovery fails -> override required
+            return super().get_fields()
+
+    def _bound(field, name):
+        field.bind(name, None)
+        return field
+
+    def _field_map_targeting(target_model):
+        return {
+            "name": _bound(serializers.CharField(), "name"),
+            "target": _bound(
+                serializers.PrimaryKeyRelatedField(queryset=target_model.objects.all()),
+                "target",
+            ),
+        }
+
+    class CreateTowardCategory(SerializerMutation):
+        class Meta:
+            serializer_class = HookSer
+            operation = "create"
+
+        @classmethod
+        def get_serializer_for_schema(cls):
+            return _field_map_targeting(product_models.Category)
+
+    class CreateTowardItem(SerializerMutation):
+        class Meta:
+            serializer_class = HookSer
+            operation = "create"
+
+        @classmethod
+        def get_serializer_for_schema(cls):
+            return _field_map_targeting(product_models.Item)
+
+    # No distinct-class collision at materialize: the two diverge to distinct names.
+    finalize_django_types()
+    assert CreateTowardCategory._input_class is not None
+    assert CreateTowardItem._input_class is not None
+    assert CreateTowardCategory._input_class.__name__ != CreateTowardItem._input_class.__name__
+    # The reverse map records the distinct relation targets (the descriptor axis that
+    # drives both the cache key AND, now, the generated name).
+    cat = next(s for s in CreateTowardCategory._input_field_specs if s.target_name == "target")
+    item = next(s for s in CreateTowardItem._input_field_specs if s.target_name == "target")
+    assert cat.related_model is product_models.Category
+    assert item.related_model is product_models.Item
+
+
+def test_subclass_redefining_serializer_validates_against_child_serializer():
+    """A subclass redefining ``Meta.serializer_class`` validates against the CHILD serializer, not an inherited parent snapshot (spec-039 Medium).
+
+    The metaclass assigns ``_mutation_meta`` AFTER ``_validate_meta`` runs, so during the
+    child's validation ``cls._mutation_meta`` resolves up the MRO to the PARENT's
+    snapshot. The default ``get_serializer_for_schema`` reading that inherited snapshot
+    would discover the PARENT serializer's fields - rejecting a child-only field
+    (``category``, absent from ``CategorySer``) as unknown at the child's class creation.
+    Reading the OWN snapshot via ``cls.__dict__`` (``None`` until assigned) falls back to
+    ``cls.Meta``, so the child validates against its OWN serializer.
+    """
+    _declare_products_primaries()
+
+    class CategorySer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Category
+            fields = ("name",)
+
+    class ItemSer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    class CreateCategory(SerializerMutation):
+        class Meta:
+            serializer_class = CategorySer
+            operation = "create"
+
+    # The subclass redefines serializer_class to ItemSer and names ``category`` - an
+    # ItemSer field that is NOT a CategorySer field. Under the inherited-snapshot bug the
+    # default hook would read the parent (Category) field set and reject ``category`` as
+    # unknown at THIS class's creation; the fix validates against the child serializer.
+    class CreateItemViaSubclass(CreateCategory):
+        class Meta:
+            serializer_class = ItemSer
+            operation = "create"
+            fields = ("name", "category")
+
+    assert CreateItemViaSubclass._mutation_meta.serializer_class is ItemSer
+    assert CreateItemViaSubclass._mutation_meta.model is product_models.Item
+
+    finalize_django_types()
+    field_names = set(_input_fields(CreateItemViaSubclass._input_class))
+    assert "category_id" in field_names  # the child serializer's FK, the 036 <name>_id scheme
+
+
 # ---------------------------------------------------------------------------
 # Base unregressed (the model flavor seam defaults unchanged)
 # ---------------------------------------------------------------------------

@@ -504,6 +504,44 @@ def test_differing_annotations_yield_distinct_descriptor_names():
     assert cre_str.__name__ != cre_int.__name__
 
 
+def test_descriptor_name_distinguishes_relation_target_model():
+    """Two relation shapes differing ONLY in ``related_model`` get DISTINCT names (spec-039).
+
+    The per-shape build cache already separates them (``InputFieldSpec.related_model``
+    is part of the frozen ``field_specs`` tuple), so the generated NAME must separate
+    them too - otherwise two distinct descriptors (a ``target`` relation pointed at
+    different models by a schema hook) collide on one materialized name. Exercises the
+    ``related_model`` fold in the per-field token directly.
+    """
+    from django_strawberry_framework.rest_framework.inputs import serializer_input_type_name
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    class HookSer(serializers.Serializer):
+        pass
+
+    def _name_for(target_model: type) -> str:
+        spec = InputFieldSpec(
+            input_attr="target_id",
+            graphql_name="targetId",
+            target_name="target",
+            kind=RELATION_SINGLE,
+            source=None,
+            related_model=target_model,
+        )
+        # A divergent (non-full) shape, so the descriptor-derived per-field token names it.
+        return serializer_input_type_name(
+            HookSer,
+            "create",
+            is_full_shape=False,
+            field_specs=(spec,),
+            annotations=("relay.GlobalID",),  # identical annotation for both targets
+            required_state=(True,),
+        )
+
+    # Same field name + same annotation + same kind, only the target model differs.
+    assert _name_for(product_models.Item) != _name_for(product_models.Category)
+
+
 def test_identical_descriptor_dedupes_via_ledger():
     """Materializing the same class twice under one name is a no-op (identical descriptors dedupe)."""
     _register_products_types()

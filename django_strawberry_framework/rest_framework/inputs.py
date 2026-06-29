@@ -38,10 +38,13 @@ The shape is the ``038`` form discipline adapted to DRF (spec-039 Decision 7):
   kind)`` plus the normalized ``optional_fields`` set, so two same-name-set inputs
   that differ in requiredness (``optional_fields``) or hook-returned field specs
   get DISTINCT deterministic names, never silent reuse. The canonical
-  ``<Serializer>Input`` / ``<Serializer>PartialInput`` name for the full shape and
-  a deterministic descriptor-derived name for a divergence; identical descriptors
-  dedupe, two distinct descriptors on one name raise ``ConfigurationError`` at
-  materialize (for free from the ``utils/inputs.py`` ledger).
+  ``<Serializer>Input`` / ``<Serializer>PartialInput`` name is reserved for the
+  DEFAULT full shape (the default discovery's full field set - NOT an arbitrary
+  hook-returned "full" shape, which diverges and takes a descriptor-derived name);
+  any divergence takes a deterministic descriptor-derived name; identical
+  descriptors dedupe, two distinct descriptors on one name raise
+  ``ConfigurationError`` at materialize (for free from the ``utils/inputs.py``
+  ledger).
 """
 
 from __future__ import annotations
@@ -340,9 +343,12 @@ class SerializerInputShape:
     - ``optional_fields`` - the normalized create ``optional_fields`` set.
 
     ``type_name`` - the generated GraphQL/class name (canonical
-    ``<Serializer>Input`` for the full shape, deterministic descriptor-derived
-    name when divergent). ``cache_key`` is the descriptor itself (it is frozen +
-    hashable), the ``make_shape_build_cache`` key the Slice-2 bind dedupes on.
+    ``<Serializer>Input`` for the DEFAULT full shape only - a hook-returned "full"
+    shape that differs from the default discovery takes a deterministic
+    descriptor-derived name, never the canonical one - and a descriptor-derived name
+    for any narrowed / ``optional_fields`` divergence). ``cache_key`` is the
+    descriptor itself (it is frozen + hashable), the ``make_shape_build_cache`` key
+    the Slice-2 bind dedupes on.
     """
 
     serializer_class: type[serializers.BaseSerializer]
@@ -359,19 +365,50 @@ class SerializerInputShape:
         return self
 
 
+def _related_model_token(related_model: type | None) -> str:
+    """Return a stable, process-independent identifier for a relation target model.
+
+    Folded into ``_shape_token`` so two relation shapes that differ ONLY in their
+    target model (same declared field name, same GraphQL id annotation - e.g. a
+    ``target`` ``PrimaryKeyRelatedField`` a schema hook points at different models)
+    produce DISTINCT descriptor-derived names. The descriptor cache key already
+    separates them (``InputFieldSpec.related_model`` is part of the frozen
+    ``field_specs`` tuple), so the generated NAME must separate them too, or two
+    distinct descriptors collide on one materialized name (spec-039). ``None`` (a
+    non-relation field) yields the literal ``"None"``; the module + qualname pair
+    is deterministic across processes (unlike ``id()`` / the salted builtin
+    ``hash``), load-bearing for the materialize-ledger dedupe.
+    """
+    if related_model is None:
+        return "None"
+    return f"{related_model.__module__}.{related_model.__qualname__}"
+
+
 def _shape_token(spec: InputFieldSpec, annotation: str, required: bool) -> str:
     """Encode one emitted field's descriptor state as an injective name token.
 
     Reuses ``mutations/inputs.py::_pascalize_token`` (P2.3) for the field-name
     component so the bare concatenation of per-field tokens stays uniquely
-    decomposable (no third PascalCase encoder). The annotation + requiredness +
-    source are folded into the token via a stable ``hash``-free digest of their
-    ``repr`` so two same-name shapes that differ ONLY in annotation / requiredness
-    / source still produce DISTINCT divergent names (spec-039 Decision 7 - the
-    descriptor identity drives the name, not just the name set).
+    decomposable (no third PascalCase encoder). The FULL field-spec identity the
+    runtime behavior depends on is folded into the token via a stable ``hash``-free
+    digest - the annotation, requiredness, kind, ``input_attr``, ``graphql_name``,
+    ``source``, AND the relation ``related_model`` - so two same-name shapes that
+    differ in ANY of those still produce DISTINCT divergent names (spec-039 - the
+    descriptor identity drives the name, not just the name set; the cache key folds
+    in ``related_model`` via the frozen ``field_specs``, so the name must too).
     """
     base = _pascalize_token(spec.target_name)
-    discriminant = f"{annotation}|{required}|{spec.kind}|{spec.source}"
+    discriminant = "|".join(
+        (
+            annotation,
+            str(required),
+            spec.kind,
+            spec.input_attr,
+            spec.graphql_name,
+            str(spec.source),
+            _related_model_token(spec.related_model),
+        ),
+    )
     # A short STABLE hex digest of the discriminant (``hashlib``, NOT the
     # process-salted builtin ``hash``, so the generated name is deterministic
     # across processes - load-bearing for the materialize-ledger dedupe). Six
@@ -400,18 +437,22 @@ def serializer_input_type_name(
 ) -> str:
     """Return the generated input-class name for a serializer shape (spec-039 Decision 7).
 
-    The canonical full shape (no narrowing, no ``optional_fields``) takes the
-    stable ``<Serializer>Input`` / ``<Serializer>PartialInput`` name; ANY divergent
+    The caller sets ``is_full_shape`` True ONLY for the DEFAULT full shape (the shape
+    the default module-level discovery produces with no narrowing + no
+    ``optional_fields`` - NOT an arbitrary hook-returned "full" shape), which takes
+    the stable ``<Serializer>Input`` / ``<Serializer>PartialInput`` name. ANY divergent
     shape (a ``Meta.fields`` / ``Meta.exclude`` narrowing, an ``optional_fields``
-    override, or a hook returning same-named fields with different
-    annotations/source/kind) takes a deterministic DESCRIPTOR-derived name so two
-    descriptors that differ get distinct names (dedupe via the materialize ledger)
-    while identical descriptors produce the same name.
+    override, or a schema hook returning same-named fields with different
+    annotations / source / kind / relation target) takes a deterministic
+    DESCRIPTOR-derived name, so two descriptors that differ get distinct names
+    (dedupe via the materialize ledger) while identical descriptors produce the same
+    name.
 
     The divergent-shape suffix is the per-field tokens concatenated, each token a
     single-leading-capital ``_pascalize_token`` of the field name plus a digest of
-    its annotation / requiredness / kind / source (so a same-name-set divergence
-    in requiredness or annotation still produces a distinct name).
+    its full field-spec identity (annotation / requiredness / kind / input_attr /
+    graphql_name / source / related_model), so a same-name-set divergence in any of
+    those still produces a distinct name.
     """
     base = serializer_class.__name__
     suffix = "PartialInput" if operation_kind == PARTIAL else "Input"
@@ -550,6 +591,97 @@ def _guard_serializer_input_attr_collisions(
         seen_source[write_source] = spec.target_name
 
 
+def _walk_serializer_fields(
+    effective: dict[str, serializers.Field],
+    model: Any,
+    provisional_name: str,
+    *,
+    is_partial: bool,
+    optional_fields: frozenset[str],
+) -> tuple[list[InputFieldSpec], list[str], list[bool], list[tuple[str, Any, dict[str, Any]]]]:
+    """Resolve an effective field dict to the per-field build state (spec-039).
+
+    Returns ``(field_specs, annotation_reprs, required_state, triples)``:
+
+    - ``field_specs`` - the ordered reverse-map ``InputFieldSpec`` per emitted field;
+    - ``annotation_reprs`` - each field's BASE (non-widened) annotation ``repr``;
+    - ``required_state`` - each field's effective requiredness (create honors
+      ``field.required`` minus ``optional_fields``; partial forces every field
+      optional - M2: requiredness is orthogonal to nullability);
+    - ``triples`` - the ``build_strawberry_input_class`` ``(python_attr, annotation,
+      field_kwargs)`` triples (a nullable field widens to ``T | None`` AND carries
+      ``strawberry.UNSET`` so it is OMITTABLE - spec-039 M2 / H3).
+
+    Factored out so the canonical-name gate can re-walk the DEFAULT full shape with
+    the exact same logic, rather than the name choice drifting from the build walk.
+    """
+    field_specs: list[InputFieldSpec] = []
+    annotation_reprs: list[str] = []
+    required_state: list[bool] = []
+    triples: list[tuple[str, Any, dict[str, Any]]] = []
+    for name, field in effective.items():
+        python_attr, annotation, spec = resolve_serializer_field(field, model, provisional_name)
+        field_specs.append(spec)
+        annotation_reprs.append(repr(annotation))
+
+        required = False if is_partial else (field.required and name not in optional_fields)
+        required_state.append(required)
+
+        # Nullability (M2): the annotation is widened ``T | None`` when the field is
+        # ``allow_null`` OR is optional; a nullable field is ALWAYS omittable (default
+        # ``UNSET``), even when DRF ``required=True`` (H3 - GraphQL cannot express
+        # required-AND-nullable, so omission is allowed at coercion and the resolver
+        # strips ``UNSET`` -> DRF raises its own field-keyed required error in-band). A
+        # non-nullable required field gets NO default, so GraphQL enforces presence.
+        nullable = getattr(field, "allow_null", False) or not required
+        field_kwargs: dict[str, Any] = {}
+        if python_attr != spec.graphql_name:
+            field_kwargs["name"] = spec.graphql_name
+        if nullable:
+            annotation = annotation | None
+            field_kwargs["default"] = strawberry.UNSET
+        triples.append((python_attr, annotation, field_kwargs))
+    return field_specs, annotation_reprs, required_state, triples
+
+
+def _default_full_shape_identity(
+    serializer_class: type[serializers.BaseSerializer],
+    model: Any,
+    provisional_name: str,
+    *,
+    is_partial: bool,
+) -> tuple[tuple[InputFieldSpec, ...], tuple[str, ...], tuple[bool, ...]] | None:
+    """Return the per-field identity of the DEFAULT full shape, or ``None``.
+
+    The canonical ``<Serializer>Input`` / ``<Serializer>PartialInput`` name is reserved
+    for the shape the DEFAULT module-level discovery produces with no narrowing and no
+    ``optional_fields`` (spec-039). A schema hook returning a "full" shape that DIFFERS
+    from this default (e.g. the same ``target`` relation pointed at a different model)
+    must NOT also claim the canonical name, or two distinct descriptors collide on it at
+    materialize - so the caller grants the canonical name only when the current shape's
+    per-field identity equals this default identity, and a divergent shape takes a
+    descriptor-derived name instead.
+
+    Returns ``None`` when the default discovery cannot run - a serializer whose
+    ``.fields`` are not materializable no-arg, which REQUIRES a
+    ``get_serializer_for_schema`` override. Such a serializer has no default full shape
+    to reserve the canonical name, so every shape over it takes a descriptor-derived
+    name (and overriding mutations stay collision-free via the per-field token).
+    """
+    try:
+        default_effective = resolve_effective_serializer_fields(serializer_class)
+    except ConfigurationError:
+        return None
+    field_specs, annotation_reprs, required_state, _triples = _walk_serializer_fields(
+        default_effective,
+        model,
+        provisional_name,
+        is_partial=is_partial,
+        optional_fields=frozenset(),
+    )
+    return (tuple(field_specs), tuple(annotation_reprs), tuple(required_state))
+
+
 def build_serializer_input_class(
     serializer_class: type[serializers.BaseSerializer],
     *,
@@ -589,7 +721,6 @@ def build_serializer_input_class(
         exclude=exclude,
         field_map=field_map,
     )
-    full_writable = resolve_effective_serializer_fields(serializer_class, field_map=field_map)
     optional_fields = resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
     is_partial = operation_kind == PARTIAL
     if is_partial:
@@ -606,46 +737,36 @@ def build_serializer_input_class(
     # computed after the field walk (it needs the resolved specs / annotations).
     provisional_name = f"{serializer_class.__name__}{'PartialInput' if is_partial else 'Input'}"
 
-    field_specs: list[InputFieldSpec] = []
-    annotation_reprs: list[str] = []
-    required_state: list[bool] = []
-    triples: list[tuple[str, Any, dict[str, Any]]] = []
-    for name, field in effective.items():
-        python_attr, annotation, spec = resolve_serializer_field(field, model, provisional_name)
-        field_specs.append(spec)
-        annotation_reprs.append(repr(annotation))
-
-        # Requiredness: create honors ``field.required`` minus ``optional_fields``;
-        # partial forces every field optional (M2: requiredness is orthogonal to
-        # nullability).
-        required = False if is_partial else (field.required and name not in optional_fields)
-        required_state.append(required)
-
-        # Nullability (M2): the annotation is widened ``T | None`` when the field
-        # is ``allow_null`` OR is optional (an optional field must accept omission
-        # via the ``strawberry.UNSET`` default, so its annotation is nullable). The
-        # two reasons are OR-ed once so the annotation is widened at most once.
-        nullable = getattr(field, "allow_null", False) or not required
-        field_kwargs: dict[str, Any] = {}
-        if python_attr != spec.graphql_name:
-            field_kwargs["name"] = spec.graphql_name
-        if nullable:
-            annotation = annotation | None
-            # A nullable field is ALWAYS omittable (default ``UNSET``), even when DRF
-            # ``required=True`` (spec-039 M2 / H3): GraphQL cannot express
-            # required-AND-nullable, so omission is allowed at coercion and the
-            # resolver strips ``UNSET`` -> DRF sees the key MISSING and raises its own
-            # field-keyed required error in-band, rather than a top-level coercion
-            # error from a required nullable field with no default. An explicit
-            # ``null`` still reaches DRF as ``None``. A non-nullable required field
-            # gets NO default below, so GraphQL enforces presence + non-null itself.
-            field_kwargs["default"] = strawberry.UNSET
-        triples.append((python_attr, annotation, field_kwargs))
+    field_specs, annotation_reprs, required_state, triples = _walk_serializer_fields(
+        effective,
+        model,
+        provisional_name,
+        is_partial=is_partial,
+        optional_fields=optional_fields,
+    )
 
     _guard_serializer_input_attr_collisions(serializer_class, field_specs)
 
+    # The canonical ``<Serializer>Input`` name is reserved for the DEFAULT full shape
+    # ONLY (spec-039): compare this shape's per-field identity against the identity the
+    # DEFAULT module-level discovery produces for the full shape. A hook returning a
+    # "full" shape that DIFFERS from the default (e.g. a relation pointed at a different
+    # model) must NOT also claim the canonical name, or two distinct descriptors collide
+    # on it at materialize. A narrowed / ``optional_fields`` / hook-varied shape diverges
+    # and takes a deterministic descriptor-derived name. (The ``not optional_fields`` /
+    # ``fields is None`` / ``exclude is None`` clauses are retained so ANY explicit
+    # narrowing or optional override takes a divergent name even when it happens to
+    # reproduce the default identity.)
+    current_identity = (tuple(field_specs), tuple(annotation_reprs), tuple(required_state))
+    default_identity = _default_full_shape_identity(
+        serializer_class,
+        model,
+        provisional_name,
+        is_partial=is_partial,
+    )
     is_full_shape = (
-        frozenset(effective) == frozenset(full_writable)
+        default_identity is not None
+        and current_identity == default_identity
         and not optional_fields
         and fields is None
         and exclude is None

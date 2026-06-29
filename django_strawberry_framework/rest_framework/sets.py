@@ -314,11 +314,20 @@ class SerializerMutation(DjangoMutation):
 
         Consulted at class-creation validation AND at the phase-2.5 ``build_input`` bind;
         never on the query path (the Slice-3 decode reads the bind-stashed reverse map).
-        The default reads the serializer from the validated snapshot when present (bind /
-        a bound subclass) else from ``cls.Meta.serializer_class`` (class creation, before
-        the snapshot is assigned), resolving the SAME serializer in both windows.
+        The default reads the serializer from the mutation's OWN validated snapshot when
+        present (the bind window) else from ``cls.Meta.serializer_class`` (class creation,
+        before the snapshot is assigned), resolving the SAME serializer in both windows.
+
+        The snapshot is read via ``cls.__dict__`` - the OWN snapshot only, NOT an
+        inherited one (spec-039 Medium): the metaclass assigns ``_mutation_meta`` AFTER
+        ``_validate_meta`` runs, so during a SUBCLASS's validation ``cls._mutation_meta``
+        would resolve up the MRO to the PARENT's snapshot (the parent's serializer),
+        making the default hook discover the wrong serializer's fields. Reading
+        ``cls.__dict__.get("_mutation_meta")`` returns ``None`` until the class's own
+        snapshot is assigned, so a subclass redefining ``Meta.serializer_class`` validates
+        against ``cls.Meta.serializer_class`` (its OWN ``Meta``), not the parent's.
         """
-        meta = cls._mutation_meta
+        meta = cls.__dict__.get("_mutation_meta")
         serializer_class = meta.serializer_class if meta is not None else cls.Meta.serializer_class
         return _default_serializer_schema_fields(serializer_class)
 

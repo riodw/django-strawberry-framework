@@ -662,23 +662,30 @@ def _default_full_shape_identity(
     per-field identity equals this default identity, and a divergent shape takes a
     descriptor-derived name instead.
 
-    Returns ``None`` when the default discovery cannot run - a serializer whose
-    ``.fields`` are not materializable no-arg, which REQUIRES a
-    ``get_serializer_for_schema`` override. Such a serializer has no default full shape
-    to reserve the canonical name, so every shape over it takes a descriptor-derived
-    name (and overriding mutations stay collision-free via the per-field token).
+    Returns ``None`` when the DEFAULT full shape cannot be CONSTRUCTED for ANY reason -
+    a serializer whose ``.fields`` are not materializable no-arg (REQUIRES a
+    ``get_serializer_for_schema`` override), but ALSO one whose default no-arg field map
+    is itself unsupported or intentionally different from the hook's (an unsupported /
+    non-PK relation field, a missing relation-primary target, a dotted source, an input
+    collision). The default shape exists ONLY to reserve the canonical name; when it
+    cannot be built it simply does not reserve it, so a VALID hook-provided shape must
+    NOT be rejected by a failure converting the default fields. EVERY step - discovery,
+    the per-field walk (relation-primary lookup, unsupported-field conversion,
+    dotted-source rejection), and any collision check - is therefore inside the guard, so
+    such a serializer's shapes always take a descriptor-derived name (overriding mutations
+    stay collision-free via the per-field token).
     """
     try:
         default_effective = resolve_effective_serializer_fields(serializer_class)
+        field_specs, annotation_reprs, required_state, _triples = _walk_serializer_fields(
+            default_effective,
+            model,
+            provisional_name,
+            is_partial=is_partial,
+            optional_fields=frozenset(),
+        )
     except ConfigurationError:
         return None
-    field_specs, annotation_reprs, required_state, _triples = _walk_serializer_fields(
-        default_effective,
-        model,
-        provisional_name,
-        is_partial=is_partial,
-        optional_fields=frozenset(),
-    )
     return (tuple(field_specs), tuple(annotation_reprs), tuple(required_state))
 
 

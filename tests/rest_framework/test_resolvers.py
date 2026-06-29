@@ -266,6 +266,20 @@ def test_decode_relation_single_explicit_none_passes_through():
     assert pk is None
 
 
+@pytest.mark.django_db
+def test_decode_relation_multi_explicit_none_passes_through():
+    """An explicit `None` whole-list is passed through (the serializer's required-ness decides), no per-member walk."""
+    _declare_nonrelay_genre_primary()
+    pks, error = serializer_resolvers._decode_relation_multi(
+        None,
+        graphql_name="genreIds",
+        related_model=library_models.Genre,
+        info=None,
+    )
+    assert error is None
+    assert pks is None
+
+
 # ===========================================================================
 # Value-preserving save, save-time exception split, IntegrityError
 # ===========================================================================
@@ -481,6 +495,28 @@ def test_decode_strips_omission_but_preserves_explicit_null():
     )
     assert err_null is None
     assert provided_null["name"] is None
+
+
+@pytest.mark.django_db
+def test_decode_serializer_data_rejects_unencodable_scalar():
+    """A lone-surrogate scalar trips the invalid-Unicode preflight -> field-keyed error, no data (the 036/038 parity).
+
+    A lone surrogate graphql-core accepts as a `String` would otherwise reach the
+    serializer's `validate_unique` / `save()` and raise a raw `UnicodeEncodeError`
+    escaping the envelope; the decode rejects it here, keyed to the GraphQL field name.
+    """
+
+    class NameSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Category
+            fields = ("name",)
+
+    mutation_cls = _bind_item_serializer_mutation(NameSerializer)
+    data = mutation_cls._input_class(name="\ud800")  # a lone high surrogate (unencodable)
+    provided, error = serializer_resolvers._decode_serializer_data(mutation_cls, data, info=None)
+    assert provided == {}
+    assert error is not None
+    assert error.field == "name"
 
 
 # ===========================================================================
@@ -871,9 +907,11 @@ def test_relation_decode_async_get_queryset_from_sync_raises_sync_misuse():
 async def test_async_serializer_resolver_runs_sync_body_under_sync_to_async():
     """The async entry runs the sync body in one `sync_to_async(thread_sensitive=True)` call.
 
-    `resolve_serializer_async` delegates to the shared `run_pipeline_async` boundary;
-    a create over the async surface returns the success payload (the same body the
-    sync path runs), proving the boundary is wired.
+    Driven through the `SerializerMutation.resolve_async` SEAM (not the resolver function
+    directly), so the seam's delegation to `resolve_serializer_async` is exercised too; that
+    in turn rides the shared `run_pipeline_async` boundary. A create over the async surface
+    returns the success payload (the same body the sync path runs), proving the seam +
+    boundary are wired.
     """
 
     class CategoryT(DjangoType, relay.Node):
@@ -939,7 +977,7 @@ async def test_async_serializer_resolver_runs_sync_body_under_sync_to_async():
     info = SimpleNamespace(context=SimpleNamespace(request=request))
     data = _Data(name="AsyncItem", category_id=gid)
 
-    payload = await serializer_resolvers.resolve_serializer_async(CreateItemAsync, info, data=data)
+    payload = await CreateItemAsync.resolve_async(info, data=data, id=None)
     assert payload.errors == []
     assert payload.node is not None
     assert payload.node.name == "AsyncItem"

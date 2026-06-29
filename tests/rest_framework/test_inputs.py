@@ -399,6 +399,12 @@ def test_meta_fields_rejects_unknown_name():
         resolve_effective_serializer_fields(_item_serializer(), fields=("nmae",))
 
 
+def test_meta_exclude_rejects_unknown_name():
+    """An unknown name in ``exclude`` raises naming the unknown field (the ``exclude`` arm of the guard)."""
+    with pytest.raises(ConfigurationError, match="unknown or non-writable"):
+        resolve_effective_serializer_fields(_item_serializer(), exclude=("nmae",))
+
+
 def test_meta_fields_and_exclude_mutually_exclusive():
     """Declaring both ``fields`` and ``exclude`` raises."""
     with pytest.raises(ConfigurationError, match="both `fields` and `exclude`"):
@@ -540,6 +546,48 @@ def test_descriptor_name_distinguishes_relation_target_model():
 
     # Same field name + same annotation + same kind, only the target model differs.
     assert _name_for(product_models.Item) != _name_for(product_models.Category)
+
+
+def test_unsupported_default_field_does_not_reject_supported_hook_map():
+    """A serializer whose DEFAULT field is unsupported but whose HOOK map is supported builds (spec-039).
+
+    The canonical-name gate re-walks the serializer's DEFAULT full shape only to RESERVE
+    the canonical name; a ``ConfigurationError`` converting the default fields (here a
+    ``SlugRelatedField`` the no-arg discovery sees) must NOT reject the supported
+    hook-provided ``PrimaryKeyRelatedField`` map. The default identity is treated as absent
+    (``_default_full_shape_identity`` swallows the walk error too, not only the discovery
+    error), so the supported shape builds under a descriptor-derived (non-canonical) name.
+    """
+    _register_products_types()
+
+    class BadDefaultSer(serializers.ModelSerializer):
+        category = serializers.SlugRelatedField(
+            slug_field="name",
+            queryset=product_models.Category.objects.all(),
+        )
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category")
+
+    # The hook-provided map replaces the unsupported default ``category`` with a supported
+    # ``PrimaryKeyRelatedField`` (the spec-039 escape hatch for a non-default schema map).
+    supported = {
+        "name": _bound(serializers.CharField(), "name"),
+        "category": _bound(
+            serializers.PrimaryKeyRelatedField(queryset=product_models.Category.objects.all()),
+            "category",
+        ),
+    }
+    cre, _shape = build_serializer_input_class(
+        BadDefaultSer,
+        operation_kind="create",
+        field_map=dict(supported),
+    )
+    assert set(_field_map(cre)) == {"name", "category_id"}
+    # The default full shape can't be built (the SlugRelatedField raises), so the canonical
+    # name is NOT reserved - the shape takes a descriptor-derived name instead.
+    assert cre.__name__ != "BadDefaultSerInput"
 
 
 def test_identical_descriptor_dedupes_via_ledger():

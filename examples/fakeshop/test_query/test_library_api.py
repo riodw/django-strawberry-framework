@@ -4943,3 +4943,114 @@ def test_create_branch_with_shelf_perform_mutate_runs_custom_write():
     # perform_mutate ran the custom multi-row write inside the mutation transaction.
     branch = models.Branch.objects.get(name="HookBranch")
     assert models.Shelf.objects.filter(code="H-1", branch=branch).exists()
+
+
+# ---------------------------------------------------------------------------
+# Serializer-mutation surface (spec-039): get_serializer_for_schema() schema hook +
+# subclass validation, earned live over /graphql/ (the README live-first mandate).
+# Shelf is non-Relay, so the payload object slot is `result` and the `branch` relation
+# input is a raw pk. The schema-hook / subclass inputs take descriptor-derived (non-
+# canonical) names, so their input object is supplied INLINE (no typed `$d` variable).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_serializer_happy_path():
+    """``createShelfViaSerializer`` writes a ``Shelf`` through ``ShelfSerializer`` (the subclass parent).
+
+    The plain serializer-create path over a library model: a raw-pk ``branch`` relation
+    resolves and the row writes. This is the parent the subclass mutation extends.
+    """
+    branch = models.Branch.objects.create(name="SerBranch", city="Boston")
+    response = _post_graphql(
+        "mutation($d: ShelfSerializerInput!) { createShelfViaSerializer(data: $d) { "
+        "result { code } errors { field messages } } }",
+        variables={"d": {"code": "SerShelf", "branchId": branch.pk}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaSerializer"]
+    assert result["errors"] == []
+    assert result["result"] == {"code": "SerShelf"}
+    assert models.Shelf.objects.filter(code="SerShelf", branch=branch).exists()
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_schema_hook_serializer_executes_over_http():
+    """A schema-hook serializer mutation (construction-kwarg-requiring serializer) writes over HTTP.
+
+    ``TenantShelfSerializer`` requires a ``tenant`` constructor kwarg, so default no-arg
+    schema discovery fails; ``get_serializer_for_schema()`` supplies the schema-time field
+    map and ``get_serializer_kwargs`` injects the runtime tenant. A successful create proves
+    the schema-time hook and the runtime serializer construction AGREE; the stamped ``topic``
+    (``tenant:<username>``) proves the injected tenant reached the constructed serializer.
+    """
+    branch = models.Branch.objects.create(name="HookBranchSer", city="Boston")
+    query = (
+        "mutation { createShelfViaSchemaHookSerializer(data: { "
+        f'code: "HookShelf", branchId: {branch.pk} '
+        "}) { result { code topic } errors { field messages } } }"
+    )
+    response = _post_graphql_as_staff(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaSchemaHookSerializer"]
+    assert result["errors"] == []
+    assert result["result"] == {"code": "HookShelf", "topic": "tenant:staff"}
+    shelf = models.Shelf.objects.get(code="HookShelf", branch=branch)
+    assert shelf.topic == "tenant:staff"
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_subclassed_serializer_validates_against_child_serializer():
+    """A subclass redefining ``Meta.serializer_class`` writes via the CHILD serializer over HTTP.
+
+    ``CreateShelfViaSubclassedSerializer`` subclasses ``CreateShelfViaSerializer`` but
+    redefines ``serializer_class`` to ``RenamedShelfSerializer`` + ``fields = (shelf_code,
+    branch)``. The schema even building (the reload fixture) proves the child validated
+    against its OWN serializer - the inherited parent (``ShelfSerializer``) snapshot would
+    reject ``shelf_code`` as unknown at class creation. A real ``/graphql/`` create writes
+    through the renamed wire name ``shelfCode``.
+    """
+    branch = models.Branch.objects.create(name="SubclassBranch", city="Boston")
+    query = (
+        "mutation { createShelfViaSubclassedSerializer(data: { "
+        f'shelfCode: "SubclassShelf", branchId: {branch.pk} '
+        "}) { result { code } errors { field messages } } }"
+    )
+    response = _post_graphql_as_staff(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaSubclassedSerializer"]
+    assert result["errors"] == []
+    assert result["result"] == {"code": "SubclassShelf"}
+    assert models.Shelf.objects.filter(code="SubclassShelf", branch=branch).exists()
+
+
+@pytest.mark.django_db
+def test_create_shelf_rejecting_serializer_save_time_all_sentinel():
+    """A serializer ``save()`` raising a BARE DRF ``ValidationError`` surfaces as the ``"__all__"`` envelope.
+
+    Field validation passes (valid ``code`` + ``branch``); the serializer then rejects the
+    whole object at save with a bare (non-dict) ``ValidationError`` detail. The recursive
+    flattener normalizes its empty path to the ``"__all__"`` sentinel - ``result`` is null
+    and no row is written (the write rolled back).
+    """
+    branch = models.Branch.objects.create(name="RejectBranch", city="Boston")
+    response = _post_graphql(
+        "mutation($d: RejectingShelfSerializerInput!) { createShelfRejectingViaSerializer(data: $d) { "
+        "result { code } errors { field messages } } }",
+        variables={"d": {"code": "RejShelf", "branchId": branch.pk}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfRejectingViaSerializer"]
+    assert result["result"] is None
+    assert result["errors"] == [
+        {"field": "__all__", "messages": ["Shelf rejected by a whole-object business rule."]},
+    ]
+    assert not models.Shelf.objects.filter(code="RejShelf").exists()

@@ -749,6 +749,78 @@ class CreateShelfRejectingViaSerializer(SerializerMutation):
         permission_classes = []
 
 
+class CreateShelfViaHookTargetingPatron(SerializerMutation):
+    """One half of a same-serializer hook-collision pair: a shared ``target`` relation pointed at ``Patron`` (spec-039 High).
+
+    Shares ``CollisionShelfSerializer`` with ``CreateShelfViaHookTargetingLoan``; both
+    override ``get_serializer_for_schema()`` to return the SAME hook field names (``code`` /
+    ``branch`` / ``target``), differing ONLY in ``target``'s model. Before the canonical-name
+    fix both "full"-looking hook shapes claimed the single ``CollisionShelfSerializerInput``
+    name and collided at materialize; the canonical name is now reserved for the (here
+    unused) DEFAULT full shape, so each hook shape takes a descriptor-derived name that folds
+    in ``target``'s ``related_model`` - the pair finalizes to DISTINCT input types. The runtime
+    write uses the shared serializer (``code`` + ``branch``); the schema-only ``target``
+    (pointed here at the non-Relay ``Patron``, distinct from the real ``branch`` FK to
+    ``Branch``) is omitted and never persists.
+    """
+
+    class Meta:
+        serializer_class = serializers.CollisionShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+    @classmethod
+    def get_serializer_for_schema(cls):
+        return serializers.shelf_collision_schema_field_map(models.Patron)
+
+
+class CreateShelfViaHookTargetingLoan(SerializerMutation):
+    """The collision pair's twin: the shared ``target`` relation pointed at ``Loan`` (spec-039 High).
+
+    Same shared ``CollisionShelfSerializer`` and same ``code`` + ``branch`` + ``target`` hook
+    shape as ``CreateShelfViaHookTargetingPatron``, with ``target`` pointed at ``Loan`` (a
+    different non-Relay model with a registered primary ``DjangoType``). The two generated
+    inputs differ ONLY in ``target``'s ``related_model`` - identical ``targetId`` annotations,
+    distinct descriptor-derived names - so the materialize ledger no longer collides on one
+    canonical name.
+    """
+
+    class Meta:
+        serializer_class = serializers.CollisionShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+    @classmethod
+    def get_serializer_for_schema(cls):
+        return serializers.shelf_collision_schema_field_map(models.Loan)
+
+
+class CreateShelfViaHookNarrowedSerializer(SerializerMutation):
+    """Create a ``Shelf`` via a serializer whose UNSUPPORTED default field a hook narrows away (spec-039 High - unsupported-default-field recovery).
+
+    ``HookNarrowedShelfSerializer``'s default ``.fields`` include an unsupported
+    ``SlugRelatedField(many=True)`` ``alt_branches``: default discovery succeeds but its WALK
+    raises, so the canonical name is not reserved (``_default_full_shape_identity`` swallows
+    the walk error) and the supported hook map is NOT rejected. The hook narrows the
+    schema-time map to the supported subset (``code`` + ``branch``); the live write proves the
+    hook map drives BOTH the schema (a ``branchId`` raw-pk input, not the ``altBranches`` slug
+    list) and the runtime decode, and ``alt_branches`` (``required=False``) is omitted.
+    """
+
+    class Meta:
+        serializer_class = serializers.HookNarrowedShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+    @classmethod
+    def get_serializer_for_schema(cls):
+        # Default no-arg discovery succeeds, so construct once and DROP the unsupported
+        # alt_branches from its bound .fields - leaving the supported (code + branch) subset.
+        fields = dict(serializers.HookNarrowedShelfSerializer().fields)
+        del fields["alt_branches"]
+        return fields
+
+
 @strawberry.type
 class Mutation:
     """Library write surface (live raw-pk relation visibility + ``to_field_name``).
@@ -758,6 +830,12 @@ class Mutation:
     over HTTP) and ``createShelfViaSubclassedSerializer`` (a subclass redefining
     ``Meta.serializer_class`` - subclass validation reads the mutation's own snapshot, not an
     inherited parent). ``createShelfViaSerializer`` is the plain parent the subclass extends.
+    ``createShelfViaHookTargetingPatron`` / ``createShelfViaHookTargetingLoan`` are the
+    same-serializer hook-shape collision pair (one serializer, two hooks pointing a shared
+    ``target`` relation at different models - distinct descriptor-derived input names, no
+    canonical-name collision), and ``createShelfViaHookNarrowedSerializer`` is the
+    unsupported-default-field recovery case (a hook narrows away an unsupported default field
+    so the supported map still builds + writes).
     """
 
     create_shelf_via_form = DjangoMutationField(CreateShelfViaForm)
@@ -773,6 +851,15 @@ class Mutation:
     )
     create_shelf_via_subclassed_serializer = DjangoMutationField(
         CreateShelfViaSubclassedSerializer,
+    )
+    create_shelf_via_hook_targeting_patron = DjangoMutationField(
+        CreateShelfViaHookTargetingPatron,
+    )
+    create_shelf_via_hook_targeting_loan = DjangoMutationField(
+        CreateShelfViaHookTargetingLoan,
+    )
+    create_shelf_via_hook_narrowed_serializer = DjangoMutationField(
+        CreateShelfViaHookNarrowedSerializer,
     )
 
 

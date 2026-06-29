@@ -548,46 +548,18 @@ def test_descriptor_name_distinguishes_relation_target_model():
     assert _name_for(product_models.Item) != _name_for(product_models.Category)
 
 
-def test_unsupported_default_field_does_not_reject_supported_hook_map():
-    """A serializer whose DEFAULT field is unsupported but whose HOOK map is supported builds (spec-039).
-
-    The canonical-name gate re-walks the serializer's DEFAULT full shape only to RESERVE
-    the canonical name; a ``ConfigurationError`` converting the default fields (here a
-    ``SlugRelatedField`` the no-arg discovery sees) must NOT reject the supported
-    hook-provided ``PrimaryKeyRelatedField`` map. The default identity is treated as absent
-    (``_default_full_shape_identity`` swallows the walk error too, not only the discovery
-    error), so the supported shape builds under a descriptor-derived (non-canonical) name.
-    """
-    _register_products_types()
-
-    class BadDefaultSer(serializers.ModelSerializer):
-        category = serializers.SlugRelatedField(
-            slug_field="name",
-            queryset=product_models.Category.objects.all(),
-        )
-
-        class Meta:
-            model = product_models.Item
-            fields = ("name", "category")
-
-    # The hook-provided map replaces the unsupported default ``category`` with a supported
-    # ``PrimaryKeyRelatedField`` (the spec-039 escape hatch for a non-default schema map).
-    supported = {
-        "name": _bound(serializers.CharField(), "name"),
-        "category": _bound(
-            serializers.PrimaryKeyRelatedField(queryset=product_models.Category.objects.all()),
-            "category",
-        ),
-    }
-    cre, _shape = build_serializer_input_class(
-        BadDefaultSer,
-        operation_kind="create",
-        field_map=dict(supported),
-    )
-    assert set(_field_map(cre)) == {"name", "category_id"}
-    # The default full shape can't be built (the SlugRelatedField raises), so the canonical
-    # name is NOT reserved - the shape takes a descriptor-derived name instead.
-    assert cre.__name__ != "BadDefaultSerInput"
+# NOTE: the unsupported-default-field recovery (``_default_full_shape_identity`` swallowing
+# a WALK-time ``ConfigurationError``, not only a discovery-time one) is now earned LIVE over
+# ``/graphql/`` per the ``test_query`` live-first rule, by
+# ``examples/fakeshop/test_query/test_library_api.py``
+# ``::test_create_shelf_via_hook_narrowed_serializer_recovers_unsupported_default_field``
+# (an unsupported ``SlugRelatedField(many=True)`` default field a schema hook narrows away).
+# The companion discovery-error -> None branch is earned live by the same suite's
+# ``::test_create_shelf_via_schema_hook_serializer_executes_over_http``. The former
+# package-only ``test_unsupported_default_field_does_not_reject_supported_hook_map`` was
+# retired with that promotion (the converter's non-PK relation rejects stay covered by
+# ``test_converter.py``); the pure-function name derivation stays unit-tested above by
+# ``test_descriptor_name_distinguishes_relation_target_model``.
 
 
 def test_identical_descriptor_dedupes_via_ledger():

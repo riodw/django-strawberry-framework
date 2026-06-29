@@ -749,69 +749,17 @@ def test_distinct_optional_fields_on_one_serializer_get_distinct_inputs():
     assert opt.default is strawberry.UNSET  # forced optional
 
 
-def test_hook_varied_relation_targets_bind_to_distinct_input_names():
-    """Two mutations over ONE serializer whose hook returns the same field NAMES but different relation TARGETS bind to DISTINCT names (spec-039 High).
-
-    Before the fix both hook-returned "full" shapes claimed the canonical
-    ``<Serializer>Input`` name, so two distinct descriptors collided at materialize
-    (``'HookSerInput' is materialized by two distinct SerializerMutation input
-    classes``). The canonical name is now reserved for the DEFAULT discovery's full
-    shape; a hook-varied shape takes a deterministic descriptor-derived name that folds
-    in the relation ``related_model``, so the two finalize cleanly to distinct names.
-    """
-    _declare_products_primaries()
-
-    class HookSer(serializers.ModelSerializer):
-        class Meta:
-            model = product_models.Item
-            fields = ("name",)
-
-        def get_fields(self):
-            _ = self.context["tenant"]  # default no-arg discovery fails -> override required
-            return super().get_fields()
-
-    def _bound(field, name):
-        field.bind(name, None)
-        return field
-
-    def _field_map_targeting(target_model):
-        return {
-            "name": _bound(serializers.CharField(), "name"),
-            "target": _bound(
-                serializers.PrimaryKeyRelatedField(queryset=target_model.objects.all()),
-                "target",
-            ),
-        }
-
-    class CreateTowardCategory(SerializerMutation):
-        class Meta:
-            serializer_class = HookSer
-            operation = "create"
-
-        @classmethod
-        def get_serializer_for_schema(cls):
-            return _field_map_targeting(product_models.Category)
-
-    class CreateTowardItem(SerializerMutation):
-        class Meta:
-            serializer_class = HookSer
-            operation = "create"
-
-        @classmethod
-        def get_serializer_for_schema(cls):
-            return _field_map_targeting(product_models.Item)
-
-    # No distinct-class collision at materialize: the two diverge to distinct names.
-    finalize_django_types()
-    assert CreateTowardCategory._input_class is not None
-    assert CreateTowardItem._input_class is not None
-    assert CreateTowardCategory._input_class.__name__ != CreateTowardItem._input_class.__name__
-    # The reverse map records the distinct relation targets (the descriptor axis that
-    # drives both the cache key AND, now, the generated name).
-    cat = next(s for s in CreateTowardCategory._input_field_specs if s.target_name == "target")
-    item = next(s for s in CreateTowardItem._input_field_specs if s.target_name == "target")
-    assert cat.related_model is product_models.Category
-    assert item.related_model is product_models.Item
+# NOTE: the same-serializer hook-shape collision (two mutations over one serializer whose
+# hooks return the same field names with different relation targets must finalize to
+# DISTINCT descriptor-derived names, not collide on the canonical one) is now earned LIVE
+# over ``/graphql/`` per the ``test_query`` live-first rule, by
+# ``examples/fakeshop/test_query/test_library_api.py``
+# ``::test_serializer_hook_same_serializer_different_targets_distinct_inputs_over_http``
+# (``CollisionShelfSerializer`` + two hooks pointing a shared ``target`` at different
+# models). The former package-only finalize-level
+# ``test_hook_varied_relation_targets_bind_to_distinct_input_names`` was retired with that
+# promotion; the surgical pure-function name derivation it leaned on stays unit-tested by
+# ``tests/rest_framework/test_inputs.py::test_descriptor_name_distinguishes_relation_target_model``.
 
 
 def test_subclass_redefining_serializer_validates_against_child_serializer():

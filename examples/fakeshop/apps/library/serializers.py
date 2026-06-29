@@ -21,7 +21,7 @@ model's ``unique_shelf_code_per_branch`` constraint surfaces through DRF's
 
 from rest_framework import serializers
 
-from .models import Shelf
+from .models import Branch, Shelf
 
 
 class TenantShelfSerializer(serializers.ModelSerializer):
@@ -99,3 +99,80 @@ class RejectingShelfSerializer(serializers.ModelSerializer):
 
     def save(self, **kwargs):
         raise serializers.ValidationError("Shelf rejected by a whole-object business rule.")
+
+
+class CollisionShelfSerializer(serializers.ModelSerializer):
+    """Plain ``Shelf`` serializer backing TWO mutations whose schema hooks diverge (spec-039 High - the same-serializer hook-shape collision).
+
+    Two ``SerializerMutation`` declarations share THIS one serializer class, and each
+    overrides ``get_serializer_for_schema()`` to return the SAME field names plus an extra
+    ``target`` relation pointed at a DIFFERENT model (see ``shelf_collision_schema_field_map``).
+    Before the canonical-name fix both hook-returned shapes claimed the single
+    ``CollisionShelfSerializerInput`` name and collided at materialize ("... is materialized
+    by two distinct SerializerMutation input classes"); the canonical name is now reserved
+    for the DEFAULT full shape only, so each divergent hook shape takes a deterministic
+    descriptor-derived name that folds in the relation ``related_model`` - the two finalize
+    cleanly to DISTINCT input types. The runtime write uses THIS serializer (``code`` +
+    ``branch``); the schema-only ``target`` field is not one of its fields, so it never
+    reaches ``validated_data`` and never persists.
+    """
+
+    class Meta:
+        model = Shelf
+        fields = ("code", "branch")
+
+
+def shelf_collision_schema_field_map(target_model):
+    """Schema-time field map of ``code`` + ``branch`` + a serializer-only ``target`` relation at ``target_model`` (spec-039 High).
+
+    The two collision mutations' ``get_serializer_for_schema()`` hooks call this with two
+    DIFFERENT ``target_model``s, so the ONLY descriptor axis differing between their
+    generated inputs is the ``target`` relation's ``related_model`` - exactly the axis the
+    descriptor-derived naming folds in (``rest_framework/inputs.py::_related_model_token``).
+    ``target`` is a serializer-only ``PrimaryKeyRelatedField`` (no backing ``Shelf`` column),
+    ``required=False`` so a write may omit it; its sole purpose is to be the divergence axis
+    that proves two same-serializer hook shapes finalize to DISTINCT names instead of
+    colliding on the canonical one. Built from a throwaway ``ModelSerializer`` purely for its
+    BOUND ``.fields`` (never saved - ``target`` is not a ``Shelf`` column).
+    """
+
+    class _TargetedShelfSerializer(serializers.ModelSerializer):
+        target = serializers.PrimaryKeyRelatedField(
+            queryset=target_model._default_manager.all(),
+            required=False,
+        )
+
+        class Meta:
+            model = Shelf
+            fields = ("code", "branch", "target")
+
+    return dict(_TargetedShelfSerializer().fields)
+
+
+class HookNarrowedShelfSerializer(serializers.ModelSerializer):
+    """``Shelf`` serializer whose default field set carries an UNSUPPORTED field a schema hook narrows away (spec-039 High - unsupported-default-field recovery).
+
+    Default no-arg discovery SUCCEEDS (the serializer constructs and ``.fields``
+    materializes), but its field WALK cannot convert ``alt_branches`` - a
+    ``SlugRelatedField(many=True)`` is a ``ManyRelatedField`` wrapping a non-PK child, and
+    only ``PrimaryKeyRelatedField(many=True)`` is a supported relation input. The
+    canonical-name gate re-walks this default full shape only to RESERVE the canonical name;
+    the walk raising ``ConfigurationError`` means the default identity is treated as ABSENT
+    (``inputs.py::_default_full_shape_identity`` swallows the WALK error, not only the
+    discovery error), so it must NOT reject the mutation's supported hook map. The mutation's
+    ``get_serializer_for_schema()`` narrows the schema-time map to the supported subset
+    (``code`` + ``branch``); ``alt_branches`` is ``required=False`` so a runtime write that
+    omits it still validates, and the live write proves the hook map drives BOTH the schema
+    (a ``branchId`` raw-pk input, NOT an ``altBranches`` slug list) and the runtime decode.
+    """
+
+    alt_branches = serializers.SlugRelatedField(
+        slug_field="name",
+        queryset=Branch.objects.all(),
+        many=True,
+        required=False,
+    )
+
+    class Meta:
+        model = Shelf
+        fields = ("code", "branch", "alt_branches")

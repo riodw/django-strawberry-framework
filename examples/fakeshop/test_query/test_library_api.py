@@ -99,6 +99,33 @@ def _input_field_names(type_name: str) -> set[str]:
     return {field["name"] for field in type_info["inputFields"]}
 
 
+def _mutation_data_input_type_name(field_name: str) -> str:
+    """Return the input type name of a mutation field's ``data`` argument via introspection.
+
+    A serializer mutation's ``data:`` argument is ``<Input>!`` (a ``NON_NULL`` wrapping the
+    generated input object), so the named type is the wrapper's ``ofType``. Used to compare
+    the descriptor-derived input names of two same-serializer hook mutations without
+    hard-coding the (deliberately opaque) digest-bearing names.
+    """
+    response = _post_graphql(
+        """
+        query {
+          __type(name: "Mutation") {
+            fields { name args { name type { kind name ofType { kind name } } } }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    fields = payload["data"]["__type"]["fields"]
+    field = next(f for f in fields if f["name"] == field_name)
+    data_arg = next(arg for arg in field["args"] if arg["name"] == "data")
+    arg_type = data_arg["type"]
+    return arg_type["name"] or arg_type["ofType"]["name"]
+
+
 @pytest.mark.django_db
 def test_library_branch_shelf_book_loan_graph_over_http():
     _seed_library_graph()
@@ -5054,3 +5081,144 @@ def test_create_shelf_rejecting_serializer_save_time_all_sentinel():
         {"field": "__all__", "messages": ["Shelf rejected by a whole-object business rule."]},
     ]
     assert not models.Shelf.objects.filter(code="RejShelf").exists()
+
+
+@pytest.mark.django_db
+def test_serializer_hook_same_serializer_different_targets_distinct_inputs_over_http():
+    """Two mutations over ONE serializer whose hooks point a shared ``target`` at different models bind to DISTINCT inputs and both write over HTTP (spec-039 High).
+
+    The same-serializer hook-shape collision, reproduced in the REAL project schema:
+    ``createShelfViaHookTargetingPatron`` and ``createShelfViaHookTargetingLoan`` share
+    ``CollisionShelfSerializer`` and return the SAME hook field names (``code`` / ``branch`` /
+    ``target``) with ``target`` pointed at different models. That the autouse reload imports
+    the composed schema AT ALL proves the materialize ledger no longer collides on one
+    canonical ``CollisionShelfSerializerInput`` name (pre-fix this raised "... is materialized
+    by two distinct SerializerMutation input classes"). Introspection proves the two generated
+    input types are DISTINCT (folding ``target``'s ``related_model``) yet both expose the
+    divergent ``targetId`` beside ``code`` + ``branchId``; and both fields write a ``Shelf`` over
+    ``/graphql/`` (the runtime uses the shared serializer's ``code`` + ``branch``; the
+    schema-only ``target`` is omitted - ``required=False`` - and never persists).
+    """
+    branch = models.Branch.objects.create(name="CollisionBranch", city="Boston")
+
+    patron_target_input = _mutation_data_input_type_name("createShelfViaHookTargetingPatron")
+    loan_target_input = _mutation_data_input_type_name("createShelfViaHookTargetingLoan")
+    # Distinct descriptor-derived names (no canonical-name collision at materialize) ...
+    assert patron_target_input != loan_target_input
+    # ... yet both carry the same divergent ``targetId`` field beside code + branchId.
+    assert _input_field_names(patron_target_input) == {"code", "branchId", "targetId"}
+    assert _input_field_names(loan_target_input) == {"code", "branchId", "targetId"}
+
+    # Both fields execute over HTTP, writing through the shared serializer's code + branch.
+    patron_response = _post_graphql(
+        "mutation { createShelfViaHookTargetingPatron(data: { "
+        f'code: "CollisionViaPatron", branchId: {branch.pk} '
+        "}) { result { code } errors { field messages } } }",
+    )
+    assert patron_response.status_code == 200
+    patron_payload = patron_response.json()
+    assert "errors" not in patron_payload, patron_payload
+    patron_result = patron_payload["data"]["createShelfViaHookTargetingPatron"]
+    assert patron_result["errors"] == []
+    assert patron_result["result"] == {"code": "CollisionViaPatron"}
+
+    loan_response = _post_graphql(
+        "mutation { createShelfViaHookTargetingLoan(data: { "
+        f'code: "CollisionViaLoan", branchId: {branch.pk} '
+        "}) { result { code } errors { field messages } } }",
+    )
+    assert loan_response.status_code == 200
+    loan_payload = loan_response.json()
+    assert "errors" not in loan_payload, loan_payload
+    loan_result = loan_payload["data"]["createShelfViaHookTargetingLoan"]
+    assert loan_result["errors"] == []
+    assert loan_result["result"] == {"code": "CollisionViaLoan"}
+
+    assert models.Shelf.objects.filter(code="CollisionViaPatron", branch=branch).exists()
+    assert models.Shelf.objects.filter(code="CollisionViaLoan", branch=branch).exists()
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_hook_narrowed_serializer_recovers_unsupported_default_field():
+    """A serializer whose DEFAULT field set has an unsupported field still builds + writes via a narrowing hook (spec-039 High).
+
+    ``HookNarrowedShelfSerializer`` declares an unsupported ``SlugRelatedField(many=True)``
+    ``alt_branches``: default no-arg discovery succeeds but its field WALK raises converting
+    it, so the canonical name is not reserved and the supported hook map is NOT rejected
+    (``inputs.py::_default_full_shape_identity`` swallows the walk error). The hook narrows
+    the schema-time map to the supported subset, so the live write proves the hook map drives
+    BOTH the schema and the runtime decode: the input exposes the supported ``code`` +
+    ``branchId`` (NOT the unsupported ``altBranches`` slug list), and a ``branchId`` create
+    writes the row.
+    """
+    branch = models.Branch.objects.create(name="NarrowBranch", city="Boston")
+    response = _post_graphql(
+        "mutation { createShelfViaHookNarrowedSerializer(data: { "
+        f'code: "NarrowShelf", branchId: {branch.pk} '
+        "}) { result { code } errors { field messages } } }",
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaHookNarrowedSerializer"]
+    assert result["errors"] == []
+    assert result["result"] == {"code": "NarrowShelf"}
+    assert models.Shelf.objects.filter(code="NarrowShelf", branch=branch).exists()
+
+    # The hook narrowed the schema to the supported subset: the input is exactly
+    # code + branchId (the unsupported alt_branches slug list is dropped, not exposed).
+    input_type_name = _mutation_data_input_type_name("createShelfViaHookNarrowedSerializer")
+    assert _input_field_names(input_type_name) == {"code", "branchId"}
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_serializer_hidden_branch_is_relation_field_error():
+    """A raw-pk ``branchId`` whose Branch is hidden by ``BranchType.get_queryset`` -> field error, no write (serializer path).
+
+    The serializer relation decode (``resolvers.py::_decode_relation_single``) resolves the
+    raw pk through the non-Relay ``BranchType`` primary's visibility hook, just like the form
+    / model paths: an anonymous caller (the mutation uses ``permission_classes = []``) cannot
+    attach a ``city="restricted"`` Branch, so the hidden pk is a ``branchId``-keyed
+    ``FieldError`` with ``result: null`` and no ``Shelf`` row. ``ShelfSerializerInput`` is the
+    canonical (default full shape) input name, so it is referenced by a typed variable.
+    """
+    restricted = models.Branch.objects.create(name="SerRestrictedFK", city="restricted")
+    response = _post_graphql(
+        "mutation($d: ShelfSerializerInput!) { createShelfViaSerializer(data: $d) { "
+        "result { code } errors { field messages } } }",
+        variables={"d": {"code": "HiddenSerShelf", "branchId": restricted.pk}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaSerializer"]
+    assert result["result"] is None
+    assert [e["field"] for e in result["errors"]] == ["branchId"]
+    assert not models.Shelf.objects.filter(code="HiddenSerShelf").exists()
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_schema_hook_serializer_hidden_branch_is_relation_field_error():
+    """The schema-hook serializer mutation also rejects a hidden raw-pk ``branchId`` (hook-generated input + serializer relation visibility in one request, spec-039).
+
+    Covers the README's preference to pin serializer relation visibility through the
+    hook-generated input too: ``createShelfViaSchemaHookSerializer`` builds its input from
+    ``get_serializer_for_schema()`` and decodes ``branchId`` through the same visibility-scoped
+    ``BranchType.get_queryset``. Posted ANONYMOUSLY (so the ``city="restricted"`` Branch is
+    hidden), the relation decode fails BEFORE the serializer is even constructed (decode runs
+    before construct in the pipeline), so the tenant injection never matters: ``result: null``,
+    a ``branchId``-keyed ``FieldError``, and no ``Shelf`` row.
+    """
+    restricted = models.Branch.objects.create(name="HookRestrictedFK", city="restricted")
+    response = _post_graphql(
+        "mutation { createShelfViaSchemaHookSerializer(data: { "
+        f'code: "HiddenHookShelf", branchId: {restricted.pk} '
+        "}) { result { code } errors { field messages } } }",
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaSchemaHookSerializer"]
+    assert result["result"] is None
+    assert [e["field"] for e in result["errors"]] == ["branchId"]
+    assert not models.Shelf.objects.filter(code="HiddenHookShelf").exists()

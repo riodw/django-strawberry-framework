@@ -6,7 +6,11 @@ import strawberry
 from strawberry import relay
 from strawberry.types import Info
 
-from apps.library import filters, filters_genre, forms, models, orders, orders_genre
+from apps.library import filters, filters_genre, forms, models, orders, orders_genre, serializers
+
+# ``SerializerMutation`` is imported BY NAME (never via star import): the root ``__all__``
+# omits it while DRF is a soft dependency (F1), so the root ``__getattr__`` resolves it on
+# demand. DRF is present in the test context, so this import succeeds.
 from django_strawberry_framework import (
     DjangoConnection,
     DjangoConnectionField,
@@ -19,6 +23,7 @@ from django_strawberry_framework import (
     DjangoNodesField,
     DjangoType,
     OptimizerHint,
+    SerializerMutation,
 )
 from django_strawberry_framework.filters import filter_input_type
 from django_strawberry_framework.orders import order_input_type
@@ -652,9 +657,108 @@ class CreateBranchWithShelf(DjangoFormMutation):
         )
 
 
+# --------------------------------------------------------------------------- #
+# Serializer-mutation surface (spec-039): the get_serializer_for_schema() schema
+# hook + subclass validation, earned live over /graphql/ per the README live-first
+# mandate. Each opens the write to any caller via ``permission_classes = []`` (the
+# allow-any opt-out) so these isolate the hook / subclass behavior, not write-auth.
+# --------------------------------------------------------------------------- #
+
+
+class CreateShelfViaSchemaHookSerializer(SerializerMutation):
+    """Create a ``Shelf`` through a construction-kwarg-requiring serializer via the schema hook (spec-039 Decision 7).
+
+    ``TenantShelfSerializer`` requires a ``tenant`` constructor kwarg, so DRF's default
+    no-arg schema discovery fails. The consumer overrides ``get_serializer_for_schema()``
+    to supply a stable, request-independent schema-time field map (spec-039 Critical-2) and
+    overrides ``get_serializer_kwargs`` to inject the runtime ``tenant`` (the actor's
+    username). The live test proves the schema-time hook and the runtime serializer
+    construction AGREE end to end over ``/graphql/``. The generated input takes a
+    deterministic descriptor-derived name (the canonical ``<Serializer>Input`` is reserved
+    for the DEFAULT full shape, which this discovery-failing serializer has none of).
+    """
+
+    class Meta:
+        serializer_class = serializers.TenantShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+    @classmethod
+    def get_serializer_for_schema(cls):
+        # The stable, request-independent schema-time field map: construct WITH a
+        # placeholder tenant (the field SET does not depend on the tenant value).
+        return dict(serializers.TenantShelfSerializer(tenant="__schema__").fields)
+
+    def get_serializer_kwargs(
+        self,
+        info,
+        *,
+        data,
+        instance=None,
+    ):
+        # Inject the runtime tenant so construction succeeds (and waive the create-required
+        # guard - the override is trusted to supply what schema-time discovery cannot).
+        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        user = getattr(getattr(info.context, "request", None), "user", None)
+        kwargs["tenant"] = getattr(user, "username", "") or "anonymous"
+        return kwargs
+
+
+class CreateShelfViaSerializer(SerializerMutation):
+    """Create a ``Shelf`` through ``ShelfSerializer`` - the subclass-mutation PARENT (spec-039)."""
+
+    class Meta:
+        serializer_class = serializers.ShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+
+class CreateShelfViaSubclassedSerializer(CreateShelfViaSerializer):
+    """A ``SerializerMutation`` SUBCLASS that REDEFINES ``Meta.serializer_class`` (spec-039 subclass validation).
+
+    Subclasses the concrete ``CreateShelfViaSerializer`` (``serializer_class=ShelfSerializer``)
+    but redefines ``serializer_class`` to ``RenamedShelfSerializer`` and narrows to its OWN
+    field ``shelf_code`` (renamed from ``code``), which ``ShelfSerializer`` does NOT declare.
+    The default ``get_serializer_for_schema`` reads the mutation's OWN ``_mutation_meta`` (via
+    ``cls.__dict__``, never an inherited parent snapshot), so the child validates against ITS
+    serializer; were the inherited parent snapshot read, ``shelf_code`` would be rejected as
+    unknown at this class's creation (the schema import / reload would fail). The live test
+    writes through the renamed wire name ``shelfCode``.
+    """
+
+    class Meta:
+        serializer_class = serializers.RenamedShelfSerializer
+        operation = "create"
+        fields = ("shelf_code", "branch")
+        permission_classes = []
+
+
+class CreateShelfRejectingViaSerializer(SerializerMutation):
+    """Create a ``Shelf`` whose serializer ``save()`` raises a bare DRF ``ValidationError`` (spec-039).
+
+    ``RejectingShelfSerializer.save()`` raises a whole-object, save-time
+    ``serializers.ValidationError`` with a BARE (non-dict) detail; the recursive error
+    flattener normalizes the empty error path to the ``"__all__"`` sentinel, so the live
+    test proves that save-time bare-detail path surfaces as ``{ field: "__all__" }`` over
+    HTTP with no row written.
+    """
+
+    class Meta:
+        serializer_class = serializers.RejectingShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+
 @strawberry.type
 class Mutation:
-    """Library write surface (live raw-pk relation visibility + ``to_field_name``)."""
+    """Library write surface (live raw-pk relation visibility + ``to_field_name``).
+
+    The serializer-mutation fields (spec-039) add ``createShelfViaSchemaHookSerializer`` (the
+    ``get_serializer_for_schema()`` schema hook + ``get_serializer_kwargs`` runtime injection
+    over HTTP) and ``createShelfViaSubclassedSerializer`` (a subclass redefining
+    ``Meta.serializer_class`` - subclass validation reads the mutation's own snapshot, not an
+    inherited parent). ``createShelfViaSerializer`` is the plain parent the subclass extends.
+    """
 
     create_shelf_via_form = DjangoMutationField(CreateShelfViaForm)
     create_shelf = DjangoMutationField(CreateShelf)
@@ -662,6 +766,14 @@ class Mutation:
     create_book_via_custom_input = DjangoMutationField(CreateBookViaCustomInput)
     update_book_via_custom_input = DjangoMutationField(UpdateBookViaCustomInput)
     create_branch_with_shelf = DjangoMutationField(CreateBranchWithShelf)
+    create_shelf_via_serializer = DjangoMutationField(CreateShelfViaSerializer)
+    create_shelf_rejecting_via_serializer = DjangoMutationField(CreateShelfRejectingViaSerializer)
+    create_shelf_via_schema_hook_serializer = DjangoMutationField(
+        CreateShelfViaSchemaHookSerializer,
+    )
+    create_shelf_via_subclassed_serializer = DjangoMutationField(
+        CreateShelfViaSubclassedSerializer,
+    )
 
 
 __all__ = ("Mutation", "Query")

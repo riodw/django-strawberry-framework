@@ -1,127 +1,138 @@
-Spec-039 verification review
-============================
+Spec-039 full review against fakeshop live-test rules
+=====================================================
 
-Review scope: the current `HEAD` implementation after the feedback-fix commit
-`7511949c`, with `docs/feedback.md` replaced from the prior review. I focused on
-the areas that changed since the last review: mutation-level `optional_fields`,
-schema-time serializer discovery, generated input identity/name generation,
-relation conversion, resolver decode, rollback behavior, and fakeshop live
-coverage.
+Review scope: current `HEAD` (`1f7e5d70`) after the latest serializer-input naming
+fixes, checked against `examples/fakeshop/test_query/README.md`. I reviewed the
+implementation diff from `7511949c..HEAD`, the new package tests, and the fakeshop
+live-test requirements.
 
-Overall assessment: the previous review items are mostly addressed. The
-implementation now uses mutation-level `Meta.optional_fields`, exposes the
-`get_serializer_for_schema()` classmethod hook, stashes relation target models at
-bind time, rejects non-PK relation fields, rolls back error-envelope writes from
-the shared atomic skeleton, removes the dead `get_serializer()` hook, and adds
-renamed-field live coverage.
-
-There are still two concrete issues before I would call this fully closed. The
-first is a spec-contract bug in input type naming for hook-varied shapes; the
-second is a class-creation timing bug for subclasses of concrete serializer
-mutations.
+Overall assessment: the latest commit fixes the two issues from the previous
+feedback in the common path: hook-varied relation targets no longer collide on the
+same input name, and subclass validation no longer reads an inherited parent
+`_mutation_meta`. There are still two blockers. One is an implementation bug in
+the new canonical-name gate; the other is a test-placement violation of the
+fakeshop live-query README.
 
 Findings
 --------
 
-### High: hook-varied full shapes can still collide on the canonical input name
+### High: schema-hook overrides can still be rejected by the default serializer shape
 
-The cache key was correctly moved to the full `SerializerInputShape` descriptor,
-but the generated type name can still stay canonical for a hook-produced "full"
-shape:
+The new canonical-name guard re-walks the serializer's default full shape so the
+canonical `<Serializer>Input` name is reserved for the default descriptor:
 
-- `django_strawberry_framework/rest_framework/sets.py::SerializerMutation.build_input`
-  calls the concrete `get_serializer_for_schema()` hook and passes that field map
-  into `build_serializer_input_class`.
+- `django_strawberry_framework/rest_framework/inputs.py::_default_full_shape_identity`
 - `django_strawberry_framework/rest_framework/inputs.py::build_serializer_input_class`
-  computes `is_full_shape` relative to that same hook-returned field map.
-- `django_strawberry_framework/rest_framework/inputs.py::serializer_input_type_name`
-  returns `<Serializer>Input` whenever `is_full_shape` is true.
 
-That means two mutations over the same serializer class can have distinct
-descriptor/cache identities but still try to materialize the same canonical class
-name. I verified this with a local probe: two `SerializerMutation` classes using
-the same `HookSer` serializer but overriding `get_serializer_for_schema()` so the
-same `target` field points at different related models. Finalization fails with:
+That helper catches `ConfigurationError` from
+`resolve_effective_serializer_fields(serializer_class)`, but it does not catch
+`ConfigurationError` raised while converting the default fields in
+`_walk_serializer_fields`. This breaks a valid use of the public
+`get_serializer_for_schema()` hook: a consumer can supply a stable, supported
+schema field map while the serializer's default no-arg field map is unsupported or
+intentionally different.
 
-```text
-ConfigurationError 'HookSerInput' is materialized by two distinct SerializerMutation input classes
+I verified this with a local probe:
+
+```python
+class BadDefaultSer(serializers.ModelSerializer):
+    category = serializers.SlugRelatedField(slug_field="name", queryset=Category.objects.all())
+
+    class Meta:
+        model = Item
+        fields = ("name", "category")
+
+class CreateItem(SerializerMutation):
+    class Meta:
+        serializer_class = BadDefaultSer
+        operation = "create"
+
+    @classmethod
+    def get_serializer_for_schema(cls):
+        return {
+            "name": bound(serializers.CharField(), "name"),
+            "category": bound(
+                serializers.PrimaryKeyRelatedField(queryset=Category.objects.all()),
+                "category",
+            ),
+        }
 ```
 
-This violates the spec requirement that same serializer/effective-field-name
-inputs with different hook-returned field specs get distinct deterministic names
-instead of stale reuse or materialization collision.
+`finalize_django_types()` still fails by converting the default `SlugRelatedField`,
+even though the hook-returned schema field is a supported `PrimaryKeyRelatedField`.
+The error is:
 
-There is a second naming gap in the same area:
-`django_strawberry_framework/rest_framework/inputs.py::_shape_token` includes the
-annotation, requiredness, kind, and source, but not the new
-`InputFieldSpec.related_model`. Two relation shapes with the same field name and
-same GraphQL annotation but different target models can therefore produce the same
-descriptor-derived suffix even when they are not considered canonical.
+```text
+ConfigurationError Serializer relation field 'category' is a SlugRelatedField; only PrimaryKeyRelatedField is supported
+```
 
-Required correction: allow the canonical `<Serializer>Input` name only for the
-actual default full serializer shape, not for arbitrary hook-returned full shapes.
-For overridden schema hooks, or for any descriptor that differs from the default
-descriptor, use a descriptor-derived name. Also fold the full field-spec identity
-needed by runtime behavior into the token, including `input_attr`, `graphql_name`,
-`source`, `kind`, and `related_model`.
+Required correction: `_default_full_shape_identity` should treat any
+`ConfigurationError` from default identity construction as "no usable default
+full shape" and return `None`, not reject a hook-provided shape. That includes
+errors from `resolve_effective_serializer_fields`, `_walk_serializer_fields`,
+relation-primary lookup, unsupported field conversion, dotted-source rejection,
+and collision checks if they are added to the default identity path.
 
-Add tests that declare two mutations over the same serializer class with the same
-field names but different hook-returned relation targets, then assert finalization
-succeeds and the generated input names are distinct.
+Add a regression test where the default no-arg serializer field map contains an
+unsupported field, the hook returns a supported replacement map, and finalization
+succeeds with a descriptor-derived input name.
 
-### Medium: the default schema hook can read an inherited parent mutation snapshot
+### High: the latest fixes do not comply with `examples/fakeshop/test_query/README.md`
 
-`SerializerMutation.get_serializer_for_schema()` reads `cls._mutation_meta` when
-it is non-`None`:
+The README's coverage rule is explicit: any `django_strawberry_framework/` line
+that can be earned by a real fakeshop `/graphql/` request must be tested in
+`examples/fakeshop/test_query/` first, with package-internal tests only for
+genuinely unreachable paths.
 
+The latest commit changes consumer-visible schema behavior in:
+
+- `django_strawberry_framework/rest_framework/inputs.py::_shape_token`
+- `django_strawberry_framework/rest_framework/inputs.py::_default_full_shape_identity`
+- `django_strawberry_framework/rest_framework/inputs.py::build_serializer_input_class`
 - `django_strawberry_framework/rest_framework/sets.py::SerializerMutation.get_serializer_for_schema`
 
-During class creation, `DjangoMutationMetaclass.__new__` calls `_validate_meta`
-before assigning the new class's own `_mutation_meta`:
+But it adds tests only under `tests/rest_framework/`:
 
-- `django_strawberry_framework/mutations/sets.py::DjangoMutationMetaclass.__new__`
-- `django_strawberry_framework/rest_framework/sets.py::SerializerMutation._validate_meta`
+- `tests/rest_framework/test_inputs.py::test_descriptor_name_distinguishes_relation_target_model`
+- `tests/rest_framework/test_sets.py::test_hook_varied_relation_targets_bind_to_distinct_input_names`
+- `tests/rest_framework/test_sets.py::test_subclass_redefining_serializer_validates_against_child_serializer`
 
-For a subclass of an existing concrete serializer mutation, `cls._mutation_meta`
-can therefore be inherited from the parent during the child class's validation.
-The default hook then discovers fields from the parent serializer while validating
-the child's `Meta.serializer_class`.
+These paths are not inherently unreachable from fakeshop live HTTP tests. The
+fakeshop schema reload fixture in `examples/fakeshop/test_query/README.md`
+already rebuilds the full project schema before live API tests; adding fakeshop
+serializer mutations that use the schema hook and then issuing real `/graphql/`
+mutations would exercise the same bind/materialization/name paths through the
+consumer-visible stack. This is exactly the kind of package behavior the README
+says belongs in `examples/fakeshop/test_query/`.
 
-I verified this with a local probe: a child mutation overriding
-`Meta.serializer_class` to an `Item` serializer and `Meta.fields = ("category",)`
-was rejected as unknown/non-writable because the hook had read the parent
-`Category` serializer's field map.
+There is also a quality issue with the current package-only hook-varied test:
+`tests/rest_framework/test_sets.py::test_hook_varied_relation_targets_bind_to_distinct_input_names`
+proves finalization, but not that the generated input can execute through the
+runtime serializer. A live fakeshop test would force the schema-time hook and
+`get_serializer_kwargs`/runtime serializer construction to agree.
 
-Required correction: during default schema discovery, use only an own validated
-snapshot, not an inherited one. For example, read
-`cls.__dict__.get("_mutation_meta")`; if no own snapshot exists yet, fall back to
-`cls.Meta.serializer_class`. Add a test where a concrete `SerializerMutation`
-subclass defines a new `Meta.serializer_class` and validates against the child
-serializer, not the parent.
+Required correction: add live fakeshop coverage in
+`examples/fakeshop/test_query/test_products_api.py` for at least one schema-hook
+serializer mutation that executes over HTTP. The test surface should use the real
+project schema and `django.test.Client` `/graphql/` request path, not direct
+`finalize_django_types()` package setup. Keep the package tests for genuinely
+internal edge cases if useful, but do not rely on them as the only coverage for
+consumer-visible hook naming and subclass validation behavior.
 
 Resolved items verified
 -----------------------
 
-- Mutation-level `Meta.optional_fields` is now normalized, validated, stored on
-  `_ValidatedMutationMeta`, threaded into input generation, and serializer-level
-  `Meta.optional_fields` is ignored.
-- `get_serializer_for_schema()` now exists as a concrete classmethod hook and is
-  used by validation/bind paths.
-- `required=True, allow_null=True` fields now get an omittable nullable generated
-  field so omission can reach DRF as missing while explicit `null` is preserved.
-- Relation target models are recorded on `InputFieldSpec.related_model`, so the
-  request path no longer re-runs schema discovery.
-- Non-PK `RelatedField` variants now fail loud instead of being treated as
-  pk-decoded relation inputs.
-- Error-envelope paths now call `transaction.set_rollback(True)` in the shared
-  write skeleton before returning a null-object payload.
-- The dead public `get_serializer()` hook was removed.
-- Fakeshop now has live renamed scalar/relation coverage keyed to `displayName`
-  and `categoryPk`.
+- Hook-varied relation target descriptors now fold `related_model` into the
+  descriptor-derived name token.
+- The canonical name is no longer granted to every hook-returned "full" shape in
+  the common path.
+- `SerializerMutation.get_serializer_for_schema()` now reads only the class's own
+  `_mutation_meta`, avoiding inherited parent snapshots during child validation.
+- The new tests cover the two previously reported edge cases at package level.
 
 Validation notes
 ----------------
 
-I ran two targeted `uv run python` probes for the remaining edge cases above. I
-did not run pytest because the repository instructions say not to run pytest
-unless explicitly asked.
+I ran targeted local `uv run python` probes to verify the remaining schema-hook
+failure. I did not run pytest because the repository instructions say not to run
+pytest unless explicitly asked.

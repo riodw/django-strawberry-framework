@@ -50,6 +50,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     convert_serializer_field,
     resolve_serializer_field,
     serializer_field_graphql_name,
+    serializer_only_relation_annotation,
 )
 
 
@@ -212,6 +213,39 @@ def test_list_field_nested_serializer_child_raises():
     field = _bind(serializers.ListField(child=Inner()), "items")
     with pytest.raises(ConfigurationError):
         convert_serializer_field(field)
+
+
+def test_list_field_file_child_raises():
+    """A ``ListField`` whose child is a ``FileField`` raises (a FILE-kind child is not a scalar).
+
+    A ``FileField`` child is neither a relation nor a nested serializer (those raise
+    earlier), so it reaches the scalar-child guard: ``convert_serializer_field`` returns
+    a ``FILE`` kind with a ``None`` annotation, which is rejected.
+    """
+    field = _bind(serializers.ListField(child=serializers.FileField()), "files")
+    with pytest.raises(ConfigurationError, match="does not resolve to a scalar"):
+        convert_serializer_field(field)
+
+
+def test_serializer_only_many_related_field_maps_to_globalid_list():
+    """A serializer-only ``PrimaryKeyRelatedField(many=True)`` -> ``list[GlobalID]`` (the column-less M2M annotation).
+
+    The ``many=True`` (``ManyRelatedField``) analog of the single serializer-only relation:
+    no backing column, so the related model resolves from ``child_relation.queryset.model``
+    and the id type follows the Relay-vs-raw-pk rule against the target's primary.
+    """
+    relay_target, _ = _make_relay_target()
+    field = _bind(
+        serializers.PrimaryKeyRelatedField(many=True, queryset=relay_target.objects.all()),
+        "targets",
+    )
+    input_attr, annotation, related_model = serializer_only_relation_annotation(
+        field,
+        RELATION_MULTI,
+    )
+    assert input_attr == "targets"
+    assert annotation == list[relay.GlobalID]
+    assert related_model is relay_target
 
 
 def test_nested_serializer_field_raises():

@@ -1,134 +1,224 @@
-Spec-039 deeper review on the fakeshop live-test lane
-=====================================================
+# Spec-039 implementation review — deeper pass
 
-Review scope: current `HEAD` (`c9eeb79e`) after the latest fixes, still judged
-against `examples/fakeshop/test_query/README.md`. I reviewed the implementation
-diff from `1f7e5d70..HEAD`, the new library serializer mutations, the live
-`test_library_api.py` additions, and the remaining package-only tests.
+Date: 2026-06-29.
 
-Overall assessment: the implementation bug from the prior review is fixed. A
-targeted local probe that previously failed now finalizes successfully with a
-descriptor-derived input name:
+Scope: current `HEAD` (`19740bac`) after the newest fakeshop live-test additions. I
+reviewed the inherited review in this file, the full [spec-039][spec-039], the live-test
+lane rule in [test_query README][test-query-readme], the `rest_framework/` implementation,
+and the new `library` serializer mutation surface/tests.
+
+Method: static review plus two targeted `uv run python` probes. I did **not** run pytest,
+per the repo instruction not to run it unless explicitly asked.
+
+Bottom line: the newest commit fixed the previous live-placement gaps for unsupported
+default-field recovery and hidden-branch serializer relation visibility. It also moved the
+same-serializer hook-collision proof into the real fakeshop schema. One production
+correctness bug remains: `allow_null`-only schema-hook variation still dedupes to the wrong
+input shape. There are also two test/spec fidelity gaps worth fixing before merge.
+
+## Findings
+
+### High: `allow_null` is still missing from serializer input shape identity
+
+The prior review's nullability finding is still valid.
+
+Evidence:
+
+- `django_strawberry_framework/rest_framework/inputs.py::_walk_serializer_fields
+  #"annotation_reprs.append(repr(annotation))"` records the base annotation before the
+  nullable widening.
+- The actual emitted GraphQL annotation is widened later at
+  `django_strawberry_framework/rest_framework/inputs.py::_walk_serializer_fields
+  #"annotation = annotation | None"`.
+- `django_strawberry_framework/rest_framework/inputs.py::SerializerInputShape` stores only
+  `annotations` plus `required_state`; neither carries the post-widening nullable shape.
+- `django_strawberry_framework/rest_framework/inputs.py::_shape_token` uses that same base
+  annotation string, so generated names miss the same axis.
+
+I verified the behavior with a direct probe using the same serializer class and two
+schema-time field maps that differ only by `CharField(required=True, allow_null=False)` vs
+`CharField(required=True, allow_null=True)`:
 
 ```text
-OK BadDefaultSerNameab03d5Category3330b1Input
+BaseInput BaseInput
+True ("<class 'str'>",) ("<class 'str'>",) (True,) (True,)
+<class 'str'> str | None
 ```
 
-The new commit also moves part of the acceptance coverage into fakeshop live HTTP
-tests, which is the right direction. The deeper issue is that the live coverage is
-still not testing the exact consumer-visible failure modes that motivated the
-implementation changes. The package tests are doing most of the hard proof.
+So the two emitted input classes have different actual annotations (`str` vs `str | None`),
+but their `SerializerInputShape` descriptors compare equal and both claim `BaseInput`.
+Through `SerializerMutation.build_input`, the first built class would be returned from the
+descriptor cache for the second declaration, silently giving one mutation the other's
+GraphQL nullability and default behavior. That is exactly the "wrong nullability" case the
+spec says the descriptor identity must prevent.
 
-Findings
---------
+Required fix: make the descriptor and name token use the emitted annotation identity, not
+the base annotation identity. The cleanest implementation is to append `repr(annotation)`
+after nullable widening in `_walk_serializer_fields`, then let `_default_full_shape_identity`,
+`SerializerInputShape.annotations`, and `_shape_token` all consume that post-widening value.
+Add a regression that finalizes two mutations over the same serializer whose hooks return
+same-name `required=True` fields differing only in `allow_null`, and assert distinct input
+classes/names.
 
-### High: live coverage does not exercise the same-serializer hook-shape collision
+### Medium: the live same-serializer collision test proves naming, but not the differentiating relation decode
 
-The core naming fix in this lane is for two `SerializerMutation` declarations over
-the same serializer class whose `get_serializer_for_schema()` hooks return the
-same field names with different field specs, especially different relation target
-models. That is the bug that previously materialized two distinct input classes
-under one canonical `<Serializer>Input` name.
+The new fakeshop collision surface is in the correct lane, but it currently proves less
+than its prose says.
 
-The current live fakeshop additions include only one schema-hook serializer
-mutation:
+Evidence:
 
-- `examples/fakeshop/apps/library/schema.py::CreateShelfViaSchemaHookSerializer`
-- `examples/fakeshop/test_query/test_library_api.py::test_create_shelf_via_schema_hook_serializer_executes_over_http`
+- `examples/fakeshop/apps/library/serializers.py::CollisionShelfSerializer` declares only
+  `code` and `branch`.
+- `examples/fakeshop/apps/library/serializers.py::shelf_collision_schema_field_map` adds a
+  synthetic `target` relation on a throwaway serializer class.
+- `examples/fakeshop/test_query/test_library_api.py::test_serializer_hook_same_serializer_different_targets_distinct_inputs_over_http`
+  introspects the two generated input names and confirms both expose `targetId`, but both
+  mutation writes omit `targetId`.
 
-That proves a hook-backed serializer can execute over HTTP, but it does not prove
-the same-serializer/different-hook-shape collision is fixed in the real project
-schema. The actual collision case remains package-only:
+I also checked DRF behavior directly: `CollisionShelfSerializer(data={"code": ..., "branch":
+..., "target": ...})` validates successfully and drops `target` from `validated_data`.
+That means the live test's differentiating field is not actually owned by the runtime
+serializer, and because the test omits it, the serializer relation decoder never has to use
+the recorded `InputFieldSpec.related_model` for the field that made the two shapes differ.
 
-- `tests/rest_framework/test_sets.py::test_hook_varied_relation_targets_bind_to_distinct_input_names`
+Impact: the test would still pass if the divergent field were introspected correctly but
+runtime decode for the `target` relation were broken, keyed to the wrong related model, or
+never reached. This is not a production bug by itself, but it leaves the hardest part of
+the same-serializer relation-target axis under-proven in the live lane.
 
-Under the README's coverage rule, this is still live-reachable. The fakeshop
-schema can declare two live serializer mutations over one serializer class, with
-two hook field maps that expose the same `target` field but point it at different
-models, then hit both mutations through `/graphql/`. That would exercise the
-materialization ledger, descriptor-derived names, and runtime reverse map in the
-same stack users run.
+Recommended correction: make the collision fixture a real runtime field, not schema-only.
+For example, use one DRY serializer class/mixin that accepts `target_model` in its
+constructor, builds a write-only `target = PrimaryKeyRelatedField(queryset=target_model...)`
+in `get_fields()`, and pops or records `target` in `validate()`/`create()`. Then the two
+mutations should override both `get_serializer_for_schema()` and `get_serializer_kwargs()`
+with `Patron` vs `Loan`, post `targetId` in both live mutations, and include one wrong-model
+or missing-target assertion. That would prove descriptor naming, bind-stashed
+`related_model`, relation decode, and runtime serializer agreement in one fakeshop path.
 
-Required correction: add a fakeshop live pair that reproduces the collision shape
-inside the project schema. The test should assert schema import succeeds, both
-mutation fields execute over HTTP, and the two generated input types are distinct
-via introspection or by successful variable-typed calls if the names are stable
-enough to reference.
+### Medium: `allow_blank=True` is still not tested, despite the spec saying it is pinned
 
-### High: unsupported-default-field schema-hook recovery is only package-tested
+`rg "allow_blank|allowBlank" tests examples/fakeshop django_strawberry_framework` now finds
+only documentation in
+`django_strawberry_framework/rest_framework/serializer_converter.py::convert_serializer_field`;
+there is no test.
 
-The implementation now correctly treats failures while constructing the default
-full shape as "no canonical default shape" instead of rejecting a valid hook map:
+The spec explicitly says the M2 test plan pins `allow_blank=True` as "not reflected in the
+SDL, enforced by the serializer." The current suite covers `required=True, allow_null=True`
+and DRF defaults, but not this third axis.
 
-- `django_strawberry_framework/rest_framework/inputs.py::_default_full_shape_identity`
+Required correction: add a test. Because this is a consumer-visible SDL/runtime behavior,
+the best fit under [test_query README][test-query-readme] is a small fakeshop live mutation:
+introspect that an `allow_blank=True` `CharField` is still a non-null `String` when required,
+then post an empty string and prove the serializer accepts it. A package-level
+`build_serializer_inputs()` test is still useful as a narrow unit backstop, but it should not
+be the only proof if the behavior is reachable over `/graphql/`.
 
-I verified the old failure mode locally with a serializer whose default no-arg
-field map contains a writable `SlugRelatedField`, while the schema hook returns a
-supported `PrimaryKeyRelatedField` replacement. It now finalizes successfully.
+### Medium: `SerializerMutation.build_input` still bypasses the promoted `cached_build_input` helper
 
-However, the regression is only covered in package tests:
+The code preserves the guard-before-cache ordering, but it does not comply with the DRY
+obligation the spec calls out.
 
-- `tests/rest_framework/test_inputs.py::test_unsupported_default_field_does_not_reject_supported_hook_map`
+Evidence:
 
-The new live hook serializer,
-`examples/fakeshop/apps/library/serializers.py::TenantShelfSerializer`, covers a
-different default failure mode: construction requires a `tenant` kwarg, so default
-schema discovery fails before field conversion. It does not cover the deeper case
-where default discovery succeeds but default field conversion is unsupported and
-the hook supplies a valid schema map.
+- `django_strawberry_framework/mutations/sets.py::cached_build_input` is the promoted helper
+  that owns "run guard, then cache lookup."
+- `django_strawberry_framework/forms/sets.py` calls that helper.
+- `django_strawberry_framework/rest_framework/sets.py::SerializerMutation.build_input`
+  reimplements the cache lookup inline inside `_build` instead.
 
-That path is also live-reachable under the README rule. A fakeshop serializer can
-declare an unsupported default field and a mutation hook can replace it with a
-supported field map, then a real `/graphql/` mutation can prove the hook map is
-used for both schema and runtime.
+I do not see a current correctness failure: `build_and_stash_input()` calls `_build()` for
+every declaration, so the create-required guard still runs per declaration before the local
+cache lookup. The issue is architectural drift. P1.7 says this procedure is shared, and the
+serializer path is now a third spelling of the exact sequencing the helper was created to
+single-site.
 
-Required correction: add a live fakeshop serializer mutation for the
-unsupported-default-field recovery case, or extend the new live hook serializer so
-its default no-arg field map succeeds but contains an unsupported default field
-that the hook replaces.
+Recommended correction: either adapt `cached_build_input` to support the serializer's
+descriptor-after-build key cleanly, or add a short source comment plus a spec note explaining
+why the descriptor-keyed serializer cache cannot use the helper without building twice. Do
+not leave the current code claiming P1.7 while bypassing the P1.7 helper.
 
-### Medium: serializer relation visibility is still not pinned live
+### Low: generated divergent-name tokens use a short probabilistic digest while documenting an injective token
 
-The new live serializer mutations all create shelves with visible branches. The
-library app already has live hidden-branch coverage for model and form mutations,
-because `BranchType.get_queryset` hides `city="restricted"` from anonymous users:
+`django_strawberry_framework/rest_framework/inputs.py::_shape_token` appends only six hex
+characters of SHA-1 for each field discriminant. The docstring says the token is injective
+and the spec promises distinct deterministic names for distinct descriptors. A six-hex
+digest is deterministic, but it is not injective and is small enough that a large consumer
+schema or generated hook matrix can hit a collision. The materialization ledger would catch
+that as a finalize-time `ConfigurationError`, but it would still reject two otherwise valid
+distinct shapes.
 
-- `examples/fakeshop/test_query/test_library_api.py::test_create_shelf_via_form_hidden_branch_fk_is_relation_field_error`
-- `examples/fakeshop/test_query/test_library_api.py::test_create_shelf_model_mutation_hidden_branch_is_field_error`
+Recommended correction: use a longer digest, at least 12 to 16 hex chars. If the contract
+must be truly "distinct", add a deterministic collision-resolution suffix at materialization
+time rather than relying on any truncated hash.
 
-The serializer resolver has its own relation decode path:
+### Low: field-sequence normalization still has the wrapper the spec says not to add
 
-- `django_strawberry_framework/rest_framework/resolvers.py::_decode_serializer_data`
-- `django_strawberry_framework/rest_framework/resolvers.py::_decode_relation_single`
+`django_strawberry_framework/rest_framework/inputs.py::normalize_serializer_field_sequence`
+is a thin wrapper over `normalize_field_name_sequence(..., flavor="SerializerMutation")`.
+The implementation is harmless, but the spec says the serializer should call the shared
+helper directly with no third rebinding wrapper. `django_strawberry_framework/rest_framework/sets.py::SerializerMutation._validate_meta`
+even says it routes through the direct helper, which is not what the code does.
 
-It is consumer-visible and reachable through the newly added
-`createShelfViaSerializer` / `createShelfViaSchemaHookSerializer` mutations, but
-there is no equivalent live assertion that a hidden raw-pk `branchId` is rejected
-with a `FieldError` and no write. Package tests cover pieces of relation decode,
-but the README rule says this should be earned through `/graphql/` when possible.
+Recommended correction: either inline the calls and remove the wrapper, or update the spec
+and comments to say the serializer intentionally follows the model/form wrapper precedent.
 
-Required correction: add a live serializer mutation test that posts a restricted
-branch pk as `branchId` anonymously and asserts the payload has `result: null`,
-the error field is `branchId`, and no `Shelf` row is created. Prefer using the
-schema-hook mutation too, so the test covers hook-generated input plus serializer
-relation visibility in one request.
+### Low: read-only exclusion prose and test naming are misleading
 
-Resolved items verified
------------------------
+`django_strawberry_framework/rest_framework/inputs.py::resolve_effective_serializer_fields`
+says excluding a `read_only` field is a no-op because the field was already dropped. The
+implementation actually validates `Meta.exclude` against the post-drop writable set, so
+explicitly excluding a read-only field raises "unknown or non-writable." The nearby test
+`tests/rest_framework/test_inputs.py::test_read_only_exclusion_does_not_trip_guard` does not
+pass `exclude=("ro",)`; it only proves the default drop path does not trip the create guard.
 
-- `_default_full_shape_identity` now catches conversion-time `ConfigurationError`
-  while building the default identity, so a valid hook map is not rejected by an
-  unsupported default field.
-- The new library serializer surface is in the correct app/test tree for live
-  HTTP acceptance coverage.
-- `CreateShelfViaSchemaHookSerializer` proves a construction-kwarg-requiring
-  serializer can execute over `/graphql/` when schema and runtime hooks agree.
-- `CreateShelfViaSubclassedSerializer` proves the inherited `_mutation_meta`
-  snapshot bug is covered through schema import and a live write.
+This may be an acceptable behavior choice, but the prose and test name should match it.
+Either add the explicit exclude test the name implies and decide whether it should raise, or
+rename/reword the test and docstring to "read-only fields are dropped before the guard."
 
-Validation notes
-----------------
+## Resolved since the previous review
 
-I ran one targeted `uv run python` probe for the previously failing unsupported
-default-field hook case. I did not run pytest because the repository instructions
-say not to run pytest unless explicitly asked.
+- `examples/fakeshop/test_query/test_library_api.py::test_create_shelf_via_hook_narrowed_serializer_recovers_unsupported_default_field`
+  now earns the unsupported-default-field recovery through real `/graphql/`.
+- `examples/fakeshop/test_query/test_library_api.py::test_create_shelf_via_serializer_hidden_branch_is_relation_field_error`
+  and
+  `examples/fakeshop/test_query/test_library_api.py::test_create_shelf_via_schema_hook_serializer_hidden_branch_is_relation_field_error`
+  now earn serializer relation visibility through real `/graphql/`.
+- `examples/fakeshop/test_query/test_library_api.py::test_serializer_hook_same_serializer_different_targets_distinct_inputs_over_http`
+  now proves the materialization/name collision no longer breaks the composed fakeshop
+  schema; it just needs the stronger runtime decode assertion described above.
+
+## Validation notes
+
+I ran two targeted `uv run python` probes:
+
+- one confirmed the `allow_null` descriptor collision (`shape_a == shape_b` while emitted
+  annotations differ);
+- one confirmed the collision fixture's synthetic `target` input is ignored by
+  `CollisionShelfSerializer` at DRF validation time.
+
+I restored the tracked fakeshop SQLite fixture after the DRF probe touched it. I did not run
+pytest.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+[spec-039]: spec-039-serializer_mutations-0_0_13.md
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+[test-query-readme]: ../examples/fakeshop/test_query/README.md
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

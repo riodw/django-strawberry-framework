@@ -195,23 +195,6 @@ def _serializer_model(serializer_class: type[serializers.BaseSerializer]) -> Any
     return _serializer_meta_value(serializer_class, "model")
 
 
-def normalize_serializer_field_sequence(
-    value: Any,
-    *,
-    label: str = "fields",
-) -> tuple[str, ...] | None:
-    """Return ``Meta.fields`` / ``Meta.exclude`` as a tuple of names, or ``None``.
-
-    The serializer-flavor entry point: delegates to the shared
-    ``utils/inputs.py::normalize_field_name_sequence`` with the serializer-mutation
-    flavor label, so a bare string (incl. ``"__all__"``) and a duplicate name are
-    rejected loudly. The field-existence basis (a name not in the serializer's
-    schema-time field set) is checked separately in
-    ``resolve_effective_serializer_fields``.
-    """
-    return normalize_field_name_sequence(value, label=label, flavor="SerializerMutation")
-
-
 def resolve_effective_serializer_fields(
     serializer_class: type[serializers.BaseSerializer],
     *,
@@ -232,16 +215,20 @@ def resolve_effective_serializer_fields(
        ``fields_for_serializer(is_input=True)`` parity - they are not input
        fields);
     3. normalize + fail-loud ``Meta.fields`` / ``Meta.exclude`` (mutually
-       exclusive; bare-string incl. ``"__all__"`` / duplicate rejection via
-       ``normalize_serializer_field_sequence``; an unknown name raises);
+       exclusive; bare-string incl. ``"__all__"`` / duplicate rejection via the shared
+       ``normalize_field_name_sequence(flavor="SerializerMutation")`` - called directly,
+       no per-flavor wrapper, spec-039 P2.7; an unknown name raises);
     4. an empty effective set raises (the ``036`` / ``038`` empty-input guard).
 
-    ``Meta.fields`` / ``Meta.exclude`` are validated against the WRITABLE field set
-    (after the read-only drop) - so naming a ``read_only`` field in ``fields`` is an
-    unknown-name error, and excluding one is a no-op (it was already dropped).
+    ``Meta.fields`` / ``Meta.exclude`` are BOTH validated against the WRITABLE field set
+    (after the read-only / ``HiddenField`` drop) - so naming a ``read_only`` (or
+    ``HiddenField``) field in EITHER ``fields`` or ``exclude`` is an unknown-or-non-writable
+    error: the dropped field is simply not in the writable set the narrowing is checked
+    against. Excluding a read-only field is NOT a silent no-op - a read-only field is never
+    an input field, so neither selecting nor excluding it is meaningful, and both fail loud.
     """
-    fields = normalize_serializer_field_sequence(fields, label="fields")
-    exclude = normalize_serializer_field_sequence(exclude, label="exclude")
+    fields = normalize_field_name_sequence(fields, label="fields", flavor="SerializerMutation")
+    exclude = normalize_field_name_sequence(exclude, label="exclude", flavor="SerializerMutation")
     if fields is not None and exclude is not None:
         raise ConfigurationError(
             f"SerializerMutation for {serializer_class.__name__} declares both `fields` and "
@@ -301,12 +288,17 @@ def resolve_optional_fields(
     ``Meta``) forces the named create fields optional regardless of
     ``field.required``. ``optional_fields`` is the consumer value (or the
     ``_ValidatedMutationMeta``-stored normalized tuple); it is normalized + fail-loud
-    via ``normalize_serializer_field_sequence`` (a bare string incl. ``"__all__"`` -
+    via the shared ``normalize_field_name_sequence(flavor="SerializerMutation")`` (called
+    directly, no per-flavor wrapper - spec-039 P2.7) (a bare string incl. ``"__all__"`` -
     no ``"__all__"`` sentinel for field SELECTORS - and a duplicate are rejected),
     then an unknown name (not in the effective field set) raises. ``None`` (unset)
     yields the empty set.
     """
-    names = normalize_serializer_field_sequence(optional_fields, label="optional_fields")
+    names = normalize_field_name_sequence(
+        optional_fields,
+        label="optional_fields",
+        flavor="SerializerMutation",
+    )
     if names is None:
         return frozenset()
     unknown = [name for name in names if name not in set(effective_field_names)]
@@ -334,9 +326,12 @@ class SerializerInputShape:
       ``Input`` / ``PartialInput`` suffix.
     - ``field_specs`` - the ordered tuple of each emitted field's reverse-map
       ``InputFieldSpec`` (input_attr / graphql_name / target_name / kind / source).
-    - ``annotations`` - the ordered tuple of each emitted field's stringified base
-      annotation, so two hook-returned shapes with the SAME names but DIFFERENT
-      annotations (a ``CharField`` vs an ``IntegerField`` under one name) diverge.
+    - ``annotations`` - the ordered tuple of each emitted field's stringified EMITTED
+      annotation (post-nullable-widening - M2 / High), so two hook-returned shapes with
+      the SAME names but a DIFFERENT emitted annotation diverge: a ``CharField`` vs an
+      ``IntegerField`` (different base type) under one name, AND a ``required=True,
+      allow_null=False`` (``str``) vs ``required=True, allow_null=True`` (``str | None``)
+      field under one name (same base type, different generated nullability).
     - ``required_state`` - the ordered tuple of each emitted field's effective
       requiredness (``field.required`` minus ``optional_fields`` for create; all
       ``False`` for partial), so an ``optional_fields`` difference diverges.
@@ -385,17 +380,27 @@ def _related_model_token(related_model: type | None) -> str:
 
 
 def _shape_token(spec: InputFieldSpec, annotation: str, required: bool) -> str:
-    """Encode one emitted field's descriptor state as an injective name token.
+    """Encode one emitted field's descriptor state as a collision-resistant name token.
 
     Reuses ``mutations/inputs.py::_pascalize_token`` (P2.3) for the field-name
     component so the bare concatenation of per-field tokens stays uniquely
     decomposable (no third PascalCase encoder). The FULL field-spec identity the
     runtime behavior depends on is folded into the token via a stable ``hash``-free
-    digest - the annotation, requiredness, kind, ``input_attr``, ``graphql_name``,
-    ``source``, AND the relation ``related_model`` - so two same-name shapes that
-    differ in ANY of those still produce DISTINCT divergent names (spec-039 - the
-    descriptor identity drives the name, not just the name set; the cache key folds
+    digest - the EMITTED annotation (post-nullable-widening, so a ``T`` vs ``T | None``
+    nullability difference diverges - M2 / High), requiredness, kind, ``input_attr``,
+    ``graphql_name``, ``source``, AND the relation ``related_model`` - so two same-name
+    shapes that differ in ANY of those still produce DISTINCT divergent names (spec-039 -
+    the descriptor identity drives the name, not just the name set; the cache key folds
     in ``related_model`` via the frozen ``field_specs``, so the name must too).
+
+    The digest is collision-RESISTANT, not provably injective: a hash of arbitrary
+    discriminants cannot be injective into a fixed-width hex string. The materialize
+    ledger is the actual injectivity backstop - two distinct descriptors that hashed to
+    one name would collide there as a loud ``ConfigurationError`` (never a silent reuse),
+    so the contract a consumer relies on ("distinct descriptors -> distinct types, or a
+    loud error") holds regardless. A wide digest just makes that ledger collision
+    astronomically unlikely in practice (a large hook matrix would otherwise reject two
+    otherwise-valid distinct shapes).
     """
     base = _pascalize_token(spec.target_name)
     discriminant = "|".join(
@@ -409,20 +414,21 @@ def _shape_token(spec: InputFieldSpec, annotation: str, required: bool) -> str:
             _related_model_token(spec.related_model),
         ),
     )
-    # A short STABLE hex digest of the discriminant (``hashlib``, NOT the
-    # process-salted builtin ``hash``, so the generated name is deterministic
-    # across processes - load-bearing for the materialize-ledger dedupe). Six
-    # lowercase hex chars give 24 bits of discrimination; the digest is appended
-    # to the single-leading-capital ``_pascalize_token`` base, and because it is
-    # all-lowercase-hex with NO interior capital and NO underscore the combined
-    # ``<Base><digest>`` token keeps the same single-leading-capital /
-    # underscore-free shape - so the bare concatenation of per-field tokens stays
-    # uniquely decomposable at uppercase boundaries and Strawberry leaves the name
-    # unchanged. The digest is left as-is (lowercase): the base already supplies
-    # the single leading capital, and uppercasing the digest head would introduce
-    # an interior boundary, breaking decomposition. No PascalCase encoder is
-    # re-spelt here - only ``_pascalize_token`` (imported) shapes the field token.
-    digest = hashlib.sha1(discriminant.encode()).hexdigest()[:6]
+    # A STABLE hex digest of the discriminant (``hashlib``, NOT the process-salted
+    # builtin ``hash``, so the generated name is deterministic across processes -
+    # load-bearing for the materialize-ledger dedupe). Sixteen lowercase hex chars
+    # give 64 bits of discrimination (up from a 24-bit six-char digest, which a large
+    # consumer schema / generated hook matrix could realistically collide); the digest
+    # is appended to the single-leading-capital ``_pascalize_token`` base, and because
+    # it is all-lowercase-hex with NO interior capital and NO underscore the combined
+    # ``<Base><digest>`` token keeps the same single-leading-capital / underscore-free
+    # shape - so the bare concatenation of per-field tokens stays uniquely decomposable
+    # at uppercase boundaries and Strawberry leaves the name unchanged. The digest is
+    # left as-is (lowercase): the base already supplies the single leading capital, and
+    # uppercasing the digest head would introduce an interior boundary, breaking
+    # decomposition. No PascalCase encoder is re-spelt here - only ``_pascalize_token``
+    # (imported) shapes the field token.
+    digest = hashlib.sha1(discriminant.encode()).hexdigest()[:16]
     return f"{base}{digest}"
 
 
@@ -604,7 +610,9 @@ def _walk_serializer_fields(
     Returns ``(field_specs, annotation_reprs, required_state, triples)``:
 
     - ``field_specs`` - the ordered reverse-map ``InputFieldSpec`` per emitted field;
-    - ``annotation_reprs`` - each field's BASE (non-widened) annotation ``repr``;
+    - ``annotation_reprs`` - each field's EMITTED (post-nullable-widening) annotation
+      ``repr`` (so the descriptor identity reflects the generated GraphQL nullability -
+      ``allow_null`` widening included - M2 / High);
     - ``required_state`` - each field's effective requiredness (create honors
       ``field.required`` minus ``optional_fields``; partial forces every field
       optional - M2: requiredness is orthogonal to nullability);
@@ -622,7 +630,6 @@ def _walk_serializer_fields(
     for name, field in effective.items():
         python_attr, annotation, spec = resolve_serializer_field(field, model, provisional_name)
         field_specs.append(spec)
-        annotation_reprs.append(repr(annotation))
 
         required = False if is_partial else (field.required and name not in optional_fields)
         required_state.append(required)
@@ -640,6 +647,17 @@ def _walk_serializer_fields(
         if nullable:
             annotation = annotation | None
             field_kwargs["default"] = strawberry.UNSET
+        # Record the EMITTED (post-widening) annotation repr - NOT the base annotation
+        # (spec-039 High / M2). The descriptor identity + the name token must reflect the
+        # GraphQL nullability actually generated: two same-name hook shapes differing ONLY
+        # in ``allow_null`` (``required=True, allow_null=False`` -> ``T`` vs
+        # ``required=True, allow_null=True`` -> ``T | None``) emit DIFFERENT nullability,
+        # so their descriptors must compare UNEQUAL - else the second declaration silently
+        # reuses the first's cached input class (the per-shape build cache hit), giving one
+        # mutation the other's nullability. Folding the widened annotation in is what the
+        # descriptor cache key + ``_shape_token`` need; ``required_state`` records
+        # requiredness, which is orthogonal (it does not move with ``allow_null`` here).
+        annotation_reprs.append(repr(annotation))
         triples.append((python_attr, annotation, field_kwargs))
     return field_specs, annotation_reprs, required_state, triples
 

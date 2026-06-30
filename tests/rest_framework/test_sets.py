@@ -754,11 +754,12 @@ def test_distinct_optional_fields_on_one_serializer_get_distinct_inputs():
 # DISTINCT descriptor-derived names, not collide on the canonical one) is now earned LIVE
 # over ``/graphql/`` per the ``test_query`` live-first rule, by
 # ``examples/fakeshop/test_query/test_library_api.py``
-# ``::test_serializer_hook_same_serializer_different_targets_distinct_inputs_over_http``
-# (``CollisionShelfSerializer`` + two hooks pointing a shared ``target`` at different
-# models). The former package-only finalize-level
-# ``test_hook_varied_relation_targets_bind_to_distinct_input_names`` was retired with that
-# promotion; the surgical pure-function name derivation it leaned on stays unit-tested by
+# ``::test_serializer_hook_same_serializer_different_targets_distinct_inputs_and_decode_over_http``
+# (``TargetedShelfSerializer`` + two hooks pointing a shared WRITE-ONLY ``target`` at
+# different models, which also pins the differentiating runtime relation decode). The former
+# package-only finalize-level ``test_hook_varied_relation_targets_bind_to_distinct_input_names``
+# was retired with that promotion; the surgical pure-function name derivation it leaned on
+# stays unit-tested by
 # ``tests/rest_framework/test_inputs.py::test_descriptor_name_distinguishes_relation_target_model``.
 
 

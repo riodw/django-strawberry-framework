@@ -752,20 +752,23 @@ class CreateShelfRejectingViaSerializer(SerializerMutation):
 class CreateShelfViaHookTargetingPatron(SerializerMutation):
     """One half of a same-serializer hook-collision pair: a shared ``target`` relation pointed at ``Patron`` (spec-039 High).
 
-    Shares ``CollisionShelfSerializer`` with ``CreateShelfViaHookTargetingLoan``; both
-    override ``get_serializer_for_schema()`` to return the SAME hook field names (``code`` /
-    ``branch`` / ``target``), differing ONLY in ``target``'s model. Before the canonical-name
-    fix both "full"-looking hook shapes claimed the single ``CollisionShelfSerializerInput``
-    name and collided at materialize; the canonical name is now reserved for the (here
-    unused) DEFAULT full shape, so each hook shape takes a descriptor-derived name that folds
-    in ``target``'s ``related_model`` - the pair finalizes to DISTINCT input types. The runtime
-    write uses the shared serializer (``code`` + ``branch``); the schema-only ``target``
-    (pointed here at the non-Relay ``Patron``, distinct from the real ``branch`` FK to
-    ``Branch``) is omitted and never persists.
+    Shares ``TargetedShelfSerializer`` with ``CreateShelfViaHookTargetingLoan``; both override
+    ``get_serializer_for_schema()`` (the schema-time field map) AND ``get_serializer_kwargs``
+    (the runtime construction) to point a shared write-only ``target`` relation at a DIFFERENT
+    model, differing ONLY in ``target``'s model. The two generated inputs (``code`` /
+    ``branchId`` / ``targetId``) differ ONLY in ``target``'s ``related_model``, so each takes a
+    distinct descriptor-derived name (the canonical name is reserved for the unused DEFAULT
+    ``code`` + ``branch`` shape) - the pair finalizes to DISTINCT input types instead of
+    colliding on one canonical name. ``target`` is a REAL runtime field: posting ``targetId``
+    decodes it against ``Patron`` (this half's model) BEFORE the serializer is constructed and
+    DRF re-validates it, so a ``Patron``-only pk succeeds here but is a ``targetId`` relation
+    error for the ``Loan`` half - proving the differentiating relation DECODE, not just the
+    name. ``target`` is ``required=False`` and popped before the write (``Shelf`` has no
+    ``target`` column).
     """
 
     class Meta:
-        serializer_class = serializers.CollisionShelfSerializer
+        serializer_class = serializers.TargetedShelfSerializer
         operation = "create"
         permission_classes = []
 
@@ -773,26 +776,53 @@ class CreateShelfViaHookTargetingPatron(SerializerMutation):
     def get_serializer_for_schema(cls):
         return serializers.shelf_collision_schema_field_map(models.Patron)
 
+    def get_serializer_kwargs(
+        self,
+        info,
+        *,
+        data,
+        instance=None,
+    ):
+        # Construct the runtime serializer with the SAME target_model the schema hook used,
+        # so the schema-time ``target`` shape and the runtime ``target`` decode agree.
+        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        kwargs["target_model"] = models.Patron
+        return kwargs
+
 
 class CreateShelfViaHookTargetingLoan(SerializerMutation):
     """The collision pair's twin: the shared ``target`` relation pointed at ``Loan`` (spec-039 High).
 
-    Same shared ``CollisionShelfSerializer`` and same ``code`` + ``branch`` + ``target`` hook
-    shape as ``CreateShelfViaHookTargetingPatron``, with ``target`` pointed at ``Loan`` (a
-    different non-Relay model with a registered primary ``DjangoType``). The two generated
-    inputs differ ONLY in ``target``'s ``related_model`` - identical ``targetId`` annotations,
-    distinct descriptor-derived names - so the materialize ledger no longer collides on one
-    canonical name.
+    Same shared ``TargetedShelfSerializer`` and same ``code`` + ``branch`` + ``target`` shape
+    as ``CreateShelfViaHookTargetingPatron``, with ``target`` pointed at ``Loan`` (a different
+    non-Relay model with a registered primary ``DjangoType``) via both
+    ``get_serializer_for_schema()`` and ``get_serializer_kwargs``. The two generated inputs
+    differ ONLY in ``target``'s ``related_model`` - identical ``targetId`` annotations, distinct
+    descriptor-derived names - so the materialize ledger no longer collides on one canonical
+    name. At runtime ``targetId`` decodes against ``Loan``, so a ``Patron``-only pk is a
+    ``targetId`` relation error here (the wrong-model assertion proving each half decodes
+    against its OWN target model).
     """
 
     class Meta:
-        serializer_class = serializers.CollisionShelfSerializer
+        serializer_class = serializers.TargetedShelfSerializer
         operation = "create"
         permission_classes = []
 
     @classmethod
     def get_serializer_for_schema(cls):
         return serializers.shelf_collision_schema_field_map(models.Loan)
+
+    def get_serializer_kwargs(
+        self,
+        info,
+        *,
+        data,
+        instance=None,
+    ):
+        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        kwargs["target_model"] = models.Loan
+        return kwargs
 
 
 class CreateShelfViaHookNarrowedSerializer(SerializerMutation):
@@ -821,6 +851,69 @@ class CreateShelfViaHookNarrowedSerializer(SerializerMutation):
         return fields
 
 
+class CreateShelfViaHookNonNullNote(SerializerMutation):
+    """One half of a same-serializer pair whose hooks differ ONLY in a field's ``allow_null`` (spec-039 High / M2).
+
+    Shares ``ShelfSerializer`` with ``CreateShelfViaHookNullableNote``; both
+    ``get_serializer_for_schema()`` hooks return ``code`` + ``branch`` + a same-name ``note``
+    ``CharField(required=True)``, differing ONLY in ``note``'s ``allow_null``. This half is
+    ``allow_null=False``, so ``note`` is a non-null ``String!`` in the generated input;
+    the twin's is a nullable, omittable ``String``. Before the descriptor-identity fix both
+    shapes compared EQUAL (the descriptor recorded the base annotation, NOT the emitted
+    nullability), so the second declaration silently reused the first's cached input class -
+    giving one mutation the other's nullability. The fix records the EMITTED annotation, so
+    the two take DISTINCT descriptor-derived names with the correct per-field nullability.
+    ``note`` is serializer-only (decoded then dropped by the runtime ``ShelfSerializer``).
+    """
+
+    class Meta:
+        serializer_class = serializers.ShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+    @classmethod
+    def get_serializer_for_schema(cls):
+        return serializers.nullability_schema_field_map(allow_null=False)
+
+
+class CreateShelfViaHookNullableNote(SerializerMutation):
+    """The nullability pair's twin: the same ``note`` field but ``allow_null=True`` (spec-039 High / M2).
+
+    Same shared ``ShelfSerializer`` and same ``code`` + ``branch`` + ``note`` hook shape as
+    ``CreateShelfViaHookNonNullNote``, with ``note`` ``allow_null=True`` - so ``note`` is a
+    nullable, OMITTABLE ``String`` (M2 - GraphQL cannot express required-AND-nullable, so the
+    key is omittable and DRF enforces presence in-band). Its generated input must take a name
+    DISTINCT from the non-null twin's (the emitted-annotation descriptor identity), not
+    silently reuse it.
+    """
+
+    class Meta:
+        serializer_class = serializers.ShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+    @classmethod
+    def get_serializer_for_schema(cls):
+        return serializers.nullability_schema_field_map(allow_null=True)
+
+
+class CreateShelfViaBlankCodeSerializer(SerializerMutation):
+    """Create a ``Shelf`` whose ``code`` is an ``allow_blank=True`` required ``CharField`` (spec-039 M2 - allow_blank pinned).
+
+    ``BlankCodeShelfSerializer`` constructs no-arg (default discovery works), so its input is
+    the canonical ``BlankCodeShelfSerializerInput``. ``allow_blank`` is absent from the SDL:
+    ``code`` is still a non-null ``String!`` (a required ``CharField``), and the empty-string
+    acceptance is enforced by the serializer at runtime. The live test introspects ``code`` as
+    a non-null ``String`` and posts ``code: ""`` to prove the serializer accepts + writes the
+    blank (a plain required ``CharField`` would reject it with a field error).
+    """
+
+    class Meta:
+        serializer_class = serializers.BlankCodeShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+
 @strawberry.type
 class Mutation:
     """Library write surface (live raw-pk relation visibility + ``to_field_name``).
@@ -832,10 +925,15 @@ class Mutation:
     inherited parent). ``createShelfViaSerializer`` is the plain parent the subclass extends.
     ``createShelfViaHookTargetingPatron`` / ``createShelfViaHookTargetingLoan`` are the
     same-serializer hook-shape collision pair (one serializer, two hooks pointing a shared
-    ``target`` relation at different models - distinct descriptor-derived input names, no
-    canonical-name collision), and ``createShelfViaHookNarrowedSerializer`` is the
-    unsupported-default-field recovery case (a hook narrows away an unsupported default field
-    so the supported map still builds + writes).
+    write-only ``target`` relation at different models - distinct descriptor-derived input
+    names AND a differentiating runtime relation decode), and
+    ``createShelfViaHookNarrowedSerializer`` is the unsupported-default-field recovery case (a
+    hook narrows away an unsupported default field so the supported map still builds + writes).
+    ``createShelfViaHookNonNullNote`` / ``createShelfViaHookNullableNote`` are a same-serializer
+    pair whose hooks differ ONLY in a field's ``allow_null`` (proving the EMITTED nullability is
+    part of the descriptor identity - distinct input types, not a silent reuse), and
+    ``createShelfViaBlankCodeSerializer`` pins ``allow_blank=True`` (a non-null ``String!`` in
+    the SDL, empty string accepted at runtime).
     """
 
     create_shelf_via_form = DjangoMutationField(CreateShelfViaForm)
@@ -860,6 +958,15 @@ class Mutation:
     )
     create_shelf_via_hook_narrowed_serializer = DjangoMutationField(
         CreateShelfViaHookNarrowedSerializer,
+    )
+    create_shelf_via_hook_non_null_note = DjangoMutationField(
+        CreateShelfViaHookNonNullNote,
+    )
+    create_shelf_via_hook_nullable_note = DjangoMutationField(
+        CreateShelfViaHookNullableNote,
+    )
+    create_shelf_via_blank_code_serializer = DjangoMutationField(
+        CreateShelfViaBlankCodeSerializer,
     )
 
 

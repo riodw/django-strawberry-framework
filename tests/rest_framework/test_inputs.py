@@ -510,6 +510,40 @@ def test_differing_annotations_yield_distinct_descriptor_names():
     assert cre_str.__name__ != cre_int.__name__
 
 
+def test_allow_null_difference_yields_distinct_descriptor_names():
+    """Two divergent shapes over one serializer differing ONLY in a field's ``allow_null`` get distinct names (spec-039 High / M2).
+
+    The descriptor identity records the EMITTED (post-nullable-widening) annotation, not the
+    base one: a ``required=True, allow_null=False`` field is ``str`` while ``required=True,
+    allow_null=True`` is ``str | None``. Two hook field maps over the SAME serializer that
+    differ ONLY in a same-name field's ``allow_null`` are therefore DISTINCT descriptors and
+    take distinct descriptor-derived names - so the per-shape build cache cannot hand the
+    second declaration the first's cached class (which would give it the wrong nullability).
+    The live ``/graphql/`` proof is
+    ``examples/fakeshop/test_query/test_library_api.py``
+    ``::test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability_over_http``;
+    this is the focused pure-function backstop on the descriptor token (the ``allow_null`` axis
+    beside the annotation-type axis above).
+    """
+
+    class Ser(serializers.Serializer):
+        x = serializers.CharField()
+
+    def _field_map(*, allow_null: bool) -> dict:
+        class _HookSer(serializers.Serializer):
+            x = serializers.CharField()
+            note = serializers.CharField(required=True, allow_null=allow_null)
+
+        return dict(_HookSer().fields)
+
+    # Both hook shapes ({x, note}) diverge from Ser's default ({x}), so each takes a
+    # descriptor-derived name; ``note`` is required in both (nullability driven only by
+    # allow_null), so the emitted ``str`` vs ``str | None`` is the sole differing axis.
+    cre_non_null, _, _, _ = build_serializer_inputs(Ser, field_map=_field_map(allow_null=False))
+    cre_nullable, _, _, _ = build_serializer_inputs(Ser, field_map=_field_map(allow_null=True))
+    assert cre_non_null.__name__ != cre_nullable.__name__
+
+
 def test_descriptor_name_distinguishes_relation_target_model():
     """Two relation shapes differing ONLY in ``related_model`` get DISTINCT names (spec-039).
 
@@ -623,8 +657,16 @@ def test_create_guard_rejects_dropping_required_relation():
         build_serializer_inputs(_item_serializer(), exclude=("category",))
 
 
-def test_read_only_exclusion_does_not_trip_guard():
-    """Excluding a ``read_only`` / ``HiddenField`` field does NOT trip the create guard."""
+def test_read_only_field_dropped_before_create_guard():
+    """A ``read_only`` field is DROPPED before the create-required guard sees the writable set.
+
+    A ``read_only`` field is never an input field, so it is dropped from the writable set
+    BEFORE the create-required-narrowing guard runs - the guard sees only writable required
+    fields and is not tripped by the (already-dropped) read-only one. Explicitly EXCLUDING a
+    read-only field is a different path that raises (see
+    ``test_excluding_read_only_field_raises_non_writable``); this test pins only the default
+    drop, which the prior name (``..._exclusion_does_not_trip_guard``) misdescribed.
+    """
 
     class S(serializers.Serializer):
         name = serializers.CharField()
@@ -633,6 +675,25 @@ def test_read_only_exclusion_does_not_trip_guard():
     # ``ro`` is dropped automatically; the guard sees only writable required fields.
     cre, _, _, _ = build_serializer_inputs(S)  # no raise
     assert set(_field_map(cre)) == {"name"}
+
+
+def test_excluding_read_only_field_raises_non_writable():
+    """Explicitly excluding a ``read_only`` field raises unknown-or-non-writable (NOT a silent no-op).
+
+    ``Meta.exclude`` is validated against the WRITABLE field set (after the read-only drop),
+    so naming a ``read_only`` field in ``exclude`` is an unknown-or-non-writable error: the
+    field is simply not in the set the narrowing is checked against. (A read-only field is
+    never an input field, so neither selecting nor excluding it is meaningful - both arms fail
+    loud, matching the ``fields`` arm; the resolver docstring no longer calls the exclude a
+    no-op.)
+    """
+
+    class S(serializers.Serializer):
+        name = serializers.CharField()
+        ro = serializers.CharField(read_only=True)
+
+    with pytest.raises(ConfigurationError, match="unknown or non-writable"):
+        resolve_effective_serializer_fields(S, exclude=("ro",))
 
 
 def test_create_guard_waiver_does_not_raise():

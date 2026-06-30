@@ -101,52 +101,116 @@ class RejectingShelfSerializer(serializers.ModelSerializer):
         raise serializers.ValidationError("Shelf rejected by a whole-object business rule.")
 
 
-class CollisionShelfSerializer(serializers.ModelSerializer):
-    """Plain ``Shelf`` serializer backing TWO mutations whose schema hooks diverge (spec-039 High - the same-serializer hook-shape collision).
+class TargetedShelfSerializer(serializers.ModelSerializer):
+    """``Shelf`` serializer whose WRITE-ONLY ``target`` relation is pointed at a RUNTIME-supplied model (spec-039 High - the same-serializer hook-shape collision).
 
-    Two ``SerializerMutation`` declarations share THIS one serializer class, and each
-    overrides ``get_serializer_for_schema()`` to return the SAME field names plus an extra
-    ``target`` relation pointed at a DIFFERENT model (see ``shelf_collision_schema_field_map``).
-    Before the canonical-name fix both hook-returned shapes claimed the single
-    ``CollisionShelfSerializerInput`` name and collided at materialize ("... is materialized
-    by two distinct SerializerMutation input classes"); the canonical name is now reserved
-    for the DEFAULT full shape only, so each divergent hook shape takes a deterministic
-    descriptor-derived name that folds in the relation ``related_model`` - the two finalize
-    cleanly to DISTINCT input types. The runtime write uses THIS serializer (``code`` +
-    ``branch``); the schema-only ``target`` field is not one of its fields, so it never
-    reaches ``validated_data`` and never persists.
+    ONE serializer class backs TWO ``SerializerMutation`` declarations; each constructs it
+    with a different ``target_model`` (``Patron`` vs ``Loan``) via BOTH
+    ``get_serializer_for_schema()`` (the schema-time field map) AND ``get_serializer_kwargs``
+    (the per-request construction), so the only descriptor axis differing between their
+    generated inputs is ``target``'s ``related_model`` - exactly the axis the descriptor-
+    derived naming folds in (``rest_framework/inputs.py::_related_model_token``). Before the
+    canonical-name fix both hook shapes claimed the single canonical input name and collided
+    at materialize; the canonical name is now reserved for the (here unused) DEFAULT full
+    shape (``code`` + ``branch``, no ``target`` - the no-arg construction), so each hook shape
+    takes a DISTINCT descriptor-derived name.
+
+    ``target`` is a REAL runtime field (not schema-only): a write-only
+    ``PrimaryKeyRelatedField`` over ``target_model``, so the resolver DECODES ``targetId``
+    against the bind-stashed ``InputFieldSpec.related_model`` (``Patron`` vs ``Loan``) BEFORE
+    constructing the serializer, then DRF RE-VALIDATES it against this same queryset. Posting
+    a pk that exists only in ``Patron`` therefore SUCCEEDS for the Patron mutation but is a
+    ``targetId`` relation error for the Loan mutation - proving each decodes against its OWN
+    target model (the differentiating relation decode, not just the generated name). It is
+    ``required=False`` (a write may omit it) and is popped before the model write (``Shelf``
+    has no ``target`` column). ``target_model=None`` (the no-arg DEFAULT discovery) builds
+    only ``code`` + ``branch``, which is what reserves the canonical name away from the hook
+    shapes.
     """
+
+    def __init__(self, *args, target_model=None, **kwargs):
+        self._target_model = target_model
+        super().__init__(*args, **kwargs)
 
     class Meta:
         model = Shelf
         fields = ("code", "branch")
 
+    def get_fields(self):
+        fields = super().get_fields()
+        if self._target_model is not None:
+            fields["target"] = serializers.PrimaryKeyRelatedField(
+                queryset=self._target_model._default_manager.all(),
+                required=False,
+                write_only=True,
+            )
+        return fields
+
+    def create(self, validated_data):
+        # ``target`` was decoded + validated (proving the relation decode used the right
+        # related_model), then dropped - ``Shelf`` has no ``target`` column.
+        validated_data.pop("target", None)
+        return super().create(validated_data)
+
 
 def shelf_collision_schema_field_map(target_model):
-    """Schema-time field map of ``code`` + ``branch`` + a serializer-only ``target`` relation at ``target_model`` (spec-039 High).
+    """Schema-time field map of ``code`` + ``branch`` + the write-only ``target`` relation at ``target_model`` (spec-039 High).
 
     The two collision mutations' ``get_serializer_for_schema()`` hooks call this with two
-    DIFFERENT ``target_model``s, so the ONLY descriptor axis differing between their
-    generated inputs is the ``target`` relation's ``related_model`` - exactly the axis the
-    descriptor-derived naming folds in (``rest_framework/inputs.py::_related_model_token``).
-    ``target`` is a serializer-only ``PrimaryKeyRelatedField`` (no backing ``Shelf`` column),
-    ``required=False`` so a write may omit it; its sole purpose is to be the divergence axis
-    that proves two same-serializer hook shapes finalize to DISTINCT names instead of
-    colliding on the canonical one. Built from a throwaway ``ModelSerializer`` purely for its
-    BOUND ``.fields`` (never saved - ``target`` is not a ``Shelf`` column).
+    DIFFERENT ``target_model``s, AGREEING with their ``get_serializer_kwargs`` runtime
+    construction (same ``target_model``), so the schema-time shape and the runtime serializer
+    decode the SAME ``target`` relation. Returns the BOUND ``.fields`` of a
+    ``TargetedShelfSerializer`` constructed with ``target_model`` - including the write-only
+    ``target`` ``PrimaryKeyRelatedField`` over ``target_model._default_manager`` - so
+    ``target``'s ``related_model`` is the only axis differing between the two generated
+    inputs.
+    """
+    return dict(TargetedShelfSerializer(target_model=target_model).fields)
+
+
+def nullability_schema_field_map(*, allow_null):
+    """Schema-time field map of ``code`` + ``branch`` + a same-name ``note`` differing ONLY in ``allow_null`` (spec-039 High / M2).
+
+    The two nullability mutations' ``get_serializer_for_schema()`` hooks call this with
+    ``allow_null=False`` vs ``allow_null=True`` over the SAME serializer (``ShelfSerializer``),
+    so the only descriptor axis differing between their generated inputs is ``note``'s EMITTED
+    nullability: ``required=True, allow_null=False`` is a non-null ``String!``, while
+    ``required=True, allow_null=True`` is a nullable, omittable ``String`` (M2 - GraphQL
+    cannot express required-AND-nullable, so it is omittable and DRF enforces presence). The
+    descriptor identity + the descriptor-derived name must capture that EMITTED nullability,
+    or the second declaration silently reuses the first's cached input class (giving one
+    mutation the other's nullability - the High bug this pins). ``note`` is a serializer-only
+    scalar (no backing ``Shelf`` column), decoded then dropped by the runtime
+    ``ShelfSerializer`` (``code`` + ``branch``); its sole purpose is the nullability axis.
+    Built from a throwaway ``ModelSerializer`` purely for its BOUND ``.fields``.
     """
 
-    class _TargetedShelfSerializer(serializers.ModelSerializer):
-        target = serializers.PrimaryKeyRelatedField(
-            queryset=target_model._default_manager.all(),
-            required=False,
-        )
+    class _NullabilityShelfSerializer(serializers.ModelSerializer):
+        note = serializers.CharField(required=True, allow_null=allow_null)
 
         class Meta:
             model = Shelf
-            fields = ("code", "branch", "target")
+            fields = ("code", "branch", "note")
 
-    return dict(_TargetedShelfSerializer().fields)
+    return dict(_NullabilityShelfSerializer().fields)
+
+
+class BlankCodeShelfSerializer(serializers.ModelSerializer):
+    """``Shelf`` serializer with an ``allow_blank=True`` required ``code`` (spec-039 M2 - allow_blank pinned).
+
+    ``allow_blank`` is NOT a GraphQL concern (spec-039 Decision 7 / M2): a required
+    ``allow_blank=True`` ``CharField`` is still a non-null ``String!`` in the generated SDL
+    (``allow_blank`` is absent from the schema), and the empty-string acceptance is enforced
+    by the serializer at runtime. The live test introspects the ``code`` input as a non-null
+    ``String`` AND posts ``code: ""`` to prove the serializer accepts + writes it (a plain
+    required ``CharField`` would reject the blank with a field error).
+    """
+
+    code = serializers.CharField(allow_blank=True)
+
+    class Meta:
+        model = Shelf
+        fields = ("code", "branch")
 
 
 class HookNarrowedShelfSerializer(serializers.ModelSerializer):

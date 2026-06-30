@@ -882,11 +882,16 @@ doc + card-wrap only (no version bump — [Decision 14](#decision-14--version-bu
     `_ALLOWED_SERIALIZER_META_KEYS`, then returns a `_ValidatedMutationMeta` (**P2.5** /
     **P2.7**); the field-sequence call is
     `utils/inputs.py::normalize_field_name_sequence(..., flavor="SerializerMutation")`
-    **directly** — no third re-binding wrapper (**P2.7**); the `build_input` /
-    `input_type_name` cluster rides the promoted `cached_build_input` +
-    `build_and_stash_input` core (guard-before-cache-lookup ordering single-sited — NOT a
-    byte-parallel `_cached_build_serializer_input` / `_build_and_stash_serializer_input`,
-    **P1.7**); the `get_serializer_kwargs` waiver reuses the generalized
+    **directly** — no third re-binding wrapper alongside the model
+    (`_normalize_field_sequence`) / form (`normalize_form_field_sequence`) ones (**P2.7** —
+    the required keyword-only `flavor` arg exists for exactly this); the `build_input` /
+    `input_type_name` cluster rides the promoted `build_and_stash_input` core
+    (materialize-then-stash, NOT a byte-parallel `_build_and_stash_serializer_input`,
+    **P1.7**) — but its per-shape dedupe is keyed on the `SerializerInputShape` DESCRIPTOR,
+    which is only knowable AFTER the build, so it does NOT route through
+    `cached_build_input` (whose pre-build key lookup the form flavor can use but the
+    serializer cannot without building the shape twice); the
+    `get_serializer_kwargs` waiver reuses the generalized
     `_hook_overridden(cls, base, name)` (**P2.6**); and the input-ledger clear registers
     through `register_subsystem_clear` (**P1.6**, the finalizer item above). The serializer's
     only genuinely-new `_validate_meta` logic is the `serializer_class`
@@ -1770,9 +1775,13 @@ field-sequence normalize, the shared non-delete ops set, and returns a
 `reject_unknown_meta_keys(name, meta, allowed)` called with the serializer's own
 `_ALLOWED_SERIALIZER_META_KEYS`, and the field-sequence call is
 `normalize_field_name_sequence(..., flavor="SerializerMutation")` **directly** — no third
-re-binding wrapper (**P2.7**); the build/stash/name seam rides the promoted
-`cached_build_input` + `build_and_stash_input` core rather than spelling
-`_cached_build_serializer_input` / `_build_and_stash_serializer_input` (**P1.7**); and the
+re-binding wrapper alongside the model (`_normalize_field_sequence`) / form
+(`normalize_form_field_sequence`) ones (**P2.7**); the build/stash/name seam rides the
+promoted `build_and_stash_input` core rather than spelling
+`_build_and_stash_serializer_input` (**P1.7**), but its descriptor-keyed per-shape dedupe —
+the `SerializerInputShape` is only knowable AFTER the build — is an inline lookup-or-store,
+NOT `cached_build_input` (whose pre-build key lookup would force building the shape twice);
+and the
 input-namespace clear **registers through the mandatory `register_subsystem_clear` seam**
 (**M4**, not a budget-dependent fallback) instead of being hand-added to both the finalizer
 pre-bind reset and `registry.clear()` — which, because every entry routes through
@@ -2103,8 +2112,11 @@ reverse-map field spec is the unified `InputFieldSpec` (the `038` `FormInputFiel
 analog plus the `source` axis) sited in [`utils/inputs.py`][utils-inputs], not a third
 ad-hoc dataclass (**P2.1**); the `SerializerInputShape` descriptor identity is
 legitimately new, but its **cache + clear plumbing** is the promoted
-`make_shape_build_cache()` (**P1.3**) and its **build/stash procedure** the promoted
-`cached_build_input` / `build_and_stash_input` (**P1.7**); the input namespace is the
+`make_shape_build_cache()` (**P1.3**) and its **stash procedure** the promoted
+`build_and_stash_input` (**P1.7**) — though, because the descriptor cache key is only
+knowable after the build, the per-shape dedupe stays an inline lookup-or-store rather than
+`cached_build_input` (whose pre-build key lookup would force building the shape twice); the
+input namespace is the
 promoted `make_input_namespace(...)` **one-ledger** trio — the form / mutation clear
 shape, **not** the heavier `clear_generated_input_namespace` (**P2.2**); the
 divergent-shape suffix reuses `mutations/inputs.py::_pascalize_token` (**P2.3**); and the
@@ -2791,7 +2803,7 @@ identity guard that the symbol is imported and not redefined under `rest_framewo
 | **P1.4** | The fail-loud converter dispatch skeleton: [`forms/converter.py`][forms-converter]'s `convert_form_field` (isinstance pre-checks → `type(field).__mro__` walk over `_SCALAR_FORM_FIELDS` → exact-base-`Field` case → raising `ConfigurationError` fallthrough) imports **nothing** from `utils/` — a free-standing skeleton | A shared dispatch skeleton — `(field, isinstance_prechecks, scalar_registry, fallthrough_error_factory) → conversion` — to a new `utils/converters.py`; the unified conversion / field-spec dataclass (**P2.1**) rides with it | `convert_serializer_field` supplies only its precheck table + scalar registry; the **GOAL-mandated fail-loud contract** (no silent `String` catch-all) is single-sited and cannot drift between the two converters | [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) (converter) + [Decision 4](#decision-4--module-and-test-locations-rest_framework-subpackage-mirroring-forms) (skeleton home) + Slice 1 |
 | **P1.5** | The **sync write-pipeline orchestration**: `mutations/resolvers.py::_run_pipeline_sync` → `_run_create` / `_run_update` (one `transaction.atomic()`; tail partly factored as `_validate_save_assign_refetch_payload`) is re-spelled by `forms/resolvers.py::_run_modelform_pipeline_sync` (model-backed) — each re-writing the atomic block + the `coerce_lookup_id → locate_instance → not_found_error` preamble + the **authorize-before-decode** ordering | `run_write_pipeline_sync(...)` to [`mutations/resolvers.py`][mutations-resolvers], **scoped to model-backed create/update only** — owning atomicity, the create-vs-update branch, the locate→authorize preamble, **authorization before `decode_step`**, and the `refetch_optimized → build_payload` tail; extend `_validate_save_assign_refetch_payload` into the full preamble+tail. **Exclude `delete`** (no data / no decode / snapshot payload) **and the model-less plain form** (no instance / no primary type / no re-fetch) — not a universal skeleton (**F6**) | The serializer supplies only `decode_step(ctx) -> decoded \| list[FieldError]` and `write_step(ctx, decoded) -> saved \| list[FieldError]` (construct / `is_valid()` / `save()`); it does **not** re-spell the atomic block or the **authorize-before-decode security ordering** — the audit's single highest-value promotion (a security invariant, not just a shape). The existing model + model-form behavior must stay **byte-equivalent under their current tests** before serializer code lands | [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) + Slice 3 resolver checklist |
 | **P1.6** | Two hand-maintained ledger-clear lists with no registration seam: the [`finalize_django_types`][types-finalizer] pre-bind reset (direct, unconditional `clear_mutation_input_namespace()` + `clear_form_input_namespace()` before `bind_mutations()`) **and** `registry.py::TypeRegistry.clear()`'s `_clear_if_importable` co-clear rows (incl. the form shape cache; the block's own comment notes a *"same two-block shape"* mirrored per flavor) | A `register_subsystem_clear(module_path, attr)` seam feeding **one** canonical list that **both** the finalizer pre-bind reset and `registry.clear()` iterate via `_clear_if_importable` (import-guarded by construction) | The serializer's `clear_serializer_input_namespace` is registered as a **static `(module_path, attr)` row** (resolved lazily by `_clear_if_importable` — no DRF import at registration, so the import-timing edge is a non-issue, **F10**) instead of being hand-added to both lists — and because every entry routes through `_clear_if_importable`, the soft-dep import-guarded **asymmetry vanishes**, collapsing the spec's whole Decision-6 / Slice-2 "import-guarded clear" caveat to a one-line registration. Invariant: a subsystem with clearable state has by definition been imported + registered | [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) + Slice 2 finalizer-reset checklist |
-| **P1.7** | The `build_input` build/stash/name seam **implementation cluster**: the model does it inline (`DjangoMutation.build_input` → `_materialize_input_for`; `input_type_name`); [`forms/sets.py`][forms-sets] grew a private mirror — `_cached_build_form_input` (per-shape dedupe + the load-bearing **guard-before-cache-lookup** ordering), `_build_and_stash_form_input` (materialize-then-stash `_input_field_specs`), `_form_input_type_name_for`, `_modelform_operation_kind` | `cached_build_input(shape_key, *, guard, build_fn) -> (input_cls, field_specs)` (owns the per-pass lookup + the **guard-before-lookup** ordering) + `build_and_stash_input(cls, *, build, materialize)` to [`mutations/sets.py`][mutations-sets] (or a new `mutations/bind_helpers.py`) | The serializer supplies only its generator, materialize fn, and shape descriptor; it does **not** spell `_cached_build_serializer_input` / `_build_and_stash_serializer_input` byte-parallel to the form trio. (Layering: **P1.3** is the cache *dict*, **P2.1** the spec *shape*, **P1.7** the build *procedure* — promoting all three is what stops `rest_framework/sets.py` being a line-for-line `forms/sets.py`) | [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) / [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) + Slice 2 `sets.py` checklist |
+| **P1.7** | The `build_input` build/stash/name seam **implementation cluster**: the model does it inline (`DjangoMutation.build_input` → `_materialize_input_for`; `input_type_name`); [`forms/sets.py`][forms-sets] grew a private mirror — `_cached_build_form_input` (per-shape dedupe + the load-bearing **guard-before-cache-lookup** ordering), `_build_and_stash_form_input` (materialize-then-stash `_input_field_specs`), `_form_input_type_name_for`, `_modelform_operation_kind` | `cached_build_input(shape_key, *, guard, build_fn) -> (input_cls, field_specs)` (owns the per-pass lookup + the **guard-before-lookup** ordering) + `build_and_stash_input(cls, *, build, materialize)` to [`mutations/sets.py`][mutations-sets] (or a new `mutations/bind_helpers.py`) | The serializer supplies only its generator, materialize fn, and shape descriptor, and rides `build_and_stash_input` (materialize-then-stash) — NOT a byte-parallel `_build_and_stash_serializer_input`. It does **not** ride `cached_build_input`: that helper looks its key up BEFORE building, but the serializer's key is the `SerializerInputShape` descriptor, only knowable AFTER the build, so forcing it through the helper would build the shape twice (the waste P1.7 names). The descriptor-keyed dedupe therefore stays an inline lookup-or-store keyed on the post-build descriptor, while the per-declaration guard-before-dedupe ordering is preserved directly. (Layering: **P1.3** is the cache *dict*, **P2.1** the spec *shape*, **P1.7** the build *procedure* — promoting the stash core + the shape/cache plumbing is what stops `rest_framework/sets.py` being a line-for-line `forms/sets.py`) | [Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) / [Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) + Slice 2 `sets.py` checklist |
 
 ### Single-siting that prevents drift (P2)
 

@@ -99,6 +99,33 @@ def _input_field_names(type_name: str) -> set[str]:
     return {field["name"] for field in type_info["inputFields"]}
 
 
+def _input_field_type(type_name: str, field_name: str) -> dict:
+    """Return an input object field's TYPE tree (``kind`` / ``name`` / ``ofType``) via introspection.
+
+    Used to assert an input field's GraphQL nullability: a ``NON_NULL`` wrapper (``kind ==
+    "NON_NULL"``, ``ofType`` the scalar) means a non-null ``String!``; a bare scalar (``kind
+    == "SCALAR"``, ``name == "String"``) means a nullable, omittable ``String``. Pins, e.g.,
+    that an ``allow_blank=True`` required ``CharField`` is still ``String!`` (allow_blank is
+    absent from the SDL) and that two hooks differing only in ``allow_null`` emit
+    ``String!`` vs ``String`` (spec-039 M2 / High).
+    """
+    response = _post_graphql(
+        f"""
+        query {{
+          __type(name: "{type_name}") {{
+            inputFields {{ name type {{ kind name ofType {{ kind name }} }} }}
+          }}
+        }}
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    type_info = payload["data"]["__type"]
+    assert type_info is not None
+    return next(f["type"] for f in type_info["inputFields"] if f["name"] == field_name)
+
+
 def _mutation_data_input_type_name(field_name: str) -> str:
     """Return the input type name of a mutation field's ``data`` argument via introspection.
 
@@ -5084,22 +5111,31 @@ def test_create_shelf_rejecting_serializer_save_time_all_sentinel():
 
 
 @pytest.mark.django_db
-def test_serializer_hook_same_serializer_different_targets_distinct_inputs_over_http():
-    """Two mutations over ONE serializer whose hooks point a shared ``target`` at different models bind to DISTINCT inputs and both write over HTTP (spec-039 High).
+def test_serializer_hook_same_serializer_different_targets_distinct_inputs_and_decode_over_http():
+    """Two mutations over ONE serializer whose hooks point a shared ``target`` at different models bind to DISTINCT inputs AND decode ``targetId`` against their OWN model over HTTP (spec-039 High).
 
     The same-serializer hook-shape collision, reproduced in the REAL project schema:
     ``createShelfViaHookTargetingPatron`` and ``createShelfViaHookTargetingLoan`` share
-    ``CollisionShelfSerializer`` and return the SAME hook field names (``code`` / ``branch`` /
+    ``TargetedShelfSerializer`` and return the SAME hook field names (``code`` / ``branch`` /
     ``target``) with ``target`` pointed at different models. That the autouse reload imports
     the composed schema AT ALL proves the materialize ledger no longer collides on one
-    canonical ``CollisionShelfSerializerInput`` name (pre-fix this raised "... is materialized
-    by two distinct SerializerMutation input classes"). Introspection proves the two generated
-    input types are DISTINCT (folding ``target``'s ``related_model``) yet both expose the
-    divergent ``targetId`` beside ``code`` + ``branchId``; and both fields write a ``Shelf`` over
-    ``/graphql/`` (the runtime uses the shared serializer's ``code`` + ``branch``; the
-    schema-only ``target`` is omitted - ``required=False`` - and never persists).
+    canonical name (pre-fix this raised "... is materialized by two distinct SerializerMutation
+    input classes"). Introspection proves the two generated input types are DISTINCT (folding
+    ``target``'s ``related_model``) yet both expose the divergent ``targetId`` beside ``code`` +
+    ``branchId``.
+
+    ``target`` is a REAL runtime field, so this also pins the DIFFERENTIATING relation decode
+    (not just the name): a ``Patron``-only pk POSTed as ``targetId`` SUCCEEDS for the Patron
+    mutation (decoded against ``Patron``, re-validated by the runtime serializer, then popped
+    before the write) but is a ``targetId`` relation error for the Loan mutation (decoded
+    against ``Loan``, where that pk does not exist) - proving each half decodes against its OWN
+    bind-stashed ``related_model``, with ``result: null`` and no row for the wrong-model post.
     """
     branch = models.Branch.objects.create(name="CollisionBranch", city="Boston")
+    patron = models.Patron.objects.create(name="CollisionPatron")
+    # A pk that exists in Patron but NOT in Loan (no Loan rows are created), so the same
+    # ``targetId`` resolves for the Patron half and fails for the Loan half.
+    target_pk = patron.pk
 
     patron_target_input = _mutation_data_input_type_name("createShelfViaHookTargetingPatron")
     loan_target_input = _mutation_data_input_type_name("createShelfViaHookTargetingLoan")
@@ -5109,10 +5145,11 @@ def test_serializer_hook_same_serializer_different_targets_distinct_inputs_over_
     assert _input_field_names(patron_target_input) == {"code", "branchId", "targetId"}
     assert _input_field_names(loan_target_input) == {"code", "branchId", "targetId"}
 
-    # Both fields execute over HTTP, writing through the shared serializer's code + branch.
+    # The Patron half decodes targetId against Patron: the Patron pk resolves, the runtime
+    # serializer re-validates + pops it, and the Shelf writes through code + branch.
     patron_response = _post_graphql(
         "mutation { createShelfViaHookTargetingPatron(data: { "
-        f'code: "CollisionViaPatron", branchId: {branch.pk} '
+        f'code: "CollisionViaPatron", branchId: {branch.pk}, targetId: {target_pk} '
         "}) { result { code } errors { field messages } } }",
     )
     assert patron_response.status_code == 200
@@ -5121,21 +5158,22 @@ def test_serializer_hook_same_serializer_different_targets_distinct_inputs_over_
     patron_result = patron_payload["data"]["createShelfViaHookTargetingPatron"]
     assert patron_result["errors"] == []
     assert patron_result["result"] == {"code": "CollisionViaPatron"}
+    assert models.Shelf.objects.filter(code="CollisionViaPatron", branch=branch).exists()
 
+    # The Loan half decodes the SAME targetId against Loan, where that pk does not exist:
+    # a targetId-keyed relation error, result null, no row (the wrong-model assertion).
     loan_response = _post_graphql(
         "mutation { createShelfViaHookTargetingLoan(data: { "
-        f'code: "CollisionViaLoan", branchId: {branch.pk} '
+        f'code: "CollisionViaLoanWrongTarget", branchId: {branch.pk}, targetId: {target_pk} '
         "}) { result { code } errors { field messages } } }",
     )
     assert loan_response.status_code == 200
     loan_payload = loan_response.json()
     assert "errors" not in loan_payload, loan_payload
     loan_result = loan_payload["data"]["createShelfViaHookTargetingLoan"]
-    assert loan_result["errors"] == []
-    assert loan_result["result"] == {"code": "CollisionViaLoan"}
-
-    assert models.Shelf.objects.filter(code="CollisionViaPatron", branch=branch).exists()
-    assert models.Shelf.objects.filter(code="CollisionViaLoan", branch=branch).exists()
+    assert loan_result["result"] is None
+    assert [e["field"] for e in loan_result["errors"]] == ["targetId"]
+    assert not models.Shelf.objects.filter(code="CollisionViaLoanWrongTarget").exists()
 
 
 @pytest.mark.django_db
@@ -5222,3 +5260,99 @@ def test_create_shelf_via_schema_hook_serializer_hidden_branch_is_relation_field
     assert result["result"] is None
     assert [e["field"] for e in result["errors"]] == ["branchId"]
     assert not models.Shelf.objects.filter(code="HiddenHookShelf").exists()
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_blank_code_serializer_accepts_empty_string_over_http():
+    """An ``allow_blank=True`` required ``code`` is a non-null ``String!`` in the SDL but accepts ``""`` at runtime (spec-039 M2 - allow_blank pinned).
+
+    ``allow_blank`` is NOT a GraphQL concern (M2): the generated input's ``code`` is still a
+    non-null ``String`` (a required ``CharField`` - allow_blank is absent from the SDL), and
+    the empty-string acceptance is enforced by the serializer at runtime. Introspection pins
+    the non-null shape; posting ``code: ""`` then proves the serializer accepts + writes the
+    blank (a plain required ``CharField`` would reject it with a field error).
+    """
+    branch = models.Branch.objects.create(name="BlankBranch", city="Boston")
+
+    # allow_blank is invisible in the SDL: the required code input is a non-null String!.
+    code_type = _input_field_type("BlankCodeShelfSerializerInput", "code")
+    assert code_type["kind"] == "NON_NULL"
+    assert code_type["ofType"]["name"] == "String"
+
+    response = _post_graphql(
+        "mutation($d: BlankCodeShelfSerializerInput!) { createShelfViaBlankCodeSerializer(data: $d) { "
+        "result { code } errors { field messages } } }",
+        variables={"d": {"code": "", "branchId": branch.pk}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaBlankCodeSerializer"]
+    # The serializer accepted the blank (a plain required CharField would have rejected it).
+    assert result["errors"] == []
+    assert result["result"] == {"code": ""}
+    assert models.Shelf.objects.filter(code="", branch=branch).exists()
+
+
+@pytest.mark.django_db
+def test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability_over_http():
+    """Two mutations over ONE serializer whose hooks differ ONLY in a field's ``allow_null`` bind to DISTINCT inputs with the CORRECT per-field nullability (spec-039 High / M2).
+
+    ``createShelfViaHookNonNullNote`` and ``createShelfViaHookNullableNote`` share
+    ``ShelfSerializer`` and return the SAME ``code`` + ``branch`` + ``note`` hook fields, with
+    ``note`` a ``required=True`` ``CharField`` differing ONLY in ``allow_null``. The EMITTED
+    nullability is part of the descriptor identity, so the two generated inputs are DISTINCT
+    types: the ``allow_null=False`` half exposes ``note`` as a non-null ``String!``, the
+    ``allow_null=True`` half as a nullable, OMITTABLE ``String``. Before the fix the descriptor
+    recorded the base annotation (NOT the post-widening one), so the two shapes compared EQUAL
+    and the second declaration silently reused the first's cached input class - giving one
+    mutation the other's nullability (the SAME input type name, same SDL nullability for both).
+
+    Both also execute over HTTP: the non-null half must supply ``note`` (decoded then dropped
+    by the runtime ``ShelfSerializer``); the nullable half may OMIT it.
+    """
+    branch = models.Branch.objects.create(name="NullabilityBranch", city="Boston")
+
+    non_null_input = _mutation_data_input_type_name("createShelfViaHookNonNullNote")
+    nullable_input = _mutation_data_input_type_name("createShelfViaHookNullableNote")
+    # Distinct descriptor-derived names: the emitted-annotation nullability is part of the
+    # identity, so the second declaration does NOT silently reuse the first's input class.
+    assert non_null_input != nullable_input
+
+    # The allow_null=False half emits a non-null String! note; the allow_null=True half a
+    # nullable String (M2 - required-AND-nullable is omittable, DRF enforces presence in-band).
+    non_null_note = _input_field_type(non_null_input, "note")
+    assert non_null_note["kind"] == "NON_NULL"
+    assert non_null_note["ofType"]["name"] == "String"
+    nullable_note = _input_field_type(nullable_input, "note")
+    assert nullable_note["kind"] == "SCALAR"
+    assert nullable_note["name"] == "String"
+
+    # The non-null half requires note (String!); it is decoded then dropped by the runtime
+    # ShelfSerializer (code + branch), and the Shelf writes.
+    non_null_response = _post_graphql(
+        "mutation { createShelfViaHookNonNullNote(data: { "
+        f'code: "NonNullNoteShelf", branchId: {branch.pk}, note: "ignored-at-runtime" '
+        "}) { result { code } errors { field messages } } }",
+    )
+    assert non_null_response.status_code == 200
+    non_null_payload = non_null_response.json()
+    assert "errors" not in non_null_payload, non_null_payload
+    non_null_result = non_null_payload["data"]["createShelfViaHookNonNullNote"]
+    assert non_null_result["errors"] == []
+    assert non_null_result["result"] == {"code": "NonNullNoteShelf"}
+    assert models.Shelf.objects.filter(code="NonNullNoteShelf", branch=branch).exists()
+
+    # The nullable half may OMIT note (it is omittable), and the Shelf still writes.
+    nullable_response = _post_graphql(
+        "mutation { createShelfViaHookNullableNote(data: { "
+        f'code: "NullableNoteShelf", branchId: {branch.pk} '
+        "}) { result { code } errors { field messages } } }",
+    )
+    assert nullable_response.status_code == 200
+    nullable_payload = nullable_response.json()
+    assert "errors" not in nullable_payload, nullable_payload
+    nullable_result = nullable_payload["data"]["createShelfViaHookNullableNote"]
+    assert nullable_result["errors"] == []
+    assert nullable_result["result"] == {"code": "NullableNoteShelf"}
+    assert models.Shelf.objects.filter(code="NullableNoteShelf", branch=branch).exists()

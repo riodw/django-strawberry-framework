@@ -77,13 +77,13 @@ from ..mutations.sets import (
 from ..mutations.sets import (
     _validate_permission_classes as _validate_mutation_permission_classes,
 )
+from ..utils.inputs import normalize_field_name_sequence
 from .inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
     _serializer_shape_build_cache,
     build_serializer_input_class,
     guard_create_required_serializer_fields,
     materialize_serializer_input_class,
-    normalize_serializer_field_sequence,
     resolve_effective_serializer_fields,
     resolve_optional_fields,
 )
@@ -185,9 +185,13 @@ class SerializerMutation(DjangoMutation):
           the shared ``non_delete_operation_error``.
         - **``fields`` + ``exclude`` both supplied / bare-string (incl.
           ``"__all__"``) / duplicate / unknown-name / empty-set** - via the Slice-1
-          ``resolve_effective_serializer_fields``, which routes through
-          ``normalize_field_name_sequence(flavor="SerializerMutation")`` directly
-          (P2.7 - no new wrapper).
+          ``resolve_effective_serializer_fields``, which calls the shared
+          ``utils/inputs.py::normalize_field_name_sequence(flavor="SerializerMutation")``
+          DIRECTLY - the required keyword-only ``flavor`` arg exists for exactly this, so
+          the serializer adds NO third re-binding wrapper alongside the model
+          (``_normalize_field_sequence``) / form (``normalize_form_field_sequence``) ones
+          (P2.7 - the typo-guard / non-delete-ops mechanics are promoted; the field-sequence
+          call routes through the shared helper directly).
 
         ``permission_classes`` is validated + normalized by the shared
         ``_validate_permission_classes`` (the ``DjangoModelPermission`` default when
@@ -253,12 +257,13 @@ class SerializerMutation(DjangoMutation):
         field_map = cls.get_serializer_for_schema()
         # Validate the narrowing fail-loud via the Slice-1 machinery (mutual
         # exclusion, bare-string incl. ``"__all__"`` / duplicate / unknown-name /
-        # empty-set guard), which routes through
-        # ``normalize_serializer_field_sequence`` ->
-        # ``normalize_field_name_sequence(flavor="SerializerMutation")`` (P2.7 - the
-        # serializer flavor's single field-sequence entry, not a new wrapper). The
-        # snapshot stores the RAW declarations; ``build_input`` re-resolves them (D1
-        # - the form flavor's validate-then-store-raw precedent).
+        # empty-set guard), which calls the shared
+        # ``normalize_field_name_sequence(flavor="SerializerMutation")`` DIRECTLY - no
+        # third re-binding wrapper alongside the model (``_normalize_field_sequence``) /
+        # form (``normalize_form_field_sequence``) ones (P2.7 promotes the typo-guard /
+        # field-sequence MECHANICS; the per-flavor call routes through the shared helper
+        # directly). The snapshot stores the RAW declarations; ``build_input`` re-resolves
+        # them (D1 - the form flavor's validate-then-store-raw precedent).
         effective = resolve_effective_serializer_fields(
             serializer_class,
             fields=fields,
@@ -273,9 +278,10 @@ class SerializerMutation(DjangoMutation):
         # the create input requiredness + the ``SerializerInputShape`` descriptor
         # identity. (The bind re-validates names via ``resolve_optional_fields``; this
         # is the earliest-feedback class-creation check.)
-        optional_fields = normalize_serializer_field_sequence(
+        optional_fields = normalize_field_name_sequence(
             getattr(meta, "optional_fields", None),
             label="optional_fields",
+            flavor="SerializerMutation",
         )
         resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
 
@@ -356,6 +362,20 @@ class SerializerMutation(DjangoMutation):
         read DjangoType's choice enums are cached per (model, field)), so building a shape
         that then dedupes is harmless.
 
+        **P1.7 reuse is partial here, by necessity.** This seam rides the promoted
+        ``build_and_stash_input`` (the materialize-then-stash-``_input_field_specs`` tail,
+        shared with the form flavor) but does NOT route the cache lookup through
+        ``cached_build_input``: that helper looks up its key BEFORE building, which the
+        form flavor can do because its key (``form_class``, operation, effective names) is
+        known pre-build, whereas the serializer's key is the ``SerializerInputShape``
+        DESCRIPTOR - only knowable AFTER the build's pure walk produces it. Forcing this
+        path through ``cached_build_input`` would mean building the shape TWICE (once to
+        derive the key, once inside ``build_fn`` on a miss), the exact waste P1.7 names; so
+        the descriptor-keyed dedupe stays an inline lookup-or-store, keyed on the post-build
+        descriptor, while the guard-before-dedupe ordering is preserved here directly. The
+        per-declaration guard discipline ``cached_build_input`` single-sites is upheld below
+        (the create-required guard runs in ``_build`` per declaration, before the dedupe).
+
         The create-required-narrowing guard (``guard_create_required_serializer_fields``)
         runs PER declaration, BEFORE the descriptor dedupe, and is WAIVED when the
         concrete mutation overrides ``get_serializer_kwargs`` (spec-039 Slice 2 waiver via
@@ -404,7 +424,10 @@ class SerializerMutation(DjangoMutation):
             )
             # Dedupe on the full descriptor: identical shapes reuse one class object
             # (the materialize ledger then dedupes idempotently); distinct shapes keep
-            # their own classes + descriptor-derived names.
+            # their own classes + descriptor-derived names. This lookup-or-store is
+            # inline rather than via ``cached_build_input`` because the descriptor key is
+            # only knowable AFTER this build (see ``build_input``'s P1.7 note); routing it
+            # through the helper would require building the shape twice.
             cached = _serializer_shape_build_cache.get(shape.cache_key)
             if cached is not None:
                 return cached

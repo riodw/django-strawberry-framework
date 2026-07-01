@@ -819,6 +819,33 @@ def test_consumer_declared_scalar_agreeing_with_column_ok():
     assert annotation is str
 
 
+def test_unbound_model_backed_field_is_treated_as_auto_generated():
+    """An unbound field has no serializer parent, so it is not treated as consumer-declared."""
+    _register_products_types()
+    field = serializers.CharField(source="name")
+    field.field_name = "name"
+    _attr, annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
+    assert spec.kind == SCALAR
+    assert annotation is str
+
+
+def test_declared_model_backed_non_scalar_conversion_defers_to_model_annotation():
+    """A declared model-backed field whose converter is not scalar falls back to the column type."""
+    _register_products_types()
+
+    class FileOverrideSer(serializers.ModelSerializer):
+        attachment = serializers.FileField(source="name")
+
+        class Meta:
+            model = product_models.Item
+            fields = ("attachment",)
+
+    field = FileOverrideSer().fields["attachment"]
+    _attr, annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
+    assert spec.kind == SCALAR
+    assert annotation is str
+
+
 def test_auto_generated_model_field_is_not_conflict_checked():
     """An AUTO-generated ModelSerializer field routes through the model converter (no conflict check)."""
     _register_products_types()
@@ -877,3 +904,36 @@ def test_serializer_field_description_notes_numeric_bounds_and_allow_blank():
     assert numeric == "Constraints: min_value=0, max_value=9."
     blank = serializer_field_description(_bind(serializers.CharField(allow_blank=True), "b"))
     assert blank == "Constraints: allow_blank=true."
+
+
+def test_serializer_field_description_notes_allow_empty_false():
+    """``allow_empty=False`` is included in the SDL metadata summary (#9)."""
+    from django_strawberry_framework.rest_framework.serializer_converter import (
+        serializer_field_description,
+    )
+
+    field = _bind(serializers.ListField(child=serializers.CharField(), allow_empty=False), "tags")
+    assert serializer_field_description(field) == "Constraints: allow_empty=false."
+
+
+def test_declared_choicefield_over_model_column_emits_serializer_enum():
+    """A declared ``ChoiceField(source=<model col>, choices=...)`` emits the serializer-only enum (rev6 rev2 P2).
+
+    The declared choices are a schema-affecting override: even mapped (via ``source``) to a
+    plain non-choice model column, the field emits the GENERATED enum from its declared choices,
+    never collapsing back to the column's ``String`` scalar.
+    """
+    _register_products_types()
+
+    class ChoiceOverColumnSer(serializers.ModelSerializer):
+        status = serializers.ChoiceField(source="name", choices=[("a", "A"), ("b", "B")])
+
+        class Meta:
+            model = product_models.Item
+            fields = ("status",)
+
+    field = ChoiceOverColumnSer().fields["status"]
+    _attr, annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
+    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert {member.value for member in annotation} == {"a", "b"}
+    assert spec.source == "name"  # still writes through to the model column

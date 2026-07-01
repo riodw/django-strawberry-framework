@@ -998,3 +998,40 @@ def test_meta_select_for_update_non_bool_raises():
                 operation = "update"
                 select_for_update = "yes"
                 permission_classes = []
+
+
+def test_meta_injected_fields_unknown_name_raises_at_class_creation():
+    """``Meta.injected_fields`` naming a field not in the schema map fails loud at class creation (rev6 rev2 P1)."""
+    with pytest.raises(ConfigurationError, match="schema-time field map"):
+
+        class BadInject(SerializerMutation):
+            class Meta:
+                serializer_class = _item_serializer()
+                operation = "create"
+                injected_fields = ("nonexistent_field",)
+                permission_classes = []
+
+
+def test_input_type_name_runs_the_determinism_guard():
+    """``input_type_name`` reads the hook through the SAME guarded path; a drifted hook raises (rev6 rev2 P2)."""
+    _declare_products_primaries()
+    serializer_cls = _item_serializer()
+    drift = {"drop": False}
+
+    class DriftNameMut(SerializerMutation):
+        class Meta:
+            serializer_class = serializer_cls
+            operation = "create"
+            permission_classes = []
+
+        @classmethod
+        def get_serializer_for_schema(cls):
+            fields = dict(serializer_cls().fields)
+            if drift["drop"]:
+                del fields["description"]
+            return fields
+
+    # The class-validation fingerprint captured the full shape; now make the hook drift.
+    drift["drop"] = True
+    with pytest.raises(ConfigurationError, match="DIFFERENT field shape"):
+        DriftNameMut.input_type_name(DriftNameMut._mutation_meta)

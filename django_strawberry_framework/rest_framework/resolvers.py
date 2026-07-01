@@ -534,53 +534,67 @@ def _assert_schema_runtime_agreement(mutation_cls: type, serializer: Any) -> Non
     ambiguity. A runtime serializer with EXTRA fields the schema map omits is fine (they are
     simply never provided); only the schema fields are held to the contract.
     """
+    for spec in mutation_cls._input_field_specs:
+        _assert_field_agreement(mutation_cls, serializer, spec)
+
+
+def _assert_field_agreement(mutation_cls: type, serializer: Any, spec: Any) -> None:
+    """Assert ONE schema-time field spec agrees with the runtime serializer (rev6 #1 / rev2 P1).
+
+    The per-field body of ``_assert_schema_runtime_agreement``, factored out so it serves BOTH
+    the input specs (``_input_field_specs``) and the ``Meta.injected_fields`` schema-time specs
+    (``_injected_field_specs``): the runtime ``serializer.fields`` must contain
+    ``spec.target_name``, have it WRITABLE, bind the SAME ``source``, keep a relation as a
+    ``PrimaryKeyRelatedField`` / ``ManyRelatedField(PrimaryKeyRelatedField)`` over the SAME
+    ``related_model``, and keep a file / scalar kind compatible. Any divergence is a framework
+    ``ConfigurationError`` at the boundary.
+    """
     runtime_fields = serializer.fields
     name = type(serializer).__name__
-    for spec in mutation_cls._input_field_specs:
-        target = spec.target_name
-        runtime = runtime_fields.get(target)
-        if runtime is None:
+    target = spec.target_name
+    runtime = runtime_fields.get(target)
+    if runtime is None:
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}: the schema exposes field "
+            f"{target!r}, but the runtime serializer {name} does not declare it. DRF would "
+            "silently ignore the incoming value. Make get_serializer_for_schema() and the "
+            "runtime serializer_class agree (declare the field on the serializer, or drop it "
+            "from the schema field map).",
+        )
+    if runtime.read_only:
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}: the schema exposes writable field "
+            f"{target!r}, but the runtime serializer {name} declares it read_only; the "
+            "incoming value would be ignored. Make the runtime field writable or drop it "
+            "from the schema field map.",
+        )
+    schema_source = spec.source or target
+    runtime_source = runtime.source or target
+    if runtime_source != schema_source:
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}: field {target!r} binds source "
+            f"{runtime_source!r} at runtime but {schema_source!r} in the schema field map; "
+            "the write would target a different attribute than the schema implies. Align "
+            "the runtime serializer's source with get_serializer_for_schema().",
+        )
+    if spec.kind in (RELATION_SINGLE, RELATION_MULTI):
+        _assert_relation_agreement(mutation_cls, spec, runtime)
+    elif spec.kind == FILE:
+        if not isinstance(runtime, serializers.FileField):
             raise ConfigurationError(
-                f"SerializerMutation {mutation_cls.__name__}: the schema exposes field "
-                f"{target!r}, but the runtime serializer {name} does not declare it. DRF would "
-                "silently ignore the incoming value. Make get_serializer_for_schema() and the "
-                "runtime serializer_class agree (declare the field on the serializer, or drop it "
-                "from the schema field map).",
+                f"SerializerMutation {mutation_cls.__name__}: field {target!r} is a file input "
+                f"in the schema but {type(runtime).__name__} at runtime; the kind moved. Align "
+                "the runtime serializer field with get_serializer_for_schema().",
             )
-        if runtime.read_only:
-            raise ConfigurationError(
-                f"SerializerMutation {mutation_cls.__name__}: the schema exposes writable field "
-                f"{target!r}, but the runtime serializer {name} declares it read_only; the "
-                "incoming value would be ignored. Make the runtime field writable or drop it "
-                "from the schema field map.",
-            )
-        schema_source = spec.source or target
-        runtime_source = runtime.source or target
-        if runtime_source != schema_source:
-            raise ConfigurationError(
-                f"SerializerMutation {mutation_cls.__name__}: field {target!r} binds source "
-                f"{runtime_source!r} at runtime but {schema_source!r} in the schema field map; "
-                "the write would target a different attribute than the schema implies. Align "
-                "the runtime serializer's source with get_serializer_for_schema().",
-            )
-        if spec.kind in (RELATION_SINGLE, RELATION_MULTI):
-            _assert_relation_agreement(mutation_cls, spec, runtime)
-        elif spec.kind == FILE:
-            if not isinstance(runtime, serializers.FileField):
-                raise ConfigurationError(
-                    f"SerializerMutation {mutation_cls.__name__}: field {target!r} is a file input "
-                    f"in the schema but {type(runtime).__name__} at runtime; the kind moved. Align "
-                    "the runtime serializer field with get_serializer_for_schema().",
-                )
-        elif isinstance(
-            runtime,
-            (serializers.RelatedField, serializers.ManyRelatedField, serializers.FileField),
-        ):
-            raise ConfigurationError(
-                f"SerializerMutation {mutation_cls.__name__}: field {target!r} is a scalar in the "
-                f"schema but a relation / file ({type(runtime).__name__}) at runtime; the kind "
-                "moved. Align the runtime serializer field with get_serializer_for_schema().",
-            )
+    elif isinstance(
+        runtime,
+        (serializers.RelatedField, serializers.ManyRelatedField, serializers.FileField),
+    ):
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}: field {target!r} is a scalar in the "
+            f"schema but a relation / file ({type(runtime).__name__}) at runtime; the kind "
+            "moved. Align the runtime serializer field with get_serializer_for_schema().",
+        )
 
 
 def _assert_relation_agreement(mutation_cls: type, spec: Any, runtime: Any) -> None:
@@ -622,60 +636,73 @@ def _scope_relation_querysets_to_visibility(
     serializer: Any,
     info: Any,
 ) -> None:
-    """Adapt each runtime relation field's queryset to the visibility-scoped queryset (spec-039 rev6 #3).
+    """Intersect each runtime relation field's queryset WITH the visibility queryset (spec-039 rev6 #3).
 
-    For every relation the schema recorded (``_input_field_specs``), replace the runtime
+    For every relation the schema recorded (``_input_field_specs``), narrow the runtime
     serializer field's ``queryset`` (``PrimaryKeyRelatedField``) / ``child_relation.queryset``
-    (``ManyRelatedField``) with the related primary ``DjangoType``'s visibility-scoped queryset -
-    the SAME ``get_queryset``-scoped queryset the decode resolved against. DRF's own
-    ``is_valid()`` re-validation then hits the visibility queryset, so it can never re-fetch a
-    row the decode's visibility check hid (closing the unscoped-second-fetch gap) even if the
-    decode were bypassed. A relation whose target has no registered primary (a raw-pk relation
-    with no visibility contract) is left with its own queryset. The agreement guard already ran,
-    so every relation spec has a matching writable runtime field over the recorded model.
+    (``ManyRelatedField``) to ``original.filter(pk__in=<visibility queryset>)`` - the author's
+    OWN queryset restriction AND-ed with the related primary ``DjangoType``'s visibility-scoped
+    ``get_queryset``. Visibility is an ADDITIONAL constraint, never a replacement (rev6 rev2 P1):
+    the earlier version REASSIGNED the field queryset, which erased a serializer author's
+    intentional ``PrimaryKeyRelatedField(queryset=Branch.objects.filter(city="allowed"))`` and
+    could admit a visible-but-serializer-disallowed row. Composing preserves the author's
+    contract while still ensuring DRF's own ``is_valid()`` lookup can never re-fetch a row the
+    visibility check hid (a single ``pk__in`` subquery - no extra round trip). A relation whose
+    target has no registered primary (a raw-pk relation with no visibility contract) is left with
+    its own queryset. The agreement guard already ran, so every relation spec has a matching
+    writable runtime field over the recorded model (with a non-``None`` queryset).
     """
     for spec in mutation_cls._input_field_specs:
         if spec.kind not in (RELATION_SINGLE, RELATION_MULTI):
             continue
-        if registry.get(spec.related_model) is None:
+        related_type = registry.get(spec.related_model)
+        if related_type is None:
             continue  # raw-pk relation, no visibility contract to scope.
         field = serializer.fields.get(spec.target_name)
         if field is None:  # pragma: no cover - the agreement guard already required it.
             continue
-        scoped = visibility_scoped_related_queryset(
-            registry.get(spec.related_model),
+        visible = visibility_scoped_related_queryset(
+            related_type,
             info,
             _SERIALIZER_ASYNC_RECOURSE,
         )
-        if isinstance(field, serializers.ManyRelatedField):
-            field.child_relation.queryset = scoped
-        else:
-            field.queryset = scoped
+        relation = (
+            field.child_relation if isinstance(field, serializers.ManyRelatedField) else field
+        )
+        # Compose (AND), not replace: keep the author's queryset as the base contract and add
+        # visibility as a pk__in constraint (a subquery, so still one lookup per field).
+        relation.queryset = relation.queryset.filter(pk__in=visible.values("pk"))
 
 
 def _assert_injected_fields_supplied(mutation_cls: type, serializer: Any) -> None:
-    """Raise if a declared ``Meta.injected_fields`` did not reach the serializer data (rev6 #2).
+    """Verify each ``Meta.injected_fields`` is runtime-ACCEPTED, not merely present (rev6 #2 / rev2 P1).
 
     ``Meta.injected_fields`` tells the create-required guard that a ``get_serializer_kwargs``
-    override supplies those (narrowed-away) required fields into ``data``. This verifies the
-    contract was HONORED at runtime: each declared injected field must be present in the
-    serializer's ``initial_data`` before ``is_valid()``. A declared-but-unsupplied field is a
-    clear ``ConfigurationError`` rather than a silent required-field validation failure. Only
-    a create with ``injected_fields`` declared is checked (update / no-injection is a no-op).
+    override supplies those (narrowed-away) required schema-time fields into ``data``. Proving
+    the KEY is present is not enough: the RUNTIME serializer must still declare the field,
+    writable, with the same source / kind / relation-model the schema-time field had - otherwise
+    DRF drops or ignores the injected value and the required field is silently missing. So for
+    each injected field this runs the SAME per-field agreement check input fields get (using the
+    schema-time ``_injected_field_specs`` stashed at bind), AND confirms the key reached the
+    serializer's ``initial_data``. A declared-but-unaccepted / unsupplied injected field is a
+    clear ``ConfigurationError``. Only a create with ``injected_fields`` declared is checked.
     """
     injected = mutation_cls._mutation_meta.injected_fields
     if not injected:
         return
     data = getattr(serializer, "initial_data", {}) or {}
-    missing = sorted(name for name in injected if name not in data)
-    if missing:
-        raise ConfigurationError(
-            f"SerializerMutation {mutation_cls.__name__}: Meta.injected_fields declares "
-            f"{sorted(injected)!r}, but the get_serializer_kwargs override did not supply "
-            f"{missing!r} into the serializer data. An injected field must be present in the "
-            "serializer's data before validation (supply it from get_serializer_kwargs, or "
-            "remove it from Meta.injected_fields).",
-        )
+    for spec in mutation_cls._injected_field_specs:
+        # Same present / writable / source / kind / relation-model checks as an input field:
+        # the runtime serializer must actually be able to VALIDATE + SAVE the injected value.
+        _assert_field_agreement(mutation_cls, serializer, spec)
+        if spec.target_name not in data:
+            raise ConfigurationError(
+                f"SerializerMutation {mutation_cls.__name__}: Meta.injected_fields declares "
+                f"{spec.target_name!r}, but the get_serializer_kwargs override did not supply it "
+                "into the serializer data. An injected field must be present in the serializer's "
+                "data before validation (supply it from get_serializer_kwargs, or remove it from "
+                "Meta.injected_fields).",
+            )
 
 
 def _assert_save_kwargs_no_shadow(mutation_cls: type, save_kwargs: dict[str, Any]) -> None:

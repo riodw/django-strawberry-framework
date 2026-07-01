@@ -972,14 +972,17 @@ def test_describe_serializer_input_reports_shape():
     """``describe_serializer_input`` describes a built shape and returns ``None`` for an unknown name (rev6 #15)."""
     from django_strawberry_framework.rest_framework.inputs import describe_serializer_input
 
-    _register_products_types()
-    _cre, cre_shape, _par, _par_shape = build_serializer_inputs(_item_serializer())
+    class SourceSer(serializers.Serializer):
+        display_name = serializers.CharField(source="name")
+
+    _cre, cre_shape, _par, _par_shape = build_serializer_inputs(SourceSer)
     description = describe_serializer_input(cre_shape.type_name)
     assert description is not None
     assert "serializer:" in description
     assert "operation: create" in description
     assert "name:" in description
-    assert "category" in description  # a field appears in the description
+    assert "display_name" in description  # a field appears in the description
+    assert "source='name'" in description
     assert describe_serializer_input("NoSuchGeneratedInput") is None
 
 
@@ -998,3 +1001,57 @@ def test_materialize_collision_message_enriched_with_shape_description():
     message = str(exc.value)
     assert "Shape registered under" in message
     assert "serializer:" in message
+
+
+def test_schema_fingerprint_sensitive_to_choices_and_help_text():
+    """The hook fingerprint changes when only choice members or help_text differ (rev6 rev2 P2)."""
+    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
+
+    class C1(serializers.Serializer):
+        color = serializers.ChoiceField(choices=[("r", "R")])
+
+    class C2(serializers.Serializer):
+        color = serializers.ChoiceField(choices=[("b", "B")])
+
+    assert serializer_schema_fingerprint(dict(C1().fields)) != serializer_schema_fingerprint(
+        dict(C2().fields),
+    )
+
+    class H1(serializers.Serializer):
+        note = serializers.CharField(help_text="one")
+
+    class H2(serializers.Serializer):
+        note = serializers.CharField(help_text="two")
+
+    assert serializer_schema_fingerprint(dict(H1().fields)) != serializer_schema_fingerprint(
+        dict(H2().fields),
+    )
+
+
+def test_schema_fingerprint_sensitive_to_converter_extras():
+    """The fingerprint changes when a ``ModelField`` wrapped field or a ``ListField`` child differs (rev6 rev2 P2)."""
+    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
+
+    class ModelFieldA(serializers.Serializer):
+        wrapped = serializers.ModelField(
+            model_field=product_models.Item._meta.get_field("name"),
+        )
+
+    class ModelFieldB(serializers.Serializer):
+        wrapped = serializers.ModelField(
+            model_field=product_models.Item._meta.get_field("is_private"),
+        )
+
+    assert serializer_schema_fingerprint(
+        {"wrapped": ModelFieldA().fields["wrapped"]},
+    ) != serializer_schema_fingerprint({"wrapped": ModelFieldB().fields["wrapped"]})
+
+    class ListA(serializers.Serializer):
+        items = serializers.ListField(child=serializers.IntegerField())
+
+    class ListB(serializers.Serializer):
+        items = serializers.ListField(child=serializers.CharField())
+
+    assert serializer_schema_fingerprint(dict(ListA().fields)) != serializer_schema_fingerprint(
+        dict(ListB().fields),
+    )

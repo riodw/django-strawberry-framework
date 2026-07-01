@@ -683,7 +683,15 @@ def _model_backed_scalar_annotation(
     sides intend the enum), so the check is skipped there; a consumer-declared field whose
     serializer converter is not a plain scalar defers to the model converter (its own guards
     apply).
+
+    **Declared choices are a schema-affecting override (rev6 rev2 P2).** A CONSUMER-DECLARED
+    ``ChoiceField`` / ``MultipleChoiceField`` (even ``source``-mapped to a plain model column)
+    emits the GENERATED serializer-only enum from its DECLARED choices, rather than collapsing
+    back to the column's scalar (``String``) - the declared choices are part of the public
+    mutation contract, so they must survive (never silently lost).
     """
+    if _is_consumer_declared(field) and _is_enumerable_serializer_choice(field):
+        return _serializer_choice_annotation(field, type_name)
     model_annotation = convert_scalar(column, type_name, force_nullable=False)
     if not _is_consumer_declared(field) or column.choices:
         return model_annotation
@@ -758,6 +766,21 @@ def _serializer_choice_enum(field: serializers.Field, type_name: str) -> type:
     return enum_cls
 
 
+def _serializer_choice_annotation(field: serializers.Field, type_name: str) -> Any:
+    """Return the generated enum annotation for an enumerable ``ChoiceField`` (spec-039 rev6 #6 / rev2 P2).
+
+    A ``ChoiceField`` -> a single generated enum; a ``MultipleChoiceField`` (a ``ChoiceField``
+    subclass) -> ``list[<enum>]``. Shared by the column-less path
+    (``_serializer_only_scalar_annotation``) and the model-backed path
+    (``_model_backed_scalar_annotation``), so a declared choice field emits the SAME generated
+    enum whether or not it maps to a model column.
+    """
+    enum_cls = _serializer_choice_enum(field, type_name)
+    if isinstance(field, serializers.MultipleChoiceField):
+        return list[enum_cls]
+    return enum_cls
+
+
 def _serializer_only_scalar_annotation(
     field: serializers.Field,
     conversion: SerializerFieldConversion,
@@ -771,10 +794,7 @@ def _serializer_only_scalar_annotation(
     """
     if not _is_enumerable_serializer_choice(field):
         return conversion.annotation
-    enum_cls = _serializer_choice_enum(field, type_name)
-    if isinstance(field, serializers.MultipleChoiceField):
-        return list[enum_cls]
-    return enum_cls
+    return _serializer_choice_annotation(field, type_name)
 
 
 def resolve_serializer_field(

@@ -1216,3 +1216,85 @@ def test_nested_fields_stored_on_snapshot_and_builds():
     sdl = str(_sb.Schema(query=Query, mutation=Mutation))
     # The nested input type is generated (canonical nested name, ItemInline full shape).
     assert "ItemInlineInput" in sdl
+
+
+def test_read_only_nested_serializer_narrowed_away_does_not_break_class_creation():
+    """A read-only nested serializer whose fields raise, narrowed away, still validates + binds (rev6 #17 review P1).
+
+    The fingerprint is scoped to the writable + narrowed (effective) set, so a read-only nested
+    OUTPUT serializer (whose ``get_fields()`` raises if read) that is narrowed away is never
+    descended into - class creation AND the phase-2.5 bind both succeed.
+    """
+    import strawberry as _sb
+
+    from django_strawberry_framework import DjangoMutationField
+
+    class RaisingChild(serializers.Serializer):
+        def get_fields(self):
+            raise RuntimeError("child fields should not be read")
+
+    class ShelfWithReadOnlyChild(serializers.ModelSerializer):
+        child = RaisingChild(read_only=True)
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "child")
+
+    class ItemT(DjangoType):
+        class Meta:
+            model = product_models.Item
+            fields = ("id", "name")
+            primary = True
+
+    class CreateItemNarrowed(SerializerMutation):
+        class Meta:
+            serializer_class = ShelfWithReadOnlyChild
+            operation = "create"
+            fields = ("name",)  # narrows away the read-only nested child
+            permission_classes = []
+
+    @_sb.type
+    class Query:
+        @_sb.field
+        def ping(self) -> int:
+            return 1
+
+    @_sb.type
+    class Mutation:
+        create_item_narrowed = DjangoMutationField(CreateItemNarrowed)
+
+    del ItemT
+    # No RuntimeError at class creation OR at the bind (the fingerprint never read child.fields).
+    finalize_django_types()
+    sdl = str(_sb.Schema(query=Query, mutation=Mutation))
+    assert "createItemNarrowed" in sdl
+
+
+def test_narrowed_away_writable_nested_not_fingerprinted():
+    """A WRITABLE nested serializer narrowed away by ``Meta.fields`` is not fingerprinted (rev6 #17 review P1).
+
+    Because the fingerprint is over the EFFECTIVE (narrowed) set, a writable nested field whose
+    ``.fields`` cannot materialize no-arg does not break class creation when it is narrowed away.
+    """
+
+    class RaisingWritableChild(serializers.Serializer):
+        def get_fields(self):
+            raise RuntimeError("cannot read no-arg")
+
+    class ItemWithWritableChild(serializers.ModelSerializer):
+        child = RaisingWritableChild()
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "child")
+
+    # ``child`` is narrowed away, so the effective-scoped fingerprint never reads its .fields.
+    class CreateItemNarrowedWritable(SerializerMutation):
+        class Meta:
+            serializer_class = ItemWithWritableChild
+            operation = "create"
+            fields = ("name",)
+            permission_classes = []
+
+    # Class creation succeeded (no RuntimeError); the snapshot carries the effective fingerprint.
+    assert CreateItemNarrowedWritable._mutation_meta.schema_fingerprint is not None

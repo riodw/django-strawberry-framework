@@ -295,6 +295,13 @@ def _fingerprint_nested(field: serializers.Field, seen: frozenset[type]) -> tupl
     recursion is bounded by the visited-class ``seen`` set: a serializer class already on the
     recursion path yields a terminal cycle marker instead of recursing forever (a self-referential
     nested serializer terminates). A non-nested field yields ``None``.
+
+    Reads the nested serializer's ``.fields`` lazily; a nested serializer that cannot materialize
+    its fields no-arg (a context-requiring nested ``get_fields()``) raises through the fingerprint,
+    so the raw exception is translated to a ``ConfigurationError`` naming the hook contract rather
+    than leaking (rev6 #17 review P1). Only WRITABLE nested fields ever reach here - the caller
+    (``_fingerprint_field_map``) drops ``read_only`` / ``HiddenField`` fields BEFORE fingerprinting,
+    so a read-only nested output field is never descended into (its ``.fields`` never read).
     """
     if not is_nested_serializer_field(field):
         return None
@@ -302,7 +309,18 @@ def _fingerprint_nested(field: serializers.Field, seen: frozenset[type]) -> tupl
     child_class = type(child)
     if child_class in seen:
         return ("<cycle>", child_class.__name__, many)
-    return (many, _fingerprint_field_map(dict(child.fields), seen | {child_class}))
+    try:
+        child_field_map = dict(child.fields)
+    except ConfigurationError:
+        raise
+    except Exception as exc:  # any DRF/consumer failure -> a clear config error.
+        raise ConfigurationError(
+            f"Could not materialize the nested serializer {child_class.__name__!r}'s fields for the "
+            f"determinism fingerprint: {type(exc).__name__}: {exc}. A nested serializer opted in via "
+            "Meta.nested_fields must expose a stable, request-independent no-arg .fields (override "
+            "get_serializer_for_schema() on the mutation to return a stable field map).",
+        ) from exc
+    return (many, _fingerprint_field_map(child_field_map, seen | {child_class}))
 
 
 def _fingerprint_field_map(
@@ -311,16 +329,24 @@ def _fingerprint_field_map(
 ) -> tuple[tuple[Any, ...], ...]:
     """The recursive fingerprint core (spec-039 rev6 #10 / #17 - the nested recursion).
 
-    Captures every SDL-affecting axis per field (see ``serializer_schema_fingerprint``), plus the
-    recursive nested fingerprint (rev6 #17). ``seen`` carries the serializer classes already on
-    the recursion path so a nested cycle terminates.
+    Captures every SDL-affecting axis per WRITABLE field (see ``serializer_schema_fingerprint``),
+    plus the recursive nested fingerprint (rev6 #17). ``seen`` carries the serializer classes
+    already on the recursion path so a nested cycle terminates.
+
+    **Scoped to the writable field set (rev6 #17 review P1).** ``read_only`` / ``HiddenField``
+    fields are DROPPED - they never produce an input field at any nesting level (the input builder
+    drops them too), so their nested structure cannot affect the SDL, and fingerprinting them
+    would needlessly read a read-only nested serializer's ``.fields`` (a context-sensitive nested
+    OUTPUT serializer's ``get_fields()`` may raise). A field flipping read-only<->writable between
+    hook reads still changes the fingerprint (it appears / disappears), so drift is still detected.
+    The top-level callers additionally pass the NARROWED effective map, so a nested field narrowed
+    away by ``Meta.fields`` / ``Meta.exclude`` is likewise never descended into.
     """
     return tuple(
         (
             name,
             type(field).__name__,
             field.source,
-            bool(field.read_only),
             bool(getattr(field, "write_only", False)),
             bool(field.required),
             bool(getattr(field, "allow_null", False)),
@@ -331,6 +357,7 @@ def _fingerprint_field_map(
             _fingerprint_nested(field, seen),
         )
         for name, field in field_map.items()
+        if not field.read_only and not isinstance(field, serializers.HiddenField)
     )
 
 
@@ -344,13 +371,20 @@ def serializer_schema_fingerprint(
     class validation AND again at the phase-2.5 bind - a NONDETERMINISTIC hook could validate
     one shape and bind another. This captures EVERY axis the generated input / SDL / reverse map
     depends on, so the bind can recompute it and raise if the hook DRIFTED (turning the spec's
-    stable-shape promise into an enforced contract, rev2 P2): each field's name, class, source,
-    read / write flags, required, allow_null, relation target model, the description inputs
+    stable-shape promise into an enforced contract, rev2 P2): each WRITABLE field's name, class,
+    source, write flag, required, allow_null, relation target model, the description inputs
     (``help_text`` + the constraint summary - rev6 #9), the enumerable choice members (rev6 #6),
     the converter discriminants (``ModelField`` wrapped field / ``ListField`` child), and - for a
     nested serializer field - a RECURSIVE fingerprint of the nested serializer's own field map
-    (rev6 #17, bounded by an on-path cycle guard). Deterministic + hashable; the ordered tuple
-    preserves field order (which drives the descriptor identity).
+    (rev6 #17, bounded by an on-path cycle guard).
+
+    **Scoped to the writable set (rev6 #17 review P1).** ``read_only`` / ``HiddenField`` fields are
+    dropped (they never produce an input), so this must be fed the SAME field set the input build
+    uses: the callers pass the NARROWED effective map (post ``Meta.fields`` / ``Meta.exclude``), and
+    ``_fingerprint_field_map`` drops read-only / hidden at every nesting level - so a read-only or
+    narrowed-away nested serializer (whose ``.fields`` may not even be materializable no-arg) is
+    never descended into. Deterministic + hashable; the ordered tuple preserves field order (which
+    drives the descriptor identity).
     """
     return _fingerprint_field_map(field_map, frozenset())
 
@@ -1104,10 +1138,27 @@ def _resolve_nested_field(
     Slice-3 decode recurses with the same per-field machinery. The annotation is the nested
     input class (single) or ``list[<nested input>]`` (many); the caller applies the
     required / ``allow_null`` widening. The cycle / depth guard runs BEFORE the recursion.
+
+    **The ``source`` axis (rev6 #17 review P1).** A nested field with a DRF ``source=`` records
+    the same normalized one-segment source scalar / relation fields do (``renamed =
+    ChildSerializer(source="actual")`` -> ``source="actual"``), so the runtime schema/runtime
+    agreement guard's source comparison matches instead of failing every invocation. A dotted
+    source / ``source="*"`` has no single write-back attribute for a nested write, so it fails
+    loud here (the same fail-loud source policy the model-column path applies).
     """
     child_serializer, many = nested_serializer_child(field)
     nested_class = type(child_serializer)
     _guard_nested_recursion(nested_class, nested_path, field_name)
+    # rev6 #17 review P1: the source axis. A dotted / star source (source_attrs != 1 segment) has
+    # no single write-back attribute for the nested write; reject it (the model-column-path policy).
+    source_attrs = getattr(field, "source_attrs", None)
+    if source_attrs is not None and len(source_attrs) != 1:
+        raise ConfigurationError(
+            f"Nested serializer field {field_name!r} declares a dotted source / source='*' "
+            f"({field.source!r}); a nested write must map to a single attribute (omit source, or "
+            "use a one-segment source).",
+        )
+    source = field.source if (field.source and field.source != field_name) else None
     nested_field_map = dict(child_serializer.fields)
     nested_cls, nested_shape = build_serializer_input_class(
         nested_class,
@@ -1127,7 +1178,7 @@ def _resolve_nested_field(
         graphql_name=graphql_camel_name(field_name),
         target_name=field_name,
         kind=kind,
-        source=None,
+        source=source,
         related_model=None,
         nested_specs=tuple(nested_shape.field_specs),
     )

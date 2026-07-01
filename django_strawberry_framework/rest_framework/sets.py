@@ -136,18 +136,27 @@ def _checked_schema_field_map(
     one shape and binds / names another is a clear ``ConfigurationError``). Both ``build_input``
     and ``input_type_name`` route through here, so the type-name derivation cannot read an
     unguarded field map behind the fingerprint's back.
+
+    The fingerprint is over the EFFECTIVE (writable + narrowed) field set - the SAME set the
+    input build uses (rev6 #17 review P1) - so a read-only / narrowed-away nested serializer is
+    never descended into; the RAW ``field_map`` is still returned for the build to re-narrow.
     """
     field_map = cls.get_serializer_for_schema()
-    if meta.schema_fingerprint is not None and (
-        serializer_schema_fingerprint(field_map) != meta.schema_fingerprint
-    ):
-        raise ConfigurationError(
-            f"SerializerMutation {cls.__name__}.get_serializer_for_schema() returned a "
-            "DIFFERENT field shape at bind than at class validation; the hook must be "
-            "deterministic and request-independent (the input is generated once at "
-            "finalization). Return a stable field map (do not read request state or "
-            "mutate per call).",
+    if meta.schema_fingerprint is not None:
+        effective = resolve_effective_serializer_fields(
+            meta.serializer_class,
+            fields=meta.fields,
+            exclude=meta.exclude,
+            field_map=field_map,
         )
+        if serializer_schema_fingerprint(effective) != meta.schema_fingerprint:
+            raise ConfigurationError(
+                f"SerializerMutation {cls.__name__}.get_serializer_for_schema() returned a "
+                "DIFFERENT field shape at bind than at class validation; the hook must be "
+                "deterministic and request-independent (the input is generated once at "
+                "finalization). Return a stable field map (do not read request state or "
+                "mutate per call).",
+            )
     return field_map
 
 
@@ -471,7 +480,10 @@ class SerializerMutation(DjangoMutation):
             nested_fields=nested_fields,
             # rev6 #10: capture a stable fingerprint of the schema-hook field shape NOW (class
             # validation) so the phase-2.5 bind can detect a nondeterministic hook that drifted.
-            schema_fingerprint=serializer_schema_fingerprint(field_map),
+            # rev6 #17 review P1: fingerprint the EFFECTIVE (writable + narrowed) set - the SAME
+            # set the input build uses - so a read-only / narrowed-away nested serializer (whose
+            # ``.fields`` need not even materialize no-arg) is never descended into.
+            schema_fingerprint=serializer_schema_fingerprint(effective),
         )
 
     @classmethod

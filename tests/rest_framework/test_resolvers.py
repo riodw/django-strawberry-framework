@@ -114,15 +114,74 @@ def test_flattener_top_level_non_field_bucket_is_all_sentinel():
 
 
 def test_flattener_rekeys_root_segment_through_reverse_map():
-    """The leaf path's ROOT segment is re-keyed through the reverse map (F5); children verbatim."""
-    reverse_map = {"category": "categoryId"}
+    """A top-level field's leaf path is re-keyed through the recursive reverse map (F5)."""
+    reverse_map = {"category": ("categoryId", None)}
     errors = {"category": ["bad relation"], "items": [{"category": ["nested"]}]}
     flat = serializer_resolvers.serializer_errors_to_field_errors(errors, reverse_map)
     by_path = {fe.field: fe.messages for fe in flat}
-    # Root `category` re-keyed to `categoryId`; the nested `items.0.category` keeps
-    # its child segment verbatim (only the ROOT `items` would re-key, and it has no
-    # reverse-map entry, so it stays `items`).
+    # `category` re-keyed to `categoryId`; the synthetic `items` has no reverse-map entry
+    # (and no child map), so its children stay verbatim.
     assert by_path == {"categoryId": ["bad relation"], "items.0.category": ["nested"]}
+
+
+def test_flattener_recursively_rekeys_nested_child_fields():
+    """Nested child fields are re-keyed to their GraphQL names at EVERY depth (rev6 #17 review P2).
+
+    A nested child field whose GraphQL name differs from its serializer name
+    (``alt_branches`` -> ``altBranches``) is re-keyed inside the nested path, not left as the
+    serializer name - so nested DRF validation errors match the framework decode-error paths.
+    """
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    child_specs = (
+        InputFieldSpec(input_attr="code", graphql_name="code", target_name="code", kind=SCALAR),
+        InputFieldSpec(
+            input_attr="alt_branches",
+            graphql_name="altBranches",
+            target_name="alt_branches",
+            kind=serializer_resolvers.RELATION_MULTI,
+        ),
+    )
+    top_specs = [
+        InputFieldSpec(
+            input_attr="shelves",
+            graphql_name="shelves",
+            target_name="shelves",
+            kind=NESTED_MULTI,
+            nested_specs=child_specs,
+        ),
+    ]
+    fake = type("M", (), {"_input_field_specs": top_specs})
+    reverse_map = serializer_resolvers._reverse_map_for(fake)
+    errors = {"shelves": [{"alt_branches": ["Bad pk"]}]}
+    (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, reverse_map)
+    assert fe.field == "shelves.0.altBranches"
+    assert fe.path == ["shelves", "0", "altBranches"]
+
+
+def test_flattener_nested_non_field_bucket_keeps_all_sentinel_with_recursive_map():
+    """A nested non-field bucket normalizes to ``<path>.__all__`` even with the recursive map (rev6 #17 review P2)."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    child_specs = (
+        InputFieldSpec(input_attr="code", graphql_name="code", target_name="code", kind=SCALAR),
+    )
+    top_specs = [
+        InputFieldSpec(
+            input_attr="shelves",
+            graphql_name="shelves",
+            target_name="shelves",
+            kind=NESTED_MULTI,
+            nested_specs=child_specs,
+        ),
+    ]
+    fake = type("M", (), {"_input_field_specs": top_specs})
+    reverse_map = serializer_resolvers._reverse_map_for(fake)
+    drf_key = serializer_resolvers._DRF_NON_FIELD_KEY
+    errors = {"shelves": [{drf_key: ["cross-field"]}]}
+    (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, reverse_map)
+    assert fe.field == f"shelves.0.{NON_FIELD_ERROR_KEY}"
+    assert fe.path == ["shelves", "0", NON_FIELD_ERROR_KEY]
 
 
 # ===========================================================================

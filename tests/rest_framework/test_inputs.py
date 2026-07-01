@@ -1384,3 +1384,101 @@ def test_describe_serializer_input_reports_nested_fields():
     assert description is not None
     assert "kind=nested_single" in description
     assert "nested_fields=[code, note]" in description
+
+
+def test_fingerprint_skips_read_only_nested_serializer():
+    """The fingerprint does NOT descend into a read-only nested serializer (rev6 #17 review P1).
+
+    A read-only nested output serializer whose ``get_fields()`` raises if read must not break
+    class validation - it never produces an input field, so the writable-scoped fingerprint
+    skips it (its ``.fields`` is never materialized).
+    """
+    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
+
+    class RaisingChild(serializers.Serializer):
+        def get_fields(self):
+            raise RuntimeError("child fields should not be read")
+
+    class Parent(serializers.Serializer):
+        name = serializers.CharField()
+        child = RaisingChild(read_only=True)
+
+    # No RuntimeError: the read-only nested field is dropped before fingerprinting.
+    fingerprint = serializer_schema_fingerprint(dict(Parent().fields))
+    # Only the writable ``name`` field is fingerprinted (the read-only child is absent).
+    assert len(fingerprint) == 1
+    assert fingerprint[0][0] == "name"
+
+
+def test_fingerprint_wraps_nested_fields_error_as_configuration_error():
+    """A WRITABLE nested serializer whose ``.fields`` cannot be read is a clear ConfigurationError (rev6 #17 review P1)."""
+    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
+
+    class RaisingWritableChild(serializers.Serializer):
+        def get_fields(self):
+            raise RuntimeError("cannot read no-arg")
+
+    class Parent(serializers.Serializer):
+        child = RaisingWritableChild()  # writable -> reached by the fingerprint
+
+    with pytest.raises(ConfigurationError, match="Could not materialize the nested serializer"):
+        serializer_schema_fingerprint(dict(Parent().fields))
+
+
+def test_nested_source_axis_recorded_single_and_many():
+    """A nested field with ``source=`` records the normalized source axis (rev6 #17 review P1)."""
+
+    class Inner(serializers.Serializer):
+        x = serializers.CharField()
+
+    class ParentSingle(serializers.Serializer):
+        renamed = Inner(source="actual")
+
+    _cls, shape = build_serializer_input_class(
+        ParentSingle,
+        operation_kind="create",
+        nested_configs={"renamed": NestedSerializerConfig()},
+    )
+    assert next(s for s in shape.field_specs if s.target_name == "renamed").source == "actual"
+
+    class ParentMany(serializers.Serializer):
+        renamed = Inner(source="actual", many=True)
+
+    _cls2, shape2 = build_serializer_input_class(
+        ParentMany,
+        operation_kind="create",
+        nested_configs={"renamed": NestedSerializerConfig()},
+    )
+    assert next(s for s in shape2.field_specs if s.target_name == "renamed").source == "actual"
+
+
+def test_nested_dotted_source_rejected():
+    """A nested field with a dotted source / ``source='*'`` fails loud (rev6 #17 review P1)."""
+
+    class Inner(serializers.Serializer):
+        x = serializers.CharField()
+
+    class Parent(serializers.Serializer):
+        renamed = Inner(source="a.b")
+
+    with pytest.raises(ConfigurationError, match="dotted source"):
+        build_serializer_input_class(
+            Parent,
+            operation_kind="create",
+            nested_configs={"renamed": NestedSerializerConfig()},
+        )
+
+
+def test_fingerprint_propagates_nested_configuration_error_unwrapped():
+    """A nested ``get_fields()`` raising ConfigurationError propagates it unchanged, not double-wrapped (rev6 #17 review P1)."""
+    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
+
+    class BadConfigChild(serializers.Serializer):
+        def get_fields(self):
+            raise ConfigurationError("a specific nested config error")
+
+    class Parent(serializers.Serializer):
+        child = BadConfigChild()
+
+    with pytest.raises(ConfigurationError, match="a specific nested config error"):
+        serializer_schema_fingerprint(dict(Parent().fields))

@@ -1329,7 +1329,7 @@ def test_build_serializer_inputs_threads_nested_into_both_shapes():
 
 
 def test_recursive_fingerprint_sensitive_to_nested_shape_change():
-    """The schema fingerprint recurses into a nested serializer's fields (a nested change is detected) (rev6 #17)."""
+    """The fingerprint recurses into an OPTED-IN nested serializer's fields (a nested change is detected) (rev6 #17)."""
     from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class ChildA(serializers.Serializer):
@@ -1345,13 +1345,18 @@ def test_recursive_fingerprint_sensitive_to_nested_shape_change():
     class ParentB(serializers.Serializer):
         detail = ChildB()
 
-    assert serializer_schema_fingerprint(
-        dict(ParentA().fields),
-    ) != serializer_schema_fingerprint(dict(ParentB().fields))
+    # Opt the nested field in (rev6 #17 review P2): only then does the fingerprint descend.
+    configs = {"detail": NestedSerializerConfig()}
+    fp_a = serializer_schema_fingerprint(dict(ParentA().fields), nested_configs=configs)
+    fp_b = serializer_schema_fingerprint(dict(ParentB().fields), nested_configs=configs)
+    assert fp_a != fp_b
+    # The recursion actually descended into the child map (not a shallow marker): ``extra`` shows up.
+    assert "extra" in repr(fp_b)
+    assert "extra" not in repr(fp_a)
 
 
 def test_recursive_fingerprint_terminates_on_nested_cycle():
-    """The recursive fingerprint terminates (a cycle marker) for a self-nesting serializer (rev6 #17)."""
+    """The recursive fingerprint terminates (a cycle marker) for an OPTED-IN self-nesting serializer (rev6 #17)."""
     from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class SelfNest(serializers.Serializer):
@@ -1362,7 +1367,10 @@ def test_recursive_fingerprint_terminates_on_nested_cycle():
             fields["me"] = SelfNest()
             return fields
 
-    fingerprint = serializer_schema_fingerprint(dict(SelfNest().fields))
+    # Opt ``me`` in at two levels so the recursion re-enters SelfNest and hits the on-path cycle
+    # guard (rev6 #17 review P2: an unopted nested field is not descended into at all).
+    configs = {"me": NestedSerializerConfig(nested_fields={"me": NestedSerializerConfig()})}
+    fingerprint = serializer_schema_fingerprint(dict(SelfNest().fields), nested_configs=configs)
     # It terminated (no RecursionError) and the nested axis carries the cycle marker.
     flat = repr(fingerprint)
     assert "<cycle>" in flat
@@ -1411,7 +1419,7 @@ def test_fingerprint_skips_read_only_nested_serializer():
 
 
 def test_fingerprint_wraps_nested_fields_error_as_configuration_error():
-    """A WRITABLE nested serializer whose ``.fields`` cannot be read is a clear ConfigurationError (rev6 #17 review P1)."""
+    """An OPTED-IN nested serializer whose ``.fields`` cannot be read is a clear ConfigurationError (rev6 #17 review P1)."""
     from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
 
     class RaisingWritableChild(serializers.Serializer):
@@ -1419,10 +1427,42 @@ def test_fingerprint_wraps_nested_fields_error_as_configuration_error():
             raise RuntimeError("cannot read no-arg")
 
     class Parent(serializers.Serializer):
-        child = RaisingWritableChild()  # writable -> reached by the fingerprint
+        child = RaisingWritableChild()  # writable + opted in -> reached by the fingerprint
 
     with pytest.raises(ConfigurationError, match="Could not materialize the nested serializer"):
-        serializer_schema_fingerprint(dict(Parent().fields))
+        serializer_schema_fingerprint(
+            dict(Parent().fields),
+            nested_configs={"child": NestedSerializerConfig()},
+        )
+
+
+def test_fingerprint_unopted_nested_raising_child_is_shallow_not_materialized():
+    """An UNOPTED nested field is NOT descended into - a raising ``get_fields()`` is never read (rev6 #17 review P2).
+
+    The prior behavior descended into every writable nested serializer, so an unopted,
+    context-sensitive child raised a misleading "opted in via Meta.nested_fields..."
+    materialization error at class validation - shadowing the canonical opt-in error the field
+    walk raises. The fingerprint now records a shallow marker for an unopted nested field without
+    reading its ``.fields``; the field walk (``build_serializer_input_class``) is what raises the
+    opt-in error.
+    """
+    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
+
+    class RaisingChild(serializers.Serializer):
+        def get_fields(self):
+            raise RuntimeError("unopted nested child fields must not be read")
+
+    class Parent(serializers.Serializer):
+        name = serializers.CharField()
+        child = RaisingChild()  # writable but NOT opted in
+
+    # No nested_configs -> the unopted child is a shallow marker, not descended into (no RuntimeError).
+    fingerprint = serializer_schema_fingerprint(dict(Parent().fields))
+    child_entry = next(entry for entry in fingerprint if entry[0] == "child")
+    assert child_entry[-1] == ("<unopted-nested>", "RaisingChild", False)
+    # The canonical opt-in error surfaces from the field walk, not the materialization wrap.
+    with pytest.raises(ConfigurationError, match="opt-in only"):
+        build_serializer_input_class(Parent, operation_kind="create")
 
 
 def test_nested_source_axis_recorded_single_and_many():
@@ -1481,4 +1521,7 @@ def test_fingerprint_propagates_nested_configuration_error_unwrapped():
         child = BadConfigChild()
 
     with pytest.raises(ConfigurationError, match="a specific nested config error"):
-        serializer_schema_fingerprint(dict(Parent().fields))
+        serializer_schema_fingerprint(
+            dict(Parent().fields),
+            nested_configs={"child": NestedSerializerConfig()},
+        )

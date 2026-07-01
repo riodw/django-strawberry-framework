@@ -42,11 +42,11 @@ Keep it tight. No headers, no bullet lists, no follow-up commentary. One paragra
 
 ## Step 3 — Read the KANBAN
 
-Now (and only now) read `KANBAN.md`. The file is large — use `grep -n "^## " KANBAN.md` first to scan section headers, then read the `## In progress` column in full. You do not need to read the `## To Do`, `## Blocked`, or `## Done` columns to author the spec.
+Now (and only now) read `KANBAN.md`. The file is large — use `grep -n "^## " KANBAN.md` first to scan section headers, then read the `## In progress` column in full. You do not need to read the `## To Do`, `## Blocked`, or `## Done` columns *in full* to author the spec — but you DO need a lightweight scan of the `## To Do` and `## Done` card IDs for the target's patch version (see the joint-cut note below); that scan is card-ID/version-level, not a body read.
 
 Locate the **lowest-NNN card under the `## In progress` board column** — that is, the card whose ID starts with `WIP-` and carries the smallest 3-digit sequence number among the WIP cards. That card is the spec target.
 
-While you're in the `## In progress` column, also note **which other WIP cards share the same patch version** as the target card (e.g., five WIP cards all tagged `-0.0.7`). When multiple cards target the same patch, the version bump is owned by the joint cut, not by any individual card's spec; record this so [Step 6](#step-6--write-the-spec) can pin the right Decision.
+While you're on the board, also determine **which other non-Done cards (WIP *and* To-Do) share the target card's patch version** — a lightweight scan of card IDs and their trailing `-X.Y.Z` across the `## In progress` and `## To Do` columns (grep the board for the patch version; you don't need to read those cards' bodies). Checking only the WIP column is NOT enough: a card can be the sole WIP card yet still share its patch version with unstarted To-Do cards. The ownership rule: if **any other non-Done card** shares the target's patch version, the `pyproject.toml` / `__version__` / `tests/base/test_init.py` bump is owned by the **joint cut** (the last card of that patch line to land), so the target's spec defers it; if the target is the **only non-Done card** at its patch version, its Slice 5 owns the bump. Finally, glance at the `## Done` column for a same-patch card that already **deferred its cut to your target** — that confirms your spec is the one that completes the joint cut and thus owns the bump. Record what you find so [Step 6](#step-6--write-the-spec) can pin the right Decision.
 
 ---
 
@@ -71,7 +71,7 @@ Existing specs may live in either `docs/spec-*.md` (the canonical new location) 
 
 What to internalize:
 
-- **Filename convention**: `spec-<NNN>-<topic>-<0_0_X>.md`, where `<NNN>` matches the KANBAN card's NNN, `<topic>` is a short snake_case slug naming the card's subject, and `<0_0_X>` is the target milestone version with dots replaced by underscores. Worked example: card `DONE-020-0.0.7 — DjangoListField (non-Relay list)` → file `spec-020-list_field-0_0_7.md`.
+- **Filename convention**: `spec-<NNN>-<topic>-<X_Y_Z>.md`, where `<NNN>` matches the KANBAN card's NNN, `<topic>` is a short snake_case slug naming the card's subject, and `<X_Y_Z>` is the target milestone version with dots replaced by underscores — **this is not restricted to the `0.0.x` ALPHA line**; always derive it from the card's actual trailing `-X.Y.Z`. Worked examples: ALPHA card `DONE-020-0.0.7 — DjangoListField (non-Relay list)` → file `spec-020-list_field-0_0_7.md`; BETA card `TODO-BETA-046-0.1.1 — <topic>` → file `spec-046-<topic>-0_1_1.md`.
 - **Section layout**: the recent specs all carry roughly the same skeleton, in this order — frontmatter with revision history, **Key glossary references**, **Slice checklist**, **Problem statement**, **Current state**, **Goals**, **Non-goals**, **Borrowing posture** (when upstreams ship a comparable primitive), **User-facing API** (when the spec adds a consumer-visible symbol), **Architectural decisions** (numbered), **Implementation plan** (with a per-slice delta table), **Edge cases and constraints**, **Test plan**, **Doc updates**, **Risks and open questions**, **Out of scope (explicitly tracked elsewhere)**, **Definition of done**. Follow the most-recent spec when in doubt.
 - **Voice and depth**: these specs are detailed and decision-heavy. Every choice is pinned with rationale; every alternative considered is named and rejected with a reason.
 - **Cross-references**: source files are cited as repository-relative paths using symbol-qualified `path::QualifiedName` form (e.g. `types/base.py::DjangoType.resolve_fields`), with `#"unique substring"` pinpoints for in-body lines and `path #"unique substring"` for module-level lines (per [`AGENTS.md`][agents] #"Source references in docs and code comments: use symbol-qualified paths"); KANBAN cards by their full ID; prior specs by markdown link; upstream packages by absolute local path from `docs/TREE.md`.
@@ -85,14 +85,14 @@ What to internalize:
 Create the new file at:
 
 ```
-docs/spec-<NNN>-<topic>-<0_0_X>.md
+docs/spec-<NNN>-<topic>-<X_Y_Z>.md
 ```
 
 Where:
 
 - `<NNN>` = the NNN from the WIP card you identified in Step 3.
 - `<topic>` = a short snake_case slug describing the card's subject.
-- `<0_0_X>` = the version segment from the WIP card's trailing `-X.Y.Z`, with dots replaced by underscores (e.g. `0.0.7` → `0_0_7`).
+- `<X_Y_Z>` = the version segment from the WIP card's trailing `-X.Y.Z`, with dots replaced by underscores (e.g. `0.0.7` → `0_0_7`, `0.1.1` → `0_1_1`, `0.1.0` → `0_1_0`).
 
 The spec must:
 
@@ -101,7 +101,8 @@ The spec must:
 - Cite source files with repository-relative paths (e.g., `django_strawberry_framework/types/base.py`). You MAY read source files during Step 6 to ground decisions — that is not a boundary violation; only file modification is.
 - Resolve as many of the card's open design questions as the available evidence supports; leave the remainder as entries inside the `Risks and open questions` section (not a standalone section), naming a preferred answer for the target version and a fallback.
 - Pin alternatives considered and rejected with a reason — do not silently drop them.
-- If multiple WIP cards share the target patch version (per Step 3), include a Decision that explicitly defers the `pyproject.toml` / `__version__` / `tests/base/test_init.py` version bump to the joint cut card. The Slice 5 / Definition of done checklist must NOT bump the version.
+- If **any other non-Done card** (WIP or To-Do) shares the target's patch version (per Step 3), include a Decision that explicitly defers the `pyproject.toml` / `__version__` / `tests/base/test_init.py` version bump to the joint cut, and the Slice 5 / Definition of done checklist must NOT bump the version. If the target is the **only non-Done card** at its patch version, the reverse holds — its Slice 5 owns the bump; mirror the lone-card version-bump Decision from the most recent lone-card spec (e.g. `spec-038`), and the shared-cut deferral Decision from the most recent joint-cut spec (e.g. `spec-039`).
+- **Milestone (`.0`) cuts carry more than a version bump.** If the target card's version is a minor-version rollover (a trailing `-X.Y.0` — e.g. `0.1.0` completing ALPHA, or `1.0.0` completing BETA; the `## To Do - Alpha (0.1.0)` / `## To Do - Beta (1.0.0)` board headers name these release targets), it is a **milestone cut**, not a routine patch bump. Its Slice 5 doc-updates list expands beyond the usual set: lift any `alpha constraint` (or the milestone's constraint) status tags in `docs/GLOSSARY.md` that the milestone releases, advance the `## Progress to 1.0.0` board section, and flip the milestone-status prose in `README.md` / `GOAL.md` / `TODAY.md`. Treat these milestone-completion chores as first-class Slice 5 deliverables, not afterthoughts.
 - The Slice 5 doc-updates list typically touches: `docs/GLOSSARY.md`, `docs/README.md`, `docs/TREE.md`, `README.md`, `GOAL.md`, `TODAY.md`, `KANBAN.md`, `CHANGELOG.md`. Not every spec touches all eight; include each only when the card's surface change is reflected there.
 
 ---
@@ -111,7 +112,7 @@ The spec must:
 Author a companion `*-terms.csv` next to the new spec at:
 
 ```
-docs/spec-<NNN>-<topic>-<0_0_X>-terms.csv
+docs/spec-<NNN>-<topic>-<X_Y_Z>-terms.csv
 ```
 
 CSV columns: `term,anchor,notes` (header row required). One row per project-specific symbol or concept the spec references — every `DjangoType`, `Meta.*` key, named subsystem (`FilterSet`, `OrderSet`, `AggregateSet`, …), helper symbol (`apply_cascade_permissions`, `OptimizerHint`, …), and shipped/planned capability that has (or should have) a `## <heading>` in `docs/GLOSSARY.md`. The `term` column is the surface form the consumer writes (e.g., `Meta.primary`, `DjangoConnectionField`); the `anchor` column is the GitHub auto-anchor for the matching `## <heading>` (lowercased, backticks dropped, non-word characters except whitespace/hyphens stripped, whitespace runs collapsed to single hyphens — so `## \`Meta.primary\`` → `metaprimary` and `## Relation handling` → `relation-handling`); the `notes` column is free-form (use it to record why a term was included, ambiguity callouts, or status hints like `planned for 0.0.9`).
@@ -135,7 +136,7 @@ The instinct to "trim CSV rows that don't have GLOSSARY headings" happens AFTER 
 Then run the checker:
 
 ```
-uv run python scripts/check_spec_glossary.py --spec docs/spec-<NNN>-<topic>-<0_0_X>.md
+uv run python scripts/check_spec_glossary.py --spec docs/spec-<NNN>-<topic>-<X_Y_Z>.md
 ```
 
 (`--terms` and `--glossary` default sensibly when the CSV lives next to the spec and the glossary stays at `docs/GLOSSARY.md`.)
@@ -169,7 +170,7 @@ The "active" spec is the one you just authored in Step 6. Every other `spec-*.md
 >
 > - **Both the `## WIP / DONE spec map` table row AND a card's `Spec:` body line are rendered from the one `SpecDoc` model** (`apps/kanban/models.py::SpecDoc`: `card` one-to-one, unique `name`, `url`). `url` is a GitHub `…/blob/main/<repo-path>` URL; the renderer strips the `blob/main/` prefix to produce the in-repo link, so the path you want in `KANBAN.md` is whatever follows `blob/main/` in `SpecDoc.url`. There is no separate "spec map" data — one `SpecDoc` per card drives both surfaces.
 > - **To repoint a moved spec's link** (action 5): update that card's `SpecDoc.url` to the new path, e.g. `…/blob/main/docs/SPECS/spec-<old_NNN>-…`.
-> - **To add/fix the active card's spec reference** (action 6): `update_or_create` a `SpecDoc(card=<active card>, name="spec-<NNN>-<topic>-<0_0_X>", url="…/blob/main/docs/spec-<NNN>-<topic>-<0_0_X>.md")`. A card with no `SpecDoc` renders as `No dedicated spec`.
+> - **To add/fix the active card's spec reference** (action 6): `update_or_create` a `SpecDoc(card=<active card>, name="spec-<NNN>-<topic>-<X_Y_Z>", url="…/blob/main/docs/spec-<NNN>-<topic>-<X_Y_Z>.md")`. A card with no `SpecDoc` renders as `No dedicated spec`.
 > - **Make the DB edits via the example project's shell**, then re-render:
 >
 >   ```
@@ -191,8 +192,8 @@ BLOB = 'https://github.com/riodw/django-strawberry-framework/blob/main'
 SpecDoc.objects.update_or_create(
     card=Card.objects.get(number=<NNN>),
     defaults={
-        'name': 'spec-<NNN>-<topic>-<0_0_X>',
-        'url': f'{BLOB}/docs/spec-<NNN>-<topic>-<0_0_X>.md',
+        'name': 'spec-<NNN>-<topic>-<X_Y_Z>',
+        'url': f'{BLOB}/docs/spec-<NNN>-<topic>-<X_Y_Z>.md',
     },
 )
 
@@ -244,9 +245,9 @@ Concrete sequence:
    ```
 
    For each hit, rewrite the path so the link still resolves after the move. Relative-path discipline: from `docs/GLOSSARY.md` the moved file is `SPECS/spec-…`; from repo-root `README.md` / `GOAL.md` / `TODAY.md` / `AGENTS.md` it is `docs/SPECS/spec-…`; from another spec under `docs/` it is `SPECS/spec-…`. Apply each rewrite in place — **except `KANBAN.md`**: it is a generated export (see the callout above), so its spec-map row and card `Spec:` line for a moved spec are repointed by updating that card's `SpecDoc.url` in the DB (set the path after `blob/main/` to `docs/SPECS/spec-…`) and re-rendering with `uv run python scripts/build_kanban_md.py`. Do NOT hand-edit `KANBAN.md` — the edit would not survive the next render.
-6. **Add or update the active WIP card's reference to the new spec.** The card you targeted in Step 3 should point at the spec file you just authored — a `SpecDoc` row whose `url` resolves to `docs/spec-<NNN>-<topic>-<0_0_X>.md`. Because `KANBAN.md` is a generated export (see the callout above), this is a **DB edit + re-render**, not a file edit. Query the card's current `SpecDoc` (via `apps/kanban/models.py::SpecDoc`) and handle three cases:
+6. **Add or update the active WIP card's reference to the new spec.** The card you targeted in Step 3 should point at the spec file you just authored — a `SpecDoc` row whose `url` resolves to `docs/spec-<NNN>-<topic>-<X_Y_Z>.md`. Because `KANBAN.md` is a generated export (see the callout above), this is a **DB edit + re-render**, not a file edit. Query the card's current `SpecDoc` (via `apps/kanban/models.py::SpecDoc`) and handle three cases:
 
-   - **No `SpecDoc` present** (the spec map renders `No dedicated spec`) — create one: `SpecDoc.objects.update_or_create(card=<active card>, defaults={"name": "spec-<NNN>-<topic>-<0_0_X>", "url": "https://github.com/<org>/<repo>/blob/main/docs/spec-<NNN>-<topic>-<0_0_X>.md"})`. The renderer surfaces it as both the spec-map row and a card-body `Spec:` line automatically.
+   - **No `SpecDoc` present** (the spec map renders `No dedicated spec`) — create one: `SpecDoc.objects.update_or_create(card=<active card>, defaults={"name": "spec-<NNN>-<topic>-<X_Y_Z>", "url": "https://github.com/<org>/<repo>/blob/main/docs/spec-<NNN>-<topic>-<X_Y_Z>.md"})`. The renderer surfaces it as both the spec-map row and a card-body `Spec:` line automatically.
    - **`SpecDoc` present but `url` points at a different path** (e.g. a stale `docs/SPECS/spec-…` from a prior archive cycle, or a now-renamed slug) — update `SpecDoc.url` (and `name` if the slug changed) to the active path.
    - **`SpecDoc.url` already correct** — no action.
 
@@ -256,7 +257,7 @@ Concrete sequence:
 9. **Re-run the checker** against the new spec one more time:
 
    ```
-   uv run python scripts/check_spec_glossary.py --spec docs/spec-<NNN>-<topic>-<0_0_X>.md
+   uv run python scripts/check_spec_glossary.py --spec docs/spec-<NNN>-<topic>-<X_Y_Z>.md
    ```
 
    The archive pass may have shifted markdown link paths inside the new spec; the script's earlier exit-0 must still hold. If it now fails, fix the cross-reference rewrites until it exits 0 again.
@@ -276,7 +277,7 @@ The flow is complete when Step 8 finishes: only the active spec and its CSV live
 - Do **not** commit.
 - Do **not** run pytest, ruff, or any other tooling unless Step 7 or Step 8 prescribes it (the `scripts/check_spec_glossary.py` run including its `--auto-link` rewrite, the `git mv` / `grep` invocations Step 8 names, and — for the `KANBAN.md` spec-reference edits — the `examples/fakeshop/manage.py shell` ORM edit plus the `scripts/build_kanban_md.py` re-render are all part of the flow) or you need to settle a question inside the spec.
 - The artifacts this flow produces: the new spec file, its companion `*-terms.csv`, the moves of every prior `spec-*.md` (and companion CSV) from `docs/` to `docs/SPECS/`, path-only cross-reference updates in every doc that pointed at a moved spec, and — for the active WIP card's spec reference and any moved-spec links in `KANBAN.md` — the `apps.kanban` `SpecDoc` rows plus the regenerated `KANBAN.md` they export to.
-- The flow is not complete until (a) `scripts/check_spec_glossary.py` exits 0 against the new spec and its CSV, (b) Step 8 has run and no `spec-*.md` other than the active one remains at `docs/` top-level, AND (c) the active WIP card in `KANBAN.md` carries a link to `docs/spec-<NNN>-<topic>-<0_0_X>.md`.
+- The flow is not complete until (a) `scripts/check_spec_glossary.py` exits 0 against the new spec and its CSV, (b) Step 8 has run and no `spec-*.md` other than the active one remains at `docs/` top-level, AND (c) the active WIP card in `KANBAN.md` carries a link to `docs/spec-<NNN>-<topic>-<X_Y_Z>.md`.
 - If the WIP card's body conflicts with something you read in Step 1, prefer the card and call out the conflict as an entry in the spec's `Risks and open questions` section — do not silently reconcile.
 - Reading source files, existing specs, or test files during Step 6 is allowed and expected. The boundary is on **writes**, not reads.
 

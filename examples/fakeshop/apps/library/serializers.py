@@ -420,3 +420,58 @@ class BookSerializer(serializers.ModelSerializer):
     class Meta:
         model = Book
         fields = ("title", "subtitle", "circulation_status")
+
+
+class NestedShelfSerializer(serializers.ModelSerializer):
+    """A nested ``Shelf`` serializer for the opt-in nested-write matrix (spec-039 rev6 #17).
+
+    Backs the nested ``shelves`` field of ``BranchWithShelvesSerializer``: scalar ``code`` /
+    ``topic`` plus the raw-pk M2M ``alt_branches`` (auto-generated as a
+    ``PrimaryKeyRelatedField(many=True)`` over the non-Relay ``BranchType`` primary). A nested
+    ``alt_branches`` id is visibility-decoded (through ``BranchType.get_queryset``, hiding
+    ``city="restricted"``) at EVERY nesting level - proving the recursive relation decode. A
+    ``validate_code`` business rule rejects the sentinel ``"BANNED"`` so the live test can prove a
+    nested DRF validation error flattens to the structured ``shelves.<i>.code`` path.
+    """
+
+    class Meta:
+        model = Shelf
+        fields = ("code", "topic", "alt_branches")
+
+    def validate_code(self, value):
+        # A post-coercion nested business rule (a valid String at the GraphQL boundary that DRF
+        # rejects) so the live test exercises nested error path flattening (``shelves.0.code``).
+        if value == "BANNED":
+            raise serializers.ValidationError("This shelf code is not allowed.")
+        return value
+
+
+class BranchWithShelvesSerializer(serializers.ModelSerializer):
+    """A ``Branch`` serializer with an EXPLICIT opt-in nested writable ``shelves`` list (spec-039 rev6 #17).
+
+    The fail-loud opt-in nested-write demonstration: the mutation declares
+    ``Meta.nested_fields = {"shelves": NestedSerializerConfig()}``, and THIS serializer implements
+    ``create()`` to perform the nested write ITSELF - the framework decodes + validates the nested
+    ``shelves`` (visibility-checking each nested ``alt_branches`` pk, flattening nested validation
+    errors to structured paths) but NEVER auto-saves the nested relation. ``name`` is unique;
+    ``city`` is optional (``blank=True``).
+    """
+
+    shelves = NestedShelfSerializer(many=True)
+
+    class Meta:
+        model = Branch
+        fields = ("name", "city", "shelves")
+
+    def create(self, validated_data):
+        # The nested write is the serializer author's own (the framework never auto-saves it):
+        # decode + validation already produced the nested shelf dicts (with ``alt_branches`` as
+        # resolved Branch instances), and this create() persists the branch + each shelf.
+        shelves_data = validated_data.pop("shelves", [])
+        branch = Branch.objects.create(**validated_data)
+        for shelf_data in shelves_data:
+            alt_branches = shelf_data.pop("alt_branches", [])
+            shelf = Shelf.objects.create(branch=branch, **shelf_data)
+            if alt_branches:
+                shelf.alt_branches.set(alt_branches)
+        return branch

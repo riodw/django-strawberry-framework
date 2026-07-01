@@ -79,11 +79,19 @@ class InputFieldSpec:
       recorded at BIND time so the Slice-3 decode never re-discovers the
       serializer's schema-time field set per request (spec-039 H4). ``None`` for a
       non-relation (``scalar`` / ``file``) field.
+    - ``nested_specs`` - the serializer-only nested-serializer axis (spec-039 rev6
+      #17): the ordered reverse-map ``InputFieldSpec`` tuple of the NESTED input's
+      OWN fields, recorded for a ``nested_single`` / ``nested_multi`` field so the
+      Slice-3 decode recurses into the nested input dataclass with the SAME
+      per-field machinery (scalar / relation / file / deeper-nested) the top level
+      uses. ``None`` for every non-nested field. A tuple of frozen
+      ``InputFieldSpec`` is hashable, so it participates in the frozen descriptor
+      identity + the per-shape build cache key like any other axis.
 
-    The form flavor keeps its own ``FormInputFieldSpec`` (no ``source`` axis, its
-    suite stays byte-equivalent); the serializer reverse-map uses this directly
-    (spec-039 D1 - the minimal-blast-radius unification: site the serializer spec
-    here, leave the form spec untouched).
+    The form flavor keeps its own ``FormInputFieldSpec`` (no ``source`` /
+    ``nested`` axis, its suite stays byte-equivalent); the serializer reverse-map
+    uses this directly (spec-039 D1 - the minimal-blast-radius unification: site
+    the serializer spec here, leave the form spec untouched).
     """
 
     input_attr: str
@@ -92,6 +100,7 @@ class InputFieldSpec:
     kind: str
     source: str | None = None
     related_model: type | None = None
+    nested_specs: tuple[InputFieldSpec, ...] | None = None
 
 
 def make_input_namespace(

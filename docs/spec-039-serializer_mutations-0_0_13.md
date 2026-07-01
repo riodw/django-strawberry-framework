@@ -1249,13 +1249,13 @@ A true description of the repo as this spec is authored:
   slot); a plain model-less `serializers.Serializer` is deferred
   ([Risks](#risks-and-open-questions); the [`DjangoFormMutation`][glossary-djangoformmutation]
   model-less sibling is the fallback shape if demanded).
-- **Serializer-derived output types / nested writable serializers.** The mutation
-  **output** is the primary [`DjangoType`][glossary-djangotype] in the frozen
-  `node` / `result` slot — **not** a serializer-derived output type (the card's
-  "dual-purposed for inputs and outputs" wording is reconciled to the frozen slot,
-  [Risks](#risks-and-open-questions)); nested writable serializers (`ParsedObject`-style
-  nested create / connect) stay the `036` nested-write non-goal
-  ([Out of scope](#out-of-scope-explicitly-tracked-elsewhere)).
+- **Serializer-derived output types.** The mutation **output** is the primary
+  [`DjangoType`][glossary-djangotype] in the frozen `node` / `result` slot — **not** a
+  serializer-derived output type (the card's "dual-purposed for inputs and outputs" wording is
+  reconciled to the frozen slot, [Risks](#risks-and-open-questions)). Nested writable
+  serializers (`ParsedObject`-style nested create / connect) were originally the `036`
+  nested-write non-goal; they now ship as the EXPLICIT opt-in `Meta.nested_fields` (rev6 #17 —
+  the serializer owns the nested write, the framework never auto-saves the relation).
 - **Serializer `delete`.** DRF serializers do not delete; a `delete` write stays the
   model-driven [`DjangoMutation`][glossary-djangomutation] (`Meta.operation =
   "delete"`) the consumer already has
@@ -1880,9 +1880,12 @@ the relation / file rows below are package extensions graphene lacks, not parity
   the one shape that annotation admits; "accepts both `GlobalID` and raw pk" is the shared
   decode *helper*'s contract, not a single generated field's, [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload) step 3 / F3).
 - `FileField` / `ImageField` → [`Upload`][glossary-upload-scalar] (`file`).
-- A nested `ModelSerializer` / `ListSerializer` field → **out of scope**
-  (the `036` nested-write non-goal), surfaced as a `ConfigurationError` (nested writes
-  are not supported in `0.0.13`).
+- A nested `ModelSerializer` / `ListSerializer` field → **fail-loud by default**, surfaced
+  as a `ConfigurationError` — UNLESS the mutation EXPLICITLY opts it in via
+  `Meta.nested_fields = {"<field>": NestedSerializerConfig(...)}` (rev6 #17), which builds the
+  nested input recursively and hands the decoded nested data to the serializer's own
+  `create()` / `update()` (the framework never auto-saves the relation). Nesting is opt-in only:
+  an un-named nested field still fails loud.
 
 **Where a serializer field overlaps a model column, reuse the read-side converters.**
 A `ModelSerializer` field backed by a `choices` column resolves to the SAME generated
@@ -3085,11 +3088,12 @@ file being `utils/converters.py`. The above per-slice deltas fold these in; trea
   ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven)).
 - **A `Meta.operation = "delete"`.** Rejected at class creation
   ([Decision 10](#decision-10--operations-create--update-no-serializer-delete)).
-- **A nested writable serializer field.** A `ModelSerializer` field that is itself a
-  serializer (`ListSerializer` / nested `ModelSerializer`) is out of scope (the `036`
-  nested-write non-goal) — the converter raises
-  [`ConfigurationError`][glossary-configurationerror] naming the field
-  ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
+- **A nested writable serializer field NOT opted in.** A `ModelSerializer` field that is
+  itself a serializer (`ListSerializer` / nested `ModelSerializer`) fails loud by default —
+  the converter raises [`ConfigurationError`][glossary-configurationerror] naming the field
+  ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth))
+  — UNLESS it is EXPLICITLY opted in via `Meta.nested_fields` (rev6 #17), which builds the
+  nested input recursively (the serializer owning the nested write via `create()` / `update()`).
 - **Write-time `IntegrityError`.** A valid `serializer.save()` that loses a
   concurrent-uniqueness race returns the null-object + `FieldError` envelope via the
   reused `036` `save_or_field_errors` mapper — never a top-level `GraphQLError`.
@@ -3526,10 +3530,11 @@ implementation reveals it is wrong.
 - **A model-less plain `Serializer` flavor** — deferred
   ([Risks](#risks-and-open-questions); the [`DjangoFormMutation`][glossary-djangoformmutation]
   model-less sibling is the fallback shape).
-- **Serializer-derived output types / nested writable serializers** — the frozen
-  `node` / `result` slot supersedes a serializer output, and nested writes stay the
-  `036` non-goal
+- **Serializer-derived output types** — the frozen `node` / `result` slot supersedes a
+  serializer output
   ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
+  (Nested writable serializers were originally a non-goal; they now ship as the EXPLICIT
+  opt-in `Meta.nested_fields` — rev6 #17.)
 - **Serializer `delete`** — not shipped; the model-driven
   [`DjangoMutation`][glossary-djangomutation] (`Meta.operation = "delete"`) covers
   deletion ([Decision 10](#decision-10--operations-create--update-no-serializer-delete)).
@@ -3737,11 +3742,12 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
 ## Round-6 improvements (better-than-graphene-django)
 
 A review pass (`docs/feedback.md`, rev6) proposed 16 improvements that make the serializer
-lane stricter, safer, and more diagnosable than graphene-django's DRF integration. They are
-all in-scope for `0.0.13` (not backlog). Each keeps the existing wins (fail-loud unmapped
-fields, visibility-checked relations, authorize-before-decode, framework-owned
-`context["request"]` / `partial`, recursive error flattening, transaction boundary,
-descriptor-based input identity, DRF-soft-dep root). This section records the design of each.
+lane stricter, safer, and more diagnosable than graphene-django's DRF integration, plus one
+follow-on (#17 — opt-in nested serializer inputs). They are all in-scope for `0.0.13` (not
+backlog). Each keeps the existing wins (fail-loud unmapped fields, visibility-checked
+relations, authorize-before-decode, framework-owned `context["request"]` / `partial`, recursive
+error flattening, transaction boundary, descriptor-based input identity, DRF-soft-dep root).
+This section records the design of each.
 
 ### rev6 #11 — Public serializer-field converter registry
 
@@ -3988,6 +3994,49 @@ error is `field="__all__"` with an EMPTY `path` (`[]`) — whether it arrives as
 non-field bucket), so the two flavors agree; a NESTED non-field error keeps the sentinel as
 its final segment (`["items", "0", "__all__"]`). Additive (a client selecting only `field` /
 `messages` is unaffected); pairs with rev6 #4. Live- and package-tested.
+
+### rev6 #17 — Explicit opt-in nested serializer input support
+
+graphene-django converts a nested `ModelSerializer` / `ListSerializer` field automatically,
+caching the generated input by the serializer's CLASS NAME (silently conflating two shapes of
+one class) with little write-contract validation. The package's default is the OPPOSITE (safer
+but less capable): a nested serializer field fails loud. This adds the CAPABILITY with the
+package's fail-loud architecture — a DRF-first, EXPLICIT, opt-in contract:
+
+- **Opt-in only, descriptor-keyed.** `Meta.nested_fields = {"items": NestedSerializerConfig(...)}`
+  names the nested field(s) that build a nested input RECURSIVELY. A nested field NOT named
+  still fails loud (`serializer_converter.py::_reject_nested_serializer`, now the FIRST check in
+  `resolve_serializer_field` so a nested field over a reverse-relation column can never be
+  misrouted as a relation-id input). `NestedSerializerConfig` (a frozen dataclass, exported from
+  the root by name under the DRF guard like `SerializerMutation`) carries `fields` / `exclude` /
+  `optional_fields` (narrow the nested input via the SAME machinery the top level uses) and a
+  recursive `nested_fields` map (the deeper opt-in — each level names its own children).
+- **Recursively fingerprinted.** `serializer_schema_fingerprint` folds a nested serializer's own
+  field map into the determinism fingerprint (bounded by an on-path cycle guard), so a
+  nondeterministic hook that changes a nested shape is caught at the phase-2.5 bind.
+- **Depth / cycle guarded.** Recursion is bounded by the finite, immutable `NestedSerializerConfig`
+  tree; a serializer class that reappears on the recursion path is a fail-loud cycle, and a
+  path beyond `_NESTED_MAX_DEPTH` is a fail-loud depth cap.
+- **The framework NEVER auto-saves the nested relation.** `Meta.nested_fields` REQUIRES the
+  serializer to override `create()` (create op) / `update()` (update op) — checked at class
+  creation, because DRF's default `ModelSerializer.create/update` `assert`s on writable nested
+  data (a raw `AssertionError` that would escape the envelope). The framework decodes + validates
+  the nested data (visibility-checking each nested relation, recursively, and scoping the runtime
+  nested serializer's relation querysets) and hands it to the serializer's OWN `create()` /
+  `update()`, which owns the write, inside the pipeline transaction.
+- **Errors route through the structured `path` / `codes` envelope.** A nested DRF validation
+  error flattens through the existing recursive `serializer_errors_to_field_errors`
+  (`shelves.1.code`); a nested framework decode error (a hidden relation id) is keyed to its FULL
+  nested path (`shelves.0.altBranches`) with the `invalid` code and rolls the write back (H6). The
+  runtime schema/runtime agreement guard (#1) recurses into the nested serializer too.
+
+The nested input dedupes on its `SerializerInputShape` descriptor (folded into the parent
+descriptor identity + the per-shape build cache, so two nested shapes never collide on one name)
+and materializes through the same ledger. Earned live by `createBranchWithNestedShelves` (a
+`Branch` with a nested `shelves` list carrying a raw-pk `altBranches` M2M) — the happy nested
+write, the hidden-nested-relation structured-path error + rollback, and the nested DRF
+validation-error flattening; the fail-loud / guard / config-validation branches are
+package-tested.
 
 <!-- LINK DEFINITIONS -->
 

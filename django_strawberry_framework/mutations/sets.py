@@ -404,6 +404,7 @@ class _ValidatedMutationMeta:
         "injected_fields",
         "input_class",
         "model",
+        "nested_fields",
         "operation",
         "optional_fields",
         "partial_input_class",
@@ -429,6 +430,7 @@ class _ValidatedMutationMeta:
         schema_fingerprint: Any = None,
         injected_fields: tuple[str, ...] | None = None,
         select_for_update: bool = False,
+        nested_fields: Any = None,
     ) -> None:
         self.model = model
         self.operation = operation
@@ -473,6 +475,11 @@ class _ValidatedMutationMeta:
         # ``SELECT ... FOR UPDATE`` row lock on the UPDATE locate query (inside the existing
         # transaction, after visibility filtering). The model + form flavors leave it ``False``.
         self.select_for_update = select_for_update
+        # The serializer-flavor ``Meta.nested_fields`` (spec-039 rev6 #17): the explicit opt-in
+        # ``{field_name: NestedSerializerConfig}`` map naming the nested serializer fields the
+        # generated input builds RECURSIVELY (an un-named nested field fails loud). ``None`` when
+        # no nesting is opted in. The model + form flavors leave it ``None``.
+        self.nested_fields = nested_fields
 
 
 def _normalize_field_sequence(value: Any, *, label: str = "fields") -> tuple[str, ...] | None:

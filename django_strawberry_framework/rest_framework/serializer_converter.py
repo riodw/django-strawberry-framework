@@ -76,13 +76,19 @@ from ..utils.converters import convert_with_mro
 from ..utils.inputs import InputFieldSpec, graphql_camel_name
 from ..utils.strings import pascal_case
 
-# The four decode kinds the reverse-map record carries, mirroring
+# The decode kinds the reverse-map record carries, mirroring
 # ``forms/converter.py``'s module constants so the Slice 3 resolver + the tests
-# address ONE source of truth instead of bare string literals.
+# address ONE source of truth instead of bare string literals. ``NESTED_SINGLE`` /
+# ``NESTED_MULTI`` are the serializer-only nested-serializer kinds (spec-039 rev6 #17):
+# an EXPLICITLY-opted-in nested ``Serializer`` (single) / ``ListSerializer`` (many),
+# whose recursion is owned by ``rest_framework/inputs.py`` (this converter module has
+# no knowledge of the recursion; it only names the kinds + detects a nested field).
 SCALAR: str = "scalar"
 RELATION_SINGLE: str = "relation_single"
 RELATION_MULTI: str = "relation_multi"
 FILE: str = "file"
+NESTED_SINGLE: str = "nested_single"
+NESTED_MULTI: str = "nested_multi"
 
 
 class SerializerFieldConversion:
@@ -262,21 +268,53 @@ register_subsystem_clear(
 )
 
 
-def _reject_nested_serializer(field: serializers.Field) -> None:
-    """Raise if ``field`` is a nested ``Serializer`` / ``ListSerializer`` (the 036 nested-write non-goal).
+def is_nested_serializer_field(field: serializers.Field) -> bool:
+    """Return whether ``field`` is a nested ``Serializer`` / ``ListSerializer`` (spec-039 rev6 #17).
 
-    Nested serializer writes are an explicit non-goal (the ``036`` nested-write
-    carve-out): a ``Serializer`` / ``ModelSerializer`` field or a
-    ``ListSerializer`` (a ``many=True`` nested serializer) has no flat scalar / id
-    input shape, so it fails loud here rather than silently degrading.
+    A nested ``Serializer`` / ``ModelSerializer`` field (single) or a
+    ``ListSerializer`` (a ``many=True`` nested serializer) - both are
+    ``serializers.BaseSerializer`` subclasses. Used by ``rest_framework/inputs.py`` to tell an
+    EXPLICITLY-opted-in nested field (``Meta.nested_fields``) apart from a scalar / relation /
+    file field BEFORE calling ``resolve_serializer_field`` (which still rejects an
+    un-opted-in nested field via ``_reject_nested_serializer``).
     """
-    if isinstance(field, (serializers.BaseSerializer, serializers.ListSerializer)):
+    return isinstance(field, serializers.BaseSerializer)
+
+
+def nested_serializer_child(
+    field: serializers.Field,
+) -> tuple[serializers.BaseSerializer, bool]:
+    """Return ``(child_serializer_instance, many)`` for a nested serializer field (spec-039 rev6 #17).
+
+    A ``ListSerializer`` (``many=True``) carries the item serializer on ``.child`` and is
+    ``many=True``; a plain nested ``Serializer`` / ``ModelSerializer`` IS the item serializer and
+    is ``many=False``. The returned instance is BOUND (its ``.fields`` are the nested input's
+    schema-time field map), which the recursive nested build in ``rest_framework/inputs.py``
+    walks with the SAME machinery the top level uses.
+    """
+    if isinstance(field, serializers.ListSerializer):
+        return field.child, True
+    return field, False
+
+
+def _reject_nested_serializer(field: serializers.Field) -> None:
+    """Raise if ``field`` is a nested ``Serializer`` / ``ListSerializer`` NOT explicitly opted in (rev6 #17).
+
+    Nested serializer writes are OPT-IN ONLY (spec-039 rev6 #17): a ``Serializer`` /
+    ``ModelSerializer`` field or a ``ListSerializer`` (a ``many=True`` nested serializer) has no
+    flat scalar / id input shape, so - UNLESS the mutation EXPLICITLY declares it in
+    ``Meta.nested_fields`` (handled in ``rest_framework/inputs.py`` before this converter is
+    reached) - it fails loud here rather than silently degrading. The opt-in nested build lives
+    in the ``inputs.py`` walk (which never routes an opted-in nested field through this
+    converter); this raise is the fail-loud default for an un-opted-in nested field.
+    """
+    if isinstance(field, serializers.BaseSerializer):
         raise ConfigurationError(
             f"Serializer field {field.field_name!r} is a nested "
-            f"{type(field).__name__}; nested serializer writes are not supported "
-            "(the flat input shape has no representation for them). Drop it via "
-            "Meta.fields / Meta.exclude, or model the relation with a "
-            "PrimaryKeyRelatedField.",
+            f"{type(field).__name__}; nested serializer writes are opt-in only. Declare it in the "
+            f"mutation's Meta.nested_fields ({{{field.field_name!r}: NestedSerializerConfig(...)}}) - "
+            "the serializer must implement create()/update() for the nested write - drop it via "
+            "Meta.fields / Meta.exclude, or model the relation with a PrimaryKeyRelatedField.",
         )
 
 
@@ -826,6 +864,13 @@ def resolve_serializer_field(
     field name (the ``validated_data`` key), ``source`` the resolved one-segment
     source.
     """
+    # rev6 #17: reject a nested serializer field FIRST, before the backing-column lookup - a
+    # nested serializer over a reverse-relation column (``BranchSerializer.shelves``) would
+    # otherwise be misrouted through the model-backed relation branch (silently typed as a
+    # relation-id input) instead of failing loud. An EXPLICITLY-opted-in nested field never
+    # reaches here (``inputs.py``'s walk routes it to the recursive nested build first); this
+    # raise is the fail-loud default for an un-opted-in nested field.
+    _reject_nested_serializer(field)
     field_name = field.field_name
     column = backing_model_field(model, field)
     # ``source`` axis: the resolved one-segment source (``None`` when it equals

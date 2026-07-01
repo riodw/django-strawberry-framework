@@ -857,3 +857,144 @@ def test_deferred_and_allowed_meta_keys_unchanged():
     # Meta sets are not extended by this slice.
     assert "serializer_class" not in types_base.ALLOWED_META_KEYS
     assert "operation" not in types_base.ALLOWED_META_KEYS
+
+
+# ---------------------------------------------------------------------------
+# get_serializer_for_schema() determinism fingerprint (spec-039 rev6 #10)
+# ---------------------------------------------------------------------------
+
+
+def test_nondeterministic_schema_hook_raises_at_bind():
+    """A ``get_serializer_for_schema()`` that DRIFTS between class validation and bind fails loud (#10)."""
+    _declare_products_primaries()
+    serializer_cls = _item_serializer()
+    drift = {"drop": False}
+
+    class DriftMut(SerializerMutation):
+        class Meta:
+            serializer_class = serializer_cls
+            operation = "create"
+            permission_classes = []
+
+        @classmethod
+        def get_serializer_for_schema(cls):
+            fields = dict(serializer_cls().fields)
+            if drift["drop"]:
+                # Drop a field ONLY on the post-validation call -> a nondeterministic shape.
+                del fields["description"]
+            return fields
+
+    # Class validation captured the fingerprint WITH ``description``; now make the hook drift.
+    drift["drop"] = True
+    with pytest.raises(ConfigurationError, match="DIFFERENT field shape"):
+        finalize_django_types()
+
+
+def test_deterministic_schema_hook_binds_without_drift_error():
+    """A stable ``get_serializer_for_schema()`` binds without the drift error (#10 happy path)."""
+    _declare_products_primaries()
+    serializer_cls = _item_serializer()
+
+    class StableMut(SerializerMutation):
+        class Meta:
+            serializer_class = serializer_cls
+            operation = "create"
+            permission_classes = []
+
+        @classmethod
+        def get_serializer_for_schema(cls):
+            return dict(serializer_cls().fields)
+
+    finalize_django_types()  # no raise
+    assert StableMut._input_class is not None
+
+
+# ---------------------------------------------------------------------------
+# Meta.injected_fields explicit contract (spec-039 rev6 #2)
+# ---------------------------------------------------------------------------
+
+
+def test_meta_injected_fields_lets_narrowing_drop_required_field():
+    """``Meta.injected_fields`` lets a narrowing drop a required field WITHOUT the blanket waiver (rev6 #2)."""
+    _declare_products_primaries()
+    serializer_cls = _item_serializer()  # `name` + `category` are required.
+
+    class InjectMut(SerializerMutation):
+        class Meta:
+            serializer_class = serializer_cls
+            operation = "create"
+            fields = ("description",)  # drops required `name` + `category`
+            injected_fields = ("name", "category")
+            permission_classes = []
+
+    finalize_django_types()  # no raise: the guard subtracts the declared injected fields.
+    assert InjectMut._input_class is not None
+
+
+def test_narrowing_dropping_required_without_injected_still_raises():
+    """Dropping a required field with NEITHER an override nor ``injected_fields`` still fails loud (rev6 #2)."""
+    _declare_products_primaries()
+
+    class BadMut(SerializerMutation):
+        class Meta:
+            serializer_class = _item_serializer()
+            operation = "create"
+            fields = ("description",)  # drops required `name` + `category`, nothing injected
+            permission_classes = []
+
+    with pytest.raises(ConfigurationError, match="drops required"):
+        finalize_django_types()
+
+
+def test_unknown_injected_fields_meta_key_still_rejected():
+    """A typo'd ``Meta`` key adjacent to ``injected_fields`` is still rejected by the typo guard."""
+    with pytest.raises(ConfigurationError, match="unknown keys"):
+
+        class TypoMut(SerializerMutation):
+            class Meta:
+                serializer_class = _item_serializer()
+                operation = "create"
+                injected_field = ("name",)  # singular typo, not the real key
+                permission_classes = []
+
+
+# ---------------------------------------------------------------------------
+# Meta.select_for_update opt-in row lock (spec-039 rev6 #14)
+# ---------------------------------------------------------------------------
+
+
+def test_meta_select_for_update_stored_on_snapshot():
+    """``Meta.select_for_update = True`` is validated + stored on the snapshot (rev6 #14)."""
+
+    class LockMut(SerializerMutation):
+        class Meta:
+            serializer_class = _item_serializer()
+            operation = "update"
+            select_for_update = True
+            permission_classes = []
+
+    assert LockMut._mutation_meta.select_for_update is True
+
+
+def test_meta_select_for_update_defaults_false():
+    """``Meta.select_for_update`` defaults to ``False`` when unset (rev6 #14)."""
+
+    class PlainMut(SerializerMutation):
+        class Meta:
+            serializer_class = _item_serializer()
+            operation = "update"
+            permission_classes = []
+
+    assert PlainMut._mutation_meta.select_for_update is False
+
+
+def test_meta_select_for_update_non_bool_raises():
+    """A non-bool ``Meta.select_for_update`` fails loud at class creation (rev6 #14)."""
+    with pytest.raises(ConfigurationError, match="select_for_update must be a bool"):
+
+        class BadMut(SerializerMutation):
+            class Meta:
+                serializer_class = _item_serializer()
+                operation = "update"
+                select_for_update = "yes"
+                permission_classes = []

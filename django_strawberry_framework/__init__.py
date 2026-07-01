@@ -37,31 +37,55 @@ from .types.converters import DjangoFileType, DjangoImageType  # noqa: E402
 __version__ = "0.0.12"
 
 
+# The DRF-soft-dependency public names, resolved lazily by NAME through the shared
+# ``rest_framework.require_drf()`` guard (spec-039 Decision 12 / rev6 #11). Each maps a
+# public name to its ``(submodule, attr)`` import target; ALL are deliberately ABSENT
+# from ``__all__`` (F1) so ``from django_strawberry_framework import *`` stays DRF-free.
+# ``SerializerMutation`` is the write base; ``register_serializer_field_converter`` +
+# ``SerializerFieldConversion`` are the public serializer-field converter-registry
+# surface (a consumer registers a converter returning a ``SerializerFieldConversion``).
+_DRF_SOFT_EXPORTS: dict[str, tuple[str, str]] = {
+    "SerializerMutation": (".rest_framework.sets", "SerializerMutation"),
+    "register_serializer_field_converter": (
+        ".rest_framework.serializer_converter",
+        "register_serializer_field_converter",
+    ),
+    "SerializerFieldConversion": (
+        ".rest_framework.serializer_converter",
+        "SerializerFieldConversion",
+    ),
+    "describe_serializer_input": (".rest_framework.inputs", "describe_serializer_input"),
+}
+
+
 def __getattr__(name: str) -> type:
-    """Resolve ``SerializerMutation`` lazily through the DRF soft-import guard (spec-039 Decision 12).
+    """Resolve the DRF-soft-dependency names lazily through the DRF import guard (spec-039 Decision 12).
 
     PEP 562 module-level ``__getattr__``: ``from django_strawberry_framework import
-    SerializerMutation`` resolves by NAME through ``rest_framework.require_drf()``
-    (the shared DRF guard), so a DRF-absent consumer gets the install-hint
-    ``ImportError`` only when they reach for the name - ``import
-    django_strawberry_framework`` itself never eagerly imports ``rest_framework/`` and
-    succeeds without DRF. Every OTHER attribute miss raises the normal
-    ``AttributeError`` so unrelated typos behave as usual.
+    SerializerMutation`` (and ``register_serializer_field_converter`` /
+    ``SerializerFieldConversion``, spec-039 rev6 #11) resolves by NAME through
+    ``rest_framework.require_drf()`` (the shared DRF guard), so a DRF-absent consumer
+    gets the install-hint ``ImportError`` only when they reach for one of these names -
+    ``import django_strawberry_framework`` itself never eagerly imports
+    ``rest_framework/`` and succeeds without DRF. Every OTHER attribute miss raises the
+    normal ``AttributeError`` so unrelated typos behave as usual.
 
-    **Non-memoizing (Decision 12).** The resolved class is NOT written into the
-    module ``globals()`` - each access re-fires the guard, so the absent-DRF test can
-    evict ``rest_framework*`` / ``django_strawberry_framework.rest_framework*`` from
+    **Non-memoizing (Decision 12).** The resolved object is NOT written into the module
+    ``globals()`` - each access re-fires the guard, so the absent-DRF test can evict
+    ``rest_framework*`` / ``django_strawberry_framework.rest_framework*`` from
     ``sys.modules`` and re-hit the guard on the next access without a stale binding.
-    ``SerializerMutation`` is deliberately ABSENT from ``__all__`` (F1) so ``from
+    These names are deliberately ABSENT from ``__all__`` (F1) so ``from
     django_strawberry_framework import *`` stays DRF-free and never trips the guard.
     """
-    if name == "SerializerMutation":
+    target = _DRF_SOFT_EXPORTS.get(name)
+    if target is not None:
+        from importlib import import_module
+
         from .rest_framework import require_drf
 
         require_drf()
-        from .rest_framework.sets import SerializerMutation
-
-        return SerializerMutation
+        submodule, attr = target
+        return getattr(import_module(submodule, __name__), attr)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 

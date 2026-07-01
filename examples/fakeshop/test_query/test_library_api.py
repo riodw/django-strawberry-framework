@@ -5299,8 +5299,10 @@ def test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability
     """Two mutations over ONE serializer whose hooks differ ONLY in a field's ``allow_null`` bind to DISTINCT inputs with the CORRECT per-field nullability (spec-039 High / M2).
 
     ``createShelfViaHookNonNullNote`` and ``createShelfViaHookNullableNote`` share
-    ``ShelfSerializer`` and return the SAME ``code`` + ``branch`` + ``note`` hook fields, with
-    ``note`` a ``required=True`` ``CharField`` differing ONLY in ``allow_null``. The EMITTED
+    ``NoteShelfSerializer`` and return the SAME ``code`` + ``branch`` + ``note`` hook fields,
+    with ``note`` a ``required=True`` ``CharField`` differing ONLY in ``allow_null``; each also
+    constructs the SAME serializer at runtime with the matching ``note_allow_null`` (rev6 #1 -
+    the agreement guard forbids a schema-only field the runtime does not declare). The EMITTED
     nullability is part of the descriptor identity, so the two generated inputs are DISTINCT
     types: the ``allow_null=False`` half exposes ``note`` as a non-null ``String!``, the
     ``allow_null=True`` half as a nullable, OMITTABLE ``String``. Before the fix the descriptor
@@ -5308,8 +5310,9 @@ def test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability
     and the second declaration silently reused the first's cached input class - giving one
     mutation the other's nullability (the SAME input type name, same SDL nullability for both).
 
-    Both also execute over HTTP: the non-null half must supply ``note`` (decoded then dropped
-    by the runtime ``ShelfSerializer``); the nullable half may OMIT it.
+    Both also execute over HTTP: the non-null half must supply ``note`` (a non-null
+    ``String!``); the nullable half sends an explicit ``null`` (its ``allow_null=True`` note
+    accepts it). ``note`` is decoded + validated then dropped by ``NoteShelfSerializer.create``.
     """
     branch = models.Branch.objects.create(name="NullabilityBranch", city="Boston")
 
@@ -5328,11 +5331,11 @@ def test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability
     assert nullable_note["kind"] == "SCALAR"
     assert nullable_note["name"] == "String"
 
-    # The non-null half requires note (String!); it is decoded then dropped by the runtime
-    # ShelfSerializer (code + branch), and the Shelf writes.
+    # The non-null half requires note (String!); it is decoded + validated then dropped by the
+    # runtime NoteShelfSerializer.create, and the Shelf writes.
     non_null_response = _post_graphql(
         "mutation { createShelfViaHookNonNullNote(data: { "
-        f'code: "NonNullNoteShelf", branchId: {branch.pk}, note: "ignored-at-runtime" '
+        f'code: "NonNullNoteShelf", branchId: {branch.pk}, note: "provided" '
         "}) { result { code } errors { field messages } } }",
     )
     assert non_null_response.status_code == 200
@@ -5343,10 +5346,11 @@ def test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability
     assert non_null_result["result"] == {"code": "NonNullNoteShelf"}
     assert models.Shelf.objects.filter(code="NonNullNoteShelf", branch=branch).exists()
 
-    # The nullable half may OMIT note (it is omittable), and the Shelf still writes.
+    # The nullable half sends an EXPLICIT null (its allow_null=True note accepts it); the note
+    # is decoded then dropped and the Shelf still writes.
     nullable_response = _post_graphql(
         "mutation { createShelfViaHookNullableNote(data: { "
-        f'code: "NullableNoteShelf", branchId: {branch.pk} '
+        f'code: "NullableNoteShelf", branchId: {branch.pk}, note: null '
         "}) { result { code } errors { field messages } } }",
     )
     assert nullable_response.status_code == 200
@@ -5356,3 +5360,382 @@ def test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability
     assert nullable_result["errors"] == []
     assert nullable_result["result"] == {"code": "NullableNoteShelf"}
     assert models.Shelf.objects.filter(code="NullableNoteShelf", branch=branch).exists()
+
+
+@pytest.mark.django_db
+def test_create_shelf_via_metadata_serializer_expanded_input_type_system_over_http():
+    """The rev6 type-system matrix over ``/graphql/``: a serializer-only enum, a DictField JSON, and a registry-mapped custom field (spec-039 rev6 #6 / #7 / #11).
+
+    ``ShelfMetadataSerializer`` carries three serializer-only write-only fields:
+    ``priority`` (a ``ChoiceField`` -> a GENERATED GraphQL enum, #6), ``attributes`` (a
+    ``DictField`` -> ``JSON``, #7), and ``accent_color`` (a custom ``HexColorField`` mapped
+    ONLY via ``register_serializer_field_converter`` -> ``String``, #11). Introspection pins
+    each input field's GraphQL type; the create then posts through all three, proving the
+    expanded input type system works end to end (the enum value round-trips into ``topic``,
+    the JSON + custom field are decoded + validated then dropped).
+    """
+    branch = models.Branch.objects.create(name="MetadataBranch", city="Boston")
+
+    # #6: the serializer-only ChoiceField became a GENERATED enum (not a String).
+    priority_type = _input_field_type("ShelfMetadataSerializerInput", "priority")
+    assert priority_type["kind"] == "ENUM"
+    assert priority_type["name"] == "ShelfMetadataSerializerInputPriorityEnum"
+    # #7: the DictField became strawberry JSON.
+    attributes_type = _input_field_type("ShelfMetadataSerializerInput", "attributes")
+    assert attributes_type["kind"] == "SCALAR"
+    assert attributes_type["name"] == "JSON"
+    # #11: the custom HexColorField mapped to String via the registered converter.
+    accent_type = _input_field_type("ShelfMetadataSerializerInput", "accentColor")
+    assert accent_type["kind"] == "SCALAR"
+    assert accent_type["name"] == "String"
+
+    # The generated enum exposes the choice VALUES as its member names (sanitized).
+    enum_values = _post_graphql(
+        """
+        query {
+          __type(name: "ShelfMetadataSerializerInputPriorityEnum") { enumValues { name } }
+        }
+        """,
+    ).json()["data"]["__type"]["enumValues"]
+    assert {v["name"] for v in enum_values} == {"low", "normal", "high"}
+
+    # Post through all three (the enum via a variable string, the JSON via an object).
+    response = _post_graphql(
+        "mutation($d: ShelfMetadataSerializerInput!) { createShelfViaMetadataSerializer(data: $d) { "
+        "result { code topic } errors { field messages } } }",
+        variables={
+            "d": {
+                "code": "MetaShelf",
+                "branchId": branch.pk,
+                "priority": "high",
+                "attributes": {"note": "x"},
+                "accentColor": "#3366ff",
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaMetadataSerializer"]
+    assert result["errors"] == []
+    # The enum value round-tripped into ``topic``; the JSON + custom field were dropped.
+    assert result["result"] == {"code": "MetaShelf", "topic": "priority:high"}
+    assert models.Shelf.objects.filter(
+        code="MetaShelf",
+        topic="priority:high",
+        branch=branch,
+    ).exists()
+
+
+def _input_field_description(type_name: str, field_name: str) -> str | None:
+    """Return an input object field's GraphQL description via introspection (spec-039 rev6 #9)."""
+    response = _post_graphql(
+        f"""
+        query {{
+          __type(name: "{type_name}") {{ inputFields {{ name description }} }}
+        }}
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    fields = payload["data"]["__type"]["inputFields"]
+    return next(f["description"] for f in fields if f["name"] == field_name)
+
+
+@pytest.mark.django_db
+def test_serializer_input_field_description_threads_drf_metadata_over_http():
+    """A DRF field's ``help_text`` + validation constraints surface as the input field's SDL description (spec-039 rev6 #9).
+
+    ``ShelfMetadataSerializer.label`` is a ``CharField(help_text=..., max_length=40)``; the
+    generated ``ShelfMetadataSerializerInput.label`` carries a description combining the help
+    text and a constraint summary (``max_length=40``). This is documentation / introspection
+    only - DRF still owns runtime validation - so the field's TYPE stays a plain ``String``.
+    """
+    description = _input_field_description("ShelfMetadataSerializerInput", "label")
+    assert description is not None
+    assert "A short human label for the shelf." in description
+    assert "max_length=40" in description
+    # The metadata is documentation only: the field type is unchanged (a nullable String).
+    label_type = _input_field_type("ShelfMetadataSerializerInput", "label")
+    assert label_type["kind"] == "SCALAR"
+    assert label_type["name"] == "String"
+
+
+@pytest.mark.django_db
+def test_serializer_error_envelope_carries_codes_and_path_over_http():
+    """The mutation error envelope carries structured ``codes`` + ``path`` alongside ``field`` / ``messages`` (spec-039 rev6 #4 / #13).
+
+    A DRF field validation error preserves the DRF ``ErrorDetail.code`` (``label`` exceeds its
+    ``max_length=40`` -> code ``max_length``) and a structured ``path`` (``["label"]``); a
+    framework relation-decode error (a nonexistent ``branchId``) carries the framework code
+    ``invalid`` + the wire-name path. Both keep the legacy ``field`` / ``messages`` intact.
+    """
+    branch = models.Branch.objects.create(name="CodesBranch", city="Boston")
+
+    # A DRF field error: label is a CharField(max_length=40); posting 50 chars fails is_valid.
+    response = _post_graphql(
+        "mutation($d: ShelfMetadataSerializerInput!) { createShelfViaMetadataSerializer(data: $d) { "
+        "result { code } errors { field messages codes path } } }",
+        variables={"d": {"code": "CodesShelf", "branchId": branch.pk, "label": "x" * 50}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfViaMetadataSerializer"]
+    assert result["result"] is None
+    (err,) = result["errors"]
+    assert err["field"] == "label"
+    assert err["path"] == ["label"]
+    assert "max_length" in err["codes"]  # the DRF ErrorDetail.code is preserved (#4).
+    assert not models.Shelf.objects.filter(code="CodesShelf").exists()
+
+    # A framework relation-decode error: a nonexistent branch pk -> code "invalid", path=["branchId"].
+    bad = _post_graphql(
+        "mutation($d: ShelfMetadataSerializerInput!) { createShelfViaMetadataSerializer(data: $d) { "
+        "result { code } errors { field messages codes path } } }",
+        variables={"d": {"code": "CodesShelf2", "branchId": 999999}},
+    )
+    bad_result = bad.json()["data"]["createShelfViaMetadataSerializer"]
+    assert bad_result["result"] is None
+    (rel_err,) = bad_result["errors"]
+    assert rel_err["field"] == "branchId"
+    assert rel_err["codes"] == ["invalid"]
+    assert rel_err["path"] == ["branchId"]
+
+
+@pytest.mark.django_db
+def test_serializer_injected_field_contract_over_http():
+    """A required field narrowed away + declared in ``Meta.injected_fields`` is supplied by the override (spec-039 rev6 #2).
+
+    ``CreateShelfWithInjectedTopic`` narrows the input to ``code`` + ``branchId`` (dropping the
+    ``OwnerStampShelfSerializer``-required ``topic``) and declares ``Meta.injected_fields =
+    ("topic",)`` with a ``get_serializer_kwargs`` override that supplies ``topic`` into the
+    serializer data. The create-required guard SUBTRACTS the declared injected field (so the
+    narrowing binds), and the write succeeds with the injected ``topic`` - the auditable,
+    per-field replacement for the old blanket waiver.
+    """
+    branch = models.Branch.objects.create(name="InjectBranch", city="Boston")
+
+    # ``topic`` is narrowed away from the input (only code + branchId remain).
+    input_name = _mutation_data_input_type_name("createShelfWithInjectedTopic")
+    assert _input_field_names(input_name) == {"code", "branchId"}
+
+    response = _post_graphql(
+        "mutation($d: " + input_name + "!) { createShelfWithInjectedTopic(data: $d) { "
+        "result { code topic } errors { field messages } } }",
+        variables={"d": {"code": "InjectShelf", "branchId": branch.pk}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfWithInjectedTopic"]
+    assert result["errors"] == []
+    # The override supplied the narrowed-away required ``topic``; the write succeeded with it.
+    assert result["result"] == {"code": "InjectShelf", "topic": "stamped-by-injection"}
+    assert models.Shelf.objects.filter(
+        code="InjectShelf",
+        topic="stamped-by-injection",
+        branch=branch,
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_serializer_m2m_relation_visibility_over_http():
+    """A raw-pk M2M serializer input writes visible branches and rejects a hidden one (spec-039 rev6 #3).
+
+    ``createShelfViaAltBranchesSerializer`` exposes ``alt_branches`` (a raw-pk M2M over the
+    non-Relay ``BranchType``). The decode confirms the whole list's visibility in one batched
+    query through ``BranchType.get_queryset`` (which hides ``city="restricted"`` from the
+    anonymous caller); DRF re-validates against the same visibility-scoped queryset. Two visible
+    branches write; a hidden branch is a ``altBranches`` relation error with no row written.
+    """
+    branch = models.Branch.objects.create(name="M2MHome", city="Boston")
+    alt1 = models.Branch.objects.create(name="M2MAlt1", city="Boston")
+    alt2 = models.Branch.objects.create(name="M2MAlt2", city="Boston")
+    hidden = models.Branch.objects.create(name="M2MHidden", city="restricted")
+
+    # Visible alt branches: the M2M writes.
+    ok = _post_graphql(
+        "mutation($d: AltBranchesShelfSerializerInput!) { createShelfViaAltBranchesSerializer(data: $d) { "
+        "result { code } errors { field messages } } }",
+        variables={
+            "d": {"code": "M2MShelf", "branchId": branch.pk, "altBranches": [alt1.pk, alt2.pk]},
+        },
+    )
+    assert ok.status_code == 200
+    ok_payload = ok.json()
+    assert "errors" not in ok_payload, ok_payload
+    ok_result = ok_payload["data"]["createShelfViaAltBranchesSerializer"]
+    assert ok_result["errors"] == []
+    shelf = models.Shelf.objects.get(code="M2MShelf", branch=branch)
+    assert set(shelf.alt_branches.values_list("pk", flat=True)) == {alt1.pk, alt2.pk}
+
+    # A hidden branch in the list is a field-keyed relation error; no row written.
+    bad = _post_graphql(
+        "mutation($d: AltBranchesShelfSerializerInput!) { createShelfViaAltBranchesSerializer(data: $d) { "
+        "result { code } errors { field messages codes } } }",
+        variables={
+            "d": {
+                "code": "M2MBadShelf",
+                "branchId": branch.pk,
+                "altBranches": [alt1.pk, hidden.pk],
+            },
+        },
+    )
+    bad_result = bad.json()["data"]["createShelfViaAltBranchesSerializer"]
+    assert bad_result["result"] is None
+    (err,) = bad_result["errors"]
+    assert err["field"] == "altBranches"
+    assert err["codes"] == ["invalid"]
+    assert not models.Shelf.objects.filter(code="M2MBadShelf").exists()
+
+
+@pytest.mark.django_db
+def test_serializer_save_kwargs_hook_injects_server_side_data_over_http():
+    """``get_serializer_save_kwargs`` injects server-side data at ``serializer.save()`` (spec-039 rev6 #12).
+
+    ``CreateShelfWithSaveKwargs`` accepts ``code`` + ``branchId`` and stamps a server-side
+    ``topic`` at SAVE time (not a client input). The write succeeds and the ``Shelf`` carries
+    the save-time-stamped ``topic``, proving the DRF-native ``serializer.save(owner=...)`` seam
+    runs inside the framework's value-preserving save closure.
+    """
+    branch = models.Branch.objects.create(name="SaveKwargsBranch", city="Boston")
+    response = _post_graphql(
+        "mutation($d: ShelfSerializerInput!) { createShelfWithSaveKwargs(data: $d) { "
+        "result { code topic } errors { field messages } } }",
+        variables={"d": {"code": "SaveKwargsShelf", "branchId": branch.pk}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createShelfWithSaveKwargs"]
+    assert result["errors"] == []
+    assert result["result"] == {"code": "SaveKwargsShelf", "topic": "stamped-at-save"}
+    assert models.Shelf.objects.filter(
+        code="SaveKwargsShelf",
+        topic="stamped-at-save",
+        branch=branch,
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_serializer_update_with_select_for_update_over_http():
+    """An update serializer mutation with ``Meta.select_for_update = True`` updates cleanly over HTTP (spec-039 rev6 #14).
+
+    ``UpdateBookViaSerializerWithLock`` locks the located ``Book`` row inside the pipeline
+    transaction (after visibility filtering). On sqlite Django silently skips the ``FOR UPDATE``
+    clause, so this proves the update + row-lock path integrates; on a supporting backend the
+    row is genuinely locked. ``BookType`` is Relay-Node, so the update ``id`` is a ``GlobalID``
+    and the payload slot is ``node``.
+    """
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    book = models.Book.objects.create(title="BeforeLock", shelf=shelf)
+
+    response = _post_graphql(
+        "mutation($id: ID!, $d: BookSerializerPartialInput!) { "
+        "updateBookViaSerializerWithLock(id: $id, data: $d) { "
+        "node { title } errors { field messages } } }",
+        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "AfterLock"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateBookViaSerializerWithLock"]
+    assert result["errors"] == []
+    assert result["node"]["title"] == "AfterLock"
+    book.refresh_from_db()
+    assert book.title == "AfterLock"
+
+
+# ---------------------------------------------------------------------------
+# Golden SDL coverage for the serializer-mutation input lane (spec-039 rev6 #16)
+# ---------------------------------------------------------------------------
+
+
+def _render_gql_type(type_dict: dict) -> str:
+    """Render an introspected GraphQL type tree to its SDL string (``String!`` / ``[FieldError!]!``)."""
+    kind = type_dict["kind"]
+    if kind == "NON_NULL":
+        return _render_gql_type(type_dict["ofType"]) + "!"
+    if kind == "LIST":
+        return "[" + _render_gql_type(type_dict["ofType"]) + "]"
+    return type_dict["name"]
+
+
+def _input_fields_sdl(type_name: str) -> list[tuple]:
+    """Return an input object's ``[(field, rendered_type, description)]`` via introspection (rev6 #16)."""
+    response = _post_graphql(
+        'query { __type(name: "' + type_name + '") { inputFields { name description '
+        "type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } }",
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    fields = payload["data"]["__type"]["inputFields"]
+    return [(f["name"], _render_gql_type(f["type"]), f["description"]) for f in fields]
+
+
+def _type_fields_sdl(type_name: str) -> list[tuple]:
+    """Return an object type's ``[(field, rendered_type, description)]`` via introspection (rev6 #16)."""
+    response = _post_graphql(
+        'query { __type(name: "' + type_name + '") { fields { name description '
+        "type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } } }",
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    fields = payload["data"]["__type"]["fields"]
+    return [(f["name"], _render_gql_type(f["type"]), f["description"]) for f in fields]
+
+
+def test_golden_sdl_library_schema_hook_serializer_input():
+    """Golden SDL for a library schema-hook serializer input + payload + the FieldError envelope (rev6 #16).
+
+    Pins the generated input names, field names, nullability, descriptions (rev6 #9), the
+    serializer-only enum (rev6 #6), the JSON / registry-mapped scalars (rev6 #7 / #11), the
+    raw-pk relation id, the ``result`` payload slot (non-Relay ``Shelf``), and the additive
+    ``codes`` / ``path`` on the shared ``FieldError`` envelope (rev6 #4 / #13) - so cross-field
+    SDL drift is caught in one focused snapshot (NOT a whole-schema dump).
+    """
+    assert _input_fields_sdl("ShelfMetadataSerializerInput") == [
+        ("code", "String!", None),
+        ("branchId", "Int!", None),
+        ("priority", "ShelfMetadataSerializerInputPriorityEnum", None),
+        ("attributes", "JSON", None),
+        ("accentColor", "String", None),
+        ("label", "String", "A short human label for the shelf. Constraints: max_length=40."),
+    ]
+    assert _type_fields_sdl("CreateShelfViaMetadataSerializerPayload") == [
+        ("result", "ShelfType", None),
+        ("errors", "[FieldError!]!", None),
+    ]
+    # The shared FieldError envelope carries the additive codes + path (rev6 #4 / #13).
+    assert _type_fields_sdl("FieldError") == [
+        ("field", "String!", None),
+        ("messages", "[String!]!", None),
+        ("codes", "[String!]!", None),
+        ("path", "[String!]!", None),
+    ]
+
+
+def test_golden_sdl_products_serializer_input():
+    """Golden SDL for a products serializer input + payload (rev6 #16).
+
+    Pins the file (``Upload``) + Relay-``GlobalID`` relation id (``categoryId: ID!``) + the
+    ``allow_blank`` / ``max_length`` descriptions (rev6 #9) + the ``node`` payload slot
+    (Relay-Node ``Item``). Both this and the library snapshot read the ONE aggregate
+    ``/graphql/`` schema.
+    """
+    assert _input_fields_sdl("ItemSerializerInput") == [
+        ("name", "String!", None),
+        ("description", "String", "Constraints: allow_blank=true."),
+        ("categoryId", "ID!", None),
+        ("attachment", "Upload", "Constraints: max_length=100."),
+    ]
+    assert _type_fields_sdl("CreateItemViaSerializerPayload") == [
+        ("node", "ItemType", None),
+        ("errors", "[FieldError!]!", None),
+    ]

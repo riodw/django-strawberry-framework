@@ -250,6 +250,35 @@ def visible_related_object(
     return queryset.filter(pk=pk).first()
 
 
+def visible_related_objects(
+    related_model: type,
+    pks: Any,
+    info: Any,
+    async_recourse: str = _RELAY_ASYNC_RECOURSE,
+) -> set:
+    """Return the VISIBLE pks among ``pks`` in ONE visibility-scoped ``pk__in`` query (spec-039 rev6 #3).
+
+    The BATCHED counterpart to ``visible_related_object``: instead of one visibility query per
+    id (the per-element multi-relation decode), decode/type-check all ids first, then confirm
+    the whole set's visibility in ONE ``pk__in`` query through the related primary
+    ``DjangoType.get_queryset`` (or the target's default manager when no primary is registered -
+    no visibility contract). Returns the set of pks actually visible (stringified for a
+    type-agnostic membership compare); the caller asserts the REQUESTED set is a subset, so a
+    hidden / missing member collapses to the same field-keyed relation error (no existence
+    leak), exactly as the single decoder does. An ``async def get_queryset`` raises
+    ``SyncMisuseError``. ``related_model`` has a primary type only when a typed relation input
+    was generated for it; a raw-pk relation resolves its primary the same way (``registry.get``).
+    """
+    from ..registry import registry
+
+    related_type = registry.get(related_model)
+    if related_type is None:
+        queryset = related_model._default_manager.all()
+    else:
+        queryset = visibility_scoped_related_queryset(related_type, info, async_recourse)
+    return {str(pk) for pk in queryset.filter(pk__in=list(pks)).values_list("pk", flat=True)}
+
+
 async def apply_type_visibility_async(
     type_cls: type,
     queryset: models.QuerySet,

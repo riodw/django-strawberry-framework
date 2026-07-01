@@ -1,203 +1,336 @@
-# Spec-039 implementation review — deeper pass
+# Improvement pass: make serializer mutations better than graphene-django
 
-Date: 2026-06-29.
+Scope: reviewed the implemented serializer mutation lane in
+`django_strawberry_framework/` against [spec-039][spec-039], the live-test policy in
+[test_query/README.md][test-query-readme], and graphene-django's DRF integration under
+`~/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django`.
 
-Scope: current `HEAD` (`19740bac`) after the newest fakeshop live-test additions. I
-reviewed the inherited review in this file, the full [spec-039][spec-039], the live-test
-lane rule in [test_query README][test-query-readme], the `rest_framework/` implementation,
-and the new `library` serializer mutation surface/tests.
+Intent: this is not another parity review. Graphene-django is useful as a baseline, but the
+goal should be a stricter, safer, more diagnosable implementation that follows this
+package's DRF-first / fail-loud architecture.
 
-Method: static review plus two targeted `uv run python` probes. I did **not** run pytest,
-per the repo instruction not to run it unless explicitly asked.
+I did not run pytest, per `AGENTS.md`; this is a static/code-path review.
 
-Bottom line: the newest commit fixed the previous live-placement gaps for unsupported
-default-field recovery and hidden-branch serializer relation visibility. It also moved the
-same-serializer hook-collision proof into the real fakeshop schema. One production
-correctness bug remains: `allow_null`-only schema-hook variation still dedupes to the wrong
-input shape. There are also two test/spec fidelity gaps worth fixing before merge.
+## Highest-value improvements
 
-## Findings
+### 1. Add a runtime schema/runtime serializer agreement guard
 
-### High: `allow_null` is still missing from serializer input shape identity
+Graphene-django builds the schema and runtime serializer from the same no-arg serializer in
+the common path, but it has no robust answer for schema-time hooks. This package added
+`get_serializer_for_schema()`, which is the right extension point, but the framework can do
+more: prove the schema-time field map and the runtime serializer still agree before
+`serializer.is_valid()` runs.
 
-The prior review's nullability finding is still valid.
+Current risk: a schema hook can expose a field that the runtime serializer does not actually
+declare, or declares with a different class/source/relation target. DRF may ignore unknown
+incoming keys rather than failing in the way the GraphQL schema implies. The fakeshop
+`TargetedShelfSerializer` fixture now avoids this, but the framework should enforce the
+contract so users cannot recreate that bug.
 
-Evidence:
+Recommended design:
 
-- `django_strawberry_framework/rest_framework/inputs.py::_walk_serializer_fields
-  #"annotation_reprs.append(repr(annotation))"` records the base annotation before the
-  nullable widening.
-- The actual emitted GraphQL annotation is widened later at
-  `django_strawberry_framework/rest_framework/inputs.py::_walk_serializer_fields
-  #"annotation = annotation | None"`.
-- `django_strawberry_framework/rest_framework/inputs.py::SerializerInputShape` stores only
-  `annotations` plus `required_state`; neither carries the post-widening nullable shape.
-- `django_strawberry_framework/rest_framework/inputs.py::_shape_token` uses that same base
-  annotation string, so generated names miss the same axis.
+- After `_merged_serializer_kwargs()` constructs the runtime serializer in
+  [`rest_framework/resolvers.py`][rf-resolvers] `::_serializer_write_step`, compare the
+  bind-stashed `mutation_cls._input_field_specs` against `serializer.fields`.
+- For every provided field, require the runtime serializer to contain `spec.target_name`,
+  require it to be writable, and require its bound `source` to match the schema-time `source`.
+- For relation fields, require the runtime field to still be `PrimaryKeyRelatedField` /
+  `ManyRelatedField` over the same `related_model` recorded in the `InputFieldSpec`.
+- For file/scalar fields, require the runtime kind to be compatible with the schema-time
+  kind; if the runtime field moved from scalar to relation or file, raise a clear
+  `ConfigurationError`.
+- Run this before `is_valid()` so a schema/runtime mismatch is a framework configuration
+  failure, not a serializer validation ambiguity.
 
-I verified the behavior with a direct probe using the same serializer class and two
-schema-time field maps that differ only by `CharField(required=True, allow_null=False)` vs
-`CharField(required=True, allow_null=True)`:
+This would be materially better than graphene-django because the schema hook becomes a
+verified contract rather than a trust point.
 
-```text
-BaseInput BaseInput
-True ("<class 'str'>",) ("<class 'str'>",) (True,) (True,)
-<class 'str'> str | None
-```
+### 2. Replace the broad `get_serializer_kwargs` create-required waiver with an explicit injection contract
 
-So the two emitted input classes have different actual annotations (`str` vs `str | None`),
-but their `SerializerInputShape` descriptors compare equal and both claim `BaseInput`.
-Through `SerializerMutation.build_input`, the first built class would be returned from the
-descriptor cache for the second declaration, silently giving one mutation the other's
-GraphQL nullability and default behavior. That is exactly the "wrong nullability" case the
-spec says the descriptor identity must prevent.
+[`rest_framework/sets.py`][rf-sets] `::SerializerMutation.build_input` currently waives the
+create-required narrowing guard whenever a concrete mutation overrides
+`get_serializer_kwargs`. That is safer than graphene-django's implicit behavior, but still
+too broad: overriding the hook to add `context={"tenant": ...}` also waives required-field
+coverage, even if the override does not supply the dropped required fields.
 
-Required fix: make the descriptor and name token use the emitted annotation identity, not
-the base annotation identity. The cleanest implementation is to append `repr(annotation)`
-after nullable widening in `_walk_serializer_fields`, then let `_default_full_shape_identity`,
-`SerializerInputShape.annotations`, and `_shape_token` all consume that post-widening value.
-Add a regression that finalizes two mutations over the same serializer whose hooks return
-same-name `required=True` fields differing only in `allow_null`, and assert distinct input
-classes/names.
+Recommended design:
 
-### Medium: the live same-serializer collision test proves naming, but not the differentiating relation decode
+- Add a declarative contract such as `Meta.injected_fields = ("tenant",)` or
+  `Meta.supplied_serializer_fields = (...)`.
+- `guard_create_required_serializer_fields()` should subtract only those declared injected
+  fields, not every field whenever the hook is overridden.
+- At runtime, verify that the final serializer kwargs/data actually include those injected
+  fields before validation.
+- Keep a compatibility path for the current broad waiver only if it raises a deprecation
+  warning or is explicitly named as an unsafe legacy escape hatch.
 
-The new fakeshop collision surface is in the correct lane, but it currently proves less
-than its prose says.
+This keeps the DRF hook, but makes it auditable. It is stricter than graphene-django and
+better aligned with the package's "schema that can actually succeed" rule.
 
-Evidence:
+### 3. Make relation validation both visibility-scoped and query-efficient
 
-- `examples/fakeshop/apps/library/serializers.py::CollisionShelfSerializer` declares only
-  `code` and `branch`.
-- `examples/fakeshop/apps/library/serializers.py::shelf_collision_schema_field_map` adds a
-  synthetic `target` relation on a throwaway serializer class.
-- `examples/fakeshop/test_query/test_library_api.py::test_serializer_hook_same_serializer_different_targets_distinct_inputs_over_http`
-  introspects the two generated input names and confirms both expose `targetId`, but both
-  mutation writes omit `targetId`.
+The current implementation is much safer than graphene-django: it authorizes before decode,
+type-checks `GlobalID`s, and visibility-checks relation ids through the target
+`DjangoType.get_queryset`. The remaining improvement is performance and double validation.
 
-I also checked DRF behavior directly: `CollisionShelfSerializer(data={"code": ..., "branch":
-..., "target": ...})` validates successfully and drops `target` from `validated_data`.
-That means the live test's differentiating field is not actually owned by the runtime
-serializer, and because the test omits it, the serializer relation decoder never has to use
-the recorded `InputFieldSpec.related_model` for the field that made the two shapes differ.
+Current shape: `_decode_relation_single()` fetches each visible object, then DRF's
+`PrimaryKeyRelatedField` fetches it again during `serializer.is_valid()`. The live query
+budget comments in fakeshop already show this duplicate relation SELECT.
 
-Impact: the test would still pass if the divergent field were introspected correctly but
-runtime decode for the `target` relation were broken, keyed to the wrong related model, or
-never reached. This is not a production bug by itself, but it leaves the hardest part of
-the same-serializer relation-target axis under-proven in the live lane.
+Recommended design:
 
-Recommended correction: make the collision fixture a real runtime field, not schema-only.
-For example, use one DRY serializer class/mixin that accepts `target_model` in its
-constructor, builds a write-only `target = PrimaryKeyRelatedField(queryset=target_model...)`
-in `get_fields()`, and pops or records `target` in `validate()`/`create()`. Then the two
-mutations should override both `get_serializer_for_schema()` and `get_serializer_kwargs()`
-with `Patron` vs `Loan`, post `targetId` in both live mutations, and include one wrong-model
-or missing-target assertion. That would prove descriptor naming, bind-stashed
-`related_model`, relation decode, and runtime serializer agreement in one fakeshop path.
+- Introduce a batched `visible_related_objects()` helper for multi relations and multiple
+  same-target relation fields in one input. Decode/type-check all ids first, then perform
+  one visibility-scoped `pk__in` query per target model/field.
+- For runtime serializer validation, adapt relation field querysets to the same
+  visibility-scoped queryset before `is_valid()` runs, so DRF's own lookup is the visibility
+  lookup rather than an unscoped second fetch.
+- Preserve the current no-existence-leak error surface: hidden, missing, wrong-type, and
+  uncoercible relation ids still collapse to the same field-keyed relation error.
+- Add live `assertNumQueries` coverage for single FK and many relation serializer mutations.
 
-### Medium: `allow_blank=True` is still not tested, despite the spec saying it is pinned
+That would keep the security win over graphene-django while removing the performance cost
+of doing the right thing.
 
-`rg "allow_blank|allowBlank" tests examples/fakeshop django_strawberry_framework` now finds
-only documentation in
-`django_strawberry_framework/rest_framework/serializer_converter.py::convert_serializer_field`;
-there is no test.
+### 4. Preserve DRF `ErrorDetail.code` in the GraphQL error envelope
 
-The spec explicitly says the M2 test plan pins `allow_blank=True` as "not reflected in the
-SDL, enforced by the serializer." The current suite covers `required=True, allow_null=True`
-and DRF defaults, but not this third axis.
+Graphene-django flattens serializer errors to messages. This package already improves on
+that with recursive paths, but it still drops DRF's structured error codes.
 
-Required correction: add a test. Because this is a consumer-visible SDL/runtime behavior,
-the best fit under [test_query README][test-query-readme] is a small fakeshop live mutation:
-introspect that an `allow_blank=True` `CharField` is still a non-null `String` when required,
-then post an empty string and prove the serializer accepts it. A package-level
-`build_serializer_inputs()` test is still useful as a narrow unit backstop, but it should not
-be the only proof if the behavior is reachable over `/graphql/`.
+Recommended design:
 
-### Medium: `SerializerMutation.build_input` still bypasses the promoted `cached_build_input` helper
+- Extend the generated mutation error type additively with `codes: [String!]` or
+  `details: [ValidationErrorDetail!]`.
+- In `django_strawberry_framework/rest_framework/resolvers.py::serializer_errors_to_field_errors`,
+  preserve each `ErrorDetail.code` alongside the message.
+- For Django `ValidationError`, preserve `ValidationError.code` where available.
+- Keep the existing `field` and `messages` fields intact for compatibility.
 
-The code preserves the guard-before-cache ordering, but it does not comply with the DRY
-obligation the spec calls out.
+Clients should be able to branch on `required`, `invalid`, `unique`, etc. without parsing
+localized human text. That would be a clear improvement over graphene-django.
 
-Evidence:
+### 5. Aggregate schema-time diagnostics instead of failing on the first bad field
 
-- `django_strawberry_framework/mutations/sets.py::cached_build_input` is the promoted helper
-  that owns "run guard, then cache lookup."
-- `django_strawberry_framework/forms/sets.py` calls that helper.
-- `django_strawberry_framework/rest_framework/sets.py::SerializerMutation.build_input`
-  reimplements the cache lookup inline inside `_build` instead.
+The implementation currently fails loud, which is already better than graphene-django's
+catch-all `serializers.Field -> String`. The next step is to fail loud with all actionable
+errors at once.
 
-I do not see a current correctness failure: `build_and_stash_input()` calls `_build()` for
-every declaration, so the create-required guard still runs per declaration before the local
-cache lookup. The issue is architectural drift. P1.7 says this procedure is shared, and the
-serializer path is now a third spelling of the exact sequencing the helper was created to
-single-site.
+Recommended design:
 
-Recommended correction: either adapt `cached_build_input` to support the serializer's
-descriptor-after-build key cleanly, or add a short source comment plus a spec note explaining
-why the descriptor-keyed serializer cache cannot use the helper without building twice. Do
-not leave the current code claiming P1.7 while bypassing the P1.7 helper.
+- During serializer input building, collect unsupported fields, non-PK relation fields,
+  dotted/source-star fields, missing relation primary `DjangoType`s, GraphQL-name
+  collisions, and source collisions.
+- Raise one `ConfigurationError` with a bullet list grouped by serializer field name.
+- Keep the existing precise messages as the per-field detail.
 
-### Low: generated divergent-name tokens use a short probabilistic digest while documenting an injective token
+This matters for real serializers with many fields: the user should not have to fix one
+field, rerun schema build, then discover the next unsupported field.
 
-`django_strawberry_framework/rest_framework/inputs.py::_shape_token` appends only six hex
-characters of SHA-1 for each field discriminant. The docstring says the token is injective
-and the spec promises distinct deterministic names for distinct descriptors. A six-hex
-digest is deterministic, but it is not injective and is small enough that a large consumer
-schema or generated hook matrix can hit a collision. The materialization ledger would catch
-that as a finalize-time `ConfigurationError`, but it would still reject two otherwise valid
-distinct shapes.
+## Type-system improvements
 
-Recommended correction: use a longer digest, at least 12 to 16 hex chars. If the contract
-must be truly "distinct", add a deterministic collision-resolution suffix at materialization
-time rather than relying on any truncated hash.
+### 6. Generate robust enums for serializer-only `ChoiceField`
 
-### Low: field-sequence normalization still has the wrapper the spec says not to add
+Graphene-django generates enums for `ChoiceField`, but its approach is shallow. The local
+implementation currently maps serializer-only `ChoiceField` to `str`, preserving runtime
+validation but losing schema precision.
 
-`django_strawberry_framework/rest_framework/inputs.py::normalize_serializer_field_sequence`
-is a thin wrapper over `normalize_field_name_sequence(..., flavor="SerializerMutation")`.
-The implementation is harmless, but the spec says the serializer should call the shared
-helper directly with no third rebinding wrapper. `django_strawberry_framework/rest_framework/sets.py::SerializerMutation._validate_meta`
-even says it routes through the direct helper, which is not what the code does.
+Recommended design:
 
-Recommended correction: either inline the calls and remove the wrapper, or update the spec
-and comments to say the serializer intentionally follows the model/form wrapper precedent.
+- Keep the existing read-side model-choice enum reuse for model-backed fields.
+- For serializer-only `ChoiceField`, generate a stable enum when choices are static and
+  GraphQL-safe.
+- For unsafe values, duplicate labels, dynamic choices, or values that cannot round-trip
+  cleanly, fail with a precise `ConfigurationError` or explicitly fall back only when the
+  mutation opts into a scalar choice field.
+- Map `MultipleChoiceField` to `list[GeneratedEnum]` under the same rules.
 
-### Low: read-only exclusion prose and test naming are misleading
+This can be better than graphene-django by making enum generation deterministic,
+descriptor-keyed, collision-safe, and explicit about fallback.
 
-`django_strawberry_framework/rest_framework/inputs.py::resolve_effective_serializer_fields`
-says excluding a `read_only` field is a no-op because the field was already dropped. The
-implementation actually validates `Meta.exclude` against the post-drop writable set, so
-explicitly excluding a read-only field raises "unknown or non-writable." The nearby test
-`tests/rest_framework/test_inputs.py::test_read_only_exclusion_does_not_trip_guard` does not
-pass `exclude=("ro",)`; it only proves the default drop path does not trip the create guard.
+### 7. Expand known DRF scalar support without adding a catch-all
 
-This may be an acceptable behavior choice, but the prose and test name should match it.
-Either add the explicit exclude test the name implies and decide whether it should raise, or
-rename/reword the test and docstring to "read-only fields are dropped before the guard."
+The previous review called out `serializers.DictField`; the broader improvement is a
+capability matrix that intentionally supports common DRF scalar fields while keeping the
+no-catch-all guarantee.
 
-## Resolved since the previous review
+Candidates to evaluate explicitly:
 
-- `examples/fakeshop/test_query/test_library_api.py::test_create_shelf_via_hook_narrowed_serializer_recovers_unsupported_default_field`
-  now earns the unsupported-default-field recovery through real `/graphql/`.
-- `examples/fakeshop/test_query/test_library_api.py::test_create_shelf_via_serializer_hidden_branch_is_relation_field_error`
-  and
-  `examples/fakeshop/test_query/test_library_api.py::test_create_shelf_via_schema_hook_serializer_hidden_branch_is_relation_field_error`
-  now earn serializer relation visibility through real `/graphql/`.
-- `examples/fakeshop/test_query/test_library_api.py::test_serializer_hook_same_serializer_different_targets_distinct_inputs_over_http`
-  now proves the materialization/name collision no longer breaks the composed fakeshop
-  schema; it just needs the stronger runtime decode assertion described above.
+- `serializers.DictField` and `serializers.HStoreField` -> `strawberry.scalars.JSON`.
+- `serializers.IPAddressField`, `FilePathField`, and URL/path-like subclasses -> `str`.
+- `serializers.DurationField` -> a deliberate scalar choice, not an accidental string.
+- `serializers.ModelField` -> route through the wrapped Django model field when present,
+  else fail loud.
 
-## Validation notes
+Each mapping should have a live mutation test when reachable through fakeshop and a package
+converter test as a narrow backstop. This gives users graphene-django's breadth without its
+silent degradation.
 
-I ran two targeted `uv run python` probes:
+### 8. Detect explicit model-backed serializer type overrides instead of silently choosing one source of truth
 
-- one confirmed the `allow_null` descriptor collision (`shape_a == shape_b` while emitted
-  annotations differ);
-- one confirmed the collision fixture's synthetic `target` input is ignored by
-  `CollisionShelfSerializer` at DRF validation time.
+The previous parity review noted that explicit serializer field type overrides on
+model-backed scalar fields are ignored because the current path routes scalars through the
+model column converter. The better-than-graphene version should not simply copy graphene and
+always trust the serializer field either; it should define a principled conflict policy.
 
-I restored the tracked fakeshop SQLite fixture after the DRF probe touched it. I did not run
-pytest.
+Recommended design:
+
+- Treat default `ModelSerializer`-generated fields as model-backed and use the read-side
+  model converter for enum/read-write symmetry.
+- Treat consumer-declared serializer fields as an explicit serializer contract.
+- If the declared serializer field's GraphQL scalar disagrees with the model-column scalar,
+  either honor the serializer field or raise a `ConfigurationError` requiring an explicit
+  override policy. Do not silently pick the model column.
+- Include `source` in the diagnostic so `display_name = CharField(source="name")` and true
+  type mismatches are easy to tell apart.
+
+That is better than both current behavior and graphene-django: the framework becomes
+predictable instead of merely serializer-first or model-first.
+
+## Schema and developer-experience improvements
+
+### 9. Thread DRF field metadata into SDL deliberately
+
+The shared input builder already supports field descriptions. Use that to expose DRF
+metadata in a controlled way:
+
+- `field.help_text` -> GraphQL input field description.
+- `min_length`, `max_length`, `min_value`, `max_value`, `allow_blank`, and `allow_empty`
+  can be appended to descriptions or surfaced through Strawberry extensions/directives if
+  this project has a stable extension convention.
+- Keep runtime validation in DRF; this is documentation/introspection, not a second
+  validator.
+
+Graphene-django only threads `help_text`. This package can do better by exposing a coherent
+DRF validation summary without changing coercion semantics.
+
+### 10. Fingerprint `get_serializer_for_schema()` for determinism
+
+The spec requires schema-time hooks to return a stable, request-independent field shape.
+The implementation calls the hook at class validation and again during binding. A
+nondeterministic hook could validate one shape and bind another.
+
+Recommended design:
+
+- Compute a lightweight field-shape fingerprint at class validation: ordered field names,
+  field classes, sources, read/write flags, relation target models, `required`,
+  `allow_null`, and relevant converter discriminants.
+- Recompute at bind and raise `ConfigurationError` if the hook drifted.
+- Optionally store and reuse the class-validation field map when safe, but still guard
+  against mutable field maps.
+
+This turns a spec promise into an enforced contract. Graphene-django has no equivalent
+because it has no schema/runtime hook split.
+
+### 11. Add a public serializer-field converter registry
+
+Fail-loud custom fields are correct, but consumers need a sanctioned way to support their
+own DRF fields without patching the framework.
+
+Recommended design:
+
+- Provide `register_serializer_field_converter(FieldClass, converter, *, override=False)`.
+- Keep the MRO dispatch and no base `serializers.Field` catch-all.
+- Require converters to return the same structured conversion shape as built-in fields.
+- Include a test proving a registered custom field maps, and an unregistered custom field
+  still raises.
+
+This is better than graphene-django's singledispatch plus catch-all because extension is
+explicit and safe.
+
+### 12. Add a serializer `save()` kwargs hook separate from constructor kwargs
+
+DRF often expects request-derived data at `serializer.save(owner=...)`, not in
+`serializer.__init__` or by mutating `data`. Graphene-django exposes `perform_mutate`, but
+that bypasses too much framework-owned behavior.
+
+Recommended design:
+
+- Add `get_serializer_save_kwargs(info, data, instance=None) -> dict`.
+- Call `serializer.save(**save_kwargs)` inside the existing value-preserving save closure.
+- Validate that save kwargs do not shadow serializer input fields unless explicitly allowed.
+- Keep `get_serializer_kwargs` for constructor/context customization only.
+
+This gives consumers a DRF-native customization point while preserving transaction,
+error-mapping, and refetch behavior.
+
+### 13. Expose structured error paths in addition to dotted `field`
+
+The current recursive flattener emits dotted paths like `items.0.name`. That is already
+better than graphene-django's one-level mapping, but clients should not have to parse
+strings.
+
+Recommended design:
+
+- Add an optional `path: [String!]` or `segments: [String!]` field to the error object.
+- Keep `field` as the legacy dotted string.
+- For root non-field errors, emit `field="__all__"` and `path=[]` or `["__all__"]` by a
+  documented rule.
+
+This is an additive client ergonomics improvement and pairs naturally with preserving DRF
+error codes.
+
+## Performance and correctness extensions
+
+### 14. Add optional row locking for update mutations
+
+The shared write pipeline runs inside `transaction.atomic()`, which is already stronger than
+graphene-django. For high-contention updates, the framework could provide an opt-in
+`select_for_update` path.
+
+Recommended design:
+
+- Add `Meta.select_for_update = True` or a hook returning lock options.
+- Apply it only to update locate queries inside the existing transaction.
+- Preserve visibility filtering before lock acquisition.
+- Skip or clearly error on unsupported backends/options.
+
+This is not needed for every app, but it is the kind of correctness control a production
+mutation framework should expose.
+
+### 15. Add a schema-shape debug/introspection registry for generated inputs
+
+Descriptor-derived serializer input names can be long and hash-like by design. Debugging
+would be easier if the framework exposed the shape reason.
+
+Recommended design:
+
+- Keep an internal registry from generated input name to `SerializerInputShape`.
+- Provide a debug helper that prints the serializer class, operation, fields, sources,
+  relation targets, requiredness, and why the canonical name was or was not used.
+- Use it in `ConfigurationError` messages for materialization/name collisions.
+
+Graphene-django's class-name cache can silently conflate shapes. This package already avoids
+that; a debug registry would make the stronger behavior easier to understand.
+
+### 16. Add golden SDL coverage for representative serializer inputs
+
+The live tests introspect focused fields, which is good. A small golden SDL snapshot for the
+serializer mutation input lane would catch cross-field drift more efficiently.
+
+Recommended design:
+
+- Keep it narrow: one products serializer mutation and one library schema-hook mutation.
+- Assert generated input names, field names, nullability, descriptions, relation id scalar,
+  and payload shape.
+- Do not snapshot the whole schema.
+
+This is especially valuable once enum generation, descriptions, error metadata, and custom
+converter hooks are added.
+
+## Keep these wins over graphene-django
+
+Do not regress these while making the improvements above:
+
+- Unsupported serializer fields fail loud instead of silently becoming `String`.
+- Relation inputs are type-checked and visibility-checked before write.
+- Authorization runs before relation decode.
+- Runtime `context["request"]` is framework-owned and checked against the authorized actor.
+- Update `partial=True` is framework-owned, not hook-owned.
+- Serializer errors are recursively flattened and re-keyed to GraphQL wire names.
+- Writes run inside the shared transaction boundary and refetch through the optimizer path.
+- Serializer input shape identity is descriptor-based, not cached only by serializer class
+  name.
+- DRF remains a soft dependency at the package root.
 
 <!-- LINK DEFINITIONS -->
 
@@ -211,6 +344,8 @@ pytest.
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
+[rf-resolvers]: ../django_strawberry_framework/rest_framework/resolvers.py
+[rf-sets]: ../django_strawberry_framework/rest_framework/sets.py
 
 <!-- tests/ -->
 

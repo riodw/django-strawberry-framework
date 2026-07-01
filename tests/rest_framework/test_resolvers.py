@@ -53,6 +53,7 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.rest_framework import resolvers as serializer_resolvers
+from django_strawberry_framework.rest_framework.serializer_converter import SCALAR
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 
@@ -981,3 +982,325 @@ async def test_async_serializer_resolver_runs_sync_body_under_sync_to_async():
     assert payload.errors == []
     assert payload.node is not None
     assert payload.node.name == "AsyncItem"
+
+
+# ===========================================================================
+# Structured error codes + paths (spec-039 rev6 #4 / #13)
+# ===========================================================================
+
+
+def test_flattener_preserves_error_detail_codes_and_path():
+    """A DRF ``ErrorDetail.code`` -> ``codes``; the dotted key -> structured ``path`` segments (#4 / #13)."""
+    from rest_framework.exceptions import ErrorDetail
+
+    errors = {
+        "name": [ErrorDetail("This field is required.", code="required")],
+        "items": [{"qty": [ErrorDetail("Not valid.", code="invalid")]}],
+    }
+    flat = serializer_resolvers.serializer_errors_to_field_errors(errors, {})
+    by_field = {fe.field: (fe.codes, fe.path) for fe in flat}
+    assert by_field["name"] == (["required"], ["name"])
+    assert by_field["items.0.qty"] == (["invalid"], ["items", "0", "qty"])
+
+
+def test_flattener_root_non_field_error_has_empty_path():
+    """A ROOT non-field error is ``field="__all__"`` with an EMPTY ``path`` (the documented rule, #13)."""
+    from rest_framework.exceptions import ErrorDetail
+
+    drf_key = serializer_resolvers._DRF_NON_FIELD_KEY
+    errors = {drf_key: [ErrorDetail("Model-wide problem.", code="invalid")]}
+    (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, {})
+    assert fe.field == NON_FIELD_ERROR_KEY
+    assert fe.path == []
+    assert fe.codes == ["invalid"]
+
+
+def test_flattener_nested_non_field_error_keeps_all_sentinel_segment():
+    """A NESTED non-field error keeps the ``"__all__"`` sentinel as its final path segment (#13)."""
+    from rest_framework.exceptions import ErrorDetail
+
+    drf_key = serializer_resolvers._DRF_NON_FIELD_KEY
+    errors = {"items": [{drf_key: [ErrorDetail("Cross-field.", code="invalid")]}]}
+    (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, {})
+    assert fe.path == ["items", "0", NON_FIELD_ERROR_KEY]
+
+
+def test_flattener_plain_string_leaf_has_no_codes():
+    """A plain (non-``ErrorDetail``) string leaf yields no codes (only real codes are surfaced)."""
+    flat = serializer_resolvers.serializer_errors_to_field_errors({"name": ["plain string"]}, {})
+    (fe,) = flat
+    assert fe.codes == []
+    assert fe.path == ["name"]
+
+
+# ===========================================================================
+# Schema/runtime serializer agreement guard (spec-039 rev6 #1)
+# ===========================================================================
+
+
+def _agreement_specs(**overrides):
+    """Build a single ``InputFieldSpec`` (defaults to a scalar ``code``) for the guard tests."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    base = {
+        "input_attr": "code",
+        "graphql_name": "code",
+        "target_name": "code",
+        "kind": SCALAR,
+    }
+    base.update(overrides)
+    return type("FakeMut", (), {"_input_field_specs": [InputFieldSpec(**base)]})
+
+
+def _shelf_model_serializer():
+    """A ``ModelSerializer`` over ``Shelf`` (``code`` scalar + ``branch`` PK relation)."""
+
+    class ShelfSer(serializers.ModelSerializer):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("code", "branch")
+
+    return ShelfSer(data={})
+
+
+def test_agreement_guard_raises_when_runtime_lacks_schema_field():
+    """A schema field the runtime serializer does not declare fails loud (#1)."""
+    fake = _agreement_specs(input_attr="ghost", graphql_name="ghost", target_name="ghost")
+    with pytest.raises(ConfigurationError, match="does not declare it"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+def test_agreement_guard_raises_when_runtime_field_read_only():
+    """A schema field the runtime declares read_only fails loud (the value would be ignored) (#1)."""
+
+    class ROSer(serializers.ModelSerializer):
+        code = serializers.CharField(read_only=True)
+
+        class Meta:
+            model = library_models.Shelf
+            fields = ("code", "branch")
+
+    with pytest.raises(ConfigurationError, match="read_only"):
+        serializer_resolvers._assert_schema_runtime_agreement(_agreement_specs(), ROSer(data={}))
+
+
+def test_agreement_guard_raises_on_source_mismatch():
+    """A runtime field binding a different source than the schema recorded fails loud (#1)."""
+    # Schema recorded source "topic"; runtime "code" binds source "code".
+    fake = _agreement_specs(source="topic")
+    with pytest.raises(ConfigurationError, match="binds source"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+def test_agreement_guard_raises_on_relation_wrong_model():
+    """A runtime relation over a DIFFERENT model than the schema recorded fails loud (#1)."""
+    fake = _agreement_specs(
+        input_attr="branch_id",
+        graphql_name="branchId",
+        target_name="branch",
+        kind=serializer_resolvers.RELATION_SINGLE,
+        related_model=library_models.Patron,  # runtime branch targets Branch, not Patron.
+    )
+    with pytest.raises(ConfigurationError, match="different model"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+def test_agreement_guard_raises_when_scalar_became_relation():
+    """A schema scalar that is a relation at runtime fails loud (the kind moved) (#1)."""
+    # Schema types "branch" as a SCALAR, but the runtime serializer declares it a relation.
+    fake = _agreement_specs(target_name="branch", input_attr="branch", graphql_name="branch")
+    with pytest.raises(ConfigurationError, match="scalar in the schema but a relation"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+def test_agreement_guard_raises_when_relation_shape_wrong():
+    """A schema relation the runtime declares as a scalar fails loud (#1)."""
+    fake = _agreement_specs(
+        target_name="code",
+        input_attr="code_id",
+        graphql_name="codeId",
+        kind=serializer_resolvers.RELATION_SINGLE,
+        related_model=library_models.Branch,
+    )
+    with pytest.raises(ConfigurationError, match="primary-key relation"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+def test_agreement_guard_passes_when_schema_and_runtime_agree():
+    """The happy path: matching scalar + relation specs pass (no raise) (#1)."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    fake = type(
+        "OkMut",
+        (),
+        {
+            "_input_field_specs": [
+                InputFieldSpec(
+                    input_attr="code",
+                    graphql_name="code",
+                    target_name="code",
+                    kind=SCALAR,
+                ),
+                InputFieldSpec(
+                    input_attr="branch_id",
+                    graphql_name="branchId",
+                    target_name="branch",
+                    kind=serializer_resolvers.RELATION_SINGLE,
+                    related_model=library_models.Branch,
+                ),
+            ],
+        },
+    )
+    # No raise.
+    serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
+
+
+# ===========================================================================
+# Explicit injection contract runtime verification (spec-039 rev6 #2)
+# ===========================================================================
+
+
+def test_declared_injected_field_missing_from_data_raises_at_runtime():
+    """A ``Meta.injected_fields`` the override did NOT supply into data fails loud (rev6 #2)."""
+    fake = type(
+        "InjectMut",
+        (),
+        {"_mutation_meta": SimpleNamespace(injected_fields=("topic",))},
+    )
+    serializer = _shelf_model_serializer()  # data={} -> initial_data lacks `topic`
+    with pytest.raises(ConfigurationError, match="did not supply"):
+        serializer_resolvers._assert_injected_fields_supplied(fake, serializer)
+
+
+def test_supplied_injected_field_passes_runtime_check():
+    """A declared injected field present in the serializer data passes (rev6 #2 happy path)."""
+
+    class ShelfSer(serializers.ModelSerializer):
+        topic = serializers.CharField(required=True)
+
+        class Meta:
+            model = library_models.Shelf
+            fields = ("code", "branch", "topic")
+
+    fake = type(
+        "InjectMut",
+        (),
+        {"_mutation_meta": SimpleNamespace(injected_fields=("topic",))},
+    )
+    serializer = ShelfSer(data={"code": "X", "branch": 1, "topic": "supplied"})
+    # No raise: `topic` is present in the serializer's data.
+    serializer_resolvers._assert_injected_fields_supplied(fake, serializer)
+
+
+def test_no_injected_fields_is_a_runtime_noop():
+    """A mutation with no ``Meta.injected_fields`` skips the runtime injection check (rev6 #2)."""
+    fake = type("PlainMut", (), {"_mutation_meta": SimpleNamespace(injected_fields=None)})
+    serializer_resolvers._assert_injected_fields_supplied(
+        fake,
+        _shelf_model_serializer(),
+    )  # no raise
+
+
+# ===========================================================================
+# Batched multi-relation visibility (spec-039 rev6 #3)
+# ===========================================================================
+
+
+@pytest.mark.django_db
+def test_decode_relation_multi_uses_a_single_batched_visibility_query():
+    """A many-relation confirms the WHOLE set's visibility in ONE ``pk__in`` query (rev6 #3)."""
+    from django.db import connection
+    from django.test.utils import CaptureQueriesContext
+
+    _declare_nonrelay_genre_primary()
+    genres = [library_models.Genre.objects.create(name=f"BatchG{i}") for i in range(3)]
+    pks = [g.pk for g in genres]
+
+    with CaptureQueriesContext(connection) as ctx:
+        result, error = serializer_resolvers._decode_relation_multi(
+            pks,
+            graphql_name="genreIds",
+            related_model=library_models.Genre,
+            info=None,
+        )
+    assert error is None
+    assert result == pks
+    # ONE batched pk__in query for all 3 members (not one visibility query per element).
+    assert len(ctx.captured_queries) == 1
+
+
+@pytest.mark.django_db
+def test_decode_relation_multi_hidden_member_is_field_error_via_batch():
+    """A hidden member in the batched set collapses to the uniform relation error (no leak) (rev6 #3)."""
+
+    class GenreT(DjangoType):
+        class Meta:
+            model = library_models.Genre
+            fields = ("id", "name")
+            primary = True
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            return queryset.exclude(name="HiddenBatch")
+
+    del GenreT
+    visible = library_models.Genre.objects.create(name="VisibleBatch")
+    hidden = library_models.Genre.objects.create(name="HiddenBatch")
+    result, error = serializer_resolvers._decode_relation_multi(
+        [visible.pk, hidden.pk],
+        graphql_name="genreIds",
+        related_model=library_models.Genre,
+        info=None,
+    )
+    assert result is None
+    assert error is not None
+    assert error.field == "genreIds"
+
+
+# ===========================================================================
+# get_serializer_save_kwargs shadow guard (spec-039 rev6 #12)
+# ===========================================================================
+
+
+def test_save_kwargs_shadowing_input_field_raises():
+    """A save kwarg whose name matches a serializer INPUT field fails loud (would clobber input) (rev6 #12)."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    fake = type(
+        "M",
+        (),
+        {
+            "_input_field_specs": [
+                InputFieldSpec(
+                    input_attr="code",
+                    graphql_name="code",
+                    target_name="code",
+                    kind=SCALAR,
+                ),
+            ],
+        },
+    )
+    with pytest.raises(ConfigurationError, match="shadow serializer input field"):
+        serializer_resolvers._assert_save_kwargs_no_shadow(fake, {"code": "clobber"})
+
+
+def test_save_kwargs_not_shadowing_input_field_is_allowed():
+    """A save kwarg NOT matching an input field (server-side data) is allowed (rev6 #12)."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    fake = type(
+        "M",
+        (),
+        {
+            "_input_field_specs": [
+                InputFieldSpec(
+                    input_attr="code",
+                    graphql_name="code",
+                    target_name="code",
+                    kind=SCALAR,
+                ),
+            ],
+        },
+    )
+    # No raise: `owner` is server-side data, not a serializer input field.
+    serializer_resolvers._assert_save_kwargs_no_shadow(fake, {"owner": object()})

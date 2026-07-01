@@ -30,6 +30,8 @@ import datetime
 import decimal
 import itertools
 import uuid
+from enum import Enum
+from typing import get_args, get_origin
 
 import pytest
 import strawberry
@@ -41,17 +43,34 @@ from strawberry import relay
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.rest_framework import serializer_converter
 from django_strawberry_framework.rest_framework.serializer_converter import (
     FILE,
     RELATION_MULTI,
     RELATION_SINGLE,
     SCALAR,
+    SerializerFieldConversion,
     backing_model_field,
     convert_serializer_field,
+    register_serializer_field_converter,
     resolve_serializer_field,
     serializer_field_graphql_name,
     serializer_only_relation_annotation,
 )
+
+
+@pytest.fixture
+def _restore_converter_registry():
+    """Snapshot + restore the module converter registry so a test registration cannot leak.
+
+    The serializer-field converter registry (spec-039 rev6 #11) mirrors the read-side
+    ``SCALAR_MAP``: a mutable module dict NOT reset by ``registry.clear()``, so a test
+    that registers a converter restores the snapshot on teardown.
+    """
+    snapshot = dict(serializer_converter._SERIALIZER_FIELD_CONVERTERS)
+    yield
+    serializer_converter._SERIALIZER_FIELD_CONVERTERS.clear()
+    serializer_converter._SERIALIZER_FIELD_CONVERTERS.update(snapshot)
 
 
 @pytest.fixture(autouse=True)
@@ -557,3 +576,304 @@ def test_relation_target_with_no_registered_primary_raises():
     field = ItemSer().fields["category"]
     with pytest.raises(ConfigurationError, match="no registered primary DjangoType"):
         resolve_serializer_field(field, product_models.Item, "X")
+
+
+# ---------------------------------------------------------------------------
+# Expanded DRF scalar capability matrix (spec-039 rev6 #7) - no catch-all
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        (serializers.DictField(), strawberry.scalars.JSON),
+        (serializers.IPAddressField(), str),
+        (serializers.FilePathField(path="/tmp"), str),
+        (serializers.DurationField(), str),
+    ],
+)
+def test_expanded_scalar_matrix(field, expected):
+    """The rev6 #7 scalars each map to their EXPLICIT annotation, kind ``scalar``.
+
+    ``DictField`` -> ``JSON``; ``IPAddressField`` / ``FilePathField`` -> ``str``;
+    ``DurationField`` -> ``str`` (a DELIBERATE scalar - DRF renders a duration as an
+    ISO-8601-ish string on the wire, not an accidental fallthrough).
+    """
+    conversion = convert_serializer_field(_bind(field, "f"))
+    assert conversion.annotation == expected
+    assert conversion.kind == SCALAR
+
+
+def test_hstore_field_maps_to_json_via_mro():
+    """``HStoreField`` (a ``DictField`` subclass) resolves to ``JSON`` through the MRO walk."""
+    conversion = convert_serializer_field(_bind(serializers.HStoreField(), "h"))
+    assert conversion.annotation == strawberry.scalars.JSON
+    assert conversion.kind == SCALAR
+
+
+def test_model_field_maps_via_wrapped_model_field():
+    """``ModelField`` resolves its scalar through the wrapped Django ``model_field`` (#7)."""
+    field = serializers.ModelField(model_field=product_models.Item._meta.get_field("name"))
+    conversion = convert_serializer_field(_bind(field, "nm"))
+    assert conversion.annotation is str
+    assert conversion.kind == SCALAR
+
+
+def test_model_field_without_wrapped_field_raises():
+    """A ``ModelField`` with no wrapped ``model_field`` fails loud (no scalar to resolve)."""
+    field = serializers.ModelField(model_field=None)
+    field.field_name = "x"
+    with pytest.raises(ConfigurationError, match="ModelField with no wrapped model_field"):
+        convert_serializer_field(field)
+
+
+def test_model_field_over_unsupported_column_fails_loud():
+    """A ``ModelField`` over an UNsupported column type raises (via ``scalar_for_field``, no ``String``)."""
+
+    class WeirdField(models.Field):
+        pass
+
+    weird = WeirdField()
+    weird.set_attributes_from_name("weird")
+    field = serializers.ModelField(model_field=weird)
+    field.field_name = "weird"
+    with pytest.raises(ConfigurationError, match="Unsupported Django field type"):
+        convert_serializer_field(field)
+
+
+# ---------------------------------------------------------------------------
+# Public converter registry (spec-039 rev6 #11) - sanctioned extension, no catch-all
+# ---------------------------------------------------------------------------
+
+
+class _CustomHexField(serializers.Field):
+    """A custom DRF field whose MRO has NO supported ancestor (unregistered -> raises)."""
+
+    def to_internal_value(self, data):  # pragma: no cover - never called in conversion.
+        return data
+
+    def to_representation(self, value):  # pragma: no cover - never called in conversion.
+        return value
+
+
+def test_unregistered_custom_field_raises_then_registered_maps(_restore_converter_registry):
+    """A custom field raises until a converter is registered, then maps - and no catch-all appears."""
+    # Unregistered: the fail-loud raise (no silent ``String``).
+    with pytest.raises(
+        ConfigurationError,
+        match="Unsupported serializer field type '_CustomHexField'",
+    ):
+        convert_serializer_field(_bind(_CustomHexField(), "c"))
+
+    register_serializer_field_converter(
+        _CustomHexField,
+        lambda field: SerializerFieldConversion(annotation=str, required=field.required),
+    )
+    conversion = convert_serializer_field(_bind(_CustomHexField(), "c"))
+    assert conversion.annotation is str
+    assert conversion.kind == SCALAR
+
+
+def test_register_converter_resolves_unregistered_subclass_via_mro(_restore_converter_registry):
+    """A registered converter also covers the field class's unregistered subclasses (MRO walk)."""
+    register_serializer_field_converter(
+        _CustomHexField,
+        lambda field: SerializerFieldConversion(annotation=str, required=field.required),
+    )
+
+    class _CustomHexSubclass(_CustomHexField):
+        pass
+
+    assert convert_serializer_field(_bind(_CustomHexSubclass(), "c")).annotation is str
+
+
+def test_register_converter_override_guard(_restore_converter_registry):
+    """Re-registering an already-mapped class raises unless ``override=True``."""
+    conv = lambda field: SerializerFieldConversion(annotation=int, required=field.required)  # noqa: E731
+    with pytest.raises(ConfigurationError, match="already registered for 'CharField'"):
+        register_serializer_field_converter(serializers.CharField, conv)
+    # ``override=True`` replaces it.
+    register_serializer_field_converter(serializers.CharField, conv, override=True)
+    assert convert_serializer_field(_bind(serializers.CharField(), "f")).annotation is int
+
+
+def test_register_converter_rejects_non_field_class(_restore_converter_registry):
+    """``field_class`` must be a ``serializers.Field`` subclass."""
+    with pytest.raises(ConfigurationError, match="must be a serializers.Field subclass"):
+        register_serializer_field_converter(
+            int,  # not a serializers.Field
+            lambda field: SerializerFieldConversion(annotation=str, required=field.required),
+        )
+
+
+def test_register_converter_rejects_non_callable(_restore_converter_registry):
+    """``converter`` must be callable."""
+    with pytest.raises(ConfigurationError, match="must be\n?.*callable|callable"):
+        register_serializer_field_converter(_CustomHexField, "not-a-callable")
+
+
+# ---------------------------------------------------------------------------
+# Serializer-only ChoiceField -> generated enum (spec-039 rev6 #6)
+# ---------------------------------------------------------------------------
+
+
+def test_serializer_only_choicefield_becomes_enum():
+    """A serializer-only ``ChoiceField`` resolves to a generated GraphQL enum (schema precision)."""
+
+    class ChoiceSer(serializers.Serializer):
+        color = serializers.ChoiceField(choices=[("r", "Red"), ("g", "Green")])
+
+    field = ChoiceSer().fields["color"]
+    _attr, annotation, spec = resolve_serializer_field(field, None, "X")
+    assert spec.kind == SCALAR
+    assert isinstance(annotation, type) and issubclass(annotation, Enum)
+    assert {member.value for member in annotation} == {"r", "g"}
+
+
+def test_serializer_only_multiple_choicefield_becomes_list_enum():
+    """A serializer-only ``MultipleChoiceField`` resolves to ``list[<enum>]``."""
+
+    class MultiSer(serializers.Serializer):
+        tags = serializers.MultipleChoiceField(choices=[("a", "A"), ("b", "B")])
+
+    field = MultiSer().fields["tags"]
+    _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
+    assert get_origin(annotation) is list
+    (inner,) = get_args(annotation)
+    assert issubclass(inner, Enum)
+    assert {member.value for member in inner} == {"a", "b"}
+
+
+def test_serializer_only_filepathfield_stays_str_not_enum():
+    """A ``FilePathField`` (a ``ChoiceField`` subclass with DYNAMIC choices) stays ``str``, never an enum."""
+
+    class PathSer(serializers.Serializer):
+        p = serializers.FilePathField(path="/tmp")
+
+    field = PathSer().fields["p"]
+    _attr, annotation, _spec = resolve_serializer_field(field, None, "X")
+    assert annotation is str
+
+
+def test_serializer_only_choice_enum_dedupes_by_name():
+    """Two resolves of the same serializer-only choice field share ONE enum object (dedupe)."""
+
+    def _resolve():
+        class ChoiceSer(serializers.Serializer):
+            color = serializers.ChoiceField(choices=[("r", "Red"), ("g", "Green")])
+
+        return resolve_serializer_field(ChoiceSer().fields["color"], None, "X")[1]
+
+    assert _resolve() is _resolve()
+
+
+def test_serializer_only_choice_enum_name_collision_with_diverging_members_raises():
+    """Reusing an enum NAME with a DIFFERENT member set fails loud (no silent reuse)."""
+
+    class SerA(serializers.Serializer):
+        color = serializers.ChoiceField(choices=[("r", "Red")])
+
+    class SerB(serializers.Serializer):
+        color = serializers.ChoiceField(choices=[("b", "Blue")])
+
+    resolve_serializer_field(SerA().fields["color"], None, "X")
+    with pytest.raises(ConfigurationError, match="two different member sets"):
+        resolve_serializer_field(SerB().fields["color"], None, "X")
+
+
+# ---------------------------------------------------------------------------
+# Model-backed type-override conflict policy (spec-039 rev6 #8)
+# ---------------------------------------------------------------------------
+
+
+def test_consumer_declared_scalar_disagreeing_with_column_raises():
+    """A consumer-declared field whose scalar disagrees with the model column fails loud."""
+    _register_products_types()
+
+    class MismatchSer(serializers.ModelSerializer):
+        name = serializers.IntegerField()  # column is TextField -> str; declared int -> disagree.
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name",)
+
+    field = MismatchSer().fields["name"]
+    with pytest.raises(ConfigurationError, match="disagrees with the backing model column"):
+        resolve_serializer_field(field, product_models.Item, "X")
+
+
+def test_consumer_declared_scalar_agreeing_with_column_ok():
+    """A benign rename (``CharField`` over a text column) AGREES and resolves to the model scalar."""
+    _register_products_types()
+
+    class AgreeSer(serializers.ModelSerializer):
+        display_name = serializers.CharField(source="name")
+
+        class Meta:
+            model = product_models.Item
+            fields = ("display_name",)
+
+    field = AgreeSer().fields["display_name"]
+    _attr, annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
+    assert spec.kind == SCALAR
+    assert annotation is str
+
+
+def test_auto_generated_model_field_is_not_conflict_checked():
+    """An AUTO-generated ModelSerializer field routes through the model converter (no conflict check)."""
+    _register_products_types()
+
+    class AutoSer(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name",)
+
+    field = AutoSer().fields["name"]
+    _attr, annotation, spec = resolve_serializer_field(field, product_models.Item, "X")
+    assert spec.kind == SCALAR
+    assert annotation is str
+
+
+# ---------------------------------------------------------------------------
+# DRF field metadata -> SDL description (spec-039 rev6 #9)
+# ---------------------------------------------------------------------------
+
+
+def test_serializer_field_description_combines_help_text_and_constraints():
+    """``help_text`` heads the description; a constraint summary is appended (#9)."""
+    from django_strawberry_framework.rest_framework.serializer_converter import (
+        serializer_field_description,
+    )
+
+    field = _bind(
+        serializers.CharField(help_text="The item name.", min_length=2, max_length=20),
+        "name",
+    )
+    description = serializer_field_description(field)
+    assert description is not None
+    assert description.startswith("The item name.")
+    assert "min_length=2" in description
+    assert "max_length=20" in description
+
+
+def test_serializer_field_description_none_without_metadata():
+    """A field with neither help text nor constraints yields ``None`` (no description emitted)."""
+    from django_strawberry_framework.rest_framework.serializer_converter import (
+        serializer_field_description,
+    )
+
+    assert serializer_field_description(_bind(serializers.CharField(), "f")) is None
+
+
+def test_serializer_field_description_notes_numeric_bounds_and_allow_blank():
+    """Numeric bounds + ``allow_blank`` are summarized even without help text (#9)."""
+    from django_strawberry_framework.rest_framework.serializer_converter import (
+        serializer_field_description,
+    )
+
+    numeric = serializer_field_description(
+        _bind(serializers.IntegerField(min_value=0, max_value=9), "n"),
+    )
+    assert numeric == "Constraints: min_value=0, max_value=9."
+    blank = serializer_field_description(_bind(serializers.CharField(allow_blank=True), "b"))
+    assert blank == "Constraints: allow_blank=true."

@@ -86,6 +86,7 @@ from .inputs import (
     materialize_serializer_input_class,
     resolve_effective_serializer_fields,
     resolve_optional_fields,
+    serializer_schema_fingerprint,
 )
 from .inputs import (
     get_serializer_for_schema as _default_serializer_schema_fields,
@@ -101,6 +102,8 @@ _ALLOWED_SERIALIZER_META_KEYS: frozenset[str] = frozenset(
     {
         "serializer_class",
         "optional_fields",
+        "injected_fields",
+        "select_for_update",
         "operation",
         "fields",
         "exclude",
@@ -284,6 +287,25 @@ class SerializerMutation(DjangoMutation):
             flavor="SerializerMutation",
         )
         resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
+        # ``Meta.injected_fields`` (rev6 #2): the auditable, per-field replacement for the
+        # blanket get_serializer_kwargs waiver. Normalized here (bare-string / duplicate
+        # rejected via the shared helper); ``build_input`` subtracts these from the
+        # create-required guard and the resolver verifies they reach the serializer's data.
+        injected_fields = normalize_field_name_sequence(
+            getattr(meta, "injected_fields", None),
+            label="injected_fields",
+            flavor="SerializerMutation",
+        )
+        # ``Meta.select_for_update`` (rev6 #14): opt-in row lock on the UPDATE locate. A bool
+        # only (the shared locate applies ``.select_for_update()`` when True); a non-bool is a
+        # clear class-creation error. On a backend without ``FOR UPDATE`` (e.g. sqlite) Django
+        # silently skips the clause, so it is safe to declare regardless of backend.
+        select_for_update = getattr(meta, "select_for_update", False)
+        if not isinstance(select_for_update, bool):
+            raise ConfigurationError(
+                f"SerializerMutation {name}.Meta.select_for_update must be a bool; got "
+                f"{select_for_update!r}.",
+            )
 
         permission_classes = _validate_mutation_permission_classes(
             name,
@@ -300,6 +322,11 @@ class SerializerMutation(DjangoMutation):
             permission_classes=permission_classes,
             serializer_class=serializer_class,
             optional_fields=optional_fields,
+            injected_fields=injected_fields,
+            select_for_update=select_for_update,
+            # rev6 #10: capture a stable fingerprint of the schema-hook field shape NOW (class
+            # validation) so the phase-2.5 bind can detect a nondeterministic hook that drifted.
+            schema_fingerprint=serializer_schema_fingerprint(field_map),
         )
 
     @classmethod
@@ -389,6 +416,20 @@ class SerializerMutation(DjangoMutation):
         operation_kind = _SERIALIZER_OPERATION_INPUT_KIND[meta.operation]
         serializer_class = meta.serializer_class
         field_map = cls.get_serializer_for_schema()
+        # rev6 #10: the schema hook must be DETERMINISTIC (a stable, request-independent shape).
+        # It ran at class validation (fingerprint stored on the snapshot); recompute here at the
+        # bind and fail loud if it DRIFTED, so a hook that validates one shape and binds another
+        # is a clear ConfigurationError rather than a silent schema/reverse-map mismatch.
+        if meta.schema_fingerprint is not None:
+            current_fingerprint = serializer_schema_fingerprint(field_map)
+            if current_fingerprint != meta.schema_fingerprint:
+                raise ConfigurationError(
+                    f"SerializerMutation {cls.__name__}.get_serializer_for_schema() returned a "
+                    "DIFFERENT field shape at bind than at class validation; the hook must be "
+                    "deterministic and request-independent (the input is generated once at "
+                    "finalization). Return a stable field map (do not read request state or "
+                    "mutate per call).",
+                )
         effective_names = tuple(
             resolve_effective_serializer_fields(
                 serializer_class,
@@ -397,21 +438,29 @@ class SerializerMutation(DjangoMutation):
                 field_map=field_map,
             ),
         )
-        # Waive the create-required guard when the concrete mutation overrides the
-        # serializer-construction hook (it injects whatever a narrowing dropped). The
-        # partial (update) shape is never create-required guarded (it widens every
-        # field optional), so only the create path runs the guard.
-        guard_waived = _hook_overridden(cls, SerializerMutation, "get_serializer_kwargs")
+        # The create-required guard (spec-039 rev6 #2). ``Meta.injected_fields`` is the
+        # SANCTIONED, auditable path: when declared, the guard RUNS but subtracts those fields
+        # (a dropped required field NOT declared injected still raises), and the resolver
+        # verifies they reach the serializer's data. The old blanket
+        # ``get_serializer_kwargs``-override waiver survives ONLY as an explicitly-named unsafe
+        # legacy escape hatch - it fully skips the guard, but ONLY when ``injected_fields`` is
+        # NOT declared (declaring ``injected_fields`` opts into the precise mechanism). The
+        # partial (update) shape is never create-required guarded (all fields optional).
+        legacy_waiver = (
+            _hook_overridden(cls, SerializerMutation, "get_serializer_kwargs")
+            and not meta.injected_fields
+        )
 
         def _build() -> tuple[type, Any]:
             # The create-required guard runs PER DECLARATION, BEFORE the per-shape
-            # descriptor dedupe (the descriptor cache key excludes the waiver flag), so
-            # a waiving mutation that materializes a narrowed shape FIRST cannot suppress
-            # the guard for a later non-waiving mutation reusing the same cached shape.
-            if operation_kind == CREATE and not guard_waived:
+            # descriptor dedupe (the descriptor cache key excludes the waiver / injection
+            # state), so a waiving mutation that materializes a narrowed shape FIRST cannot
+            # suppress the guard for a later non-waiving mutation reusing the same cached shape.
+            if operation_kind == CREATE and not legacy_waiver:
                 guard_create_required_serializer_fields(
                     serializer_class,
                     effective_names,
+                    injected_fields=meta.injected_fields,
                     field_map=field_map,
                 )
             input_cls, shape = build_serializer_input_class(
@@ -496,6 +545,27 @@ class SerializerMutation(DjangoMutation):
         if instance is not None:
             kwargs["instance"] = instance
         return kwargs
+
+    def get_serializer_save_kwargs(
+        self,
+        info: Any,
+        data: Any,
+        instance: Any = None,
+    ) -> dict[str, Any]:
+        """Return extra kwargs for ``serializer.save(**kwargs)`` (spec-039 rev6 #12).
+
+        The DRF-native customization point for request-derived data DRF expects at SAVE time
+        (``serializer.save(owner=request.user)``) rather than in the constructor or by mutating
+        ``data`` - distinct from ``get_serializer_kwargs`` (which shapes CONSTRUCTION / context).
+        The default returns ``{}``; a consumer overrides it to inject save-time attributes. The
+        Slice-3 resolver calls it inside the value-preserving ``save()`` closure (so the
+        transaction / error-mapping / optimizer re-fetch behavior is preserved) and REJECTS a
+        save kwarg that shadows a serializer input field (it would silently override the client's
+        input). ``data`` is the decoded ``provided_data``; ``instance`` is the located row on
+        update (``None`` on create).
+        """
+        del info, data, instance  # the default injects nothing; an override may consult them.
+        return {}
 
     @classmethod
     def resolve_sync(

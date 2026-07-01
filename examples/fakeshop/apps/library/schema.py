@@ -852,22 +852,24 @@ class CreateShelfViaHookNarrowedSerializer(SerializerMutation):
 
 
 class CreateShelfViaHookNonNullNote(SerializerMutation):
-    """One half of a same-serializer pair whose hooks differ ONLY in a field's ``allow_null`` (spec-039 High / M2).
+    """One half of a same-serializer pair whose hooks differ ONLY in a field's ``allow_null`` (spec-039 High / M2 + rev6 #1).
 
-    Shares ``ShelfSerializer`` with ``CreateShelfViaHookNullableNote``; both
-    ``get_serializer_for_schema()`` hooks return ``code`` + ``branch`` + a same-name ``note``
-    ``CharField(required=True)``, differing ONLY in ``note``'s ``allow_null``. This half is
-    ``allow_null=False``, so ``note`` is a non-null ``String!`` in the generated input;
-    the twin's is a nullable, omittable ``String``. Before the descriptor-identity fix both
-    shapes compared EQUAL (the descriptor recorded the base annotation, NOT the emitted
-    nullability), so the second declaration silently reused the first's cached input class -
-    giving one mutation the other's nullability. The fix records the EMITTED annotation, so
-    the two take DISTINCT descriptor-derived names with the correct per-field nullability.
-    ``note`` is serializer-only (decoded then dropped by the runtime ``ShelfSerializer``).
+    Shares ``NoteShelfSerializer`` with ``CreateShelfViaHookNullableNote``; both override
+    ``get_serializer_for_schema()`` (the schema-time field map) AND ``get_serializer_kwargs``
+    (the per-request construction) to build the SAME serializer with a different
+    ``note_allow_null``, so the schema-time ``note`` shape and the runtime ``note`` field AGREE
+    (rev6 #1 - the agreement guard now forbids a schema-only decode-then-drop field). This half
+    is ``allow_null=False``, so ``note`` is a non-null ``String!`` in the generated input; the
+    twin's is a nullable, omittable ``String``. Before the descriptor-identity fix both shapes
+    compared EQUAL (the descriptor recorded the base annotation, NOT the emitted nullability),
+    so the second declaration silently reused the first's cached input class - giving one
+    mutation the other's nullability. The fix records the EMITTED annotation, so the two take
+    DISTINCT descriptor-derived names with the correct per-field nullability. ``note`` is a
+    serializer-only write-only field (decoded + validated then dropped by ``create()``).
     """
 
     class Meta:
-        serializer_class = serializers.ShelfSerializer
+        serializer_class = serializers.NoteShelfSerializer
         operation = "create"
         permission_classes = []
 
@@ -875,26 +877,51 @@ class CreateShelfViaHookNonNullNote(SerializerMutation):
     def get_serializer_for_schema(cls):
         return serializers.nullability_schema_field_map(allow_null=False)
 
+    def get_serializer_kwargs(
+        self,
+        info,
+        *,
+        data,
+        instance=None,
+    ):
+        # Construct the runtime serializer with the SAME note_allow_null the schema hook used,
+        # so the schema-time ``note`` shape and the runtime ``note`` field agree (rev6 #1).
+        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        kwargs["note_allow_null"] = False
+        return kwargs
+
 
 class CreateShelfViaHookNullableNote(SerializerMutation):
-    """The nullability pair's twin: the same ``note`` field but ``allow_null=True`` (spec-039 High / M2).
+    """The nullability pair's twin: the same ``note`` field but ``allow_null=True`` (spec-039 High / M2 + rev6 #1).
 
-    Same shared ``ShelfSerializer`` and same ``code`` + ``branch`` + ``note`` hook shape as
+    Same shared ``NoteShelfSerializer`` and same ``code`` + ``branch`` + ``note`` hook shape as
     ``CreateShelfViaHookNonNullNote``, with ``note`` ``allow_null=True`` - so ``note`` is a
-    nullable, OMITTABLE ``String`` (M2 - GraphQL cannot express required-AND-nullable, so the
-    key is omittable and DRF enforces presence in-band). Its generated input must take a name
-    DISTINCT from the non-null twin's (the emitted-annotation descriptor identity), not
-    silently reuse it.
+    nullable, OMITTABLE, null-ACCEPTING ``String`` (M2 - GraphQL cannot express
+    required-AND-nullable, so the key is omittable and an explicit ``null`` is a valid value).
+    Its generated input must take a name DISTINCT from the non-null twin's (the
+    emitted-annotation descriptor identity), not silently reuse it. Its ``get_serializer_kwargs``
+    constructs the runtime serializer with ``note_allow_null=True`` so schema + runtime agree.
     """
 
     class Meta:
-        serializer_class = serializers.ShelfSerializer
+        serializer_class = serializers.NoteShelfSerializer
         operation = "create"
         permission_classes = []
 
     @classmethod
     def get_serializer_for_schema(cls):
         return serializers.nullability_schema_field_map(allow_null=True)
+
+    def get_serializer_kwargs(
+        self,
+        info,
+        *,
+        data,
+        instance=None,
+    ):
+        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        kwargs["note_allow_null"] = True
+        return kwargs
 
 
 class CreateShelfViaBlankCodeSerializer(SerializerMutation):
@@ -910,6 +937,116 @@ class CreateShelfViaBlankCodeSerializer(SerializerMutation):
 
     class Meta:
         serializer_class = serializers.BlankCodeShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+
+class UpdateBookViaSerializerWithLock(SerializerMutation):
+    """Update a ``Book`` with an opt-in ``SELECT ... FOR UPDATE`` row lock (spec-039 rev6 #14).
+
+    ``BookType`` is Relay-Node, so the update ``id`` is a decodable ``GlobalID`` (payload slot
+    ``node``). ``Meta.select_for_update = True`` locks the located row inside the pipeline
+    transaction, AFTER visibility filtering. On sqlite (the test backend) Django silently skips
+    the ``FOR UPDATE`` clause, so the live test proves the update path integrates cleanly with
+    the lock enabled; on a supporting backend the row is genuinely locked.
+    """
+
+    class Meta:
+        serializer_class = serializers.BookSerializer
+        operation = "update"
+        select_for_update = True
+        permission_classes = []
+
+
+class CreateShelfWithSaveKwargs(SerializerMutation):
+    """Create a ``Shelf`` injecting server-side data at ``serializer.save(**kwargs)`` (spec-039 rev6 #12).
+
+    ``ShelfSerializer`` accepts ``code`` + ``branch``; ``get_serializer_save_kwargs`` supplies a
+    server-side ``topic`` at SAVE time (NOT a client input, NOT a constructor kwarg) - the
+    DRF-native ``serializer.save(owner=...)`` pattern. ``topic`` is not a serializer input field,
+    so it does not shadow one. The live test posts ``{code, branchId}`` and reads the
+    save-time-stamped ``topic`` back off the written ``Shelf``.
+    """
+
+    class Meta:
+        serializer_class = serializers.ShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+    def get_serializer_save_kwargs(
+        self,
+        info,
+        data,
+        instance=None,
+    ):
+        return {"topic": "stamped-at-save"}
+
+
+class CreateShelfViaAltBranchesSerializer(SerializerMutation):
+    """Create a ``Shelf`` with a raw-pk M2M ``alt_branches`` input - the batched multi-relation visibility path (spec-039 rev6 #3).
+
+    ``alt_branches`` targets the non-Relay ``BranchType``, so the input is a raw-pk list; the
+    serializer decode confirms the whole list's visibility in ONE batched ``pk__in`` query
+    (through ``BranchType.get_queryset``, hiding ``city="restricted"`` from the anonymous
+    caller), and DRF's own re-validation runs against the SAME visibility-scoped queryset. The
+    live test proves the M2M writes for visible branches and that a hidden branch is an
+    ``altBranches`` relation error over ``/graphql/``.
+    """
+
+    class Meta:
+        serializer_class = serializers.AltBranchesShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+
+class CreateShelfWithInjectedTopic(SerializerMutation):
+    """Create a ``Shelf`` narrowing away a REQUIRED ``topic`` and INJECTING it via ``Meta.injected_fields`` (spec-039 rev6 #2).
+
+    ``OwnerStampShelfSerializer`` declares ``topic`` ``required=True``; this mutation narrows
+    the input to ``("code", "branch")`` (dropping ``topic``) and declares
+    ``Meta.injected_fields = ("topic",)`` + a ``get_serializer_kwargs`` override that supplies
+    ``topic`` into ``data``. The create-required guard SUBTRACTS the declared injected field
+    (so the narrowing does not raise), and the resolver VERIFIES the override supplied it - the
+    auditable, per-field replacement for the old blanket ``get_serializer_kwargs`` waiver. The
+    live test posts ``{code, branchId}`` (no ``topic`` input) and reads the injected
+    ``topic`` back off the written ``Shelf``.
+    """
+
+    class Meta:
+        serializer_class = serializers.OwnerStampShelfSerializer
+        operation = "create"
+        fields = ("code", "branch")
+        injected_fields = ("topic",)
+        permission_classes = []
+
+    def get_serializer_kwargs(
+        self,
+        info,
+        *,
+        data,
+        instance=None,
+    ):
+        # Supply the narrowed-away required ``topic`` into the serializer data (the injection
+        # contract Meta.injected_fields declares).
+        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        kwargs["data"] = {**kwargs["data"], "topic": "stamped-by-injection"}
+        return kwargs
+
+
+class CreateShelfViaMetadataSerializer(SerializerMutation):
+    """Create a ``Shelf`` via ``ShelfMetadataSerializer`` - the live type-system matrix (spec-039 rev6 #6 / #7 / #11).
+
+    The input carries a serializer-only ``ChoiceField`` -> a GENERATED enum (``priority``), a
+    ``DictField`` -> ``JSON`` (``attributes``), and a custom ``HexColorField`` mapped via the
+    public converter registry -> ``String`` (``accentColor``). The live test introspects each
+    input field's type (ENUM / JSON / String) and posts a create through them, proving the
+    expanded input type system - serializer-only enums, the expanded DRF scalar matrix, and the
+    sanctioned converter registry - end to end over ``/graphql/``. The resolved ``priority`` is
+    stamped into ``topic`` so the test can read the write effect.
+    """
+
+    class Meta:
+        serializer_class = serializers.ShelfMetadataSerializer
         operation = "create"
         permission_classes = []
 
@@ -967,6 +1104,21 @@ class Mutation:
     )
     create_shelf_via_blank_code_serializer = DjangoMutationField(
         CreateShelfViaBlankCodeSerializer,
+    )
+    create_shelf_via_metadata_serializer = DjangoMutationField(
+        CreateShelfViaMetadataSerializer,
+    )
+    create_shelf_with_injected_topic = DjangoMutationField(
+        CreateShelfWithInjectedTopic,
+    )
+    create_shelf_via_alt_branches_serializer = DjangoMutationField(
+        CreateShelfViaAltBranchesSerializer,
+    )
+    create_shelf_with_save_kwargs = DjangoMutationField(
+        CreateShelfWithSaveKwargs,
+    )
+    update_book_via_serializer_with_lock = DjangoMutationField(
+        UpdateBookViaSerializerWithLock,
     )
 
 

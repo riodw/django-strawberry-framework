@@ -1,177 +1,179 @@
-# Review feedback - `spec-038-form_mutations-0_0_12.md`
+# Review feedback - `spec-040-auth_mutations-0_0_13.md`
+
+Reviewed against the shipped `036` mutation foundation the spec says `register`
+rides "unchanged" — every load-bearing reuse claim was checked against the actual
+source (`mutations/resolvers.py`, `mutations/sets.py`, `utils/permissions.py`), not
+taken on the spec's word. The spec is strong: the envelope reuse, the AllowAny
+inversion, the `get_queryset`-skip reasoning, and the bind lifecycle all hold up.
+The findings below are the places where a reuse claim does not match the code it
+names, or where a stated DoD item cannot be implemented as written.
 
 ## Findings
 
-### [P1] Raw-pk relation inputs are promised visibility-scoped, but the reused `036` helper does not do that
+### [P1] The `register` password write-step has no seam in the `036` pipeline, and the default create pipeline persists the raw password
 
-The spec supports `ModelChoiceField` / `ModelMultipleChoiceField` inputs as Relay
-`GlobalID` when the target primary type is Relay-shaped, otherwise as a raw pk scalar
-(`docs/spec-038-form_mutations-0_0_12.md #"the raw pk scalar"`). It also says relation
-decode runs type and visibility checks through the related primary `DjangoType.get_queryset`
-before the form sees the value (`docs/spec-038-form_mutations-0_0_12.md #"visibility-checks the pk through the related"`).
-But the text also says to reuse the shipped `036` related-id path
-(`docs/spec-038-form_mutations-0_0_12.md #"first runs the shipped"`),
-and that helper explicitly passes raw pk scalars through with no visibility hook:
-`django_strawberry_framework/mutations/resolvers.py::_decode_relation_id_set #"A raw pk scalar"`.
+Decision 6 describes `register` as a thin `DjangoMutation` rider: "the `036`
+foundation unchanged" with "no new pipeline"
+(`docs/spec-040-auth_mutations-0_0_13.md #"foundation unchanged"`;
+`docs/spec-040-auth_mutations-0_0_13.md #"one write-step wrapper on the 036 skeleton"`).
+The password step is described as happening inside "the resolver" — pop `password`
+"before instance construction", `validate_password(password, user)`, then
+`set_password` before `full_clean()` / `save()`
+(`docs/spec-040-auth_mutations-0_0_13.md #"before instance construction"`;
+`docs/spec-040-auth_mutations-0_0_13.md #"set_password"`). But the spec never names
+which seam carries that step, and the actual `036` create pipeline has none.
 
-That means the non-Relay relation branch can violate the restored security invariant the
-spec claims to fix. A raw pk for a hidden related object will be placed into
-`data={"category": pk}` and then validated by the form. With a default `ModelForm`
-relation queryset, that is usually `Category.objects.all()`, so the form can accept an
-object the GraphQL caller cannot see. Raw-pk M2M gets an existence check in the shipped
-helper, but still not a visibility check; raw-pk FK gets neither until Django form/model
-validation, which is not request scoped.
+`_run_pipeline_sync` hard-wires the create/update steps as **module-level
+functions**, not subclass-overridable hooks:
+`django_strawberry_framework/mutations/resolvers.py::_run_pipeline_sync #"write_step=lambda instance, decoded: _model_write_step"`.
+`_model_decode_step` constructs `model(**scalar_and_fk_attrs)` with `password` as a
+plain attribute
+(`django_strawberry_framework/mutations/resolvers.py::_model_decode_step #"target = model(**scalar_and_fk_attrs)"`),
+and `_model_write_step` runs `full_clean` → `save` with no `set_password`
+(`django_strawberry_framework/mutations/resolvers.py::_model_write_step #"write_error = save_or_field_errors(target.save)"`).
+`DjangoMutation` exposes no `perform_create` / write hook — the only per-subclass
+resolver seam is `resolve_sync` / `resolve_async`
+(`django_strawberry_framework/mutations/sets.py::DjangoMutation #"def resolve_sync"`),
+which is exactly what the form and serializer *flavors* override to supply their own
+decode/write steps.
 
-Pin a separate form relation decoder instead of reusing the `036` helper unchanged: for
-raw pk single and multi relation inputs, resolve/coerce the pk and check it through the
-related primary type's `get_queryset` before handing any value to the form. Keep the same
-no-existence-leak `FieldError` shape. Add tests for a non-Relay related primary type
-where `get_queryset` hides a row, covering both `ModelChoiceField` and
-`ModelMultipleChoiceField` raw-pk inputs.
+So the literal "rides `DjangoMutation` unchanged" reading is a security defect: with
+the default pipeline, `RegisterInput.password` is set via `model(password=<raw>)`,
+`full_clean` only checks the 128-char `max_length`, and `save()` stores the
+**plaintext password**. Making `register` safe *requires* overriding
+`resolve_sync` **and** `resolve_async` and re-supplying a custom decode step (pop
+`password`) plus a custom write step (`validate_password` → `set_password` →
+`full_clean` → `save`) over the shared `run_write_pipeline_sync` skeleton — i.e.
+`register` is structurally a fourth decode/write-step pair; the genuine reuse is the
+column converter + input generator + skeleton, not the pipeline body.
 
-### [P1] `form.save()` can still leak a raw database error instead of the frozen envelope
+Pin the seam in Decision 6: state that `DjangoRegisterMutation` overrides
+`resolve_sync` / `resolve_async`, reuses `run_write_pipeline_sync` with a custom
+`write_step` (and decode step) for the password work, and that `036` provides no
+per-instance write hook to reuse. Correct the "no new pipeline / foundation
+unchanged" framing to "reuses the skeleton via a custom write step." Keep the
+`plaintext-never-persisted` test, and require it on **both** the sync and async
+paths (the async twin is a separate override and can regress independently).
 
-The resolver pipeline maps `form.is_valid()` failures through the shared `FieldError`
-envelope (`docs/spec-038-form_mutations-0_0_12.md #"A failure maps"`), then writes
-with bare `form.save()` / `perform_mutate(...)` inside `transaction.atomic()`
-(`docs/spec-038-form_mutations-0_0_12.md #"commit=True; M2M written"`). The
-helper-reuse paragraph promotes the validation mapper and payload helpers, but it still
-does not name the `036` save-time `IntegrityError` mapping helper
-(`django_strawberry_framework/mutations/resolvers.py::_finalize_validated_write #"_save_or_field_errors"`).
+### [P2] Decision 8's bind-validation is unreachable for `register`; its no-user-type error is a different, generic message raised earlier by `bind_mutations()`
 
-That reopens the race / residual-constraint hole `036` already closed. A `ModelForm` can
-validate successfully, then lose a concurrent uniqueness race or hit a database
-constraint at `save()`. The model mutation path returns a null object plus `FieldError`
-payload for that class of failure; the form path as written can bubble a top-level
-GraphQL error / 500, breaking the cross-flavor envelope contract at write time.
+Decision 8 and the Slice 1 checklist promise that a declared `login` **or
+`current_user` / `register`** with no registered primary `DjangoType` for the user
+model raises a `ConfigurationError` naming the auth-specific fix — "declare a
+`DjangoType` with `Meta.model = get_user_model()`; mark it `Meta.primary = True`…"
+(`docs/spec-040-auth_mutations-0_0_13.md #"or current_user / register"`;
+`docs/spec-040-auth_mutations-0_0_13.md #"mark it"`).
 
-Require the form resolver to catch `IntegrityError` from `form.save()` and from the
-default plain-form `perform_mutate` save path, using the same message policy as model
-mutations. Add a package resolver test with a valid `ModelForm.save()` that raises
-`IntegrityError` and asserts envelope output, not a top-level GraphQL error.
+But `register` is a `DjangoMutation`, bound by `bind_mutations()`, and Decision 9
+places `bind_auth_mutations()` **after** it
+(`docs/spec-040-auth_mutations-0_0_13.md #"after bind_mutations"`). `bind_mutations()`
+resolves the payload's primary type first, and a missing user type raises the
+**generic** message there, before `bind_auth_mutations()` runs:
+`django_strawberry_framework/mutations/sets.py::_resolve_primary_type #"which has no registered DjangoType"`
+— "DjangoMutation `DjangoRegisterMutation` targets `User`, which has no registered
+DjangoType; … Declare a DjangoType for `User`." That names the raw model class (a
+swapped `AUTH_USER_MODEL` yields whatever the concrete class is called), not
+`get_user_model()` / `Meta.primary`, and never reaches the auth-specific check.
 
-### [P2] There is still no form-construction hook, so common migrated forms cannot be reused
+So the `register` arm of the Decision 8 / Slice 1 DoD item cannot be implemented as
+written — either it is dead (the generic error wins) or it would have to duplicate a
+check `bind_mutations()` already performs. Reconcile: either (a) scope Decision 8's
+auth-specific validation to `login` / `current_user` only and document that
+`register` surfaces the generic `bind_mutations()` no-primary error, or (b) have
+`bind_auth_mutations()` (or a pre-`bind_mutations` hook) validate the user primary
+type for all three with the auth message before `bind_mutations()` can raise. Add a
+test pinning the *exact* error and message a no-`UserType` schema produces for
+`register` specifically, distinct from `login`.
 
-The input generator instantiates the form with no arguments to read `form.fields`
-(`docs/spec-038-form_mutations-0_0_12.md #"The form is instantiated once at bind time"`),
-and runtime construction is fixed to `form_class(data=provided_data, files=provided_files)`
-or `form_class(data=data, files=files, instance=<located row>)`
-(`docs/spec-038-form_mutations-0_0_12.md #"data=provided_data, files=provided_files"`).
-The spec mentions graphene-django's `get_form_kwargs`, but does not provide an equivalent
-package hook (`docs/spec-038-form_mutations-0_0_12.md #"as a *full* update"`).
+### [P2] The cached `DjangoRegisterMutation` rider can silently drop out of the schema on a second finalize (reload idempotence)
 
-That is a migration blocker. Existing Django forms often require constructor kwargs such
-as `user`, `request`, tenant, or service objects to scope querysets, choose choices, or
-run validation. Relation visibility before the form is required, but it does not replace
-a form's own constructor contract or request-scoped queryset setup.
+Decision 6 says the rider is "created lazily on first factory call"
+(`docs/spec-040-auth_mutations-0_0_13.md #"lazily on first factory call"`) and
+"synthesizes (once, cached per normalized argument set)"
+(`docs/spec-040-auth_mutations-0_0_13.md #"cached per normalized argument set"`).
+Decision 9 wires a `register_subsystem_clear` row for the **auth** declaration
+ledger — but the rider rides the **mutation** ledger
+(`register_mutation`), which `registry.clear()` empties via
+`clear_mutation_registry`
+(`django_strawberry_framework/mutations/sets.py::make_declaration_registry #"def clear"`).
 
-Pin both schema-time and runtime extension points. Schema-time field discovery needs
-either a documented no-arg form requirement or an overridable `get_unbound_form()` /
-`get_form_fields()` hook whose field shape is stable. Runtime needs a
-`get_form_kwargs(info, data, files, instance=None)` or `get_form(...)` hook used by
-create, update, and plain forms. Add tests for a form that requires `user` and for a hook
-that scopes a `ModelChoiceField.queryset` without changing the generated input shape.
+The spec does not say how the per-args class cache interacts with a
+`registry.clear()` + re-finalize. If the factory registers the rider into the
+mutation ledger only at first *synthesis* and later returns the cached class without
+re-calling `register_mutation`, then on the second finalize (ledger cleared, the
+consumer re-runs `register = register_mutation()`) the rider is never re-appended and
+`register` **silently disappears from the schema** — while `login` / `logout` (auth
+ledger, explicitly cleared + re-declared) survive. This is precisely the reload path
+the suite's autouse complete-reload fixtures exercise, so it would surface as an
+order-dependent "register missing" flake, not a clean failure.
 
-### [P2] Plain `DjangoFormMutation` still has contradictory `operation` rules
+Specify that every `register_mutation()` call re-registers the (cached) rider into
+the mutation ledger — `register_mutation` already dedups by identity
+(`#"if declaration_cls not in store"`), so a live ledger is a no-op and a cleared one
+re-appends — or that the per-args cache is reset on `registry.clear()`. Add a
+reload-idempotence test: finalize → `registry.clear()` → re-declare → finalize again,
+asserting `register` is still present in the second schema.
 
-Decision 10 says plain `DjangoFormMutation` has no model operation and does not declare
-`Meta.operation` (`docs/spec-038-form_mutations-0_0_12.md #"has no model operation"`).
-But the Slice 2 checklist and DoD still describe one form-flavor `_validate_meta` override
-that restricts `operation` to `{"create", "update"}` and rejects `"delete"`
-(`docs/spec-038-form_mutations-0_0_12.md #"operation is restricted";
-`docs/spec-038-form_mutations-0_0_12.md #"form flavor has no delete pipeline"`).
-The generated form input identity also includes `operation kind`
-(`docs/spec-038-form_mutations-0_0_12.md #"operation kind, frozenset(effective field names)"`).
+### [P3] A user-typed payload makes the consumer's `UserType` field selection the auth read surface, but the spec never cautions against exposing `password` / privilege columns
 
-That leaves implementers two incompatible readings: accept meaningless
-`operation = "create"` / `"update"` on a model-less mutation, or reject it despite the
-shared validation checklist. It also leaves the plain-form input cache key without a
-defined operation component.
+`login`, `register`, and `me` all type their user in the consumer's own primary
+`DjangoType` (Decision 8). The register safety story is entirely about the *input*
+side — narrowing `Meta.fields` so privilege columns are structurally unreachable
+(`docs/spec-040-auth_mutations-0_0_13.md #"privilege escalation is structurally"`).
+But the *output* side is whatever the consumer put in `UserType.fields`. A consumer
+who writes `fields = "__all__"` (or lists `password`, `is_superuser`, `last_login`)
+gets the password **hash** and privilege flags surfaced through `LoginPayload.node`,
+`RegisterPayload.node`, and `me` — on the auth surface specifically.
 
-Split the rules by base class. `DjangoModelFormMutation` should default / validate
-`operation in {"create", "update"}`. Plain `DjangoFormMutation` should reject any
-`Meta.operation` as unsupported and use a fixed identity sentinel such as `"plain"` for
-input-shape caching. Add tests for `Meta.operation` on the plain base and for plain-form
-input dedupe.
+The example UserType is safe (`fields = ("id", "username", "email")`), but nothing
+warns the reader. Add a caution to Decision 8 and the `Auth mutations` GLOSSARY entry:
+the user primary type's field selection *is* the authenticated read surface; exclude
+`password` and privilege columns. (Doc-only, like the `038` file-clearing scope note
+— no code.)
 
-### [P2] The converter cannot both map base `forms.Field` to `str` and fail on unknown custom fields
+### [P3] `login` returns `authenticate()`'s user directly (no optimizer re-fetch), which is asymmetric with `register`, and Decision 5 conflates "skip visibility" with "skip re-fetch"
 
-Decision 7 specifies a single-dispatch registry on `forms.Field`
-(`docs/spec-038-form_mutations-0_0_12.md #"single-dispatch on the Django"`), maps
-base `Field` to `str` (`docs/spec-038-form_mutations-0_0_12.md #"text-like"`),
-and also requires an unknown form-field class to raise `ConfigurationError`
-(`docs/spec-038-form_mutations-0_0_12.md #"unknown form-field class raises"`).
+Decision 5 says the login payload's user is "the object `authenticate()` returned …
+not a visibility-scoped lookup," and calls this the "Same posture as `current_user`
+… and the register re-fetch"
+(`docs/spec-040-auth_mutations-0_0_13.md #"not a visibility-scoped lookup"`;
+`docs/spec-040-auth_mutations-0_0_13.md #"and the register re-fetch"`). But those are
+two different things. `register` re-fetches by pk through
+`refetch_optimized` (Decision 6, `#"refetch_optimized"`), which is what applies the
+spec-035 G2 optimizer plan
+(`django_strawberry_framework/mutations/resolvers.py::refetch_optimized #"apply_connection_optimization"`).
+`login` returns the raw `authenticate()` instance with **no** such re-fetch — so the
+two payload nodes are not the same posture: `login { node { <relations> } }` is
+unplanned (N+1, and a different Strictness-mode footprint) while `register`'s node is
+optimizer-planned.
 
-With normal `functools.singledispatch`, registering `forms.Field` is a catch-all for
-every custom field subclass. The unknown-field error becomes unreachable, and a
-consumer's custom field silently becomes `String` even when its cleaned value is not a
-string or its widget semantics need a different input shape.
+This is defensible (the login actor is themselves, and a re-fetch costs a query), but
+the spec should say it plainly rather than lumping `login` in with "the register
+re-fetch." Clarify Decision 5: `login` skips **both** visibility and the re-fetch and
+returns the `authenticate()` instance directly, so its node is not optimizer-planned;
+if a planned login node is wanted, note the by-pk-no-visibility `refetch_optimized`
+call is available (the same one register uses). No test change required if the raw
+instance is intended; add an SDL/behavior note either way.
 
-Choose one contract. For the fail-loud contract the spec already claims, do not use a
-base `forms.Field` fallback in the dispatch table. Either handle exact `forms.Field`
-specially before dispatch, or implement an explicit registry that raises when
-`type(field)` is not one of the supported classes. Add a custom
-`class CustomField(forms.Field)` test proving it raises.
+## Verification
 
-### [P2] `ModelChoiceField.to_field_name` is ignored by the relation decode
+This is a design review of an unimplemented spec; no code changed, so `ruff` /
+`git diff --check` do not apply. I grounded the reuse claims against the named source
+rather than running the test suite:
 
-The spec decodes `categoryId` and then feeds the bound form a pk under the form field
-name (`docs/spec-038-form_mutations-0_0_12.md #"then place the *visible*"`).
-The same pk-list shape is specified for multi relations
-(`docs/spec-038-form_mutations-0_0_12.md #"is type-/visibility-checked the same way"`).
+- **Confirmed accurate:** `refetch_optimized` is by-pk **without** the visibility
+  filter (`mutations/resolvers.py::refetch_optimized`); `_validate_permission_classes`
+  preserves an explicit `[]` as AllowAny and only applies `unset_default` for `None`
+  (`mutations/sets.py::_validate_permission_classes #"An explicit"`), so the
+  AllowAny-default design is feasible; `request_from_info(info, *, family_label=...)`
+  exists with that signature (`utils/permissions.py`); `build_payload_type(...,
+  object_type=None)` and `payload_object_slot(primary)` exist as cited.
+- **Contradicted / underspecified (the findings above):** no per-subclass write hook
+  in the create pipeline (P1); `_resolve_primary_type`'s generic no-DjangoType error
+  pre-empts the auth-specific one for `register` (P2); mutation-ledger reload
+  interaction with the rider cache (P2).
 
-Django form relation fields can set `to_field_name`, and `ForeignKey(to_field=...)` can
-generate exactly that form field. In that case `ModelChoiceField.to_python()` looks up by
-the configured target field, not by `pk`. Feeding the decoded pk into the form makes a
-valid GraphQL id fail form validation whenever the form expects a slug, code, or other
-unique target value.
-
-After the type and visibility check finds the related object, convert the value passed to
-the form with the form field's own key: `obj.serializable_value(field.to_field_name)` when
-`to_field_name` is set, otherwise `obj.pk`. Do the same per element for
-`ModelMultipleChoiceField`. Add tests for single and multi relation fields with
-`to_field_name`.
-
-### [P2] Create-time narrowing can exclude a required form field and produce an always-invalid mutation
-
-The spec validates malformed `Meta.fields` / `Meta.exclude` names and empty effective
-sets (`docs/spec-038-form_mutations-0_0_12.md #"empty effective field set"`), but it does
-not reject a create mutation that narrows out a required form field. Create construction
-passes only provided input fields to the bound form
-(`docs/spec-038-form_mutations-0_0_12.md #"data=provided_data, files=provided_files"`).
-
-For standard Django form fields, a required field omitted from bound `data=` fails
-required validation; `initial` is not a substitute for submitted data in the general
-case. So `Meta.fields = ("name",)` on a form whose required `category` remains in
-`form.fields` creates a schema that looks valid but cannot succeed.
-
-Add a create-time validation rule: if `operation = "create"` excludes any
-`field.required` form field, raise `ConfigurationError` naming the missing required form
-fields, unless a hook explicitly supplies those values before binding. Cover both
-`Meta.fields` and `Meta.exclude`.
-
-### [P3] Optional file clearing is still not expressible
-
-Partial update preserves omitted file fields by leaving them out of `files=`
-(`docs/spec-038-form_mutations-0_0_12.md #"an omitted file field is preserved"`), and
-the edge-case text says an optional field the consumer wants emptied is sent explicitly
-(`docs/spec-038-form_mutations-0_0_12.md #"wants emptied is sent explicitly"`). For
-`FileField` / `ImageField`, however, the only specified input shape is `Upload`
-(`docs/spec-038-form_mutations-0_0_12.md #"forms.FileField"`).
-
-Django's clearable file semantics distinguish "no change" from "clear" with a false
-sentinel produced by `ClearableFileInput`, not with an uploaded file. A nullable `Upload`
-value does not give the resolver a clear signal, and sending no file means preserve.
-That leaves optional file/image fields uploadable and preservable, but not clearable.
-
-Either document file clearing as out of scope for `0.0.12`, or add an explicit input
-representation such as `<field>Clear: Boolean` for clearable file fields and route it
-through the form/widget-compatible clear path. Add a partial-update test for clearing a
-blank/null file field if it is in scope.
-
-## Checks run
-
-- `uv run python scripts/check_spec_glossary.py --spec docs/spec-038-form_mutations-0_0_12.md`
-- `uv run ruff format .`
-- `uv run ruff check --fix .`
-- `git diff --check`
+Recommended before finalizing: run
+`uv run python scripts/check_spec_glossary.py --spec docs/spec-040-auth_mutations-0_0_13.md`
+(I could not run it here — local tooling outage — so the `OK: <N> terms` gate in DoD
+item 1 is unverified).

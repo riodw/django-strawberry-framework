@@ -281,6 +281,20 @@ def test_decode_relation_multi_explicit_none_passes_through():
     assert pks is None
 
 
+@pytest.mark.django_db
+def test_decode_relation_multi_empty_list_passes_through_without_query():
+    """An empty many-relation input returns an empty list before any visibility query."""
+    _declare_nonrelay_genre_primary()
+    pks, error = serializer_resolvers._decode_relation_multi(
+        [],
+        graphql_name="genreIds",
+        related_model=library_models.Genre,
+        info=None,
+    )
+    assert error is None
+    assert pks == []
+
+
 # ===========================================================================
 # Value-preserving save, save-time exception split, IntegrityError
 # ===========================================================================
@@ -1033,6 +1047,19 @@ def test_flattener_plain_string_leaf_has_no_codes():
     assert fe.path == ["name"]
 
 
+def test_flattener_bare_error_detail_preserves_code():
+    """A bare DRF ``ErrorDetail`` leaf still preserves its single code (#4)."""
+    from rest_framework.exceptions import ErrorDetail
+
+    flat = serializer_resolvers.serializer_errors_to_field_errors(
+        {"name": ErrorDetail("Invalid.", code="invalid")},
+        {},
+    )
+    (fe,) = flat
+    assert fe.codes == ["invalid"]
+    assert fe.path == ["name"]
+
+
 # ===========================================================================
 # Schema/runtime serializer agreement guard (spec-039 rev6 #1)
 # ===========================================================================
@@ -1113,6 +1140,22 @@ def test_agreement_guard_raises_when_scalar_became_relation():
         serializer_resolvers._assert_schema_runtime_agreement(fake, _shelf_model_serializer())
 
 
+def test_agreement_guard_raises_when_file_became_scalar():
+    """A schema file input that is scalar at runtime fails loud (the kind moved) (#1)."""
+
+    class FileDriftSer(serializers.Serializer):
+        upload = serializers.CharField()
+
+    fake = _agreement_specs(
+        target_name="upload",
+        input_attr="upload",
+        graphql_name="upload",
+        kind=serializer_resolvers.FILE,
+    )
+    with pytest.raises(ConfigurationError, match="file input"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, FileDriftSer(data={}))
+
+
 def test_agreement_guard_raises_when_relation_shape_wrong():
     """A schema relation the runtime declares as a scalar fails loud (#1)."""
     fake = _agreement_specs(
@@ -1160,20 +1203,8 @@ def test_agreement_guard_passes_when_schema_and_runtime_agree():
 # ===========================================================================
 
 
-def test_declared_injected_field_missing_from_data_raises_at_runtime():
-    """A ``Meta.injected_fields`` the override did NOT supply into data fails loud (rev6 #2)."""
-    fake = type(
-        "InjectMut",
-        (),
-        {"_mutation_meta": SimpleNamespace(injected_fields=("topic",))},
-    )
-    serializer = _shelf_model_serializer()  # data={} -> initial_data lacks `topic`
-    with pytest.raises(ConfigurationError, match="did not supply"):
-        serializer_resolvers._assert_injected_fields_supplied(fake, serializer)
-
-
-def test_supplied_injected_field_passes_runtime_check():
-    """A declared injected field present in the serializer data passes (rev6 #2 happy path)."""
+def _topic_shelf_serializer_class():
+    """A ``Shelf`` serializer declaring a required ``topic`` (the injected-field fixture)."""
 
     class ShelfSer(serializers.ModelSerializer):
         topic = serializers.CharField(required=True)
@@ -1182,14 +1213,53 @@ def test_supplied_injected_field_passes_runtime_check():
             model = library_models.Shelf
             fields = ("code", "branch", "topic")
 
-    fake = type(
+    return ShelfSer
+
+
+def _injected_topic_mut(specs=None):
+    """A fake mutation declaring ``injected_fields=("topic",)`` + its stashed schema-time spec."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    topic_spec = InputFieldSpec(
+        input_attr="topic",
+        graphql_name="topic",
+        target_name="topic",
+        kind=SCALAR,
+    )
+    return type(
         "InjectMut",
         (),
-        {"_mutation_meta": SimpleNamespace(injected_fields=("topic",))},
+        {
+            "_mutation_meta": SimpleNamespace(injected_fields=("topic",)),
+            "_injected_field_specs": [topic_spec] if specs is None else specs,
+        },
     )
-    serializer = ShelfSer(data={"code": "X", "branch": 1, "topic": "supplied"})
-    # No raise: `topic` is present in the serializer's data.
-    serializer_resolvers._assert_injected_fields_supplied(fake, serializer)
+
+
+def test_declared_injected_field_missing_from_data_raises_at_runtime():
+    """A ``Meta.injected_fields`` the override did NOT supply into data fails loud (rev6 #2)."""
+    # ``topic`` IS a runtime field (agreement passes), but the override did not put it in data.
+    serializer = _topic_shelf_serializer_class()(data={"code": "X", "branch": 1})
+    with pytest.raises(ConfigurationError, match="did not supply"):
+        serializer_resolvers._assert_injected_fields_supplied(_injected_topic_mut(), serializer)
+
+
+def test_declared_injected_field_dropped_by_runtime_serializer_raises():
+    """An injected field the RUNTIME serializer does not declare fails loud (rev6 rev2 P1 - not just presence)."""
+    # ``_shelf_model_serializer`` has NO ``topic``; the runtime-agreement check catches it even
+    # though a naive presence check would (wrongly) pass once the key were injected.
+    serializer = _shelf_model_serializer()
+    with pytest.raises(ConfigurationError, match="does not declare it"):
+        serializer_resolvers._assert_injected_fields_supplied(_injected_topic_mut(), serializer)
+
+
+def test_supplied_injected_field_passes_runtime_check():
+    """A declared injected field present + runtime-accepted passes (rev6 #2 happy path)."""
+    serializer = _topic_shelf_serializer_class()(
+        data={"code": "X", "branch": 1, "topic": "supplied"},
+    )
+    # No raise: ``topic`` is a writable runtime field AND present in the serializer's data.
+    serializer_resolvers._assert_injected_fields_supplied(_injected_topic_mut(), serializer)
 
 
 def test_no_injected_fields_is_a_runtime_noop():
@@ -1257,6 +1327,77 @@ def test_decode_relation_multi_hidden_member_is_field_error_via_batch():
     assert error.field == "genreIds"
 
 
+def test_relation_queryset_scope_skips_unregistered_raw_pk_relation():
+    """A relation target without a registered primary type keeps the serializer queryset unchanged."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    class BranchSer(serializers.Serializer):
+        branch = serializers.PrimaryKeyRelatedField(queryset=library_models.Branch.objects.all())
+
+    serializer = BranchSer()
+    field = serializer.fields["branch"]
+    original = field.queryset
+    fake = type(
+        "RawPkMut",
+        (),
+        {
+            "_input_field_specs": [
+                InputFieldSpec(
+                    input_attr="branch",
+                    graphql_name="branch",
+                    target_name="branch",
+                    kind=serializer_resolvers.RELATION_SINGLE,
+                    related_model=library_models.Branch,
+                ),
+            ],
+        },
+    )
+    serializer_resolvers._scope_relation_querysets_to_visibility(fake, serializer, info=None)
+    assert field.queryset is original
+
+
+def test_relation_queryset_scope_handles_many_related_field():
+    """Many relation fields scope their child relation queryset through target visibility (#3)."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    class BranchT(DjangoType):
+        class Meta:
+            model = library_models.Branch
+            fields = ("id", "name")
+            primary = True
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            return queryset.exclude(name="HiddenScope")
+
+    class BranchesSer(serializers.Serializer):
+        branches = serializers.PrimaryKeyRelatedField(
+            many=True,
+            queryset=library_models.Branch.objects.all(),
+        )
+
+    del BranchT
+    serializer = BranchesSer()
+    field = serializer.fields["branches"]
+    fake = type(
+        "ManyMut",
+        (),
+        {
+            "_input_field_specs": [
+                InputFieldSpec(
+                    input_attr="branches",
+                    graphql_name="branches",
+                    target_name="branches",
+                    kind=serializer_resolvers.RELATION_MULTI,
+                    related_model=library_models.Branch,
+                ),
+            ],
+        },
+    )
+    serializer_resolvers._scope_relation_querysets_to_visibility(fake, serializer, info=None)
+    assert field.child_relation.queryset.query.where
+
+
 # ===========================================================================
 # get_serializer_save_kwargs shadow guard (spec-039 rev6 #12)
 # ===========================================================================
@@ -1304,3 +1445,83 @@ def test_save_kwargs_not_shadowing_input_field_is_allowed():
     )
     # No raise: `owner` is server-side data, not a serializer input field.
     serializer_resolvers._assert_save_kwargs_no_shadow(fake, {"owner": object()})
+
+
+@pytest.mark.django_db
+def test_relation_queryset_scope_composes_with_author_queryset():
+    """Visibility scoping AND-s the author's field queryset - never replaces it (rev6 rev2 P1).
+
+    A serializer author's own ``PrimaryKeyRelatedField(queryset=...)`` restriction is the base
+    contract; visibility is an ADDITIONAL constraint. A visible-but-author-DISALLOWED row must
+    still be rejected (the earlier reassignment erased the author's queryset and admitted it).
+    """
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    class BranchT(DjangoType):
+        class Meta:
+            model = library_models.Branch
+            fields = ("id", "name")
+            primary = True  # default get_queryset: every branch is visible
+
+    del BranchT
+    allowed = library_models.Branch.objects.create(name="ScopeAllowed", city="allowed")
+    other = library_models.Branch.objects.create(name="ScopeOther", city="other")
+
+    class SingleSer(serializers.Serializer):
+        branch = serializers.PrimaryKeyRelatedField(
+            queryset=library_models.Branch.objects.filter(city="allowed"),
+        )
+
+    class ManySer(serializers.Serializer):
+        branches = serializers.PrimaryKeyRelatedField(
+            many=True,
+            queryset=library_models.Branch.objects.filter(city="allowed"),
+        )
+
+    single = SingleSer()
+    serializer_resolvers._scope_relation_querysets_to_visibility(
+        type(
+            "SingleMut",
+            (),
+            {
+                "_input_field_specs": [
+                    InputFieldSpec(
+                        input_attr="branch",
+                        graphql_name="branch",
+                        target_name="branch",
+                        kind=serializer_resolvers.RELATION_SINGLE,
+                        related_model=library_models.Branch,
+                    ),
+                ],
+            },
+        ),
+        single,
+        info=None,
+    )
+    single_qs = single.fields["branch"].queryset
+    assert allowed in single_qs  # visible AND author-allowed
+    assert other not in single_qs  # visible but author-DISALLOWED - the author's filter survives
+
+    many = ManySer()
+    serializer_resolvers._scope_relation_querysets_to_visibility(
+        type(
+            "ManyMut",
+            (),
+            {
+                "_input_field_specs": [
+                    InputFieldSpec(
+                        input_attr="branches",
+                        graphql_name="branches",
+                        target_name="branches",
+                        kind=serializer_resolvers.RELATION_MULTI,
+                        related_model=library_models.Branch,
+                    ),
+                ],
+            },
+        ),
+        many,
+        info=None,
+    )
+    many_qs = many.fields["branches"].child_relation.queryset
+    assert allowed in many_qs
+    assert other not in many_qs

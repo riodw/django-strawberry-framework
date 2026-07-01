@@ -19,6 +19,7 @@ from apps.products.models import Category
 from django.db import models
 
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.querysets import (
     SyncMisuseError,
     apply_type_visibility_async,
@@ -27,6 +28,7 @@ from django_strawberry_framework.utils.querysets import (
     normalize_query_source,
     post_process_queryset_result_async,
     post_process_queryset_result_sync,
+    visible_related_objects,
 )
 
 
@@ -83,6 +85,18 @@ def test_initial_queryset_uses_default_manager():
     qs = initial_queryset(_SyncType)
     assert isinstance(qs, models.QuerySet)
     assert qs.model is Category
+
+
+@pytest.mark.django_db
+def test_visible_related_objects_without_registered_type_uses_default_manager():
+    """A relation target without a primary ``DjangoType`` falls back to the model default manager."""
+    registry.clear()
+    category = Category.objects.create(name="NoRegisteredPrimary")
+    try:
+        visible = visible_related_objects(Category, [category.pk], info=None)
+    finally:
+        registry.clear()
+    assert visible == {str(category.pk)}
 
 
 # ---------------------------------------------------------------------------

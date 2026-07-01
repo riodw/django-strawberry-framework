@@ -198,6 +198,34 @@ def _fingerprint_relation_target(field: serializers.Field) -> str | None:
     return None
 
 
+def _fingerprint_choices(field: serializers.Field) -> tuple[str, ...] | None:
+    """Return a ``ChoiceField``'s choice VALUES for the fingerprint, else ``None``.
+
+    The generated enum's members come from the choice VALUES (rev6 #6), so a hook that changes
+    the choices changes the SDL enum - folded into the fingerprint (rev2 P2). Every
+    ``ChoiceField`` (incl. ``FilePathField``, whose choices are filesystem-dynamic but stable
+    within a single process between the two hook reads) is fingerprinted; a non-choice field
+    yields ``None``.
+    """
+    if isinstance(field, serializers.ChoiceField):
+        return tuple(str(value) for value in field.choices)
+    return None
+
+
+def _fingerprint_converter_extra(field: serializers.Field) -> str | None:
+    """Return converter-affecting discriminants (``ModelField`` wrapped / ``ListField`` child), else ``None``.
+
+    A ``ModelField``'s wrapped ``model_field`` and a ``ListField``'s ``child`` determine the
+    generated annotation, so a hook that swaps them changes the SDL - folded into the fingerprint
+    (rev2 P2).
+    """
+    if isinstance(field, serializers.ModelField):
+        return type(getattr(field, "model_field", None)).__name__
+    if isinstance(field, serializers.ListField):
+        return type(getattr(field, "child", None)).__name__
+    return None
+
+
 def serializer_schema_fingerprint(
     field_map: dict[str, serializers.Field],
 ) -> tuple[tuple[Any, ...], ...]:
@@ -206,11 +234,14 @@ def serializer_schema_fingerprint(
     ``get_serializer_for_schema()`` must return a STABLE, request-independent field shape (the
     input is generated once at finalization, BEFORE any request), but the hook is called at
     class validation AND again at the phase-2.5 bind - a NONDETERMINISTIC hook could validate
-    one shape and bind another. This captures the shape axes the generated input + the reverse
-    map depend on - each field's name, class, source, read / write flags, required, allow_null,
-    and relation target model - so the bind can recompute it and raise if the hook DRIFTED
-    (turning the spec's stable-shape promise into an enforced contract). Deterministic +
-    hashable; the ordered tuple preserves field order (which drives the descriptor identity).
+    one shape and bind another. This captures EVERY axis the generated input / SDL / reverse map
+    depends on, so the bind can recompute it and raise if the hook DRIFTED (turning the spec's
+    stable-shape promise into an enforced contract, rev2 P2): each field's name, class, source,
+    read / write flags, required, allow_null, relation target model, the description inputs
+    (``help_text`` + the constraint summary - rev6 #9), the enumerable choice members (rev6 #6),
+    and the converter discriminants (``ModelField`` wrapped field / ``ListField`` child).
+    Deterministic + hashable; the ordered tuple preserves field order (which drives the
+    descriptor identity).
     """
     return tuple(
         (
@@ -222,6 +253,9 @@ def serializer_schema_fingerprint(
             bool(field.required),
             bool(getattr(field, "allow_null", False)),
             _fingerprint_relation_target(field),
+            serializer_field_description(field),
+            _fingerprint_choices(field),
+            _fingerprint_converter_extra(field),
         )
         for name, field in field_map.items()
     )
@@ -363,6 +397,38 @@ def resolve_optional_fields(
             f"naming field(s) not in the effective input set: {sorted(unknown)!r}.",
         )
     return frozenset(names)
+
+
+def resolve_injected_field_specs(
+    serializer_class: type[serializers.BaseSerializer],
+    field_map: dict[str, serializers.Field],
+    injected_fields: Any,
+) -> list[InputFieldSpec]:
+    """Resolve the schema-time ``InputFieldSpec`` for each ``Meta.injected_fields`` name (rev6 rev2 P1).
+
+    ``Meta.injected_fields`` names required schema-time fields a ``get_serializer_kwargs``
+    override supplies (they are NARROWED OUT of the generated input, so their specs are NOT in
+    ``_input_field_specs``). This resolves their schema-time specs from the SAME field map the
+    input build used, so the Slice-3 resolver can hold each injected field to the SAME
+    present / writable / source / kind / relation-model runtime-agreement contract an
+    input-exposed field gets - proving the runtime serializer will actually validate + save the
+    injected value, not merely that its key is present in ``data``. ``None`` / empty yields
+    ``[]``. Each name is already validated to exist in ``field_map`` at class creation; resolving
+    an unsupported injected field here fails loud (the same fail-loud the input walk applies).
+    """
+    if not injected_fields:
+        return []
+    model = _serializer_model(serializer_class)
+    provisional_name = f"{serializer_class.__name__}Input"
+    specs: list[InputFieldSpec] = []
+    for name in injected_fields:
+        _python_attr, _annotation, spec = resolve_serializer_field(
+            field_map[name],
+            model,
+            provisional_name,
+        )
+        specs.append(spec)
+    return specs
 
 
 @dataclass(frozen=True)

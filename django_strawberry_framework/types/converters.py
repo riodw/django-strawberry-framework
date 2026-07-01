@@ -262,9 +262,12 @@ def scalar_for_field(field: models.Field) -> Any:
     for klass in type(field).__mro__:
         if klass in SCALAR_MAP:
             return SCALAR_MAP[klass]
+    model = getattr(field, "model", None)
+    model_label = getattr(model, "__name__", "<unbound>")
+    field_name = getattr(field, "name", "<unknown>")
     raise ConfigurationError(
         f"Unsupported Django field type {type(field).__name__!r} on "
-        f"{field.model.__name__}.{field.name}. Add an entry to "
+        f"{model_label}.{field_name}. Add an entry to "
         "SCALAR_MAP or exclude this field via Meta.exclude.",
     )
 

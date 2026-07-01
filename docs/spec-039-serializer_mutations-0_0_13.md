@@ -650,7 +650,9 @@ doc + card-wrap only (no version bump — [Decision 14](#decision-14--version-bu
     `convert_serializer_field(field)` registry (the graphene-django
     [`convert_serializer_field`][upstream-serializer-converter] parity shape)
     returning the Strawberry annotation + required-ness for each supported DRF
-    serializer-field class (`CharField` / `ChoiceField` → `str`, `IntegerField` →
+    serializer-field class (`CharField` → `str`, `ChoiceField` → `str` *base* —
+    a serializer-only `ChoiceField` is upgraded to a generated enum at the build site (rev6 #6),
+    `IntegerField` →
     `int`, `BooleanField` → `bool`, `FloatField` → `float`, `DecimalField` →
     `Decimal`, `DateField` / `DateTimeField` / `TimeField` → Python-native,
     `UUIDField` → `uuid.UUID`, `JSONField` → `strawberry.scalars.JSON`, `ListField` →
@@ -1845,13 +1847,22 @@ mapping (graphene's `convert_serializer_field` table is the scalar-row reference
 graphene degrades relation / file fields to `String` via its base-`Field` catch-all —
 the relation / file rows below are package extensions graphene lacks, not parity):
 
-- `CharField` (and `EmailField` / `SlugField` / `URLField` / `RegexField` via MRO) →
-  `str`; `ChoiceField` → `str` (model-less default; over a `ModelSerializer` column's
-  `choices`, routed through the read-side [enum][glossary-choice-enum-generation] at
-  the build site).
+- `CharField` (and `EmailField` / `SlugField` / `URLField` / `RegexField` / `IPAddressField`
+  via MRO) → `str`. A serializer-only `ChoiceField` → a **GENERATED enum** at the build site
+  (rev6 #6): the converter's *base* mapping is `str`, upgraded to the enum by
+  `resolve_serializer_field` where `type_name` is known (the same finalize-at-the-build-site
+  pattern relations / files use). Over a `ModelSerializer` `choices` column an auto-generated
+  field reuses the read-side column [enum][glossary-choice-enum-generation]; a
+  CONSUMER-DECLARED `ChoiceField` — even `source`-mapped to a plain (non-choice) column —
+  emits the serializer-only enum too (rev6 rev2 P2: declared choices are a schema-affecting
+  override, never collapsed back to `String`). `FilePathField` stays `str` (dynamic filesystem
+  choices, not a stable enum).
 - `IntegerField` → `int`, `FloatField` → `float`, `DecimalField` → `Decimal`,
   `BooleanField` → `bool`, `UUIDField` → `uuid.UUID`.
-- `DateField` / `DateTimeField` / `TimeField` → Python-native.
+- `DateField` / `DateTimeField` / `TimeField` → Python-native; `DurationField` → `str` (a
+  deliberate wire scalar, rev6 #7).
+- `DictField` / `HStoreField` → `strawberry.scalars.JSON`; `ModelField` → its wrapped Django
+  column's scalar (rev6 #7).
 - `JSONField` → `strawberry.scalars.JSON`; `ListField` → `list[<scalar child>]` — the
   `child` is converted **recursively through the same scalar registry**
   (`ListField(child=IntegerField())` → `list[int]`); a `ListField` whose `child` is a
@@ -1859,7 +1870,8 @@ the relation / file rows below are package extensions graphene lacks, not parity
   [`ConfigurationError`][glossary-configurationerror] naming the field (a relation list is
   expressed via `ManyRelatedField` / `PrimaryKeyRelatedField(many=True)`, and a nested
   serializer is the `036` nested-write non-goal — a `ListField` must not become a
-  back-door to either). `MultipleChoiceField` → `list[str]`.
+  back-door to either). A serializer-only `MultipleChoiceField` → `list[<generated enum>]`
+  (rev6 #6; base `list[str]`, upgraded at the build site like `ChoiceField`).
 - `PrimaryKeyRelatedField` → the target's id (`relation_single`), `many=True` /
   `ManyRelatedField` → `list[<id>]` (`relation_multi`); the generated field carries
   **exactly one** id annotation, **strategy-dependent on the target** — the target primary
@@ -3769,6 +3781,13 @@ serializer-only choice field share one enum object; a name reused with a differe
 fails loud. `FilePathField` (a `ChoiceField` subclass with dynamic filesystem-path choices) is
 excluded — it stays `str`. Earned live by `createShelfViaMetadataSerializer` (`priority`).
 
+**Declared choices survive on a model-backed scalar too (rev2 P2).** A CONSUMER-DECLARED
+`ChoiceField` / `MultipleChoiceField` — even one `source`-mapped to a plain (non-choice) model
+column — emits the SAME generated serializer-only enum (via the shared `_serializer_choice_annotation`),
+rather than collapsing back to the column's `String` scalar. The declared choices are part of the
+public mutation contract, so they are never silently lost. Package-regression-tested with
+`ChoiceField(source="name", choices=...)` over a non-choice column.
+
 ### rev6 #8 — Model-backed serializer type-override conflict policy
 
 An AUTO-generated `ModelSerializer` field routes through the read-side `convert_scalar`
@@ -3778,8 +3797,10 @@ backing model column's scalar (e.g. `count = IntegerField(source="a_char_col")` 
 the framework FAILS LOUD naming the field, its `source`, and both scalars, rather than
 silently picking the model column (the graphene-django trap). A benign rename
 (`display_name = CharField(source="name")` — str vs str) agrees and resolves to the model
-scalar; a `choices` column keeps the enum symmetry (the check is skipped there). This is a
-class-creation / bind-time raise (an invalid configuration), so it is package-tested, not live.
+scalar; a `choices` column keeps the enum symmetry (the check is skipped there); a
+consumer-declared `ChoiceField` is handled by rev2 P2 (it emits the serializer-only enum,
+above) BEFORE this scalar-disagreement check. This is a class-creation / bind-time raise (an
+invalid configuration), so it is package-tested, not live.
 
 ### rev6 #9 — Thread DRF field metadata into the SDL
 
@@ -3894,14 +3915,18 @@ info)` confirms a MULTI relation's whole set in ONE visibility-scoped `pk__in` q
 one per id: the serializer multi decoder now type-checks + coerces every id first (the extracted
 `_type_check_relation_id`, no DB), then batch-confirms visibility, preserving the uniform
 no-existence-leak relation error (a hidden / missing member is the same field-keyed error). (b)
-`_scope_relation_querysets_to_visibility` adapts each runtime relation field's `queryset`
-(`PrimaryKeyRelatedField`) / `child_relation.queryset` (`ManyRelatedField`) to the SAME
-visibility-scoped queryset before `is_valid()`, so DRF's own re-validation lookup is the
-visibility lookup rather than an unscoped second fetch — DRF can never re-fetch a row the decode
-hid, even if the decode were bypassed. Package-tested with `assertNumQueries`-style
-`CaptureQueriesContext` (the batched multi decode is exactly ONE query) + a hidden-member
-rejection; live-tested by `createShelfViaAltBranchesSerializer` (a raw-pk M2M writes visible
-branches, a hidden branch is a `altBranches` relation error over `/graphql/`).
+`_scope_relation_querysets_to_visibility` COMPOSES each runtime relation field's `queryset`
+(`PrimaryKeyRelatedField`) / `child_relation.queryset` (`ManyRelatedField`) WITH the
+visibility-scoped queryset before `is_valid()` — `original.filter(pk__in=<visibility queryset>)`,
+an ADDITIONAL constraint (a `pk__in` subquery, still one lookup), never a REPLACEMENT (**rev2
+P1**: the earlier reassignment erased a serializer author's own
+`PrimaryKeyRelatedField(queryset=...)` restriction and could admit a visible-but-disallowed row).
+So DRF's own re-validation honors BOTH the author's queryset AND visibility, and can never
+re-fetch a row the decode hid. Package-tested with `assertNumQueries`-style
+`CaptureQueriesContext` (the batched multi decode is exactly ONE query), a hidden-member
+rejection, and a visible-but-author-disallowed single + many relation (the compose preserves the
+author's filter); live-tested by `createShelfViaAltBranchesSerializer` (a raw-pk M2M writes
+visible branches, a hidden branch is a `altBranches` relation error over `/graphql/`).
 
 ### rev6 #2 — Explicit injection contract (`Meta.injected_fields`)
 
@@ -3910,26 +3935,35 @@ too broad — it waived required-field coverage even when the override did not s
 fields. `Meta.injected_fields = (...)` is the auditable, per-field replacement (a new serializer
 `Meta` key, normalized like `optional_fields`, stored on the snapshot): the create-required
 guard SUBTRACTS only the declared injected fields (a dropped required field NOT declared injected
-STILL raises), and the resolver's `_assert_injected_fields_supplied` VERIFIES at runtime that each
-declared injected field actually reached the serializer's `initial_data` before `is_valid()`
-(a declared-but-unsupplied field is a clear `ConfigurationError`). The old blanket waiver survives
-ONLY as an explicitly-named unsafe legacy escape hatch (`legacy_waiver` in `build_input`): it
-fully skips the guard, but ONLY when `injected_fields` is NOT declared — declaring
-`injected_fields` opts into the precise mechanism. Live-tested (`createShelfWithInjectedTopic`
-narrows away a required `topic` and injects it); package-tested (subtract / still-raise / runtime
-verify).
+STILL raises). Each injected name is validated at CLASS creation against the schema-time field
+map (a typo fails loud), and its schema-time spec is stashed (`_injected_field_specs`). At
+runtime `_assert_injected_fields_supplied` proves RUNTIME ACCEPTANCE, not mere presence (**rev2
+P1**): each injected field must pass the SAME present / writable / source / kind / relation-model
+agreement check an input field gets (so the runtime serializer cannot silently drop or ignore it)
+AND have reached the serializer's `initial_data` — either failure is a clear `ConfigurationError`.
+The old blanket waiver survives ONLY as an explicitly-named unsafe legacy escape hatch
+(`legacy_waiver` in `build_input`): it fully skips the guard, but ONLY when `injected_fields` is
+NOT declared — declaring `injected_fields` opts into the precise mechanism. Live-tested
+(`createShelfWithInjectedTopic` narrows away a required `topic` and injects it); package-tested
+(subtract / still-raise / class-validation / runtime agreement + presence).
 
 ### rev6 #10 — Fingerprint `get_serializer_for_schema()` for determinism
 
 The spec requires the schema hook to return a STABLE, request-independent field shape, but the
 hook runs at class validation AND again at the phase-2.5 bind — a nondeterministic hook could
 validate one shape and bind another. `inputs.py::serializer_schema_fingerprint(field_map)`
-computes a lightweight digest (ordered field names, classes, sources, read/write flags,
-`required`, `allow_null`, relation target models); `_validate_meta` captures it on the
-`_ValidatedMutationMeta.schema_fingerprint` slot at class validation, and `build_input`
-recomputes it at bind and raises `ConfigurationError` if it DRIFTED. This turns the spec's
-stable-shape promise into an enforced contract (graphene-django has no equivalent — no
-schema/runtime hook split). Package-tested (drift raises; a stable hook binds cleanly).
+computes a digest of EVERY SDL-affecting axis (**rev2 P2**): ordered field names, classes,
+sources, read/write flags, `required`, `allow_null`, relation target models, PLUS the description
+inputs (`help_text` + the constraint summary), the enumerable choice MEMBERS, and the converter
+discriminants (`ModelField` wrapped field / `ListField` child) — so a hook that changes a
+description, enum members, or converter behavior without changing the coarse identity still trips
+the guard. `_validate_meta` captures it on `_ValidatedMutationMeta.schema_fingerprint` at class
+validation; both `build_input` AND `input_type_name` read the hook through the ONE guarded path
+`_checked_schema_field_map` (**rev2 P2**: the type-name derivation no longer reads an unguarded
+field map behind the fingerprint's back), raising `ConfigurationError` on drift. This turns the
+spec's stable-shape promise into an enforced contract (graphene-django has no equivalent — no
+schema/runtime hook split). Package-tested (drift raises at bind AND via `input_type_name`; the
+fingerprint is sensitive to choices / help_text / converter extras; a stable hook binds cleanly).
 
 ### rev6 #4 — Preserve DRF `ErrorDetail.code` in the error envelope
 

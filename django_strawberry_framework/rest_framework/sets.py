@@ -85,6 +85,7 @@ from .inputs import (
     guard_create_required_serializer_fields,
     materialize_serializer_input_class,
     resolve_effective_serializer_fields,
+    resolve_injected_field_specs,
     resolve_optional_fields,
     serializer_schema_fingerprint,
 )
@@ -119,6 +120,33 @@ _ALLOWED_SERIALIZER_META_KEYS: frozenset[str] = frozenset(
 _SERIALIZER_OPERATION_INPUT_KIND: dict[str, str] = {"create": CREATE, "update": PARTIAL}
 
 
+def _checked_schema_field_map(
+    cls: type,
+    meta: _ValidatedMutationMeta,
+) -> dict[str, serializers.Field]:
+    """Read ``get_serializer_for_schema()`` through the ONE guarded path (spec-039 #10 / rev2 P2).
+
+    The single authoritative read of the schema hook for the bind window: calls the overridable
+    ``get_serializer_for_schema()`` and, when the class-validation fingerprint is present on the
+    snapshot, verifies the returned shape has NOT DRIFTED (a nondeterministic hook that validates
+    one shape and binds / names another is a clear ``ConfigurationError``). Both ``build_input``
+    and ``input_type_name`` route through here, so the type-name derivation cannot read an
+    unguarded field map behind the fingerprint's back.
+    """
+    field_map = cls.get_serializer_for_schema()
+    if meta.schema_fingerprint is not None and (
+        serializer_schema_fingerprint(field_map) != meta.schema_fingerprint
+    ):
+        raise ConfigurationError(
+            f"SerializerMutation {cls.__name__}.get_serializer_for_schema() returned a "
+            "DIFFERENT field shape at bind than at class validation; the hook must be "
+            "deterministic and request-independent (the input is generated once at "
+            "finalization). Return a stable field map (do not read request state or "
+            "mutate per call).",
+        )
+    return field_map
+
+
 class SerializerMutation(DjangoMutation):
     """A DRF-``ModelSerializer``-backed write mutation (spec-039 Decision 6).
 
@@ -146,6 +174,12 @@ class SerializerMutation(DjangoMutation):
     # at bind so the Slice-3 decode reaches the serializer-field-keyed reverse map.
     # ``None`` until bind (mirrors ``_input_class`` + the form flavor's slot).
     _input_field_specs: list | None = None
+
+    # The schema-time specs for ``Meta.injected_fields`` (spec-039 rev6 rev2 P1), stashed at
+    # bind so the Slice-3 resolver holds each injected field to the SAME runtime-agreement
+    # contract (present / writable / source / kind / relation-model) an input field gets - not
+    # merely that its key is present in ``data``. ``[]`` when no fields are injected.
+    _injected_field_specs: list | None = None
 
     @classmethod
     def _resolve_model(cls, meta: type) -> Any:
@@ -296,6 +330,17 @@ class SerializerMutation(DjangoMutation):
             label="injected_fields",
             flavor="SerializerMutation",
         )
+        # rev6 rev2 P1: an injected field must be a real SCHEMA-TIME field (a required field the
+        # input narrowed away), validated at class creation so a typo fails loud here rather than
+        # silently waiving nothing. The runtime resolver then re-checks it against serializer.fields.
+        if injected_fields:
+            unknown_injected = [name for name in injected_fields if name not in field_map]
+            if unknown_injected:
+                raise ConfigurationError(
+                    f"SerializerMutation {name}.Meta.injected_fields names field(s) not in the "
+                    f"schema-time field map: {sorted(unknown_injected)!r}. Inject only fields the "
+                    "serializer's get_serializer_for_schema() exposes.",
+                )
         # ``Meta.select_for_update`` (rev6 #14): opt-in row lock on the UPDATE locate. A bool
         # only (the shared locate applies ``.select_for_update()`` when True); a non-bool is a
         # clear class-creation error. On a backend without ``FOR UPDATE`` (e.g. sqlite) Django
@@ -415,21 +460,16 @@ class SerializerMutation(DjangoMutation):
         )  # the serializer input derives from the serializer, not the model primary.
         operation_kind = _SERIALIZER_OPERATION_INPUT_KIND[meta.operation]
         serializer_class = meta.serializer_class
-        field_map = cls.get_serializer_for_schema()
-        # rev6 #10: the schema hook must be DETERMINISTIC (a stable, request-independent shape).
-        # It ran at class validation (fingerprint stored on the snapshot); recompute here at the
-        # bind and fail loud if it DRIFTED, so a hook that validates one shape and binds another
-        # is a clear ConfigurationError rather than a silent schema/reverse-map mismatch.
-        if meta.schema_fingerprint is not None:
-            current_fingerprint = serializer_schema_fingerprint(field_map)
-            if current_fingerprint != meta.schema_fingerprint:
-                raise ConfigurationError(
-                    f"SerializerMutation {cls.__name__}.get_serializer_for_schema() returned a "
-                    "DIFFERENT field shape at bind than at class validation; the hook must be "
-                    "deterministic and request-independent (the input is generated once at "
-                    "finalization). Return a stable field map (do not read request state or "
-                    "mutate per call).",
-                )
+        # rev6 #10 / rev2 P2: read the schema hook through the ONE guarded path, so the
+        # determinism fingerprint is checked HERE and in ``input_type_name`` alike (no unguarded
+        # second read). Then stash the schema-time specs for ``Meta.injected_fields`` (rev2 P1)
+        # so the resolver can hold each injected field to the runtime-agreement contract.
+        field_map = _checked_schema_field_map(cls, meta)
+        cls._injected_field_specs = resolve_injected_field_specs(
+            serializer_class,
+            field_map,
+            meta.injected_fields,
+        )
         effective_names = tuple(
             resolve_effective_serializer_fields(
                 serializer_class,
@@ -509,7 +549,9 @@ class SerializerMutation(DjangoMutation):
             fields=meta.fields,
             exclude=meta.exclude,
             optional_fields=meta.optional_fields,
-            field_map=cls.get_serializer_for_schema(),
+            # rev2 P2: the SAME guarded hook read as ``build_input`` (fingerprint-checked), so
+            # the type-name derivation never reads an unguarded field map.
+            field_map=_checked_schema_field_map(cls, meta),
         )
         return shape.type_name
 
@@ -525,9 +567,20 @@ class SerializerMutation(DjangoMutation):
         The graphene ``get_serializer_kwargs`` parity seam (spec-039 Decision 7 step 4 /
         Decision 8). The default returns ``{"data": data}`` (create) or ``{"data": data,
         "instance": instance}`` (update, when ``instance`` is non-``None``). A consumer
-        overrides this to add / replace kwargs (an extra ``context`` key, an extra
-        constructor kwarg), which WAIVES ``build_input``'s create-required guard (the
-        override injects whatever a narrowing dropped).
+        overrides this to add / replace CONSTRUCTOR kwargs (an extra ``context`` key, a
+        constructor argument like ``tenant``), or to inject a narrowed-away required field's
+        VALUE into ``data``.
+
+        **Narrowing away a required field: use ``Meta.injected_fields`` (rev6 #2).** The
+        auditable, per-field contract is ``Meta.injected_fields`` - it names the fields this
+        override supplies, so the create-required guard subtracts ONLY those (a dropped required
+        field NOT declared injected still fails loud), and the resolver verifies at runtime that
+        each declared injected field reached the data AND agrees with the runtime serializer
+        (present / writable / source / kind / relation-model). The OLD "overriding this hook
+        waives ALL required-field coverage" behavior survives ONLY as an explicitly-named
+        UNSAFE legacy escape hatch in ``build_input`` (``legacy_waiver``): it fully skips the
+        guard, but ONLY when ``Meta.injected_fields`` is not declared. Prefer
+        ``Meta.injected_fields``.
 
         **The non-overridable framework invariants are NOT set here.** The Slice-3
         resolver's ``_merged_serializer_kwargs`` merges this return UNDER ``partial=True``
@@ -536,9 +589,9 @@ class SerializerMutation(DjangoMutation):
         invariants never live in the consumer-overridable hook (a hook returning
         ``partial`` itself, or a DIFFERENT ``context["request"]`` object, is a
         ``ConfigurationError`` there). This default never sets ``partial`` or
-        ``context`` - the framework owns both - and ``build_input``'s
-        ``_hook_overridden(cls, SerializerMutation, "get_serializer_kwargs")`` waiver
-        compares against it (the ``forms/sets.py`` ``get_form_kwargs`` precedent).
+        ``context`` - the framework owns both - and ``build_input``'s legacy-waiver check
+        (``_hook_overridden(cls, SerializerMutation, "get_serializer_kwargs")``) compares
+        against it (the ``forms/sets.py`` ``get_form_kwargs`` precedent).
         """
         del info  # the default ignores ``info``; an override may consult it.
         kwargs: dict[str, Any] = {"data": data}

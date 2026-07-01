@@ -5650,6 +5650,120 @@ def test_serializer_update_with_select_for_update_over_http():
     assert book.title == "AfterLock"
 
 
+@pytest.mark.django_db
+def test_create_branch_with_nested_shelves_over_http():
+    """An EXPLICIT opt-in nested serializer write creates a branch + nested shelves over HTTP (spec-039 rev6 #17).
+
+    ``CreateBranchWithNestedShelves`` opts a nested ``shelves`` list in via
+    ``Meta.nested_fields = {"shelves": NestedSerializerConfig()}``; the serializer's OWN
+    ``create()`` performs the nested write (the framework never auto-saves the relation). The
+    generated input carries a nested ``NestedShelfSerializerInput`` (``code`` / ``topic`` / a
+    raw-pk ``altBranches`` list). A create writes the branch + every nested shelf, and a nested
+    ``altBranches`` id is visibility-decoded through ``BranchType.get_queryset``.
+    """
+    home = models.Branch.objects.create(name="NestVisibleAlt", city="Boston")
+
+    # Introspection: the top input has a nested ``shelves`` list of ``NestedShelfSerializerInput``.
+    top_input = _mutation_data_input_type_name("createBranchWithNestedShelves")
+    assert "shelves" in _input_field_names(top_input)
+    assert _input_field_names("NestedShelfSerializerInput") == {"code", "topic", "altBranches"}
+
+    response = _post_graphql(
+        "mutation($d: " + top_input + "!) { createBranchWithNestedShelves(data: $d) { "
+        "result { name shelves { code topic } } errors { field messages } } }",
+        variables={
+            "d": {
+                "name": "NestedHome",
+                "city": "Boston",
+                "shelves": [
+                    {"code": "N1", "topic": "fiction", "altBranches": [home.pk]},
+                    {"code": "N2"},
+                ],
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBranchWithNestedShelves"]
+    assert result["errors"] == []
+    # ``BranchType.shelves`` orders by ``-code``, so N2 then N1.
+    assert result["result"] == {
+        "name": "NestedHome",
+        "shelves": [{"code": "N2", "topic": ""}, {"code": "N1", "topic": "fiction"}],
+    }
+    branch = models.Branch.objects.get(name="NestedHome")
+    n1 = models.Shelf.objects.get(branch=branch, code="N1")
+    # The nested ``alt_branches`` pk was decoded, visibility-checked, and written by create().
+    assert set(n1.alt_branches.values_list("pk", flat=True)) == {home.pk}
+
+
+@pytest.mark.django_db
+def test_nested_shelf_hidden_alt_branch_is_structured_path_error_over_http():
+    """A hidden id in a NESTED relation is a structured ``shelves.<i>.altBranches`` error with no partial write (spec-039 rev6 #17 / #3 / #13).
+
+    A nested ``shelves[0].altBranches`` pointing at a ``city="restricted"`` branch (hidden from
+    the anonymous caller by ``BranchType.get_queryset``) is a relation error keyed to the FULL
+    nested path - proving the recursive decode visibility-checks nested relations and keys the
+    error to its structured path. The whole write rolls back (no branch, no shelves).
+    """
+    hidden = models.Branch.objects.create(name="NestHiddenAlt", city="restricted")
+    top_input = _mutation_data_input_type_name("createBranchWithNestedShelves")
+
+    response = _post_graphql(
+        "mutation($d: " + top_input + "!) { createBranchWithNestedShelves(data: $d) { "
+        "result { name } errors { field messages codes path } } }",
+        variables={
+            "d": {
+                "name": "NestedRollback",
+                "shelves": [{"code": "N1", "altBranches": [hidden.pk]}],
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBranchWithNestedShelves"]
+    assert result["result"] is None
+    (err,) = result["errors"]
+    assert err["field"] == "shelves.0.altBranches"
+    assert err["path"] == ["shelves", "0", "altBranches"]
+    assert err["codes"] == ["invalid"]
+    # H6: the error envelope committed nothing.
+    assert not models.Branch.objects.filter(name="NestedRollback").exists()
+    assert not models.Shelf.objects.filter(code="N1", branch__name="NestedRollback").exists()
+
+
+@pytest.mark.django_db
+def test_nested_shelf_validation_error_flattens_to_structured_path_over_http():
+    """A NESTED DRF validation error flattens to the structured ``shelves.<i>.code`` path (spec-039 rev6 #17).
+
+    ``NestedShelfSerializer.validate_code`` rejects the sentinel ``"BANNED"`` (a valid String at
+    the GraphQL boundary, so it survives coercion and reaches DRF's ``is_valid()``). The nested
+    field error surfaces through the recursive flattener keyed to ``shelves.1.code`` (the second
+    nested item), with the DRF ``ErrorDetail.code`` preserved; the whole write rolls back.
+    """
+    top_input = _mutation_data_input_type_name("createBranchWithNestedShelves")
+
+    response = _post_graphql(
+        "mutation($d: " + top_input + "!) { createBranchWithNestedShelves(data: $d) { "
+        "result { name } errors { field messages path } } }",
+        variables={
+            "d": {"name": "NestedBadCode", "shelves": [{"code": "OK1"}, {"code": "BANNED"}]},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBranchWithNestedShelves"]
+    assert result["result"] is None
+    (err,) = result["errors"]
+    assert err["field"] == "shelves.1.code"
+    assert err["path"] == ["shelves", "1", "code"]
+    assert err["messages"] == ["This shelf code is not allowed."]
+    assert not models.Branch.objects.filter(name="NestedBadCode").exists()
+
+
 # ---------------------------------------------------------------------------
 # Golden SDL coverage for the serializer-mutation input lane (spec-039 rev6 #16)
 # ---------------------------------------------------------------------------

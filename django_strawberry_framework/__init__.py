@@ -43,7 +43,9 @@ __version__ = "0.0.12"
 # from ``__all__`` (F1) so ``from django_strawberry_framework import *`` stays DRF-free.
 # ``SerializerMutation`` is the write base; ``register_serializer_field_converter`` +
 # ``SerializerFieldConversion`` are the public serializer-field converter-registry
-# surface (a consumer registers a converter returning a ``SerializerFieldConversion``).
+# surface (a consumer registers a converter returning a ``SerializerFieldConversion``);
+# ``NestedSerializerConfig`` is the explicit opt-in for nested serializer inputs
+# (``Meta.nested_fields = {"items": NestedSerializerConfig(...)}``, spec-039 rev6 #17).
 _DRF_SOFT_EXPORTS: dict[str, tuple[str, str]] = {
     "SerializerMutation": (".rest_framework.sets", "SerializerMutation"),
     "register_serializer_field_converter": (
@@ -55,6 +57,7 @@ _DRF_SOFT_EXPORTS: dict[str, tuple[str, str]] = {
         "SerializerFieldConversion",
     ),
     "describe_serializer_input": (".rest_framework.inputs", "describe_serializer_input"),
+    "NestedSerializerConfig": (".rest_framework.inputs", "NestedSerializerConfig"),
 }
 
 

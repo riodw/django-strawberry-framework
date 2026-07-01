@@ -137,7 +137,14 @@ from ..utils.querysets import (
     visible_related_object,
     visible_related_objects,
 )
-from .serializer_converter import FILE, RELATION_MULTI, RELATION_SINGLE
+from .serializer_converter import (
+    FILE,
+    NESTED_MULTI,
+    NESTED_SINGLE,
+    RELATION_MULTI,
+    RELATION_SINGLE,
+    nested_serializer_child,
+)
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
 # async ``get_queryset`` is met inside the (sync) serializer pipeline. Mirrors the
@@ -282,21 +289,43 @@ def _decode_serializer_data(
 ) -> tuple[dict[str, Any], FieldError | None]:
     """Decode the bound input dataclass into a serializer-field-keyed ``provided_data`` (NET-NEW).
 
-    Walks the provided input fields (``UNSET`` stripped) and, using the bind-stashed
-    per-field reverse map (``mutation_cls._input_field_specs``, keyed by input attr),
-    routes each value by ``kind`` to ``provided_data[spec.target_name]`` (the
-    DECLARED serializer field name DRF maps to ``source`` internally):
+    The top entry: decodes ``data`` against the bind-stashed top-level reverse map
+    (``mutation_cls._input_field_specs``) via the recursive ``_decode_input_object`` (which
+    handles nested inputs, rev6 #17). A decode ``FieldError`` short-circuits.
+    """
+    return _decode_input_object(mutation_cls._input_field_specs, data, info)
+
+
+def _decode_input_object(
+    specs: list,
+    data: Any,
+    info: Any,
+    *,
+    path_prefix: str = "",
+) -> tuple[dict[str, Any], FieldError | None]:
+    """Decode ONE strawberry input dataclass into a serializer-field-keyed dict (spec-039 rev6 #17).
+
+    Walks the provided input fields (``UNSET`` stripped) and, using the per-field reverse map
+    (``specs``, keyed by input attr), routes each value by ``kind`` to
+    ``result[spec.target_name]`` (the DECLARED serializer field name DRF maps to ``source``
+    internally):
 
     - ``SCALAR`` -> the choice-enum member unwrapped to its raw value via the reused
       ``raw_choice_value`` (with the ``036`` / ``038`` invalid-Unicode preflight).
-    - ``RELATION_SINGLE`` / ``RELATION_MULTI`` -> the visibility-checked relation
-      pk(s), type-checked against the relation's target model.
-    - ``FILE`` -> the ``Upload`` value, routed into ``data`` like any other value
-      (the deliberate DRF contrast with the form flavor's ``files=`` split).
+    - ``RELATION_SINGLE`` / ``RELATION_MULTI`` -> the visibility-checked relation pk(s),
+      type-checked against the relation's target model.
+    - ``NESTED_SINGLE`` / ``NESTED_MULTI`` -> a RECURSIVELY-decoded nested dict / list of dicts
+      (rev6 #17), using the nested reverse map ``spec.nested_specs`` - so a nested relation is
+      visibility-checked and a nested scalar Unicode-preflighted exactly like a top-level one.
+    - ``FILE`` -> the ``Upload`` value, routed into ``data`` like any other value (the
+      deliberate DRF contrast with the form flavor's ``files=`` split).
 
-    A relation decode ``FieldError`` short-circuits.
+    ``path_prefix`` is the dotted GraphQL path of the enclosing nested field (empty at the top),
+    so a decode ``FieldError`` (a hidden relation id, invalid Unicode) is keyed to its FULL path
+    (``shelves.0.altBranches``), not just the leaf name. Re-used recursively for nested items.
+    A decode ``FieldError`` short-circuits (the shared skeleton maps it to a null payload).
     """
-    spec_by_attr = {spec.input_attr: spec for spec in mutation_cls._input_field_specs}
+    spec_by_attr = {spec.input_attr: spec for spec in specs}
     provided_data: dict[str, Any] = {}
 
     for field in data.__strawberry_definition__.fields:
@@ -305,6 +334,7 @@ def _decode_serializer_data(
         if value is strawberry.UNSET:
             continue
         spec = spec_by_attr[python_name]
+        field_path = _join_path(path_prefix, spec.graphql_name)
 
         if spec.kind in (RELATION_SINGLE, RELATION_MULTI):
             decoder = (
@@ -312,10 +342,15 @@ def _decode_serializer_data(
             )
             decoded, error = decoder(
                 value,
-                graphql_name=spec.graphql_name,
+                graphql_name=field_path,
                 related_model=spec.related_model,
                 info=info,
             )
+            if error is not None:
+                return {}, error
+            provided_data[spec.target_name] = decoded
+        elif spec.kind in (NESTED_SINGLE, NESTED_MULTI):
+            decoded, error = _decode_nested(spec, value, info, path_prefix=field_path)
             if error is not None:
                 return {}, error
             provided_data[spec.target_name] = decoded
@@ -329,13 +364,57 @@ def _decode_serializer_data(
             # serializer's ``validate_unique`` lookup or ``save()`` INSERT and raise a
             # raw ``UnicodeEncodeError`` - a ``ValueError`` neither ``is_valid()`` nor
             # ``save_or_field_errors`` maps - escaping the envelope. Reject it here,
-            # keyed to the input's GraphQL field name.
-            text_error = _unencodable_text_error(spec.graphql_name, value)
+            # keyed to the input's (full-path) GraphQL field name.
+            text_error = _unencodable_text_error(field_path, value)
             if text_error is not None:
                 return {}, text_error
             provided_data[spec.target_name] = raw_choice_value(value)
 
     return provided_data, None
+
+
+def _decode_nested(
+    spec: Any,
+    value: Any,
+    info: Any,
+    *,
+    path_prefix: str,
+) -> tuple[Any, FieldError | None]:
+    """Recursively decode a nested input value into nested serializer-keyed data (spec-039 rev6 #17).
+
+    A single nested input dataclass -> one decoded dict (via ``_decode_input_object`` over
+    ``spec.nested_specs``); a ``NESTED_MULTI`` list -> a list of decoded dicts, each keyed under
+    its index in the path (``shelves.0`` / ``shelves.1``). An explicit ``None`` (a nested clear /
+    omitted value that coerced to ``null``) passes through unchanged so the parent serializer's
+    OWN validation decides (a required nested field raises its own field-keyed error via
+    ``is_valid()``). A decode ``FieldError`` in any nested item short-circuits. The decoded nested
+    data is handed to the parent serializer's ``create()`` / ``update()`` (which owns the write -
+    the framework never auto-saves the nested relation).
+    """
+    if value is None:
+        return None, None
+    if spec.kind == NESTED_MULTI:
+        decoded_items: list[dict[str, Any]] = []
+        for index, item in enumerate(value):
+            item_data, error = _decode_input_object(
+                spec.nested_specs,
+                item,
+                info,
+                path_prefix=_join_path(path_prefix, str(index)),
+            )
+            if error is not None:
+                return None, error
+            decoded_items.append(item_data)
+        return decoded_items, None
+    item_data, error = _decode_input_object(
+        spec.nested_specs,
+        value,
+        info,
+        path_prefix=path_prefix,
+    )
+    if error is not None:
+        return None, error
+    return item_data, None
 
 
 def serializer_errors_to_field_errors(
@@ -579,6 +658,8 @@ def _assert_field_agreement(mutation_cls: type, serializer: Any, spec: Any) -> N
         )
     if spec.kind in (RELATION_SINGLE, RELATION_MULTI):
         _assert_relation_agreement(mutation_cls, spec, runtime)
+    elif spec.kind in (NESTED_SINGLE, NESTED_MULTI):
+        _assert_nested_agreement(mutation_cls, spec, runtime)
     elif spec.kind == FILE:
         if not isinstance(runtime, serializers.FileField):
             raise ConfigurationError(
@@ -588,12 +669,18 @@ def _assert_field_agreement(mutation_cls: type, serializer: Any, spec: Any) -> N
             )
     elif isinstance(
         runtime,
-        (serializers.RelatedField, serializers.ManyRelatedField, serializers.FileField),
+        (
+            serializers.BaseSerializer,
+            serializers.RelatedField,
+            serializers.ManyRelatedField,
+            serializers.FileField,
+        ),
     ):
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}: field {target!r} is a scalar in the "
-            f"schema but a relation / file ({type(runtime).__name__}) at runtime; the kind "
-            "moved. Align the runtime serializer field with get_serializer_for_schema().",
+            f"schema but a relation / file / nested serializer ({type(runtime).__name__}) at "
+            "runtime; the kind moved. Align the runtime serializer field with "
+            "get_serializer_for_schema().",
         )
 
 
@@ -631,6 +718,36 @@ def _assert_relation_agreement(mutation_cls: type, spec: Any, runtime: Any) -> N
         )
 
 
+def _assert_nested_agreement(mutation_cls: type, spec: Any, runtime: Any) -> None:
+    """Confirm a runtime nested serializer field matches the schema-time nested spec (spec-039 rev6 #17).
+
+    A ``NESTED_MULTI`` spec requires a runtime ``ListSerializer`` (a ``many=True`` nested
+    serializer); a ``NESTED_SINGLE`` spec requires a plain nested ``Serializer`` (a
+    ``BaseSerializer`` that is NOT a ``ListSerializer``). Then the agreement RECURSES: each
+    schema-time nested field spec (``spec.nested_specs``) is held to the SAME present / writable /
+    source / kind / relation-model / deeper-nested contract against the runtime nested
+    serializer's own fields - so a nested shape that drifted between the schema-time hook and the
+    runtime serializer is a clear ``ConfigurationError`` at the boundary, at every depth.
+    """
+    if spec.kind == NESTED_MULTI:
+        ok_shape = isinstance(runtime, serializers.ListSerializer)
+    else:
+        ok_shape = isinstance(runtime, serializers.BaseSerializer) and not isinstance(
+            runtime,
+            serializers.ListSerializer,
+        )
+    if not ok_shape:
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_cls.__name__}: nested field {spec.target_name!r} is "
+            f"{type(runtime).__name__} at runtime, but the schema types it as a nested "
+            f"{'list of serializers' if spec.kind == NESTED_MULTI else 'serializer'}. Align the "
+            "runtime serializer field with get_serializer_for_schema().",
+        )
+    child_serializer, _many = nested_serializer_child(runtime)
+    for child_spec in spec.nested_specs:
+        _assert_field_agreement(mutation_cls, child_serializer, child_spec)
+
+
 def _scope_relation_querysets_to_visibility(
     mutation_cls: type,
     serializer: Any,
@@ -651,8 +768,31 @@ def _scope_relation_querysets_to_visibility(
     target has no registered primary (a raw-pk relation with no visibility contract) is left with
     its own queryset. The agreement guard already ran, so every relation spec has a matching
     writable runtime field over the recorded model (with a non-``None`` queryset).
+
+    **Nested recursion (rev6 #17).** A nested serializer field's OWN relation fields are scoped
+    too, by recursing into the runtime nested serializer's ``.fields`` with the nested reverse
+    map (``spec.nested_specs``) - so DRF's nested ``is_valid()`` lookup is the visibility lookup
+    at every depth, the same defense-in-depth the top level gets.
     """
-    for spec in mutation_cls._input_field_specs:
+    _scope_specs_over_serializer(mutation_cls._input_field_specs, serializer, info)
+
+
+def _scope_specs_over_serializer(specs: list, serializer: Any, info: Any) -> None:
+    """Scope one serializer's relation-field querysets to visibility, recursing into nested (rev6 #3 / #17).
+
+    The per-serializer body of ``_scope_relation_querysets_to_visibility``, factored out so it
+    serves both the top-level input specs and each nested serializer's specs. A relation field is
+    AND-ed with the visibility queryset (never replaced); a nested field recurses into the runtime
+    nested serializer's own fields with the nested reverse map.
+    """
+    for spec in specs:
+        if spec.kind in (NESTED_SINGLE, NESTED_MULTI):
+            nested_field = serializer.fields.get(spec.target_name)
+            if nested_field is None:  # pragma: no cover - the agreement guard already required it.
+                continue
+            child_serializer, _many = nested_serializer_child(nested_field)
+            _scope_specs_over_serializer(spec.nested_specs, child_serializer, info)
+            continue
         if spec.kind not in (RELATION_SINGLE, RELATION_MULTI):
             continue
         related_type = registry.get(spec.related_model)

@@ -57,10 +57,12 @@ from django_strawberry_framework.mutations.sets import iter_mutations
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.rest_framework.inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
+    NestedSerializerConfig,
 )
 from django_strawberry_framework.rest_framework.inputs import (
     _materialized_names as serializer_materialized_names,
 )
+from django_strawberry_framework.rest_framework.sets import _validate_serializer_nested_fields
 
 
 @pytest.fixture(autouse=True)
@@ -1035,3 +1037,182 @@ def test_input_type_name_runs_the_determinism_guard():
     drift["drop"] = True
     with pytest.raises(ConfigurationError, match="DIFFERENT field shape"):
         DriftNameMut.input_type_name(DriftNameMut._mutation_meta)
+
+
+# ---------------------------------------------------------------------------
+# Meta.nested_fields validation (spec-039 rev6 #17)
+# ---------------------------------------------------------------------------
+
+
+def _category_field_map(*, with_create=True, with_items=True):
+    """Return a ``CategorySerializer``'s bound field map (nested ``items`` list) + the class."""
+
+    class ItemInline(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name",)
+
+    class CategorySer(serializers.ModelSerializer):
+        if with_items:
+            items = ItemInline(many=True)
+
+        class Meta:
+            model = product_models.Category
+            fields = ("name", "items") if with_items else ("name",)
+
+        if with_create:
+
+            def create(self, validated_data):
+                return None
+
+    return CategorySer, dict(CategorySer().fields)
+
+
+def test_validate_nested_fields_none_returns_none():
+    """An unset ``Meta.nested_fields`` normalizes to ``None`` (rev6 #17)."""
+    serializer_cls, field_map = _category_field_map()
+    assert (
+        _validate_serializer_nested_fields("M", serializer_cls, "create", field_map, None) is None
+    )
+
+
+def test_validate_nested_fields_rejects_non_mapping():
+    """A non-mapping ``Meta.nested_fields`` fails loud at class creation (rev6 #17)."""
+    serializer_cls, field_map = _category_field_map()
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        _validate_serializer_nested_fields("M", serializer_cls, "create", field_map, ["items"])
+
+
+def test_validate_nested_fields_rejects_non_config_value():
+    """A value that is not a ``NestedSerializerConfig`` fails loud (rev6 #17)."""
+    serializer_cls, field_map = _category_field_map()
+    with pytest.raises(ConfigurationError, match="must be a NestedSerializerConfig"):
+        _validate_serializer_nested_fields(
+            "M",
+            serializer_cls,
+            "create",
+            field_map,
+            {"items": object()},
+        )
+
+
+def test_validate_nested_fields_rejects_unknown_field():
+    """A ``nested_fields`` key not in the serializer's field map fails loud (rev6 #17)."""
+    serializer_cls, field_map = _category_field_map()
+    with pytest.raises(ConfigurationError, match="not in the serializer's schema-time field map"):
+        _validate_serializer_nested_fields(
+            "M",
+            serializer_cls,
+            "create",
+            field_map,
+            {"ghost": NestedSerializerConfig()},
+        )
+
+
+def test_validate_nested_fields_rejects_non_nested_field():
+    """A ``nested_fields`` key naming a scalar (not a nested serializer) fails loud (rev6 #17)."""
+    serializer_cls, field_map = _category_field_map()
+    with pytest.raises(ConfigurationError, match="not a nested serializer"):
+        _validate_serializer_nested_fields(
+            "M",
+            serializer_cls,
+            "create",
+            field_map,
+            {"name": NestedSerializerConfig()},
+        )
+
+
+def test_validate_nested_fields_requires_create_override():
+    """``nested_fields`` on a create op requires the serializer to override ``create()`` (rev6 #17)."""
+    serializer_cls, field_map = _category_field_map(with_create=False)
+    with pytest.raises(ConfigurationError, match="does not override create"):
+        _validate_serializer_nested_fields(
+            "M",
+            serializer_cls,
+            "create",
+            field_map,
+            {"items": NestedSerializerConfig()},
+        )
+
+
+def test_validate_nested_fields_requires_update_override_for_update_op():
+    """``nested_fields`` on an update op requires the serializer to override ``update()`` (rev6 #17)."""
+    serializer_cls, field_map = _category_field_map(with_create=True)
+    # The class overrides create() but NOT update(); an update op needs update().
+    with pytest.raises(ConfigurationError, match="does not override update"):
+        _validate_serializer_nested_fields(
+            "M",
+            serializer_cls,
+            "update",
+            field_map,
+            {"items": NestedSerializerConfig()},
+        )
+
+
+def test_validate_nested_fields_valid_returns_normalized_dict():
+    """A valid ``Meta.nested_fields`` normalizes to a plain dict (rev6 #17)."""
+    serializer_cls, field_map = _category_field_map()
+    config = NestedSerializerConfig()
+    result = _validate_serializer_nested_fields(
+        "M",
+        serializer_cls,
+        "create",
+        field_map,
+        {"items": config},
+    )
+    assert result == {"items": config}
+
+
+def test_nested_fields_stored_on_snapshot_and_builds():
+    """A declared ``Meta.nested_fields`` is stored on the snapshot and the mutation finalizes (rev6 #17)."""
+
+    class ItemInline(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name",)
+
+    class CategoryWithItems(serializers.ModelSerializer):
+        items = ItemInline(many=True)
+
+        class Meta:
+            model = product_models.Category
+            fields = ("name", "items")
+
+        def create(self, validated_data):
+            return None
+
+    class CategoryT(DjangoType):
+        class Meta:
+            model = product_models.Category
+            fields = ("id", "name")
+            primary = True
+
+    class CreateCategoryWithItems(SerializerMutation):
+        class Meta:
+            serializer_class = CategoryWithItems
+            operation = "create"
+            nested_fields = {"items": NestedSerializerConfig()}
+            permission_classes = []
+
+    snapshot = CreateCategoryWithItems._mutation_meta
+    assert set(snapshot.nested_fields) == {"items"}
+
+    import strawberry as _sb
+
+    from django_strawberry_framework import DjangoMutationField
+
+    @_sb.type
+    class Query:
+        @_sb.field
+        def ping(self) -> int:
+            return 1
+
+    @_sb.type
+    class Mutation:
+        create_category_with_items = DjangoMutationField(CreateCategoryWithItems)
+
+    del CategoryT
+    finalize_django_types()
+    sdl = str(_sb.Schema(query=Query, mutation=Mutation))
+    # The nested input type is generated (canonical nested name, ItemInline full shape).
+    assert "ItemInlineInput" in sdl

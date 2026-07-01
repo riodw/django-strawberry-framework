@@ -40,18 +40,23 @@ from strawberry.types.base import StrawberryOptional
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.rest_framework import inputs as serializer_inputs
 from django_strawberry_framework.rest_framework.inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
+    NestedSerializerConfig,
     SerializerInputShape,
     build_serializer_input_class,
     build_serializer_inputs,
     clear_serializer_input_namespace,
+    describe_serializer_input,
     get_serializer_for_schema,
     guard_create_required_serializer_fields,
     materialize_serializer_input_class,
     resolve_effective_serializer_fields,
 )
 from django_strawberry_framework.rest_framework.serializer_converter import (
+    NESTED_MULTI,
+    NESTED_SINGLE,
     RELATION_SINGLE,
     SCALAR,
 )
@@ -1055,3 +1060,327 @@ def test_schema_fingerprint_sensitive_to_converter_extras():
     assert serializer_schema_fingerprint(dict(ListA().fields)) != serializer_schema_fingerprint(
         dict(ListB().fields),
     )
+
+
+# ===========================================================================
+# Opt-in nested serializer inputs (spec-039 rev6 #17)
+# ===========================================================================
+
+
+def _nested_child_serializer():
+    """A plain nested serializer (two scalars) for the nested-input build tests."""
+
+    class Child(serializers.Serializer):
+        code = serializers.CharField()
+        note = serializers.CharField(required=False)
+
+    return Child
+
+
+def test_nested_serializer_config_defaults_and_root_import():
+    """``NestedSerializerConfig`` is importable from the package root and defaults to all-None (rev6 #17)."""
+    import django_strawberry_framework as dsf
+
+    assert dsf.NestedSerializerConfig is NestedSerializerConfig
+    config = NestedSerializerConfig()
+    assert config.fields is None
+    assert config.exclude is None
+    assert config.optional_fields is None
+    assert config.nested_fields is None
+
+
+def test_nested_single_field_builds_recursive_input():
+    """A single opted-in nested serializer field builds a nested input class + records nested_specs (rev6 #17)."""
+    child = _nested_child_serializer()
+
+    class Parent(serializers.Serializer):
+        title = serializers.CharField()
+        detail = child()
+
+    cls, shape = build_serializer_input_class(
+        Parent,
+        operation_kind="create",
+        nested_configs={"detail": NestedSerializerConfig()},
+    )
+    fields = _field_map(cls)
+    assert set(fields) == {"title", "detail"}
+    detail_spec = next(s for s in shape.field_specs if s.target_name == "detail")
+    assert detail_spec.kind == NESTED_SINGLE
+    assert [s.target_name for s in detail_spec.nested_specs] == ["code", "note"]
+
+
+def test_nested_multi_field_builds_list_of_nested_input():
+    """A ``many=True`` opted-in nested serializer builds a ``list[<nested>]`` field (kind nested_multi) (rev6 #17)."""
+    child = _nested_child_serializer()
+
+    class Parent(serializers.Serializer):
+        title = serializers.CharField()
+        items = child(many=True)
+
+    _cls, shape = build_serializer_input_class(
+        Parent,
+        operation_kind="create",
+        nested_configs={"items": NestedSerializerConfig()},
+    )
+    items_spec = next(s for s in shape.field_specs if s.target_name == "items")
+    assert items_spec.kind == NESTED_MULTI
+    assert [s.target_name for s in items_spec.nested_specs] == ["code", "note"]
+
+
+def test_nested_config_narrows_nested_fields():
+    """``NestedSerializerConfig(fields=...)`` narrows the NESTED input's field set (rev6 #17)."""
+    child = _nested_child_serializer()
+
+    class Parent(serializers.Serializer):
+        detail = child()
+
+    _cls, shape = build_serializer_input_class(
+        Parent,
+        operation_kind="create",
+        nested_configs={"detail": NestedSerializerConfig(fields=("code",))},
+    )
+    detail_spec = next(s for s in shape.field_specs if s.target_name == "detail")
+    assert [s.target_name for s in detail_spec.nested_specs] == ["code"]
+
+
+def test_nested_config_deeper_nesting_opts_in_grandchild():
+    """A ``NestedSerializerConfig.nested_fields`` opts a DEEPER nested serializer in (rev6 #17)."""
+
+    class Grand(serializers.Serializer):
+        leaf = serializers.CharField()
+
+    class Child(serializers.Serializer):
+        code = serializers.CharField()
+        grand = Grand()
+
+    class Parent(serializers.Serializer):
+        child = Child()
+
+    _cls, shape = build_serializer_input_class(
+        Parent,
+        operation_kind="create",
+        nested_configs={
+            "child": NestedSerializerConfig(nested_fields={"grand": NestedSerializerConfig()}),
+        },
+    )
+    child_spec = next(s for s in shape.field_specs if s.target_name == "child")
+    grand_spec = next(s for s in child_spec.nested_specs if s.target_name == "grand")
+    assert grand_spec.kind == NESTED_SINGLE
+    assert [s.target_name for s in grand_spec.nested_specs] == ["leaf"]
+
+
+def test_nested_field_without_opt_in_still_rejects():
+    """A nested serializer field NOT named in ``nested_configs`` fails loud (nesting is opt-in only) (rev6 #17)."""
+    child = _nested_child_serializer()
+
+    class Parent(serializers.Serializer):
+        detail = child()
+
+    with pytest.raises(ConfigurationError, match="opt-in only"):
+        build_serializer_input_class(Parent, operation_kind="create")
+
+
+def test_nested_cycle_guard_fails_loud():
+    """A self-nesting serializer (a class re-entering the recursion path) fails loud (rev6 #17)."""
+
+    class SelfNest(serializers.Serializer):
+        x = serializers.CharField()
+
+        def get_fields(self):
+            fields = super().get_fields()
+            fields["me"] = SelfNest()
+            return fields
+
+    with pytest.raises(ConfigurationError, match="cycle"):
+        build_serializer_input_class(
+            SelfNest,
+            operation_kind="create",
+            nested_configs={"me": NestedSerializerConfig()},
+        )
+
+
+def test_nested_depth_guard_fails_loud(monkeypatch):
+    """Nesting deeper than ``_NESTED_MAX_DEPTH`` (distinct serializers, no cycle) fails loud (rev6 #17)."""
+    monkeypatch.setattr(serializer_inputs, "_NESTED_MAX_DEPTH", 1)
+
+    class Inner(serializers.Serializer):
+        y = serializers.CharField()
+
+    class Outer(serializers.Serializer):
+        inner = Inner()
+
+    with pytest.raises(ConfigurationError, match="maximum nesting depth"):
+        build_serializer_input_class(
+            Outer,
+            operation_kind="create",
+            nested_configs={"inner": NestedSerializerConfig()},
+        )
+
+
+def test_nested_config_key_not_in_effective_set_raises():
+    """A ``nested_fields`` key naming a field NOT in the effective set fails loud (rev6 #17)."""
+    child = _nested_child_serializer()
+
+    class Parent(serializers.Serializer):
+        detail = child()
+
+    with pytest.raises(ConfigurationError, match="not in the effective input set"):
+        build_serializer_input_class(
+            Parent,
+            operation_kind="create",
+            nested_configs={"ghost": NestedSerializerConfig()},
+        )
+
+
+def test_nested_config_key_naming_scalar_raises():
+    """A ``nested_fields`` key naming a SCALAR (not a nested serializer) fails loud (rev6 #17)."""
+    child = _nested_child_serializer()
+
+    class Parent(serializers.Serializer):
+        title = serializers.CharField()
+        detail = child()
+
+    with pytest.raises(ConfigurationError, match="not a nested serializer"):
+        build_serializer_input_class(
+            Parent,
+            operation_kind="create",
+            nested_configs={"title": NestedSerializerConfig(), "detail": NestedSerializerConfig()},
+        )
+
+
+def test_identical_nested_shape_dedupes_to_one_class():
+    """Two builds of the same nested shape resolve the nested input to ONE cached class object (rev6 #17)."""
+    child = _nested_child_serializer()
+
+    class Parent(serializers.Serializer):
+        detail = child()
+
+    first, _ = build_serializer_input_class(
+        Parent,
+        operation_kind="create",
+        nested_configs={"detail": NestedSerializerConfig()},
+    )
+    second, _ = build_serializer_input_class(
+        Parent,
+        operation_kind="create",
+        nested_configs={"detail": NestedSerializerConfig()},
+    )
+    # The nested field annotation resolves to the SAME cached nested class (the dedupe cache hit).
+    first_nested = _field_map(first)["detail"].type
+    second_nested = _field_map(second)["detail"].type
+
+    def _unwrap(t):
+        return getattr(t, "of_type", t)
+
+    assert _unwrap(first_nested) is _unwrap(second_nested)
+
+
+def test_distinct_nested_shapes_yield_distinct_top_names():
+    """Two DIFFERENT nested shapes give the top inputs DISTINCT descriptor-derived names (rev6 #17)."""
+
+    class ChildA(serializers.Serializer):
+        code = serializers.CharField()
+
+    class ChildB(serializers.Serializer):
+        code = serializers.CharField()
+        extra = serializers.IntegerField()
+
+    class ParentA(serializers.Serializer):
+        detail = ChildA()
+
+    class ParentB(serializers.Serializer):
+        detail = ChildB()
+
+    _a, shape_a = build_serializer_input_class(
+        ParentA,
+        operation_kind="create",
+        nested_configs={"detail": NestedSerializerConfig()},
+    )
+    _b, shape_b = build_serializer_input_class(
+        ParentB,
+        operation_kind="create",
+        nested_configs={"detail": NestedSerializerConfig()},
+    )
+    assert shape_a.type_name != shape_b.type_name
+
+
+def test_build_serializer_inputs_threads_nested_into_both_shapes():
+    """``build_serializer_inputs`` threads ``nested_configs`` into BOTH the create + partial shapes (rev6 #17)."""
+    child = _nested_child_serializer()
+
+    class Parent(serializers.Serializer):
+        detail = child()
+
+    create_cls, create_shape, partial_cls, partial_shape = build_serializer_inputs(
+        Parent,
+        guard_required=False,
+        nested_configs={"detail": NestedSerializerConfig()},
+    )
+    assert "detail" in _field_map(create_cls)
+    assert "detail" in _field_map(partial_cls)
+    assert (
+        next(s for s in create_shape.field_specs if s.target_name == "detail").kind
+        == NESTED_SINGLE
+    )
+    assert (
+        next(s for s in partial_shape.field_specs if s.target_name == "detail").kind
+        == NESTED_SINGLE
+    )
+
+
+def test_recursive_fingerprint_sensitive_to_nested_shape_change():
+    """The schema fingerprint recurses into a nested serializer's fields (a nested change is detected) (rev6 #17)."""
+    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
+
+    class ChildA(serializers.Serializer):
+        code = serializers.CharField()
+
+    class ChildB(serializers.Serializer):
+        code = serializers.CharField()
+        extra = serializers.CharField()
+
+    class ParentA(serializers.Serializer):
+        detail = ChildA()
+
+    class ParentB(serializers.Serializer):
+        detail = ChildB()
+
+    assert serializer_schema_fingerprint(
+        dict(ParentA().fields),
+    ) != serializer_schema_fingerprint(dict(ParentB().fields))
+
+
+def test_recursive_fingerprint_terminates_on_nested_cycle():
+    """The recursive fingerprint terminates (a cycle marker) for a self-nesting serializer (rev6 #17)."""
+    from django_strawberry_framework.rest_framework.inputs import serializer_schema_fingerprint
+
+    class SelfNest(serializers.Serializer):
+        x = serializers.CharField()
+
+        def get_fields(self):
+            fields = super().get_fields()
+            fields["me"] = SelfNest()
+            return fields
+
+    fingerprint = serializer_schema_fingerprint(dict(SelfNest().fields))
+    # It terminated (no RecursionError) and the nested axis carries the cycle marker.
+    flat = repr(fingerprint)
+    assert "<cycle>" in flat
+
+
+def test_describe_serializer_input_reports_nested_fields():
+    """``describe_serializer_input`` lists a nested field's own child field names (rev6 #17 / #15)."""
+    child = _nested_child_serializer()
+
+    class Parent(serializers.Serializer):
+        detail = child()
+
+    _cls, shape = build_serializer_input_class(
+        Parent,
+        operation_kind="create",
+        nested_configs={"detail": NestedSerializerConfig()},
+    )
+    description = describe_serializer_input(shape.type_name)
+    assert description is not None
+    assert "kind=nested_single" in description
+    assert "nested_fields=[code, note]" in description

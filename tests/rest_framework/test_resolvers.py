@@ -53,7 +53,11 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.rest_framework import resolvers as serializer_resolvers
-from django_strawberry_framework.rest_framework.serializer_converter import SCALAR
+from django_strawberry_framework.rest_framework.serializer_converter import (
+    NESTED_MULTI,
+    NESTED_SINGLE,
+    SCALAR,
+)
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.utils.querysets import SyncMisuseError
 
@@ -1525,3 +1529,173 @@ def test_relation_queryset_scope_composes_with_author_queryset():
     many_qs = many.fields["branches"].child_relation.queryset
     assert allowed in many_qs
     assert other not in many_qs
+
+
+# ===========================================================================
+# Nested serializer inputs - decode + agreement internals (spec-039 rev6 #17)
+# ===========================================================================
+
+
+def _nested_single_input_and_specs():
+    """Build a single-nested input (``detail`` -> ``{code}``) + its top reverse-map specs."""
+    from django_strawberry_framework.rest_framework.inputs import (
+        NestedSerializerConfig,
+        build_serializer_input_class,
+    )
+
+    class Child(serializers.Serializer):
+        code = serializers.CharField()
+
+    class Parent(serializers.Serializer):
+        detail = Child()
+
+    cls, shape = build_serializer_input_class(
+        Parent,
+        operation_kind="create",
+        nested_configs={"detail": NestedSerializerConfig()},
+    )
+    return cls, list(shape.field_specs)
+
+
+def _nested_child_input_cls(top_cls):
+    """Return the nested input class referenced by the top input's ``detail`` field."""
+    field = next(f for f in top_cls.__strawberry_definition__.fields if f.python_name == "detail")
+    return getattr(field.type, "of_type", field.type)
+
+
+def test_decode_nested_single_recurses_into_child():
+    """A single nested input decodes recursively into a nested serializer-keyed dict (rev6 #17)."""
+    top_cls, specs = _nested_single_input_and_specs()
+    child_cls = _nested_child_input_cls(top_cls)
+    data = top_cls(detail=child_cls(code="X"))
+    provided, error = serializer_resolvers._decode_input_object(specs, data, info=None)
+    assert error is None
+    assert provided == {"detail": {"code": "X"}}
+
+
+def test_decode_nested_explicit_none_passes_through():
+    """An explicit ``null`` nested value passes through unchanged (the serializer's validation decides) (rev6 #17)."""
+    top_cls, specs = _nested_single_input_and_specs()
+    data = top_cls(detail=None)
+    provided, error = serializer_resolvers._decode_input_object(specs, data, info=None)
+    assert error is None
+    assert provided == {"detail": None}
+
+
+def _nested_agreement_fake(**spec_overrides):
+    """Build a fake mutation carrying ONE nested ``InputFieldSpec`` (with nested_specs)."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    child_specs = spec_overrides.pop(
+        "nested_specs",
+        (
+            InputFieldSpec(
+                input_attr="code",
+                graphql_name="code",
+                target_name="code",
+                kind=SCALAR,
+            ),
+        ),
+    )
+    base = {
+        "input_attr": "detail",
+        "graphql_name": "detail",
+        "target_name": "detail",
+        "kind": NESTED_SINGLE,
+        "nested_specs": child_specs,
+    }
+    base.update(spec_overrides)
+    return type("FakeMut", (), {"_input_field_specs": [InputFieldSpec(**base)]})
+
+
+def _child_single_serializer():
+    class Child(serializers.Serializer):
+        code = serializers.CharField()
+
+    class ParentSingle(serializers.Serializer):
+        detail = Child()
+
+    return ParentSingle(data={})
+
+
+def _child_many_serializer():
+    class Child(serializers.Serializer):
+        code = serializers.CharField()
+
+    class ParentMany(serializers.Serializer):
+        detail = Child(many=True)
+
+    return ParentMany(data={})
+
+
+def test_nested_agreement_multi_spec_over_single_runtime_raises():
+    """A schema nested-MULTI field that is a single serializer at runtime fails loud (rev6 #17)."""
+    fake = _nested_agreement_fake(kind=NESTED_MULTI)
+    with pytest.raises(ConfigurationError, match="nested list of serializers"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _child_single_serializer())
+
+
+def test_nested_agreement_single_spec_over_many_runtime_raises():
+    """A schema nested-SINGLE field that is a ``ListSerializer`` at runtime fails loud (rev6 #17)."""
+    fake = _nested_agreement_fake(kind=NESTED_SINGLE)
+    with pytest.raises(ConfigurationError, match="nested serializer"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _child_many_serializer())
+
+
+def test_nested_agreement_recurses_into_child_specs():
+    """A nested field's child spec is held to the SAME agreement contract (recursion) (rev6 #17)."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    ghost_child = (
+        InputFieldSpec(
+            input_attr="ghost",
+            graphql_name="ghost",
+            target_name="ghost",
+            kind=SCALAR,
+        ),
+    )
+    fake = _nested_agreement_fake(nested_specs=ghost_child)
+    # The runtime nested ``Child`` declares ``code``, not ``ghost``.
+    with pytest.raises(ConfigurationError, match="does not declare it"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, _child_single_serializer())
+
+
+def test_agreement_scalar_field_that_became_nested_serializer_raises():
+    """A schema SCALAR field that is a nested serializer at runtime fails loud (the kind moved) (rev6 #17)."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    class Child(serializers.Serializer):
+        x = serializers.CharField()
+
+    class Runtime(serializers.Serializer):
+        detail = Child()
+
+    fake = type(
+        "M",
+        (),
+        {
+            "_input_field_specs": [
+                InputFieldSpec(
+                    input_attr="detail",
+                    graphql_name="detail",
+                    target_name="detail",
+                    kind=SCALAR,
+                ),
+            ],
+        },
+    )
+    with pytest.raises(ConfigurationError, match="nested serializer"):
+        serializer_resolvers._assert_schema_runtime_agreement(fake, Runtime(data={}))
+
+
+def test_decode_nested_single_error_short_circuits():
+    """A decode error INSIDE a single nested input short-circuits with the nested error (rev6 #17)."""
+    top_cls, specs = _nested_single_input_and_specs()
+    child_cls = _nested_child_input_cls(top_cls)
+    # A lone surrogate in the nested scalar trips the invalid-Unicode preflight inside the
+    # nested decode, so the single-nested branch returns the error (keyed to the full path).
+    data = top_cls(detail=child_cls(code="\ud800"))
+    provided, error = serializer_resolvers._decode_input_object(specs, data, info=None)
+    assert provided == {}
+    assert error is not None
+    assert error.field == "detail.code"

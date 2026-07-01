@@ -287,6 +287,60 @@ def test_list_serializer_field_raises():
         convert_serializer_field(_bind(Inner(many=True), "items"))
 
 
+def test_is_nested_serializer_field_detects_nested_and_scalar():
+    """``is_nested_serializer_field`` is True for a nested serializer / list, False for a scalar (rev6 #17)."""
+
+    class Inner(serializers.Serializer):
+        x = serializers.CharField()
+
+    assert serializer_converter.is_nested_serializer_field(_bind(Inner(), "single"))
+    assert serializer_converter.is_nested_serializer_field(_bind(Inner(many=True), "many"))
+    assert not serializer_converter.is_nested_serializer_field(_bind(serializers.CharField(), "s"))
+
+
+def test_nested_serializer_child_reports_single_vs_many():
+    """``nested_serializer_child`` peels a ``ListSerializer`` to its child (many=True) vs a single (many=False) (rev6 #17)."""
+
+    class Inner(serializers.Serializer):
+        x = serializers.CharField()
+
+    single = _bind(Inner(), "single")
+    child_single, many_single = serializer_converter.nested_serializer_child(single)
+    assert child_single is single
+    assert many_single is False
+
+    many = _bind(Inner(many=True), "many")
+    child_many, many_flag = serializer_converter.nested_serializer_child(many)
+    assert isinstance(child_many, Inner)
+    assert many_flag is True
+
+
+def test_resolve_serializer_field_rejects_nested_over_relation_column():
+    """A nested serializer over a REVERSE-relation column fails loud, not misrouted as a relation (rev6 #17).
+
+    ``resolve_serializer_field`` rejects a nested serializer FIRST, before the backing-column
+    lookup - so a ``CategorySerializer.items = ItemInline(many=True)`` (whose ``items`` source
+    resolves to the reverse-relation column) is a clear opt-in error, never silently typed as a
+    relation-id input.
+    """
+
+    class ItemInline(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name",)
+
+    class CategorySer(serializers.ModelSerializer):
+        items = ItemInline(many=True)
+
+        class Meta:
+            model = product_models.Category
+            fields = ("name", "items")
+
+    field = CategorySer().fields["items"]
+    with pytest.raises(ConfigurationError, match="opt-in only"):
+        resolve_serializer_field(field, product_models.Category, "CategorySerInput")
+
+
 # ---------------------------------------------------------------------------
 # Relation / file kind flags
 # ---------------------------------------------------------------------------

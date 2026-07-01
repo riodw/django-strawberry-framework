@@ -50,6 +50,7 @@ The shape is the ``038`` form discipline adapted to DRF (spec-039 Decision 7):
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -62,11 +63,19 @@ from ..registry import register_subsystem_clear
 from ..utils.inputs import (
     InputFieldSpec,
     build_strawberry_input_class,
+    graphql_camel_name,
     make_input_namespace,
     make_shape_build_cache,
     normalize_field_name_sequence,
 )
-from .serializer_converter import resolve_serializer_field, serializer_field_description
+from .serializer_converter import (
+    NESTED_MULTI,
+    NESTED_SINGLE,
+    is_nested_serializer_field,
+    nested_serializer_child,
+    resolve_serializer_field,
+    serializer_field_description,
+)
 
 # Module path the ``strawberry.lazy(...)`` marker references for the SERIALIZER
 # input namespace; pinned as a single constant so any forward-ref and
@@ -145,6 +154,57 @@ def clear_serializer_input_namespace() -> None:
 # imports this module, never registers the row) skips the serializer clear as a
 # correct no-op - the soft-dep asymmetry the seam removes.
 register_subsystem_clear(SERIALIZER_INPUTS_MODULE_PATH, "clear_serializer_input_namespace")
+
+
+# The maximum serializer nesting DEPTH the opt-in nested build will descend (spec-039 rev6
+# #17). Recursion is already bounded by the finite, immutable ``NestedSerializerConfig`` tree
+# (a consumer opts in each level EXPLICITLY, and a frozen dataclass cannot contain itself) AND
+# by the on-path cycle guard (a serializer class that reappears on the recursion path fails
+# loud). This numeric cap is the additional POLICY backstop: a legitimately-but-absurdly deep
+# nesting (distinct serializers, no cycle) is rejected rather than silently generating a wall
+# of nested input types. Generous by default; most nested write APIs are one or two deep.
+_NESTED_MAX_DEPTH: int = 5
+
+
+@dataclass(frozen=True)
+class NestedSerializerConfig:
+    """Explicit opt-in configuration for ONE nested serializer input field (spec-039 rev6 #17).
+
+    The descriptor-keyed contract that turns the framework's default fail-loud rejection of a
+    nested ``Serializer`` / ``ListSerializer`` field into a supported, RECURSIVE input:
+    ``Meta.nested_fields = {"items": NestedSerializerConfig(...)}`` opts the ``items`` nested
+    field in. A nested field NOT named in ``Meta.nested_fields`` still fails loud
+    (``serializer_converter.py::_reject_nested_serializer``) - nesting is never implicit.
+
+    graphene-django converts nested serializers automatically and caches the generated input by
+    the serializer's CLASS NAME (conflating two shapes of one class) with little write-contract
+    validation. This is the fail-loud counterpart: opt-in only, descriptor-keyed (folded into the
+    ``SerializerInputShape`` identity so two nested shapes never collide on one name), recursively
+    fingerprinted (a nondeterministic hook that changes a nested shape is caught), depth / cycle
+    guarded, and - crucially - the framework NEVER auto-saves the nested relation: the decoded
+    nested data is passed to the parent serializer's OWN ``create()`` / ``update()`` (which the
+    mutation's ``Meta`` validation requires the serializer to override), so the nested write is
+    the serializer author's, done correctly, inside the pipeline transaction.
+
+    Fields (all optional):
+
+    - ``fields`` / ``exclude`` - narrow the NESTED input's field set, validated against the
+      nested serializer's writable fields by the SAME ``resolve_effective_serializer_fields``
+      machinery the top level uses (mutually exclusive; an unknown / non-writable name fails
+      loud). ``None`` uses the nested serializer's full writable set.
+    - ``optional_fields`` - force named nested CREATE fields optional (the nested analog of the
+      mutation's ``Meta.optional_fields``).
+    - ``nested_fields`` - the DEEPER opt-in: a ``{field_name: NestedSerializerConfig}`` map for a
+      nested serializer that itself contains a nested serializer field. This is how multi-level
+      nesting opts in - each level names its own children; a deeper nested field with no covering
+      entry fails loud. The immutable, finite tree bounds the recursion (with the cycle / depth
+      guards as backstops).
+    """
+
+    fields: Any = None
+    exclude: Any = None
+    optional_fields: Any = None
+    nested_fields: Mapping[str, NestedSerializerConfig] | None = None
 
 
 def get_serializer_for_schema(
@@ -226,22 +286,34 @@ def _fingerprint_converter_extra(field: serializers.Field) -> str | None:
     return None
 
 
-def serializer_schema_fingerprint(
-    field_map: dict[str, serializers.Field],
-) -> tuple[tuple[Any, ...], ...]:
-    """Return a stable, request-independent fingerprint of a schema-time field map (spec-039 rev6 #10).
+def _fingerprint_nested(field: serializers.Field, seen: frozenset[type]) -> tuple[Any, ...] | None:
+    """Return a RECURSIVE fingerprint of a nested serializer field's own map, else ``None`` (rev6 #17).
 
-    ``get_serializer_for_schema()`` must return a STABLE, request-independent field shape (the
-    input is generated once at finalization, BEFORE any request), but the hook is called at
-    class validation AND again at the phase-2.5 bind - a NONDETERMINISTIC hook could validate
-    one shape and bind another. This captures EVERY axis the generated input / SDL / reverse map
-    depends on, so the bind can recompute it and raise if the hook DRIFTED (turning the spec's
-    stable-shape promise into an enforced contract, rev2 P2): each field's name, class, source,
-    read / write flags, required, allow_null, relation target model, the description inputs
-    (``help_text`` + the constraint summary - rev6 #9), the enumerable choice members (rev6 #6),
-    and the converter discriminants (``ModelField`` wrapped field / ``ListField`` child).
-    Deterministic + hashable; the ordered tuple preserves field order (which drives the
-    descriptor identity).
+    A nested ``Serializer`` / ``ListSerializer`` field's generated input derives from the NESTED
+    serializer's fields, so a hook that changes a nested shape changes the SDL - folded into the
+    fingerprint recursively so the phase-2.5 drift guard is sensitive to nested changes too. The
+    recursion is bounded by the visited-class ``seen`` set: a serializer class already on the
+    recursion path yields a terminal cycle marker instead of recursing forever (a self-referential
+    nested serializer terminates). A non-nested field yields ``None``.
+    """
+    if not is_nested_serializer_field(field):
+        return None
+    child, many = nested_serializer_child(field)
+    child_class = type(child)
+    if child_class in seen:
+        return ("<cycle>", child_class.__name__, many)
+    return (many, _fingerprint_field_map(dict(child.fields), seen | {child_class}))
+
+
+def _fingerprint_field_map(
+    field_map: dict[str, serializers.Field],
+    seen: frozenset[type],
+) -> tuple[tuple[Any, ...], ...]:
+    """The recursive fingerprint core (spec-039 rev6 #10 / #17 - the nested recursion).
+
+    Captures every SDL-affecting axis per field (see ``serializer_schema_fingerprint``), plus the
+    recursive nested fingerprint (rev6 #17). ``seen`` carries the serializer classes already on
+    the recursion path so a nested cycle terminates.
     """
     return tuple(
         (
@@ -256,9 +328,31 @@ def serializer_schema_fingerprint(
             serializer_field_description(field),
             _fingerprint_choices(field),
             _fingerprint_converter_extra(field),
+            _fingerprint_nested(field, seen),
         )
         for name, field in field_map.items()
     )
+
+
+def serializer_schema_fingerprint(
+    field_map: dict[str, serializers.Field],
+) -> tuple[tuple[Any, ...], ...]:
+    """Return a stable, request-independent fingerprint of a schema-time field map (spec-039 rev6 #10 / #17).
+
+    ``get_serializer_for_schema()`` must return a STABLE, request-independent field shape (the
+    input is generated once at finalization, BEFORE any request), but the hook is called at
+    class validation AND again at the phase-2.5 bind - a NONDETERMINISTIC hook could validate
+    one shape and bind another. This captures EVERY axis the generated input / SDL / reverse map
+    depends on, so the bind can recompute it and raise if the hook DRIFTED (turning the spec's
+    stable-shape promise into an enforced contract, rev2 P2): each field's name, class, source,
+    read / write flags, required, allow_null, relation target model, the description inputs
+    (``help_text`` + the constraint summary - rev6 #9), the enumerable choice members (rev6 #6),
+    the converter discriminants (``ModelField`` wrapped field / ``ListField`` child), and - for a
+    nested serializer field - a RECURSIVE fingerprint of the nested serializer's own field map
+    (rev6 #17, bounded by an on-path cycle guard). Deterministic + hashable; the ordered tuple
+    preserves field order (which drives the descriptor identity).
+    """
+    return _fingerprint_field_map(field_map, frozenset())
 
 
 def _serializer_meta_value(serializer_class: type[serializers.BaseSerializer], name: str) -> Any:
@@ -531,6 +625,11 @@ def describe_serializer_input(name: str) -> str | None:
             extra += f", source={spec.source!r}"
         if spec.related_model is not None:
             extra += f", relation_target={spec.related_model.__name__}"
+        if spec.nested_specs is not None:
+            # rev6 #17: name the nested input's own fields so a nested shape is inspectable
+            # (the recursive reverse map, one level - deeper levels have their own registry rows).
+            nested_names = ", ".join(child.target_name for child in spec.nested_specs)
+            extra += f", nested_fields=[{nested_names}]"
         lines.append(
             f"    - {spec.target_name!r} -> {spec.graphql_name!r}: {annotation} "
             f"(kind={spec.kind}, required={required}{extra})",
@@ -820,6 +919,8 @@ def _walk_serializer_fields(
     serializer_class: type[serializers.BaseSerializer],
     is_partial: bool,
     optional_fields: frozenset[str],
+    nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
+    nested_path: tuple[type, ...] = (),
 ) -> tuple[list[InputFieldSpec], list[str], list[bool], list[tuple[str, Any, dict[str, Any]]]]:
     """Resolve an effective field dict to the per-field build state (spec-039).
 
@@ -849,6 +950,11 @@ def _walk_serializer_fields(
     fix-one-rerun-discover-the-next. A single problem is raised verbatim, so the precise
     per-field wording (and every ``pytest.raises(match=...)`` substring) is preserved.
     """
+    # rev6 #17: nested op kind mirrors the top-level operation - a create builds
+    # ``CREATE``-shaped nested inputs (required nested fields required), an update builds
+    # ``PARTIAL``-shaped ones (all optional). Derived from ``is_partial`` so the walk needs no
+    # extra operation param.
+    nested_operation_kind = PARTIAL if is_partial else CREATE
     field_specs: list[InputFieldSpec] = []
     annotation_reprs: list[str] = []
     required_state: list[bool] = []
@@ -856,11 +962,24 @@ def _walk_serializer_fields(
     field_errors: list[str] = []
     for name, field in effective.items():
         try:
-            python_attr, annotation, spec = resolve_serializer_field(
-                field,
-                model,
-                provisional_name,
-            )
+            if is_nested_serializer_field(field) and nested_configs and name in nested_configs:
+                # rev6 #17: an EXPLICITLY-opted-in nested serializer field builds a nested input
+                # RECURSIVELY (never routed through ``resolve_serializer_field``, which would
+                # reject it). A nested field NOT in ``nested_configs`` falls through to the
+                # converter, which fails loud (nesting is opt-in only).
+                python_attr, annotation, spec = _resolve_nested_field(
+                    field,
+                    name,
+                    nested_configs[name],
+                    operation_kind=nested_operation_kind,
+                    nested_path=nested_path,
+                )
+            else:
+                python_attr, annotation, spec = resolve_serializer_field(
+                    field,
+                    model,
+                    provisional_name,
+                )
         except ConfigurationError as exc:
             # rev6 #5: collect the per-field conversion error (prefixed with the field
             # name) and keep walking so the aggregate names every bad field at once.
@@ -913,6 +1032,137 @@ def _walk_serializer_fields(
     if all_problems:
         raise _aggregate_field_problems(serializer_class, all_problems)
     return field_specs, annotation_reprs, required_state, triples
+
+
+def _guard_nested_recursion(
+    nested_class: type,
+    nested_path: tuple[type, ...],
+    field_name: str,
+) -> None:
+    """Fail loud on a nested-serializer CYCLE or excessive DEPTH (spec-039 rev6 #17).
+
+    ``nested_path`` is the tuple of serializer classes already on the recursion path (the
+    parent chain, including the serializer whose ``field_name`` field is being descended into).
+    A ``nested_class`` already on the path is a CYCLE (a serializer that nests itself directly or
+    transitively - recursion would never terminate); a path at or beyond ``_NESTED_MAX_DEPTH`` is
+    the DEPTH cap (an absurdly deep but acyclic nesting). Both are class-creation / bind-time
+    configuration errors, not silent truncation.
+    """
+    if nested_class in nested_path:
+        raise ConfigurationError(
+            f"Nested serializer field {field_name!r} re-enters {nested_class.__name__}, which is "
+            "already on the nesting path (a nested-serializer cycle); the recursive input build "
+            "would never terminate. Break the cycle, or drop the field from Meta.nested_fields.",
+        )
+    if len(nested_path) >= _NESTED_MAX_DEPTH:
+        raise ConfigurationError(
+            f"Nested serializer field {field_name!r} exceeds the maximum nesting depth "
+            f"({_NESTED_MAX_DEPTH}); flatten the nested write or reduce Meta.nested_fields depth.",
+        )
+
+
+def _dedupe_and_materialize_nested(
+    nested_cls: type,
+    nested_shape: SerializerInputShape,
+) -> tuple[type, SerializerInputShape]:
+    """Dedupe a nested input on its descriptor, materialize it, return the canonical pair (rev6 #17).
+
+    Two references to the SAME nested shape (within one build or across two top-level mutations)
+    must resolve to ONE class object, or Strawberry rejects two distinct types under one GraphQL
+    name. The nested build rides the SAME per-shape build cache the top level uses (keyed on the
+    frozen ``SerializerInputShape`` descriptor - nested and top-level keys never collide because
+    the descriptors differ), and materializes through the SAME ledger, so a genuine
+    distinct-class-same-name clash (an astronomically-unlikely digest collision) still fails loud
+    at materialize. Identical descriptors return the cached class; a first sighting is cached +
+    materialized.
+    """
+    cached = _serializer_shape_build_cache.get(nested_shape.cache_key)
+    if cached is not None:
+        return cached
+    _serializer_shape_build_cache[nested_shape.cache_key] = (nested_cls, nested_shape)
+    materialize_serializer_input_class(nested_shape.type_name, nested_cls)
+    return nested_cls, nested_shape
+
+
+def _resolve_nested_field(
+    field: serializers.Field,
+    field_name: str,
+    nested_config: NestedSerializerConfig,
+    *,
+    operation_kind: str,
+    nested_path: tuple[type, ...],
+) -> tuple[str, Any, InputFieldSpec]:
+    """Resolve ONE opted-in nested serializer field to ``(python_attr, annotation, spec)`` (rev6 #17).
+
+    Builds the nested input RECURSIVELY from the nested serializer's OWN bound field map (read
+    off the nested serializer instance - ``.child`` for a ``many=True`` ``ListSerializer``, the
+    field itself for a single nested serializer), threading the ``NestedSerializerConfig``'s
+    ``fields`` / ``exclude`` / ``optional_fields`` / deeper ``nested_fields`` into the SAME
+    ``build_serializer_input_class`` the top level uses. The nested input is deduped +
+    materialized (so identical nested shapes share one type), and the returned
+    ``InputFieldSpec`` records ``nested_specs`` (the nested input's own reverse map) so the
+    Slice-3 decode recurses with the same per-field machinery. The annotation is the nested
+    input class (single) or ``list[<nested input>]`` (many); the caller applies the
+    required / ``allow_null`` widening. The cycle / depth guard runs BEFORE the recursion.
+    """
+    child_serializer, many = nested_serializer_child(field)
+    nested_class = type(child_serializer)
+    _guard_nested_recursion(nested_class, nested_path, field_name)
+    nested_field_map = dict(child_serializer.fields)
+    nested_cls, nested_shape = build_serializer_input_class(
+        nested_class,
+        operation_kind=operation_kind,
+        fields=nested_config.fields,
+        exclude=nested_config.exclude,
+        optional_fields=nested_config.optional_fields,
+        field_map=nested_field_map,
+        nested_configs=nested_config.nested_fields,
+        _nested_path=nested_path,
+    )
+    nested_cls, nested_shape = _dedupe_and_materialize_nested(nested_cls, nested_shape)
+    kind = NESTED_MULTI if many else NESTED_SINGLE
+    annotation: Any = list[nested_cls] if many else nested_cls
+    spec = InputFieldSpec(
+        input_attr=field_name,
+        graphql_name=graphql_camel_name(field_name),
+        target_name=field_name,
+        kind=kind,
+        source=None,
+        related_model=None,
+        nested_specs=tuple(nested_shape.field_specs),
+    )
+    return field_name, annotation, spec
+
+
+def _validate_nested_config_keys(
+    serializer_class: type[serializers.BaseSerializer],
+    effective: dict[str, serializers.Field],
+    nested_configs: Mapping[str, NestedSerializerConfig] | None,
+) -> None:
+    """Fail loud if a ``nested_fields`` key does not name an effective NESTED serializer field (rev6 #17).
+
+    Runs at EVERY nesting level (so a typo in a deeper ``NestedSerializerConfig.nested_fields``
+    fails loud, not silently ignored): each key must be in the effective input set (not narrowed
+    away by ``fields`` / ``exclude``) AND be a nested ``Serializer`` / ``ListSerializer`` field -
+    configuring nesting for a scalar / relation field, an excluded field, or a typo is a
+    configuration error.
+    """
+    if not nested_configs:
+        return
+    for name in nested_configs:
+        field = effective.get(name)
+        if field is None:
+            raise ConfigurationError(
+                f"SerializerMutation for {serializer_class.__name__} declares nested_fields for "
+                f"{name!r}, which is not in the effective input set (unknown, read-only, or "
+                "narrowed away by Meta.fields / Meta.exclude).",
+            )
+        if not is_nested_serializer_field(field):
+            raise ConfigurationError(
+                f"SerializerMutation for {serializer_class.__name__} declares nested_fields for "
+                f"{name!r}, but it is a {type(field).__name__}, not a nested serializer. "
+                "nested_fields is only for nested Serializer / ListSerializer fields.",
+            )
 
 
 def _default_full_shape_identity(
@@ -969,6 +1219,8 @@ def build_serializer_input_class(
     exclude: Any = None,
     optional_fields: Any = None,
     field_map: dict[str, serializers.Field] | None = None,
+    nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
+    _nested_path: tuple[type, ...] = (),
 ) -> tuple[type, SerializerInputShape]:
     """Build ONE ``@strawberry.input`` class from a serializer's schema-time fields.
 
@@ -979,6 +1231,12 @@ def build_serializer_input_class(
     lives on the mutation, NOT the serializer's own ``Meta``); ``field_map`` is the
     ``get_serializer_for_schema()`` hook's result threaded from the bind (else the
     default module discovery when called in isolation).
+
+    ``nested_configs`` is the mutation's ``Meta.nested_fields`` map (spec-039 rev6 #17):
+    each named nested serializer field is built RECURSIVELY into a nested input (an
+    un-named nested field still fails loud). ``_nested_path`` is the internal
+    recursion-path accumulator (serializer classes already descended into) for the cycle /
+    depth guard; direct callers omit it.
 
     A nullable input field (``allow_null=True`` OR optional) widens to
     ``annotation | None`` AND carries a ``strawberry.UNSET`` default so the key is
@@ -993,6 +1251,7 @@ def build_serializer_input_class(
     and the ``SerializerInputShape`` descriptor (which carries the reverse-map
     field specs + the generated name). Slice 2's phase-2.5 bind calls
     ``materialize_serializer_input_class`` to pin the class as a module global.
+    Any NESTED input classes are deduped + materialized during the walk (rev6 #17).
     """
     effective = resolve_effective_serializer_fields(
         serializer_class,
@@ -1000,6 +1259,9 @@ def build_serializer_input_class(
         exclude=exclude,
         field_map=field_map,
     )
+    # rev6 #17: fail loud NOW (at every nesting level) if a ``nested_fields`` key does not name
+    # an effective nested serializer field - a typo / excluded / non-nested key is a config error.
+    _validate_nested_config_keys(serializer_class, effective, nested_configs)
     optional_fields = resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
     is_partial = operation_kind == PARTIAL
     if is_partial:
@@ -1027,6 +1289,8 @@ def build_serializer_input_class(
         serializer_class=serializer_class,
         is_partial=is_partial,
         optional_fields=optional_fields,
+        nested_configs=nested_configs,
+        nested_path=(*_nested_path, serializer_class),
     )
 
     # The canonical ``<Serializer>Input`` name is reserved for the DEFAULT full shape
@@ -1092,6 +1356,7 @@ def build_serializer_inputs(
     optional_fields: Any = None,
     guard_required: bool = True,
     field_map: dict[str, serializers.Field] | None = None,
+    nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
 ) -> tuple[type, SerializerInputShape, type, SerializerInputShape]:
     """Build BOTH the create + partial inputs for a serializer, with the create-required guard.
 
@@ -1129,6 +1394,7 @@ def build_serializer_inputs(
         exclude=exclude,
         optional_fields=optional_fields,
         field_map=field_map,
+        nested_configs=nested_configs,
     )
     partial_cls, partial_shape = build_serializer_input_class(
         serializer_class,
@@ -1137,6 +1403,7 @@ def build_serializer_inputs(
         exclude=exclude,
         optional_fields=optional_fields,
         field_map=field_map,
+        nested_configs=nested_configs,
     )
     return create_cls, create_shape, partial_cls, partial_shape
 

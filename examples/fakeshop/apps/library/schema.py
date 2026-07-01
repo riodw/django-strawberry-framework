@@ -22,6 +22,7 @@ from django_strawberry_framework import (
     DjangoNodeField,
     DjangoNodesField,
     DjangoType,
+    NestedSerializerConfig,
     OptimizerHint,
     SerializerMutation,
 )
@@ -1033,6 +1034,33 @@ class CreateShelfWithInjectedTopic(SerializerMutation):
         return kwargs
 
 
+class CreateBranchWithNestedShelves(SerializerMutation):
+    """Create a ``Branch`` with an EXPLICIT opt-in nested writable ``shelves`` list (spec-039 rev6 #17).
+
+    ``BranchWithShelvesSerializer`` declares a nested ``shelves = NestedShelfSerializer(many=True)``;
+    the mutation opts it in with ``Meta.nested_fields = {"shelves": NestedSerializerConfig()}`` and
+    the serializer implements ``create()`` for the nested write. The generated input carries a
+    ``shelves: [<NestedShelfSerializerInput>!]`` field, each nested item exposing ``code`` /
+    ``topic`` / a raw-pk ``altBranches`` list. The live test proves, over ``/graphql/``:
+
+    * the nested create writes the branch + every nested shelf (through the serializer's OWN
+      ``create()`` - the framework never auto-saves the nested relation);
+    * a nested ``altBranches`` id is visibility-decoded (a ``city="restricted"`` branch is hidden),
+      surfacing as a structured ``shelves.<i>.altBranches`` relation error with NO partial write;
+    * a nested DRF validation error (``code == "BANNED"``) flattens to the structured
+      ``shelves.<i>.code`` path.
+
+    Opens to any caller via ``permission_classes = []`` so it isolates the nested behavior, not
+    write-auth. ``BranchType`` is non-Relay, so the payload slot is ``result``.
+    """
+
+    class Meta:
+        serializer_class = serializers.BranchWithShelvesSerializer
+        operation = "create"
+        nested_fields = {"shelves": NestedSerializerConfig()}
+        permission_classes = []
+
+
 class CreateShelfViaMetadataSerializer(SerializerMutation):
     """Create a ``Shelf`` via ``ShelfMetadataSerializer`` - the live type-system matrix (spec-039 rev6 #6 / #7 / #11).
 
@@ -1119,6 +1147,9 @@ class Mutation:
     )
     update_book_via_serializer_with_lock = DjangoMutationField(
         UpdateBookViaSerializerWithLock,
+    )
+    create_branch_with_nested_shelves = DjangoMutationField(
+        CreateBranchWithNestedShelves,
     )
 
 

@@ -59,6 +59,7 @@ through ``_merged_serializer_kwargs`` (spec-039 Medium-7).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from rest_framework import serializers
@@ -80,6 +81,7 @@ from ..mutations.sets import (
 from ..utils.inputs import normalize_field_name_sequence
 from .inputs import (
     SERIALIZER_INPUTS_MODULE_PATH,
+    NestedSerializerConfig,
     _serializer_shape_build_cache,
     build_serializer_input_class,
     guard_create_required_serializer_fields,
@@ -92,6 +94,7 @@ from .inputs import (
 from .inputs import (
     get_serializer_for_schema as _default_serializer_schema_fields,
 )
+from .serializer_converter import is_nested_serializer_field
 
 # The serializer ``Meta``'s allowed-key set (spec-039 Decision 6). Disjoint from
 # ``036``'s ``_ALLOWED_MUTATION_META_KEYS`` and ``038``'s form sets: a serializer
@@ -105,6 +108,7 @@ _ALLOWED_SERIALIZER_META_KEYS: frozenset[str] = frozenset(
         "optional_fields",
         "injected_fields",
         "select_for_update",
+        "nested_fields",
         "operation",
         "fields",
         "exclude",
@@ -145,6 +149,90 @@ def _checked_schema_field_map(
             "mutate per call).",
         )
     return field_map
+
+
+# ``operation`` -> the DRF serializer write method whose OVERRIDE ``Meta.nested_fields`` requires
+# (spec-039 rev6 #17): a create routes nested data through ``create()``, an update through
+# ``update()``. DRF's ``ModelSerializer.create`` / ``.update`` ``assert`` (via
+# ``raise_errors_on_nested_writes``) that no nested writable data is present unless the method is
+# overridden - a raw ``AssertionError`` that would escape the error envelope - so the framework
+# requires the override at class creation instead (the "only pass nested data to serializers that
+# implement create()/update()" contract).
+_SERIALIZER_OPERATION_NESTED_WRITE_METHOD: dict[str, str] = {
+    "create": "create",
+    "update": "update",
+}
+
+
+def _validate_serializer_nested_fields(
+    name: str,
+    serializer_class: type[serializers.Serializer],
+    operation: str,
+    field_map: dict[str, serializers.Field],
+    nested_fields: Any,
+) -> dict[str, NestedSerializerConfig] | None:
+    """Validate + normalize ``Meta.nested_fields`` at class creation (spec-039 rev6 #17).
+
+    ``Meta.nested_fields`` is the explicit opt-in for nested serializer writes: a
+    ``{field_name: NestedSerializerConfig}`` map. Validated all at class creation:
+
+    - it must be a mapping of ``str -> NestedSerializerConfig`` (a wrong container / wrong value
+      type fails loud);
+    - each key must name a field in the schema-time ``field_map`` that IS a nested
+      ``Serializer`` / ``ListSerializer`` (a typo / non-nested field fails loud - the deeper
+      per-level key validation runs in the recursive build);
+    - the serializer MUST override the write method the ``operation`` uses (``create()`` for
+      create, ``update()`` for update): DRF's default ``ModelSerializer`` method ``assert``s
+      against nested writable data (a raw ``AssertionError`` that would escape the envelope), so
+      the framework requires the override up front - the "only pass nested data to a serializer
+      that implements the nested write correctly" contract. The framework NEVER auto-saves the
+      nested relation; the serializer author's overridden method owns the write.
+
+    Returns the normalized ``dict`` (``None`` when unset).
+    """
+    if nested_fields is None:
+        return None
+    if not isinstance(nested_fields, Mapping):
+        raise ConfigurationError(
+            f"SerializerMutation {name}.Meta.nested_fields must be a mapping of "
+            f"{{field_name: NestedSerializerConfig}}; got {nested_fields!r}.",
+        )
+    normalized: dict[str, NestedSerializerConfig] = {}
+    for field_name, config in nested_fields.items():
+        if not isinstance(config, NestedSerializerConfig):
+            raise ConfigurationError(
+                f"SerializerMutation {name}.Meta.nested_fields[{field_name!r}] must be a "
+                f"NestedSerializerConfig; got {config!r}.",
+            )
+        field = field_map.get(field_name)
+        if field is None:
+            raise ConfigurationError(
+                f"SerializerMutation {name}.Meta.nested_fields names {field_name!r}, which is not "
+                "in the serializer's schema-time field map. Nest only fields the serializer "
+                "declares.",
+            )
+        if not is_nested_serializer_field(field):
+            raise ConfigurationError(
+                f"SerializerMutation {name}.Meta.nested_fields names {field_name!r}, but it is a "
+                f"{type(field).__name__}, not a nested serializer. nested_fields is only for "
+                "nested Serializer / ListSerializer fields (a relation is a "
+                "PrimaryKeyRelatedField).",
+            )
+        normalized[field_name] = config
+    write_method = _SERIALIZER_OPERATION_NESTED_WRITE_METHOD[operation]
+    if getattr(serializer_class, write_method) is getattr(
+        serializers.ModelSerializer,
+        write_method,
+    ):
+        raise ConfigurationError(
+            f"SerializerMutation {name}.Meta.nested_fields is declared, but {serializer_class.__name__} "
+            f"does not override {write_method}(); DRF's default ModelSerializer.{write_method}() "
+            "raises on writable nested data (an AssertionError that would escape the error "
+            f"envelope). Implement {write_method}() to perform the nested write yourself (the "
+            "framework decodes + validates the nested data but never auto-saves the relation), or "
+            "remove Meta.nested_fields.",
+        )
+    return normalized
 
 
 class SerializerMutation(DjangoMutation):
@@ -351,6 +439,17 @@ class SerializerMutation(DjangoMutation):
                 f"SerializerMutation {name}.Meta.select_for_update must be a bool; got "
                 f"{select_for_update!r}.",
             )
+        # ``Meta.nested_fields`` (rev6 #17): the explicit opt-in for nested serializer writes.
+        # Validated at class creation - each key must name a nested serializer field the schema
+        # map exposes, and the serializer MUST override the operation's write method (create /
+        # update), because the framework never auto-saves the nested relation.
+        nested_fields = _validate_serializer_nested_fields(
+            name,
+            serializer_class,
+            operation,
+            field_map,
+            getattr(meta, "nested_fields", None),
+        )
 
         permission_classes = _validate_mutation_permission_classes(
             name,
@@ -369,6 +468,7 @@ class SerializerMutation(DjangoMutation):
             optional_fields=optional_fields,
             injected_fields=injected_fields,
             select_for_update=select_for_update,
+            nested_fields=nested_fields,
             # rev6 #10: capture a stable fingerprint of the schema-hook field shape NOW (class
             # validation) so the phase-2.5 bind can detect a nondeterministic hook that drifted.
             schema_fingerprint=serializer_schema_fingerprint(field_map),
@@ -510,6 +610,8 @@ class SerializerMutation(DjangoMutation):
                 exclude=meta.exclude,
                 optional_fields=meta.optional_fields,
                 field_map=field_map,
+                # rev6 #17: opt-in nested serializer inputs, built recursively during the walk.
+                nested_configs=meta.nested_fields,
             )
             # Dedupe on the full descriptor: identical shapes reuse one class object
             # (the materialize ledger then dedupes idempotently); distinct shapes keep
@@ -552,6 +654,9 @@ class SerializerMutation(DjangoMutation):
             # rev2 P2: the SAME guarded hook read as ``build_input`` (fingerprint-checked), so
             # the type-name derivation never reads an unguarded field map.
             field_map=_checked_schema_field_map(cls, meta),
+            # rev6 #17: the SAME nested opt-in as ``build_input`` (the nested build is idempotent
+            # via the shape cache + materialize ledger), so the name derivation matches the build.
+            nested_configs=meta.nested_fields,
         )
         return shape.type_name
 

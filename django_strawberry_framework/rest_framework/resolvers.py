@@ -419,7 +419,7 @@ def _decode_nested(
 
 def serializer_errors_to_field_errors(
     errors: Any,
-    reverse_map: dict[str, str],
+    reverse_map: dict[str, tuple[str, dict | None]],
     *,
     prefix: str = "",
 ) -> list[FieldError]:
@@ -433,41 +433,39 @@ def serializer_errors_to_field_errors(
     (indexed children / a field's message list), and leaf strings / ``ErrorDetail``s.
     This walks it depth-first, emitting one ``FieldError`` per leaf:
 
-    - a **dict** recurses each key, joining the dotted path (``items.0.name``);
-      DRF's ``non_field_errors`` key (``NON_FIELD_ERRORS_KEY`` =
-      ``api_settings.NON_FIELD_ERRORS_KEY``, default ``"non_field_errors"``)
-      normalizes to the ``"__all__"`` sentinel segment at THAT level - so a top-level
-      bucket becomes the bare ``"__all__"`` and a nested one becomes
+    - a **dict** recurses each key, joining the dotted path (``items.0.name``); each key is
+      RE-KEYED to its GraphQL name AS IT DESCENDS (not only the root - rev6 #17 review P2),
+      using the RECURSIVE ``reverse_map``, so a nested child field / alias / relation suffix
+      reports its GraphQL name (``shelves.0.altBranches``, not ``shelves.0.alt_branches``).
+      DRF's ``non_field_errors`` key (``NON_FIELD_ERRORS_KEY`` = ``api_settings.NON_FIELD_ERRORS_KEY``,
+      default ``"non_field_errors"``) normalizes to the ``"__all__"`` sentinel segment at THAT
+      level - so a top-level bucket becomes the bare ``"__all__"`` and a nested one
       ``<path>.__all__``;
-    - a **list of dicts/lists** recurses each child under its index (``items.0``);
-    - a **list of leaf messages** (the common ``{field: ["msg", ...]}`` shape) is
-      ONE ``FieldError`` for the path with the whole message list;
-    - the **ROOT segment** of each emitted leaf path is re-keyed back through the
-      reverse map (``serializer field name -> GraphQL input name``) so a relation
-      error reports ``categoryId``, not ``category`` (F5), while a nested path keeps
-      its child segments verbatim.
+    - a **list of dicts/lists** recurses each child under its NUMERIC index (``items.0``),
+      carrying the SAME level reverse map (the list items are the same nested serializer);
+    - a **list of leaf messages** (the common ``{field: ["msg", ...]}`` shape) is ONE
+      ``FieldError`` for the (already-re-keyed) path with the whole message list.
 
-    ``reverse_map`` maps each serializer field's declared name (``spec.target_name``)
-    to its GraphQL input name (``spec.graphql_name``); a root segment with no entry
-    (a nested child key, the ``"__all__"`` sentinel, or a non-reverse-mapped field)
-    is kept verbatim.
+    ``reverse_map`` is the RECURSIVE reverse map from ``_build_reverse_map`` -
+    ``{serializer field name: (GraphQL input name, child_map | None)}`` - so each nesting level
+    re-keys with its OWN field map. A segment with no entry (a numeric index, the ``"__all__"``
+    sentinel, or a non-mapped field) is kept verbatim.
     """
     if isinstance(errors, dict):
         flattened: list[FieldError] = []
         for key, value in errors.items():
-            # The DRF non-field bucket -> the package's ``"__all__"`` sentinel SEGMENT
-            # (joined like any other), so a top-level bucket becomes ``"__all__"`` and
-            # a nested one ``<path>.__all__``.
-            segment = NON_FIELD_ERROR_KEY if str(key) == _DRF_NON_FIELD_KEY else str(key)
+            # Re-key THIS dict key to its GraphQL name and descend with the child level's map,
+            # so every segment (not just the root) reports the GraphQL name (rev6 #17 review P2).
+            segment, child_map = _rekey_segment(str(key), reverse_map)
             child_prefix = _join_path(prefix, segment)
             flattened.extend(
-                serializer_errors_to_field_errors(value, reverse_map, prefix=child_prefix),
+                serializer_errors_to_field_errors(value, child_map, prefix=child_prefix),
             )
         return flattened
     if isinstance(errors, list) and any(isinstance(item, (dict, list)) for item in errors):
-        # An indexed list of nested children (``items: [{...}, {...}]``): recurse
-        # each under its index. A mixed list never occurs in DRF's error shape, but
-        # the guard keeps a stray leaf in such a list from being dropped.
+        # An indexed list of nested children (``items: [{...}, {...}]``): recurse each under its
+        # index, keeping the SAME reverse map (each item is the same nested serializer). A mixed
+        # list never occurs in DRF's error shape, but the guard keeps a stray leaf from dropping.
         flattened = []
         for index, item in enumerate(errors):
             child_prefix = _join_path(prefix, str(index))
@@ -475,13 +473,13 @@ def serializer_errors_to_field_errors(
                 serializer_errors_to_field_errors(item, reverse_map, prefix=child_prefix),
             )
         return flattened
-    # A leaf: a list of messages, a bare string, or an ``ErrorDetail``. Re-key the
-    # ROOT segment through the reverse map, then build the shared leaf - preserving each
-    # DRF ``ErrorDetail.code`` alongside the message (rev6 #4) and the structured path
-    # (rev6 #13, derived inside ``field_error`` from the dotted key).
+    # A leaf: a list of messages, a bare string, or an ``ErrorDetail``. The ``prefix`` is already
+    # fully re-keyed during descent, so build the shared leaf directly - preserving each DRF
+    # ``ErrorDetail.code`` alongside the message (rev6 #4) and the structured path (rev6 #13,
+    # derived inside ``field_error`` from the dotted key).
     return [
         field_error(
-            _rekey_root(prefix, reverse_map),
+            prefix,
             errors,
             codes=_error_detail_codes(errors),
         ),
@@ -508,24 +506,46 @@ def _join_path(prefix: str, segment: str) -> str:
     return f"{prefix}.{segment}" if prefix else segment
 
 
-def _rekey_root(path: str, reverse_map: dict[str, str]) -> str:
-    """Re-key a leaf path's ROOT segment through the reverse map; keep child segments verbatim (F5).
+def _rekey_segment(
+    key: str,
+    reverse_map: dict[str, tuple[str, dict | None]],
+) -> tuple[str, dict[str, tuple[str, dict | None]]]:
+    """Re-key ONE dict segment to its GraphQL name + return the CHILD level's reverse map (review P2).
 
-    ``category`` -> ``categoryId``; ``items.0.name`` -> ``items.0.name`` (the
-    ``items`` root re-keyed if present, the ``0`` / ``name`` children verbatim). An
-    empty path (a model-wide ``non_field_errors``) is left empty so ``field_error``
-    normalizes it to the ``"__all__"`` sentinel.
+    The DRF non-field bucket normalizes to the ``"__all__"`` sentinel (with no child map); a
+    reverse-mapped serializer field returns its GraphQL name + its nested child map (``{}`` when
+    the field is not itself nested); an unmapped key (a numeric index reached as a dict key, or a
+    non-input field) is kept verbatim with no child map. So each nesting level re-keys with its
+    OWN field map, not only the root.
     """
-    if not path:
-        return path
-    root, _, rest = path.partition(".")
-    mapped = reverse_map.get(root, root)
-    return f"{mapped}.{rest}" if rest else mapped
+    if key == _DRF_NON_FIELD_KEY:
+        return NON_FIELD_ERROR_KEY, {}
+    mapped = reverse_map.get(key) if reverse_map else None
+    if mapped is None:
+        return key, {}
+    graphql_name, child_map = mapped
+    return graphql_name, (child_map or {})
 
 
-def _reverse_map_for(mutation_cls: type) -> dict[str, str]:
-    """Build the ``{serializer field name: GraphQL input name}`` map from the bind-stashed specs."""
-    return {spec.target_name: spec.graphql_name for spec in mutation_cls._input_field_specs}
+def _build_reverse_map(specs: list) -> dict[str, tuple[str, dict | None]]:
+    """Build the RECURSIVE reverse map from the bind-stashed input specs (rev6 #17 review P2).
+
+    ``{serializer field name (spec.target_name): (GraphQL input name (spec.graphql_name),
+    child_map | None)}`` - a nested field's ``child_map`` is the recursive reverse map of its
+    ``nested_specs``, so ``serializer_errors_to_field_errors`` re-keys nested child fields /
+    aliases / relation suffixes to their GraphQL names at every depth (not just the root). A
+    non-nested field has ``child_map=None``.
+    """
+    result: dict[str, tuple[str, dict | None]] = {}
+    for spec in specs:
+        child = _build_reverse_map(spec.nested_specs) if spec.nested_specs is not None else None
+        result[spec.target_name] = (spec.graphql_name, child)
+    return result
+
+
+def _reverse_map_for(mutation_cls: type) -> dict[str, tuple[str, dict | None]]:
+    """Build the recursive ``{serializer name: (GraphQL name, child_map)}`` map from the specs."""
+    return _build_reverse_map(mutation_cls._input_field_specs)
 
 
 def _merged_serializer_kwargs(

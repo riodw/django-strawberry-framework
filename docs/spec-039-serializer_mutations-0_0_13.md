@@ -4010,10 +4010,19 @@ package's fail-loud architecture — a DRF-first, EXPLICIT, opt-in contract:
   misrouted as a relation-id input). `NestedSerializerConfig` (a frozen dataclass, exported from
   the root by name under the DRF guard like `SerializerMutation`) carries `fields` / `exclude` /
   `optional_fields` (narrow the nested input via the SAME machinery the top level uses) and a
-  recursive `nested_fields` map (the deeper opt-in — each level names its own children).
-- **Recursively fingerprinted.** `serializer_schema_fingerprint` folds a nested serializer's own
-  field map into the determinism fingerprint (bounded by an on-path cycle guard), so a
-  nondeterministic hook that changes a nested shape is caught at the phase-2.5 bind.
+  recursive `nested_fields` map (the deeper opt-in — each level names its own children). A nested
+  field with a DRF `source=` records the same normalized one-segment source axis scalar / relation
+  fields do (review P1), so the runtime schema/runtime agreement guard's source comparison matches
+  instead of failing every invocation; a dotted source / `source="*"` fails loud in
+  `_resolve_nested_field` (the model-column-path fail-loud source policy).
+- **Recursively fingerprinted, scoped to the writable set.** `serializer_schema_fingerprint` folds
+  a nested serializer's own field map into the determinism fingerprint (bounded by an on-path
+  cycle guard), so a nondeterministic hook that changes a nested shape is caught at the phase-2.5
+  bind. The fingerprint runs over the EFFECTIVE (writable + narrowed) field set — the SAME set the
+  input build uses — and drops `read_only` / `HiddenField` at every level (review P1), so a
+  read-only or narrowed-away nested serializer (e.g. a context-sensitive nested OUTPUT serializer
+  whose `.fields` cannot materialize no-arg) is NEVER descended into and cannot break class
+  creation; a residual reachable nested-`.fields` failure is wrapped as `ConfigurationError`.
 - **Depth / cycle guarded.** Recursion is bounded by the finite, immutable `NestedSerializerConfig`
   tree; a serializer class that reappears on the recursion path is a fail-loud cycle, and a
   path beyond `_NESTED_MAX_DEPTH` is a fail-loud depth cap.
@@ -4024,19 +4033,23 @@ package's fail-loud architecture — a DRF-first, EXPLICIT, opt-in contract:
   the nested data (visibility-checking each nested relation, recursively, and scoping the runtime
   nested serializer's relation querysets) and hands it to the serializer's OWN `create()` /
   `update()`, which owns the write, inside the pipeline transaction.
-- **Errors route through the structured `path` / `codes` envelope.** A nested DRF validation
-  error flattens through the existing recursive `serializer_errors_to_field_errors`
-  (`shelves.1.code`); a nested framework decode error (a hidden relation id) is keyed to its FULL
-  nested path (`shelves.0.altBranches`) with the `invalid` code and rolls the write back (H6). The
-  runtime schema/runtime agreement guard (#1) recurses into the nested serializer too.
+- **Errors route through the structured `path` / `codes` envelope, re-keyed at every depth.** A
+  nested DRF validation error flattens through the recursive `serializer_errors_to_field_errors`,
+  which now RE-KEYS each path segment to its GraphQL name as it descends (review P2 — not only the
+  root), driven by a recursive reverse map built from `InputFieldSpec.nested_specs`: a nested child
+  field / alias / relation suffix reports its SDL name (`shelves.0.altBranches`, not
+  `shelves.0.alt_branches`), while numeric indexes and the `__all__` non-field sentinel are
+  preserved. A nested framework decode error (a hidden relation id) is keyed to the same FULL
+  nested path with the `invalid` code and rolls the write back (H6). The runtime schema/runtime
+  agreement guard (#1) recurses into the nested serializer too.
 
 The nested input dedupes on its `SerializerInputShape` descriptor (folded into the parent
 descriptor identity + the per-shape build cache, so two nested shapes never collide on one name)
 and materializes through the same ledger. Earned live by `createBranchWithNestedShelves` (a
 `Branch` with a nested `shelves` list carrying a raw-pk `altBranches` M2M) — the happy nested
 write, the hidden-nested-relation structured-path error + rollback, and the nested DRF
-validation-error flattening; the fail-loud / guard / config-validation branches are
-package-tested.
+validation-error flattening; the fail-loud / guard / config-validation / source-axis / recursive
+re-keying branches are package-tested.
 
 <!-- LINK DEFINITIONS -->
 

@@ -1298,3 +1298,41 @@ def test_narrowed_away_writable_nested_not_fingerprinted():
 
     # Class creation succeeded (no RuntimeError); the snapshot carries the effective fingerprint.
     assert CreateItemNarrowedWritable._mutation_meta.schema_fingerprint is not None
+
+
+def test_unopted_writable_nested_reports_opt_in_error_not_materialization():
+    """An UNOPTED writable nested child that raises from ``get_fields()`` reports the opt-in error (rev6 #17 review P2).
+
+    The prior fingerprint descended into EVERY writable nested serializer, so an unopted,
+    context-sensitive child raised a misleading "opted in via Meta.nested_fields..."
+    materialization error at class validation - shadowing the canonical opt-in error. The
+    fingerprint is now gated on ``Meta.nested_fields`` (the opt-in tree): an unopted nested field
+    is a shallow marker, so class creation succeeds and the phase-2.5 bind's field walk raises the
+    canonical opt-in error instead.
+    """
+    _declare_products_primaries()
+
+    class RaisingChild(serializers.Serializer):
+        def get_fields(self):
+            raise RuntimeError("unopted nested child fields must not be read")
+
+    class ItemWithUnoptedChild(serializers.ModelSerializer):
+        child = RaisingChild()
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "child")
+
+    # No Meta.nested_fields -> the nested child is NOT opted in.
+    class CreateItemUnopted(SerializerMutation):
+        class Meta:
+            serializer_class = ItemWithUnoptedChild
+            operation = "create"
+            permission_classes = []
+
+    # Class creation succeeded: the fingerprint recorded a shallow marker (no RuntimeError, no
+    # "Could not materialize..." wrap), and the snapshot carries the fingerprint.
+    assert CreateItemUnopted._mutation_meta.schema_fingerprint is not None
+    # The phase-2.5 bind's field walk raises the CANONICAL opt-in error (not the materialization wrap).
+    with pytest.raises(ConfigurationError, match="opt-in only"):
+        finalize_django_types()

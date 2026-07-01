@@ -139,7 +139,10 @@ def _checked_schema_field_map(
 
     The fingerprint is over the EFFECTIVE (writable + narrowed) field set - the SAME set the
     input build uses (rev6 #17 review P1) - so a read-only / narrowed-away nested serializer is
-    never descended into; the RAW ``field_map`` is still returned for the build to re-narrow.
+    never descended into; the RAW ``field_map`` is still returned for the build to re-narrow. The
+    recursion is gated on ``meta.nested_fields`` (the opt-in tree, rev6 #17 review P2), the SAME map
+    passed at class validation, so both windows fingerprint the identical opt-in structure and an
+    unopted nested field is never descended into.
     """
     field_map = cls.get_serializer_for_schema()
     if meta.schema_fingerprint is not None:
@@ -149,7 +152,10 @@ def _checked_schema_field_map(
             exclude=meta.exclude,
             field_map=field_map,
         )
-        if serializer_schema_fingerprint(effective) != meta.schema_fingerprint:
+        if (
+            serializer_schema_fingerprint(effective, nested_configs=meta.nested_fields)
+            != meta.schema_fingerprint
+        ):
             raise ConfigurationError(
                 f"SerializerMutation {cls.__name__}.get_serializer_for_schema() returned a "
                 "DIFFERENT field shape at bind than at class validation; the hook must be "
@@ -482,8 +488,13 @@ class SerializerMutation(DjangoMutation):
             # validation) so the phase-2.5 bind can detect a nondeterministic hook that drifted.
             # rev6 #17 review P1: fingerprint the EFFECTIVE (writable + narrowed) set - the SAME
             # set the input build uses - so a read-only / narrowed-away nested serializer (whose
-            # ``.fields`` need not even materialize no-arg) is never descended into.
-            schema_fingerprint=serializer_schema_fingerprint(effective),
+            # ``.fields`` need not even materialize no-arg) is never descended into. review P2:
+            # gate the recursion on ``nested_fields`` so an UNOPTED nested field is not descended
+            # into either (the field walk raises the canonical opt-in error instead).
+            schema_fingerprint=serializer_schema_fingerprint(
+                effective,
+                nested_configs=nested_fields,
+            ),
         )
 
     @classmethod

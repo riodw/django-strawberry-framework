@@ -286,20 +286,36 @@ def _fingerprint_converter_extra(field: serializers.Field) -> str | None:
     return None
 
 
-def _fingerprint_nested(field: serializers.Field, seen: frozenset[type]) -> tuple[Any, ...] | None:
-    """Return a RECURSIVE fingerprint of a nested serializer field's own map, else ``None`` (rev6 #17).
+def _fingerprint_nested(
+    field: serializers.Field,
+    field_name: str,
+    seen: frozenset[type],
+    nested_configs: Mapping[str, NestedSerializerConfig] | None,
+) -> tuple[Any, ...] | None:
+    """Return a fingerprint of a nested serializer field, else ``None`` (rev6 #17 / review P2).
 
     A nested ``Serializer`` / ``ListSerializer`` field's generated input derives from the NESTED
-    serializer's fields, so a hook that changes a nested shape changes the SDL - folded into the
-    fingerprint recursively so the phase-2.5 drift guard is sensitive to nested changes too. The
-    recursion is bounded by the visited-class ``seen`` set: a serializer class already on the
-    recursion path yields a terminal cycle marker instead of recursing forever (a self-referential
-    nested serializer terminates). A non-nested field yields ``None``.
+    serializer's fields, so a hook that changes an OPTED-IN nested shape changes the SDL - folded
+    into the fingerprint recursively so the phase-2.5 drift guard is sensitive to nested changes
+    too. The recursion is bounded by the visited-class ``seen`` set: a serializer class already on
+    the recursion path yields a terminal cycle marker instead of recursing forever (a
+    self-referential nested serializer terminates). A non-nested field yields ``None``.
 
-    Reads the nested serializer's ``.fields`` lazily; a nested serializer that cannot materialize
-    its fields no-arg (a context-requiring nested ``get_fields()``) raises through the fingerprint,
-    so the raw exception is translated to a ``ConfigurationError`` naming the hook contract rather
-    than leaking (rev6 #17 review P1). Only WRITABLE nested fields ever reach here - the caller
+    **Gated on the opt-in tree (rev6 #17 review P2).** A nested field is descended into ONLY when it
+    is declared in ``nested_configs`` (this level's ``Meta.nested_fields`` / the parent
+    ``NestedSerializerConfig.nested_fields``) - the SAME tree the input builder walks. A nested
+    field NOT opted in produces NO nested input (nesting is opt-in only; the field walk raises the
+    canonical opt-in error), so its child shape cannot affect the SDL - it records a SHALLOW marker
+    (class name + many-ness) WITHOUT reading the child's ``.fields``. This matters because an
+    unopted, context-sensitive nested serializer's ``get_fields()`` may raise; descending into it
+    here would surface a misleading "opted in via Meta.nested_fields" materialization error at
+    class validation, shadowing the canonical opt-in error the field walk would raise. The shallow
+    marker still changes if the hook flips a field between nested and scalar, so drift is detected.
+
+    Reads an OPTED-IN nested serializer's ``.fields`` lazily; one that cannot materialize its fields
+    no-arg (a context-requiring nested ``get_fields()``) raises through the fingerprint, so the raw
+    exception is translated to a ``ConfigurationError`` naming the hook contract rather than leaking
+    (rev6 #17 review P1). Only WRITABLE nested fields ever reach here - the caller
     (``_fingerprint_field_map``) drops ``read_only`` / ``HiddenField`` fields BEFORE fingerprinting,
     so a read-only nested output field is never descended into (its ``.fields`` never read).
     """
@@ -307,6 +323,12 @@ def _fingerprint_nested(field: serializers.Field, seen: frozenset[type]) -> tupl
         return None
     child, many = nested_serializer_child(field)
     child_class = type(child)
+    nested_config = nested_configs.get(field_name) if nested_configs else None
+    if nested_config is None:
+        # Not opted in: no nested input is built (opt-in only), so the child shape cannot affect
+        # the SDL and the field walk raises the canonical opt-in error. Record a shallow marker
+        # WITHOUT reading child.fields (an unopted context-sensitive child may raise) - rev6 #17 P2.
+        return ("<unopted-nested>", child_class.__name__, many)
     if child_class in seen:
         return ("<cycle>", child_class.__name__, many)
     try:
@@ -320,18 +342,27 @@ def _fingerprint_nested(field: serializers.Field, seen: frozenset[type]) -> tupl
             "Meta.nested_fields must expose a stable, request-independent no-arg .fields (override "
             "get_serializer_for_schema() on the mutation to return a stable field map).",
         ) from exc
-    return (many, _fingerprint_field_map(child_field_map, seen | {child_class}))
+    child_fingerprint = _fingerprint_field_map(
+        child_field_map,
+        seen | {child_class},
+        nested_config.nested_fields,
+    )
+    return (many, child_fingerprint)
 
 
 def _fingerprint_field_map(
     field_map: dict[str, serializers.Field],
     seen: frozenset[type],
+    nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
 ) -> tuple[tuple[Any, ...], ...]:
     """The recursive fingerprint core (spec-039 rev6 #10 / #17 - the nested recursion).
 
     Captures every SDL-affecting axis per WRITABLE field (see ``serializer_schema_fingerprint``),
-    plus the recursive nested fingerprint (rev6 #17). ``seen`` carries the serializer classes
-    already on the recursion path so a nested cycle terminates.
+    plus the recursive nested fingerprint for OPTED-IN nested fields (rev6 #17). ``seen`` carries
+    the serializer classes already on the recursion path so a nested cycle terminates;
+    ``nested_configs`` is THIS level's opt-in tree (``Meta.nested_fields`` at the top, the parent
+    ``NestedSerializerConfig.nested_fields`` deeper) - only fields it names are descended into
+    (rev6 #17 review P2), so an unopted nested field's ``.fields`` is never read.
 
     **Scoped to the writable field set (rev6 #17 review P1).** ``read_only`` / ``HiddenField``
     fields are DROPPED - they never produce an input field at any nesting level (the input builder
@@ -354,7 +385,7 @@ def _fingerprint_field_map(
             serializer_field_description(field),
             _fingerprint_choices(field),
             _fingerprint_converter_extra(field),
-            _fingerprint_nested(field, seen),
+            _fingerprint_nested(field, name, seen, nested_configs),
         )
         for name, field in field_map.items()
         if not field.read_only and not isinstance(field, serializers.HiddenField)
@@ -363,6 +394,8 @@ def _fingerprint_field_map(
 
 def serializer_schema_fingerprint(
     field_map: dict[str, serializers.Field],
+    *,
+    nested_configs: Mapping[str, NestedSerializerConfig] | None = None,
 ) -> tuple[tuple[Any, ...], ...]:
     """Return a stable, request-independent fingerprint of a schema-time field map (spec-039 rev6 #10 / #17).
 
@@ -374,9 +407,17 @@ def serializer_schema_fingerprint(
     stable-shape promise into an enforced contract, rev2 P2): each WRITABLE field's name, class,
     source, write flag, required, allow_null, relation target model, the description inputs
     (``help_text`` + the constraint summary - rev6 #9), the enumerable choice members (rev6 #6),
-    the converter discriminants (``ModelField`` wrapped field / ``ListField`` child), and - for a
-    nested serializer field - a RECURSIVE fingerprint of the nested serializer's own field map
-    (rev6 #17, bounded by an on-path cycle guard).
+    the converter discriminants (``ModelField`` wrapped field / ``ListField`` child), and - for an
+    OPTED-IN nested serializer field - a RECURSIVE fingerprint of the nested serializer's own field
+    map (rev6 #17, bounded by an on-path cycle guard).
+
+    **Gated on the opt-in tree (rev6 #17 review P2).** ``nested_configs`` is the mutation's
+    ``Meta.nested_fields`` map - the SAME opt-in tree the input builder walks. Only nested fields it
+    names are descended into; an unopted nested field records a shallow marker WITHOUT reading its
+    ``.fields`` (nesting is opt-in only, so it produces no nested input and the field walk raises the
+    canonical opt-in error - descending here would surface a misleading materialization error that
+    shadows it). Callers pass ``Meta.nested_fields`` so class-validation and the bind fingerprint the
+    identical opt-in structure.
 
     **Scoped to the writable set (rev6 #17 review P1).** ``read_only`` / ``HiddenField`` fields are
     dropped (they never produce an input), so this must be fed the SAME field set the input build
@@ -386,7 +427,7 @@ def serializer_schema_fingerprint(
     never descended into. Deterministic + hashable; the ordered tuple preserves field order (which
     drives the descriptor identity).
     """
-    return _fingerprint_field_map(field_map, frozenset())
+    return _fingerprint_field_map(field_map, frozenset(), nested_configs)
 
 
 def _serializer_meta_value(serializer_class: type[serializers.BaseSerializer], name: str) -> Any:

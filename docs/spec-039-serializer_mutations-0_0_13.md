@@ -4015,14 +4015,22 @@ package's fail-loud architecture — a DRF-first, EXPLICIT, opt-in contract:
   fields do (review P1), so the runtime schema/runtime agreement guard's source comparison matches
   instead of failing every invocation; a dotted source / `source="*"` fails loud in
   `_resolve_nested_field` (the model-column-path fail-loud source policy).
-- **Recursively fingerprinted, scoped to the writable set.** `serializer_schema_fingerprint` folds
-  a nested serializer's own field map into the determinism fingerprint (bounded by an on-path
-  cycle guard), so a nondeterministic hook that changes a nested shape is caught at the phase-2.5
-  bind. The fingerprint runs over the EFFECTIVE (writable + narrowed) field set — the SAME set the
-  input build uses — and drops `read_only` / `HiddenField` at every level (review P1), so a
-  read-only or narrowed-away nested serializer (e.g. a context-sensitive nested OUTPUT serializer
-  whose `.fields` cannot materialize no-arg) is NEVER descended into and cannot break class
-  creation; a residual reachable nested-`.fields` failure is wrapped as `ConfigurationError`.
+- **Recursively fingerprinted, scoped to the writable set, gated on the opt-in tree.**
+  `serializer_schema_fingerprint` folds an OPTED-IN nested serializer's own field map into the
+  determinism fingerprint (bounded by an on-path cycle guard), so a nondeterministic hook that
+  changes a nested shape is caught at the phase-2.5 bind. The fingerprint runs over the EFFECTIVE
+  (writable + narrowed) field set — the SAME set the input build uses — and drops `read_only` /
+  `HiddenField` at every level (review P1), so a read-only or narrowed-away nested serializer (e.g.
+  a context-sensitive nested OUTPUT serializer whose `.fields` cannot materialize no-arg) is NEVER
+  descended into and cannot break class creation; a residual reachable nested-`.fields` failure is
+  wrapped as `ConfigurationError`. The recursion is ALSO gated on the `Meta.nested_fields` opt-in
+  tree (review follow-on P2), threaded into the fingerprint at BOTH class validation and bind: an
+  UNOPTED nested field records a shallow marker (class name + many-ness) WITHOUT reading its
+  `.fields` — nesting is opt-in only, so it produces no nested input and its child shape cannot
+  affect the SDL, and the field walk raises the canonical `_reject_nested_serializer` opt-in error.
+  Descending into an unopted, context-sensitive nested child would otherwise surface a misleading
+  "opted in via Meta.nested_fields..." materialization error at class validation, shadowing the
+  canonical opt-in error.
 - **Depth / cycle guarded.** Recursion is bounded by the finite, immutable `NestedSerializerConfig`
   tree; a serializer class that reappears on the recursion path is a fail-loud cycle, and a
   path beyond `_NESTED_MAX_DEPTH` is a fail-loud depth cap.
@@ -4049,7 +4057,7 @@ and materializes through the same ledger. Earned live by `createBranchWithNested
 `Branch` with a nested `shelves` list carrying a raw-pk `altBranches` M2M) — the happy nested
 write, the hidden-nested-relation structured-path error + rollback, and the nested DRF
 validation-error flattening; the fail-loud / guard / config-validation / source-axis / recursive
-re-keying branches are package-tested.
+re-keying / opt-in-gated-fingerprint branches are package-tested.
 
 <!-- LINK DEFINITIONS -->
 

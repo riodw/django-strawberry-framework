@@ -48,4 +48,7 @@ payload_object_slot,fielderror-envelope,the node/result slot rule; documented wi
 request_from_info,djangomodelpermission,the shared request resolver named in the write-auth entry
 check_permission,djangomodelpermission,the overridable authorize hook the factories route through
 bind_mutations,djangomutation,the phase-2.5 bind the register rider rides
+run_write_pipeline_sync,djangomutation,the shared write skeleton the rider's step pair rides; documented under DjangoMutation
+resolve_sync,djangomutation,the per-flavor resolver seam the rider overrides
+resolve_async,djangomutation,the async twin of the resolver seam; independently regressable
 register_subsystem_clear,finalize_django_types,the registry clear seam the auth ledger registers with; no own entry

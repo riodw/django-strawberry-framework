@@ -490,43 +490,48 @@ def _sanitize_member_name(value: Any) -> str:
     return sanitized
 
 
-def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
-    """Generate (or fetch from registry) a Strawberry ``Enum`` for ``field.choices``.
+def build_enum_from_choices(
+    choice_pairs: list[tuple[Any, Any]],
+    enum_name: str,
+    *,
+    source_label: str,
+) -> type[Enum]:
+    """Build a Strawberry ``Enum`` from a flat ``(value, label)`` choice sequence.
 
-    1. Coerce ``field.choices`` to a list and reject if empty.
-    2. Reject Django's grouped-choices form.
-    3. Cache check on ``(field.model, field.name)``; return cached on hit.
-    4. Compute enum name ``f"{type_name}{PascalCase(field.name)}Enum"``.
-    5. Sanitize member names from choice *values* (not labels) so a label
-       edit doesn't churn the GraphQL schema; reject if two values
-       sanitize to the same identifier.
-    6. Build the ``Enum`` and decorate with ``strawberry.enum``.
-    7. Cache via ``registry.register_enum`` and return the enum class.
+    The shared choices -> enum CORE reused by the read-side model-choice path
+    (``convert_choices_to_enum``, keyed + cached per ``(model, field_name)``) and the
+    serializer-only ``ChoiceField`` / ``MultipleChoiceField`` path
+    (``rest_framework/serializer_converter.py``, keyed by the descriptor-derived name -
+    spec-039 rev6 #6). Both build a GraphQL-safe enum from the SAME rules, so the
+    grouped-form rejection, the value-not-label sanitization, and the sanitize-collision
+    guard cannot drift between the two flavors:
 
-    The first ``DjangoType`` to read a given ``(model, field_name)`` wins
-    the enum's GraphQL name; sibling types pointing at the same column
-    receive the cached enum unchanged.
+    1. reject the empty sequence;
+    2. reject Django's grouped-choices form (a ``(group_label, [(value, label), ...])``
+       nested tuple - detected on ``label`` being a list / tuple, the load-bearing
+       distinction: in the grouped form the *value* slot is the group name, so testing
+       it would false-negative);
+    3. sanitize member names from choice VALUES (not labels) so a label edit does not
+       churn the GraphQL schema; reject two values that sanitize to one member;
+    4. build the ``Enum`` and decorate with ``strawberry.enum``.
+
+    ``source_label`` names the offending field in every raised message
+    (``"Model.field"`` for the read side, the serializer field name for the serializer
+    side), so the two callers share one message shape. The caller owns caching /
+    registry keying (the two key spaces - ``(model, field_name)`` vs the descriptor-
+    derived enum name - stay separate).
 
     Raises:
-        ConfigurationError: triggered by any of the following:
-
-            - ``field.choices`` is empty - declared but the sequence is
-              empty.
-            - ``field.choices`` contains nested tuples (Django's
-              grouped-choices form). Only the flat ``(value, label)``
-              form is supported.
-            - two or more choice values sanitize to the same enum member
-              (e.g. ``"a-b"`` and ``"a_b"`` both collapse to ``"a_b"``);
-              rename one side or split into separate fields.
+        ConfigurationError: empty sequence, grouped-choices form, or two values that
+            sanitize to the same enum member.
     """
-    choices = list(field.choices or [])
-    if not choices:
+    if not choice_pairs:
         raise ConfigurationError(
-            f"{field.model.__name__}.{field.name} declares choices but the "
+            f"{source_label} declares choices but the "
             "sequence is empty; choices must be a non-empty flat sequence "
             "of (value, label) pairs.",
         )
-    for _value, label in choices:
+    for _value, label in choice_pairs:
         # Django's grouped-choices form is
         # ``(group_label, [(value, label), ...])``. In the flat form the
         # second element is always a label string; in the grouped form it
@@ -536,20 +541,15 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
         # (a string), so checking it produces a false negative.
         if isinstance(label, (list, tuple)):
             raise ConfigurationError(
-                f"{field.model.__name__}.{field.name} uses Django's grouped-choices "
+                f"{source_label} uses Django's grouped-choices "
                 "form (nested tuples for option groups). Only the flat "
                 "(value, label) form is supported; flatten the choices source or split into "
                 "separate fields.",
             )
 
-    cached = registry.get_enum(field.model, field.name)
-    if cached is not None:
-        return cached
-
-    enum_name = f"{type_name}{pascal_case(field.name)}Enum"
     members: dict[str, Any] = {}
     collisions: dict[str, list[Any]] = {}
-    for value, _label in choices:
+    for value, _label in choice_pairs:
         member = _sanitize_member_name(value)
         if member in members:
             collisions.setdefault(member, [members[member]]).append(value)
@@ -561,11 +561,44 @@ def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
             for member, vals in sorted(collisions.items())
         )
         raise ConfigurationError(
-            f"{field.model.__name__}.{field.name} choices sanitize to the same enum member: "
+            f"{source_label} choices sanitize to the same enum member: "
             f"{details}.  Rename one side or split into separate fields.",
         )
     enum_cls = Enum(enum_name, members)  # type: ignore[arg-type]
-    enum_cls = strawberry.enum(enum_cls)
+    return strawberry.enum(enum_cls)
+
+
+def convert_choices_to_enum(field: models.Field, type_name: str) -> type[Enum]:
+    """Generate (or fetch from registry) a Strawberry ``Enum`` for ``field.choices``.
+
+    1. Cache check on ``(field.model, field.name)``; return cached on hit.
+    2. Compute enum name ``f"{type_name}{PascalCase(field.name)}Enum"``.
+    3. Delegate to the shared ``build_enum_from_choices`` core (empty / grouped-form
+       rejection, value-based sanitization, sanitize-collision guard, ``Enum`` build).
+    4. Cache via ``registry.register_enum`` and return the enum class.
+
+    The first ``DjangoType`` to read a given ``(model, field_name)`` wins
+    the enum's GraphQL name; sibling types pointing at the same column
+    receive the cached enum unchanged. The build rules are single-sited in
+    ``build_enum_from_choices`` so the serializer-only ``ChoiceField`` path
+    (spec-039 rev6 #6) applies the identical grouped-form / sanitization / collision
+    contract.
+
+    Raises:
+        ConfigurationError: empty ``field.choices``, Django's grouped-choices form, or
+            two choice values that sanitize to the same enum member (all raised by
+            ``build_enum_from_choices``).
+    """
+    cached = registry.get_enum(field.model, field.name)
+    if cached is not None:
+        return cached
+
+    enum_name = f"{type_name}{pascal_case(field.name)}Enum"
+    enum_cls = build_enum_from_choices(
+        list(field.choices or []),
+        enum_name,
+        source_label=f"{field.model.__name__}.{field.name}",
+    )
     registry.register_enum(field.model, field.name, enum_cls)
     return enum_cls
 

@@ -21,7 +21,15 @@ model's ``unique_shelf_code_per_branch`` constraint surfaces through DRF's
 
 from rest_framework import serializers
 
-from .models import Branch, Shelf
+# The serializer-field converter-registry surface (spec-039 rev6 #11) is resolved by
+# NAME through the root ``__getattr__`` (the DRF soft-dependency guard), like
+# ``SerializerMutation``.
+from django_strawberry_framework import (
+    SerializerFieldConversion,
+    register_serializer_field_converter,
+)
+
+from .models import Book, Branch, Shelf
 
 
 class TenantShelfSerializer(serializers.ModelSerializer):
@@ -168,31 +176,63 @@ def shelf_collision_schema_field_map(target_model):
     return dict(TargetedShelfSerializer(target_model=target_model).fields)
 
 
-def nullability_schema_field_map(*, allow_null):
-    """Schema-time field map of ``code`` + ``branch`` + a same-name ``note`` differing ONLY in ``allow_null`` (spec-039 High / M2).
+class NoteShelfSerializer(serializers.ModelSerializer):
+    """``Shelf`` serializer with a serializer-only ``note`` whose ``allow_null`` is RUNTIME-supplied (spec-039 High / M2 + rev6 #1).
 
-    The two nullability mutations' ``get_serializer_for_schema()`` hooks call this with
-    ``allow_null=False`` vs ``allow_null=True`` over the SAME serializer (``ShelfSerializer``),
-    so the only descriptor axis differing between their generated inputs is ``note``'s EMITTED
-    nullability: ``required=True, allow_null=False`` is a non-null ``String!``, while
-    ``required=True, allow_null=True`` is a nullable, omittable ``String`` (M2 - GraphQL
-    cannot express required-AND-nullable, so it is omittable and DRF enforces presence). The
-    descriptor identity + the descriptor-derived name must capture that EMITTED nullability,
-    or the second declaration silently reuses the first's cached input class (giving one
-    mutation the other's nullability - the High bug this pins). ``note`` is a serializer-only
-    scalar (no backing ``Shelf`` column), decoded then dropped by the runtime
-    ``ShelfSerializer`` (``code`` + ``branch``); its sole purpose is the nullability axis.
-    Built from a throwaway ``ModelSerializer`` purely for its BOUND ``.fields``.
+    ONE serializer class backs TWO ``SerializerMutation`` declarations; each constructs it with
+    a different ``note_allow_null`` via BOTH ``get_serializer_for_schema()`` (the schema-time
+    field map) AND ``get_serializer_kwargs`` (the per-request construction), so the schema-time
+    ``note`` shape and the runtime ``note`` field AGREE (rev6 #1 - no schema-only
+    decode-then-drop the agreement guard now forbids). The only descriptor axis differing
+    between the two generated inputs is ``note``'s EMITTED nullability: ``required=True,
+    allow_null=False`` is a non-null ``String!``, while ``required=True, allow_null=True`` is a
+    nullable, OMITTABLE ``String`` (M2 - GraphQL cannot express required-AND-nullable, so it is
+    omittable and null-accepting, DRF enforcing presence/validity in-band). The descriptor
+    identity + the descriptor-derived name must capture that EMITTED nullability, or the second
+    declaration silently reuses the first's cached input class (giving one mutation the other's
+    nullability - the High bug this pins).
+
+    ``note`` is a serializer-only WRITE-ONLY field (no backing ``Shelf`` column), decoded +
+    validated then popped in ``create()``. ``note_allow_null=None`` (the no-arg DEFAULT
+    discovery) omits it, building only ``code`` + ``branch`` - which reserves the canonical name
+    away from the two hook shapes.
     """
 
-    class _NullabilityShelfSerializer(serializers.ModelSerializer):
-        note = serializers.CharField(required=True, allow_null=allow_null)
+    def __init__(self, *args, note_allow_null=None, **kwargs):
+        self._note_allow_null = note_allow_null
+        super().__init__(*args, **kwargs)
 
-        class Meta:
-            model = Shelf
-            fields = ("code", "branch", "note")
+    class Meta:
+        model = Shelf
+        fields = ("code", "branch")
 
-    return dict(_NullabilityShelfSerializer().fields)
+    def get_fields(self):
+        fields = super().get_fields()
+        if self._note_allow_null is not None:
+            fields["note"] = serializers.CharField(
+                required=True,
+                allow_null=self._note_allow_null,
+                write_only=True,
+            )
+        return fields
+
+    def create(self, validated_data):
+        # ``note`` was decoded + validated (proving the emitted nullability), then dropped -
+        # ``Shelf`` has no ``note`` column.
+        validated_data.pop("note", None)
+        return super().create(validated_data)
+
+
+def nullability_schema_field_map(*, allow_null):
+    """Schema-time field map of ``code`` + ``branch`` + a ``note`` differing ONLY in ``allow_null`` (spec-039 High / M2).
+
+    The two nullability mutations' ``get_serializer_for_schema()`` hooks call this with
+    ``allow_null=False`` vs ``allow_null=True`` over the SAME ``NoteShelfSerializer``; each
+    mutation's ``get_serializer_kwargs`` constructs the runtime serializer with the SAME
+    ``note_allow_null``, so the schema-time ``note`` shape and the runtime ``note`` field AGREE
+    (rev6 #1). Returns the BOUND ``.fields`` of a ``NoteShelfSerializer(note_allow_null=...)``.
+    """
+    return dict(NoteShelfSerializer(note_allow_null=allow_null).fields)
 
 
 class BlankCodeShelfSerializer(serializers.ModelSerializer):
@@ -240,3 +280,143 @@ class HookNarrowedShelfSerializer(serializers.ModelSerializer):
     class Meta:
         model = Shelf
         fields = ("code", "branch", "alt_branches")
+
+
+class HexColorField(serializers.Field):
+    """A custom DRF field with NO supported converter ancestor (spec-039 rev6 #11 - live proof).
+
+    A bare ``serializers.Field`` subclass, so ``convert_serializer_field`` would FAIL LOUD on
+    it (no base-``Field`` catch-all) - UNTIL ``register_serializer_field_converter`` maps it
+    (below). The library app registers the converter at import, so the live
+    ``createShelfViaMetadataSerializer`` input can carry an ``accentColor: String`` field
+    driven by the SANCTIONED converter registry, proving a consumer field maps over
+    ``/graphql/`` without patching the framework (and an UNregistered custom field still
+    raises - the package converter test pins that half).
+    """
+
+    def to_internal_value(self, data):
+        # Accept the wire string as-is; a real field would validate ``#rrggbb``.
+        return str(data)
+
+    def to_representation(self, value):  # pragma: no cover - write-only, never serialized out.
+        return value
+
+
+# spec-039 rev6 #11: register the converter for the custom ``HexColorField`` -> ``str`` at
+# import time (before ``finalize_django_types`` builds the schema), so the MRO walk in
+# ``convert_serializer_field`` resolves it and ``ShelfMetadataSerializer`` below can use it.
+register_serializer_field_converter(
+    HexColorField,
+    lambda field: SerializerFieldConversion(annotation=str, required=field.required),
+)
+
+
+class ShelfMetadataSerializer(serializers.ModelSerializer):
+    """A ``Shelf`` serializer exercising the rev6 type-system improvements live (spec-039 rev6 #6 / #7 / #11).
+
+    Three serializer-only WRITE-ONLY fields prove the expanded input type system over
+    ``/graphql/``:
+
+    * ``priority`` - a serializer-only ``ChoiceField`` -> a GENERATED GraphQL enum (rev6 #6),
+      not the graphene-django ``String``;
+    * ``attributes`` - a ``DictField`` -> ``strawberry.scalars.JSON`` (rev6 #7);
+    * ``accent_color`` - a custom ``HexColorField`` mapped ONLY via the public converter
+      registry (rev6 #11) -> ``String``.
+
+    All three are ``write_only`` + ``required=False`` serializer-only extras (no ``Shelf``
+    column), decoded + validated then popped in ``create()`` (``Shelf`` has no such columns);
+    the resolved ``priority`` is stamped into ``topic`` so the live test can read the effect.
+    ``code`` + ``branch`` are the ordinary model-backed columns (auto-generated, so the rev6
+    #8 conflict policy leaves them alone).
+    """
+
+    priority = serializers.ChoiceField(
+        choices=[("low", "Low"), ("normal", "Normal"), ("high", "High")],
+        required=False,
+        write_only=True,
+    )
+    attributes = serializers.DictField(required=False, write_only=True)
+    accent_color = HexColorField(required=False, write_only=True)
+    # rev6 #9: ``help_text`` + validation constraints thread into the input field's SDL
+    # description (documentation only - DRF still enforces ``max_length`` at runtime).
+    label = serializers.CharField(
+        help_text="A short human label for the shelf.",
+        max_length=40,
+        required=False,
+        write_only=True,
+    )
+
+    class Meta:
+        model = Shelf
+        fields = (
+            "code",
+            "branch",
+            "priority",
+            "attributes",
+            "accent_color",
+            "label",
+        )
+
+    def create(self, validated_data):
+        # The serializer-only extras were decoded + validated (proving the enum / JSON /
+        # registered-converter / described inputs), then dropped - ``Shelf`` has no such
+        # columns. The resolved ``priority`` is stamped into ``topic`` so the live test can
+        # read the effect.
+        priority = validated_data.pop("priority", None)
+        validated_data.pop("attributes", None)
+        validated_data.pop("accent_color", None)
+        validated_data.pop("label", None)
+        if priority is not None:
+            validated_data["topic"] = f"priority:{priority}"
+        return super().create(validated_data)
+
+
+class OwnerStampShelfSerializer(serializers.ModelSerializer):
+    """A ``Shelf`` serializer with a REQUIRED ``topic`` a mutation narrows away + INJECTS (spec-039 rev6 #2).
+
+    ``topic`` is declared ``required=True`` (the ``Shelf.topic`` column is ``blank=True,
+    default=""``, so DRF would otherwise make it optional). A ``SerializerMutation`` can then
+    narrow the input to ``("code", "branch")`` - dropping the required ``topic`` - and declare
+    ``Meta.injected_fields = ("topic",)`` + a ``get_serializer_kwargs`` override that supplies
+    ``topic`` into ``data``. The create-required guard SUBTRACTS the declared injected field
+    (so the narrowing does not raise), and the resolver VERIFIES the override actually supplied
+    it - the auditable, per-field replacement for the old blanket waiver.
+    """
+
+    topic = serializers.CharField(required=True)
+
+    class Meta:
+        model = Shelf
+        fields = ("code", "branch", "topic")
+
+
+class AltBranchesShelfSerializer(serializers.ModelSerializer):
+    """A ``Shelf`` serializer exposing the raw-pk M2M ``alt_branches`` (spec-039 rev6 #3 - batched multi-relation visibility).
+
+    ``alt_branches`` is auto-generated by ``ModelSerializer`` as a
+    ``PrimaryKeyRelatedField(many=True)`` over the non-Relay ``BranchType`` primary, so the
+    generated input is a raw-pk list. The serializer decode confirms the WHOLE list's
+    visibility in ONE batched ``pk__in`` query (through ``BranchType.get_queryset``, which
+    hides ``city="restricted"`` from non-staff), and DRF's own re-validation runs against the
+    SAME visibility-scoped queryset - so a hidden member is a ``altBranches`` relation error
+    and never attached. ``required=False`` (M2M ``blank=True``), so a write may omit it.
+    """
+
+    class Meta:
+        model = Shelf
+        fields = ("code", "branch", "alt_branches")
+
+
+class BookSerializer(serializers.ModelSerializer):
+    """A ``Book`` (Relay-Node) serializer backing the UPDATE + row-lock live matrix (spec-039 rev6 #14).
+
+    ``BookType`` is Relay-Node, so an update mutation's ``id`` is a decodable ``GlobalID`` and its
+    payload slot is ``node``. A ``SerializerMutation`` with ``operation="update"`` +
+    ``Meta.select_for_update = True`` locks the located row (``SELECT ... FOR UPDATE``) inside the
+    pipeline transaction, after visibility filtering. Scalars only (``title`` / ``subtitle`` /
+    ``circulation_status``) keep the update partial-input simple.
+    """
+
+    class Meta:
+        model = Book
+        fields = ("title", "subtitle", "circulation_status")

@@ -192,7 +192,15 @@ def run_write_pipeline_sync(
             node_id, id_error = coerce_lookup_id(id, primary_type)
             if id_error is not None:
                 return _error_payload([id_error])
-            instance = locate_instance(primary_type, node_id, info)
+            # rev6 #14: an opt-in ``SELECT ... FOR UPDATE`` row lock on the update locate,
+            # acquired after visibility filtering and inside this ``transaction.atomic()``
+            # boundary. ``meta.select_for_update`` is ``False`` for the model / form flavors.
+            instance = locate_instance(
+                primary_type,
+                node_id,
+                info,
+                select_for_update=meta.select_for_update,
+            )
             if instance is None:
                 return _error_payload([not_found_error()])
 
@@ -311,7 +319,7 @@ def _explicit_null_error(
         return None
     if model._meta.get_field(python_name).null:
         return None
-    return FieldError(field=field_name, messages=["This field cannot be null."])
+    return field_error(field_name, "This field cannot be null.", codes="null")
 
 
 def _make_aware_if_naive(value: Any) -> Any:
@@ -357,9 +365,10 @@ def _unencodable_text_error(field_name: str, value: Any) -> FieldError | None:
         try:
             value.encode("utf-8")
         except UnicodeEncodeError:
-            return FieldError(
-                field=field_name,
-                messages=["Text contains invalid Unicode (unpaired surrogate code points)."],
+            return field_error(
+                field_name,
+                "Text contains invalid Unicode (unpaired surrogate code points).",
+                codes="invalid",
             )
     return None
 
@@ -550,9 +559,10 @@ def _relation_null_error(field_name: str) -> FieldError:
     rejected as a field-keyed error naming the clear signal, rather than iterating
     ``None`` into a resolver exception.
     """
-    return FieldError(
-        field=field_name,
-        messages=[f"Relation {field_name!r} cannot be null; send an empty list to clear it."],
+    return field_error(
+        field_name,
+        f"Relation {field_name!r} cannot be null; send an empty list to clear it.",
+        codes="null",
     )
 
 
@@ -756,7 +766,13 @@ def _raw_pk_relation_error(
     return _relation_membership_error(field_name, queryset, real_pks, coerced)
 
 
-def locate_instance(target_type: type, node_id: Any, info: Any) -> Any | None:
+def locate_instance(
+    target_type: type,
+    node_id: Any,
+    info: Any,
+    *,
+    select_for_update: bool = False,
+) -> Any | None:
     """Locate an update / delete row through the visibility ``get_queryset`` (spec-036 Decision 10).
 
     ``apply_type_visibility_sync(target_type, initial_queryset(target_type),
@@ -766,6 +782,12 @@ def locate_instance(target_type: type, node_id: Any, info: Any) -> Any | None:
     ``FieldError`` on ``id``, indistinguishable from a hidden row (no existence
     leak). An ``async def get_queryset`` met here raises ``SyncMisuseError``
     (``apply_type_visibility_sync`` closes the coroutine first).
+
+    **Optional row lock (spec-039 rev6 #14).** When ``select_for_update`` is True the visible
+    queryset is wrapped in ``.select_for_update()`` BEFORE the ``.get(pk=...)`` - so the lock is
+    acquired AFTER visibility filtering, inside the pipeline's existing ``transaction.atomic()``
+    boundary (the caller runs within it). On a backend without ``SELECT ... FOR UPDATE`` support
+    (e.g. sqlite) Django silently skips the clause, so this is safe regardless of backend.
     """
     model = model_for(target_type)
     queryset = apply_type_visibility_sync(
@@ -774,6 +796,8 @@ def locate_instance(target_type: type, node_id: Any, info: Any) -> Any | None:
         info,
         _MUTATION_ASYNC_RECOURSE,
     )
+    if select_for_update:
+        queryset = queryset.select_for_update()
     try:
         return queryset.get(pk=node_id)
     except model.DoesNotExist:
@@ -865,22 +889,37 @@ def _unique_constraint_groups(model: type) -> list[set[str]]:
     return groups
 
 
-def field_error(path: str, messages: Any) -> FieldError:
-    """Build ONE ``FieldError`` leaf for the shared envelope (spec-039 P2.4).
+def field_error(path: str, messages: Any, *, codes: Any = None) -> FieldError:
+    """Build ONE ``FieldError`` leaf for the shared envelope (spec-039 P2.4 / rev6 #4 / #13).
 
     The single leaf constructor BOTH the flat Django mapper
     (``validation_error_to_field_errors``) and the recursive DRF serializer
     flattener (``rest_framework/resolvers.py::serializer_errors_to_field_errors``)
-    call, so the ``"__all__"`` sentinel + the message-container coercion cannot
-    drift between the two flatteners. An empty ``path`` (a model-wide / non-field
+    call, so the ``"__all__"`` sentinel + the message-container coercion + the
+    structured ``path`` / ``codes`` derivation cannot drift between the two flatteners
+    (nor across the three write flavors). An empty ``path`` (a model-wide / non-field
     error) is normalized to the ``NON_FIELD_ERROR_KEY`` sentinel (pinned to Django's
     ``"__all__"`` in ``mutations/inputs.py`` - AR-M3, single source). ``messages`` is
     coerced to a ``list[str]``: a bare string becomes a one-element list, any other
     iterable (a DRF ``ErrorDetail`` list, a tuple) is materialized as a list.
+
+    **Structured ``path`` (rev6 #13):** the dotted ``path`` string is split into segments
+    (``items.0.name`` -> ``["items", "0", "name"]``); an empty ``path`` (the root non-field
+    error) yields ``[]`` while ``field`` is the ``"__all__"`` sentinel - the documented
+    root rule. **Structured ``codes`` (rev6 #4):** the caller passes the DRF
+    ``ErrorDetail.code``s / Django ``ValidationError.code``s (or a framework code); ``None``
+    yields ``[]``.
     """
     key = path if path else NON_FIELD_ERROR_KEY
     message_list = [messages] if isinstance(messages, str) else [str(m) for m in messages]
-    return FieldError(field=key, messages=message_list)
+    # rev6 #13 root rule: a model-wide / non-field error (an empty path, or the bare
+    # ``"__all__"`` sentinel as the WHOLE path - the DRF flattener joins the top-level
+    # non-field bucket to exactly that) carries an EMPTY ``path``, while ``field`` stays
+    # ``"__all__"``; a NESTED non-field error (``items.0.__all__``) keeps its segments. So
+    # the model + serializer flavors agree on the root-non-field shape.
+    segments = [] if not path or path == NON_FIELD_ERROR_KEY else path.split(".")
+    code_list = [codes] if isinstance(codes, str) else [str(c) for c in codes] if codes else []
+    return FieldError(field=key, messages=message_list, codes=code_list, path=segments)
 
 
 def relation_field_error(graphql_name: str) -> FieldError:
@@ -896,7 +935,7 @@ def relation_field_error(graphql_name: str) -> FieldError:
     the ``"Invalid id for relation ..."`` message + leaf construction are single
     sourced across every flavor (AR-H4).
     """
-    return FieldError(field=graphql_name, messages=[f"Invalid id for relation {graphql_name!r}."])
+    return field_error(graphql_name, f"Invalid id for relation {graphql_name!r}.", codes="invalid")
 
 
 def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
@@ -917,9 +956,14 @@ def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
         for field_name, field_errors in exc.error_dict.items():
             path = "" if field_name == NON_FIELD_ERRORS else field_name
             messages = [message for error in field_errors for message in error.messages]
-            errors.append(field_error(path, messages))
+            # rev6 #4: preserve each leaf Django ``ValidationError.code`` alongside the
+            # message (``error.error_list`` is the flattened leaf list ``error.messages``
+            # reads; a ``None`` code is dropped).
+            codes = [leaf.code for error in field_errors for leaf in error.error_list if leaf.code]
+            errors.append(field_error(path, messages, codes=codes))
         return errors
-    return [field_error("", list(exc.messages))]
+    codes = [leaf.code for leaf in exc.error_list if leaf.code]
+    return [field_error("", list(exc.messages), codes=codes)]
 
 
 def _integrity_error_field_errors() -> list[FieldError]:
@@ -941,12 +985,7 @@ def _integrity_error_field_errors() -> list[FieldError]:
     per-field attribution would be guesswork (feedback CR-3 - dropped the unused
     ``model`` / ``provided_attrs`` params rather than feign a refinement).
     """
-    return [
-        FieldError(
-            field=NON_FIELD_ERROR_KEY,
-            messages=["A database constraint was violated."],
-        ),
-    ]
+    return [field_error("", "A database constraint was violated.", codes="constraint")]
 
 
 def _assign_m2m(instance: Any, m2m_assignments: list[Any]) -> None:
@@ -1289,7 +1328,7 @@ def coerce_lookup_id(id: Any, target_type: type) -> tuple[Any, FieldError | None
 
 def not_found_error() -> FieldError:
     """Build the not-found ``FieldError`` on ``id`` (hidden or missing - no existence leak)."""
-    return FieldError(field="id", messages=["No matching row found."])
+    return field_error("id", "No matching row found.", codes="not_found")
 
 
 def _invalid_lookup_id_error() -> FieldError:
@@ -1300,7 +1339,7 @@ def _invalid_lookup_id_error() -> FieldError:
     failure is determined from the id's type slot alone, without a DB read, so it
     reveals nothing about row existence (spec-036 Decision 10 / finding-#1).
     """
-    return FieldError(field="id", messages=["Invalid id."])
+    return field_error("id", "Invalid id.", codes="invalid")
 
 
 def payload_cls_for(mutation_cls: type) -> type:

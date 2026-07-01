@@ -868,3 +868,133 @@ def test_scalar_reverse_map_is_identity():
     assert name_spec.graphql_name == "name"
     assert name_spec.kind == SCALAR
     assert name_spec.source is None
+
+
+# ---------------------------------------------------------------------------
+# Aggregate schema-time diagnostics (spec-039 rev6 #5)
+# ---------------------------------------------------------------------------
+
+
+def test_multiple_schema_time_problems_aggregate_into_one_error():
+    """Several bad fields surface in ONE ConfigurationError (not one-fix-rerun-per-field) (#5)."""
+    _register_products_types()
+
+    class CustomField(serializers.Field):
+        def to_internal_value(self, data):  # pragma: no cover - never reached in conversion.
+            return data
+
+        def to_representation(self, value):  # pragma: no cover - never reached in conversion.
+            return value
+
+    class MultiBadSer(serializers.ModelSerializer):
+        # A non-PK relation (unsupported) ...
+        slug_rel = serializers.SlugRelatedField(
+            slug_field="name",
+            queryset=product_models.Category.objects.all(),
+        )
+        # ... and an unmapped custom field (unsupported) - two distinct problems.
+        weird = CustomField()
+
+        class Meta:
+            model = product_models.Item
+            fields = ("slug_rel", "weird")
+
+    with pytest.raises(ConfigurationError) as exc:
+        build_serializer_inputs(MultiBadSer, guard_required=False)
+    message = str(exc.value)
+    # One aggregated error naming BOTH offending fields at once.
+    assert "2 schema-time problem(s)" in message
+    assert "slug_rel" in message
+    assert "weird" in message
+
+
+def test_single_schema_time_problem_raises_verbatim():
+    """A SINGLE problem is raised verbatim (no aggregate header), preserving the precise message (#5)."""
+    _register_products_types()
+
+    class OneBadSer(serializers.ModelSerializer):
+        slug_rel = serializers.SlugRelatedField(
+            slug_field="name",
+            queryset=product_models.Category.objects.all(),
+        )
+
+        class Meta:
+            model = product_models.Item
+            fields = ("slug_rel",)
+
+    with pytest.raises(ConfigurationError, match="PrimaryKeyRelatedField") as exc:
+        build_serializer_inputs(OneBadSer, guard_required=False)
+    # No aggregate header for a single problem.
+    assert "schema-time problem(s)" not in str(exc.value)
+
+
+def test_generated_input_field_carries_drf_metadata_description():
+    """A built input field carries the DRF ``help_text`` + constraint description (#9)."""
+
+    class DescribedSer(serializers.Serializer):
+        label = serializers.CharField(help_text="A label.", max_length=8)
+
+    cre, _, _, _ = build_serializer_inputs(DescribedSer)
+    (field,) = [f for f in cre.__strawberry_definition__.fields if f.python_name == "label"]
+    assert field.description is not None
+    assert "A label." in field.description
+    assert "max_length=8" in field.description
+
+
+def test_injected_fields_subtract_from_create_required_guard():
+    """A required field a narrowing drops but that is DECLARED injected does not raise (rev6 #2)."""
+    ser = _required_field_serializer()
+    # Dropping `required_scalar` (narrow to `maybe`) is fine when it is declared injected.
+    guard_create_required_serializer_fields(
+        ser,
+        ("maybe",),
+        injected_fields=("required_scalar",),
+    )  # no raise
+
+
+def test_dropped_required_not_injected_still_raises():
+    """A dropped required field NOT declared injected STILL raises (the guard is not blanket) (rev6 #2)."""
+    ser = _required_field_serializer()
+    with pytest.raises(ConfigurationError, match="required_scalar"):
+        guard_create_required_serializer_fields(
+            ser,
+            ("maybe",),
+            injected_fields=("something_else",),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Shape debug/introspection registry (spec-039 rev6 #15)
+# ---------------------------------------------------------------------------
+
+
+def test_describe_serializer_input_reports_shape():
+    """``describe_serializer_input`` describes a built shape and returns ``None`` for an unknown name (rev6 #15)."""
+    from django_strawberry_framework.rest_framework.inputs import describe_serializer_input
+
+    _register_products_types()
+    _cre, cre_shape, _par, _par_shape = build_serializer_inputs(_item_serializer())
+    description = describe_serializer_input(cre_shape.type_name)
+    assert description is not None
+    assert "serializer:" in description
+    assert "operation: create" in description
+    assert "name:" in description
+    assert "category" in description  # a field appears in the description
+    assert describe_serializer_input("NoSuchGeneratedInput") is None
+
+
+def test_materialize_collision_message_enriched_with_shape_description():
+    """A distinct-class materialize collision enriches the error with the registered shape (rev6 #15)."""
+    _register_products_types()
+    cre, shape = build_serializer_input_class(_item_serializer(), operation_kind="create")
+    materialize_serializer_input_class(shape.type_name, cre)  # first: ok
+
+    class OtherSer(serializers.Serializer):
+        different = serializers.CharField()
+
+    other_cls, _other_shape = build_serializer_input_class(OtherSer, operation_kind="create")
+    with pytest.raises(ConfigurationError) as exc:
+        materialize_serializer_input_class(shape.type_name, other_cls)
+    message = str(exc.value)
+    assert "Shape registered under" in message
+    assert "serializer:" in message

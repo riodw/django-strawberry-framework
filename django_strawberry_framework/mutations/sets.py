@@ -401,12 +401,15 @@ class _ValidatedMutationMeta:
         "exclude",
         "fields",
         "form_class",
+        "injected_fields",
         "input_class",
         "model",
         "operation",
         "optional_fields",
         "partial_input_class",
         "permission_classes",
+        "schema_fingerprint",
+        "select_for_update",
         "serializer_class",
     )
 
@@ -423,6 +426,9 @@ class _ValidatedMutationMeta:
         form_class: Any = None,
         serializer_class: Any = None,
         optional_fields: tuple[str, ...] | None = None,
+        schema_fingerprint: Any = None,
+        injected_fields: tuple[str, ...] | None = None,
+        select_for_update: bool = False,
     ) -> None:
         self.model = model
         self.operation = operation
@@ -452,6 +458,21 @@ class _ValidatedMutationMeta:
         # ``build_serializer_input_class`` so it participates in the input shape +
         # descriptor identity. The model + form flavors leave it ``None``.
         self.optional_fields = optional_fields
+        # The serializer-flavor schema-hook fingerprint (spec-039 rev6 #10): a stable digest of
+        # the ``get_serializer_for_schema()`` field shape captured at class validation, so the
+        # phase-2.5 bind can raise on a NONDETERMINISTIC hook that drifted. The model + form
+        # flavors leave it ``None`` (net-new state, never read off their paths).
+        self.schema_fingerprint = schema_fingerprint
+        # The serializer-flavor ``Meta.injected_fields`` (spec-039 rev6 #2): the auditable,
+        # per-field replacement for the blanket ``get_serializer_kwargs``-override waiver -
+        # names the required fields a ``get_serializer_kwargs`` override supplies into ``data``,
+        # subtracted from the create-required guard AND verified present at runtime. The model +
+        # form flavors leave it ``None``.
+        self.injected_fields = injected_fields
+        # The serializer-flavor ``Meta.select_for_update`` (spec-039 rev6 #14): an opt-in
+        # ``SELECT ... FOR UPDATE`` row lock on the UPDATE locate query (inside the existing
+        # transaction, after visibility filtering). The model + form flavors leave it ``False``.
+        self.select_for_update = select_for_update
 
 
 def _normalize_field_sequence(value: Any, *, label: str = "fields") -> tuple[str, ...] | None:

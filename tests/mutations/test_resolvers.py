@@ -2213,3 +2213,93 @@ def test_validation_error_to_field_errors_non_dict_uses_all_key():
     assert [(error.field, error.messages) for error in errors] == [
         (NON_FIELD_ERROR_KEY, ["a plain message"]),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Structured error codes + paths on the Django flat mapper (spec-039 rev6 #4 / #13)
+# ---------------------------------------------------------------------------
+
+
+def test_validation_error_to_field_errors_preserves_django_codes_and_path():
+    """A Django ``ValidationError``'s ``.code``s -> ``codes``; field name -> ``path`` (#4 / #13)."""
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    from django_strawberry_framework.mutations.resolvers import validation_error_to_field_errors
+
+    exc = DjangoValidationError(
+        {"name": [DjangoValidationError("This field is required.", code="required")]},
+    )
+    (fe,) = validation_error_to_field_errors(exc)
+    assert fe.field == "name"
+    assert fe.codes == ["required"]
+    assert fe.path == ["name"]
+
+
+def test_validation_error_to_field_errors_non_dict_root_has_empty_path():
+    """A non-dict (model-wide) Django ``ValidationError`` keys ``"__all__"`` with an EMPTY path (#13)."""
+    from django.core.exceptions import ValidationError as DjangoValidationError
+
+    from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
+    from django_strawberry_framework.mutations.resolvers import validation_error_to_field_errors
+
+    (fe,) = validation_error_to_field_errors(
+        DjangoValidationError("Whole-object problem.", code="invalid"),
+    )
+    assert fe.field == NON_FIELD_ERROR_KEY
+    assert fe.path == []
+    assert fe.codes == ["invalid"]
+
+
+# ---------------------------------------------------------------------------
+# Optional row locking on the update locate (spec-039 rev6 #14)
+# ---------------------------------------------------------------------------
+
+
+def test_locate_instance_applies_select_for_update_when_requested(monkeypatch):
+    """``locate_instance(..., select_for_update=True)`` wraps the visible queryset in ``.select_for_update()`` (#14)."""
+    from unittest.mock import MagicMock
+
+    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+
+    sentinel = object()
+    visible_qs = MagicMock(name="visible_qs")
+    locked_qs = MagicMock(name="locked_qs")
+    visible_qs.select_for_update.return_value = locked_qs
+    locked_qs.get.return_value = sentinel
+
+    monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: MagicMock())
+    monkeypatch.setattr(mutation_resolvers, "initial_queryset", lambda _t: None)
+    monkeypatch.setattr(
+        mutation_resolvers,
+        "apply_type_visibility_sync",
+        lambda *a, **k: visible_qs,
+    )
+
+    result = mutation_resolvers.locate_instance(object(), 7, None, select_for_update=True)
+    assert result is sentinel
+    visible_qs.select_for_update.assert_called_once_with()
+    locked_qs.get.assert_called_once_with(pk=7)
+
+
+def test_locate_instance_no_lock_by_default(monkeypatch):
+    """``locate_instance`` does NOT lock unless asked (the default is an unlocked visibility lookup) (#14)."""
+    from unittest.mock import MagicMock
+
+    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+
+    sentinel = object()
+    visible_qs = MagicMock(name="visible_qs")
+    visible_qs.get.return_value = sentinel
+
+    monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: MagicMock())
+    monkeypatch.setattr(mutation_resolvers, "initial_queryset", lambda _t: None)
+    monkeypatch.setattr(
+        mutation_resolvers,
+        "apply_type_visibility_sync",
+        lambda *a, **k: visible_qs,
+    )
+
+    result = mutation_resolvers.locate_instance(object(), 7, None)
+    assert result is sentinel
+    visible_qs.select_for_update.assert_not_called()
+    visible_qs.get.assert_called_once_with(pk=7)

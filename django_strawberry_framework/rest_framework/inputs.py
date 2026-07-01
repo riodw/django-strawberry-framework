@@ -66,7 +66,7 @@ from ..utils.inputs import (
     make_shape_build_cache,
     normalize_field_name_sequence,
 )
-from .serializer_converter import resolve_serializer_field
+from .serializer_converter import resolve_serializer_field, serializer_field_description
 
 # Module path the ``strawberry.lazy(...)`` marker references for the SERIALIZER
 # input namespace; pinned as a single constant so any forward-ref and
@@ -100,9 +100,18 @@ def materialize_serializer_input_class(name: str, input_cls: type) -> None:
     no-op, so identical descriptors dedupe), and the distinct-class collision
     raise (a second, DIFFERENT class under one name raises ``ConfigurationError``).
 
-    Defined here; called by Slice 2's phase-2.5 bind.
+    Defined here; called by Slice 2's phase-2.5 bind. On a distinct-class name COLLISION the
+    raised message is ENRICHED with the shape registered under ``name`` (rev6 #15's
+    ``describe_serializer_input``), so a clash between two descriptor-derived shapes is
+    diagnosable (which serializer / operation / fields produced the contested name).
     """
-    _materialize_input(name, input_cls)
+    try:
+        _materialize_input(name, input_cls)
+    except ConfigurationError as exc:
+        debug = describe_serializer_input(name)
+        if debug is None:
+            raise
+        raise ConfigurationError(f"{exc}\n\nShape registered under {name!r}:\n{debug}") from exc
 
 
 def clear_serializer_input_namespace() -> None:
@@ -119,9 +128,11 @@ def clear_serializer_input_namespace() -> None:
     holder. Like ``clear_mutation_input_namespace`` (and unlike the set families'
     clear), this resets only the module-level ledger it owns - the serializer
     subsystem has no arguments-factory cache and no per-set ``_lifecycle`` binding
-    state. Wired into ``registry.clear()`` in Slice 2 (spec-039).
+    state. Wired into ``registry.clear()`` in Slice 2 (spec-039). Also resets the rev6 #15
+    shape debug registry (same build lifecycle).
     """
     _clear_input_namespace()
+    _SERIALIZER_SHAPE_REGISTRY.clear()
 
 
 # Register the serializer input-namespace clear as a canonical PRE-BIND clear
@@ -170,6 +181,50 @@ def get_serializer_for_schema(
             "request-independent field map.",
         ) from exc
     return dict(fields)
+
+
+def _fingerprint_relation_target(field: serializers.Field) -> str | None:
+    """Return a relation field's target model qualname for the fingerprint, or ``None``.
+
+    Peels a ``ManyRelatedField`` to its ``child_relation`` and reads the relation's
+    ``queryset.model``; a non-relation field yields ``None``.
+    """
+    if isinstance(field, serializers.ManyRelatedField):
+        field = field.child_relation
+    if isinstance(field, serializers.RelatedField):
+        model = getattr(getattr(field, "queryset", None), "model", None)
+        if model is not None:
+            return f"{model.__module__}.{model.__qualname__}"
+    return None
+
+
+def serializer_schema_fingerprint(
+    field_map: dict[str, serializers.Field],
+) -> tuple[tuple[Any, ...], ...]:
+    """Return a stable, request-independent fingerprint of a schema-time field map (spec-039 rev6 #10).
+
+    ``get_serializer_for_schema()`` must return a STABLE, request-independent field shape (the
+    input is generated once at finalization, BEFORE any request), but the hook is called at
+    class validation AND again at the phase-2.5 bind - a NONDETERMINISTIC hook could validate
+    one shape and bind another. This captures the shape axes the generated input + the reverse
+    map depend on - each field's name, class, source, read / write flags, required, allow_null,
+    and relation target model - so the bind can recompute it and raise if the hook DRIFTED
+    (turning the spec's stable-shape promise into an enforced contract). Deterministic +
+    hashable; the ordered tuple preserves field order (which drives the descriptor identity).
+    """
+    return tuple(
+        (
+            name,
+            type(field).__name__,
+            field.source,
+            bool(field.read_only),
+            bool(getattr(field, "write_only", False)),
+            bool(field.required),
+            bool(getattr(field, "allow_null", False)),
+            _fingerprint_relation_target(field),
+        )
+        for name, field in field_map.items()
+    )
 
 
 def _serializer_meta_value(serializer_class: type[serializers.BaseSerializer], name: str) -> Any:
@@ -360,6 +415,63 @@ class SerializerInputShape:
         return self
 
 
+# spec-039 rev6 #15: the generated-input-name -> ``SerializerInputShape`` debug registry.
+# ``build_serializer_input_class`` records each shape it produces here (keyed by the generated
+# type name), so ``describe_serializer_input`` can explain WHY a (deliberately opaque,
+# descriptor-derived) input has its shape / name - the fields, sources, relation targets,
+# requiredness, and whether the canonical name was used. Reset by ``registry.clear()`` through
+# ``clear_serializer_input_namespace`` (the same lifecycle as the materialize ledger).
+_SERIALIZER_SHAPE_REGISTRY: dict[str, SerializerInputShape] = {}
+
+
+def describe_serializer_input(name: str) -> str | None:
+    """Return a human-readable description of a generated serializer input shape (spec-039 rev6 #15).
+
+    Given a generated input class name (e.g. a descriptor-derived
+    ``NoteShelfSerializerCode...Note...Input``), returns a multi-line summary of its
+    ``SerializerInputShape`` - the backing serializer, operation, per-field
+    (declared name -> GraphQL name, emitted annotation, kind, source, relation target,
+    requiredness), and whether the CANONICAL ``<Serializer>Input`` name was used or a
+    descriptor-derived name (a narrowing / ``optional_fields`` / hook divergence). Returns
+    ``None`` for an unregistered name. graphene-django's class-name cache can silently conflate
+    shapes; this makes the package's stronger descriptor-based identity easy to inspect (and is
+    folded into the materialize-collision error message so a name clash is diagnosable).
+    """
+    shape = _SERIALIZER_SHAPE_REGISTRY.get(name)
+    if shape is None:
+        return None
+    canonical_suffix = "PartialInput" if shape.operation_kind == PARTIAL else "Input"
+    canonical_name = f"{shape.serializer_class.__name__}{canonical_suffix}"
+    name_note = (
+        "canonical (the DEFAULT full shape)"
+        if name == canonical_name
+        else "descriptor-derived (a narrowing / optional_fields / hook divergence)"
+    )
+    lines = [
+        f"SerializerMutation input {name!r}:",
+        f"  serializer: {shape.serializer_class.__module__}.{shape.serializer_class.__qualname__}",
+        f"  operation: {shape.operation_kind}",
+        f"  name: {name_note}",
+        "  fields:",
+    ]
+    for spec, annotation, required in zip(
+        shape.field_specs,
+        shape.annotations,
+        shape.required_state,
+        strict=True,
+    ):
+        extra = ""
+        if spec.source is not None:
+            extra += f", source={spec.source!r}"
+        if spec.related_model is not None:
+            extra += f", relation_target={spec.related_model.__name__}"
+        lines.append(
+            f"    - {spec.target_name!r} -> {spec.graphql_name!r}: {annotation} "
+            f"(kind={spec.kind}, required={required}{extra})",
+        )
+    return "\n".join(lines)
+
+
 def _related_model_token(related_model: type | None) -> str:
     """Return a stable, process-independent identifier for a relation target model.
 
@@ -499,6 +611,7 @@ def guard_create_required_serializer_fields(
     serializer_class: type[serializers.BaseSerializer],
     effective_field_names: Any,
     *,
+    injected_fields: Any = None,
     field_map: dict[str, serializers.Field] | None = None,
 ) -> None:
     """Raise if a create narrowing drops a still-declared required writable serializer field.
@@ -511,37 +624,51 @@ def guard_create_required_serializer_fields(
     both ``Meta.fields`` and ``Meta.exclude``. ``read_only`` / ``HiddenField``
     fields are exempt (already dropped, never required input).
 
+    **The explicit injection contract (spec-039 rev6 #2).** ``injected_fields`` names the
+    fields a ``get_serializer_kwargs`` override supplies into ``data`` (``Meta.injected_fields``);
+    they are SUBTRACTED from the dropped-required set, so a required field a narrowing drops
+    but that is DECLARED injected does not raise, while a dropped required field NOT declared
+    injected STILL raises. This replaces the old blanket "overriding ``get_serializer_kwargs``
+    waives ALL required-field coverage" waiver with an auditable, per-field declaration (the
+    broad waiver survives only as an explicitly-named unsafe legacy path in ``build_input``).
+
     Factored out so the Slice-2 bind's per-shape build cache can run it PER
     mutation DECLARATION rather than only on the first build of a given shape: the
-    cache key (the ``SerializerInputShape`` descriptor) excludes ``guard_required``,
-    so a waiving mutation (``guard_required=False``, having overridden
-    ``get_serializer_kwargs`` to inject the values) that materializes a shape FIRST
-    must not suppress the guard for a later non-waiving mutation reusing the same
-    cached shape. The guard is tied to the declaration, not the built input shape
-    (the ``forms/inputs.py::guard_create_required_fields`` per-declaration precedent).
+    cache key (the ``SerializerInputShape`` descriptor) excludes the waiver / injection
+    state, so a waiving mutation that materializes a shape FIRST must not suppress the guard
+    for a later non-waiving mutation reusing the same cached shape. The guard is tied to the
+    declaration, not the built input shape (the
+    ``forms/inputs.py::guard_create_required_fields`` per-declaration precedent).
     """
     dropped_required = sorted(
         _required_writable_field_names(serializer_class, field_map=field_map)
-        - set(effective_field_names),
+        - set(effective_field_names)
+        - set(injected_fields or ()),
     )
     if dropped_required:
         raise ConfigurationError(
             f"SerializerMutation create input for {serializer_class.__name__} drops required "
             f"serializer field(s) {dropped_required!r} via Meta.fields / Meta.exclude; the "
-            "serializer can never validate without them. Keep them in the input, or override "
-            "get_serializer_kwargs to supply them (which waives this guard).",
+            "serializer can never validate without them. Keep them in the input, or declare them "
+            "in Meta.injected_fields and supply them from a get_serializer_kwargs override.",
         )
 
 
-def _guard_serializer_input_attr_collisions(
+def _collect_input_attr_collision_messages(
     serializer_class: type[serializers.BaseSerializer],
     field_specs: list[InputFieldSpec],
-) -> None:
-    """Raise if two serializer fields collide on input attr / GraphQL name / writable source.
+) -> list[str]:
+    """Return every input-attr / GraphQL-name / writable-source collision message (spec-039 rev6 #5).
 
     Three ways two serializer fields collapse to one generated input field (or one
     model attr), all of which would otherwise SILENTLY drop / double-write - so all
-    fail loud here (the package's fail-loud contract):
+    fail loud (the package's fail-loud contract). Formerly this RAISED on the FIRST
+    collision; it now COLLECTS every collision message and returns them, so the caller
+    (``_walk_serializer_fields``) can aggregate them with the per-field conversion errors
+    into ONE ``ConfigurationError`` (rev6 #5 - report all actionable problems at once,
+    not one-fix-rerun-per-field). The message wording is byte-unchanged, so a consumer
+    (and the tests) still see the same per-collision sentence, now as one bullet in the
+    aggregate:
 
     * ``input_attr`` clash - a relation field ``category`` remaps to input attr
       ``category_id``, so a serializer declaring BOTH a relation ``category`` AND a
@@ -556,16 +683,17 @@ def _guard_serializer_input_attr_collisions(
     * ``source`` clash - two WRITABLE fields sharing one one-segment ``source``
       would double-write one model attr. A ``read_only`` field sharing a ``source``
       with a writable one is fine (read-only is dropped before this is reached), so
-      only the writable-vs-writable collision raises. (The DRF ``source``-collision
+      only the writable-vs-writable collision is reported. (The DRF ``source``-collision
       arm is new - forms have no ``source`` axis.)
     """
+    messages: list[str] = []
     seen_attr: dict[str, str] = {}
     seen_graphql: dict[str, str] = {}
     seen_source: dict[str, str] = {}
     for spec in field_specs:
         prior_attr = seen_attr.get(spec.input_attr)
         if prior_attr is not None:
-            raise ConfigurationError(
+            messages.append(
                 f"SerializerMutation for {serializer_class.__name__!r} generates two input "
                 f"fields with the same attribute {spec.input_attr!r}: serializer fields "
                 f"{prior_attr!r} and {spec.target_name!r} collide (a relation field remaps to "
@@ -574,7 +702,7 @@ def _guard_serializer_input_attr_collisions(
             )
         prior_graphql = seen_graphql.get(spec.graphql_name)
         if prior_graphql is not None:
-            raise ConfigurationError(
+            messages.append(
                 f"SerializerMutation for {serializer_class.__name__!r} generates two input "
                 f"fields with the same GraphQL name {spec.graphql_name!r}: serializer fields "
                 f"{prior_graphql!r} and {spec.target_name!r} collide under default camel-casing "
@@ -586,7 +714,7 @@ def _guard_serializer_input_attr_collisions(
         write_source = spec.source if spec.source is not None else spec.target_name
         prior_source = seen_source.get(write_source)
         if prior_source is not None:
-            raise ConfigurationError(
+            messages.append(
                 f"SerializerMutation for {serializer_class.__name__!r} has two writable fields "
                 f"{prior_source!r} and {spec.target_name!r} sharing one source {write_source!r}; "
                 "they would double-write one model attribute. Give each a distinct source, or "
@@ -595,6 +723,27 @@ def _guard_serializer_input_attr_collisions(
         seen_attr[spec.input_attr] = spec.target_name
         seen_graphql[spec.graphql_name] = spec.target_name
         seen_source[write_source] = spec.target_name
+    return messages
+
+
+def _aggregate_field_problems(
+    serializer_class: type[serializers.BaseSerializer],
+    messages: list[str],
+) -> ConfigurationError:
+    """Build ONE ``ConfigurationError`` from all collected schema-time problems (spec-039 rev6 #5).
+
+    A SINGLE problem is raised VERBATIM (so the precise per-field / per-collision wording -
+    and every ``pytest.raises(match=...)`` substring - is preserved unchanged); TWO OR MORE
+    are grouped under a header with one bullet each, so a consumer with several bad fields
+    fixes them all in one pass instead of fix-one-field-rerun-discover-the-next.
+    """
+    if len(messages) == 1:
+        return ConfigurationError(messages[0])
+    bullets = "\n".join(f"  - {message}" for message in messages)
+    return ConfigurationError(
+        f"SerializerMutation input for {serializer_class.__name__} has "
+        f"{len(messages)} schema-time problem(s):\n{bullets}",
+    )
 
 
 def _walk_serializer_fields(
@@ -602,6 +751,7 @@ def _walk_serializer_fields(
     model: Any,
     provisional_name: str,
     *,
+    serializer_class: type[serializers.BaseSerializer],
     is_partial: bool,
     optional_fields: frozenset[str],
 ) -> tuple[list[InputFieldSpec], list[str], list[bool], list[tuple[str, Any, dict[str, Any]]]]:
@@ -618,17 +768,38 @@ def _walk_serializer_fields(
       optional - M2: requiredness is orthogonal to nullability);
     - ``triples`` - the ``build_strawberry_input_class`` ``(python_attr, annotation,
       field_kwargs)`` triples (a nullable field widens to ``T | None`` AND carries
-      ``strawberry.UNSET`` so it is OMITTABLE - spec-039 M2 / H3).
+      ``strawberry.UNSET`` so it is OMITTABLE - spec-039 M2 / H3; each also carries a
+      ``description`` threaded from the DRF field's metadata - rev6 #9).
 
     Factored out so the canonical-name gate can re-walk the DEFAULT full shape with
     the exact same logic, rather than the name choice drifting from the build walk.
+
+    **Aggregate diagnostics (spec-039 rev6 #5).** Every per-field conversion error
+    (unsupported field, non-PK relation, missing relation-primary, dotted / star source,
+    the model-backed type-override conflict) is COLLECTED rather than raised on the first,
+    then combined with the input-attr / GraphQL-name / source collision messages and raised
+    as ONE ``ConfigurationError`` (a bullet list when there is more than one). So a
+    real serializer with several bad fields surfaces them ALL at once instead of
+    fix-one-rerun-discover-the-next. A single problem is raised verbatim, so the precise
+    per-field wording (and every ``pytest.raises(match=...)`` substring) is preserved.
     """
     field_specs: list[InputFieldSpec] = []
     annotation_reprs: list[str] = []
     required_state: list[bool] = []
     triples: list[tuple[str, Any, dict[str, Any]]] = []
+    field_errors: list[str] = []
     for name, field in effective.items():
-        python_attr, annotation, spec = resolve_serializer_field(field, model, provisional_name)
+        try:
+            python_attr, annotation, spec = resolve_serializer_field(
+                field,
+                model,
+                provisional_name,
+            )
+        except ConfigurationError as exc:
+            # rev6 #5: collect the per-field conversion error (prefixed with the field
+            # name) and keep walking so the aggregate names every bad field at once.
+            field_errors.append(f"{name}: {exc}")
+            continue
         field_specs.append(spec)
 
         required = False if is_partial else (field.required and name not in optional_fields)
@@ -647,6 +818,13 @@ def _walk_serializer_fields(
         if nullable:
             annotation = annotation | None
             field_kwargs["default"] = strawberry.UNSET
+        # rev6 #9: thread the DRF field's help_text + a validation-constraint summary into
+        # the generated input field's SDL description (documentation only - DRF still owns
+        # runtime validation). Deterministic from the field, so it never varies independently
+        # of the descriptor identity (identical descriptors share identical descriptions).
+        description = serializer_field_description(field)
+        if description is not None:
+            field_kwargs["description"] = description
         # Record the EMITTED (post-widening) annotation repr - NOT the base annotation
         # (spec-039 High / M2). The descriptor identity + the name token must reflect the
         # GraphQL nullability actually generated: two same-name hook shapes differing ONLY
@@ -659,6 +837,15 @@ def _walk_serializer_fields(
         # requiredness, which is orthogonal (it does not move with ``allow_null`` here).
         annotation_reprs.append(repr(annotation))
         triples.append((python_attr, annotation, field_kwargs))
+
+    # rev6 #5: fold the collision messages (over the fields that DID resolve) in with the
+    # per-field errors, then raise ONE aggregated ConfigurationError if anything failed.
+    all_problems = field_errors + _collect_input_attr_collision_messages(
+        serializer_class,
+        field_specs,
+    )
+    if all_problems:
+        raise _aggregate_field_problems(serializer_class, all_problems)
     return field_specs, annotation_reprs, required_state, triples
 
 
@@ -699,6 +886,7 @@ def _default_full_shape_identity(
             default_effective,
             model,
             provisional_name,
+            serializer_class=serializer_class,
             is_partial=is_partial,
             optional_fields=frozenset(),
         )
@@ -762,15 +950,18 @@ def build_serializer_input_class(
     # computed after the field walk (it needs the resolved specs / annotations).
     provisional_name = f"{serializer_class.__name__}{'PartialInput' if is_partial else 'Input'}"
 
+    # The per-field walk resolves each field, threads DRF metadata into descriptions
+    # (rev6 #9), and AGGREGATES every per-field conversion error + input-attr / GraphQL-name
+    # / source collision into ONE ``ConfigurationError`` (rev6 #5) - the collision guard is
+    # now folded into the walk (no separate call).
     field_specs, annotation_reprs, required_state, triples = _walk_serializer_fields(
         effective,
         model,
         provisional_name,
+        serializer_class=serializer_class,
         is_partial=is_partial,
         optional_fields=optional_fields,
     )
-
-    _guard_serializer_input_attr_collisions(serializer_class, field_specs)
 
     # The canonical ``<Serializer>Input`` name is reserved for the DEFAULT full shape
     # ONLY (spec-039): compare this shape's per-field identity against the identity the
@@ -820,6 +1011,10 @@ def build_serializer_input_class(
         optional_fields=optional_fields,
         type_name=type_name,
     )
+    # rev6 #15: record the shape under its generated name for the debug registry (identical
+    # descriptors overwrite harmlessly; a genuine distinct-descriptor name clash is caught by
+    # the materialize ledger, whose error is then enriched with this shape's description).
+    _SERIALIZER_SHAPE_REGISTRY[type_name] = shape
     return input_cls, shape
 
 

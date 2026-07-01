@@ -88,10 +88,30 @@ class FieldError:
     messages for that field. Defined and frozen here (spec-036 Decision 7) so
     the form-based (0.0.12) and DRF-serializer / auth (0.0.13) flavor cards
     reuse the byte-identical type. Mirrors graphene-django's ``ErrorType``.
+
+    **Additive client-ergonomics fields (spec-039 rev6 #4 / #13).** Two optional,
+    default-empty lists sit alongside the legacy ``field`` / ``messages`` (both kept
+    intact for compatibility), so a client can branch WITHOUT parsing localized human
+    text or the dotted ``field`` string:
+
+    - ``codes`` - the structured error codes. For a serializer failure these are DRF
+      ``ErrorDetail.code``s (``required`` / ``invalid`` / ``unique`` / ``blank`` / ...); for a
+      Django ``ValidationError`` they are its ``.code``s; framework-generated errors carry a
+      deliberate code (``invalid`` for a bad relation id, ``null`` for an explicit null,
+      ``not_found`` for a locate miss, ``constraint`` for an integrity fallback).
+    - ``path`` - the ``field`` dotted string split into SEGMENTS (``items.0.name`` ->
+      ``["items", "0", "name"]``), so a client walks structured paths instead of parsing
+      strings. A ROOT non-field error is ``field="__all__"`` with an EMPTY ``path`` (``[]``);
+      a NESTED non-field error keeps its segments (``["items", "0", "__all__"]``).
+
+    Both default to ``[]`` so every existing construction site (and a client selecting only
+    ``field`` / ``messages``) is unaffected.
     """
 
     field: str
     messages: list[str]
+    codes: list[str] = strawberry.field(default_factory=list)
+    path: list[str] = strawberry.field(default_factory=list)
 
 
 # The mutation-input namespace lifecycle trio, single-sited via

@@ -97,8 +97,8 @@ To complete the Alpha (pre-0.1.0) milestone: **88.6%**.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-040-0.0.13` - Auth mutations (login / logout / register) | No dedicated spec |
-| `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`) | [spec-039-serializer_mutations-0_0_13.md](docs/spec-039-serializer_mutations-0_0_13.md) |
+| `WIP-ALPHA-040-0.0.13` - Auth mutations (login / logout / register) | [spec-040-auth_mutations-0_0_13.md](docs/spec-040-auth_mutations-0_0_13.md) |
+| `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`) | [spec-039-serializer_mutations-0_0_13.md](docs/SPECS/spec-039-serializer_mutations-0_0_13.md) |
 | `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms) | [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md) |
 | `DONE-037-0.0.11` - Upload scalar and file / image field mapping | [spec-037-upload_file_image_mapping-0_0_11.md](docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md) |
 | `DONE-036-0.0.11` - Mutations + auto-generated Input types | [spec-036-mutations-0_0_11.md](docs/SPECS/spec-036-mutations-0_0_11.md) |
@@ -151,6 +151,7 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 - Status: In progress
 - Relative size: M
 - Labels: `auth`, `mutations`, `public-api`
+- Spec: [spec-040-auth_mutations-0_0_13.md](docs/spec-040-auth_mutations-0_0_13.md)
 
 #### Planning note
 
@@ -1308,7 +1309,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Status: In progress
 - Relative size: L
 - Labels: `mutations`, `public-api`, `serializers`
-- Spec: [spec-039-serializer_mutations-0_0_13.md](docs/spec-039-serializer_mutations-0_0_13.md)
+- Spec: [spec-039-serializer_mutations-0_0_13.md](docs/SPECS/spec-039-serializer_mutations-0_0_13.md)
 
 #### Glossary terms
 

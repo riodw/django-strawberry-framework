@@ -4062,117 +4062,117 @@ re-keying / opt-in-gated-fingerprint branches are package-tested.
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[changelog]: ../CHANGELOG.md
-[contributing]: ../CONTRIBUTING.md
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
-[pyproject]: ../pyproject.toml
-[pytest-ini]: ../pytest.ini
-[readme]: ../README.md
-[start]: ../START.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[changelog]: ../../CHANGELOG.md
+[contributing]: ../../CONTRIBUTING.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
+[pyproject]: ../../pyproject.toml
+[pytest-ini]: ../../pytest.ini
+[readme]: ../../README.md
+[start]: ../../START.md
+[today]: ../../TODAY.md
 
 <!-- .github/ -->
-[django-workflow]: ../.github/workflows/django.yml
+[django-workflow]: ../../.github/workflows/django.yml
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
-[glossary-auth-mutations]: GLOSSARY.md#auth-mutations
-[glossary-bigint-scalar]: GLOSSARY.md#bigint-scalar
-[glossary-choice-enum-generation]: GLOSSARY.md#choice-enum-generation
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-cross-subsystem-invariants]: GLOSSARY.md#cross-subsystem-invariants
-[glossary-definition-order-independence]: GLOSSARY.md#definition-order-independence
-[glossary-djangoformmutation]: GLOSSARY.md#djangoformmutation
-[glossary-djangomodelformmutation]: GLOSSARY.md#djangomodelformmutation
-[glossary-djangomodelpermission]: GLOSSARY.md#djangomodelpermission
-[glossary-djangomutation]: GLOSSARY.md#djangomutation
-[glossary-djangomutationfield]: GLOSSARY.md#djangomutationfield
-[glossary-djangonodefield]: GLOSSARY.md#djangonodefield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-fielderror-envelope]: GLOSSARY.md#fielderror-envelope
-[glossary-fieldset]: GLOSSARY.md#fieldset
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-finalize_django_types]: GLOSSARY.md#finalize_django_types
-[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-input-type-generation]: GLOSSARY.md#input-type-generation
-[glossary-metaexclude]: GLOSSARY.md#metaexclude
-[glossary-metafields]: GLOSSARY.md#metafields
-[glossary-metaglobalid_strategy]: GLOSSARY.md#metaglobalid_strategy
-[glossary-metamodel]: GLOSSARY.md#metamodel
-[glossary-metaprimary]: GLOSSARY.md#metaprimary
-[glossary-only-projection]: GLOSSARY.md#only-projection
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-per-field-permission-hooks]: GLOSSARY.md#per-field-permission-hooks
-[glossary-relation-handling]: GLOSSARY.md#relation-handling
-[glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
-[glossary-relay_globalid_strategy]: GLOSSARY.md#relay_globalid_strategy
-[glossary-scalar-field-conversion]: GLOSSARY.md#scalar-field-conversion
-[glossary-serializermutation]: GLOSSARY.md#serializermutation
-[glossary-specialized-scalar-conversions]: GLOSSARY.md#specialized-scalar-conversions
-[glossary-syncmisuseerror]: GLOSSARY.md#syncmisuseerror
-[glossary-testclient]: GLOSSARY.md#testclient
-[glossary-upload-scalar]: GLOSSARY.md#upload-scalar
-[glossary]: GLOSSARY.md
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-auth-mutations]: ../GLOSSARY.md#auth-mutations
+[glossary-bigint-scalar]: ../GLOSSARY.md#bigint-scalar
+[glossary-choice-enum-generation]: ../GLOSSARY.md#choice-enum-generation
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-cross-subsystem-invariants]: ../GLOSSARY.md#cross-subsystem-invariants
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoformmutation]: ../GLOSSARY.md#djangoformmutation
+[glossary-djangomodelformmutation]: ../GLOSSARY.md#djangomodelformmutation
+[glossary-djangomodelpermission]: ../GLOSSARY.md#djangomodelpermission
+[glossary-djangomutation]: ../GLOSSARY.md#djangomutation
+[glossary-djangomutationfield]: ../GLOSSARY.md#djangomutationfield
+[glossary-djangonodefield]: ../GLOSSARY.md#djangonodefield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fielderror-envelope]: ../GLOSSARY.md#fielderror-envelope
+[glossary-fieldset]: ../GLOSSARY.md#fieldset
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-finalize_django_types]: ../GLOSSARY.md#finalize_django_types
+[glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-input-type-generation]: ../GLOSSARY.md#input-type-generation
+[glossary-metaexclude]: ../GLOSSARY.md#metaexclude
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metaglobalid_strategy]: ../GLOSSARY.md#metaglobalid_strategy
+[glossary-metamodel]: ../GLOSSARY.md#metamodel
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-per-field-permission-hooks]: ../GLOSSARY.md#per-field-permission-hooks
+[glossary-relation-handling]: ../GLOSSARY.md#relation-handling
+[glossary-relay-node-integration]: ../GLOSSARY.md#relay-node-integration
+[glossary-relay_globalid_strategy]: ../GLOSSARY.md#relay_globalid_strategy
+[glossary-scalar-field-conversion]: ../GLOSSARY.md#scalar-field-conversion
+[glossary-serializermutation]: ../GLOSSARY.md#serializermutation
+[glossary-specialized-scalar-conversions]: ../GLOSSARY.md#specialized-scalar-conversions
+[glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
+[glossary-testclient]: ../GLOSSARY.md#testclient
+[glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
+[glossary]: ../GLOSSARY.md
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[spec-027]: SPECS/spec-027-filters-0_0_8.md
-[spec-028]: SPECS/spec-028-orders-0_0_8.md
-[spec-034]: SPECS/spec-034-permissions-0_0_10.md
-[spec-035]: SPECS/spec-035-optimizer_hardening-0_0_10.md
-[spec-036]: SPECS/spec-036-mutations-0_0_11.md
-[spec-037]: SPECS/spec-037-upload_file_image_mapping-0_0_11.md
-[spec-038]: SPECS/spec-038-form_mutations-0_0_12.md
+[next]: NEXT.md
+[spec-027]: spec-027-filters-0_0_8.md
+[spec-028]: spec-028-orders-0_0_8.md
+[spec-034]: spec-034-permissions-0_0_10.md
+[spec-035]: spec-035-optimizer_hardening-0_0_10.md
+[spec-036]: spec-036-mutations-0_0_11.md
+[spec-037]: spec-037-upload_file_image_mapping-0_0_11.md
+[spec-038]: spec-038-form_mutations-0_0_12.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[forms-converter]: ../django_strawberry_framework/forms/converter.py
-[forms-inputs]: ../django_strawberry_framework/forms/inputs.py
-[forms-resolvers]: ../django_strawberry_framework/forms/resolvers.py
-[forms-sets]: ../django_strawberry_framework/forms/sets.py
-[init]: ../django_strawberry_framework/__init__.py
-[mutations-fields]: ../django_strawberry_framework/mutations/fields.py
-[mutations-inputs]: ../django_strawberry_framework/mutations/inputs.py
-[mutations-resolvers]: ../django_strawberry_framework/mutations/resolvers.py
-[mutations-sets]: ../django_strawberry_framework/mutations/sets.py
-[registry]: ../django_strawberry_framework/registry.py
-[rf-converter]: ../django_strawberry_framework/rest_framework/serializer_converter.py
-[rf-init]: ../django_strawberry_framework/rest_framework/__init__.py
-[rf-inputs]: ../django_strawberry_framework/rest_framework/inputs.py
-[rf-resolvers]: ../django_strawberry_framework/rest_framework/resolvers.py
-[rf-sets]: ../django_strawberry_framework/rest_framework/sets.py
-[types-base]: ../django_strawberry_framework/types/base.py
-[types-converters]: ../django_strawberry_framework/types/converters.py
-[types-definition]: ../django_strawberry_framework/types/definition.py
-[types-relay]: ../django_strawberry_framework/types/relay.py
-[types-finalizer]: ../django_strawberry_framework/types/finalizer.py
-[utils-inputs]: ../django_strawberry_framework/utils/inputs.py
-[utils-permissions]: ../django_strawberry_framework/utils/permissions.py
-[utils-querysets]: ../django_strawberry_framework/utils/querysets.py
+[forms-converter]: ../../django_strawberry_framework/forms/converter.py
+[forms-inputs]: ../../django_strawberry_framework/forms/inputs.py
+[forms-resolvers]: ../../django_strawberry_framework/forms/resolvers.py
+[forms-sets]: ../../django_strawberry_framework/forms/sets.py
+[init]: ../../django_strawberry_framework/__init__.py
+[mutations-fields]: ../../django_strawberry_framework/mutations/fields.py
+[mutations-inputs]: ../../django_strawberry_framework/mutations/inputs.py
+[mutations-resolvers]: ../../django_strawberry_framework/mutations/resolvers.py
+[mutations-sets]: ../../django_strawberry_framework/mutations/sets.py
+[registry]: ../../django_strawberry_framework/registry.py
+[rf-converter]: ../../django_strawberry_framework/rest_framework/serializer_converter.py
+[rf-init]: ../../django_strawberry_framework/rest_framework/__init__.py
+[rf-inputs]: ../../django_strawberry_framework/rest_framework/inputs.py
+[rf-resolvers]: ../../django_strawberry_framework/rest_framework/resolvers.py
+[rf-sets]: ../../django_strawberry_framework/rest_framework/sets.py
+[types-base]: ../../django_strawberry_framework/types/base.py
+[types-converters]: ../../django_strawberry_framework/types/converters.py
+[types-definition]: ../../django_strawberry_framework/types/definition.py
+[types-relay]: ../../django_strawberry_framework/types/relay.py
+[types-finalizer]: ../../django_strawberry_framework/types/finalizer.py
+[utils-inputs]: ../../django_strawberry_framework/utils/inputs.py
+[utils-permissions]: ../../django_strawberry_framework/utils/permissions.py
+[utils-querysets]: ../../django_strawberry_framework/utils/querysets.py
 
 <!-- tests/ -->
-[test-base-init]: ../tests/base/test_init.py
-[test-mutations]: ../tests/mutations/
-[test-rest-framework]: ../tests/rest_framework/
+[test-base-init]: ../../tests/base/test_init.py
+[test-mutations]: ../../tests/mutations/
+[test-rest-framework]: ../../tests/rest_framework/
 
 <!-- examples/ -->
-[products-models]: ../examples/fakeshop/apps/products/models.py
-[products-schema]: ../examples/fakeshop/apps/products/schema.py
-[products-serializers]: ../examples/fakeshop/apps/products/serializers.py
-[test-products-api]: ../examples/fakeshop/test_query/test_products_api.py
-[test-query-readme]: ../examples/fakeshop/test_query/README.md
-[test-uploads-api]: ../examples/fakeshop/test_query/test_uploads_api.py
+[products-models]: ../../examples/fakeshop/apps/products/models.py
+[products-schema]: ../../examples/fakeshop/apps/products/schema.py
+[products-serializers]: ../../examples/fakeshop/apps/products/serializers.py
+[test-products-api]: ../../examples/fakeshop/test_query/test_products_api.py
+[test-query-readme]: ../../examples/fakeshop/test_query/README.md
+[test-uploads-api]: ../../examples/fakeshop/test_query/test_uploads_api.py
 
 <!-- scripts/ -->
 
 <!-- .venv/ -->
-[upstream-serializer-converter]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/serializer_converter.py
-[upstream-serializer-mutation]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/mutation.py
+[upstream-serializer-converter]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/serializer_converter.py
+[upstream-serializer-mutation]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/rest_framework/mutation.py
 
 <!-- External -->

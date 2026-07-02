@@ -116,7 +116,7 @@ Revision history (kept inline so the spec is self-contained):
   path with **no package-root re-export** (opt-in by import, the card's own DoD)
   ([Decision 3](#decision-3--consumer-surface-four-field-factories-at-the-auth-submodule-path-opt-in-by-import-no-root-re-export));
   the `auth/` module + `tests/auth/` mirror
-  ([Decision 4](#decision-4--module-and-test-locations-auth-mirroring-the-upstream-trio-tests-auth-mirroring-source));
+  ([Decision 4](#decision-4--module-and-test-locations-auth-mirroring-the-upstream-trio-testsauth-mirroring-source));
   the login / logout shapes on the frozen envelope with the **anonymous-allowed
   default** as the deliberate, documented inversion of the family's deny-by-default
   ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design));
@@ -1123,14 +1123,21 @@ credential slot, not a claim the column is called "username").
 **Resolver semantics** (the upstream borrow, envelope-transported):
 
 1. `request = request_from_info(info, family_label="AuthMutation")` — the shared
-   request resolver every permission seam uses ([`utils/permissions.py`][utils-permissions]).
+   request resolver every permission seam uses ([`utils/permissions.py`][utils-permissions]);
+   the `family_label` is a single module-level `_AUTH_FAMILY_LABEL` constant reused by
+   every auth surface, never a per-field string literal, so the resolution wording cannot
+   drift between fields (the [`docs/feedback.md`][feedback] D1 reuse directive).
 2. Authorization: run the field's `permission_classes` through the shared
    `authorize_or_raise` gate via the permission carrier (named below). A denial is a
    top-level `GraphQLError` — identical to every write flavor.
 3. `login`: `user = auth.authenticate(request, username=username,
    password=password)`. `None` → the payload with `node: null` and ONE
    `"__all__"`-keyed [`FieldError`][glossary-fielderror-envelope]
-   (`"Incorrect username/password"`). Success → `auth.login(request, user)`, then
+   (`"Incorrect username/password"`) — built via the `field_error("", …)` empty-path
+   leaf ctor ([`mutations/resolvers.py`][mutations-resolvers]), which normalizes the
+   empty path to `NON_FIELD_ERROR_KEY`, **never** a hard-coded `"__all__"` string (the
+   [`docs/feedback.md`][feedback] D8 reuse directive — the leaf ctor owns the sentinel).
+   Success → `auth.login(request, user)`, then
    the payload with the user in the slot. The message is deliberately
    undifferentiated (no "unknown user" vs "wrong password" split — no
    account-enumeration oracle), the exact upstream wording.
@@ -1170,7 +1177,12 @@ the operation string, a `_primary_type` (the resolved user primary for `login` /
 `check_permission = DjangoMutation.check_permission` bound directly (its body reads
 only `type(self)._mutation_meta.permission_classes`, so the duck-typed snapshot
 suffices — it is **not** a `_ValidatedMutationMeta`, which would require `model` /
-`operation` constructor kwargs). The factory's resolver then calls
+`operation` constructor kwargs). **That holder synthesis is single-sited in ONE
+`_make_permission_holder(operation, primary_type, permission_classes)` helper** —
+`login` / `logout` / `current_user` all call it rather than each spelling a
+near-identical class body, so the duck-typed `_mutation_meta` shape lives in one place;
+the only per-field inputs are the pinned `operation` string and the `_primary_type`
+(the [`docs/feedback.md`][feedback] D3 / P4 reuse directive). The factory's resolver then calls
 `authorize_or_raise(holder_cls, info, operation, data, instance=instance)` before the
 session work, so the iteration, the `GraphQLError` denial, and the async-hook
 [`SyncMisuseError`][glossary-syncmisuseerror] guard (`reject_async_in_sync_context`
@@ -1292,7 +1304,12 @@ to `Register`** (the P1 naming fix — see below) with:
   `is_active` / `groups` / `user_permissions` — privilege escalation is structurally
   unreachable, not policy-checked
   ([Input type generation][glossary-input-type-generation] narrows via the standard
-  `Meta.fields` path, reusing the model-column converter unchanged).
+  `Meta.fields` path, reusing the model-column converter unchanged). Because the narrowed
+  set has **no relation inputs** (`groups` / `user_permissions` are excluded), register
+  wires **none** of the relation-visibility helpers (`relation_kind` /
+  `is_forward_many_to_many` / `visible_related_object(s)`); they return for free via the
+  inherited decode only if a consumer ever widens `Meta.fields`, and must not be added
+  preemptively (the [`docs/feedback.md`][feedback] D-N3 deliberate-non-reuse note).
 - `Meta.permission_classes` defaulted to the explicit AllowAny (Decision 5's
   inversion), overridable through the factory's `permission_classes=` kwarg.
   **`permission_classes` is class-local, so `register` is one declaration per
@@ -1331,7 +1348,14 @@ to `Register`** (the P1 naming fix — see below) with:
   `_model_decode_step`'s `(target, m2m_assignments, exclude)` shape
   ([`mutations/resolvers.py`][mutations-resolvers] `::_model_decode_step`) with the
   raw password appended as a fourth element that never touches
-  `model(**scalar_and_fk_attrs)`. The `write_step` unpacks that tuple, runs
+  `model(**scalar_and_fk_attrs)`. **The decode reuses the shared UNSET-strip walk, not
+  a second copy** (the [`docs/feedback.md`][feedback] D6 reuse directive): the
+  provided-field iteration goes through [`iter_provided_input_fields`][utils-inputs] (the
+  same walk `_decode_relations` opens with), and the auth-specific delta — keeping
+  `password` out of the constructed model attrs — is expressed by threading an extra
+  `exclude` (`{"password"}`) into the existing `_model_decode_step`, **not** by forking a
+  second decoder (a forked walk is the classic place the UNSET / raw-`None`-vs-omitted rule
+  drifts). The `write_step` unpacks that tuple, runs
   `django.contrib.auth.password_validation.validate_password(raw_password, user)`,
   and — on failure — maps the raised error to a `password`-keyed
   [`FieldError`][glossary-fielderror-envelope] **directly, not through the generic
@@ -1347,7 +1371,13 @@ to `Register`** (the P1 naming fix — see below) with:
   (the same [`spec-036`][spec-036] leaf ctor, keyed explicitly) — so every failing
   validator's messages land under the single `password` key, not `"__all__"`. It then
   runs `user.set_password(raw_password)`
-  **before** `full_clean()` / `save()`. The plaintext exists only in memory and
+  **before** `full_clean()` / `save()`. **`validate_password` + `set_password` are the
+  ONLY auth-specific steps** (the [`docs/feedback.md`][feedback] D7 reuse directive): the
+  `full_clean()` + `save()` + `IntegrityError` mapping are delegated to the shared
+  write path (`_full_clean_or_field_errors` / [`save_or_field_errors`][mutations-resolvers]),
+  so the duplicate-`USERNAME_FIELD` unique error and the concurrent-race `IntegrityError`
+  come back through the standing envelope with no auth-specific error handling. The
+  plaintext exists only in memory and
   never reaches a model column (a unit assertion pins that the model decode never
   receives `password` in `scalar_and_fk_attrs`); hashing before `full_clean()` means
   the `password` column validates against the hash rather than the raw input; and the
@@ -1500,11 +1530,28 @@ and assigns them onto its dispatcher (`_resolve.__signature__` / `_resolve.__ann
 [`mutations/fields.py`][mutations-fields]) — the `current_user()` factory injects a
 return annotation of
 `Optional[Annotated["CurrentUserAlias", strawberry.lazy("django_strawberry_framework.auth.queries")]]`
-onto its dispatcher resolver. `bind_auth_mutations()` then does
-`setattr(auth.queries, "CurrentUserAlias", primary_type)` (the resolved user primary
-type), so Strawberry resolves the lazy ref to the concrete `UserType` at schema build
-and the SDL reads `me: UserType`. `login` / `logout` attach their `LoginPayload` /
-`LogoutPayload` return refs the same way, into the `mutations.inputs` namespace
+onto its dispatcher resolver. **That `Annotated[…, strawberry.lazy(…)]` return ref is
+built by the shared [`_lazy_ref`][mutations-fields]`(type_name, module_path)` helper** —
+the same builder [`DjangoMutationField`][glossary-djangomutationfield] uses for its
+`<Name>Payload` refs — not a hand-spelled `Annotated[...]`, and the whole
+resolve-request → gate → session-work → inject-signature dispatcher is **single-sited in
+ONE auth field-construction helper** the three factories share, not copied per field (the
+[`docs/feedback.md`][feedback] D12 / P1 / P2 reuse directive). To keep that single copy
+honest across `mutations/` and `auth/`, [`_lazy_ref`][mutations-fields] and the
+`_resolve.__signature__` / `_resolve.__annotations__` injection assignment are promoted to
+shared machinery rather than re-spelled in `auth/`. **The `"CurrentUserAlias"` slot is owned by a
+[`make_input_namespace`][utils-inputs]`("django_strawberry_framework.auth.queries",
+"AuthMutation")` trio, not a hand-rolled `setattr` / `delattr` pair** (the
+[`docs/feedback.md`][feedback] D13 reuse directive): `bind_auth_mutations()` pins the
+alias by calling that trio's `materialize_fn("CurrentUserAlias", primary_type)` — which
+sets the module global through the blessed [`materialize_generated_input_class`][utils-inputs]
+parked-global path — and the trio's `clear_fn` empties the ledger. Because that `clear_fn`
+is the alias namespace's pre-bind [`register_subsystem_clear`][registry] row, the ledger is
+empty before each re-materialize, so a *different* `UserType` class object on a reload's
+second finalize does not trip the distinct-class collision guard. Strawberry resolves the
+lazy ref to the concrete `UserType` at schema build and the SDL reads `me: UserType`.
+`login` / `logout` attach their `LoginPayload` / `LogoutPayload` return refs the same way,
+into the `mutations.inputs` namespace
 ([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
 The resolver performs **no queryset work**: no
 [`get_queryset`][glossary-get_queryset-visibility-hook] re-run, no re-fetch — the
@@ -1545,8 +1592,12 @@ surface as the **primary** [`DjangoType`][glossary-djangotype] registered for
 `get_user_model()` (the [`Meta.primary`][glossary-metaprimary] registry lookup every
 payload resolution uses). The consumer declares it — their field selection, their
 [`Meta.interfaces`][glossary-metainterfaces], their visibility hook for directory
-reads. `bind_auth_mutations()` validates at phase 2.5: if any of the three
-user-typed fields was declared and no primary type for the user model is registered,
+reads. `bind_auth_mutations()` validates at phase 2.5: it resolves the user primary via
+[`registry.primary_for`][registry]`(get_user_model())` — **the same getter
+`_resolve_primary_type` uses**, so "what counts as a registered primary" stays
+single-sited and only the raise *message* differs between the auth check and the generic
+mutation bind (the [`docs/feedback.md`][feedback] D16 reuse directive) — and if any of the
+three user-typed fields was declared while that lookup returns `None`,
 finalization fails with a [`ConfigurationError`][glossary-configurationerror] naming
 the missing registration and the fix ("declare a `DjangoType` with
 `Meta.model = get_user_model()`; mark it `Meta.primary = True` if the model has
@@ -1638,7 +1689,11 @@ type may not even be registered yet
 factories cannot resolve types eagerly; they follow the exact
 [`DjangoMutationField`][glossary-djangomutationfield] discipline:
 
-- Each factory call records a declaration in a module-level auth ledger (which
+- Each factory call records a declaration in a module-level auth ledger — **a
+  [`make_declaration_registry`][mutations-sets]`("AuthMutation")` instance, not a
+  hand-rolled list** (the [`docs/feedback.md`][feedback] D14 reuse directive), so the
+  every-call identity-deduped `.register` and the `TypeRegistry.clear()` drain are the
+  same ones the model / form / serializer flavors use — (which
   surfaces were declared, with which `permission_classes`) and returns a field whose
   dispatcher resolver carries an **injected `__signature__` / `__annotations__`** — the
   same mechanism [`DjangoMutationField`][glossary-djangomutationfield] uses
@@ -1699,7 +1754,9 @@ them** (the P1 lifecycle fix):
   whose row self-registers at import per the [`spec-039`][spec-039] F10
   owning-module invariant). The **only** net-new `register_subsystem_clear` row is
   the `current_user` generated-alias namespace in `auth/queries.py` — a genuine
-  emit ledger, self-registered when `auth/__init__.py` imports `queries`.
+  emit ledger whose `clear_fn` is the one the
+  [`make_input_namespace`][utils-inputs] trio returns (Decision 7's D13 reuse of the
+  parked-global lifecycle), self-registered when `auth/__init__.py` imports `queries`.
 - A factory call **after** finalization raises
   [`ConfigurationError`][glossary-configurationerror] (the standing
   declare-after-finalize rule).
@@ -1750,11 +1807,25 @@ the gate's own `instance=request.user` argument forces that lazy object as it is
 *computed*, so evaluating the gate outside the boundary would raise
 `SynchronousOnlyOperation`. The async dispatcher therefore wraps the whole
 gate-then-session-work block in one sync helper run via
-`await sync_to_async(helper, thread_sensitive=True)()`. The
+`await sync_to_async(helper, thread_sensitive=True)()`. **That boundary is single-sited
+in ONE auth async helper the three async resolvers share** (the
+[`docs/feedback.md`][feedback] D17 reuse directive), never a per-field copy of the
+`sync_to_async(..., thread_sensitive=True)` call; the `036` boundary wrapper
+([`mutations/resolvers.py`][mutations-resolvers]) is itself mutation-shaped (it takes
+`mutation_cls` / `data` / `id`), so a follow-on **may** factor its
+`await sync_to_async(fn, thread_sensitive=True)(...)` core into a generic
+`run_in_one_sync_boundary(fn, *args)` primitive both the mutation entry and auth share
+(P3 — optional, only if it does not disturb the pinned `036` AR-M4 wording). The
 [`SyncMisuseError`][glossary-syncmisuseerror] discipline is unaffected: a
 `sync_to_async(thread_sensitive=True)` worker is itself a sync context, so
 `reject_async_in_sync_context` still rejects an `async def` `has_permission` (never a
-silent allow) exactly as on the sync path.
+silent allow) exactly as on the sync path — and [`SyncMisuseError`][glossary-syncmisuseerror]
+is imported from its public path ([`django_strawberry_framework`][init] / `.types`), never
+redefined in `auth/` (the D19 reuse directive). Any place auth must detect whether a
+consumer callable is itself `async def` (as distinct from catching a coroutine *result*,
+which `reject_async_in_sync_context` owns) uses the partial-aware
+[`is_async_callable`][utils-typing] predicate, never a bare `inspect.iscoroutinefunction`
+(the D18 reuse directive).
 
 Alternatives considered (and rejected):
 
@@ -1860,6 +1931,94 @@ payload shapes from the existing builder. Staged-but-not-implemented seams follo
 [`AGENTS.md`][agents] design-doc anchor discipline (a source-site
 `TODO(spec-040 Slice N)` comment naming this spec, removed in the slice that ships
 it).
+
+## Helper-reuse obligations (DRY)
+
+The auth surface is a thin layer over the frozen foundation, so its correctness leans on
+**reusing** the write-stack / [`utils/`][utils-inputs] helpers rather than re-spelling
+them. This checklist consolidates the [`docs/feedback.md`][feedback] helper-reuse review
+(a deep pass over all ten [`utils/`][utils-inputs] modules against the planned surface);
+each item is single-sited in the decision it cross-references, and the implementation is
+verified against it slice by slice. The three `D-N*` items are deliberate **non**-reuse —
+sharing the named helper there would be a *bug*, so they carry a source comment.
+
+- [ ] **D1** — every auth resolver reads the request via
+  `request_from_info(info, family_label=_AUTH_FAMILY_LABEL)` ([`utils/permissions.py`][utils-permissions]),
+  one shared label constant, never a re-spelled `info.context.request` walk
+  ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)).
+- [ ] **D2** — the async-permission-hook guard (`reject_async_in_sync_context` +
+  `_PERMISSION_ASYNC_RECOURSE`) is reused **by call** through the bound
+  `check_permission`; no new recourse string
+  ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design) / [Decision 10](#decision-10--sync--async-session-work-through-one-sync_to_asyncthread_sensitivetrue-boundary)).
+- [ ] **D3 / P4** — the permission holder binds `DjangoMutation.check_permission`, builds
+  `_mutation_meta` via `_validate_permission_classes(..., unset_default=())`, and is
+  synthesized by ONE `_make_permission_holder(...)` helper, not three class bodies
+  ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)).
+- [ ] **D4** — all four surfaces gate through `authorize_or_raise`; the denial message
+  rides the existing `_primary_type` / holder-`__name__` fallback, no auth-specific
+  formatter ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)).
+- [ ] **D5** — `LoginPayload` / `LogoutPayload` via `build_payload_type` +
+  `payload_object_slot` on the existing `mutations.inputs` emit ledger; no new clear row;
+  `RegisterPayload` never named explicitly
+  ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design) / [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
+- [ ] **D6** — register's `decode_step` reuses [`iter_provided_input_fields`][utils-inputs]
+  and threads an extra `exclude` (`{"password"}`) through `_model_decode_step`, rather than
+  forking a second decoder
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
+- [ ] **D7** — register's `write_step` delegates `full_clean()` / `save()` /
+  `IntegrityError` to the shared path (`_full_clean_or_field_errors` /
+  [`save_or_field_errors`][mutations-resolvers]); only `validate_password` + `set_password`
+  are auth-specific
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
+- [ ] **D8** — register's password error uses `field_error("password", …)` directly;
+  `login`'s failure error uses `field_error("", …)` (empty path → `NON_FIELD_ERROR_KEY`);
+  neither hard-codes `"__all__"`
+  ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design) / [Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
+- [ ] **D9** — register's re-fetch rides the inherited `refetch_optimized`; `login` /
+  `current_user` do no queryset work
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor) / [Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset)).
+- [ ] **D10 / D11** — `RegisterInput` is named via the `input_type_name` / `build_input`
+  seams and materialized via the inherited `materialize_mutation_input_class`; no new input
+  namespace for register
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
+- [ ] **D12 / P1 / P2** — the lazy return refs are built by [`_lazy_ref`][mutations-fields];
+  the field-dispatcher construction is single-sited in ONE auth helper; `_lazy_ref` + the
+  `__signature__` / `__annotations__` injection are promoted to shared machinery
+  ([Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset) / [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
+- [ ] **D13** — the `CurrentUserAlias` namespace is owned by a
+  [`make_input_namespace`][utils-inputs] trio (its `materialize_fn` pins the alias, its
+  `clear_fn` is the `register_subsystem_clear` row); no hand-rolled `setattr` / `delattr`
+  ([Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset) / [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
+- [ ] **D14** — the auth declaration ledger is a
+  [`make_declaration_registry`][mutations-sets]`("AuthMutation")` instance; every-call
+  re-record on both ledgers via `.register`
+  ([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
+- [ ] **D15** — the current_user alias uses the pre-bind `register_subsystem_clear` seam;
+  the auth declaration ledger uses a `TypeRegistry.clear()` hand row beside the mutation /
+  form declaration clears
+  ([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
+- [ ] **D16** — `bind_auth_mutations()` resolves the primary via
+  [`registry.primary_for`][registry]`(get_user_model())`, the same getter
+  `_resolve_primary_type` uses; only the message differs
+  ([Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind)).
+- [ ] **D17 / P3** — the async fields wrap gate-then-work in ONE
+  `sync_to_async(thread_sensitive=True)` boundary, single-sited across the three; a generic
+  `run_in_one_sync_boundary` primitive shared with the `036` wrapper is an optional follow-on
+  ([Decision 10](#decision-10--sync--async-session-work-through-one-sync_to_asyncthread_sensitivetrue-boundary)).
+- [ ] **D18 / D19** — any async-callable detection uses
+  [`is_async_callable`][utils-typing]; [`SyncMisuseError`][glossary-syncmisuseerror] is
+  imported from its public path, never redefined
+  ([Decision 10](#decision-10--sync--async-session-work-through-one-sync_to_asyncthread_sensitivetrue-boundary)).
+- [ ] **D-N1** (non-reuse) — `current_user` / `login` must NOT scope through
+  [`get_queryset`][glossary-get_queryset-visibility-hook] / the visibility helpers (they
+  return the actor, not a lookup)
+  ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design) / [Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset)).
+- [ ] **D-N2** (non-reuse) — register's password error must NOT route through
+  `validation_error_to_field_errors` (it keys a list-style error to `"__all__"`)
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
+- [ ] **D-N3** (non-reuse) — register wires none of the relation-visibility helpers (the
+  narrowed `Meta.fields` has no relation inputs)
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
 
 ## Edge cases and constraints
 
@@ -2280,7 +2439,12 @@ opt-in documentation) — plus the spec/CSV and the version-cut items the
 
 6. The full suite is green at the 100% coverage gate (`fail_under = 100`);
    `ruff format` + `ruff check` are clean; the `036` / `038` / `039` mutation
-   surfaces and the read side are unchanged.
+   surfaces and the read side are unchanged. Every
+   [Helper-reuse obligation](#helper-reuse-obligations-dry) (the
+   [`docs/feedback.md`][feedback] D1–D19 / P1–P4 / D-N1–D-N3 directives) is satisfied —
+   the auth code routes through the named write-stack / [`utils/`][utils-inputs] helpers
+   and does not re-spell them, and the three deliberate non-reuse points carry their
+   source comment.
 
 **Slice 3 — docs + the `0.0.13` version cut + card wrap**
 
@@ -2363,12 +2527,16 @@ opt-in documentation) — plus the spec/CSV and the version-cut items the
 [conf]: ../django_strawberry_framework/conf.py
 [forms-sets]: ../django_strawberry_framework/forms/sets.py
 [init]: ../django_strawberry_framework/__init__.py
+[mutations-fields]: ../django_strawberry_framework/mutations/fields.py
+[mutations-inputs]: ../django_strawberry_framework/mutations/inputs.py
 [mutations-permissions]: ../django_strawberry_framework/mutations/permissions.py
 [mutations-resolvers]: ../django_strawberry_framework/mutations/resolvers.py
 [mutations-sets]: ../django_strawberry_framework/mutations/sets.py
 [registry]: ../django_strawberry_framework/registry.py
 [types-finalizer]: ../django_strawberry_framework/types/finalizer.py
+[utils-inputs]: ../django_strawberry_framework/utils/inputs.py
 [utils-permissions]: ../django_strawberry_framework/utils/permissions.py
+[utils-typing]: ../django_strawberry_framework/utils/typing.py
 
 <!-- tests/ -->
 [test-base-init]: ../tests/base/test_init.py

@@ -249,6 +249,52 @@ Revision history (kept inline so the spec is self-contained):
   restates the repo's first-line seed-helper rule (every
   `test_auth_api.py` test opens with `create_users(N)`, even the register /
   anonymous-`me` cases) ([Test plan](#test-plan)).
+- **Revision 4** — applied a third code-review pass ([`docs/feedback.md`][feedback];
+  every load-bearing reuse claim re-grounded against the package source before editing
+  — `_resolve_primary_type`'s generic no-`DjangoType` raise naming `mutation_cls.__name__`,
+  `check_permission` passing `type(self)` as the `has_permission` `mutation` positional,
+  and `authorize_or_raise` threading `data` / `instance` straight into the gate were all
+  re-confirmed).
+  **Foundational (lifecycle) fix:** **(P2, reload)** the register rider now re-records
+  into **both** declaration ledgers on **every** factory call — the mutation ledger (for
+  binding) **and** the auth ledger (for [Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind)
+  coverage), identity-deduped on both — so after a `registry.clear()` + re-declare the
+  register-arm auth-specific error still pre-empts `_resolve_primary_type`'s generic
+  message on the second finalize; this closes the path where the auth-ledger record could
+  have been written once (behind the cache guard) and left stale, letting the register
+  arm silently regress on the reload path the complete-reload fixtures exercise every
+  test. The reload-idempotence test is extended to assert the register-arm auth error on
+  a post-clear second finalize, not merely `register`'s presence
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)
+  / [Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind)
+  / [Test plan](#test-plan)).
+  **Seam-and-contract fixes:** **(P2, composability scope)** Decision 5's
+  `DjangoModelPermission` caution is broadened to the general rule — the `mutation`
+  positional a custom `has_permission` receives on `login` / `logout` / `current_user`
+  is the internal permission holder, **not** a [`DjangoMutation`][glossary-djangomutation]
+  (no `Meta.model` / `_resolve_model`), so [Goal 3](#goals) composability holds for gates
+  keyed on `info` / `operation` / `data` but a gate that introspects the mutation object
+  raises at request time (documented, the `DenyAll` precedent), with a live test
+  ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)).
+  **(P3, gate payload)** the `data` / `instance` each field passes into
+  `authorize_or_raise` is pinned — `login` passes `data = {"username": username}`
+  (never the password) + `instance=None` so an account-scoped rate-limit / lockout gate
+  can read the attempted username; `logout` passes `data=None` / `instance=None`;
+  `current_user` `data=None` / `instance=<request user | None>`; a live test asserts the
+  login gate sees the username
+  ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)).
+  **(P3, GOAL criterion 4)** Decision 8's caution now states that `get_queryset`
+  row-redaction does **not** reach `me` / `login.node` (only field selection governs
+  those surfaces — a deliberate, sound carve-out from success-criterion 4), and the
+  Out-of-scope FieldSet claim is scoped: field gates compose on `register`'s planned
+  node "like any other type," but `login.node` / `me`'s raw, unplanned instances are
+  flagged for re-examination when field gates land
+  ([Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind)
+  / [Out of scope](#out-of-scope-explicitly-tracked-elsewhere)). Plus a
+  [Borrowing posture](#borrowing-posture) scope note grounding the single-upstream
+  parity in the [`GOAL.md`][goal] north-star (the cookbook reference carries no auth
+  surface; this card advances the fakeshop target-example direction, adjacent to the
+  six-file north-star shape).
 
 ## Key glossary references
 
@@ -680,6 +726,17 @@ parity" rule is satisfied honestly with the 🍓 Required link alone — the car
 this spec. The borrowing splits along the package's standing line — *behaviorally*
 copy the upstream's good ideas, *surface-wise* stay DRF-shaped and envelope-first.
 
+One scope note the [`GOAL.md`][goal] north-star invites (the Revision-4 cross-reference):
+the pinned cookbook working reference carries **no** auth surface at all — it is pure
+read-side nodes + filter / order / aggregate / fieldset sidecars +
+[`get_queryset`][glossary-get_queryset-visibility-hook] visibility — so this card does
+**not** advance the six-file cookbook/astronomy north-star *shape* ([`GOAL.md`][goal]
+"What success looks like"); it advances the adjacent [`GOAL.md`][goal] fakeshop
+target-example direction ("auth mutations exercised by the existing test users"). That
+is exactly why the single-upstream-parity framing is honest: auth is a
+`strawberry-graphql-django` parity item, adjacent to the north star, not a cookbook
+parity one.
+
 ### From `strawberry-graphql-django` — borrow the capability set and the session semantics
 
 - **The four-symbol surface** — `login`, `logout`, `register`, `current_user`
@@ -1054,10 +1111,20 @@ the operation string, a `_primary_type` (the resolved user primary for `login` /
 only `type(self)._mutation_meta.permission_classes`, so the duck-typed snapshot
 suffices — it is **not** a `_ValidatedMutationMeta`, which would require `model` /
 `operation` constructor kwargs). The factory's resolver then calls
-`authorize_or_raise(holder_cls, operation, data, instance)` before the session work,
-so the iteration, the `GraphQLError` denial, and the async-hook
+`authorize_or_raise(holder_cls, info, operation, data, instance=instance)` before the
+session work, so the iteration, the `GraphQLError` denial, and the async-hook
 [`SyncMisuseError`][glossary-syncmisuseerror] guard (`reject_async_in_sync_context`
 with `_PERMISSION_ASYNC_RECOURSE`) are all reused **by call**, not re-implemented.
+**The gate payload is pinned per field** (the P3 gate-contract fix) so a custom
+`has_permission` knows exactly what it receives — `authorize_or_raise` threads `data` /
+`instance` straight into `check_permission` → `has_permission`
+([`mutations/resolvers.py`][mutations-resolvers] `::authorize_or_raise`): `login`
+passes `data = {"username": username}` (the attempted credential — **never** the
+password) and `instance=None` (there is no pre-auth object), so an account-scoped
+rate-limit / lockout gate can key on the attempted username while an IP-only gate
+ignores `data` and reads `request_from_info(info)`; `logout` passes `data=None`,
+`instance=None`; `current_user` passes `data=None`, `instance=<request user | None>`
+([Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset)).
 The pinned operation strings are `"login"` / `"logout"` / `"current_user"`; the
 denial message is `authorize_or_raise`'s standard
 `f"Not authorized to {operation} {target}."`, where `target` is the resolved user
@@ -1083,6 +1150,24 @@ factory-time `issubclass` reject that would also refuse legitimate consumer
 subclasses of `DjangoModelPermission` that override `has_permission` for session
 verbs. (`register`, a real `DjangoMutation` with `operation = "create"` → the
 `add_<user>` perm, is unaffected — `DjangoModelPermission` works there.)
+
+**This generalizes beyond `DjangoModelPermission`** (the P2 composability-scope fix).
+The incompatibility is not that one class's quirk — it is structural: `check_permission`
+passes the holder **itself** as the `mutation` positional to any custom `has_permission`
+(`permission_class().has_permission(info, type(self), operation, data, instance)`,
+[`mutations/sets.py`][mutations-sets]), and for `login` / `logout` / `current_user` that
+object is the internal permission holder, **not** a
+[`DjangoMutation`][glossary-djangomutation]: it carries the duck-typed `_mutation_meta`
++ `_primary_type` the gate machinery reads, but **no `Meta.model`, no `_resolve_model`**,
+none of the create/update/delete shape a real mutation exposes. So [Goal 3](#goals)'s
+"gate any auth field without new machinery" holds for gates keyed on `info` /
+`operation` / `data` (a rate-limit, invite, IP allow-list, or `IsAuthenticated`-style
+check — the intended cases), but a gate that **introspects the `mutation` argument**
+(reads `mutation.Meta.model`, branches on the concrete class) raises at request time on
+the three model-less fields. The rule for those three, stated plainly: **key on `info` /
+`operation` / `data`, never on the mutation object.** This is documented, not
+factory-time guarded (the `DenyAll` request-time-raise precedent applied to the general
+case). `register`, a real `DjangoMutation`, carries the full shape and is unaffected.
 
 **Login skips both visibility AND the optimizer re-fetch — two distinct choices,
 each deliberate.** The payload's user is the raw object `authenticate()` returned —
@@ -1236,17 +1321,28 @@ is exactly the row a staff-only `UserType.get_queryset` would hide).
 The synthesized class is created **lazily on first factory call** (not at module
 import): creating it registers a mutation declaration, and a consumer who imports
 `auth` only for `login_mutation` must not get a phantom user-input/payload
-materialized at bind. **Every factory call — cached or not — re-registers the
-class into the mutation declaration ledger** (the P2 reload finding):
-`register_mutation`'s registry dedupes by identity
-([`mutations/sets.py`][mutations-sets] `::make_declaration_registry` #"if
-declaration_cls not in store"), so on a live ledger the re-register is a no-op,
-and after a `registry.clear()` + consumer re-declaration it **re-appends** — the
-rider survives the suite's complete-reload fixtures instead of silently dropping
-out of the second schema while `login` / `logout` (auth ledger, explicitly cleared
-and re-declared) survive. A reload-idempotence test pins the cycle: finalize →
-`registry.clear()` → re-declare → finalize, with `register` present in the second
-schema. Calls after
+materialized at bind. **Every factory call — cached or not — re-records into BOTH
+declaration ledgers: the mutation ledger (so `bind_mutations()` re-binds the rider)
+AND the auth ledger (so `bind_auth_mutations()`'s
+[Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind)
+validation still covers `register`)** (the P2 reload finding). Both re-records are
+identity-deduped ([`mutations/sets.py`][mutations-sets] `::make_declaration_registry`
+#"if declaration_cls not in store"), so on a live ledger each is a no-op, and after a
+`registry.clear()` drains both, a consumer re-declaration **re-appends to both**.
+Critically, the auth-ledger record is **not** written once alongside the cached-class
+synthesis and then left stale behind the cache guard: were it, a `registry.clear()`
+(which the suite's complete-reload fixtures run every test) would drain it with no
+re-add, `bind_auth_mutations()` would no longer see `register` on the second finalize,
+and its
+[Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind)
+arm would silently regress to `_resolve_primary_type`'s generic message — the exact
+failure that Decision pre-empts. The every-call re-record on both ledgers closes that
+path, so the rider survives the reload fixtures with its auth-specific error intact,
+alongside `login` / `logout` (auth ledger, explicitly cleared and re-declared). A
+reload-idempotence test pins the cycle: finalize → `registry.clear()` → re-declare →
+finalize, asserting both that `register` is present in the second schema AND — for a
+no-`UserType` schema — that the second finalize still fires the register-arm
+auth-specific error (not the generic `_resolve_primary_type` one). Calls after
 [`finalize_django_types`][glossary-finalize_django_types] raise the standing
 declare-after-finalize [`ConfigurationError`][glossary-configurationerror].
 
@@ -1309,7 +1405,7 @@ is the query resolver, not `run_write_pipeline_sync`** (the P2 seam fix, resolve
 the query surface). It accepts `permission_classes=` through the same
 module-internal permission holder
 ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)),
-and its resolver runs `authorize_or_raise(holder_cls, "current_user", data=None,
+and its resolver runs `authorize_or_raise(holder_cls, info, "current_user", data=None,
 instance=<the request user, or None when anonymous>)` **first** — a denial is a
 top-level `GraphQLError` (authorization is not the same axis as the anonymous read).
 Only after the gate passes does the nullable-return rule apply: an authenticated
@@ -1385,11 +1481,15 @@ had it), the generic error would always pre-empt the auth-specific one for
 `register` and the register arm of this Decision would be dead. So
 [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)
 orders `bind_auth_mutations()` **before** `bind_mutations()`: the auth ledger
-knows every declared surface (`register_mutation()` records there too), the
+knows every declared surface (`register_mutation()` re-records there on **every**
+call, identity-deduped —
+[Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)
+— so the coverage re-appears after a `registry.clear()` + re-declare and does not
+regress to the generic message on a second finalize), the
 primary-type lookup needs only registration-time state, and all three user-typed
 surfaces fail with the same actionable auth message. Tests pin the **exact** error
 a no-`UserType` schema produces for `register` specifically, distinct from
-`login`'s.
+`login`'s — **on both the first finalize and a post-reload second finalize.**
 
 **The user type's field selection IS the authenticated read surface** (the P3
 review caution). The register input side is safe by construction (privilege
@@ -1401,7 +1501,20 @@ and exclude `password` and privilege columns (the spec's example uses
 `("id", "username", "email")`); the Slice 3 GLOSSARY entry carries the same
 caution. This is doc-only guidance — the package does not police the consumer's
 selection (a deliberately privileged `UserType` behind a staff-only schema is
-legitimate), it makes the trade visible.
+legitimate), it makes the trade visible. One further asymmetry belongs in the same
+caution (the Revision-4 GOAL cross-reference): because `me` and `login.node`
+deliberately skip [`get_queryset`][glossary-get_queryset-visibility-hook]
+([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)
+/ [Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset)),
+a `UserType.get_queryset` written to **row-redact** (mask rows, drop the actor under a
+directory rule) gives **no** protection on those two surfaces — only the field
+selection governs what a logged-in actor sees of *themselves* there. This is sound
+(viewing your own row is not a directory lookup — Decision 7's actor-not-lookup
+reasoning), but it is a deliberate carve-out from [`GOAL.md`][goal] success-criterion 4
+("the same hook covers reads and writes"), called out so a consumer relying on
+`get_queryset` for row-level redaction knows it does not reach `me` / `login.node`
+(the register payload's re-fetch is likewise by-pk-without-visibility, but that is the
+`036` own-write exception, not a general read-gate bypass).
 
 Justification: resolving through the registry is what every flavor does with its
 payload type; a package-provided fallback `UserType` would pick a field selection
@@ -1793,6 +1906,13 @@ aligned with the standing test-placement contract without weakening live coverag
 - a `permission_classes=[IsAuthenticated-style]` gate on `me` denying an anonymous
   caller with the `GraphQLError` (distinct from the AllowAny default's anonymous
   `null`);
+- a custom `login` gate keyed on `data["username"]` (an account-scoped rate-limit /
+  lockout shape) sees the **attempted username** in `data` and denies/allows on it —
+  pinning the Revision-4 P3 gate payload (and asserting the password is **not** in
+  `data`); a gate reading only `info` / `operation` authorizes correctly, while a gate
+  that introspects the `mutation` argument (`mutation.Meta.model`) raises at request
+  time on the model-less fields — documented, not silently broken (the Revision-4 P2
+  composability scope);
 - SDL assertions: `LoginPayload` / `LogoutPayload` / `RegisterPayload` /
   `RegisterInput` shapes as pinned in
   [User-facing API](#user-facing-api) (`email: String` optional, below).
@@ -1806,7 +1926,10 @@ aligned with the standing test-placement contract without weakening live coverag
   a re-finalize rebuilds the emit artifacts; the **reload-idempotence cycle** —
   finalize → `registry.clear()` → re-declare → finalize, asserting `register` (and
   `login` / `logout` / `me`) are present in the second schema (the every-call
-  re-register rule); the **conflicting-declaration raise** — a second
+  re-register rule) **and, for a no-`UserType` schema, that the second finalize still
+  raises the register-arm auth-specific error — not merely that `register` is present
+  when the type exists** (the auth-ledger every-call re-record closing the reload
+  regression, Revision-4 P2); the **conflicting-declaration raise** — a second
   `register_mutation(permission_classes=[Other])` (or `login_mutation`) with a
   different permission set raises `ConfigurationError`;
 - bind validation: the no-primary-user-type
@@ -1950,8 +2073,14 @@ implementation reveals it is wrong.
   recorded follow-on ([Risks](#risks-and-open-questions)).
 - **Field-level read gates** ([`FieldSet`][glossary-fieldset] /
   [Per-field permission hooks][glossary-per-field-permission-hooks]) — `0.1.1`;
-  they will compose on top of the auth surface's returned user objects like any
-  other type.
+  they will compose on top of the auth surface's returned user objects — for
+  `register`'s G2-planned re-fetched node as for any other type. `login.node` / `me`
+  (the raw, non-optimizer-planned actor instances,
+  [Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)
+  / [Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset))
+  will be **re-examined** when field gates land, since whether a per-field
+  `check_<field>_permission` fires identically on a raw unplanned instance versus a
+  planned node is not yet proven (the Revision-4 GOAL cross-reference).
 - **A new `DjangoType` `Meta` key or settings key** —
   ([Decision 2](#decision-2--card-scope-boundary-session-auth-ships-channels--token-auth-stay-out-no-new-meta--settings-key)).
 

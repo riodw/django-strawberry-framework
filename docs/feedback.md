@@ -1,178 +1,217 @@
-# Review feedback - `spec-040-auth_mutations-0_0_13.md`
+# Adversarial review — `spec-040-auth_mutations-0_0_13.md` (Revision 3)
 
-Reviewed Revision 2 against the current mutation/finalizer source, the fakeshop
-settings/schema, and the local upstream `strawberry_django/auth/` module. The prior
-`feedback2` findings have mostly been incorporated correctly. The remaining issues are
-lifecycle and implementation-seam problems: places where the spec's desired public shape is
-right, but the named existing machinery will not produce it as written. I re-checked each
-finding against source while editing this file; the cited paths below use symbol-qualified
-references or unique source substrings rather than line numbers.
+Scope: a fresh adversarial pass on the thrice-revised spec, with every load-bearing
+reuse claim re-grounded against the package source (not taken from the spec's own
+prose), and cross-referenced against [`GOAL.md`](GOAL.md) and the north-star working
+reference [`recipes/schema.py`](../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py).
+
+The spec is in strong shape. Revisions 2–3 folded in the earlier findings and — verified
+below — did so *correctly against the code*, not just plausibly. The findings here are
+the residue those passes did not reach: two reload / composability gaps and two
+contract under-specifications, plus a GOAL cross-reference.
+
+---
 
 ## Findings
 
-### [P1] `register_subsystem_clear` is the wrong lifecycle for auth declarations, and the proposed bind order can clear auth state before or after it is needed
+### [P2] The register-arm bind error regresses to the generic message after a reload — and the specified reload test won't catch it
 
-Decision 9 says the auth declaration ledger's clear is registered through
-`registry.py::register_subsystem_clear`, so both `registry.clear()` and the finalizer's
-pre-bind reset drain it. That conflicts with what the source says that seam is for.
+**Spec anchors:** Decision 6 (lines 1236–1251, "Every factory call — cached or not —
+re-registers the class into the **mutation** declaration ledger"); Decision 8 / 9
+(line 1470, `bind_auth_mutations()` "validates Decision 8 for every declared
+user-typed surface (`register` included, **via its auth-ledger record**)"); Edge cases
+(lines 1745–1756).
 
-Source grounding:
+**Code grounded:** `_bind_mutation` resolves the payload primary type through
+`_resolve_primary_type` ([mutations/sets.py:1314](django_strawberry_framework/mutations/sets.py)),
+whose no-registered-type raise is the *generic* "…which has no registered DjangoType…"
+message naming the raw class. `bind_mutations()` runs *after* `bind_auth_mutations()`
+per the pinned order (finalizer.py:786–788 today binds `iter_subsystem_clears()` →
+`bind_mutations()`; the spec inserts `bind_auth_mutations()` between them). The whole
+point of Decision 8's Revision-2 reordering is that `bind_auth_mutations()` raises the
+*auth-specific* error for `register` **first**, pre-empting the generic one.
 
-- `django_strawberry_framework/registry.py #"The canonical pre-bind input-namespace clear list"` says the `_subsystem_clears` rows are exactly the **pre-bind input-namespace clears**, and explicitly excludes declaration registries: `"The declaration-registry resets and the per-pass shape-cache resets are NOT pre-bind input clears"`.
-- `django_strawberry_framework/registry.py::register_subsystem_clear` says it records a `"pre-bind input-namespace clear"`, not a declaration-ledger clear.
-- `django_strawberry_framework/types/finalizer.py::finalize_django_types #"registry is NOT cleared here - this resets only the emit ledgers, not declarations"` runs `iter_subsystem_clears()` immediately before `bind_mutations()`. The comment says this reset is for emit/materialization ledgers and deliberately not for declarations.
-- `django_strawberry_framework/registry.py::TypeRegistry.clear #"The DECLARATION-registry resets"` clears the mutation/form declaration registries separately from the pre-bind namespace loop. That is the existing lifecycle split.
+**The gap:** that pre-emption depends entirely on `register` having a live **auth-ledger**
+record when `bind_auth_mutations()` runs. But the spec only ever pins the every-call
+re-registration for the **mutation** ledger (line 1240). It never states when the
+`register` **auth-ledger** record is written, nor that it is re-written on every factory
+call. The register class is "created lazily on **first** factory call" (line 1236) and
+cached — so if the auth-ledger record is written alongside that once-only synthesis
+(guarded by the cache), then after `registry.clear()` drains the auth declaration ledger
+(its `TypeRegistry.clear()` hand row) the record is **gone and not re-added**, while the
+mutation-ledger re-register *is* re-added. Second finalize: `bind_auth_mutations()` no
+longer sees `register`, skips its Decision-8 validation, and `bind_mutations()`'
+`_resolve_primary_type` raises the **generic** message for a missing user type — the
+exact regression Decision 8 was written to prevent, now reachable on the reload path the
+autouse complete-reload fixtures exercise every test.
 
-If `clear_auth_declarations` is put into `register_subsystem_clear` and the pre-bind reset
-runs before `bind_auth_mutations()`, the auth declarations are gone before they bind. If
-`bind_auth_mutations()` is moved before the reset to dodge that, the reset can clear the
-`mutations.inputs` materialization ledger after `LoginPayload` / `LogoutPayload` have already
-been emitted, weakening the distinct-name collision guard and breaking retry semantics. It
-also drains the auth declarations after a failed finalize, so the documented recover-in-place
-rerun no longer sees the auth fields.
+The specified reload test (lines 1808–1809: finalize → `registry.clear()` → re-declare →
+finalize, "asserting `register` … present in the second schema") asserts *presence*, so
+it passes even while the register-arm error message has silently reverted.
 
-Fix the lifecycle split in the spec: auth declarations need a registry-clear-only clear path,
-not the pre-bind input-namespace seam. Either add a distinct registry-clear hook for
-declaration ledgers or wire an auth declaration clear beside the mutation/form declaration
-clears in `TypeRegistry.clear()`. Then order phase 2.5 as: run the existing pre-bind
-materialization reset first, run `bind_auth_mutations()` next, then `bind_mutations()`, then
-`bind_form_mutations()`. Auth payloads can use the existing `mutations.inputs` materialization
-ledger; auth declarations should not be part of that reset list.
+**Fix:** state explicitly that `register_mutation()` re-records into **both** ledgers on
+every call — the mutation ledger (for binding) and the auth ledger (for Decision-8
+coverage) — with the same identity-dedupe on both. **Test:** extend the reload cycle to
+run the no-`UserType` case *after* a `registry.clear()` + re-declare and assert the
+**register-arm auth-specific** error (distinct from the generic `_resolve_primary_type`
+message) still fires on the second finalize — not merely that `register` is present when
+the type does exist.
 
-### [P1] `RegisterPayload` cannot come from a concrete class named `DjangoRegisterMutation` under the existing field machinery
+### [P2] A custom permission class receives the bare holder as its `mutation` argument — Goal 3 composability is only partly honored for `login` / `logout` / `current_user`
 
-Decision 6 repeatedly names the synthesized concrete rider `DjangoRegisterMutation`, while
-the user-facing API and DoD require `RegisterInput` / `RegisterPayload`. The input half is
-covered: `DjangoMutation.input_type_name()` is an overridable seam. The payload half is not.
+**Spec anchors:** Goal 3 (lines 617–623, "Compose with the existing permissions
+surface… a consumer can gate any auth field… without new machinery"); Decision 5
+(lines 1070–1085, the `DjangoModelPermission` incompatibility, documented "by
+documentation, not a factory-time guard").
 
-Today `django_strawberry_framework/mutations/sets.py::_bind_mutation` calls
-`build_payload_type(mutation_cls.__name__, ...)`, and
-`django_strawberry_framework/mutations/fields.py::_synthesized_mutation_signature` returns a
-lazy ref to `f"{mutation_cls.__name__}Payload"`. There is no payload-name seam. A concrete
-class whose `__name__` is `DjangoRegisterMutation` will therefore expose
-`DjangoRegisterMutationPayload`, not `RegisterPayload`.
+**Code grounded:** the permission holder reuses `DjangoMutation.check_permission` by
+call, and that body calls
+`permission_class().has_permission(info, type(self), operation, data, instance)`
+([mutations/sets.py:1001–1006](django_strawberry_framework/mutations/sets.py)) — it
+passes `type(self)`, i.e. the **holder class**, as the `mutation` positional. For the
+model-less auth holders that object has a duck-typed `_mutation_meta` snapshot and
+`_primary_type`, but **no `Meta.model`, no `_resolve_model`, none of the shape a real
+`DjangoMutation` carries.**
 
-Source grounding:
+**The gap:** the spec documents this hazard for exactly one class (`DjangoModelPermission`)
+and frames it as that class's quirk. It is general: *any* consumer `has_permission` that
+introspects the `mutation` argument — a DRF-style gate reading `mutation.Meta.model`, a
+gate that branches on the operation by inspecting the class, etc. — breaks on the three
+model-less auth fields at request time, not just the family default. Goal 3 promises
+"gate any auth field without new machinery"; that holds only for gates that rely solely
+on `info` / `operation` / `data` and never touch the `mutation` object.
 
-- `django_strawberry_framework/mutations/sets.py::_bind_mutation #"build_payload_type("` passes `mutation_cls.__name__` as the payload base name.
-- `django_strawberry_framework/mutations/fields.py::_synthesized_mutation_signature #"return_annotation = _lazy_ref"` builds the return annotation as `f"{mutation_cls.__name__}Payload"`.
-- `django_strawberry_framework/mutations/fields.py::_synthesized_mutation_signature #"data_ann = _lazy_ref"` reads `mutation_cls.input_type_name(meta)` for the input name, so `RegisterInput` has an existing seam; the payload name does not.
+**Fix:** broaden the Decision 5 caution from "`DjangoModelPermission` is incompatible" to
+the general rule: *the `mutation` positional passed to a custom `has_permission` on
+`login` / `logout` / `current_user` is an internal permission holder, not a
+`DjangoMutation` — gates for these fields must key on `info` / `operation` / `data`, never
+on introspecting the mutation object.* **Test:** a custom permission class reading only
+`info` + `operation` authorizes/denies correctly on `login`; document (don't silently
+break) that a `mutation.Meta`-reading class raises at request time — the `DenyAll`
+precedent's posture, applied to the general case.
 
-Pick one root fix and make the spec explicit. The smallest is to make the internal safe base
-private, then synthesize the concrete registered class with `__name__ == "Register"` so the
-unchanged machinery emits `RegisterPayload`. If the concrete class really must be named
-`DjangoRegisterMutation`, the card must add a payload-name seam to both `_bind_mutation()` and
-`DjangoMutationField`; that is broader and should be named as a foundation change, not
-implied by "standard machinery."
+### [P3] What `data` / `instance` a `login` / `logout` permission gate receives is unspecified — undercutting the advertised rate-limit / invite gate
 
-### [P2] `register_mutation(permission_classes=...)` is per-field API, but the design stores permissions on a cached class with fixed payload names
+**Spec anchors:** line 833 ("`register_mutation(permission_classes=[InviteOnly])`"),
+line 1037 ("rate-limit gate on `login`, invite gate on `register`, a locked-down
+`logout`"), Decision 5 line 1057 (`authorize_or_raise(holder_cls, operation, data,
+instance)`).
 
-The spec promises `permission_classes=` on every auth factory and says
-`register_mutation()` caches the rider per normalized argument set. For `register`, those
-permissions live in `Meta.permission_classes`, so different factory calls with different
-permission classes imply different concrete mutation classes. With fixed `RegisterInput` /
-`RegisterPayload` names, two such classes collide in the existing materialization ledger:
-input generation may reuse a cached shape, but `build_payload_type()` creates a fresh payload
-class for each mutation class and `materialize_generated_input_class()` rejects a different
-class under an existing name.
+**Code grounded:** `authorize_or_raise(mutation_cls, info, operation, data, *, instance)`
+([mutations/resolvers.py:1238–1245](django_strawberry_framework/mutations/resolvers.py))
+threads `data` and `instance` straight into `check_permission` → `has_permission`.
+Decision 7 pins these for `current_user` (`data=None`, `instance=<request user | None>`,
+line 1312), and `register` — a real create mutation — gets the standard `data`=input.
+But Decision 5 writes `authorize_or_raise(holder_cls, operation, data, instance)` for
+`login` / `logout` **without ever defining `data` or `instance`.**
 
-Source grounding:
+**The gap:** the spec advertises a per-request rate-limit gate on `login`, but a gate
+that rate-limits *per account* needs the attempted `username` in `data`. If `login`
+passes `data=None`, only IP-based gating (via `info.context.request`) is possible — the
+per-account case the wording implies is silently unavailable.
 
-- `django_strawberry_framework/mutations/sets.py::_validate_permission_classes` normalizes `Meta.permission_classes` into the mutation meta snapshot.
-- `django_strawberry_framework/mutations/sets.py::DjangoMutation.check_permission #"for permission_class in meta.permission_classes"` reads permissions from that class-level meta snapshot, so permissions are class-local in the existing mutation family.
-- `django_strawberry_framework/mutations/fields.py::DjangoMutationField` exposes no field-level permission override; it accepts only `description`, `deprecation_reason`, and `directives`.
-- `django_strawberry_framework/utils/inputs.py::materialize_generated_input_class #"A collision against a different class under the same ``name`` raises"` rejects a second distinct payload/input class under the same GraphQL type name. This is the collision that two permission-specialized `Register` classes would hit.
+**Fix:** pin `login`'s gate payload — recommend `data = {"username": username}` (never
+the password) and `instance=None` (there is no pre-auth instance) — and `logout`'s
+(`data=None`, `instance=None`). **Test:** assert a `login` gate sees the attempted
+username in `data`.
 
-This is not just an edge-case nicety. The factory API invites field-local customization, while
-the current `DjangoMutationField` protocol is class-local. State the contract. Options:
+### [P3] The get_queryset bypass on `login.node` / `me` is a documented deviation from GOAL success-criterion 4, and the 0.1.1-forward "FieldSet composes like any other type" claim is not obviously true for `login.node`
 
-- Support one `register_mutation()` declaration per schema/process and raise a
-  `ConfigurationError` if a second call uses different permissions.
-- Add a field-level permission override to the auth register field rather than encoding the
-  permission classes into the mutation class, so one concrete `Register` class and one
-  `RegisterPayload` serve every field.
-- Add a payload reuse/name seam that intentionally allows same-shape payload reuse across
-  permission-specialized classes.
+**Spec anchors:** Decision 5 (lines 1087–1106, login node = raw `authenticate()`
+instance, no visibility, **no optimizer re-fetch**), Decision 7 (lines 1329–1335,
+`current_user` runs no `get_queryset`), Out-of-scope (lines 1951–1954, field-level read
+gates "will compose on top of the auth surface's returned user objects **like any other
+type**").
 
-The second option is the cleanest API-wise, but it means `register_mutation()` is no longer a
-plain `DjangoMutationField(DjangoRegisterMutation)` wrapper; the spec should own that if it
-chooses it.
+**GOAL cross-reference:** success criterion 4 ([GOAL.md](GOAL.md) line 511) is "Enforce
+row, field, and cascade permissions declaratively — **the same hook covers reads and
+writes**." `me` and `login.node` deliberately bypass `get_queryset`. This is *sound* for
+the actor's own row (viewing yourself is not a directory lookup, and the spec argues it
+well), so it is not a leak. But it is an undocumented-as-such carve-out from a stated
+success criterion, and the Revision-2 P3 caution only covers field **selection** (which
+columns `UserType` exposes), not the interaction: a `UserType.get_queryset` written to
+row-redact provides **no** protection on `me` / `login.node`.
 
-### [P2] The permission seam for `login`, `logout`, and `current_user` is promised but not actually named
+**The sharper half:** the Out-of-scope line commits a future `0.1.1` FieldSet gate to
+compose on the auth user objects "like any other type." Every *other* type's node is
+re-fetched / optimizer-planned; `login.node` is explicitly the raw `authenticate()`
+instance, per-field, **not** optimizer-planned (asymmetric with `register`'s G2-planned
+re-fetch — the spec's own words, line 1098). Whether a per-field `check_<field>_permission`
+fires identically on a raw, unplanned instance versus a planned node is not obvious, and
+the spec asserts it without qualification for an unbuilt feature.
 
-The spec says every auth factory accepts `permission_classes=` and routes it through the same
-`check_permission` machinery. `register` can inherit that from `DjangoMutation`. `login`,
-`logout`, and `current_user` cannot: they are fixed field factories, not mutation subclasses,
-and `django_strawberry_framework/mutations/resolvers.py::authorize_or_raise` assumes a
-mutation class with `_mutation_meta`, `_primary_type`, and `check_permission()`.
+**Fix:** (a) add one sentence to Decision 8's caution noting that `get_queryset`
+row-redaction does not apply to `me` / `login.node` (only field selection governs those
+surfaces); (b) scope the Out-of-scope claim to "…returned user objects; `login.node`'s
+raw-instance path will be re-examined when field gates land" rather than the unqualified
+"like any other type."
 
-Source grounding:
+---
 
-- `django_strawberry_framework/mutations/resolvers.py::authorize_or_raise #"mutation_cls().check_permission"` delegates to a mutation-class instance method and later reads `mutation_cls._primary_type` for the authorization error target.
-- `django_strawberry_framework/mutations/sets.py::DjangoMutation.check_permission` is the method that loops over `Meta.permission_classes`; fixed auth fields do not inherit it unless the spec adds a small auth permission target.
-- `django_strawberry_framework/mutations/sets.py::_validate_permission_classes #"unset_default"` is reusable for the AllowAny default, but it only validates/normalizes the class list. It does not by itself provide a resolver-time runner for non-mutation fields.
-- `django_strawberry_framework/utils/permissions.py::request_from_info` is a request extractor only; it does not run `permission_classes`.
+## GOAL.md cross-reference summary
 
-Decision 7 also never says how `current_user(permission_classes=...)` behaves, even though
-the glossary references and user-facing section say "every auth factory" / "any auth field."
-For a query helper, the operation name, `data`, and `instance` values passed to
-`has_permission(info, mutation, operation, data, instance)` are load-bearing API: is
-`instance` the authenticated user, `None` for anonymous, or never supplied? Does a denied
-anonymous `me` return `null` or raise the top-level auth `GraphQLError`?
+- **Cookbook / north-star parity:** the working reference
+  [`recipes/schema.py`](../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py)
+  (the file [GOAL.md](GOAL.md) line 3 pins as THE reference) contains **no auth surface
+  at all** — it is pure read-side nodes + filter/order/aggregate/fieldset sidecars +
+  `get_queryset` visibility. This confirms the spec's "single-upstream parity" framing is
+  **honest**: auth is a `strawberry-graphql-django` parity item, not a cookbook-parity
+  item. Consequence worth stating plainly in the spec: this card does **not** advance the
+  six-file astronomy/cookbook north-star shape (GOAL "What success looks like"); it
+  advances only the *fakeshop target-example* growth direction ("auth mutations exercised
+  by the existing test users", [GOAL.md](GOAL.md) line 535). That is a legitimate scope —
+  but the spec's framing occasionally reads as if auth is core to the north star; it is
+  adjacent to it.
+- **Criterion 6 (three mutation flavors, one envelope):** consistent. Auth is explicitly
+  "NOT a fourth flavor," and `login`/`register`/`logout` returning `FieldError` envelopes
+  upholds the Cross-subsystem invariant. No contradiction.
+- **Non-goal "silently weakens rich relations into generic placeholders":** the spec
+  correctly cites this (Decision 8) to reject a `JSON`/opaque user fallback. Aligned.
+- **Strawberry request idiom:** the cookbook uses `info.context.user` (Graphene:
+  context *is* the request); the spec correctly uses `request_from_info(info)` /
+  `request.user`, matching the GOAL astronomy example's
+  `info.context.request.user` shape. Correct for the Strawberry port — no finding.
 
-Pin a concrete helper instead of leaving each resolver to re-spell the loop. A good shape is a
-small shared auth permission target/runner that uses `_validate_permission_classes(...,
-unset_default=())`, rejects async hooks with the same `SyncMisuseError` recourse, and passes a
-documented operation string (`"login"`, `"logout"`, `"current_user"`, `"register"`) plus
-`data` / `instance` values. If `current_user` is not meant to be permission-gated, remove it
-from the "every factory" language and the "any auth field" error-shape row.
+---
 
-### [P3] The register password handoff between `decode_step` and `write_step` is underspecified
+## Verified correct (re-grounded, not taken on faith)
 
-Decision 6 says the decode step pops `password` before delegating to the model decode, and the
-write step later runs `validate_password(password, user)` then `set_password(password)`.
-`django_strawberry_framework/mutations/resolvers.py::run_write_pipeline_sync` only passes the
-decoded value returned by `decode_step` into `write_step`; it does not pass the original input.
+These Revision-2/3 claims were checked against source and hold:
 
-Source grounding:
+- **The lifecycle split is real and correctly reasoned.** The finalizer pre-bind reset
+  drains `iter_subsystem_clears()` immediately before `bind_mutations()`
+  (finalizer.py:786–788); `TypeRegistry.clear()` iterates the same emit rows and *then*
+  hand-rows `clear_mutation_registry` / `clear_form_mutation_registry` separately
+  (registry.py:576–595), with an explicit comment that declaration-registry resets are
+  **not** pre-bind input clears (registry.py:572–575). So routing the auth **declaration**
+  ledger onto a `TypeRegistry.clear()` hand row (not `register_subsystem_clear`) is exactly
+  right — the Revision-3 P1 fix is sound, and the earlier draft's `register_subsystem_clear`
+  approach really would have drained the declarations before the auth bind read them.
+- **The permission holder duck-typing is sufficient.** `check_permission` reads only
+  `type(self)._mutation_meta.permission_classes` (sets.py:998); `authorize_or_raise`
+  constructs `mutation_cls()` zero-arg and, on denial, does
+  `getattr(mutation_cls._primary_type, "__name__", mutation_cls.__name__)`
+  (resolvers.py:1264, 1276) — so a holder carrying `_mutation_meta` (with
+  `.permission_classes`), `_primary_type`, and `check_permission = DjangoMutation.check_permission`
+  is exactly what the reused code needs, and `_primary_type = None` for `logout` produces
+  the documented holder-name fallback. Confirmed feasible.
+- **Payload materialization + lazy-ref resolution.** `build_payload_type` builds both
+  shapes (inputs.py:603–616) but only *creates* the class; it is
+  `materialize_mutation_input_class` that parks it as a resolvable module global of
+  `mutations.inputs` (inputs.py:133–147) and enforces the distinct-shape collision raise.
+  So `bind_auth_mutations()` must call *both* (build then materialize) — the spec's "rides
+  the existing `mutations.inputs` emit ledger" is correct, though its shorthand
+  "`build_payload_type` materializes" is imprecise. The parked-globals overwrite-in-place
+  lifecycle (inputs.py:155–161) means the reload path re-materializes fresh payloads with
+  no staleness — so the cached `Register` rider does **not** carry a stale payload across
+  reloads (a hazard I checked for and cleared).
+- **The password never reaches a model column** is enforceable exactly as specced: the
+  register `decode_step` returning `(user, m2m, exclude, raw_password)` and popping
+  `password` before `model(**scalar_and_fk_attrs)` mirrors `_model_decode_step`'s real
+  shape, and `run_write_pipeline_sync` passes only the decode return into `write_step`.
 
-- `django_strawberry_framework/mutations/resolvers.py::run_write_pipeline_sync #"decode_step(instance) -> decoded"` documents the seam as `decode_step(instance) -> decoded | list[FieldError]`.
-- `django_strawberry_framework/mutations/resolvers.py::run_write_pipeline_sync #"write_step(instance, decoded) -> saved"` documents the next seam as receiving only `instance` and that decoded value.
-- `django_strawberry_framework/mutations/resolvers.py::_model_decode_step #"target = model(**scalar_and_fk_attrs)"` shows why `password` must be removed before delegating to the default model construction path.
-- `django_strawberry_framework/mutations/resolvers.py::_model_write_step #"target, m2m_assignments, exclude = decoded"` shows the existing decoded tuple shape that a register-specific tuple can extend explicitly.
+## Process note
 
-So the raw password must be carried deliberately after it is removed from the model attrs. The
-spec should say how. Prefer an explicit decoded tuple, e.g. `(user, m2m_assignments, exclude,
-raw_password)`, over an implicit closure: it is easier to test, mirrors the existing
-`_model_decode_step` contract, and makes "raw password exists only in memory, never on the
-model instance" auditable. Keep the sync and async plaintext-never-persisted tests, but add a
-unit assertion that the model decode never receives `password` in `scalar_and_fk_attrs`.
-
-### [P3] The auth test plan should restate the repo's first-line seed-helper rule
-
-The repo instructions require the first line of every catalog/auth test to be
-`seed_data(N)` or `create_users(N)` from `apps.products.services`, with no hand-rolled
-`User` setup outside seed-helper tests. The spec's live auth plan uses `create_users()` for
-login cases, but the register / anonymous-`me` cases are written as if they can start from an
-empty database.
-
-Source grounding:
-
-- The thread-level `AGENTS.md` instructions say: "First line of every catalog/auth test: seed_data(N) or create_users(N) from apps.products.services; never hand-roll Category/Item/Property/Entry/User".
-- `examples/fakeshop/apps/products/services.py::create_users` is the existing seed helper for auth users and is already used across `examples/fakeshop/test_query/test_products_api.py`.
-- `docs/spec-040-auth_mutations-0_0_13.md #"register → login → `me` → logout round trip"` describes live auth tests but does not restate the first-line seed-helper rule for the new auth test module.
-
-Add a short test-plan rule: every `examples/fakeshop/test_query/test_auth_api.py` test starts
-with `create_users(N)` even when the behavior under test creates a fresh account through the
-GraphQL `register` mutation. That keeps the new auth tests aligned with the standing test
-placement contract without weakening the live coverage.
-
-## Verification
-
-- Ran `uv run python scripts/check_spec_glossary.py --spec docs/spec-040-auth_mutations-0_0_13.md`: `OK: 53 terms`.
-- Confirmed Django's default fakeshop user model has `USERNAME_FIELD == "username"` and
-  `REQUIRED_FIELDS == ["email"]`, so the `RegisterInput { username email password }` example
-  is consistent.
-- Re-read the cited source symbols while editing this feedback pass; the findings above now
-  carry the grounding claims inline.
-- No pytest run; this was a design/spec review.
+The spec's DoD item 1 still gates on
+`scripts/check_spec_glossary.py … reports OK: <N> terms` — not run here (design-only
+spec; the CSV companion is a Slice-0 artifact). Flagging so it isn't assumed green.

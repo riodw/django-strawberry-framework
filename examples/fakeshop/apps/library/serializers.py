@@ -73,6 +73,19 @@ class ShelfSerializer(serializers.ModelSerializer):
         fields = ("code", "branch")
 
 
+class OptionalCodeShelfSerializer(serializers.ModelSerializer):
+    """Plain ``Shelf`` serializer used to prove mutation ``Meta.optional_fields`` over HTTP.
+
+    ``code`` is required by DRF. One live mutation leaves that strict shape alone while
+    another applies mutation-level ``optional_fields = ("code",)`` so GraphQL accepts
+    omission and DRF returns the required error in-band.
+    """
+
+    class Meta:
+        model = Shelf
+        fields = ("code", "branch")
+
+
 class RenamedShelfSerializer(serializers.ModelSerializer):
     """``Shelf`` serializer with a RENAMED scalar - the subclass-mutation CHILD's serializer (spec-039).
 

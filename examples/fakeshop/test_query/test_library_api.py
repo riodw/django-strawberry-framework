@@ -5295,6 +5295,59 @@ def test_create_shelf_via_blank_code_serializer_accepts_empty_string_over_http()
 
 
 @pytest.mark.django_db
+def test_serializer_optional_fields_over_http_uses_distinct_input_and_in_band_required_error():
+    """Mutation ``Meta.optional_fields`` weakens GraphQL requiredness without hiding DRF validation.
+
+    Two mutations share one serializer and the same field set. The strict mutation uses the
+    serializer's natural required ``code``; the optional mutation sets mutation-level
+    ``Meta.optional_fields = ("code",)``. They must not share a stale generated input, and the
+    optional shape must accept omission at GraphQL coercion while DRF still returns its
+    field-keyed required error in the payload.
+    """
+    branch = models.Branch.objects.create(name="OptionalCodeBranch", city="Boston")
+
+    strict_input = _mutation_data_input_type_name("createShelfViaOptionalCodeStrictSerializer")
+    optional_input = _mutation_data_input_type_name("createShelfViaOptionalCodeSerializer")
+    assert strict_input != optional_input
+
+    strict_code = _input_field_type(strict_input, "code")
+    assert strict_code["kind"] == "NON_NULL"
+    assert strict_code["ofType"]["name"] == "String"
+    optional_code = _input_field_type(optional_input, "code")
+    assert optional_code["kind"] == "SCALAR"
+    assert optional_code["name"] == "String"
+    optional_branch = _input_field_type(optional_input, "branchId")
+    assert optional_branch["kind"] == "NON_NULL"
+    assert optional_branch["ofType"]["name"] == "Int"
+
+    omitted_response = _post_graphql(
+        f"mutation($d: {optional_input}!) {{ createShelfViaOptionalCodeSerializer(data: $d) {{ "
+        "result { code } errors { field messages } } }",
+        variables={"d": {"branchId": branch.pk}},
+    )
+    assert omitted_response.status_code == 200
+    omitted_payload = omitted_response.json()
+    assert "errors" not in omitted_payload, omitted_payload
+    omitted_result = omitted_payload["data"]["createShelfViaOptionalCodeSerializer"]
+    assert omitted_result["result"] is None
+    assert [error["field"] for error in omitted_result["errors"]] == ["code"]
+    assert not models.Shelf.objects.filter(branch=branch, code="").exists()
+
+    success_response = _post_graphql(
+        f"mutation($d: {optional_input}!) {{ createShelfViaOptionalCodeSerializer(data: $d) {{ "
+        "result { code } errors { field messages } } }",
+        variables={"d": {"code": "OptionalCodeShelf", "branchId": branch.pk}},
+    )
+    assert success_response.status_code == 200
+    success_payload = success_response.json()
+    assert "errors" not in success_payload, success_payload
+    success_result = success_payload["data"]["createShelfViaOptionalCodeSerializer"]
+    assert success_result["errors"] == []
+    assert success_result["result"] == {"code": "OptionalCodeShelf"}
+    assert models.Shelf.objects.filter(code="OptionalCodeShelf", branch=branch).exists()
+
+
+@pytest.mark.django_db
 def test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability_over_http():
     """Two mutations over ONE serializer whose hooks differ ONLY in a field's ``allow_null`` bind to DISTINCT inputs with the CORRECT per-field nullability (spec-039 High / M2).
 
@@ -5360,6 +5413,21 @@ def test_serializer_hooks_differing_only_in_allow_null_bind_distinct_nullability
     assert nullable_result["errors"] == []
     assert nullable_result["result"] == {"code": "NullableNoteShelf"}
     assert models.Shelf.objects.filter(code="NullableNoteShelf", branch=branch).exists()
+
+    # The nullable half is also GraphQL-omittable; omission reaches DRF as a missing key, so
+    # the required-field error stays in-band rather than becoming a top-level GraphQL error.
+    omitted_response = _post_graphql(
+        "mutation { createShelfViaHookNullableNote(data: { "
+        f'code: "OmittedNullableNoteShelf", branchId: {branch.pk} '
+        "}) { result { code } errors { field messages } } }",
+    )
+    assert omitted_response.status_code == 200
+    omitted_payload = omitted_response.json()
+    assert "errors" not in omitted_payload, omitted_payload
+    omitted_result = omitted_payload["data"]["createShelfViaHookNullableNote"]
+    assert omitted_result["result"] is None
+    assert [error["field"] for error in omitted_result["errors"]] == ["note"]
+    assert not models.Shelf.objects.filter(code="OmittedNullableNoteShelf", branch=branch).exists()
 
 
 @pytest.mark.django_db

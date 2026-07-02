@@ -2919,6 +2919,34 @@ def test_create_item_via_serializer_validate_field_error_is_field_keyed():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_create_item_via_serializer_unencodable_scalar_is_field_error_no_crash():
+    """A lone-surrogate serializer scalar is rejected in-band before database validation."""
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    client = _login_with_perm("view_item_1", "add_item")
+    before = models.Item.objects.count()
+
+    response = _post_graphql(
+        _CREATE_ITEM_VIA_SERIALIZER,
+        client=client,
+        variables={
+            "d": {
+                "name": f"serializer-surrogate-{_LONE_SURROGATE}",
+                "categoryId": _global_id("products.category", category.pk),
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createItemViaSerializer"]
+    assert result["node"] is None
+    assert [error["field"] for error in result["errors"]] == ["name"]
+    assert models.Item.objects.count() == before
+
+
+@pytest.mark.django_db(transaction=True)
 def test_create_item_via_serializer_object_validate_all_sentinel_and_request_context():
     """A `name` equal to the username trips the object `validate()` -> `"__all__"` (request-context proof).
 

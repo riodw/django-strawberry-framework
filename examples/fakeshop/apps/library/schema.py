@@ -714,6 +714,31 @@ class CreateShelfViaSerializer(SerializerMutation):
         permission_classes = []
 
 
+class CreateShelfViaOptionalCodeStrictSerializer(SerializerMutation):
+    """Create a ``Shelf`` through ``OptionalCodeShelfSerializer`` with its natural required ``code``."""
+
+    class Meta:
+        serializer_class = serializers.OptionalCodeShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+
+class CreateShelfViaOptionalCodeSerializer(SerializerMutation):
+    """Create a ``Shelf`` while mutation ``Meta.optional_fields`` makes required ``code`` omittable.
+
+    ``OptionalCodeShelfSerializer`` itself declares no custom ``Meta.optional_fields``; the
+    public API is the mutation's ``Meta.optional_fields``. The strict sibling above shares the
+    same serializer and field set but does not set ``optional_fields``, so the two generated
+    inputs must remain distinct and retain different ``code`` requiredness.
+    """
+
+    class Meta:
+        serializer_class = serializers.OptionalCodeShelfSerializer
+        operation = "create"
+        optional_fields = ("code",)
+        permission_classes = []
+
+
 class CreateShelfViaSubclassedSerializer(CreateShelfViaSerializer):
     """A ``SerializerMutation`` SUBCLASS that REDEFINES ``Meta.serializer_class`` (spec-039 subclass validation).
 
@@ -1098,7 +1123,10 @@ class Mutation:
     pair whose hooks differ ONLY in a field's ``allow_null`` (proving the EMITTED nullability is
     part of the descriptor identity - distinct input types, not a silent reuse), and
     ``createShelfViaBlankCodeSerializer`` pins ``allow_blank=True`` (a non-null ``String!`` in
-    the SDL, empty string accepted at runtime).
+    the SDL, empty string accepted at runtime). ``createShelfViaOptionalCodeStrictSerializer``
+    and ``createShelfViaOptionalCodeSerializer`` share one serializer and prove mutation-level
+    ``Meta.optional_fields`` produces a distinct input with weaker GraphQL requiredness while
+    leaving DRF to enforce the omitted required field in-band.
     """
 
     create_shelf_via_form = DjangoMutationField(CreateShelfViaForm)
@@ -1109,6 +1137,12 @@ class Mutation:
     create_branch_with_shelf = DjangoMutationField(CreateBranchWithShelf)
     create_shelf_via_serializer = DjangoMutationField(CreateShelfViaSerializer)
     create_shelf_rejecting_via_serializer = DjangoMutationField(CreateShelfRejectingViaSerializer)
+    create_shelf_via_optional_code_strict_serializer = DjangoMutationField(
+        CreateShelfViaOptionalCodeStrictSerializer,
+    )
+    create_shelf_via_optional_code_serializer = DjangoMutationField(
+        CreateShelfViaOptionalCodeSerializer,
+    )
     create_shelf_via_schema_hook_serializer = DjangoMutationField(
         CreateShelfViaSchemaHookSerializer,
     )

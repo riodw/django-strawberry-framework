@@ -45,8 +45,10 @@ hook and its default steps would persist the raw password
 ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
 The only genuinely new machinery is the small session-auth resolver pair
 (`django.contrib.auth.authenticate` / `login` / `logout` behind the envelope) and the
-auth declaration ledger + `bind_auth_mutations()` phase-2.5 bind that materializes the
-`LoginPayload` / `LogoutPayload` classes and the `current_user` return alias before
+auth declaration ledger + `bind_auth_mutations()` phase-2.5 bind that materializes —
+**surface-keyed, each artifact only when its surface was declared**
+([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)) —
+the `LoginPayload` / `LogoutPayload` classes and the `current_user` return alias before
 `strawberry.Schema(...)` runs.
 
 **Version boundary** (see
@@ -354,6 +356,74 @@ Revision history (kept inline so the spec is self-contained):
   three-branch [Edge cases](#edge-cases-and-constraints) entry + the
   [Borrowing posture](#borrowing-posture) "borrow the session semantics as-is") and
   required no change.
+- **Revision 7** — applied the verified pre-build review round
+  ([`docs/feedback.md`][feedback]; every item re-grounded against the scaffolded
+  fail-loud stubs — the `auth/mutations.py` / `auth/queries.py` TODO pseudocode,
+  [`schema_reload.py`][schema-reload]'s `_PROJECT_APP_SCHEMA_MODULES`, and
+  `resolvers.py::_model_decode_step`'s AR-H2 exclude calculation — before
+  editing). **Foundational (build-critical) fixes:** **(#1)** the bind is now
+  **surface-keyed** — the ledger records which of the four surfaces was declared
+  and `bind_auth_mutations()` performs only the work those surfaces need
+  (logout-only resolves no user primary; a partial schema emits no orphan sibling
+  payloads), resolving the Decision 8 / Decision 9 tension the scaffold's
+  unconditional pseudocode exposed, with the logout-only / login-only /
+  register-only / current-user-only package tests
+  ([Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind)
+  / [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)
+  / [Test plan](#test-plan)); **(#2)** the live plan is cut to the **canonical
+  AllowAny default surface** — the one-declaration-per-process rule makes gated
+  variants of the same fixed-payload field unreachable in the one aggregated
+  fakeshop schema, so all permission-gate coverage moves to `tests/auth/`
+  isolated throwaway schemas (the documented genuinely-unreachable-live placement,
+  not a live-first weakening) ([Test plan](#test-plan)); **(#3)** Slice 1 adds
+  `"apps.accounts.schema"` to [`schema_reload.py`][schema-reload]'s
+  `_PROJECT_APP_SCHEMA_MODULES` in the same commit that composes accounts into
+  [`config/schema.py`][config-schema] (pre-empting the helper's own documented
+  `LazyType` `KeyError` / dropped-surface failure mode), with a live
+  reload-preservation test ([Slice checklist](#slice-checklist)); **(#4)** the
+  conflict / cache key is pinned to the **schema-affecting declaration args only**
+  (the normalized `permission_classes`) — `description` / `deprecation_reason` /
+  `directives` are per-field presentation kwargs the shared signature helper
+  partitions out, never a false-`ConfigurationError`
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)
+  / [Edge cases](#edge-cases-and-constraints)); **(#5)** Slice 1's checklist /
+  DoD no longer reference Slice-2-only surfaces — the register-arm /
+  current-user-arm validation coverage moves to Slice 2 while Slice 1 wires the
+  bind ordering that keeps those arms reachable
+  ([Slice checklist](#slice-checklist) / [Definition of done](#definition-of-done)).
+  **Also folded in:** **(#6)** the register exclusion seam must **preserve the
+  provided-marker** — the AR-H2 `_unprovided_exclude` still counts `password` as
+  provided, so the seam is "extract with marker preserved," never "pop before
+  decode," with a helper-level test
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor));
+  **(#7)** the "AllowAny" wording is aligned — no `AllowAny` class exists or is
+  added; the default is the empty-list semantics via
+  `_validate_permission_classes(..., unset_default=())`
+  ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design));
+  **(#8)** the holder `__name__`s are pinned (`Login` / `Session` /
+  `CurrentUser`) and the four exact denial strings documented — logout's, whose
+  target IS the holder name, reads `"Not authorized to logout Session."`
+  ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design));
+  **(#9)** the register field derivation is factored as the directly-testable
+  `derive_register_fields(user_model)` helper with the exact ordering rule,
+  delegating rejection to `editable_input_fields` — testable with a test-scoped
+  model, no `AUTH_USER_MODEL` swap
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor));
+  **(#10)** the `node` / `result` wording is scoped — `node` is the fakeshop
+  Relay-backed rendering, `me` carries no slot at all, and tests must not encode
+  `node` as the generic contract
+  ([User-facing API](#user-facing-api) / [Test plan](#test-plan)); **(#13)** the
+  holder / rider same-args cache and conflict state ARE the surface-keyed
+  declaration ledger drained by the `TypeRegistry.clear()` hand row — a prior
+  conflicting-`permission_classes` raise does not survive a clear, asserted by
+  the reload-idempotence test
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)
+  / [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
+  The round's **(#11)** (`types/relay.py` strategy resolution) was verified a
+  non-issue requiring no spec-040 edit, and **(#12)** (the bare-holder `mutation`
+  argument hazard) was verified **already addressed** by Revision 4's Decision 5
+  generalization ("key on `info` / `operation` / `data`, never on the mutation
+  object") and required no change.
 
 ## Key glossary references
 
@@ -514,46 +584,68 @@ completes the joint `0.0.13` cut
         `mutations/inputs.py::build_payload_type` onto the **existing**
         `mutations.inputs` emit ledger (the `LoginPayload` object slot resolved
         from the user model's primary [`DjangoType`][glossary-djangotype]; the
-        `LogoutPayload` from `object_type=None`), and the auth **declaration**
+        `LogoutPayload` from `object_type=None` — **each materialized only when its
+        surface was declared**, the surface-keyed bind of
+        [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)),
+        and the auth **declaration**
         ledger cleared by a `TypeRegistry.clear()` hand row beside
         `clear_mutation_registry` / `clear_form_mutation_registry` — **not**
         [`register_subsystem_clear`][registry] (that seam is drained by the
         pre-bind reset, which must not touch declarations)
         ([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
-  - [ ] Bind validation: a declared `login` (or `current_user` / `register`) with no
-        registered primary [`DjangoType`][glossary-djangotype] for
-        `get_user_model()` raises
+  - [ ] Bind validation, Slice-1 scope: a declared `login` with no registered
+        primary [`DjangoType`][glossary-djangotype] for `get_user_model()` raises
         [`ConfigurationError`][glossary-configurationerror] naming the fix — fired
         from `bind_auth_mutations()` before `bind_mutations()` can raise the
-        generic `_resolve_primary_type` message, with the register-arm error
-        pinned distinct from login's
-        ([Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind)).
+        generic `_resolve_primary_type` message — and a **logout-only** schema
+        binds with **no** user type registered at all (the surface-keyed
+        exemption). The bind **ordering** is wired here so the Slice-2 register /
+        `current_user` arms (their auth-specific errors pinned distinct from
+        login's) are reachable the commit those factories land — those arms are
+        exercised in Slice 2, not here (`register_mutation()` / `current_user()`
+        do not exist in Slice 1)
+        ([Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind)
+        / [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
   - [ ] **In the same commit:** the fakeshop `apps/accounts/` live surface (a
         schema-only app declaring `UserType(DjangoType)` over `auth.User` + the auth
         `Query` / `Mutation` blocks, composed into
-        [`config/schema.py`][config-schema]) and the live
+        [`config/schema.py`][config-schema]), **`"apps.accounts.schema"` added to
+        [`schema_reload.py`][schema-reload]'s `_PROJECT_APP_SCHEMA_MODULES`** — the
+        Revision-7 reload fix: the row lands in the SAME slice that composes
+        accounts into the aggregate, placed among the independent apps (accounts
+        references only `auth.User`, no other fakeshop app) before the
+        `config.schema` reload, because without it a post-`registry.clear()`
+        rebuild raises the `LazyType` `KeyError` (here on the auth payload /
+        `UserType` lazy refs) or silently drops the auth surface — the helper's own
+        documented failure mode — and the live
         `examples/fakeshop/test_query/test_auth_api.py` login / logout coverage
         (happy path, wrong-credential envelope, anonymous logout, session-cookie
-        round trip).
+        round trip — the canonical AllowAny default surface only,
+        [Test plan](#test-plan)).
   - [ ] Mirrored package tests under `tests/auth/` for the residue a live query
-        cannot drive (ledger idempotence / clear, bind validation, the
-        post-finalize-declaration raise, async paths, the sessionless-request edge).
+        cannot drive (ledger idempotence / clear, bind validation — the login arm +
+        the logout-only exemption, the post-finalize-declaration raise, async
+        paths, the sessionless-request edge, and the permission-gate variants on
+        isolated throwaway schemas — genuinely unreachable live under the
+        one-declaration-per-process rule, [Test plan](#test-plan)).
 - [ ] **Slice 2 — `register_mutation` + `current_user`, earned live**
   - [ ] `auth/mutations.py` grows `register_mutation()` — synthesizing (and caching)
         a [`DjangoMutation`][glossary-djangomutation] subclass whose `__name__` is
         pinned to `Register` (so the unchanged machinery emits `RegisterPayload` —
         no payload-name seam) over `get_user_model()`,
         `operation = "create"`, `Meta.fields` narrowed to
-        `(USERNAME_FIELD, *REQUIRED_FIELDS, "password")` (`email` optional per
+        `(USERNAME_FIELD, *REQUIRED_FIELDS, "password")` via the directly-testable
+        `derive_register_fields(user_model)` helper (`email` optional per
         `input_field_required`), **overriding `resolve_sync` / `resolve_async`** to
         ride `run_write_pipeline_sync` with the password-aware step pair (the
-        `decode_step` pops `password` and returns
+        `decode_step` captures `password` through the provided-marker-preserving
+        exclusion seam and returns
         `(user, m2m_assignments, exclude, raw_password)`; the write step runs
         `django.contrib.auth.password_validation.validate_password(raw_password, user)`
         — failures → `password`-keyed [`FieldError`][glossary-fielderror-envelope]s
         — then `set_password(raw_password)` **before** `full_clean()` / `save()`; the
         `036` pipeline has no per-instance write hook to reuse), with **every**
-        same-args factory call re-registering the cached rider into the mutation
+        same-`permission_classes` factory call re-registering the cached rider into the mutation
         ledger (identity-deduped; reload-safe) and a conflicting-`permission_classes`
         second call raising [`ConfigurationError`][glossary-configurationerror]
         ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
@@ -571,10 +663,15 @@ completes the joint `0.0.13` cut
         both the sync and async paths**, the validator → envelope mapping shapes
         (a `password`-keyed leaf, **not** the `"__all__"` sentinel the generic
         `validation_error_to_field_errors` mapper produces for a list-style error),
-        the factory cache identity, the **reload-idempotence cycle** (finalize →
-        `registry.clear()` → re-declare → finalize, `register` present in the
-        second schema), the register-arm no-`UserType` error message,
-        custom-`USERNAME_FIELD` mapping).
+        the exclusion-seam provided-marker test, the factory cache identity, the
+        **reload-idempotence cycle** (finalize → `registry.clear()` → re-declare →
+        finalize, `register` present in the second schema; a prior
+        conflicting-`permission_classes` raise does not survive the clear), the
+        register-arm / current-user-arm no-`UserType` error messages (pinned
+        distinct from login's — the coverage moved here from Slice 1, where these
+        factories do not yet exist) plus the register-only / current-user-only
+        surface-keyed binds, and `derive_register_fields` for the default AND a
+        custom-`USERNAME_FIELD` / custom-`REQUIRED_FIELDS` test-scoped model).
 - [ ] **Slice 3 — docs + the `0.0.13` version cut + card wrap**
   - [ ] The version quintet moves `0.0.12` → `0.0.13`: [`pyproject.toml`][pyproject],
         `__version__` in [`__init__.py`][init],
@@ -931,6 +1028,15 @@ knob (contradicting "generator unchanged") or a per-entry input-class merge over
 (hairy for FK-typed entries), so this card does neither
 ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
 
+The `node` slot in the SDL above is the **fakeshop-specific rendering**, not the
+generic contract (the Revision-7 slot-wording fix): the example `UserType`
+implements `relay.Node`, and `payload_object_slot(primary)`
+([`mutations/inputs.py`][mutations-inputs]) names the object slot `node` for a
+Relay-backed primary and `result` otherwise. The generic `login` / `register`
+payload contract is "the uniform object slot per `payload_object_slot`" — and `me`
+returns the user type **directly**, with no slot at all. Tests must not encode the
+Relay-only `node` name as the generic contract ([Test plan](#test-plan)).
+
 Consumer-visible behavior:
 
 - `login(username:, password:)` authenticates against the configured backends and
@@ -1152,7 +1258,13 @@ for model-backed writes; [`DenyAll`][mutations-permissions] for the model-less p
 form). Auth mutations are the **front door**: requiring authentication to
 authenticate is a contradiction, so each auth factory's *unset*
 `permission_classes` resolves to the explicit empty list — the `036` AllowAny
-semantics (an empty class list authorizes every request). This is not a weakening of
+semantics (an empty class list authorizes every request). **There is no `AllowAny`
+class anywhere in the package, and this card adds none** (the Revision-7 wording
+fix): "AllowAny" is this spec's shorthand for the *semantics* of the empty
+permission-class list, produced by `_validate_permission_classes(...,
+unset_default=())` — the implementation must not mint a new public `AllowAny`
+primitive, and every "AllowAny" in this document reads as "empty list /
+allow-all". This is not a weakening of
 the family rule but its documented, single-sited exception: the factories pass the
 explicit default into the same `_validate_permission_classes` normalization
 ([`mutations/sets.py`][mutations-sets]) every flavor uses, so a consumer who
@@ -1203,9 +1315,22 @@ denial message is `authorize_or_raise`'s standard
 `f"Not authorized to {operation} {target}."`, where `target` is the resolved user
 type for `login` (e.g. `"Not authorized to login UserType."`) and the holder class
 `__name__` for the model-less `logout` (the same `_primary_type is None` fallback the
-plain form's `"Not authorized to form <FormClass>."` uses) — the holder `__name__`s
-are chosen so that fallback reads sensibly, and the live gate test asserts the exact
-strings.
+plain form's `"Not authorized to form <FormClass>."` uses). **The holder `__name__`s
+are pinned, not left to implementation taste** (the Revision-7 stable-denial-string
+fix — the denial strings are test-asserted contracts): the login holder is `Login`
+and the `current_user` holder is `CurrentUser` (their denial strings read the
+resolved user type, so those names never surface in a denial), and the logout
+holder — whose `__name__` IS the denial target under the `_primary_type is None`
+fallback — is **`Session`**, so its string reads cleanly. The four expected denial
+strings, exactly: `"Not authorized to login <UserType>."`,
+`"Not authorized to logout Session."`,
+`"Not authorized to current_user <UserType>."`, and — for `register`, a real
+[`DjangoMutation`][glossary-djangomutation] with `operation = "create"` —
+the standard `"Not authorized to create <UserType>."` (where `<UserType>` is the
+consumer primary's `__name__`). The `tests/auth/` gate tests assert these exact
+strings on isolated throwaway schemas — the gated variants cannot coexist with the
+aggregate fakeshop default surface under the one-declaration-per-process rule
+([Test plan](#test-plan)).
 
 **`DjangoModelPermission` is incompatible with the model-less auth fields — by
 documentation, not a factory-time guard.** Passing
@@ -1300,7 +1425,22 @@ to `Register`** (the P1 naming fix — see below) with:
 - `Meta.model = get_user_model()`, `Meta.operation = "create"`.
 - [`Meta.fields`][glossary-metafields] narrowed to
   `(USERNAME_FIELD, *REQUIRED_FIELDS, "password")` — the
-  Django-blessed minimal account shape (`createsuperuser`'s own prompt set). The
+  Django-blessed minimal account shape (`createsuperuser`'s own prompt set).
+  **The derivation is a directly-testable helper,
+  `derive_register_fields(user_model) -> tuple[str, ...]`** (the Revision-7
+  testability fix): it takes the model as an argument — never reading
+  `get_user_model()` inline — and the rule is exact: `USERNAME_FIELD` first, then
+  each distinct `REQUIRED_FIELDS` entry in declaration order, then `password`
+  exactly once, deduplicated (an entry repeating `USERNAME_FIELD` or `password`
+  appears once). Unknown / non-editable / reverse names are rejected as the
+  bind-time [`ConfigurationError`][glossary-configurationerror] naming field +
+  model by **delegating to the standard `editable_input_fields` validation**
+  ([`mutations/inputs.py`][mutations-inputs] — which already raises naming field +
+  model, maps a forward FK to `<field>_id`, and includes forward M2M), never
+  re-implemented. The model argument is what lets both the default and a
+  custom-`USERNAME_FIELD` / custom-`REQUIRED_FIELDS` model be tested directly with
+  a test-scoped model — no second Django project and no `AUTH_USER_MODEL` swap
+  ([Test plan](#test-plan)). The
   generated input therefore **cannot** carry `is_staff` / `is_superuser` /
   `is_active` / `groups` / `user_permissions` — privilege escalation is structurally
   unreachable, not policy-checked
@@ -1321,14 +1461,32 @@ to `Register`** (the P1 naming fix — see below) with:
   fixed `RegisterInput` / `RegisterPayload` names cannot serve two distinct
   permission-specialized classes (`build_payload_type` mints a fresh payload per
   class, and `materialize_generated_input_class` raises on a second distinct class
-  under an existing name). So a same-args `register_mutation()` call returns the
-  identity-deduped cached class, but a second call with a **different**
+  under an existing name). So a same-`permission_classes` `register_mutation()`
+  call returns the identity-deduped cached class, but a second call with a **different**
   `permission_classes` raises a [`ConfigurationError`][glossary-configurationerror]
   naming the conflict (there is one `register` field per schema in practice; the
   raise makes a conflicting second declaration loud rather than a silent ledger
   collision). The same one-declaration-per-process rule holds for the fixed-payload
   `login` / `logout` / `current_user` holders
-  ([Edge cases](#edge-cases-and-constraints)).
+  ([Edge cases](#edge-cases-and-constraints)). **The conflict / cache key is the
+  schema-affecting declaration args only — today exactly the normalized
+  `permission_classes`** (the Revision-7 key fix): `description` /
+  `deprecation_reason` / `directives` are per-field `strawberry.field`
+  presentation kwargs, applied to each returned field and never part of the
+  generated types, so the shared signature helper partitions the factory kwargs
+  into three classes — resolver GraphQL args | declaration args
+  (`permission_classes`, plus any future payload-/type-affecting arg) | Strawberry
+  field kwargs — and only the declaration args enter the key.
+  `login_mutation(description="A")` after `login_mutation(description="B")` is the
+  cached-idempotent path with the new field metadata, never a
+  false-`ConfigurationError`. **And the key's state is the surface-keyed
+  declaration ledger itself, drained by the `TypeRegistry.clear()` hand row** (the
+  Revision-7 reload finding): the cached holder / rider lookup and the conflict
+  check both read the ledger, so after a `registry.clear()` a re-declaration with a
+  *different* `permission_classes` mints a fresh holder / rider rather than
+  tripping a stale conflict raise that survives the clear
+  ([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)
+  / [Edge cases](#edge-cases-and-constraints)).
 - The **password step, carried on the per-flavor resolver seam** (the P1 review
   finding, folded in): [`DjangoMutation`][glossary-djangomutation] exposes **no
   per-instance write hook** — `_run_pipeline_sync` hard-wires the model
@@ -1352,11 +1510,22 @@ to `Register`** (the P1 naming fix — see below) with:
   `model(**scalar_and_fk_attrs)`. **The decode reuses the shared UNSET-strip walk, not
   a second copy** (the [`docs/feedback.md`][feedback] D6 reuse directive): the
   provided-field iteration goes through [`iter_provided_input_fields`][utils-inputs] (the
-  same walk `_decode_relations` opens with), and the auth-specific delta — keeping
-  `password` out of the constructed model attrs — is expressed by threading an extra
-  `exclude` (`{"password"}`) into the existing `_model_decode_step`, **not** by forking a
-  second decoder (a forked walk is the classic place the UNSET / raw-`None`-vs-omitted rule
-  drifts). The `write_step` unpacks that tuple, runs
+  same walk `_decode_relations` opens with), and the auth-specific delta — capturing
+  `password` out of the constructed model attrs — is a small reusable **exclusion
+  seam**: an `excluded_input_fields` parameter threaded through the existing
+  `_model_decode_step` into `_decode_relations`, **not** a fork of the decoder (a
+  forked walk is the classic place the UNSET / raw-`None`-vs-omitted rule
+  drifts). **The seam must preserve the provided-marker** (the Revision-7 marker
+  fix): `_model_decode_step` computes the create-path `full_clean` exclude from the
+  *provided* attrs (`_provided_attr_names` → `_unprovided_exclude` — the AR-H2
+  calculation), so naively popping `password` before the walk would mark it
+  **unprovided** and silently drop the `password` column from `full_clean`
+  validation. The seam therefore extracts the excluded value while the AR-H2
+  calculation still counts `password` as provided — the register seam is "extract
+  the protected input value *with its provided-marker preserved*," never merely
+  "pop `password` from the model attrs" — and a focused helper-level test pins
+  exactly that (value captured, marker preserved, attr absent from
+  `model(**scalar_and_fk_attrs)`). The `write_step` unpacks that tuple, runs
   `django.contrib.auth.password_validation.validate_password(raw_password, user)`,
   and — on failure — maps the raised error to a `password`-keyed
   [`FieldError`][glossary-fielderror-envelope] **directly, not through the generic
@@ -1593,7 +1762,11 @@ surface as the **primary** [`DjangoType`][glossary-djangotype] registered for
 `get_user_model()` (the [`Meta.primary`][glossary-metaprimary] registry lookup every
 payload resolution uses). The consumer declares it — their field selection, their
 [`Meta.interfaces`][glossary-metainterfaces], their visibility hook for directory
-reads. `bind_auth_mutations()` validates at phase 2.5: it resolves the user primary via
+reads. `bind_auth_mutations()` validates at phase 2.5, **and only when the surface-keyed
+ledger carries a user-typed surface** — a logout-only ledger never performs the
+lookup at all, so the exemption below is structural, not a message branch
+([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)'s
+surface-keyed bind, the Revision-7 foundational fix): it resolves the user primary via
 [`registry.get`][registry]`(get_user_model())` — **the same getter
 `_resolve_primary_type` uses**, so "what counts as a registered primary" stays
 single-sited and only the raise *message* differs between the auth check and the generic
@@ -1605,7 +1778,8 @@ finalization fails with a [`ConfigurationError`][glossary-configurationerror] na
 the missing registration and the fix ("declare a `DjangoType` with
 `Meta.model = get_user_model()`; mark it `Meta.primary = True` if the model has
 several"). `logout_mutation()` is exempt — its `{ ok, errors }` payload references
-no user type, so a logout-only schema (however unlikely) needs no user type.
+no user type, so a logout-only schema (however unlikely) needs no user type and
+resolves no primary.
 
 **The validation must run BEFORE `bind_mutations()` to be reachable for
 `register`** (the P2 review finding). The register rider is itself a
@@ -1696,8 +1870,9 @@ factories cannot resolve types eagerly; they follow the exact
   [`make_declaration_registry`][mutations-sets]`("AuthMutation")` instance, not a
   hand-rolled list** (the [`docs/feedback.md`][feedback] D14 reuse directive), so the
   every-call identity-deduped `.register` and the `TypeRegistry.clear()` drain are the
-  same ones the model / form / serializer flavors use — (which
-  surfaces were declared, with which `permission_classes`) and returns a field whose
+  same ones the model / form / serializer flavors use — (**surface-keyed**: which of
+  `login` / `logout` / `register` / `current_user` was declared, with which
+  `permission_classes`) and returns a field whose
   dispatcher resolver carries an **injected `__signature__` / `__annotations__`** — the
   same mechanism [`DjangoMutationField`][glossary-djangomutationfield] uses
   ([`mutations/fields.py`][mutations-fields] `_resolve.__signature__` /
@@ -1728,13 +1903,35 @@ reset loop runs first, then `bind_auth_mutations()`, then `bind_mutations()`, th
    rider's own bind could raise `_resolve_primary_type`'s generic no-DjangoType
    error. Nothing in the auth bind depends on `bind_mutations()` having run — the
    primary-type lookup and the payload materialization consume only
-   registration-time state. It validates Decision 8 for **every** declared
-   user-typed surface (`register` included, via its auth-ledger record), resolves
-   the user primary type, materializes `LoginPayload` (object slot per
-   `payload_object_slot(primary)`) and `LogoutPayload` (`object_type=None`) through
-   the ONE `build_payload_type` builder + the existing `mutations.inputs` emit
-   ledger, and materializes the `current_user` return alias — all before
-   `strawberry.Schema(...)` resolves the lazy refs.
+   registration-time state. **The bind is surface-keyed** (the Revision-7
+   foundational fix): it reads which of the four surfaces the ledger carries and
+   performs only the work those surfaces need — the user primary type is resolved
+   at most once, and only when a user-typed surface (`login` / `register` /
+   `current_user`) was declared:
+
+   - `login` → resolve the user primary + validate
+     ([Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind),
+     the login-arm message), materialize `LoginPayload` (object slot per
+     `payload_object_slot(primary)`);
+   - `logout` → materialize `LogoutPayload` (`object_type=None`) **only** — the
+     user primary is neither resolved nor required (Decision 8's logout exemption,
+     made structural);
+   - `register` → resolve the user primary + validate (the register-arm message,
+     pre-empting `_resolve_primary_type`'s generic raise), then leave
+     `RegisterInput` / `RegisterPayload` to `bind_mutations()` (the rider is an
+     ordinary [`DjangoMutation`][glossary-djangomutation]) — the auth bind
+     materializes **no** login / logout payload for it;
+   - `current_user` → resolve the user primary + validate (the current_user-arm
+     message), materialize the `CurrentUserAlias` return alias — no login / logout
+     payloads.
+
+   Both payload materializations ride the ONE `build_payload_type` builder + the
+   existing `mutations.inputs` emit ledger, all before `strawberry.Schema(...)`
+   resolves the lazy refs. A partial schema therefore emits **no orphan
+   payloads**: a register-only schema materializes no `LoginPayload` (so it cannot
+   collide with a consumer's own distinct-shape `LoginPayload`), and a logout-only
+   schema binds with no user type registered at all
+   ([Edge cases](#edge-cases-and-constraints) / [Test plan](#test-plan)).
 3. **`bind_mutations()`** then binds the register rider as an ordinary
    [`DjangoMutation`][glossary-djangomutation] (its `RegisterInput` /
    `RegisterPayload` materialize there), followed by **`bind_form_mutations()`** —
@@ -1750,7 +1947,15 @@ them** (the P1 lifecycle fix):
   ([`registry.py::TypeRegistry.clear`][registry] #"The DECLARATION-registry
   resets"), **not** `register_subsystem_clear`. Declarations must survive the
   pre-bind reset so a recover-in-place re-finalize (and the register rider's
-  every-call re-register) still sees them.
+  every-call re-register) still sees them. **The ledger is also the holders' /
+  rider's same-args cache and conflict state** (the Revision-7 reload-idempotence
+  finding) — the cached permission holders and the cached `Register` rider are
+  looked up through the declaration records, never a separate module dict a
+  `registry.clear()` would miss — so draining the ledger drains the cache: after a
+  clear, a re-declaration with a *different* `permission_classes` mints a fresh
+  holder / rider rather than tripping a stale conflicting-declaration raise
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)
+  / [Edge cases](#edge-cases-and-constraints)).
 - The **emit** artifacts follow the pre-bind seam: `LoginPayload` / `LogoutPayload`
   ride the **existing** `mutations.inputs` `register_subsystem_clear` row (no new
   row — importing `auth/mutations.py` transitively imports `mutations/inputs.py`,
@@ -1777,6 +1982,15 @@ standard distinct-shape collision raise rather than a silent overwrite
 
 Alternatives considered (and rejected):
 
+- **Materialize both fixed payloads whenever any auth declaration exists** (the
+  scaffold's first bind pseudocode, guarding only `current_user`). Rejected on the
+  Revision-7 surface-keyed finding: it breaks the logout-only exemption (a
+  logout-only schema would resolve — and raise on — `get_user_model()`'s missing
+  primary), and it emits orphan payloads for partial schemas (a register-only
+  schema would still materialize `LoginPayload`, colliding with a consumer's own
+  distinct-shape `LoginPayload`). It was also an internal spec tension — Decision 8
+  exempted logout while this Decision read as unconditional — resolved by keying
+  the ledger and the bind on the declared surfaces.
 - **Route the auth declaration ledger through `register_subsystem_clear`** (the
   Revision-2 draft). Rejected on the P1 finding: that seam is drained by the
   pre-bind reset loop *before* `bind_auth_mutations()` runs, so the auth
@@ -1922,8 +2136,8 @@ Line deltas are planning estimates.
 
 | Slice | Files touched | New / changed tests | Approx. delta |
 | --- | --- | --- | --- |
-| 1 — auth substrate + `login` / `logout`, earned live | `auth/__init__.py` (new; the four re-exports — `register_mutation` / `current_user` land in Slice 2), `auth/mutations.py` (new; `login_mutation` / `logout_mutation` factories, the login / logout permission-holder classes reusing `check_permission` / `authorize_or_raise` by call, declaration ledger, `bind_auth_mutations()`, sync/async session resolvers, the AllowAny default through `_validate_permission_classes`), [`types/finalizer.py`][types-finalizer] (the `bind_auth_mutations()` call in the pinned phase-2.5 slot — after the pre-bind reset loop, before `bind_mutations()`), [`registry.py`][registry] (the auth **declaration** ledger's `TypeRegistry.clear()` hand row beside `clear_mutation_registry` / `clear_form_mutation_registry` — NOT `register_subsystem_clear`; `LoginPayload` / `LogoutPayload` ride the existing `mutations.inputs` emit row), `examples/fakeshop/apps/accounts/` (new; schema-only app: `UserType` over `auth.User`, `Query.me`-less for now, `Mutation.login` / `logout`), [`config/schema.py`][config-schema] + [`config/settings.py`][config-settings] (compose + install the app) | **Primary: `test_query/test_auth_api.py`** (new; ~8 live — login happy path + session cookie, wrong-password `"__all__"` envelope, inactive-user envelope, logout round trip, anonymous logout `ok: false`, a `permission_classes` gate w/ exact denial string). **Internals: `tests/auth/test_mutations.py`** (~11 — ledger record/dedupe, declarations-survive-pre-bind-reset, reload-idempotence, conflicting-declaration raise, bind validation incl. the no-primary-type raise, post-finalize factory raise, async paths, sessionless edge, async-permission `SyncMisuseError`) | `+430 / 0` |
-| 2 — `register` + `current_user`, earned live | `auth/mutations.py` (`register_mutation` + the cached `Register` rider synthesis — `__name__ = "Register"` (→ `RegisterPayload`), `Meta.fields` narrowing (`email` optional per `input_field_required`), the `resolve_sync` / `resolve_async` overrides riding `run_write_pipeline_sync` with the password-aware decode / write step pair (`decode_step` → `(user, m2m, exclude, raw_password)`; `write_step` → `validate_password(raw_password, user)` → `set_password` → `full_clean` → `save`), the every-call ledger re-register + conflicting-perms `ConfigurationError`, the `RegisterInput` input-name-seam override), `auth/queries.py` (new; `current_user` factory + resolver pair + its permission holder + the bind-materialized return alias + the alias-namespace `register_subsystem_clear` row), `examples/fakeshop/apps/accounts/schema.py` (grow `register` + `me`), | **Primary: `test_query/test_auth_api.py`** (+~7 live — register → login → `me` → logout round trip, hashed-password assertion, duplicate-username envelope, weak-password validator envelope, anonymous `me: null`, `me` under an `IsAuthenticated`-style gate, register under an explicit permission gate). **Internals: `tests/auth/test_mutations.py` + `tests/auth/test_queries.py`** (+~11 — factory cache identity, the reload-idempotence cycle, the register-arm no-`UserType` error, custom-`USERNAME_FIELD` field-set derivation, validator → envelope mapping shapes, model-decode-never-sees-`password` + plaintext-never-persisted on BOTH sync and async paths, `current_user` lazy-load forcing, alias materialization) | `+360 / 0` |
+| 1 — auth substrate + `login` / `logout`, earned live | `auth/__init__.py` (new; the four re-exports — `register_mutation` / `current_user` land in Slice 2), `auth/mutations.py` (new; `login_mutation` / `logout_mutation` factories, the login / logout permission-holder classes reusing `check_permission` / `authorize_or_raise` by call, declaration ledger, `bind_auth_mutations()`, sync/async session resolvers, the AllowAny default through `_validate_permission_classes`), [`types/finalizer.py`][types-finalizer] (the `bind_auth_mutations()` call in the pinned phase-2.5 slot — after the pre-bind reset loop, before `bind_mutations()`), [`registry.py`][registry] (the auth **declaration** ledger's `TypeRegistry.clear()` hand row beside `clear_mutation_registry` / `clear_form_mutation_registry` — NOT `register_subsystem_clear`; `LoginPayload` / `LogoutPayload` ride the existing `mutations.inputs` emit row), `examples/fakeshop/apps/accounts/` (new; schema-only app: `UserType` over `auth.User`, `Query.me`-less for now, `Mutation.login` / `logout`), [`config/schema.py`][config-schema] + [`config/settings.py`][config-settings] (compose + install the app), [`schema_reload.py`][schema-reload] (the `"apps.accounts.schema"` `_PROJECT_APP_SCHEMA_MODULES` row — same commit as the compose) | **Primary: `test_query/test_auth_api.py`** (new; ~7 live — login happy path + session cookie, wrong-password `"__all__"` envelope, inactive-user envelope, logout round trip, anonymous logout `ok: false`, the complete-reload fixture preserving the auth surface — the canonical AllowAny default surface only; the gate variants are package tests). **Internals: `tests/auth/test_mutations.py`** (~14 — ledger record/dedupe, declarations-survive-pre-bind-reset, reload-idempotence incl. the post-clear conflict reset, conflicting-declaration raise keyed on `permission_classes` only (a `description`-only delta never raises), bind validation — the login-arm no-primary-type raise + the logout-only surface-keyed exemption, post-finalize factory raise, async paths, sessionless edge, async-permission `SyncMisuseError`, the permission-gate variants on isolated throwaway schemas — exact denial strings, gate-payload contract, mutation-introspection raise) | `+430 / 0` |
+| 2 — `register` + `current_user`, earned live | `auth/mutations.py` (`register_mutation` + the cached `Register` rider synthesis — `__name__ = "Register"` (→ `RegisterPayload`), `Meta.fields` narrowing (`email` optional per `input_field_required`), the `resolve_sync` / `resolve_async` overrides riding `run_write_pipeline_sync` with the password-aware decode / write step pair (`decode_step` → `(user, m2m, exclude, raw_password)`; `write_step` → `validate_password(raw_password, user)` → `set_password` → `full_clean` → `save`), the every-call ledger re-register + conflicting-perms `ConfigurationError`, the `RegisterInput` input-name-seam override), `auth/queries.py` (new; `current_user` factory + resolver pair + its permission holder + the bind-materialized return alias + the alias-namespace `register_subsystem_clear` row), `examples/fakeshop/apps/accounts/schema.py` (grow `register` + `me`), | **Primary: `test_query/test_auth_api.py`** (+~5 live — register → login → `me` → logout round trip, hashed-password assertion, duplicate-username envelope, weak-password validator envelope, anonymous `me: null` — the AllowAny default surface only; the `me` / `register` gate variants are package tests). **Internals: `tests/auth/test_mutations.py` + `tests/auth/test_queries.py`** (+~14 — factory cache identity, the reload-idempotence cycle incl. the post-clear conflict reset, the register-arm / current-user-arm no-`UserType` errors (moved from Slice 1) + the register-only / current-user-only surface-keyed binds, `derive_register_fields` for the default and a custom-`USERNAME_FIELD` / custom-`REQUIRED_FIELDS` test-scoped model, the exclusion-seam provided-marker test, validator → envelope mapping shapes, model-decode-never-sees-`password` + plaintext-never-persisted on BOTH sync and async paths, `current_user` lazy-load forcing, alias materialization, the `me`-gate / `register`-gate variants on isolated throwaway schemas) | `+360 / 0` |
 | 3 — docs + `0.0.13` version cut + card wrap | [`docs/GLOSSARY.md`][glossary] ([Auth mutations][glossary-auth-mutations] → `shipped (0.0.13)` full contract; [`SerializerMutation`][glossary-serializermutation] → `shipped (0.0.13)`; package-version line; Index rows; submodule-exports note), [`docs/README.md`][docs-readme] + [`README.md`][readme] ("Coming next" → "Shipped today" for both `0.0.13` features; Status → `0.0.13`), [`TODAY.md`][today] (serializer wording → shipped; auth noted under capabilities-not-exercised-by-products), [`GOAL.md`][goal] (fakeshop auth wording future → shipped), [`docs/TREE.md`][tree] (`auth/`, `tests/auth/`, `accounts`, `test_auth_api.py` rows — closes the target-layout gap), [`CHANGELOG.md`][changelog] (**explicit-permission caveat**), version quintet, [`KANBAN.md`][kanban] card wrap (DB + re-render) | `test_version` → `0.0.13` | `+150 / -60` |
 
 Total expected delta: ~`+940 / -60` — an M cut, matching the card's relative size.
@@ -1965,7 +2179,9 @@ sharing the named helper there would be a *bug*, so they carry a source comment.
   `RegisterPayload` never named explicitly
   ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design) / [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
 - [ ] **D6** — register's `decode_step` reuses [`iter_provided_input_fields`][utils-inputs]
-  and threads an extra `exclude` (`{"password"}`) through `_model_decode_step`, rather than
+  and threads `excluded_input_fields={"password"}` through `_model_decode_step` /
+  `_decode_relations` **with the provided-marker preserved** (the AR-H2
+  `_unprovided_exclude` calculation still counts `password` as provided), rather than
   forking a second decoder
   ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
 - [ ] **D7** — register's `write_step` delegates `full_clean()` / `save()` /
@@ -2062,15 +2278,22 @@ sharing the named helper there would be a *bug*, so they carry a source comment.
   whose `authenticate` signature does not accept `username=` / `password=` kwargs is
   out of scope ([Risks](#risks-and-open-questions)).
 - **`REQUIRED_FIELDS` naming `password`-adjacent or unusable columns.** The
-  synthesized `Meta.fields` tuple deduplicates (`USERNAME_FIELD` appearing in
-  `REQUIRED_FIELDS` is a consumer error Django itself rejects) and the standard
-  `Meta.fields` validation rejects unknown names loudly — no silent drops.
+  `derive_register_fields(user_model)` tuple deduplicates (`USERNAME_FIELD`
+  appearing in `REQUIRED_FIELDS` is a consumer error Django itself rejects) and
+  unknown / non-editable names are rejected loudly by **delegating to the standard
+  `editable_input_fields` validation**, never a re-implemented check — no silent
+  drops
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
 - **Payload-name collisions.** `LoginPayload` / `LogoutPayload` / `RegisterPayload` /
   `RegisterInput` materialize through the standard emit ledger, so a consumer's own
   mutation class named `Login` (emitting a distinct-shape `LoginPayload`) hits the
   established distinct-shape collision
   [`ConfigurationError`][glossary-configurationerror] at finalization — documented,
-  with the consumer rename as the recourse.
+  with the consumer rename as the recourse. Conversely, the surface-keyed bind
+  materializes only the **declared** surfaces' payloads
+  ([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)),
+  so a register-only schema emits no `LoginPayload` at all — the collision can only
+  fire when the `login` surface is actually declared, never from an orphan payload.
 - **One auth surface of each kind per process** (the fixed-payload-name
   consequence). Because the payload names are fixed (`LoginPayload`,
   `RegisterPayload`, …), a second call to the *same* factory with a **different**
@@ -2082,12 +2305,23 @@ sharing the named helper there would be a *bug*, so they carry a source comment.
 - **Factory called after finalization.** The standing declare-after-finalize
   [`ConfigurationError`][glossary-configurationerror]; tests pin it for both the
   ledger factories and the lazy `Register` synthesis.
-- **Two calls to the same factory, same args.** Idempotent: the same normalized
-  argument set returns the identity-deduped cached class / holder (two schemas, or a
-  Query plus a re-export, get the same materialized payloads); a same-args
+- **Two calls to the same factory.** The conflict / cache key is the
+  **schema-affecting declaration args only** — today exactly the normalized
+  `permission_classes`. `description` / `deprecation_reason` / `directives` are
+  per-field `strawberry.field` presentation kwargs, applied to each returned field
+  and **excluded** from the key: `login_mutation(description="A")` after
+  `login_mutation(description="B")` returns the cached class / holder with the new
+  field metadata, never a raise. A same-key call is idempotent — the
+  identity-deduped cached class / holder (two schemas, or a Query plus a re-export,
+  get the same materialized payloads); a same-`permission_classes`
   `register_mutation()` re-registers the one cached `Register` rider (the reload
-  re-register, below). A *different*-args call is the conflicting-declaration raise
-  above.
+  re-register, below). A different-`permission_classes` call is the
+  conflicting-declaration raise above — and that conflict state lives in the
+  surface-keyed declaration ledger drained by the `TypeRegistry.clear()` hand row,
+  so it does **not** survive a `registry.clear()`: a post-clear re-declaration with
+  different gates mints a fresh holder / rider
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)
+  / [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
 - **Password never on the model instance.** A unit assertion pins that the register
   `decode_step` removes `password` before `model(**scalar_and_fk_attrs)` — the raw
   value travels only as the fourth element of the
@@ -2136,6 +2370,10 @@ sharing the named helper there would be a *bug*, so they carry a source comment.
   their factories, `register` through the every-call re-register of the cached rider
   — and phase 2.5 rebuilds the emit artifacts, so a second finalize reconstructs the
   full auth surface (the suite's complete-reload fixtures exercise exactly this path).
+  Because the holder / rider cache and the conflict state ARE the declaration ledger
+  ([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)),
+  the clear also resets a prior conflicting-`permission_classes` raise — a
+  post-clear re-declaration with different gates starts clean.
   A recover-in-place re-finalize after a fixable later-phase failure still sees the
   declarations because the pre-bind reset never touched them.
 
@@ -2172,23 +2410,30 @@ aligned with the standing test-placement contract without weakening live coverag
   sentinel the generic mapper would produce for `validate_password`'s list-style
   error) with the fakeshop validators' messages;
 - anonymous `me: null`;
-- a `permission_classes`-gated auth field denying with a top-level `GraphQLError`,
-  asserting the **exact** denial string (`"Not authorized to login <UserType>."` for
-  login; the holder-name fallback for logout) — the composability DoD, exercised
-  live, and the permission carrier's reuse-by-call proof;
-- a `permission_classes=[IsAuthenticated-style]` gate on `me` denying an anonymous
-  caller with the `GraphQLError` (distinct from the AllowAny default's anonymous
-  `null`);
-- a custom `login` gate keyed on `data["username"]` (an account-scoped rate-limit /
-  lockout shape) sees the **attempted username** in `data` and denies/allows on it —
-  pinning the Revision-4 P3 gate payload (and asserting the password is **not** in
-  `data`); a gate reading only `info` / `operation` authorizes correctly, while a gate
-  that introspects the `mutation` argument (`mutation.Meta.model`) raises at request
-  time on the model-less fields — documented, not silently broken (the Revision-4 P2
-  composability scope);
+- **the live suite covers only the canonical default surface** — `login` /
+  `logout` / `register` / `me` at the AllowAny default (the Revision-7 test-plan
+  fix): the one-declaration-per-process rule
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)
+  / [Edge cases](#edge-cases-and-constraints)) makes a second, permission-gated
+  variant of the same fixed-payload field impossible in the single aggregated
+  [`config/schema.py`][config-schema], so the gate variants are **genuinely
+  unreachable from a real query** against the fakeshop schema — the documented
+  [`AGENTS.md`][agents] placement exception for unreachable-live behavior, not a
+  weakening of live-first. ALL permission-gate coverage (the exact denial strings,
+  the gate-payload contract, the `IsAuthenticated`-style `me` gate, the
+  mutation-introspection raise) lives in `tests/auth/` on isolated throwaway
+  schemas (below);
+- the complete-reload fixture path preserves the auth surface:
+  [`reload_all_project_schemas`][schema-reload] (with `"apps.accounts.schema"` in
+  `_PROJECT_APP_SCHEMA_MODULES`) rebuilds `login` / `logout` / `me` after a
+  `registry.clear()` — pinning against the `LazyType` `KeyError` /
+  silently-dropped-surface failure modes the helper's own docstring documents;
 - SDL assertions: `LoginPayload` / `LogoutPayload` / `RegisterPayload` /
   `RegisterInput` shapes as pinned in
-  [User-facing API](#user-facing-api) (`email: String` optional, below).
+  [User-facing API](#user-facing-api) (`email: String` optional, below) — noting
+  `node` is the fakeshop-specific slot name (the example `UserType` implements
+  `relay.Node`; `payload_object_slot(primary)` yields `result` for a non-Relay
+  primary), so no test encodes the Relay-only `node` name as the generic contract.
 
 **Package-internal (`tests/auth/`, mirrored, internals only):**
 
@@ -2202,18 +2447,50 @@ aligned with the standing test-placement contract without weakening live coverag
   re-register rule) **and, for a no-`UserType` schema, that the second finalize still
   raises the register-arm auth-specific error — not merely that `register` is present
   when the type exists** (the auth-ledger every-call re-record closing the reload
-  regression, Revision-4 P2); the **conflicting-declaration raise** — a second
+  regression, Revision-4 P2) — **and that a prior conflicting-`permission_classes`
+  raise does not survive the clear**: after `registry.clear()`, a re-declaration
+  with a *different* `permission_classes` succeeds with a fresh holder / rider (the
+  cache / conflict state IS the ledger, Revision-7); the
+  **conflicting-declaration raise** — a second
   `register_mutation(permission_classes=[Other])` (or `login_mutation`) with a
-  different permission set raises `ConfigurationError`;
-- bind validation: the no-primary-user-type
+  different permission set raises `ConfigurationError`, **keyed on
+  `permission_classes` only** — a repeat call differing solely in `description` /
+  `deprecation_reason` / `directives` returns the cached class / holder, never
+  raises ([Edge cases](#edge-cases-and-constraints));
+- bind validation (surface-keyed, [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)):
+  the no-primary-user-type
   [`ConfigurationError`][glossary-configurationerror] (message names the fix),
-  **fired from `bind_auth_mutations()` ahead of `bind_mutations()` — with the
-  register-arm error pinned exactly and distinct from login's** (never the generic
-  `_resolve_primary_type` message); logout-only exemption; post-finalize factory
-  raise;
-- the register rider: factory cache identity; the synthesized `Meta.fields` set for
-  the default AND a custom-`USERNAME_FIELD` / custom-`REQUIRED_FIELDS` user model
-  (a test-scoped model, since fakeshop pins the default `auth.User`);
+  **fired from `bind_auth_mutations()` ahead of `bind_mutations()`** — a
+  **logout-only** schema with no `UserType` **binds successfully**, materializing
+  only `LogoutPayload` and never resolving the user primary, while login-only /
+  register-only / current-user-only schemas with no `UserType` each raise their
+  auth-specific arm (the login arm lands in Slice 1; the register / `current_user`
+  arms in Slice 2 when those factories exist, **with the register-arm error pinned
+  exactly and distinct from login's** — never the generic `_resolve_primary_type`
+  message); post-finalize factory raise;
+- permission-gate coverage (moved off the live plan — the gated variants cannot
+  coexist with the aggregate default surface in one process): each on an isolated
+  throwaway schema with an explicit `registry.clear()` between the default and
+  gated declarations — a gated auth field denying with the top-level `GraphQLError`
+  and the **exact** pinned denial strings
+  (`"Not authorized to login <UserType>."`; `"Not authorized to logout Session."` —
+  the pinned holder `__name__`,
+  [Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design));
+  an `IsAuthenticated`-style gate on `me` denying an anonymous caller with the
+  `GraphQLError` (distinct from the AllowAny default's anonymous `null`); a custom
+  `login` gate keyed on `data["username"]` seeing the **attempted username** in
+  `data` (and asserting the password is **not** in `data`); a gate reading only
+  `info` / `operation` authorizing correctly while a gate that introspects the
+  `mutation` argument (`mutation.Meta.model`) raises at request time on the
+  model-less fields (the Revision-4 P2 composability scope);
+- the register rider: factory cache identity; `derive_register_fields(user_model)`
+  called **directly** for the default AND a custom-`USERNAME_FIELD` /
+  custom-`REQUIRED_FIELDS` model (a test-scoped model passed as the argument — no
+  second Django project, no `AUTH_USER_MODEL` swap; fakeshop pins the default
+  `auth.User`), including the unknown / non-editable rejection delegating to
+  `editable_input_fields`; the exclusion-seam helper test — `password`'s value
+  captured out of the constructed attrs **while its provided-marker is preserved**
+  (the AR-H2 `_unprovided_exclude` still counts `password` as provided);
   `validate_password(password, user)` receives the constructed instance; the
   plaintext-never-persisted assertion at the write-step seam **on both the sync
   and the async resolver paths** (separate overrides, independently regressable);
@@ -2384,23 +2661,34 @@ opt-in documentation) — plus the spec/CSV and the version-cut items the
    2.5 in the pinned slot (pre-bind reset loop → `bind_auth_mutations()` →
    `bind_mutations()` → `bind_form_mutations()`), `LoginPayload` / `LogoutPayload`
    materialized through the ONE `build_payload_type` builder onto the existing
-   `mutations.inputs` emit ledger (no new `register_subsystem_clear` row in Slice 1),
+   `mutations.inputs` emit ledger — **surface-keyed: each payload only when its
+   surface was declared** ([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows))
+   — (no new `register_subsystem_clear` row in Slice 1),
    the auth **declaration** ledger cleared by a `TypeRegistry.clear()` hand row
    beside `clear_mutation_registry` / `clear_form_mutation_registry` (NOT the
    pre-bind seam — [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)),
-   the login / logout permission holders reusing `authorize_or_raise` /
-   `check_permission` by call, the user-model primary-type bind
-   validation covering all three user-typed surfaces with the auth-specific
-   message (the register arm pinned distinct from the generic
-   `_resolve_primary_type` error)
+   the login / logout permission holders (pinned `__name__`s `Login` / `Session`)
+   reusing `authorize_or_raise` / `check_permission` by call, the **surface-keyed**
+   user-model primary-type bind validation for the Slice-1-declarable surfaces (the
+   login arm's auth-specific message; the logout-only exemption binding with no
+   user type and resolving no primary) — with the bind ordering wired so the
+   Slice-2 register / `current_user` arms are reachable when those factories land
+   (their coverage is DoD items 4–5, **not** this one: `register_mutation()` /
+   `current_user()` do not exist in Slice 1)
    ([Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind)),
-   the AllowAny default + `permission_classes=` seam through the standard
-   `check_permission` machinery, and sync + async resolver pairs over
-   `django.contrib.auth` — failed authentication returning the ONE
-   `"__all__"`-keyed [`FieldError`][glossary-fielderror-envelope]
+   the AllowAny default (the empty permission-class list via `unset_default=()` —
+   no `AllowAny` class exists or is added) + `permission_classes=` seam through the
+   standard `check_permission` machinery (the conflict / cache key being
+   `permission_classes` alone — presentation kwargs excluded), and sync + async
+   resolver pairs over `django.contrib.auth` — failed authentication returning the
+   ONE `"__all__"`-keyed [`FieldError`][glossary-fielderror-envelope]
    ([Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)).
    **In the same commit**, the fakeshop `accounts` surface exposes `login` /
-   `logout` and `test_query/test_auth_api.py` earns every reachable branch live.
+   `logout`, `"apps.accounts.schema"` joins [`schema_reload.py`][schema-reload]'s
+   `_PROJECT_APP_SCHEMA_MODULES` (so the complete-reload fixtures preserve the auth
+   surface after a `registry.clear()`), and `test_query/test_auth_api.py` earns
+   every reachable branch live (the canonical AllowAny default surface — the gate
+   variants are `tests/auth/` package tests, [Test plan](#test-plan)).
 3. `tests/auth/test_mutations.py` mirrors the module for the package-only residue
    (ledger, bind validation, post-finalize raise, async, sessionless,
    [`SyncMisuseError`][glossary-syncmisuseerror]).
@@ -2411,18 +2699,23 @@ opt-in documentation) — plus the spec/CSV and the version-cut items the
    "Register"`, so the unchanged machinery emits `RegisterPayload` — there is no
    payload-name seam; [`DjangoMutation`][glossary-djangomutation] rider: `create`
    over `get_user_model()`, `Meta.fields = (USERNAME_FIELD, *REQUIRED_FIELDS,
-   "password")` with `email` optional per `input_field_required`, `RegisterInput`
+   "password")` via the directly-testable `derive_register_fields(user_model)`
+   helper (delegating unknown-field rejection to `editable_input_fields`) with
+   `email` optional per `input_field_required`, `RegisterInput`
    via the input-name seam, privilege columns structurally absent) — **overriding
    `resolve_sync` AND `resolve_async`** to ride `run_write_pipeline_sync` with the
    password-aware step pair (the `decode_step` returns
-   `(user, m2m_assignments, exclude, raw_password)` with `password` popped from the
-   model attrs; the `write_step` runs `validate_password(raw_password, user)` →
+   `(user, m2m_assignments, exclude, raw_password)` with `password` captured
+   through the provided-marker-preserving exclusion seam — the AR-H2 exclude
+   calculation still counts it as provided; the `write_step` runs
+   `validate_password(raw_password, user)` →
    `set_password(raw_password)` → `full_clean()` → `save()`; the `036` pipeline
    exposes no per-instance write hook), plaintext never persisted **on either path**
    (asserted: model decode never receives `password`), a **conflicting second call
    with a different `permission_classes` raising
-   [`ConfigurationError`][glossary-configurationerror]**, and **every same-args
-   factory call re-registering the cached rider into the mutation ledger**
+   [`ConfigurationError`][glossary-configurationerror]**, and **every
+   same-`permission_classes` factory call re-registering the cached rider into the
+   mutation ledger**
    (identity-deduped, reload-safe) — exposed through the unchanged
    [`DjangoMutationField`][glossary-djangomutationfield], with the `036` payload
    re-fetch (by pk, no visibility filter, G2-gated)
@@ -2434,10 +2727,16 @@ opt-in documentation) — plus the spec/CSV and the version-cut items the
    logout round trip, the duplicate-username and weak-password envelopes, the
    hashed-storage assertion, and anonymous `me: null`.
 5. `tests/auth/` covers the internals residue (factory cache, the
-   reload-idempotence cycle with `register` present in the second schema, the
-   register-arm no-`UserType` error message, custom user-model field-set
-   derivation, validator-mapping shapes, hash-ordering, the sync + async
-   plaintext-never-persisted pair, lazy-user forcing).
+   reload-idempotence cycle with `register` present in the second schema and a
+   prior conflicting-`permission_classes` raise not surviving the clear, the
+   register-arm / current-user-arm no-`UserType` error messages — pinned distinct
+   from login's, the coverage moved here from Slice 1 — plus the register-only /
+   current-user-only surface-keyed binds, `derive_register_fields` custom
+   user-model field-set derivation (a test-scoped model, no `AUTH_USER_MODEL`
+   swap), the exclusion-seam provided-marker test, validator-mapping shapes,
+   hash-ordering, the sync + async plaintext-never-persisted pair, lazy-user
+   forcing, and the `me` / `register` gate variants on isolated throwaway
+   schemas).
 
 **Cross-cutting — no regression**
 
@@ -2550,6 +2849,7 @@ opt-in documentation) — plus the spec/CSV and the version-cut items the
 [config-settings]: ../examples/fakeshop/config/settings.py
 [config-urls]: ../examples/fakeshop/config/urls.py
 [create-users]: ../examples/fakeshop/apps/products/management/commands/create_users.py
+[schema-reload]: ../examples/fakeshop/schema_reload.py
 [test-query-readme]: ../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->

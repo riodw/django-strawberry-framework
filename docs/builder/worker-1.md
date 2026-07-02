@@ -56,17 +56,77 @@ For the current slice:
 3. Read the active build plan and target slice.
 4. Read the active spec section for the slice and any referenced decisions.
 5. Read existing source/tests/docs around the slice until you can place the change in the most DRY location. Verify every symbol, field, method, fixture, and file path the spec names for this slice exists in the codebase OR is explicitly listed as a prior-slice deliverable; flag any spec-vs-codebase gap under `### Notes for Worker 1 (spec reconciliation)` and resolve (in-plan or spec edit) before completing the plan.
-6. Run `scripts/review_inspect.py` with `--output-dir docs/shadow` when `BUILD.md` requires it.
-7. Create or update the slice artifact, including the `Status:` line set to `planned` after the plan is written.
-8. Fill the `Plan (Worker 1)` section.
-9. Include a DRY analysis that cites existing files/helpers to reuse or extend.
-10. Include implementation steps with file paths and line anchors where practical. Mark line numbers as pin-at-write-time hints (per `BUILD.md` Implementation steps note).
-11. Include required tests and temporary-test opportunities for Worker 3.
-12. Copy the spec's nested sub-bullets for this slice from `## Slice checklist` verbatim into `### Spec slice checklist (verbatim)` — preserve exact bullet text, nested sub-bullets, and inline citations. Every box stays `- [ ]` during the planning pass. **Worker 2 ticks each box `- [x]` as it lands that sub-check during the build pass** (incremental progress); Worker 1 does not pre-tick at planning and is no longer the original ticker — it audits Worker 2's ticks at final verification (see the Final verification job).
-13. Use `Implementation discretion items` only when you have **assessed and decided** the choice belongs to Worker 2 (style, naming, equivalent-shape preference). Do not delegate architectural questions there; if you cannot resolve one by reading the spec and codebase, escalate to the maintainer instead.
-14. Append a short memory entry.
+6. Run the low-context utils inventory from "Utils inventory before helper planning" below. Use it before proposing a new helper, shared constant, validation branch, coercion utility, or test helper; record the outcome in the artifact's DRY analysis.
+7. Run `scripts/review_inspect.py` with `--output-dir docs/shadow` when `BUILD.md` requires it.
+8. Create or update the slice artifact, including the `Status:` line set to `planned` after the plan is written.
+9. Fill the `Plan (Worker 1)` section.
+10. Include a DRY analysis that cites existing files/helpers to reuse or extend.
+11. Include implementation steps with file paths and line anchors where practical. Mark line numbers as pin-at-write-time hints (per `BUILD.md` Implementation steps note).
+12. Include required tests and temporary-test opportunities for Worker 3.
+13. Copy the spec's nested sub-bullets for this slice from `## Slice checklist` verbatim into `### Spec slice checklist (verbatim)` — preserve exact bullet text, nested sub-bullets, and inline citations. Every box stays `- [ ]` during the planning pass. **Worker 2 ticks each box `- [x]` as it lands that sub-check during the build pass** (incremental progress); Worker 1 does not pre-tick at planning and is no longer the original ticker — it audits Worker 2's ticks at final verification (see the Final verification job).
+14. Use `Implementation discretion items` only when you have **assessed and decided** the choice belongs to Worker 2 (style, naming, equivalent-shape preference). Do not delegate architectural questions there; if you cannot resolve one by reading the spec and codebase, escalate to the maintainer instead.
+15. Append a short memory entry.
 
 The plan must prefer small, reusable helpers over duplicated local logic. If a helper would be premature, say why and name the condition that would justify extracting it later.
+
+### Utils inventory before helper planning
+
+Worker 1 needs enough package-wide context to avoid duplicating existing utilities, but must not spend context reading every utility implementation on every slice. During every planning pass, refresh a shallow AST inventory of `django_strawberry_framework/utils/` before proposing new helper-like logic or deciding no helper is needed.
+
+Preferred command from the repository root:
+
+```shell
+mkdir -p docs/shadow && uv run python - <<'PY' > docs/shadow/utils-inventory.md
+import ast
+from pathlib import Path
+
+
+def signature(node):
+    args = [arg.arg for arg in [*node.args.posonlyargs, *node.args.args]]
+    if node.args.vararg:
+        args.append(f"*{node.args.vararg.arg}")
+    elif node.args.kwonlyargs:
+        args.append("*")
+    args.extend(arg.arg for arg in node.args.kwonlyargs)
+    if node.args.kwarg:
+        args.append(f"**{node.args.kwarg.arg}")
+    return ", ".join(args)
+
+
+def doc_summary(node):
+    docstring = ast.get_docstring(node) or ""
+    return docstring.strip().splitlines()[0] if docstring else ""
+
+
+root = Path("django_strawberry_framework/utils")
+for path in sorted(root.rglob("*.py")):
+    relpath = path.as_posix()
+    tree = ast.parse(path.read_text())
+    print(f"## {relpath}")
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            prefix = "async " if isinstance(node, ast.AsyncFunctionDef) else ""
+            summary = doc_summary(node)
+            suffix = f" — {summary}" if summary else ""
+            print(f"- {prefix}{node.name}({signature(node)}){suffix}")
+        elif isinstance(node, ast.ClassDef):
+            bases = ", ".join(ast.unparse(base) for base in node.bases) or "object"
+            summary = doc_summary(node)
+            suffix = f" — {summary}" if summary else ""
+            print(f"- class {node.name}({bases}){suffix}")
+            for child in node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    prefix = "async " if isinstance(child, ast.AsyncFunctionDef) else ""
+                    summary = doc_summary(child)
+                    suffix = f" — {summary}" if summary else ""
+                    print(f"  - {prefix}{node.name}.{child.name}({signature(child)}){suffix}")
+    print()
+PY
+```
+
+The inventory is an index, not a substitute for source reading. It records module paths, top-level functions, classes, class methods, signatures, and first docstring lines only. If it surfaces a relevant candidate, read that specific utility source around the symbol before citing or planning against it; do not read every utility file "just in case."
+
+In the artifact's `### DRY analysis`, include a bullet named `**Utils inventory checked.**` that states `docs/shadow/utils-inventory.md` was refreshed and lists relevant candidate helpers, or says no relevant utility was found. If Worker 1 reuses an existing inventory instead of refreshing it, state why it is current, such as no diff under `django_strawberry_framework/utils/` since the inventory was generated.
 
 ### Wire-shape conversions touch all three test trees
 
@@ -78,7 +138,7 @@ When a slice adds, removes, or renames a field/column on an example-project mode
 
 ### DRY analysis shape
 
-The `Plan (Worker 1)` section's DRY analysis answers three questions explicitly, each as a bullet that cites file paths and line ranges:
+The `Plan (Worker 1)` section's DRY analysis begins with the `**Utils inventory checked.**` bullet, then answers three questions explicitly, each as a bullet that cites file paths and line ranges:
 
 - **Existing patterns reused.** Which functions, classes, validators, or test fixtures already exist that the implementation can call or extend? Cite `path/file.py:NN-MM`.
 - **New helpers justified.** What single new helper, module, or constant is justified? Name its single responsibility and the call sites it serves.

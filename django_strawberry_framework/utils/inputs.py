@@ -260,10 +260,14 @@ def normalize_field_name_sequence(
 ) -> tuple[str, ...] | None:
     """Return a ``Meta.fields`` / ``Meta.exclude`` value as a tuple of names, or ``None``.
 
-    The flavor-agnostic body shared by ``mutations/sets.py::_normalize_field_sequence``
-    and ``forms/inputs.py::normalize_form_field_sequence`` (spec-038 integration
-    pass, Finding I1). Both sites normalize a declared field sequence the same way;
-    they differed only in the human flavor label interpolated into the two
+    The flavor-agnostic body all three write flavors call DIRECTLY - the model
+    (``mutations/sets.py::DjangoMutation._validate_meta``), the form
+    (``forms/inputs.py::resolve_effective_form_fields``), and the serializer
+    (``rest_framework/inputs.py::resolve_effective_serializer_fields``) - passing
+    their own ``flavor`` label (spec-038 integration Finding I1; spec-039 Mn3 inlined
+    the former per-flavor ``_normalize_field_sequence`` / ``normalize_form_field_sequence``
+    re-binding wrappers). Each site normalizes a declared field sequence the same
+    way; they differ only in the human flavor label interpolated into the two
     ``ConfigurationError`` messages, so that single divergence is hoisted to the
     ``flavor`` parameter -- mirroring how ``mutations/sets.py::make_declaration_registry``
     already parameterizes its reject wording by a flavor label. The

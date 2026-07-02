@@ -360,11 +360,10 @@ class SerializerMutation(DjangoMutation):
           ``"__all__"``) / duplicate / unknown-name / empty-set** - via the Slice-1
           ``resolve_effective_serializer_fields``, which calls the shared
           ``utils/inputs.py::normalize_field_name_sequence(flavor="SerializerMutation")``
-          DIRECTLY - the required keyword-only ``flavor`` arg exists for exactly this, so
-          the serializer adds NO third re-binding wrapper alongside the model
-          (``_normalize_field_sequence``) / form (``normalize_form_field_sequence``) ones
-          (P2.7 - the typo-guard / non-delete-ops mechanics are promoted; the field-sequence
-          call routes through the shared helper directly).
+          DIRECTLY - the required keyword-only ``flavor`` arg exists for exactly this
+          (P2.7). All three flavors now call that shared helper directly (spec-039 Mn3
+          inlined the former model / form re-binding wrappers), so there is no
+          per-flavor wrapper on any side.
 
         ``permission_classes`` is validated + normalized by the shared
         ``_validate_permission_classes`` (the ``DjangoModelPermission`` default when
@@ -438,12 +437,12 @@ class SerializerMutation(DjangoMutation):
         # Validate the narrowing fail-loud via the Slice-1 machinery (mutual
         # exclusion, bare-string incl. ``"__all__"`` / duplicate / unknown-name /
         # empty-set guard), which calls the shared
-        # ``normalize_field_name_sequence(flavor="SerializerMutation")`` DIRECTLY - no
-        # third re-binding wrapper alongside the model (``_normalize_field_sequence``) /
-        # form (``normalize_form_field_sequence``) ones (P2.7 promotes the typo-guard /
-        # field-sequence MECHANICS; the per-flavor call routes through the shared helper
-        # directly). The snapshot stores the RAW declarations; ``build_input`` re-resolves
-        # them (D1 - the form flavor's validate-then-store-raw precedent).
+        # ``normalize_field_name_sequence(flavor="SerializerMutation")`` DIRECTLY
+        # (P2.7 promotes the typo-guard / field-sequence MECHANICS). All three flavors
+        # call that shared helper directly (spec-039 Mn3 inlined the former model /
+        # form re-binding wrappers), so there is no per-flavor wrapper on any side. The
+        # snapshot stores the RAW declarations; ``build_input`` re-resolves them (D1 -
+        # the form flavor's validate-then-store-raw precedent).
         effective = resolve_effective_serializer_fields(
             serializer_class,
             fields=fields,

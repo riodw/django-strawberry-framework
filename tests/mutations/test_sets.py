@@ -144,8 +144,8 @@ def test_meta_duplicate_fields_raises():
 
     ``("name", "name", "category")`` would otherwise collapse silently when the
     effective field set is taken as a ``frozenset``, masking the malformed
-    declaration. ``_normalize_field_sequence`` rejects it fail-loud naming the
-    repeated field.
+    declaration. The shared ``normalize_field_name_sequence`` rejects it fail-loud
+    naming the repeated field.
     """
     with pytest.raises(ConfigurationError, match="duplicate field name"):
 

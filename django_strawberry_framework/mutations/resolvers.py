@@ -451,13 +451,13 @@ def _decode_relation_id_set(
     Each element: a ``relay.GlobalID`` is run through ``decode_model_global_id``
     against the relation's Django target model - a decode failure, a wrong-model
     id, or an uncoercible ``node_id`` (any non-``OK`` status) is the uniform
-    ``_relation_error`` on ``field_name`` (AR-H4 + feedback CR-1: a wrong-type id
+    ``relation_field_error`` on ``field_name`` (AR-H4 + feedback CR-1: a wrong-type id
     is never a cross-model lookup, an uncoercible pk is never a raw ``ValueError``).
     A raw pk scalar (a non-Relay-Node target, which has no ``GlobalID`` shape)
     passes through the decode unchanged (there is no ``GlobalID`` to decode), then
     takes the raw-pk relation check below rather than the ``GlobalID`` visibility
     query. The decoded ``GlobalID`` set is visibility-checked in one query (Decision
-    10 / feedback P1): a hidden / missing member is the same ``_relation_error``,
+    10 / feedback P1): a hidden / missing member is the same ``relation_field_error``,
     indistinguishable (no existence leak). A list is homogeneously typed (all
     ``GlobalID`` for a Relay target, all raw pk otherwise), so ``needs_visibility``
     is all-or-nothing and the whole set is checked together.
@@ -646,7 +646,7 @@ def _relation_visibility_error(
     hook. A ``GlobalID``-typed relation input is only generated when the related
     model HAS a primary Relay-Node type (``mutations/inputs.py``), so this path is
     reached only with a resolvable primary. Hidden and missing are
-    indistinguishable (the uniform ``_relation_error``, no existence leak),
+    indistinguishable (the uniform ``relation_field_error``, no existence leak),
     matching the update/delete locate (``locate_instance``); FK / OneToOne pass a
     one-element list, M2M the whole set (verified in one ``pk__in`` query). An
     ``async def get_queryset`` met here raises ``SyncMisuseError`` (the same sync
@@ -654,7 +654,7 @@ def _relation_visibility_error(
 
     The ``pks`` arrive **already coerced** through the resolved type's pk field by
     ``decode_model_global_id`` (the shared DRY-2 primitive), so an uncoercible
-    ``node_id`` was already mapped to ``_relation_error`` upstream and never reaches
+    ``node_id`` was already mapped to ``relation_field_error`` upstream and never reaches
     the ``pk__in`` query as a raw Django ``ValueError`` (feedback CR-1). This step
     only confirms visibility.
     """
@@ -681,7 +681,7 @@ def _coerce_relation_pk_or_none(related_model: type, pk: Any) -> Any:
     Min/MaxValueValidators reject it here as a ``ValidationError`` instead. An
     uncoercible / out-of-range pk is treated as "identifies no row" - excluded from
     the existence query (below) and so absent from the visible set, which makes it
-    the same not-found ``_relation_error`` as a genuinely missing pk, never a
+    the same not-found ``relation_field_error`` as a genuinely missing pk, never a
     backend crash (feedback - relation huge-pk crash).
     """
     pk_field = related_model._meta.pk
@@ -706,7 +706,7 @@ def _relation_existence_error(
     create a dangling FK row and return a false success. This confirms existence in
     one query against the target model's **default manager** (existence only, NOT
     the visibility ``get_queryset`` - a raw-pk relation carries no visibility
-    contract). A missing member is the uniform ``_relation_error`` on
+    contract). A missing member is the uniform ``relation_field_error`` on
     ``field_name``, the same field-keyed envelope the GlobalID path returns, so the
     whole write rolls back inside the transaction rather than persisting a dangling
     row. Used only for raw-pk M2M; the GlobalID path's visibility query already
@@ -718,7 +718,7 @@ def _relation_existence_error(
     never reach the backend as a raw ``OverflowError`` / ``ValueError``. Because the
     membership check below still compares the FULL input set against the queried
     rows, a dropped pk is absent from ``existing`` and so fails the subset check -
-    the same not-found ``_relation_error`` outcome as a valid-but-missing pk.
+    the same not-found ``relation_field_error`` outcome as a valid-but-missing pk.
     """
     coerced = [
         value
@@ -755,7 +755,7 @@ def _raw_pk_relation_error(
     When a primary type IS registered the pks are visibility-checked through the
     SAME ``apply_type_visibility_sync(initial_queryset(...))`` query the
     ``GlobalID`` branch uses (a hidden / missing member is the uniform
-    ``_relation_error``, indistinguishable - no existence leak). When NO primary is
+    ``relation_field_error``, indistinguishable - no existence leak). When NO primary is
     registered there is no visibility contract: a raw-pk **M2M** set still needs the
     pre-``.set(...)`` existence check (``_relation_existence_error``), while a raw-pk
     **FK** relies on ``full_clean``'s own FK existence check.
@@ -772,7 +772,7 @@ def _raw_pk_relation_error(
     ``decode_model_global_id`` coercion: an uncoercible / out-of-range raw pk is
     dropped from the ``pk__in`` query so it can never reach the backend as a raw
     ``OverflowError`` / ``ValueError`` and - absent from the visible set - yields
-    the same not-found ``_relation_error`` a genuinely missing pk does. An ``async
+    the same not-found ``relation_field_error`` a genuinely missing pk does. An ``async
     def get_queryset`` met here raises ``SyncMisuseError`` (the standing sync
     discipline).
     """
@@ -955,9 +955,10 @@ def relation_field_error(graphql_name: str) -> FieldError:
     """Build the uniform invalid / hidden / wrong-model relation ``FieldError`` (spec-039 integration).
 
     The single leaf constructor for the relation-decode error all three write
-    flavors raise - the ``036`` model path (``_relation_error``), the ``038`` form
-    decoder (``forms/resolvers.py::_relation_field_error``), and the ``039``
-    serializer decoder (``rest_framework/resolvers.py::_relation_field_error``). A
+    flavors raise - the ``036`` model path (``_decode_relation_id_set`` /
+    ``_relation_membership_error``), the ``038`` form decoder, and the ``039``
+    serializer decoder all call this DIRECTLY (spec-039 Mn1 folded away the former
+    per-flavor ``_relation_error`` / ``_relation_field_error`` aliases). A
     wrong-model, hidden, missing, or uncoercible id all collapse to this one
     field-keyed shape (no existence leak), keyed to the GraphQL wire name the
     client sent (``categoryId``). Siblings the ``field_error`` leaf ctor above so

@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-06-27
+Last refreshed: 2026-07-02
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -81,15 +81,15 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**65.0% complete** toward `1.0.0` - 39 of 60 cards done (67.8% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**66.7% complete** toward `1.0.0` - 40 of 60 cards done (69.4% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 39/44 (88.6%) | 89.7% |
+| Alpha (pre-0.1.0) | 40/44 (90.9%) | 91.9% |
 | Beta (pre-1.0.0) | 0/15 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
-To complete the Alpha (pre-0.1.0) milestone: **88.6%**.
+To complete the Alpha (pre-0.1.0) milestone: **90.9%**.
 
 ## Board columns
 
@@ -97,7 +97,7 @@ To complete the Alpha (pre-0.1.0) milestone: **88.6%**.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-040-0.0.13` - Auth mutations (login / logout / register) | [spec-040-auth_mutations-0_0_13.md](docs/spec-040-auth_mutations-0_0_13.md) |
+| `DONE-040-0.0.13` - Auth mutations (login / logout / register) | [spec-040-auth_mutations-0_0_13.md](docs/spec-040-auth_mutations-0_0_13.md) |
 | `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`) | [spec-039-serializer_mutations-0_0_13.md](docs/SPECS/spec-039-serializer_mutations-0_0_13.md) |
 | `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms) | [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md) |
 | `DONE-037-0.0.11` - Upload scalar and file / image field mapping | [spec-037-upload_file_image_mapping-0_0_11.md](docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md) |
@@ -141,45 +141,6 @@ To complete the Alpha (pre-0.1.0) milestone: **88.6%**.
 ## In progress
 
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
-
-<a id="auth_mutations_login_logout_register"></a>
-### [WIP-ALPHA-040-0.0.13 - Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
-
-- Priority: Medium
-- Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
-- Status: In progress
-- Relative size: M
-- Labels: `auth`, `mutations`, `public-api`
-- Spec: [spec-040-auth_mutations-0_0_13.md](docs/spec-040-auth_mutations-0_0_13.md)
-
-#### Planning note
-
-planned
-
-#### Definition of done
-
-- [ ] Implement `django_strawberry_framework/auth/` with `login_mutation`, `logout_mutation`, `register_mutation`, and a `current_user` query helper, each composable with the existing permissions surface.
-- [ ] Mirrored tests under `tests/auth/`.
-- [ ] Documented as opt-in: consumers must import explicitly; auth mutations are not injected into every schema.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/auth/` — `mutations.py` (login / logout / register), `queries.py` (`current_user`), `utils.py`.
-
-#### Why it matters
-
-- `strawberry-graphql-django` ships a small auth-mutations module so consumers don't have to hand-wire the most common Django auth flows. Natural follow-on once general mutations land.
-
-#### Other
-
-- strawberry-graphql-django ships a small auth-mutations module.
-- depends on `DONE-036-0.0.11`.
-- new `auth/` module (`login` / `logout` / `register` + `current_user` query helper) composing with permissions; builds on DONE-036-0.0.11's mutation infra. Mirrored tests; opt-in import.
-
-#### Card references
-
-- Related: depends on `DONE-036-0.0.11`. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
 
 ## To Do - Alpha (0.1.0)
 
@@ -1300,6 +1261,80 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
+<a id="auth_mutations_login_logout_register"></a>
+### [DONE-040-0.0.13 - Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
+
+- Priority: Medium
+- Parity: 🍓 strawberry-graphql-django (Required)
+- Severity: Medium
+- Status: Shipped
+- Relative size: M
+- Labels: `auth`, `mutations`, `public-api`
+- Spec: [spec-040-auth_mutations-0_0_13.md](docs/spec-040-auth_mutations-0_0_13.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
+| [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
+| [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) | shipped (`0.0.11`) |
+| [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | shipped (`0.0.12`) |
+| [`DjangoModelPermission`](docs/GLOSSARY.md#djangomodelpermission) | shipped (`0.0.11`) |
+| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
+| [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
+| [`Meta.model`](docs/GLOSSARY.md#metamodel) | shipped |
+| [`Meta.fields`](docs/GLOSSARY.md#metafields) | shipped |
+| [`Meta.interfaces`](docs/GLOSSARY.md#metainterfaces) | shipped (`0.0.5`) |
+| [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
+| [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
+| [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
+| [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
+| [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
+
+#### Planning note
+
+planned
+
+#### Definition of done
+
+- [x] Implement `django_strawberry_framework/auth/` with `login_mutation`, `logout_mutation`, `register_mutation`, and a `current_user` query helper, each composable with the existing permissions surface.
+- [x] Mirrored tests under `tests/auth/`.
+- [x] Documented as opt-in: consumers must import explicitly; auth mutations are not injected into every schema.
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/auth/` — `mutations.py` (login / logout / register), `queries.py` (`current_user`), `utils.py`.
+
+#### Why it matters
+
+- `strawberry-graphql-django` ships a small auth-mutations module so consumers don't have to hand-wire the most common Django auth flows. Natural follow-on once general mutations land.
+
+#### Other
+
+- strawberry-graphql-django ships a small auth-mutations module.
+- depends on `DONE-036-0.0.11`.
+- new `auth/` module (`login` / `logout` / `register` + `current_user` query helper) composing with permissions; builds on DONE-036-0.0.11's mutation infra. Mirrored tests; opt-in import.
+
+#### Card references
+
+- Related: depends on `DONE-036-0.0.11`. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+
 <a id="drf_serializer_mutations_serializermutation"></a>
 ### [DONE-039-0.0.13 - DRF serializer mutations (`SerializerMutation`)](KANBAN.html#drf_serializer_mutations_serializermutation)
 
@@ -1315,7 +1350,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 | Term | Status |
 | --- | --- |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | implemented on main, releasing in `0.0.13` |
+| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
 | [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
 | [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) | shipped (`0.0.11`) |
 | [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | shipped (`0.0.12`) |
@@ -1334,7 +1369,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
 | [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
 | [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
 | [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
 | [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
@@ -1446,8 +1481,8 @@ needs spec
 | [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | implemented on main, releasing in `0.0.13` |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
+| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
 | [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
 | [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
 | [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
@@ -1637,8 +1672,8 @@ planned
 | [`DjangoImageType`](docs/GLOSSARY.md#djangoimagetype) | shipped (`0.0.11`) |
 | [`DjangoFormMutation`](docs/GLOSSARY.md#djangoformmutation) | shipped (`0.0.12`) |
 | [`DjangoModelFormMutation`](docs/GLOSSARY.md#djangomodelformmutation) | shipped (`0.0.12`) |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | implemented on main, releasing in `0.0.13` |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
+| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
 | [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 | [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
 | [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
@@ -1663,7 +1698,7 @@ needs spec
 - [x] Add `docs/spec-mutations.md`.
 - [x] Implement `django_strawberry_framework/mutations/` (sets, fields, resolvers, input-type generation) on the DRF-style Meta surface (`Meta.input_class`, `Meta.partial_input_class`, etc.).
 - [x] Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`.
-- [x] Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `WIP-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
+- [x] Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `DONE-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings).
 - [x] Tests under `tests/mutations/`.
 - [x] Live HTTP coverage under `examples/fakeshop/test_query/` exercising the products write surface.
 
@@ -1692,17 +1727,17 @@ needs spec
 
 - mutations are the single largest unscoped gap vs strawberry-graphql-django (create / update / delete + auto-generated Input / PartialInput types).
 - no on-board predecessor.
-- `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by DONE-038-0.0.12 / DONE-039-0.0.13 / WIP-ALPHA-040-0.0.13.
+- `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by DONE-038-0.0.12 / DONE-039-0.0.13 / DONE-040-0.0.13.
 
 #### Card references
 
 - Dependency: `DONE-018-0.0.6` (`Meta.primary`) — explicit primary type drives mutation target resolution. -> `DONE-018-0.0.6` - Multiple DjangoTypes per model with `Meta.primary`
 - Related: Auto-generated input types respect the relation-override contract pinned in `DONE-010-0.0.4`. -> `DONE-010-0.0.4` - 0.0.4 foundation slice (definition-order independence)
 - Dependency: `DONE-034-0.0.10` (permissions) — write mutations need to compose with `apply_cascade_permissions`. -> `DONE-034-0.0.10` - Permissions subsystem
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `WIP-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms)
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `WIP-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`)
-- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `WIP-ALPHA-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `WIP-ALPHA-040-0.0.13` - Auth mutations (login / logout / register)
-- Related: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by DONE-038-0.0.12 / DONE-039-0.0.13 / WIP-ALPHA-040-0.0.13. -> `DONE-027-0.0.8` - Filtering subsystem
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `DONE-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `DONE-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`)
+- Related: Define the shared `errors: list[FieldError]` envelope type for typed validation errors at the package boundary; reused unchanged by `DONE-038-0.0.12`, `DONE-039-0.0.13`, and `DONE-040-0.0.13`. Shape mirrors graphene-django's `ErrorType` (field name + list of message strings). -> `DONE-040-0.0.13` - Auth mutations (login / logout / register)
+- Related: `DONE-027-0.0.8`-scale. The single largest unscoped gap versus strawberry-graphql-django. New `mutations/` subpackage (sets / fields / resolvers / input-type generation) + spec + tests + live HTTP, plus the shared `errors: list[FieldError]` envelope reused by DONE-038-0.0.12 / DONE-039-0.0.13 / DONE-040-0.0.13. -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="optimizer_robustness_hardening_upstream_comparison_guards"></a>
 ### [DONE-035-0.0.10 - Optimizer robustness hardening (upstream-comparison guards)](KANBAN.html#optimizer_robustness_hardening_upstream_comparison_guards)
@@ -1740,7 +1775,7 @@ needs spec
 | [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
 | [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
 | [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
 | [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 
 #### Package files
@@ -1875,7 +1910,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
 | [Relation handling](docs/GLOSSARY.md#relation-handling) | shipped (`0.0.1`+) |
 | [`DjangoMutation`](docs/GLOSSARY.md#djangomutation) | shipped (`0.0.11`) |
-| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | planned for `0.0.13` |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
 | [`AggregateSet`](docs/GLOSSARY.md#aggregateset) | planned for `0.1.3` |
 | [`get_child_queryset`](docs/GLOSSARY.md#get_child_queryset) | planned for `0.1.3` |
 | [Connection-aware optimizer planning](docs/GLOSSARY.md#connection-aware-optimizer-planning) | shipped (`0.0.9`) |

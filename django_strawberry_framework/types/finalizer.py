@@ -780,20 +780,24 @@ def finalize_django_types() -> None:
     # DRF-absent consumer and break schema construction for everyone). Each
     # owning ``inputs`` module registered its row at import time, so the rows
     # present here are exactly the subsystems the consumer actually imported.
+    from ..auth.mutations import bind_auth_mutations
     from ..mutations.sets import bind_mutations
     from ..registry import _clear_if_importable, iter_subsystem_clears
 
     for module_path, attr in iter_subsystem_clears():
         _clear_if_importable(module_path, attr, lambda clear: clear())
-    # TODO(spec-040 Slice 1): bind auth declarations in this exact slot, after the
-    # pre-bind emit-ledger reset and before ``bind_mutations()``. Pseudocode:
-    # import ``django_strawberry_framework.auth.mutations::bind_auth_mutations``
-    # locally and call it before the existing mutation bind.
-    # ``bind_auth_mutations()`` validates the user model's primary ``DjangoType``
-    # for login/register/current_user with the auth-specific message before the
-    # register rider can fall through to ``_resolve_primary_type``'s generic
-    # mutation error. It also materializes ``LoginPayload`` / ``LogoutPayload`` and
-    # the ``CurrentUserAlias`` lazy return target before ``strawberry.Schema(...)``.
+    # Bind auth declarations in the pinned phase-2.5 slot (spec-040 Decision 9):
+    # AFTER the pre-bind emit-ledger reset above (the auth DECLARATION ledger is
+    # not a pre-bind row, so the reset never touches it) and BEFORE
+    # ``bind_mutations()`` - ``bind_auth_mutations()`` validates the user model's
+    # primary ``DjangoType`` for the login / register / current_user arms with the
+    # auth-specific message before the register rider could fall through to
+    # ``_resolve_primary_type``'s generic mutation error (spec-040 Decision 8). It
+    # also materializes ``LoginPayload`` / ``LogoutPayload`` and the
+    # ``CurrentUserAlias`` lazy return target before ``strawberry.Schema(...)``
+    # resolves them - surface-keyed, each artifact only when its surface was
+    # declared (an empty auth ledger makes the call a no-op).
+    bind_auth_mutations()
     bind_mutations()
     # Bind plain ``DjangoFormMutation`` declarations (spec-038 Slice 2 / Decision
     # 6 / Decision 13) in the SAME phase-2.5 window. The model-less plain-form

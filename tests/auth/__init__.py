@@ -1,6 +1,8 @@
-"""Package-internal tests for the planned auth subsystem."""
+"""Package-internal tests for the auth subsystem (spec-040).
 
-# TODO(spec-040 Slice 1-2): keep only non-live auth internals in this mirror
-# package. Pseudocode: ledger/bind/cache/async/sessionless tests live here; any
-# behavior reachable through a real fakeshop ``/graphql/`` request belongs in
-# ``examples/fakeshop/test_query/test_auth_api.py`` instead.
+Only non-live auth internals live in this mirror package - ledger / bind /
+cache / async / sessionless mechanics plus the permission-gate variants that
+cannot coexist with the aggregate fakeshop default surface. Any behavior
+reachable through a real fakeshop ``/graphql/`` request is earned in
+``examples/fakeshop/test_query/test_auth_api.py`` instead.
+"""

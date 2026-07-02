@@ -17,7 +17,7 @@ Companion files:
 - `alpha constraint` — current behavior that works but is intentionally narrower than the eventual API.
 - `post-1.0.0` — strategic differentiation tracked in [`../BACKLOG.md`][backlog], not on the roadmap to `1.0.0`.
 
-Current package version: `0.0.12`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
+Current package version: `0.0.13`. Alpha-quality — suitable for internal tools and prototypes, not production. The `1.0.0` release is the API-freeze boundary; after `1.0.0` ships, strict semantic versioning applies to every entry below.
 
 ## Public exports
 
@@ -55,6 +55,11 @@ Symbols available from the `django_strawberry_framework.testing` subpackage (con
 - [`safe_wrap_connection_method`](#safe_wrap_connection_method) — cooperative wrap helper for monkey-patching `connections[alias]` methods without clobbering Django's `_DatabaseFailure` wrapper (the wrap-time half of the [Django Trac #37064 hardening](#django-trac-37064-hardening) defense-in-depth).
 - `global_id_for` / `decode_global_id` — public Relay test helpers at the `django_strawberry_framework.testing.relay` submodule path (NOT re-exported from the `testing` root, by design); mint and decode the strategy-aware encoded `GlobalID` a finalized Relay-Node-shaped type emits. See [Relay Node integration](#relay-node-integration).
 
+
+Symbols available from the `django_strawberry_framework.auth` submodule (the opt-in session-auth surface - deliberately NOT re-exported from the package root, so the opt-in stays structural and a consumer who skips auth never imports `django.contrib.auth` machinery):
+
+- [`login_mutation`](#auth-mutations) / [`logout_mutation`](#auth-mutations) / [`register_mutation`](#auth-mutations) / [`current_user`](#auth-mutations) - the four session-auth field factories (see [Auth mutations](#auth-mutations)); each accepts `permission_classes=` with the explicit allow-any default.
+
 _Note:_ The import path is clean by construction — the registration path uses Strawberry's no-warning `strawberry.scalar(name=..., serialize=..., parse_value=...)` overload via the [`strawberry_config`](#strawberry_config) factory, so no `DeprecationWarning` is emitted.
 
 ## Index
@@ -65,7 +70,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 |---|---|
 | [`AggregateSet`](#aggregateset) | planned for `0.1.3` |
 | [`apply_cascade_permissions`](#apply_cascade_permissions) | shipped (`0.0.10`) |
-| [Auth mutations](#auth-mutations) | planned for `0.0.13` |
+| [Auth mutations](#auth-mutations) | shipped (`0.0.13`) |
 | [`BigInt` scalar](#bigint-scalar) | shipped (`0.0.6`) |
 | [Choice enum generation](#choice-enum-generation) | shipped (`0.0.1`) |
 | [`ConfigurationError`](#configurationerror) | shipped (`0.0.1`) |
@@ -139,7 +144,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Schema audit](#schema-audit) | shipped (`0.0.3`) |
 | [Schema export management command](#schema-export-management-command) | shipped (`0.0.7`) |
 | [Schema introspection management command](#schema-introspection-management-command) | shipped (`0.0.9`) |
-| [`SerializerMutation`](#serializermutation) | implemented on main, releasing in `0.0.13` |
+| [`SerializerMutation`](#serializermutation) | shipped (`0.0.13`) |
 | [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [strawberry_config](#strawberry_config) | shipped (`0.0.7`) |
 | [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
@@ -213,11 +218,13 @@ qs = await aapply_cascade_permissions(cls, qs, info)
 
 ## Auth mutations
 
-**Status:** planned for `0.0.13`.
+**Status:** shipped (`0.0.13`).
 
-`login` / `logout` / `register` mutations plus a `current_user` query helper. Opt-in via explicit import; not bundled into the default schema. Composes with [`DjangoMutation`](#djangomutation) and `django.contrib.auth`.
+The opt-in session-auth surface over `django.contrib.auth` (`0.0.13`): four field factories at the `django_strawberry_framework.auth` submodule path - `login_mutation()`, `logout_mutation()`, `register_mutation()`, and the `current_user()` query helper - imported explicitly and never injected into a schema (the opt-in is structural: nothing is re-exported from the package root, and a consumer who skips auth never pays its import). `login(username:, password:)` authenticates against the configured backends and establishes the Django session, returning the user in the uniform payload slot; a failed authentication (wrong password, unknown username, inactive user) is ONE non-field [`FieldError`](#fielderror-envelope) - `"Incorrect username/password"`, deliberately undifferentiated so there is no account-enumeration oracle - never a raised error. `logout` returns the pinned model-less `{ ok, errors }` payload (`ok` is whether an authenticated session existed; teardown is idempotent). `register(data: RegisterInput!)` is a narrow [`DjangoMutation`](#djangomutation) `create` over `get_user_model()` whose generated input is structurally limited to `(USERNAME_FIELD, *REQUIRED_FIELDS, "password")` - the privilege columns (`is_staff` / `is_superuser` / `groups` / `user_permissions`) are unreachable by construction - with `validate_password(password, user)` failures keyed to `password` (the constructed instance is passed, so similarity validators compare against the submitted username) and the password stored only through `set_password` (hashed before `full_clean()`; the plaintext never reaches a model column). `current_user()` returns the session actor typed as the consumer's primary user [`DjangoType`](#djangotype), or `null` for an anonymous request (an expected state, never an error), with no [`get_queryset`](#get_queryset-visibility-hook) re-run - the actor-not-lookup rule; `login`'s payload user likewise skips visibility and the optimizer re-fetch, while `register`'s node comes back through the standard planned re-fetch.
 
-**See also:** [`DjangoMutation`](#djangomutation).
+Every factory accepts `permission_classes=` through the standard `check_permission` machinery; the auth **default is the explicit empty list (allow-any)** - the deliberate, documented inversion of the write family's deny-by-default ([`DjangoModelPermission`](#djangomodelpermission) / deny-all), because an auth surface that requires authentication is a contradiction. A user-typed auth field declared with no registered primary user `DjangoType` fails loudly at [`finalize_django_types`](#finalize_django_types) naming the fix (`Meta.model = get_user_model()`; `Meta.primary = True` when the model has several types); a logout-only schema is exempt (its payload references no user type). **The consumer `UserType`'s field selection IS the authenticated read surface**: whatever that type selects is what `login` / `register` / `me` return - select explicitly (never `fields = "__all__"` over the user model) and keep `password` and the privilege columns off it; note a `get_queryset` written for row-redaction does not reach `me` / `login`'s node (only the field selection governs what an actor sees of themselves there). Session transport requires Django's `SessionMiddleware` + `AuthenticationMiddleware` on the `/graphql/` path (a sessionless deployment surfaces Django's own error); Channels / websocket auth is deliberately not covered until the `0.0.14` [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) card.
+
+**See also:** [`DjangoMutation`](#djangomutation), [`FieldError` envelope](#fielderror-envelope), [`DjangoModelPermission`](#djangomodelpermission).
 
 ## `BigInt` scalar
 
@@ -1244,7 +1251,7 @@ The positional `type` argument dispatches by shape: a **dotted** object path (`a
 
 ## `SerializerMutation`
 
-**Status:** implemented on main, releasing in `0.0.13`.
+**Status:** shipped (`0.0.13`).
 
 Consumes a DRF `Serializer` / `ModelSerializer` via `Meta.serializer_class`. It **subclasses** [`DjangoMutation`](#djangomutation), overriding `_resolve_model` to return `Meta.serializer_class.Meta.model` (the `ModelSerializer`-driven contract), and so reuses the base value: the primary [`DjangoType`](#djangotype) payload in the uniform `node` / `result` slot, the [`DjangoModelPermission`](#djangomodelpermission) default (authorized for free through the model override), the visibility-scoped `update` locate, and the optimizer re-fetch (the G2 gate keeps `select_related` / `prefetch_related` but suppresses `.only(...)` under the mutation operation). Its input is **serializer-derived** rather than model-column derived — the `serializer_converter` field map plus the serializer-input generator build the `<Serializer>Input` / `<Serializer>PartialInput` from the serializer's schema-time fields. Validation runs `serializer.is_valid()` then `serializer.save()`; `serializer.errors` populate the shared [`FieldError` envelope](#fielderror-envelope) (DRF's `non_field_errors` keyed under the `"__all__"` sentinel) and the post-save row is returned in the uniform slot. Bound at [`finalize_django_types`](#finalize_django_types) phase 2.5 alongside the other [`DjangoMutation`](#djangomutation) bases.
 

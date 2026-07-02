@@ -226,7 +226,9 @@ def _decode_relations(
     model: type,
     data: Any,
     info: Any,
-) -> tuple[dict[str, Any], list[Any], FieldError | None]:
+    *,
+    excluded_input_fields: frozenset[str] = frozenset(),
+) -> tuple[dict[str, Any], list[Any], dict[str, Any], FieldError | None]:
     """Decode the provided input fields into model attrs + M2M pk lists (spec-036 Decision 8 step 1).
 
     Walks the input dataclass's provided fields (``UNSET`` stripped - the
@@ -247,19 +249,37 @@ def _decode_relations(
     the raw-pk visibility gap. With no primary registered there is no contract to
     apply.
 
-    Returns ``(scalar_and_fk_attrs, m2m_assignments, error)`` where
-    ``scalar_and_fk_attrs`` is the ``{model_attr: value}`` map for ``setattr`` /
-    ``Model(**...)`` (FK as ``<field>_id`` -> pk), ``m2m_assignments`` is a list
-    of ``(m2m_field_name, [pk, ...])`` deferred to the post-save write step
-    (AR-M1), and ``error`` is the first decode ``FieldError`` or ``None``.
+    ``excluded_input_fields`` is the spec-040 D6 **exclusion seam**: a provided
+    input attr named there (the register flavor's ``password``) is captured into
+    the ``excluded_values`` map and skipped BEFORE the relation / scalar / null
+    routing, so its raw value never reaches ``model(**scalar_and_fk_attrs)`` -
+    while the walk itself (the UNSET-vs-null-vs-value tri-state) stays the ONE
+    shared ``iter_provided_input_fields`` pass, never a forked copy. The caller
+    (``_model_decode_step``) folds the captured names back into the AR-H2
+    provided-marker calculation, so exclusion never silently drops the column
+    from ``full_clean`` validation.
+
+    Returns ``(scalar_and_fk_attrs, m2m_assignments, excluded_values, error)``
+    where ``scalar_and_fk_attrs`` is the ``{model_attr: value}`` map for
+    ``setattr`` / ``Model(**...)`` (FK as ``<field>_id`` -> pk),
+    ``m2m_assignments`` is a list of ``(m2m_field_name, [pk, ...])`` deferred to
+    the post-save write step (AR-M1), ``excluded_values`` is the captured
+    ``{excluded_attr: raw value}`` map (empty for the default no-exclusion walk),
+    and ``error`` is the first decode ``FieldError`` or ``None``.
     """
     fk_by_attr, m2m_by_name = _relation_field_index(model)
     scalar_and_fk_attrs: dict[str, Any] = {}
     m2m_assignments: list[Any] = []
+    excluded_values: dict[str, Any] = {}
 
     # The ``UNSET``-strip walk is single-sited in ``iter_provided_input_fields``
     # (spec-039 M2); the per-field kind routing below stays flavor-specific.
     for python_name, value, field in iter_provided_input_fields(data):
+        if python_name in excluded_input_fields:
+            # The exclusion seam (spec-040 D6): capture the raw provided value and
+            # skip every decode branch - the value must never become a model attr.
+            excluded_values[python_name] = value
+            continue
         # A decode failure keys to the input field's GraphQL name (what the
         # client sent), e.g. ``categoryId`` - distinct from a ``full_clean``
         # error, which keys to the MODEL field name. ``graphql_name`` is the
@@ -270,7 +290,7 @@ def _decode_relations(
         if m2m_field is not None:
             pks, error = _decode_relation_id_list(graphql_name, value, m2m_field, info)
             if error is not None:
-                return {}, [], error
+                return {}, [], {}, error
             m2m_assignments.append((python_name, pks))
             continue
 
@@ -278,19 +298,19 @@ def _decode_relations(
         if fk_field is not None:
             pk, error = _decode_single_relation_id(graphql_name, value, fk_field, info)
             if error is not None:
-                return {}, [], error
+                return {}, [], {}, error
             scalar_and_fk_attrs[python_name] = pk
             continue
 
         null_error = _explicit_null_error(model, python_name, graphql_name, value)
         if null_error is not None:
-            return {}, [], null_error
+            return {}, [], {}, null_error
         text_error = _unencodable_text_error(graphql_name, value)
         if text_error is not None:
-            return {}, [], text_error
+            return {}, [], {}, text_error
         scalar_and_fk_attrs[python_name] = _make_aware_if_naive(raw_choice_value(value))
 
-    return scalar_and_fk_attrs, m2m_assignments, None
+    return scalar_and_fk_attrs, m2m_assignments, excluded_values, None
 
 
 def _explicit_null_error(
@@ -1136,7 +1156,8 @@ def _model_decode_step(
     info: Any,
     *,
     instance: Any,
-) -> tuple[dict[str, Any], list[Any], list[str] | None] | list[FieldError]:
+    excluded_input_fields: frozenset[str] = frozenset(),
+) -> tuple[Any, ...] | list[FieldError]:
     """The model ``decode_step``: relation-decode + construct / ``setattr`` (spec-039 P1.5).
 
     Decodes the input relations (the ``036`` ``_decode_relations`` contract:
@@ -1150,25 +1171,28 @@ def _model_decode_step(
     ``Model.objects.create()``), update excludes unprovided fields so an unsent
     column keeps its stored value, both keep validating any unprovided field
     co-participating in a unique constraint with a provided one.
+
+    ``excluded_input_fields`` is the spec-040 D6 exclusion seam (the register
+    flavor's ``password``): the named provided attrs are captured OUT of the model
+    construction by ``_decode_relations`` (the raw value never becomes a model
+    attr) **with their provided-marker preserved** - the captured names are folded
+    back into the AR-H2 ``provided`` set below, so the excluded column still
+    participates in ``full_clean`` validation (naively popping it pre-walk would
+    mark it unprovided and silently drop it from the exclude calculation - the
+    spec-040 Revision-7 marker fix). A NON-EMPTY exclusion returns the extended
+    tuple ``(target, m2m_assignments, exclude, excluded_values)``; the default
+    no-exclusion call keeps the exact historical three-tuple, so the model
+    flavor's ``_model_write_step`` contract is byte-unchanged.
     """
-    scalar_and_fk_attrs, m2m_assignments, decode_error = _decode_relations(model, data, info)
+    scalar_and_fk_attrs, m2m_assignments, excluded_values, decode_error = _decode_relations(
+        model,
+        data,
+        info,
+        excluded_input_fields=excluded_input_fields,
+    )
     if decode_error is not None:
         return [decode_error]
 
-    # TODO(spec-040 Slice 2): add a small reusable exclusion seam here and in
-    # ``_decode_relations`` so ``Register`` can remove ``password`` before model
-    # construction without forking ``iter_provided_input_fields``. Pseudocode:
-    # thread ``excluded_input_fields=frozenset({"password"})`` into
-    # ``_decode_relations``; during its existing ``iter_provided_input_fields``
-    # loop, record any excluded provided values in an ``excluded_values`` map and
-    # ``continue`` before relation/scalar/null validation. Return that map beside
-    # ``scalar_and_fk_attrs`` / ``m2m_assignments`` so this function can append
-    # ``excluded_values["password"]`` to the decoded tuple that the register write
-    # step receives.
-    # The exclusion must preserve the UNSET-vs-null-vs-value rules and the
-    # AR-H2 ``exclude`` calculation. The register write step then validates the
-    # raw password, calls ``set_password()``, and delegates ``full_clean`` /
-    # ``save`` / M2M assignment back to the shared model write tail.
     if instance is None:
         target = model(**scalar_and_fk_attrs)
     else:
@@ -1177,7 +1201,12 @@ def _model_decode_step(
             setattr(target, attr, value)
 
     provided = _provided_attr_names(model, scalar_and_fk_attrs, m2m_assignments)
+    # The exclusion seam preserves the provided-marker (spec-040 D6): an excluded
+    # input WAS provided, so it still counts for the AR-H2 exclude calculation.
+    provided |= set(excluded_values)
     exclude = _unprovided_exclude(model, provided)
+    if excluded_input_fields:
+        return target, m2m_assignments, exclude, excluded_values
     return target, m2m_assignments, exclude
 
 
@@ -1425,13 +1454,22 @@ async def run_pipeline_async(
     synchronously inside that thread, while an ``async def get_queryset`` raises
     ``SyncMisuseError`` there (no awaiting context - the standing discipline).
     """
-    # TODO(spec-040 Slice 1): if the auth resolvers need the same one-boundary
-    # primitive, factor the core without changing the mutation-shaped public
-    # wrapper above. Pseudocode: expose a generic helper that runs an arbitrary
-    # callable inside one ``sync_to_async(thread_sensitive=True)`` worker.
-    # Auth's async login/logout/current_user path should wrap gate-then-session
-    # work in one worker, while this mutation entry keeps its current signature.
-    return await sync_to_async(sync_body, thread_sensitive=True)(mutation_cls, info, data, id)
+    return await run_in_one_sync_boundary(sync_body, mutation_cls, info, data, id)
+
+
+async def run_in_one_sync_boundary(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run ``fn(*args, **kwargs)`` in ONE ``sync_to_async(thread_sensitive=True)`` worker.
+
+    The generic one-boundary primitive (spec-040 D17 / P3): the mutation entry
+    (``run_pipeline_async`` above, which keeps its mutation-shaped signature and
+    the pinned AR-M4 contract) and the auth fixed-field async dispatchers
+    (``auth/mutations.py`` - gate-then-session-work in one worker) share this one
+    ``sync_to_async`` call, so the boundary discipline (one worker per resolution,
+    ``thread_sensitive=True``, never per-step hops) cannot drift between flavors.
+    A ``sync_to_async`` worker is itself a sync context, so the standing
+    ``SyncMisuseError`` guards still fire inside ``fn``.
+    """
+    return await sync_to_async(fn, thread_sensitive=True)(*args, **kwargs)
 
 
 def make_resolver_entries(sync_body: Any) -> tuple[Any, Any]:

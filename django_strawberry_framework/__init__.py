@@ -34,7 +34,7 @@ from .scalars import BigInt, Upload, strawberry_config  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 from .types.converters import DjangoFileType, DjangoImageType  # noqa: E402
 
-__version__ = "0.0.12"
+__version__ = "0.0.13"
 
 
 # The DRF-soft-dependency public names, resolved lazily by NAME through the shared

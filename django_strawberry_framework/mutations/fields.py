@@ -61,16 +61,46 @@ from ..exceptions import ConfigurationError
 from .inputs import INPUTS_MODULE_PATH
 
 
-# TODO(spec-040 Slice 1): promote the lazy-ref + signature-attachment idiom below
-# into shared field-factory machinery before auth adds fixed factories. Pseudocode:
-# move ``_lazy_ref`` itself plus the ``__signature__`` / ``__annotations__``
-# assignment into one helper; build the return lazy ref there, derive an
-# ``inspect.Signature`` from the fixed field's keyword arguments, then attach both
-# signature artifacts to the dispatcher in one place.
-# ``login_mutation`` / ``logout_mutation`` / ``current_user`` need the same
-# ``__signature__`` / ``__annotations__`` path as ``DjangoMutationField`` because
-# their return types materialize at phase 2.5. Keeping this helper single-sited is
-# the DRY constraint from spec-040 Helper-reuse D12 / P1 / P2.
+def base_resolver_params() -> tuple[list[inspect.Parameter], dict[str, Any]]:
+    """Return the Strawberry-reserved ``root`` / ``info`` parameter prologue (spec-040 D12).
+
+    The two parameters every synthesized dispatcher opens with - ``root``
+    (positional, defaulted so Strawberry binds it without a GraphQL argument) and
+    the keyword-only ``info: Info`` - plus the matching ``__annotations__`` seed.
+    Promoted so the ``DjangoMutationField`` signature synthesis and the auth
+    fixed-field factories (``login_mutation`` / ``logout_mutation`` /
+    ``current_user``, spec-040) build their injected signatures from ONE prologue
+    rather than each re-spelling the reserved-parameter shape.
+    """
+    params = [
+        inspect.Parameter("root", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
+        inspect.Parameter("info", inspect.Parameter.KEYWORD_ONLY, annotation=Info),
+    ]
+    return params, {"info": Info}
+
+
+def attach_injected_signature(
+    resolver: Any,
+    params: list[inspect.Parameter],
+    annotations: dict[str, Any],
+    return_annotation: Any,
+) -> None:
+    """Assign an injected ``__signature__`` / ``__annotations__`` pair onto ``resolver``.
+
+    The signature-injection idiom the mutation family relies on (spec-036 Decision
+    5 / 7): a field whose argument or return types materialize at phase 2.5 cannot
+    be statically annotated, so the dispatcher carries a synthesized
+    ``inspect.Signature`` plus a matching ``__annotations__`` dict (with the
+    ``strawberry.lazy`` forward-refs) that Strawberry reads at field construction.
+    Promoted to shared machinery (spec-040 Helper-reuse D12 / P1 / P2) so
+    ``DjangoMutationField`` and the auth fixed-field factories attach their
+    signature artifacts through ONE assignment site. ``return_annotation`` is
+    folded into ``annotations`` here so a caller supplies only the argument map.
+    """
+    resolver.__signature__ = inspect.Signature(params, return_annotation=return_annotation)
+    resolver.__annotations__ = {**annotations, "return": return_annotation}
+
+
 def _validate_mutation_target(mutation_cls: Any) -> None:
     """Reject a bad ``DjangoMutationField`` target at the construction line (spec-036 / spec-038 Decision 5).
 
@@ -146,7 +176,7 @@ def _lazy_ref(type_name: str, module_path: str) -> Any:
 
 def _synthesized_mutation_signature(
     mutation_cls: type,
-) -> tuple[inspect.Signature, dict[str, Any]]:
+) -> tuple[list[inspect.Parameter], dict[str, Any], Any]:
     """Build the per-operation resolver ``__signature__`` + ``__annotations__`` (spec-036 Decision 14 / 7).
 
     ``root`` / ``info`` are Strawberry-reserved (bound without becoming GraphQL
@@ -178,11 +208,7 @@ def _synthesized_mutation_signature(
     meta = mutation_cls._mutation_meta
     operation = meta.operation
 
-    params: list[inspect.Parameter] = [
-        inspect.Parameter("root", inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None),
-        inspect.Parameter("info", inspect.Parameter.KEYWORD_ONLY, annotation=Info),
-    ]
-    annotations: dict[str, Any] = {"info": Info}
+    params, annotations = base_resolver_params()
 
     if operation in ("update", "delete"):
         params.append(
@@ -198,8 +224,7 @@ def _synthesized_mutation_signature(
         annotations["data"] = data_ann
 
     return_annotation = _lazy_ref(f"{mutation_cls.__name__}Payload", INPUTS_MODULE_PATH)
-    annotations["return"] = return_annotation
-    return inspect.Signature(params, return_annotation=return_annotation), annotations
+    return params, annotations, return_annotation
 
 
 def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory family (DjangoConnectionField / DjangoNodeField parity)
@@ -242,9 +267,8 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
             return mutation_cls.resolve_async(info, **call_kwargs)
         return mutation_cls.resolve_sync(info, **call_kwargs)
 
-    signature, annotations = _synthesized_mutation_signature(mutation_cls)
-    _resolve.__signature__ = signature
-    _resolve.__annotations__ = annotations
+    params, annotations, return_annotation = _synthesized_mutation_signature(mutation_cls)
+    attach_injected_signature(_resolve, params, annotations, return_annotation)
     return strawberry.field(
         resolver=_resolve,
         description=description,

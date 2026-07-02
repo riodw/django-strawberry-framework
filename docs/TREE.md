@@ -189,9 +189,11 @@ django_graphene_filters/
 
 Source: `django_strawberry_framework/`
 
-```bash
+```text
 django_strawberry_framework/    # Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL.
+├── _cross_web_patches.py         # Defensive patches for upstream ``cross_web`` bugs, applied at app load.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
+├── _strawberry_patches.py        # Defensive patches for upstream Strawberry bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its Django patches at app load.
 ├── conf.py                       # Package settings, read from the host project's ``DJANGO_STRAWBERRY_FRAMEWORK`` dict.
 ├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
@@ -201,22 +203,32 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── py.typed
 ├── registry.py                   # Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
-├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory; also re-exports Strawberry's built-in ``Upload`` (``strawberry_config()`` stays ``BigInt``-only - ``Upload`` needs no ``_PACKAGE_SCALAR_MAP`` entry).
+├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared across the FilterSet / OrderSet / AggregateSet family.
+├── auth/    # Opt-in session-auth field factories (spec-040).
+│   ├── mutations.py              # Session-auth mutation factories + the phase-2.5 auth bind (spec-040).
+│   └── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 │   ├── base.py                   # Filter primitives + ``RelatedFilter``.
 │   ├── factories.py              # Filter input-class BFS factory + the (currently unconsumed) dynamic-FilterSet cache.
 │   ├── inputs.py                 # Filter input namespace, lookup-name scaffolding, and shape converters.
 │   └── sets.py                   # ``FilterSet`` + ``FilterSetMetaclass`` - declaration, validation, and the apply pipeline.
-├── forms/    # Form-based mutation subsystem - ``DjangoFormMutation`` / ``DjangoModelFormMutation`` over a Django ``Form`` / ``ModelForm`` (``Meta.form_class``).
-│   ├── converter.py              # ``convert_form_field`` registry - Django form field -> Strawberry input annotation + required-ness (reuses the read-side scalar / choice-enum / ``Upload`` converters).
-│   ├── inputs.py                 # Form-derived ``@strawberry.input`` generation (``<FormClass>Input`` / ``<FormClass>PartialInput``) from ``form_class.base_fields``.
-│   ├── resolvers.py              # The form mutation pipeline - ``is_valid()`` -> ``form.errors`` -> ``FieldError`` envelope -> ``save()`` / ``perform_mutate`` (sync + async).
-│   └── sets.py                   # The two form-mutation bases + ``Meta`` validation; ``DjangoModelFormMutation`` rides ``DjangoMutation`` via ``_resolve_model``, the plain ``DjangoFormMutation`` is the model-less sibling.
+├── forms/    # Form-mutations subsystem - the Django-``Form`` / ``ModelForm`` write side (spec-038).
+│   ├── converter.py              # Form-field -> Strawberry annotation conversion + the per-input-field reverse map (spec-038).
+│   ├── inputs.py                 # Form-derived ``@strawberry.input`` generation substrate (spec-038 Slice 1).
+│   ├── resolvers.py              # The sync + async form-mutation resolver pipeline (spec-038 Slice 3).
+│   └── sets.py                   # The ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases + ``Meta`` validation + bind (Slice 2).
 ├── management/    # Django management namespace for the framework's ``manage.py`` commands.
 │   └── commands/    # Implementations of the framework's ``manage.py`` commands (``export_schema``, ``inspect_django_type``).
+│       ├── _imports.py           # Shared importer-to-``CommandError`` helper for the framework's management commands.
 │       ├── export_schema.py      # manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol.
 │       └── inspect_django_type.py  # manage.py inspect_django_type - print a DjangoType's per-field GraphQL resolution table.
+├── mutations/    # Mutations subsystem - the write side (spec-036).
+│   ├── fields.py                 # ``DjangoMutationField`` - the write-side field factory (spec-036 Slice 3).
+│   ├── inputs.py                 # Generated mutation-input namespace, the public ``FieldError`` envelope, and the payload wrapper.
+│   ├── permissions.py            # ``DjangoModelPermission`` - the DRF-shaped default write-authorization class (spec-036).
+│   ├── resolvers.py              # The sync + async create / update / delete write pipeline (spec-036 Slice 3).
+│   └── sets.py                   # ``DjangoMutation`` base + metaclass + ``Meta`` validation + the phase-2.5 bind (spec-036 Slice 2).
 ├── optimizer/    # Optimizer subsystem - selection-driven queryset planning via ``DjangoOptimizerExtension`` (N+1 prevention).
 │   ├── _context.py               # Shared context read/write helpers for optimizer <-> resolver hand-off.
 │   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
@@ -230,25 +242,25 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
-├── rest_framework/    # DRF-serializer mutation subsystem - ``SerializerMutation`` over a DRF ``Serializer`` / ``ModelSerializer`` (``Meta.serializer_class``); behind the soft ``djangorestframework`` guard.
-│   ├── __init__.py               # Soft-DRF guard (``require_drf()`` + the single install-hint string) gating every ``rest_framework/`` module and the lazy root ``SerializerMutation`` re-export.
-│   ├── serializer_converter.py   # ``convert_serializer_field`` registry - DRF serializer field -> Strawberry input annotation + required-ness (reuses the read-side scalar / choice-enum / ``Upload`` converters at the model-column-backed sites).
-│   ├── inputs.py                 # Serializer-derived ``@strawberry.input`` generation (``<SerializerClass>Input`` / ``<SerializerClass>PartialInput``) from the serializer's schema-time fields.
-│   ├── resolvers.py              # The serializer mutation pipeline - ``is_valid()`` -> ``serializer.errors`` -> ``FieldError`` envelope -> ``save()`` (sync + async), supplying the decode / write callbacks to the shared write skeleton.
-│   └── sets.py                   # ``SerializerMutation`` base + ``Meta`` validation; rides ``DjangoMutation`` via ``_resolve_model`` returning ``Meta.serializer_class.Meta.model``.
+├── rest_framework/    # The DRF soft-dependency guard shared by every serializer-mutation module (spec-039 Decision 12).
+│   ├── inputs.py                 # DRF-serializer-derived ``@strawberry.input`` generation substrate (spec-039 Slice 1).
+│   ├── resolvers.py              # The sync + async serializer-mutation resolver pipeline (spec-039 Slice 3).
+│   ├── serializer_converter.py   # DRF serializer-field -> Strawberry input conversion + the per-input-field reverse map (spec-039).
+│   └── sets.py                   # The ``SerializerMutation`` base + ``Meta`` validation + the phase-2.5 bind (spec-039 Slice 2).
 ├── testing/    # Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
 │   ├── _wrap.py                  # Cooperative connection-method wrapping for consumer test instrumentation.
 │   └── relay.py                  # Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
 ├── types/    # Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
 │   ├── base.py                   # ``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
-│   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types; defines the ``DjangoFileType`` / ``DjangoImageType`` read-output objects, the ``_safe_file_attr`` storage guard, the ``FIELD_OUTPUT_TYPE_MAP`` read-output map, and ``convert_field_output`` (filter-input ``SCALAR_MAP`` stays ``str``).
+│   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types.
 │   ├── definition.py             # ``DjangoTypeDefinition`` - canonical metadata for collected ``DjangoType`` classes.
 │   ├── finalizer.py              # ``finalize_django_types()`` - the once-only finalization gate for collected ``DjangoType`` classes.
 │   ├── relations.py              # Pending relation records for definition-order-independent ``DjangoType`` finalization.
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
-│   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations; also attaches file-column resolvers (``_attach_file_resolvers``) for columns resolving via ``FIELD_OUTPUT_TYPE_MAP``.
+│   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations.
 └── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, and type unwrapping.
     ├── connections.py            # Connection planner/resolver shared contracts: window bounds + sidecar kwargs.
+    ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters (spec-039 P1.4).
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
     ├── inputs.py                 # Generated-input substrate shared by the filter and order set families.
     ├── permissions.py            # Active-input permission traversal shared by the FilterSet and OrderSet families.
@@ -264,9 +276,11 @@ The current package tree merged with every not-yet-existing path linked from a W
 
 Source: `django_strawberry_framework/ (+ planned card paths)`
 
-```bash
+```text
 django_strawberry_framework/    # Public API of django-strawberry-framework, a DRF-inspired Django integration for Strawberry GraphQL.
+├── _cross_web_patches.py         # Defensive patches for upstream ``cross_web`` bugs, applied at app load.
 ├── _django_patches.py            # Defensive patches for upstream Django bugs, applied at app load.
+├── _strawberry_patches.py        # Defensive patches for upstream Strawberry bugs, applied at app load.
 ├── apps.py                       # Django ``AppConfig`` - registers the package and applies its Django patches at app load.
 ├── conf.py                       # Package settings, read from the host project's ``DJANGO_STRAWBERRY_FRAMEWORK`` dict.
 ├── connection.py                 # ``DjangoConnection[T]`` + ``DjangoConnectionField`` - the Relay cursor-pagination surface.
@@ -280,6 +294,9 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared across the FilterSet / OrderSet / AggregateSet family.
 ├── aggregates/    # planned by TODO-BETA-049-0.1.3 - Aggregation subsystem
+├── auth/    # Opt-in session-auth field factories (spec-040).
+│   ├── mutations.py              # Session-auth mutation factories + the phase-2.5 auth bind (spec-040).
+│   └── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
 ├── extensions/    # planned by TODO-ALPHA-044-0.0.14 - Response-extensions debug middleware
 │   └── debug.py                  # planned by TODO-ALPHA-044-0.0.14 - Response-extensions debug middleware
 ├── fieldset/    # planned by TODO-BETA-046-0.1.1 - `FieldSet`
@@ -288,18 +305,24 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── factories.py              # Filter input-class BFS factory + the (currently unconsumed) dynamic-FilterSet cache.
 │   ├── inputs.py                 # Filter input namespace, lookup-name scaffolding, and shape converters.
 │   └── sets.py                   # ``FilterSet`` + ``FilterSetMetaclass`` - declaration, validation, and the apply pipeline.
-├── forms/    # Form-based mutation subsystem - ``DjangoFormMutation`` / ``DjangoModelFormMutation`` over a Django ``Form`` / ``ModelForm`` (``Meta.form_class``).
-│   ├── converter.py              # ``convert_form_field`` registry - Django form field -> Strawberry input annotation + required-ness (reuses the read-side scalar / choice-enum / ``Upload`` converters).
-│   ├── inputs.py                 # Form-derived ``@strawberry.input`` generation (``<FormClass>Input`` / ``<FormClass>PartialInput``) from ``form_class.base_fields``.
-│   ├── resolvers.py              # The form mutation pipeline - ``is_valid()`` -> ``form.errors`` -> ``FieldError`` envelope -> ``save()`` / ``perform_mutate`` (sync + async).
-│   └── sets.py                   # The two form-mutation bases + ``Meta`` validation; ``DjangoModelFormMutation`` rides ``DjangoMutation`` via ``_resolve_model``, the plain ``DjangoFormMutation`` is the model-less sibling.
+├── forms/    # Form-mutations subsystem - the Django-``Form`` / ``ModelForm`` write side (spec-038).
+│   ├── converter.py              # Form-field -> Strawberry annotation conversion + the per-input-field reverse map (spec-038).
+│   ├── inputs.py                 # Form-derived ``@strawberry.input`` generation substrate (spec-038 Slice 1).
+│   ├── resolvers.py              # The sync + async form-mutation resolver pipeline (spec-038 Slice 3).
+│   └── sets.py                   # The ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases + ``Meta`` validation + bind (Slice 2).
 ├── management/    # Django management namespace for the framework's ``manage.py`` commands.
 │   └── commands/    # Implementations of the framework's ``manage.py`` commands (``export_schema``, ``inspect_django_type``).
+│       ├── _imports.py           # Shared importer-to-``CommandError`` helper for the framework's management commands.
 │       ├── export_schema.py      # manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol.
 │       └── inspect_django_type.py  # manage.py inspect_django_type - print a DjangoType's per-field GraphQL resolution table.
 ├── middleware/    # planned by TODO-ALPHA-042-0.0.14 - Debug-toolbar middleware
 │   └── debug_toolbar.py          # planned by TODO-ALPHA-042-0.0.14 - Debug-toolbar middleware
-├── mutations/    # shipped in DONE-036-0.0.11 - Mutations + auto-generated Input types
+├── mutations/    # Mutations subsystem - the write side (spec-036).
+│   ├── fields.py                 # ``DjangoMutationField`` - the write-side field factory (spec-036 Slice 3).
+│   ├── inputs.py                 # Generated mutation-input namespace, the public ``FieldError`` envelope, and the payload wrapper.
+│   ├── permissions.py            # ``DjangoModelPermission`` - the DRF-shaped default write-authorization class (spec-036).
+│   ├── resolvers.py              # The sync + async create / update / delete write pipeline (spec-036 Slice 3).
+│   └── sets.py                   # ``DjangoMutation`` base + metaclass + ``Meta`` validation + the phase-2.5 bind (spec-036 Slice 2).
 ├── optimizer/    # Optimizer subsystem - selection-driven queryset planning via ``DjangoOptimizerExtension`` (N+1 prevention).
 │   ├── _context.py               # Shared context read/write helpers for optimizer <-> resolver hand-off.
 │   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
@@ -313,26 +336,27 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
-├── rest_framework/    # DRF-serializer mutation subsystem - ``SerializerMutation`` over a DRF ``Serializer`` / ``ModelSerializer`` (``Meta.serializer_class``); behind the soft ``djangorestframework`` guard.
-│   ├── __init__.py               # Soft-DRF guard (``require_drf()`` + the single install-hint string) gating every ``rest_framework/`` module and the lazy root ``SerializerMutation`` re-export.
-│   ├── serializer_converter.py   # ``convert_serializer_field`` registry - DRF serializer field -> Strawberry input annotation + required-ness (reuses the read-side scalar / choice-enum / ``Upload`` converters at the model-column-backed sites).
-│   ├── inputs.py                 # Serializer-derived ``@strawberry.input`` generation (``<SerializerClass>Input`` / ``<SerializerClass>PartialInput``) from the serializer's schema-time fields.
-│   ├── resolvers.py              # The serializer mutation pipeline - ``is_valid()`` -> ``serializer.errors`` -> ``FieldError`` envelope -> ``save()`` (sync + async), supplying the decode / write callbacks to the shared write skeleton.
-│   └── sets.py                   # ``SerializerMutation`` base + ``Meta`` validation; rides ``DjangoMutation`` via ``_resolve_model`` returning ``Meta.serializer_class.Meta.model``.
+├── permissions/    # planned by TODO-BETA-051-0.1.4 - Opt-in node-sentinel redaction tier (`Meta.redaction_mode`)
+├── rest_framework/    # The DRF soft-dependency guard shared by every serializer-mutation module (spec-039 Decision 12).
+│   ├── inputs.py                 # DRF-serializer-derived ``@strawberry.input`` generation substrate (spec-039 Slice 1).
+│   ├── resolvers.py              # The sync + async serializer-mutation resolver pipeline (spec-039 Slice 3).
+│   ├── serializer_converter.py   # DRF serializer-field -> Strawberry input conversion + the per-input-field reverse map (spec-039).
+│   └── sets.py                   # The ``SerializerMutation`` base + ``Meta`` validation + the phase-2.5 bind (spec-039 Slice 2).
 ├── testing/    # Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
 │   ├── _wrap.py                  # Cooperative connection-method wrapping for consumer test instrumentation.
 │   ├── client.py                 # planned by TODO-ALPHA-043-0.0.14 - Test client helper
 │   └── relay.py                  # Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
 ├── types/    # Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
 │   ├── base.py                   # ``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
-│   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types; defines the ``DjangoFileType`` / ``DjangoImageType`` read-output objects, the ``_safe_file_attr`` storage guard, the ``FIELD_OUTPUT_TYPE_MAP`` read-output map, and ``convert_field_output`` (filter-input ``SCALAR_MAP`` stays ``str``).
+│   ├── converters.py             # Convert Django model fields to Strawberry-compatible Python types.
 │   ├── definition.py             # ``DjangoTypeDefinition`` - canonical metadata for collected ``DjangoType`` classes.
 │   ├── finalizer.py              # ``finalize_django_types()`` - the once-only finalization gate for collected ``DjangoType`` classes.
 │   ├── relations.py              # Pending relation records for definition-order-independent ``DjangoType`` finalization.
 │   ├── relay.py                  # Internal Relay helpers - interface injection, node resolver defaults, and GlobalID strategies.
-│   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations; also attaches file-column resolvers (``_attach_file_resolvers``) for columns resolving via ``FIELD_OUTPUT_TYPE_MAP``.
+│   └── resolvers.py              # Relation-field resolvers for ``DjangoType`` relation annotations.
 └── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, and type unwrapping.
     ├── connections.py            # Connection planner/resolver shared contracts: window bounds + sidecar kwargs.
+    ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters (spec-039 P1.4).
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
     ├── inputs.py                 # Generated-input substrate shared by the filter and order set families.
     ├── permissions.py            # Active-input permission traversal shared by the FilterSet and OrderSet families.
@@ -353,19 +377,24 @@ Tests live in four deliberate places, each chosen by what the test is proving. T
 
 Source: `tests/`
 
-```bash
+```text
 tests/    # Package-internal tests for django_strawberry_framework.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and Django patch application.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection and DjangoConnectionField tests for Relay pagination behavior.
+├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_list_field.py            # DjangoListField tests for root list fields, queryset visibility, and sidecars.
 ├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
 ├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
 ├── test_relay_connection.py      # Relation-as-Connection tests for cursor conformance and Relay field upgrades.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
-├── test_scalars.py               # Scalar tests for BigInt, the framework StrawberryConfig helper, and the re-exported Upload scalar (built-in default-registry resolution).
+├── test_scalars.py               # Scalar tests for BigInt and the framework StrawberryConfig helper.
+├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
+├── auth/    # Package-internal tests for the auth subsystem (spec-040).
+│   ├── test_mutations.py         # Package-internal tests for ``django_strawberry_framework/auth/mutations.py`` (spec-040).
+│   └── test_queries.py           # Package-internal tests for ``django_strawberry_framework/auth/queries.py`` (spec-040).
 ├── base/    # Frozen base tests for package configuration and version sanity.
 │   ├── test_conf.py              # Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK.
 │   └── test_init.py              # Package init tests for version metadata and public exports.
@@ -377,14 +406,21 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_sets.py              # FilterSet tests for Meta collection, validation, sync/async apply, and tree overrides.
 │   └── fixtures/    # Fixture modules for filter lazy-resolution tests.
 │       └── filtersets.py         # Fixture FilterSet declarations for cross-module lazy-resolution tests.
-├── forms/    # Package tests for the form-mutation subsystem.
-│   ├── test_converter.py         # ``convert_form_field`` tests - each supported form field -> annotation + required-ness, relation id mapping, ``Upload`` mapping, and the unknown-field raise.
-│   ├── test_inputs.py            # Form-derived input tests - shape from ``base_fields``, ``Meta.fields`` / ``Meta.exclude`` narrowing, and materialization as a module global.
-│   ├── test_resolvers.py         # Form pipeline tests - create / update happy paths, ``form.errors`` -> envelope, decode split, partial-update reconstruction, plain-form payload, and the G2 re-fetch shape.
-│   └── test_sets.py              # Form-base tests - the ``Meta`` validation matrix, plain-form input dedupe, registration / finalizer binding, and the model-flavor seam defaults.
+├── forms/    # Package tests for the forms subsystem (form-derived inputs + the converter, spec-038).
+│   ├── test_converter.py         # Converter tests for the form-field -> Strawberry annotation registry (spec-038 Slice 1).
+│   ├── test_inputs.py            # Form-derived input tests for the generated ``<FormClass>Input`` / ``PartialInput`` (spec-038).
+│   ├── test_resolvers.py         # Form-mutation resolver-pipeline tests (spec-038 Slice 3).
+│   └── test_sets.py              # ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases, ``Meta`` validation, and the bind (spec-038 Slice 2).
 ├── management/    # Package tests for django-strawberry-framework management commands.
 │   ├── test_export_schema.py     # Management command tests for export_schema SDL output and failure modes.
+│   ├── test_imports.py           # Tests for the shared ``import_or_command_error`` management-command helper.
 │   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
+├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
+│   ├── test_fields.py            # ``DjangoMutationField`` factory tests (spec-036 Slice 3).
+│   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.
+│   ├── test_permissions.py       # ``DjangoModelPermission`` class behavior + write-auth enforcement (spec-036 Slice 2 + Slice 3).
+│   ├── test_resolvers.py         # Write-pipeline resolver tests (spec-036 Slice 3).
+│   └── test_sets.py              # ``DjangoMutation`` base, ``Meta`` validation, registration, and the phase-2.5 bind.
 ├── optimizer/    # Package tests for optimizer planning and DjangoOptimizerExtension.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
 │   ├── test_extension.py         # DjangoOptimizerExtension tests for root-gated planning and queryset optimization.
@@ -402,30 +438,31 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_finalizer.py         # Finalizer tests for order binding, Meta.orderset_class promotion, and orphan validation.
 │   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
-├── rest_framework/    # Package tests for the DRF-serializer mutation subsystem.
-│   ├── test_converter.py         # ``convert_serializer_field`` tests - each supported serializer field -> annotation + required-ness, relation id mapping, ``Upload`` mapping, and the unknown-field raise.
-│   ├── test_inputs.py            # Serializer-derived input tests - shape from the serializer's schema-time fields, ``Meta.fields`` / ``Meta.exclude`` narrowing, and materialization as a module global.
-│   ├── test_resolvers.py         # Serializer pipeline tests - create / update happy paths, ``serializer.errors`` -> envelope, decode split, partial-update reconstruction, and the G2 re-fetch shape.
-│   ├── test_sets.py              # ``SerializerMutation`` base tests - the ``Meta`` validation matrix, registration / finalizer binding, and the model-flavor seam defaults.
-│   └── test_soft_dependency.py   # Soft-DRF tests - package import succeeds without DRF, the install-hint ``ImportError`` raises on access, and ``from … import *`` stays DRF-free.
+├── rest_framework/    # Package for spec-039 package-internal DRF serializer-mutation tests.
+│   ├── test_converter.py         # Converter tests for the DRF serializer-field -> Strawberry annotation registry (spec-039 Slice 1).
+│   ├── test_inputs.py            # Serializer-derived input tests for the generated ``<Serializer>Input`` / ``PartialInput`` (spec-039).
+│   ├── test_resolvers.py         # Serializer-mutation resolver internals a live products `/graphql/` cannot drive (spec-039 Slice 3).
+│   ├── test_sets.py              # ``SerializerMutation`` base, ``Meta`` validation, and the phase-2.5 bind (spec-039 Slice 2).
+│   └── test_soft_dependency.py   # The DRF soft-dependency import guard (spec-039 Decision 12, Slice 2).
 ├── testing/    # Package tests for public consumer testing utilities.
 │   ├── test_relay.py             # Public Relay helper tests for global_id_for and decode_global_id.
 │   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.
 ├── types/    # Package tests for the DjangoType subsystem.
 │   ├── test_base.py              # DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
-│   ├── test_converters.py        # Converter tests for scalar mapping, choice enums, relation annotations, and file/image read-output conversion (convert_field_output / FIELD_OUTPUT_TYPE_MAP / DjangoFileType / DjangoImageType).
+│   ├── test_converters.py        # Converter tests for scalar mapping, choice enums, and relation annotations.
 │   ├── test_definition_order.py  # Acceptance tests for definition-order-independent DjangoType relation finalization.
 │   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
 │   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related_target_for relation lookup.
 │   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
 │   ├── test_relations.py         # PendingRelation tests for identity hashing and dataclass field contracts.
 │   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
-│   ├── test_resolvers.py         # Relation resolver tests for Django relation managers and optimizer hand-off, plus file/image output resolvers (subfield reads and the empty-file parent-null guard).
+│   ├── test_resolvers.py         # Relation resolver tests for Django relation managers and optimizer hand-off.
 │   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.
 │       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
 └── utils/    # Package tests for shared utility helpers.
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
+    ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039 P1.4).
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
     ├── test_permissions.py       # Tests for the shared active-input permission substrate (``utils/permissions.py``).
@@ -438,7 +475,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 
 Source: `examples/fakeshop/apps/*/tests/`
 
-```bash
+```text
 examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the app they protect.
 ├── glossary/
 │   └── tests/    # Non-live app tests for glossary models, factories, and import commands.
@@ -447,7 +484,7 @@ examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the
 │       └── test_models.py        # Glossary model tests for term edges, aliases, categories, and spec mentions.
 ├── kanban/
 │   └── tests/    # Non-live app tests for kanban services, signals, and board invariants.
-│       ├── test_commands.py      # Kanban command tests for card, changed-file, and predicted-file import workflows.
+│       ├── test_commands.py      # Kanban command tests for changed-file and predicted-file import workflows.
 │       ├── test_services.py      # Kanban service tests for structured card creation and rollback behavior.
 │       └── test_signals.py       # Kanban signal tests for dependencies, done-card guards, blocking, and ordering.
 ├── library/
@@ -456,6 +493,7 @@ examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the
 │       └── test_schema.py        # Library schema tests for in-process GraphQL execution without HTTP.
 ├── products/
 │   └── tests/    # Non-live app tests for products admin, commands, models, schema, and services.
+│       ├── conftest.py           # Shared fixtures for the in-process ``apps.products`` schema tests.
 │       ├── test_admin.py         # Products admin tests for changelist query-param branches.
 │       ├── test_commands.py      # Products command tests for service-backed seed and delete management commands.
 │       ├── test_models.py        # Products model tests for example-domain __str__ implementations.
@@ -469,7 +507,7 @@ examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the
 
 Source: `examples/fakeshop/tests/`
 
-```bash
+```text
 examples/fakeshop/tests/    # Example-project tests for fakeshop behavior without live /graphql HTTP.
 ├── test_export_schema.py         # Fakeshop project command tests for export_schema against the configured schema.
 ├── test_inspect_django_type.py   # Fakeshop project command tests for inspect_django_type against example DjangoTypes.
@@ -479,16 +517,20 @@ examples/fakeshop/tests/    # Example-project tests for fakeshop behavior withou
 
 Source: `examples/fakeshop/test_query/`
 
-```bash
+```text
 examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consumer-visible API.
 ├── README.md                     # Live GraphQL-API tests for the fakeshop example project.
+├── conftest.py                   # Shared fixtures for the fakeshop acceptance (live ``/graphql/``) suites.
+├── test_auth_api.py              # Live ``/graphql/`` auth API acceptance tests (spec-040).
 ├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
 ├── test_kanban_api.py            # Live GraphQL HTTP tests for the kanban board docs-as-data API.
 ├── test_library_api.py           # Live GraphQL HTTP tests for library relations, optimizer behavior, and Relay fields.
 ├── test_multi_db.py              # Live GraphQL HTTP tests for sharded fakeshop multi-database cooperation.
+├── test_mutation_atomicity.py    # Live ``/graphql/`` regression: a mutation must not commit a partial write.
 ├── test_products_api.py          # Live GraphQL HTTP tests for the products catalog API surface.
 ├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar conversion and wire-format coverage.
-└── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filter input and queryset behavior.
+├── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filter input and queryset behavior.
+└── test_uploads_api.py           # Live GraphQL HTTP tests for the spec-037 file/image wire contract.
 ```
 
 
@@ -498,19 +540,24 @@ The current test trees merged with the not-yet-existing test paths linked from W
 
 Source: `tests/ (+ planned card paths)`
 
-```bash
+```text
 tests/    # Package-internal tests for django_strawberry_framework.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and Django patch application.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection and DjangoConnectionField tests for Relay pagination behavior.
+├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
 ├── test_list_field.py            # DjangoListField tests for root list fields, queryset visibility, and sidecars.
 ├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
 ├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
 ├── test_relay_connection.py      # Relation-as-Connection tests for cursor conformance and Relay field upgrades.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
-├── test_scalars.py               # Scalar tests for BigInt, the framework StrawberryConfig helper, and the re-exported Upload scalar (built-in default-registry resolution).
+├── test_scalars.py               # Scalar tests for BigInt and the framework StrawberryConfig helper.
+├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
+├── auth/    # Package-internal tests for the auth subsystem (spec-040).
+│   ├── test_mutations.py         # Package-internal tests for ``django_strawberry_framework/auth/mutations.py`` (spec-040).
+│   └── test_queries.py           # Package-internal tests for ``django_strawberry_framework/auth/queries.py`` (spec-040).
 ├── base/    # Frozen base tests for package configuration and version sanity.
 │   ├── test_conf.py              # Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK.
 │   └── test_init.py              # Package init tests for version metadata and public exports.
@@ -525,15 +572,21 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_sets.py              # FilterSet tests for Meta collection, validation, sync/async apply, and tree overrides.
 │   └── fixtures/    # Fixture modules for filter lazy-resolution tests.
 │       └── filtersets.py         # Fixture FilterSet declarations for cross-module lazy-resolution tests.
-├── forms/    # Package tests for the form-mutation subsystem.
-│   ├── test_converter.py         # ``convert_form_field`` tests - each supported form field -> annotation + required-ness, relation id mapping, ``Upload`` mapping, and the unknown-field raise.
-│   ├── test_inputs.py            # Form-derived input tests - shape from ``base_fields``, ``Meta.fields`` / ``Meta.exclude`` narrowing, and materialization as a module global.
-│   ├── test_resolvers.py         # Form pipeline tests - create / update happy paths, ``form.errors`` -> envelope, decode split, partial-update reconstruction, plain-form payload, and the G2 re-fetch shape.
-│   └── test_sets.py              # Form-base tests - the ``Meta`` validation matrix, plain-form input dedupe, registration / finalizer binding, and the model-flavor seam defaults.
+├── forms/    # Package tests for the forms subsystem (form-derived inputs + the converter, spec-038).
+│   ├── test_converter.py         # Converter tests for the form-field -> Strawberry annotation registry (spec-038 Slice 1).
+│   ├── test_inputs.py            # Form-derived input tests for the generated ``<FormClass>Input`` / ``PartialInput`` (spec-038).
+│   ├── test_resolvers.py         # Form-mutation resolver-pipeline tests (spec-038 Slice 3).
+│   └── test_sets.py              # ``DjangoFormMutation`` / ``DjangoModelFormMutation`` bases, ``Meta`` validation, and the bind (spec-038 Slice 2).
 ├── management/    # Package tests for django-strawberry-framework management commands.
 │   ├── test_export_schema.py     # Management command tests for export_schema SDL output and failure modes.
+│   ├── test_imports.py           # Tests for the shared ``import_or_command_error`` management-command helper.
 │   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
-├── mutations/    # shipped in DONE-036-0.0.11 - Mutations + auto-generated Input types
+├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
+│   ├── test_fields.py            # ``DjangoMutationField`` factory tests (spec-036 Slice 3).
+│   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.
+│   ├── test_permissions.py       # ``DjangoModelPermission`` class behavior + write-auth enforcement (spec-036 Slice 2 + Slice 3).
+│   ├── test_resolvers.py         # Write-pipeline resolver tests (spec-036 Slice 3).
+│   └── test_sets.py              # ``DjangoMutation`` base, ``Meta`` validation, registration, and the phase-2.5 bind.
 ├── optimizer/    # Package tests for optimizer planning and DjangoOptimizerExtension.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
 │   ├── test_extension.py         # DjangoOptimizerExtension tests for root-gated planning and queryset optimization.
@@ -551,30 +604,31 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_finalizer.py         # Finalizer tests for order binding, Meta.orderset_class promotion, and orphan validation.
 │   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
-├── rest_framework/    # Package tests for the DRF-serializer mutation subsystem.
-│   ├── test_converter.py         # ``convert_serializer_field`` tests - each supported serializer field -> annotation + required-ness, relation id mapping, ``Upload`` mapping, and the unknown-field raise.
-│   ├── test_inputs.py            # Serializer-derived input tests - shape from the serializer's schema-time fields, ``Meta.fields`` / ``Meta.exclude`` narrowing, and materialization as a module global.
-│   ├── test_resolvers.py         # Serializer pipeline tests - create / update happy paths, ``serializer.errors`` -> envelope, decode split, partial-update reconstruction, and the G2 re-fetch shape.
-│   ├── test_sets.py              # ``SerializerMutation`` base tests - the ``Meta`` validation matrix, registration / finalizer binding, and the model-flavor seam defaults.
-│   └── test_soft_dependency.py   # Soft-DRF tests - package import succeeds without DRF, the install-hint ``ImportError`` raises on access, and ``from … import *`` stays DRF-free.
+├── rest_framework/    # Package for spec-039 package-internal DRF serializer-mutation tests.
+│   ├── test_converter.py         # Converter tests for the DRF serializer-field -> Strawberry annotation registry (spec-039 Slice 1).
+│   ├── test_inputs.py            # Serializer-derived input tests for the generated ``<Serializer>Input`` / ``PartialInput`` (spec-039).
+│   ├── test_resolvers.py         # Serializer-mutation resolver internals a live products `/graphql/` cannot drive (spec-039 Slice 3).
+│   ├── test_sets.py              # ``SerializerMutation`` base, ``Meta`` validation, and the phase-2.5 bind (spec-039 Slice 2).
+│   └── test_soft_dependency.py   # The DRF soft-dependency import guard (spec-039 Decision 12, Slice 2).
 ├── testing/    # Package tests for public consumer testing utilities.
 │   ├── test_relay.py             # Public Relay helper tests for global_id_for and decode_global_id.
 │   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.
 ├── types/    # Package tests for the DjangoType subsystem.
 │   ├── test_base.py              # DjangoType tests for Meta validation, scalar mapping, relations, registry, and get_queryset.
-│   ├── test_converters.py        # Converter tests for scalar mapping, choice enums, relation annotations, and file/image read-output conversion (convert_field_output / FIELD_OUTPUT_TYPE_MAP / DjangoFileType / DjangoImageType).
+│   ├── test_converters.py        # Converter tests for scalar mapping, choice enums, and relation annotations.
 │   ├── test_definition_order.py  # Acceptance tests for definition-order-independent DjangoType relation finalization.
 │   ├── test_definition_order_schema.py  # Schema-build tests for definition-order-independent DjangoType finalization.
 │   ├── test_definition_relations.py  # DjangoTypeDefinition tests for related_target_for relation lookup.
 │   ├── test_generic_foreign_key.py  # DjangoType tests for GenericForeignKey rejection and GenericRelation support.
 │   ├── test_relations.py         # PendingRelation tests for identity hashing and dataclass field contracts.
 │   ├── test_relay_interfaces.py  # DjangoType Relay interface tests for Node wiring and resolver contracts.
-│   ├── test_resolvers.py         # Relation resolver tests for Django relation managers and optimizer hand-off, plus file/image output resolvers (subfield reads and the empty-file parent-null guard).
+│   ├── test_resolvers.py         # Relation resolver tests for Django relation managers and optimizer hand-off.
 │   └── fixtures/    # Fixture modules for cross-module DjangoType resolution tests.
 │       ├── branch_module.py      # Cross-module fixture declaring BranchType and BranchFilter together.
 │       └── shelf_module.py       # Cross-module fixture declaring ShelfType and ShelfFilter together.
 └── utils/    # Package tests for shared utility helpers.
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
+    ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039 P1.4).
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
     ├── test_permissions.py       # Tests for the shared active-input permission substrate (``utils/permissions.py``).
@@ -591,7 +645,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 
 Source: `examples/fakeshop/`
 
-```bash
+```text
 examples/fakeshop/    # A Django + Strawberry GraphQL example project that exercises django-strawberry-framework end-to-end.
 ├── manage.py                     # Django command-line entry point for the fakeshop example project.
 ├── config/    # Project orchestration package for fakeshop settings, URLs, WSGI, and schema composition.
@@ -608,9 +662,11 @@ examples/fakeshop/    # A Django + Strawberry GraphQL example project that exerc
     │   ├── apps.py               # Django app configuration for the fakeshop products domain.
     │   ├── fields.py             # AdvancedFieldSet declarations for computed and permission-gated products fields.
     │   ├── filters.py            # FilterSet declarations for the fakeshop products app.
+    │   ├── forms.py              # Consumer Django forms for the products live form-mutation surface (spec-038 Slice 4).
     │   ├── models.py             # Faker-shaped product catalog.
     │   ├── orders.py             # OrderSet declarations for the fakeshop products app.
     │   ├── schema.py             # GraphQL schema for the fakeshop products app.
+    │   ├── serializers.py        # DRF serializers for the products live serializer-mutation surface (spec-039 Slice 3).
     │   ├── services.py           # Dynamic data seeding service using Faker providers.
     │   ├── management/    # Management-command namespace for products data and user fixtures.
     │   │   └── commands/    # Django management commands for products fixture setup and teardown.
@@ -620,6 +676,7 @@ examples/fakeshop/    # A Django + Strawberry GraphQL example project that exerc
     │   │       ├── seed_data.py  # Seed Faker-backed products catalog rows up to a requested per-provider count.
     │   │       └── seed_shards.py  # Prepare the secondary shard SQLite DB for multi-DB products coverage.
     │   └── tests/    # Non-live app tests for products admin, commands, models, schema, and services.
+    │       ├── conftest.py       # Shared fixtures for the in-process ``apps.products`` schema tests.
     │       ├── test_admin.py     # Products admin tests for changelist query-param branches.
     │       ├── test_commands.py  # Products command tests for service-backed seed and delete management commands.
     │       ├── test_models.py    # Products model tests for example-domain __str__ implementations.

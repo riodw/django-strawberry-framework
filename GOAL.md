@@ -532,7 +532,7 @@ The destination is a Django-native, Strawberry-powered framework that makes rich
 
 Two example projects prove the goal:
 
-- **Fakeshop** (`examples/fakeshop/`) extends today's shipped demo — `products` already runs connection fields with filter / order sidecars, cascade row-level visibility, and `ModelForm`-driven create / update / delete plus file-upload mutations, beside the `library` and `scalars` apps — into the full Relay-shaped showcase: the remaining aggregate / fieldset / search sidecars; `ModelSerializer`-driven mutations; image-upload mutations; auth mutations exercised by the existing test users; sharded multi-database stress mode.
+- **Fakeshop** (`examples/fakeshop/`) extends today's shipped demo — `products` already runs connection fields with filter / order sidecars, cascade row-level visibility, and `ModelForm`- plus `ModelSerializer`-driven create / update / delete and file-upload mutations, beside the `library` and `scalars` apps, and the schema-only `accounts` app already exercises the shipped auth mutations (`login` / `logout` / `register` / `me`) with the existing test users — into the full Relay-shaped showcase: the remaining aggregate / fieldset / search sidecars; image-upload mutations; sharded multi-database stress mode.
 - **Cookbook parity**: a Strawberry version of `django-graphene-filters`'s `recipes/schema.py` should be a clean port — same node graph (object types, attributes, values), same sidecar shape, equivalent capabilities. The astronomy example above is the structural reduction of that port; the full cookbook is the proof.
 
 For the per-card sequencing of each capability, see [`KANBAN.md`][kanban].

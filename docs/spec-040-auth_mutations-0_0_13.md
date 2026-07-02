@@ -295,6 +295,34 @@ Revision history (kept inline so the spec is self-contained):
   parity in the [`GOAL.md`][goal] north-star (the cookbook reference carries no auth
   surface; this card advances the fakeshop target-example direction, adjacent to the
   six-file north-star shape).
+- **Revision 5** — applied a fourth code-review pass ([`docs/feedback.md`][feedback]).
+  The one genuinely new finding was **(P1, error keying)**: `validate_password` raises
+  a **list-style** `ValidationError` (a bare message list, **no** `error_dict`), and
+  the shared `validation_error_to_field_errors` mapper's non-dict branch keys such an
+  error to the `"__all__"` sentinel via `field_error("", …)` — **not** `password`
+  ([`mutations/resolvers.py`][mutations-resolvers] `::validation_error_to_field_errors`
+  #"return [field_error(\"\", list(exc.messages)…)]", re-confirmed against source). So
+  the register `write_step` now maps the validator failure to a `password`-keyed
+  [`FieldError`][glossary-fielderror-envelope] **directly** at the `validate_password`
+  call site (`field_error("password", exc.messages, codes=…)`), never routing it
+  through the generic mapper, and the weak-password tests (live + mirrored) assert the
+  key is `password`, not `"__all__"`
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)
+  / [Edge cases](#edge-cases-and-constraints) / [Test plan](#test-plan)). The review's
+  other items were verified **already addressed** by Revisions 2–4 and required no
+  change: the plaintext-password decode-pop + unit assertion (Rev 2/3,
+  [Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)),
+  the duck-typed-holder "never introspect the `mutation` object" rule + test (Rev 4,
+  [Decision 5](#decision-5--login--logout-session-mutations-on-the-frozen-envelope-anonymous-allowed-by-design)),
+  the declaration-ledger-on-`TypeRegistry.clear()` vs emit-ledger-on-pre-bind split
+  (Rev 3, [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)),
+  the `current_user` bind-materialized lazy alias + its emit-ledger row
+  ([Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset)
+  / [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)),
+  the async lazy-user forcing inside the `sync_to_async` boundary
+  ([Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset)
+  / [Edge cases](#edge-cases-and-constraints)), and the first-line `create_users(N)`
+  seed rule (Rev 3, [Test plan](#test-plan)).
 
 ## Key glossary references
 
@@ -509,7 +537,9 @@ completes the joint `0.0.13` cut
         `AUTH_PASSWORD_VALIDATORS`), and the anonymous `me → null` case.
   - [ ] Mirrored package tests under `tests/auth/` for the internals (the
         password-hash write step with the **plaintext-never-persisted assertion on
-        both the sync and async paths**, the validator → envelope mapping shapes,
+        both the sync and async paths**, the validator → envelope mapping shapes
+        (a `password`-keyed leaf, **not** the `"__all__"` sentinel the generic
+        `validation_error_to_field_errors` mapper produces for a list-style error),
         the factory cache identity, the **reload-idempotence cycle** (finalize →
         `registry.clear()` → re-declare → finalize, `register` present in the
         second schema), the register-arm no-`UserType` error message,
@@ -1272,9 +1302,21 @@ to `Register`** (the P1 naming fix — see below) with:
   ([`mutations/resolvers.py`][mutations-resolvers] `::_model_decode_step`) with the
   raw password appended as a fourth element that never touches
   `model(**scalar_and_fk_attrs)`. The `write_step` unpacks that tuple, runs
-  `django.contrib.auth.password_validation.validate_password(raw_password, user)`
-  (each `ValidationError` message a `password`-keyed
-  [`FieldError`][glossary-fielderror-envelope]), then `user.set_password(raw_password)`
+  `django.contrib.auth.password_validation.validate_password(raw_password, user)`,
+  and — on failure — maps the raised error to a `password`-keyed
+  [`FieldError`][glossary-fielderror-envelope] **directly, not through the generic
+  `validation_error_to_field_errors` mapper** (the P1 error-keying fix). This is
+  load-bearing: `validate_password` raises a **list-style** `ValidationError` (a bare
+  message list, no `error_dict`), and the shared mapper's non-dict branch keys such an
+  error to the `"__all__"` sentinel, not `password`
+  ([`mutations/resolvers.py`][mutations-resolvers] `::validation_error_to_field_errors`
+  #"return [field_error(\"\", list(exc.messages)...)]" → `field_error`'s empty-path →
+  `NON_FIELD_ERROR_KEY`). So the write step catches the `ValidationError` at the
+  `validate_password` call site and builds the leaf itself —
+  `field_error("password", exc.messages, codes=[leaf.code for leaf in exc.error_list if leaf.code])`
+  (the same [`spec-036`][spec-036] leaf ctor, keyed explicitly) — so every failing
+  validator's messages land under the single `password` key, not `"__all__"`. It then
+  runs `user.set_password(raw_password)`
   **before** `full_clean()` / `save()`. The plaintext exists only in memory and
   never reaches a model column (a unit assertion pins that the model decode never
   receives `password` in `scalar_and_fk_attrs`); hashing before `full_clean()` means
@@ -1783,8 +1825,13 @@ it).
   `save_or_field_errors` path — both the `036` contract, no auth-specific code.
 - **Password validator failures.** Every failing validator contributes a message
   under the single `password` key (Django's `validate_password` aggregates into one
-  `ValidationError`); the live weak-password test asserts multiple messages under
-  one key against fakeshop's four configured validators.
+  **list-style** `ValidationError`). Because that error has no `error_dict`, the write
+  step keys it to `password` **directly** (`field_error("password", exc.messages, …)`),
+  **not** via the generic `validation_error_to_field_errors` mapper — whose non-dict
+  branch would key it to the `"__all__"` sentinel
+  ([Decision 6](#decision-6--register_mutation-rides-djangomutation-a-narrow-create-over-get_user_model-with-password-hashing--not-a-fourth-flavor)).
+  The live weak-password test asserts multiple messages under the `password`
+  key (not `"__all__"`) against fakeshop's four configured validators.
 - **Custom user models.** `USERNAME_FIELD` / `REQUIRED_FIELDS` drive the register
   field set, so an email-login model registers with `email` + password; a
   `REQUIRED_FIELDS` entry that is a forward FK becomes the standard `<field>_id`
@@ -1897,7 +1944,9 @@ aligned with the standing test-placement contract without weakening live coverag
 - register → login → `me` → logout round trip on a fresh username; the stored
   password is hashed (`check_password` true, raw string not in the column);
 - duplicate-username envelope keyed to `username`; weak-password envelope keyed to
-  `password` with the fakeshop validators' messages;
+  `password` (explicitly asserting the key is `password`, **not** the `"__all__"`
+  sentinel the generic mapper would produce for `validate_password`'s list-style
+  error) with the fakeshop validators' messages;
 - anonymous `me: null`;
 - a `permission_classes`-gated auth field denying with a top-level `GraphQLError`,
   asserting the **exact** denial string (`"Not authorized to login <UserType>."` for

@@ -58,15 +58,19 @@ import strawberry
 from rest_framework import serializers
 
 from ..exceptions import ConfigurationError
-from ..mutations.inputs import CREATE, PARTIAL, _pascalize_token
+from ..mutations.inputs import CREATE, PARTIAL
 from ..registry import register_subsystem_clear
 from ..utils.inputs import (
     InputFieldSpec,
     build_strawberry_input_class,
+    generated_input_type_name,
     graphql_camel_name,
+    guard_dropped_required,
     make_input_namespace,
     make_shape_build_cache,
     normalize_field_name_sequence,
+    pascalize_token,
+    resolve_effective_fields,
 )
 from .serializer_converter import (
     NESTED_MULTI,
@@ -485,53 +489,33 @@ def resolve_effective_serializer_fields(
     against. Excluding a read-only field is NOT a silent no-op - a read-only field is never
     an input field, so neither selecting nor excluding it is meaningful, and both fail loud.
     """
-    fields = normalize_field_name_sequence(fields, label="fields", flavor="SerializerMutation")
-    exclude = normalize_field_name_sequence(exclude, label="exclude", flavor="SerializerMutation")
-    if fields is not None and exclude is not None:
-        raise ConfigurationError(
-            f"SerializerMutation for {serializer_class.__name__} declares both `fields` and "
-            "`exclude`; supply at most one.",
-        )
-
     discovered = get_serializer_for_schema(serializer_class) if field_map is None else field_map
     # Drop read-only + HiddenField: neither is an input field. ``read_only``
     # covers explicit ``read_only=True`` fields; ``HiddenField`` is read_only=False
     # but never accepts client input (it injects a fixed value), so it is dropped
-    # by class too.
+    # by class too. The narrowing spine + the pinned error wording are single-sited
+    # in ``utils/inputs.py::resolve_effective_fields`` (spec-039 M4), shared with the
+    # form flavor; this wrapper supplies the WRITABLE basis + the serializer message
+    # knobs so the read-only drop stays intrinsic to the serializer flavor.
     writable = {
         name: field
         for name, field in discovered.items()
         if not field.read_only and not isinstance(field, serializers.HiddenField)
     }
-
-    if fields is not None:
-        unknown = [name for name in fields if name not in writable]
-        if unknown:
-            raise ConfigurationError(
-                f"SerializerMutation for {serializer_class.__name__} declares `fields` naming "
-                f"unknown or non-writable serializer field(s): {sorted(unknown)!r}.",
-            )
-        effective = {name: writable[name] for name in fields}
-    elif exclude is not None:
-        unknown = [name for name in exclude if name not in writable]
-        if unknown:
-            raise ConfigurationError(
-                f"SerializerMutation for {serializer_class.__name__} declares `exclude` naming "
-                f"unknown or non-writable serializer field(s): {sorted(unknown)!r}.",
-            )
-        excluded = set(exclude)
-        effective = {name: field for name, field in writable.items() if name not in excluded}
-    else:
-        effective = dict(writable)
-
-    if not effective:
-        raise ConfigurationError(
+    return resolve_effective_fields(
+        writable,
+        fields=fields,
+        exclude=exclude,
+        subject=f"SerializerMutation for {serializer_class.__name__}",
+        seq_flavor="SerializerMutation",
+        unknown_noun="unknown or non-writable serializer field(s)",
+        empty_message=(
             f"SerializerMutation input for {serializer_class.__name__} has no fields; "
             "Meta.fields / Meta.exclude narrowed the writable serializer field set to empty "
             "(or the serializer declares no writable fields). A serializer input must define "
-            "at least one field.",
-        )
-    return effective
+            "at least one field."
+        ),
+    )
 
 
 def resolve_optional_fields(
@@ -734,9 +718,10 @@ def _related_model_token(related_model: type | None) -> str:
 def _shape_token(spec: InputFieldSpec, annotation: str, required: bool) -> str:
     """Encode one emitted field's descriptor state as a collision-resistant name token.
 
-    Reuses ``mutations/inputs.py::_pascalize_token`` (P2.3) for the field-name
-    component so the bare concatenation of per-field tokens stays uniquely
-    decomposable (no third PascalCase encoder). The FULL field-spec identity the
+    Reuses ``utils/inputs.py::pascalize_token`` (promoted from ``mutations/inputs.py``
+    - spec-039 Md5) for the field-name component so the bare concatenation of
+    per-field tokens stays uniquely decomposable (no third PascalCase encoder). The
+    FULL field-spec identity the
     runtime behavior depends on is folded into the token via a stable ``hash``-free
     digest - the EMITTED annotation (post-nullable-widening, so a ``T`` vs ``T | None``
     nullability difference diverges - M2 / High), requiredness, kind, ``input_attr``,
@@ -754,7 +739,7 @@ def _shape_token(spec: InputFieldSpec, annotation: str, required: bool) -> str:
     astronomically unlikely in practice (a large hook matrix would otherwise reject two
     otherwise-valid distinct shapes).
     """
-    base = _pascalize_token(spec.target_name)
+    base = pascalize_token(spec.target_name)
     discriminant = "|".join(
         (
             annotation,
@@ -778,7 +763,7 @@ def _shape_token(spec: InputFieldSpec, annotation: str, required: bool) -> str:
     # at uppercase boundaries and Strawberry leaves the name unchanged. The digest is
     # left as-is (lowercase): the base already supplies the single leading capital, and
     # uppercasing the digest head would introduce an interior boundary, breaking
-    # decomposition. No PascalCase encoder is re-spelt here - only ``_pascalize_token``
+    # decomposition. No PascalCase encoder is re-spelt here - only ``pascalize_token``
     # (imported) shapes the field token.
     digest = hashlib.sha1(discriminant.encode()).hexdigest()[:16]
     return f"{base}{digest}"
@@ -812,15 +797,16 @@ def serializer_input_type_name(
     graphql_name / source / related_model), so a same-name-set divergence in any of
     those still produces a distinct name.
     """
-    base = serializer_class.__name__
-    suffix = "PartialInput" if operation_kind == PARTIAL else "Input"
-    if is_full_shape:
-        return f"{base}{suffix}"
     token = "".join(
         _shape_token(spec, ann, req)
         for spec, ann, req in zip(field_specs, annotations, required_state, strict=True)
     )
-    return f"{base}{token}{suffix}"
+    return generated_input_type_name(
+        serializer_class.__name__,
+        is_partial=operation_kind == PARTIAL,
+        is_full_shape=is_full_shape,
+        token=token,
+    )
 
 
 def _required_writable_field_names(
@@ -880,18 +866,21 @@ def guard_create_required_serializer_fields(
     declaration, not the built input shape (the
     ``forms/inputs.py::guard_create_required_fields`` per-declaration precedent).
     """
-    dropped_required = sorted(
-        _required_writable_field_names(serializer_class, field_map=field_map)
-        - set(effective_field_names)
-        - set(injected_fields or ()),
-    )
-    if dropped_required:
-        raise ConfigurationError(
+    # The drop-detection (``required - effective - waived``) is single-sited in
+    # ``utils/inputs.py::guard_dropped_required`` (spec-039 Md1), shared with the form
+    # create guard; the serializer passes ``Meta.injected_fields`` as ``waived`` and
+    # keeps its own pinned error wording.
+    guard_dropped_required(
+        _required_writable_field_names(serializer_class, field_map=field_map),
+        effective_field_names,
+        waived=injected_fields or (),
+        make_error=lambda dropped: ConfigurationError(
             f"SerializerMutation create input for {serializer_class.__name__} drops required "
-            f"serializer field(s) {dropped_required!r} via Meta.fields / Meta.exclude; the "
+            f"serializer field(s) {dropped!r} via Meta.fields / Meta.exclude; the "
             "serializer can never validate without them. Keep them in the input, or declare them "
             "in Meta.injected_fields and supply them from a get_serializer_kwargs override.",
-        )
+        ),
+    )
 
 
 def _collect_input_attr_collision_messages(

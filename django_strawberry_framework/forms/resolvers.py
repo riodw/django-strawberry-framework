@@ -91,26 +91,24 @@ from __future__ import annotations
 
 from typing import Any
 
-import strawberry
 from django import forms
 from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.forms.models import model_to_dict
-from strawberry import relay
 
 from ..mutations.resolvers import (
-    _coerce_relation_pk_or_none,
     _unencodable_text_error,
     authorize_or_raise,
+    make_resolver_entries,
     payload_cls_for,
     raw_choice_value,
     relation_field_error,
-    run_pipeline_async,
     run_write_pipeline_sync,
     save_or_field_errors,
+    type_check_relation_id,
 )
-from ..relay import GlobalIDDecode, decode_model_global_id
-from ..utils.querysets import visible_related_object
+from ..utils.inputs import iter_provided_input_fields
+from ..utils.querysets import sync_pipeline_recourse, visible_related_object
 from .converter import FILE, RELATION_MULTI, RELATION_SINGLE, FormInputFieldSpec
 from .inputs import get_form_fields
 
@@ -119,24 +117,7 @@ from .inputs import get_form_fields
 # ``036`` ``_MUTATION_ASYNC_RECOURSE`` wording: the whole pipeline runs
 # synchronously (under one ``sync_to_async`` worker on the async surface), so an
 # ``async def get_queryset`` can never be awaited here.
-_FORM_ASYNC_RECOURSE = (
-    "A form mutation runs its ORM pipeline synchronously (under one sync_to_async "
-    "call on the async surface), so it cannot await an async get_queryset hook; "
-    "redefine the target type's get_queryset as a sync method."
-)
-
-
-def _relation_field_error(graphql_name: str) -> Any:
-    """Build the uniform invalid / hidden / wrong-model relation ``FieldError``.
-
-    Keys to the input field's GraphQL wire name (``categoryId``) - what the client
-    sent - matching the ``036`` relation decode's AR-H4 contract. Hidden, missing,
-    wrong-model, and uncoercible all collapse to this one shape (no existence
-    leak). The form-path alias for the shared ``relation_field_error`` leaf ctor:
-    the message + leaf shape are single-sourced in ``mutations/resolvers.py``
-    (spec-039 integration), byte-identical across all three write flavors.
-    """
-    return relation_field_error(graphql_name)
+_FORM_ASYNC_RECOURSE = sync_pipeline_recourse("form mutation")
 
 
 def _to_form_key_value(obj: Any, form_field: Any) -> Any:
@@ -162,14 +143,15 @@ def _decode_form_relation_single(
 ) -> tuple[Any, Any | None]:
     """Decode ONE relation id to its form-key value, visibility-checked (NET-NEW, P1).
 
-    The body: (i) a ``relay.GlobalID`` runs through ``decode_model_global_id``
-    against the related model - a non-``OK`` status (decode-failed / wrong-model /
-    uncoercible) is a field-keyed ``FieldError``; (ii) a raw pk runs through
-    ``_coerce_relation_pk_or_none`` - ``None`` (uncoercible / out of range) is a
-    field-keyed ``FieldError``; (iii) for BOTH branches, resolve the VISIBLE object
-    via ``_visible_related_object`` - a hidden / missing row is the SAME
-    field-keyed ``FieldError`` (closing the raw-pk visibility gap); (iv) convert
-    the object to the form key by ``to_field_name``.
+    The body: (i) the structural type-check + pk coercion (a ``relay.GlobalID`` run
+    through ``decode_model_global_id`` against the related model; a raw pk through
+    ``_coerce_relation_pk_or_none``) is delegated to the shared
+    ``mutations/resolvers.py::type_check_relation_id`` (spec-039 M3) - a non-``OK``
+    GlobalID / an uncoercible raw pk is the uniform field-keyed ``FieldError``;
+    (ii) the type-checked pk is resolved to the VISIBLE object via
+    ``visible_related_object`` - a hidden / missing row is the SAME field-keyed
+    ``FieldError`` (closing the raw-pk visibility gap); (iii) the visible object is
+    converted to the form key by ``to_field_name``.
 
     Returns ``(form_key_value, None)`` on success or ``(None, FieldError)``. The
     related model is the form field's ``queryset.model`` (single-sourced off the
@@ -187,19 +169,16 @@ def _decode_form_relation_single(
     if value in form_field.empty_values:
         return value, None
     related_model = form_field.queryset.model
-    if isinstance(value, relay.GlobalID):
-        result = decode_model_global_id(value, related_model)
-        if result.status is not GlobalIDDecode.OK:
-            return None, _relation_field_error(graphql_name)
-        pk = result.pk
-    else:
-        pk = _coerce_relation_pk_or_none(related_model, value)
-        if pk is None:
-            return None, _relation_field_error(graphql_name)
-
+    pk, error = type_check_relation_id(
+        value,
+        graphql_name=graphql_name,
+        related_model=related_model,
+    )
+    if error is not None:
+        return None, error
     obj = visible_related_object(related_model, pk, info, _FORM_ASYNC_RECOURSE)
     if obj is None:
-        return None, _relation_field_error(graphql_name)
+        return None, relation_field_error(graphql_name)
     return _to_form_key_value(obj, form_field), None
 
 
@@ -279,11 +258,9 @@ def _decode_form_data(
     provided_data: dict[str, Any] = {}
     provided_files: dict[str, Any] = {}
 
-    for field in data.__strawberry_definition__.fields:
-        python_name = field.python_name
-        value = getattr(data, python_name, strawberry.UNSET)
-        if value is strawberry.UNSET:
-            continue
+    # The ``UNSET``-strip walk is single-sited in ``iter_provided_input_fields``
+    # (spec-039 M2); the per-field kind routing below stays form-specific.
+    for python_name, value, _field in iter_provided_input_fields(data):
         spec = spec_by_attr[python_name]
         form_field = form_fields[spec.form_field_name]
 
@@ -577,38 +554,12 @@ def _run_form_pipeline_sync(
     return _run_modelform_pipeline_sync(mutation_cls, info, data, id)
 
 
-def resolve_form_sync(
-    mutation_cls: type,
-    info: Any,
-    *,
-    data: Any = strawberry.UNSET,
-    id: Any = strawberry.UNSET,  # noqa: A002
-) -> Any:
-    """Sync form-pipeline entry the form bases' ``resolve_sync`` delegates to (spec-038 Decision 8).
-
-    The form-flavor parallel of ``mutations/resolvers.py::resolve_mutation_sync``:
-    a thin public entry normalizing the ``UNSET``-default kwargs to the body's
-    positional args. The plain flavor never passes ``id`` (its ``resolve_sync``
-    signature has no ``id`` param), so it defaults to ``UNSET`` and the plain body
-    ignores it.
-    """
-    return _run_form_pipeline_sync(mutation_cls, info, data, id)
-
-
-async def resolve_form_async(
-    mutation_cls: type,
-    info: Any,
-    *,
-    data: Any = strawberry.UNSET,
-    id: Any = strawberry.UNSET,  # noqa: A002
-) -> Any:
-    """Async form-pipeline entry: the sync body in one ``sync_to_async(thread_sensitive=True)`` (Decision 8).
-
-    Delegates to the shared ``mutations/resolvers.py::run_pipeline_async`` boundary
-    (single-sourced with the model flavor - the same ``036`` boundary shape) so the
-    ``transaction.atomic()`` + every ORM call run on one worker thread, never
-    interleaving ORM work with ``await``s. A sync ``get_queryset`` runs
-    synchronously inside that thread; an ``async def get_queryset`` raises
-    ``SyncMisuseError`` there.
-    """
-    return await run_pipeline_async(_run_form_pipeline_sync, mutation_cls, info, data, id)
+# The form-flavor module entry points (spec-038 Decision 8), via the shared factory
+# (spec-039 M1a - single-sourced with the model flavor). ``resolve_form_sync``
+# normalizes the ``UNSET``-default kwargs to ``_run_form_pipeline_sync`` (the plain
+# flavor never passes ``id``, so it defaults to ``UNSET`` and the plain body ignores
+# it); ``resolve_form_async`` runs the same body through the shared
+# ``run_pipeline_async`` boundary (one ``sync_to_async(thread_sensitive=True)`` call,
+# so the ``transaction.atomic()`` + every ORM call run on one worker thread). Both
+# form bases' ``resolve_sync`` / ``resolve_async`` seams delegate here by name.
+resolve_form_sync, resolve_form_async = make_resolver_entries(_run_form_pipeline_sync)

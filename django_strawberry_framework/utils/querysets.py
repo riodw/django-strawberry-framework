@@ -147,6 +147,27 @@ _RELAY_ASYNC_RECOURSE = (
 )
 
 
+def sync_pipeline_recourse(flavor_noun: str) -> str:
+    """Build the ``SyncMisuseError`` recourse a sync write pipeline appends (spec-039 Md2).
+
+    The three write flavors (model / form / serializer) each raise a
+    ``SyncMisuseError`` naming the SAME recourse when an ``async def get_queryset`` is
+    met inside their (synchronous) ORM pipeline - byte-identical except the flavor
+    subject. Single-sites that sentence so the three ``*_ASYNC_RECOURSE`` module
+    constants cannot drift; each flavor still keeps its own named constant
+    (``_MUTATION_ASYNC_RECOURSE`` / ``_FORM_ASYNC_RECOURSE`` /
+    ``_SERIALIZER_ASYNC_RECOURSE``), now computed from this template. NOT used for the
+    Relay recourse (``_RELAY_ASYNC_RECOURSE`` - async IS possible there) or the
+    permission recourse (about ``has_permission`` / ``check_permission``, not
+    ``get_queryset``), which are genuinely different wordings.
+    """
+    return (
+        f"A {flavor_noun} runs its ORM pipeline synchronously (under one sync_to_async "
+        "call on the async surface), so it cannot await an async get_queryset hook; "
+        "redefine the target type's get_queryset as a sync method."
+    )
+
+
 def apply_type_visibility_sync(
     type_cls: type,
     queryset: models.QuerySet,
@@ -205,6 +226,63 @@ def visibility_scoped_related_queryset(
     )
 
 
+def related_visibility_queryset(
+    related_model: type,
+    info: Any,
+    async_recourse: str = _RELAY_ASYNC_RECOURSE,
+) -> models.QuerySet | None:
+    """Return the related model's visibility-scoped queryset, or ``None`` when it has no primary.
+
+    The ``registry.get(related_model)`` resolve + the "scope through the primary
+    ``DjangoType.get_queryset`` visibility hook, else no contract" branch that four
+    relation surfaces open with (``visible_related_object`` /
+    ``visible_related_objects`` here, the model
+    ``mutations/resolvers.py::_raw_pk_relation_error``, and the serializer
+    ``rest_framework/resolvers.py::_scope_specs_over_serializer``). ``None`` means
+    "the related model has no registered primary ``DjangoType``" - a raw-pk relation
+    with no visibility contract - and each caller keeps its OWN None-handling
+    explicit (default-manager existence, an existence-only check, or skip), because
+    that tail genuinely diverges per surface. Single-sites only the resolve + the
+    visibility-scoping call, so the ONE place a drift is a data-leak bug class is
+    written once (spec-039 Md3). An ``async def get_queryset`` met here raises
+    ``SyncMisuseError`` (inherited from ``apply_type_visibility_sync``).
+    """
+    from ..registry import registry
+
+    related_type = registry.get(related_model)
+    if related_type is None:
+        return None
+    return visibility_scoped_related_queryset(related_type, info, async_recourse)
+
+
+def stringified_pks_present(queryset: models.QuerySet, query_pks: Any) -> set[str]:
+    """Return the stringified pks among ``query_pks`` actually present in ``queryset`` (one query).
+
+    The ``{str(pk) for pk in queryset.filter(pk__in=...).values_list("pk", flat=True)}``
+    lookup the relation membership checks share (spec-039 Md4): the model
+    ``mutations/resolvers.py::_relation_membership_error`` and the serializer
+    ``visible_related_objects`` both build this present-set in one query, stringifying
+    each pk for a type-agnostic membership compare (an int pk and its ``"3"`` string
+    form compare equal). Single-sites the query + the str-coercion so the
+    no-existence-leak comparison basis cannot drift.
+    """
+    return {str(pk) for pk in queryset.filter(pk__in=list(query_pks)).values_list("pk", flat=True)}
+
+
+def pks_all_present(declared_pks: Any, present: set[str]) -> bool:
+    """Return whether every ``declared_pks`` member (stringified) is in ``present`` (spec-039 Md4).
+
+    The subset-membership test the model relation guard
+    (``mutations/resolvers.py::_relation_membership_error``) and the serializer M2M
+    decoder (``rest_framework/resolvers.py::_decode_relation_multi``) share: a
+    ``declared`` set is fully present iff its stringified members are a subset of the
+    ``present`` set (typically from ``stringified_pks_present``). A missing / hidden
+    member fails the subset check, which each caller maps to the uniform field-keyed
+    relation error - the same no-existence-leak outcome.
+    """
+    return {str(pk) for pk in declared_pks} <= present
+
+
 def visible_related_object(
     related_model: type,
     pk: Any,
@@ -239,14 +317,11 @@ def visible_related_object(
     branch; it does NOT imply every generated GraphQL relation input accepts both a
     raw pk and a GlobalID (the input exposes one strategy-dependent shape).
     """
-    from ..registry import registry
-
-    related_type = registry.get(related_model)
-    if related_type is None:
+    queryset = related_visibility_queryset(related_model, info, async_recourse)
+    if queryset is None:
         # No primary DjangoType: a raw-pk relation with no Relay-Node target. Scope
         # existence against the default manager (no visibility contract to apply).
         return related_model._default_manager.filter(pk=pk).first()
-    queryset = visibility_scoped_related_queryset(related_type, info, async_recourse)
     return queryset.filter(pk=pk).first()
 
 
@@ -269,14 +344,10 @@ def visible_related_objects(
     ``SyncMisuseError``. ``related_model`` has a primary type only when a typed relation input
     was generated for it; a raw-pk relation resolves its primary the same way (``registry.get``).
     """
-    from ..registry import registry
-
-    related_type = registry.get(related_model)
-    if related_type is None:
+    queryset = related_visibility_queryset(related_model, info, async_recourse)
+    if queryset is None:
         queryset = related_model._default_manager.all()
-    else:
-        queryset = visibility_scoped_related_queryset(related_type, info, async_recourse)
-    return {str(pk) for pk in queryset.filter(pk__in=list(pks)).values_list("pk", flat=True)}
+    return stringified_pks_present(queryset, pks)
 
 
 async def apply_type_visibility_async(

@@ -114,26 +114,26 @@ import strawberry
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError as DRFValidationError
-from strawberry import relay
 
 from ..exceptions import ConfigurationError
 from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 from ..mutations.resolvers import (
-    _coerce_relation_pk_or_none,
     _unencodable_text_error,
     field_error,
+    make_resolver_entries,
     raw_choice_value,
     relation_field_error,
-    run_pipeline_async,
     run_write_pipeline_sync,
     save_or_field_errors,
+    type_check_relation_id,
     validation_error_to_field_errors,
 )
-from ..registry import registry
-from ..relay import GlobalIDDecode, decode_model_global_id
+from ..utils.inputs import iter_provided_input_fields
 from ..utils.permissions import request_from_info
 from ..utils.querysets import (
-    visibility_scoped_related_queryset,
+    pks_all_present,
+    related_visibility_queryset,
+    sync_pipeline_recourse,
     visible_related_object,
     visible_related_objects,
 )
@@ -150,31 +150,15 @@ from .serializer_converter import (
 # async ``get_queryset`` is met inside the (sync) serializer pipeline. Mirrors the
 # ``036`` / ``038`` recourse wording: the whole pipeline runs synchronously (under
 # one ``sync_to_async`` worker on the async surface), so an ``async def
-# get_queryset`` can never be awaited here.
-_SERIALIZER_ASYNC_RECOURSE = (
-    "A serializer mutation runs its ORM pipeline synchronously (under one "
-    "sync_to_async call on the async surface), so it cannot await an async "
-    "get_queryset hook; redefine the target type's get_queryset as a sync method."
-)
+# get_queryset`` can never be awaited here. Single-sourced across the three write
+# flavors via ``sync_pipeline_recourse`` (spec-039 Md2).
+_SERIALIZER_ASYNC_RECOURSE = sync_pipeline_recourse("serializer mutation")
 
 # DRF's non-field-errors bucket key (``api_settings.NON_FIELD_ERRORS_KEY``,
 # default ``"non_field_errors"``). Read once from DRF's settings so the recursive
 # flattener normalizes WHATEVER key DRF is configured to use (not a hard-coded
 # literal) to the package's ``"__all__"`` sentinel at every level.
 _DRF_NON_FIELD_KEY: str = serializers.api_settings.NON_FIELD_ERRORS_KEY
-
-
-def _relation_field_error(graphql_name: str) -> FieldError:
-    """Build the uniform invalid / hidden / wrong-model relation ``FieldError``.
-
-    Keys to the input field's GraphQL wire name (``categoryId``) - what the client
-    sent - matching the ``036`` / ``038`` relation-decode contract. Hidden, missing,
-    wrong-model, and uncoercible all collapse to this one shape (no existence
-    leak). The serializer-path alias for the shared ``relation_field_error`` leaf
-    ctor: the message + leaf shape are single-sourced in ``mutations/resolvers.py``
-    (spec-039 integration), byte-identical across all three write flavors.
-    """
-    return relation_field_error(graphql_name)
 
 
 def _decode_relation_single(
@@ -186,15 +170,15 @@ def _decode_relation_single(
 ) -> tuple[Any, FieldError | None]:
     """Decode ONE relation id to its visible pk (mirrors the ``038`` form single decoder).
 
-    (i) a ``relay.GlobalID`` runs through ``decode_model_global_id`` against the
-    target model (decoded against the target type's RECORDED
-    ``effective_globalid_strategy``, never a live settings re-read) - a non-``OK``
-    status is a field-keyed ``FieldError``; (ii) a raw pk runs through
-    ``_coerce_relation_pk_or_none`` - ``None`` (uncoercible / out of range) is a
-    field-keyed ``FieldError``; (iii) for BOTH branches resolve the VISIBLE object
-    via the promoted ``visible_related_object`` (P1.1) - a hidden / missing row is
-    the SAME field-keyed ``FieldError`` (no existence leak); (iv) reduce the visible
-    object to its pk (what DRF's ``PrimaryKeyRelatedField`` expects).
+    (i) the structural type-check + pk coercion (a ``relay.GlobalID`` through
+    ``decode_model_global_id`` against the target model; a raw pk through
+    ``_coerce_relation_pk_or_none``) is delegated to the shared
+    ``mutations/resolvers.py::type_check_relation_id`` (spec-039 M3) - a non-``OK``
+    GlobalID / an uncoercible raw pk is a field-keyed ``FieldError``; (ii) the
+    type-checked pk is resolved to the VISIBLE object via the promoted
+    ``visible_related_object`` (P1.1) - a hidden / missing row is the SAME
+    field-keyed ``FieldError`` (no existence leak); (iii) reduce the visible object
+    to its pk (what DRF's ``PrimaryKeyRelatedField`` expects).
 
     An explicit ``None`` is NOT an id to decode: it is a clear / no-value passed
     through unchanged so the serializer's own validation decides (a required
@@ -206,7 +190,7 @@ def _decode_relation_single(
     """
     if value is None:
         return None, None
-    pk, error = _type_check_relation_id(
+    pk, error = type_check_relation_id(
         value,
         graphql_name=graphql_name,
         related_model=related_model,
@@ -215,34 +199,8 @@ def _decode_relation_single(
         return None, error
     obj = visible_related_object(related_model, pk, info, _SERIALIZER_ASYNC_RECOURSE)
     if obj is None:
-        return None, _relation_field_error(graphql_name)
+        return None, relation_field_error(graphql_name)
     return obj.pk, None
-
-
-def _type_check_relation_id(
-    value: Any,
-    *,
-    graphql_name: str,
-    related_model: type,
-) -> tuple[Any, FieldError | None]:
-    """Type-check + coerce ONE relation id to a pk WITHOUT a DB fetch (spec-039 rev6 #3).
-
-    The STRUCTURAL half of the single decoder, factored out so the batched multi decoder can
-    coerce every id first (no per-element fetch), then confirm visibility for the whole set in
-    one query: (i) a ``relay.GlobalID`` runs through ``decode_model_global_id`` against the
-    target model (a non-``OK`` status is the uniform relation ``FieldError``); (ii) a raw pk
-    runs through ``_coerce_relation_pk_or_none`` (``None`` -> the uniform error). Neither
-    branch touches the DB - visibility is confirmed by the caller.
-    """
-    if isinstance(value, relay.GlobalID):
-        result = decode_model_global_id(value, related_model)
-        if result.status is not GlobalIDDecode.OK:
-            return None, _relation_field_error(graphql_name)
-        return result.pk, None
-    pk = _coerce_relation_pk_or_none(related_model, value)
-    if pk is None:
-        return None, _relation_field_error(graphql_name)
-    return pk, None
 
 
 def _decode_relation_multi(
@@ -265,7 +223,7 @@ def _decode_relation_multi(
         return None, None
     pks: list[Any] = []
     for value in values:
-        pk, error = _type_check_relation_id(
+        pk, error = type_check_relation_id(
             value,
             graphql_name=graphql_name,
             related_model=related_model,
@@ -276,9 +234,9 @@ def _decode_relation_multi(
     if not pks:
         return [], None
     visible = visible_related_objects(related_model, pks, info, _SERIALIZER_ASYNC_RECOURSE)
-    if not {str(pk) for pk in pks} <= visible:
+    if not pks_all_present(pks, visible):
         # A hidden / missing member: the uniform relation error (no existence leak).
-        return None, _relation_field_error(graphql_name)
+        return None, relation_field_error(graphql_name)
     return pks, None
 
 
@@ -328,11 +286,10 @@ def _decode_input_object(
     spec_by_attr = {spec.input_attr: spec for spec in specs}
     provided_data: dict[str, Any] = {}
 
-    for field in data.__strawberry_definition__.fields:
-        python_name = field.python_name
-        value = getattr(data, python_name, strawberry.UNSET)
-        if value is strawberry.UNSET:
-            continue
+    # The ``UNSET``-strip walk is single-sited in ``iter_provided_input_fields``
+    # (spec-039 M2); the per-field kind routing (incl. the nested recursion) below
+    # stays serializer-specific.
+    for python_name, value, _field in iter_provided_input_fields(data):
         spec = spec_by_attr[python_name]
         field_path = _join_path(path_prefix, spec.graphql_name)
 
@@ -541,11 +498,6 @@ def _build_reverse_map(specs: list) -> dict[str, tuple[str, dict | None]]:
         child = _build_reverse_map(spec.nested_specs) if spec.nested_specs is not None else None
         result[spec.target_name] = (spec.graphql_name, child)
     return result
-
-
-def _reverse_map_for(mutation_cls: type) -> dict[str, tuple[str, dict | None]]:
-    """Build the recursive ``{serializer name: (GraphQL name, child_map)}`` map from the specs."""
-    return _build_reverse_map(mutation_cls._input_field_specs)
 
 
 def _merged_serializer_kwargs(
@@ -815,17 +767,19 @@ def _scope_specs_over_serializer(specs: list, serializer: Any, info: Any) -> Non
             continue
         if spec.kind not in (RELATION_SINGLE, RELATION_MULTI):
             continue
-        related_type = registry.get(spec.related_model)
-        if related_type is None:
+        # ``related_visibility_queryset`` single-sites the ``registry.get`` resolve +
+        # the visibility-scoping call (spec-039 Md3); ``None`` = raw-pk relation with
+        # no primary type (no visibility contract to scope).
+        visible = related_visibility_queryset(
+            spec.related_model,
+            info,
+            _SERIALIZER_ASYNC_RECOURSE,
+        )
+        if visible is None:
             continue  # raw-pk relation, no visibility contract to scope.
         field = serializer.fields.get(spec.target_name)
         if field is None:  # pragma: no cover - the agreement guard already required it.
             continue
-        visible = visibility_scoped_related_queryset(
-            related_type,
-            info,
-            _SERIALIZER_ASYNC_RECOURSE,
-        )
         relation = (
             field.child_relation if isinstance(field, serializers.ManyRelatedField) else field
         )
@@ -910,7 +864,7 @@ def _serializer_write_step(
     ``GraphQLError`` at the write.
     """
     serializer_class = mutation_cls._mutation_meta.serializer_class
-    reverse_map = _reverse_map_for(mutation_cls)
+    reverse_map = _build_reverse_map(mutation_cls._input_field_specs)
     kwargs = _merged_serializer_kwargs(
         mutation_cls,
         info,
@@ -1017,25 +971,6 @@ def _serializer_decode_step(
     return provided_data
 
 
-async def resolve_serializer_async(
-    mutation_cls: type,
-    info: Any,
-    *,
-    data: Any = strawberry.UNSET,
-    id: Any = strawberry.UNSET,  # noqa: A002
-) -> Any:
-    """Async serializer-pipeline entry: the sync body in one ``sync_to_async(thread_sensitive=True)``.
-
-    Delegates to the shared ``mutations/resolvers.py::run_pipeline_async`` boundary
-    (single-sourced with the model + form flavors - the same ``036`` boundary shape)
-    so the ``transaction.atomic()`` + every ORM call run on one worker thread, never
-    interleaving ORM work with ``await``s. A sync ``get_queryset`` runs synchronously
-    inside that thread; an ``async def get_queryset`` raises ``SyncMisuseError``
-    there.
-    """
-    return await run_pipeline_async(_run_serializer_pipeline_sync, mutation_cls, info, data, id)
-
-
 def _run_serializer_pipeline_sync(
     mutation_cls: type,
     info: Any,
@@ -1050,3 +985,14 @@ def _run_serializer_pipeline_sync(
     it (the ``036`` ``_run_pipeline_sync`` / ``resolve_mutation_sync`` relationship).
     """
     return resolve_serializer_sync(mutation_cls, info, data=data, id=id)
+
+
+# The serializer async entry, via the shared factory (spec-039 M1a). ONLY the async
+# half is taken: the serializer sync entry (``resolve_serializer_sync`` above) is
+# bespoke - it calls ``run_write_pipeline_sync`` with decode / write lambdas
+# directly, with no ``_run_*_pipeline_sync`` dispatcher to normalize - so the
+# generated sync entry is discarded. The async half runs
+# ``_run_serializer_pipeline_sync`` through the shared ``run_pipeline_async`` boundary
+# (single-sourced with the model + form flavors), so the three flavors cannot drift
+# on the boundary contract.
+_, resolve_serializer_async = make_resolver_entries(_run_serializer_pipeline_sync)

@@ -41,6 +41,7 @@ declared in this slice is inert: registered + bound at finalize, never resolved.
 
 from __future__ import annotations
 
+import importlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple, get_origin
 
@@ -99,8 +100,12 @@ _VALID_OPERATIONS: frozenset[str] = frozenset({"create", "update", "delete"})
 # ``<Model>Input`` (``CREATE``); ``update`` builds the all-optional
 # ``<Model>PartialInput`` (``PARTIAL``); ``delete`` is ``id:``-only and needs no
 # input (spec-036 Decision 14). The bind reads this to know which input(s) to
-# materialize per operation.
-_OPERATION_INPUT_KIND: dict[str, str] = {"create": CREATE, "update": PARTIAL}
+# materialize per operation. Single-sourced across all three write flavors
+# (spec-039 Mn2): the model reads it via ``.get(...)`` (``delete`` -> ``None``), the
+# form + serializer flavors via ``[...]`` (both reject ``delete``, so every key is
+# present). Replaces the byte-identical ``_SERIALIZER_OPERATION_INPUT_KIND`` +
+# ``_modelform_operation_kind`` copies.
+NON_DELETE_OPERATION_INPUT_KIND: dict[str, str] = {"create": CREATE, "update": PARTIAL}
 
 # The create/update-only write operations the form + serializer flavors share
 # (spec-039 P1.2). A ``DjangoModelFormMutation`` and a ``SerializerMutation`` both
@@ -219,6 +224,169 @@ def build_and_stash_input(
     materialize(input_cls.__name__, input_cls)
     cls._input_field_specs = specs_of(payload)
     return input_cls
+
+
+def construction_kwargs(*, instance: Any = None, **base: Any) -> dict[str, Any]:
+    """Build a construction-hook kwargs dict, adding ``instance`` only when non-``None`` (spec-039 Md7).
+
+    The default construction-kwargs hooks share the ``{...base...}`` +
+    ``if instance is not None: kwargs["instance"] = instance`` shape: the form
+    ``_default_get_form_kwargs`` passes ``base={"data": ..., "files": ...}``, the
+    serializer ``get_serializer_kwargs`` passes ``base={"data": ...}``. Single-sites
+    the "add ``instance`` only for update" clause (create / plain pass
+    ``instance=None`` so no ``instance=`` key is emitted) so a new flavor's default
+    hook reuses it rather than re-spelling the guard.
+    """
+    kwargs = dict(base)
+    if instance is not None:
+        kwargs["instance"] = instance
+    return kwargs
+
+
+def require_backing_class(
+    name: str,
+    meta: type,
+    *,
+    key: str,
+    base_label: str,
+    expected_label: str,
+) -> Any:
+    """Return ``Meta.<key>`` or raise the shared "declares no backing class" error (spec-039 M5).
+
+    The presence check both the form + serializer ``_validate_meta`` prologues share:
+    an unset / ``None`` ``Meta.<key>`` (``form_class`` / ``serializer_class``) is a
+    clean ``ConfigurationError`` naming the key + the expected base, never a
+    downstream ``AttributeError`` on a missing class. ``base_label`` names the
+    offending base (``DjangoModelFormMutation`` / ``DjangoFormMutation`` /
+    ``SerializerMutation``); ``expected_label`` is the base type named in the message
+    (``forms.ModelForm`` / ``forms.Form`` / ``serializers.ModelSerializer``). The
+    per-flavor TYPE-gate (ModelForm-ness; the serializer's Serializer +
+    ModelSerializer pair) stays at the call site - its messages genuinely diverge -
+    so this owns only the shared presence clause.
+    """
+    backing = getattr(meta, key, None)
+    if backing is None:
+        raise ConfigurationError(
+            f"{base_label} {name}.Meta declares no {key}; set Meta.{key} to a "
+            f"{expected_label} subclass.",
+        )
+    return backing
+
+
+def resolve_meta_model(meta: type, *, key: str, meta_attr: str) -> Any:
+    """Resolve a backing class's ``Meta.model`` via the shared three-getattr chain (spec-039 M5).
+
+    The ``getattr(meta, key) -> getattr(backing, meta_attr) -> getattr(backing_meta,
+    "model")`` chain both flavors' ``_resolve_model`` overrides walk, differing only
+    in ``key`` (``form_class`` / ``serializer_class``) and ``meta_attr`` (a
+    ``ModelForm``'s ``_meta`` vs a serializer's ``Meta``). Returns ``None`` for any
+    missing link (no backing class, no meta, no model), so the caller's base
+    validation raises the clean "resolves no model" error rather than an
+    ``AttributeError``.
+    """
+    backing = getattr(meta, key, None)
+    backing_meta = getattr(backing, meta_attr, None)
+    return getattr(backing_meta, "model", None)
+
+
+def resolve_backed_model_or_raise(
+    cls: type,
+    meta: type,
+    *,
+    base_label: str,
+    key: str,
+    noun: str,
+) -> Any:
+    """Return ``cls._resolve_model(meta)`` or raise the shared "resolves no model" error (spec-039 M5).
+
+    The no-model raise both flavors' ``_validate_meta`` share, run AFTER the backing
+    class is type-validated (so ``Meta.<key>`` is a real class with a ``.__name__``).
+    ``base_label`` / ``key`` / ``noun`` (``ModelForm`` / ``ModelSerializer``) are the
+    only per-flavor axes; the message is otherwise byte-identical across flavors.
+    """
+    model = cls._resolve_model(meta)
+    if model is None:
+        backing = getattr(meta, key)
+        raise ConfigurationError(
+            f"{base_label} {cls.__name__}.Meta.{key} {backing.__name__} resolves no model; "
+            f"a {noun} must set Meta.model so the mutation has a model + a DjangoType to return.",
+        )
+    return model
+
+
+def resolver_seams(
+    module_path: str,
+    sync_name: str,
+    async_name: str,
+    *,
+    with_id: bool = True,
+) -> tuple[Any, Any]:
+    """Build the ``(resolve_sync, resolve_async)`` classmethod pair a mutation base exposes (spec-039 M1b).
+
+    Every write-flavor base (``DjangoMutation`` / ``DjangoModelFormMutation`` /
+    ``DjangoFormMutation`` / ``SerializerMutation``) exposes an identical
+    ``resolve_sync`` / ``resolve_async`` seam: a function-local import of the flavor's
+    resolver module (the cycle guard - the import runs at RESOLVE time, not class /
+    module load) then a delegate to that module's entry with the GraphQL ``data`` /
+    ``id`` kwargs. Single-sites the eight bodies as one factory: ``module_path`` is
+    the flavor's resolver module, ``sync_name`` / ``async_name`` the entries it
+    delegates to, and ``with_id`` is ``False`` for the model-LESS plain
+    ``DjangoFormMutation`` (whose seam signature is ``(info, *, data)`` - no ``id``).
+
+    Each call produces FRESH classmethod objects, so ``SubclassA.resolve_sync.__func__
+    is BaseA.resolve_sync.__func__`` (inheritance) while ``BaseA.resolve_sync.__func__
+    is not BaseB.resolve_sync.__func__`` (distinct factory calls) - the identities the
+    field factory's routing tests assert. Assign the pair in the class body via
+    ``resolve_sync, resolve_async = resolver_seams(...)`` so both land in the class
+    ``__dict__``.
+    """
+    if with_id:
+
+        @classmethod
+        def resolve_sync(
+            cls: type,
+            info: Any,
+            *,
+            data: Any,
+            id: Any,  # noqa: A002
+        ) -> Any:
+            """Delegate to the flavor's sync resolver entry (function-local import cycle guard)."""
+            return getattr(importlib.import_module(module_path), sync_name)(
+                cls,
+                info,
+                data=data,
+                id=id,
+            )
+
+        @classmethod
+        def resolve_async(
+            cls: type,
+            info: Any,
+            *,
+            data: Any,
+            id: Any,  # noqa: A002
+        ) -> Any:
+            """Delegate to the flavor's async resolver entry (function-local import cycle guard)."""
+            return getattr(importlib.import_module(module_path), async_name)(
+                cls,
+                info,
+                data=data,
+                id=id,
+            )
+
+    else:
+
+        @classmethod
+        def resolve_sync(cls: type, info: Any, *, data: Any) -> Any:
+            """Delegate to the flavor's sync resolver entry (no ``id`` - model-less flavor)."""
+            return getattr(importlib.import_module(module_path), sync_name)(cls, info, data=data)
+
+        @classmethod
+        def resolve_async(cls: type, info: Any, *, data: Any) -> Any:
+            """Delegate to the flavor's async resolver entry (no ``id`` - model-less flavor)."""
+            return getattr(importlib.import_module(module_path), async_name)(cls, info, data=data)
+
+    return resolve_sync, resolve_async
 
 
 # Per-finalize-pass build cache keyed by generated-input shape identity
@@ -482,23 +650,6 @@ class _ValidatedMutationMeta:
         self.nested_fields = nested_fields
 
 
-def _normalize_field_sequence(value: Any, *, label: str = "fields") -> tuple[str, ...] | None:
-    """Return ``Meta.fields`` / ``Meta.exclude`` as a tuple of names, or ``None``.
-
-    The model-flavor entry point: delegates to the shared
-    ``utils/inputs.py::normalize_field_name_sequence`` (spec-038 integration pass,
-    Finding I1) with the ``DjangoMutation`` flavor label, so the bare-string and
-    duplicate-name ``ConfigurationError`` messages stay byte-identical to the
-    pre-consolidation wording. ``None`` means "unset"; a non-``None`` value is
-    coerced to a tuple so the bind and the generator see one shape
-    (``editable_input_fields`` accepts a tuple). A bare string and a duplicate
-    name both fail loud at class creation; ``label`` names which key (``fields`` /
-    ``exclude``) is at fault. The field-existence-basis check lives separately in
-    the bind.
-    """
-    return normalize_field_name_sequence(value, label=label, flavor="DjangoMutation")
-
-
 def _validate_permission_classes(
     mutation_name: str,
     value: Any,
@@ -677,8 +828,20 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
                 f"{sorted(_VALID_OPERATIONS)}; got {operation!r}.",
             )
 
-        fields = _normalize_field_sequence(getattr(meta, "fields", None), label="fields")
-        exclude = _normalize_field_sequence(getattr(meta, "exclude", None), label="exclude")
+        # The model-flavor field-sequence normalization routes through the shared
+        # ``normalize_field_name_sequence`` DIRECTLY (spec-039 Mn3 - no per-flavor
+        # re-binding wrapper, matching the serializer flavor's P2.7 style); the
+        # ``DjangoMutation`` flavor label keeps the messages byte-identical.
+        fields = normalize_field_name_sequence(
+            getattr(meta, "fields", None),
+            label="fields",
+            flavor="DjangoMutation",
+        )
+        exclude = normalize_field_name_sequence(
+            getattr(meta, "exclude", None),
+            label="exclude",
+            flavor="DjangoMutation",
+        )
         if fields is not None and exclude is not None:
             raise ConfigurationError(
                 f"DjangoMutation {name}.Meta declares both `fields` and `exclude`; "
@@ -770,7 +933,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         to consult this seam (deleting the transient ``_input_type_name`` twin), so
         this is now the single source for the model ``data:`` lazy-ref name.
         """
-        operation_kind = _OPERATION_INPUT_KIND[meta.operation]
+        operation_kind = NON_DELETE_OPERATION_INPUT_KIND[meta.operation]
         effective_field_names = tuple(
             field.name
             for field in editable_input_fields(
@@ -787,44 +950,18 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
             full_field_names=full_field_names,
         )
 
-    @classmethod
-    def resolve_sync(
-        cls,
-        info: Any,
-        *,
-        data: Any,
-        id: Any,  # noqa: A002  # ``id`` is the GraphQL arg name
-    ) -> Any:
-        """Resolve a mutation synchronously (the sync resolver seam).
-
-        The overridable sync-dispatch seam Slice 3's ``mutations/fields.py``
-        ``_resolve`` will call. The **model default** delegates to today's
-        ``mutations/resolvers.py::resolve_mutation_sync`` (so the model dispatch is
-        unchanged); the form flavors override it with the form resolver pipeline
-        (spec-038 Slice 3). Function-local import to keep the module-load order
-        independent of ``resolvers.py``.
-        """
-        from .resolvers import resolve_mutation_sync
-
-        return resolve_mutation_sync(cls, info, data=data, id=id)
-
-    @classmethod
-    def resolve_async(
-        cls,
-        info: Any,
-        *,
-        data: Any,
-        id: Any,  # noqa: A002  # ``id`` is the GraphQL arg name
-    ) -> Any:
-        """Resolve a mutation asynchronously (the async resolver seam).
-
-        The async mirror of ``resolve_sync``: the **model default** delegates to
-        ``mutations/resolvers.py::resolve_mutation_async``; the form flavors
-        override it with the async form pipeline (spec-038 Slice 3).
-        """
-        from .resolvers import resolve_mutation_async
-
-        return resolve_mutation_async(cls, info, data=data, id=id)
+    # The overridable sync / async resolver-dispatch seams
+    # (``mutations/fields.py::_resolve`` calls them). The **model default** delegates
+    # to ``mutations/resolvers.py::resolve_mutation_sync`` / ``resolve_mutation_async``
+    # (the function-local import inside the generated seam keeps the module-load order
+    # independent of ``resolvers.py``); the form + serializer flavors override this
+    # pair with their own ``resolver_seams(...)`` call (spec-039 M1b - the eight
+    # near-identical seam bodies single-sited as one factory).
+    resolve_sync, resolve_async = resolver_seams(
+        "django_strawberry_framework.mutations.resolvers",
+        "resolve_mutation_sync",
+        "resolve_mutation_async",
+    )
 
     def check_permission(
         self,
@@ -938,7 +1075,7 @@ def _materialize_input_for(
     set), so two mutations resolving the same shape to two DIFFERENT representations
     still raise the AR-M6 collision.
     """
-    operation_kind = _OPERATION_INPUT_KIND.get(meta.operation)
+    operation_kind = NON_DELETE_OPERATION_INPUT_KIND.get(meta.operation)
     if operation_kind is None:
         return None  # delete: id-only, no input.
 

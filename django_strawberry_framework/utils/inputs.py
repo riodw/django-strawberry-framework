@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import importlib
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Annotated, Any, ClassVar
 
@@ -198,6 +198,60 @@ def graphql_camel_name(name: str) -> str:
     return head + "".join(part.capitalize() for part in rest)
 
 
+def pascalize_token(name: str) -> str:
+    """Encode one field name as a single ``[A-Z][a-z0-9]*`` token for an input-name suffix.
+
+    A single leading capital with a fully-lowercased tail and underscores removed
+    (``is_private`` -> ``Isprivate``, ``category`` -> ``Category``). This shape is
+    load-bearing for the bare-concatenation suffix the three generated-input
+    type-name derivers use (``mutation_input_type_name`` / ``form_input_type_name`` /
+    ``serializer_input_type_name``): because each token has NO interior capital and
+    NO underscore, the concatenation of tokens is uniquely decomposable at uppercase
+    boundaries, so distinct field sets never collide on one generated name.
+
+    Deliberately NOT ``pascal_case`` (which collapses underscores across the whole
+    name and per-segment-capitalizes) - an interior capital would make ``IsPrivate``
+    ambiguously re-decompose as the two fields ``is`` + ``private``, the exact
+    collision this guards against (``("a_b", "c")`` -> ``AbC`` vs ``("a", "b_c")`` ->
+    ``ABc``, distinct). It also stays underscore-free so Strawberry's GraphQL name
+    converter leaves a PascalCase class name unchanged (an underscore would be
+    mangled into a lowercased segment tail in the GraphQL type name).
+
+    Promoted here from ``mutations/inputs.py`` (spec-039 P2.3 kept it sited there at
+    two consumers; at three - model + form + serializer - it graduates to the shared
+    input-name machinery, kept visibly distinct from ``pascal_case``). The old
+    ``mutations/inputs.py::_pascalize_token`` name remains as an import alias.
+    """
+    return name.replace("_", "").capitalize()
+
+
+def generated_input_type_name(
+    base_name: str,
+    *,
+    is_partial: bool,
+    is_full_shape: bool,
+    token: str,
+) -> str:
+    """Return a generated input-class name from its shape components (spec-039 M6).
+
+    The load-bearing skeleton the three flavors' input-name derivers share
+    (``mutations/inputs.py::mutation_input_type_name`` /
+    ``forms/inputs.py::form_input_type_name`` /
+    ``rest_framework/inputs.py::serializer_input_type_name``): a
+    ``PartialInput`` / ``Input`` suffix, the canonical ``<Base><suffix>`` for the
+    full shape, and a deterministic ``<Base><token><suffix>`` for any divergent
+    shape. Single-sited so the suffix rule + the full-vs-derived branching cannot
+    drift between flavors; each flavor still computes its OWN ``token`` (a
+    ``pascalize_token`` concatenation for the model / form name-set shapes, a
+    descriptor digest for the serializer) and its OWN ``is_full_shape`` /
+    ``is_partial`` decision, so the injective-token contract stays with the caller.
+    """
+    suffix = "PartialInput" if is_partial else "Input"
+    if is_full_shape:
+        return f"{base_name}{suffix}"
+    return f"{base_name}{token}{suffix}"
+
+
 def normalize_field_name_sequence(
     value: Any,
     *,
@@ -242,6 +296,110 @@ def normalize_field_name_sequence(
             f"{duplicates!r}. Each field may appear at most once.",
         )
     return names
+
+
+def resolve_effective_fields(
+    basis: dict[str, Any],
+    *,
+    fields: Any,
+    exclude: Any,
+    subject: str,
+    seq_flavor: str,
+    unknown_noun: str,
+    empty_message: str,
+) -> dict[str, Any]:
+    """Return the effective ``{name: field}`` dict after ``fields`` / ``exclude`` narrowing (spec-039 M4).
+
+    The narrowing spine both ``forms/inputs.py::resolve_effective_form_fields`` and
+    ``rest_framework/inputs.py::resolve_effective_serializer_fields`` share: normalize
+    ``fields`` + ``exclude`` (via ``normalize_field_name_sequence`` under ``seq_flavor``)
+    -> mutual-exclusion raise -> ``fields``-branch unknown-name raise ->
+    ``exclude``-branch unknown-name raise (the identical ``[name for name in fields if
+    name not in basis]`` loop) -> empty-effective-set raise. Preserves ``basis``
+    insertion order for the ``exclude`` / un-narrowed cases and the caller's order for
+    ``fields``.
+
+    The only per-flavor divergences are threaded in as the four message knobs
+    (``subject`` = the ``"<Flavor> for <Name>"`` prefix, ``seq_flavor`` = the
+    ``normalize_field_name_sequence`` flavor label, ``unknown_noun`` = the
+    ``"unknown ... field(s)"`` clause, ``empty_message`` = the fully-formed no-fields
+    error) and the ``basis`` dict itself - the caller computes its basis (the form's
+    ``base_fields``, the serializer's read-only-filtered ``writable`` map) so the
+    "basis is the only structural divergence" shape holds. Each flavor keeps a thin
+    wrapper that supplies these, so the pinned error wording stays byte-identical.
+    """
+    fields = normalize_field_name_sequence(fields, label="fields", flavor=seq_flavor)
+    exclude = normalize_field_name_sequence(exclude, label="exclude", flavor=seq_flavor)
+    if fields is not None and exclude is not None:
+        raise ConfigurationError(
+            f"{subject} declares both `fields` and `exclude`; supply at most one.",
+        )
+    if fields is not None:
+        unknown = [name for name in fields if name not in basis]
+        if unknown:
+            raise ConfigurationError(
+                f"{subject} declares `fields` naming {unknown_noun}: {sorted(unknown)!r}.",
+            )
+        effective = {name: basis[name] for name in fields}
+    elif exclude is not None:
+        unknown = [name for name in exclude if name not in basis]
+        if unknown:
+            raise ConfigurationError(
+                f"{subject} declares `exclude` naming {unknown_noun}: {sorted(unknown)!r}.",
+            )
+        excluded = set(exclude)
+        effective = {name: field for name, field in basis.items() if name not in excluded}
+    else:
+        effective = dict(basis)
+
+    if not effective:
+        raise ConfigurationError(empty_message)
+    return effective
+
+
+def guard_dropped_required(
+    required_field_names: Any,
+    effective_field_names: Any,
+    *,
+    waived: Any = (),
+    make_error: Callable[[list[str]], Exception],
+) -> None:
+    """Raise if a create narrowing drops a still-required field not covered by ``waived`` (spec-039 Md1).
+
+    The set-arithmetic core the form + serializer create-required guards share:
+    ``sorted(required - effective - waived)``; a non-empty dropped set raises the
+    flavor's ``make_error(dropped)`` (a ``ConfigurationError`` either way). The form
+    flavor passes no ``waived`` (it has no injected-field mechanism); the serializer
+    passes ``Meta.injected_fields``. The MESSAGE stays flavor-specific (built by
+    ``make_error`` over the sorted dropped list) so each pinned wording is
+    byte-preserved; only the drop-detection is single-sited.
+    """
+    dropped = sorted(set(required_field_names) - set(effective_field_names) - set(waived))
+    if dropped:
+        raise make_error(dropped)
+
+
+def iter_provided_input_fields(data: Any) -> Iterator[tuple[str, Any, Any]]:
+    """Yield ``(python_name, value, field)`` for each PROVIDED field of a bound input (spec-039 M2).
+
+    The ``UNSET``-strip walk every write-flavor decoder opens with - the model
+    ``mutations/resolvers.py::_decode_relations``, the form
+    ``forms/resolvers.py::_decode_form_data``, and the serializer
+    ``rest_framework/resolvers.py::_decode_input_object``: iterate
+    ``data.__strawberry_definition__.fields``, read each field's value off the input
+    dataclass, and skip any left ``strawberry.UNSET`` (an OMITTED field, distinct from
+    an explicit ``None`` which is kept as a provided value). Single-sited so the three
+    decoders share ONE definition of "which fields did the client provide" - and a
+    fourth write flavor gets the blessed walk for free. The per-field decode (kind
+    branch, spec lookup, short-circuit protocol) stays at each call site: this owns
+    only the walk, not the routing.
+    """
+    for field in data.__strawberry_definition__.fields:
+        python_name = field.python_name
+        value = getattr(data, python_name, strawberry.UNSET)
+        if value is strawberry.UNSET:
+            continue
+        yield python_name, value, field
 
 
 def build_strawberry_input_class(

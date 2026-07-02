@@ -151,8 +151,7 @@ def test_flattener_recursively_rekeys_nested_child_fields():
             nested_specs=child_specs,
         ),
     ]
-    fake = type("M", (), {"_input_field_specs": top_specs})
-    reverse_map = serializer_resolvers._reverse_map_for(fake)
+    reverse_map = serializer_resolvers._build_reverse_map(top_specs)
     errors = {"shelves": [{"alt_branches": ["Bad pk"]}]}
     (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, reverse_map)
     assert fe.field == "shelves.0.altBranches"
@@ -175,8 +174,7 @@ def test_flattener_nested_non_field_bucket_keeps_all_sentinel_with_recursive_map
             nested_specs=child_specs,
         ),
     ]
-    fake = type("M", (), {"_input_field_specs": top_specs})
-    reverse_map = serializer_resolvers._reverse_map_for(fake)
+    reverse_map = serializer_resolvers._build_reverse_map(top_specs)
     drf_key = serializer_resolvers._DRF_NON_FIELD_KEY
     errors = {"shelves": [{drf_key: ["cross-field"]}]}
     (fe,) = serializer_resolvers.serializer_errors_to_field_errors(errors, reverse_map)

@@ -65,15 +65,21 @@ from typing import Any
 from rest_framework import serializers
 
 from ..exceptions import ConfigurationError
-from ..mutations.inputs import CREATE, PARTIAL
+from ..mutations.inputs import CREATE
 from ..mutations.sets import (
+    NON_DELETE_OPERATION_INPUT_KIND,
     NON_DELETE_WRITE_OPERATIONS,
     DjangoMutation,
     _hook_overridden,
     _ValidatedMutationMeta,
     build_and_stash_input,
+    construction_kwargs,
     non_delete_operation_error,
     reject_unknown_meta_keys,
+    require_backing_class,
+    resolve_backed_model_or_raise,
+    resolve_meta_model,
+    resolver_seams,
 )
 from ..mutations.sets import (
     _validate_permission_classes as _validate_mutation_permission_classes,
@@ -116,12 +122,12 @@ _ALLOWED_SERIALIZER_META_KEYS: frozenset[str] = frozenset(
     },
 )
 
-# ``operation`` -> input-generator kind. ``create`` builds the required-aware
-# ``<Serializer>Input`` (``CREATE``); ``update`` builds the all-optional
-# ``<Serializer>PartialInput`` (``PARTIAL``). Single-sourced so ``build_input`` and
-# ``input_type_name`` cannot drift on the mapping (the ``036`` / ``038``
-# operation->kind map precedent).
-_SERIALIZER_OPERATION_INPUT_KIND: dict[str, str] = {"create": CREATE, "update": PARTIAL}
+# ``operation`` -> input-generator kind: the shared
+# ``mutations/sets.py::NON_DELETE_OPERATION_INPUT_KIND`` map (spec-039 Mn2), which
+# replaced the byte-identical ``_SERIALIZER_OPERATION_INPUT_KIND`` /
+# ``_modelform_operation_kind`` copies. ``create`` -> the required-aware
+# ``<Serializer>Input`` (``CREATE``); ``update`` -> the all-optional
+# ``<Serializer>PartialInput`` (``PARTIAL``).
 
 
 def _checked_schema_field_map(
@@ -164,6 +170,30 @@ def _checked_schema_field_map(
                 "mutate per call).",
             )
     return field_map
+
+
+def _serializer_input_shape_for(
+    meta: _ValidatedMutationMeta,
+    *,
+    operation_kind: str,
+    field_map: dict[str, serializers.Field],
+) -> tuple[type, Any]:
+    """Return the serializer input class + descriptor through the shared shape cache (Mn5)."""
+    input_cls, shape = build_serializer_input_class(
+        meta.serializer_class,
+        operation_kind=operation_kind,
+        fields=meta.fields,
+        exclude=meta.exclude,
+        optional_fields=meta.optional_fields,
+        field_map=field_map,
+        # rev6 #17: opt-in nested serializer inputs, built recursively during the walk.
+        nested_configs=meta.nested_fields,
+    )
+    cached = _serializer_shape_build_cache.get(shape.cache_key)
+    if cached is not None:
+        return cached
+    _serializer_shape_build_cache[shape.cache_key] = (input_cls, shape)
+    return input_cls, shape
 
 
 # ``operation`` -> the DRF serializer write method whose OVERRIDE ``Meta.nested_fields`` requires
@@ -284,6 +314,11 @@ class SerializerMutation(DjangoMutation):
     # merely that its key is present in ``data``. ``[]`` when no fields are injected.
     _injected_field_specs: list | None = None
 
+    # The bound serializer-input type name, stashed after successful materialization.
+    # Before bind, ``input_type_name`` derives the descriptor through the shared
+    # cache helper; after bind, it can read this once the determinism guard passes.
+    _input_type_name: str | None = None
+
     @classmethod
     def _resolve_model(cls, meta: type) -> Any:
         """Resolve the model from ``Meta.serializer_class.Meta.model`` (the ``036`` seam override).
@@ -297,9 +332,7 @@ class SerializerMutation(DjangoMutation):
         clean ``ConfigurationError`` (never a raw ``AttributeError`` from
         ``serializer_class.Meta.model``).
         """
-        serializer_class = getattr(meta, "serializer_class", None)
-        serializer_meta = getattr(serializer_class, "Meta", None)
-        return getattr(serializer_meta, "model", None)
+        return resolve_meta_model(meta, key="serializer_class", meta_attr="Meta")
 
     @classmethod
     def _validate_meta(cls, meta: type) -> _ValidatedMutationMeta:
@@ -353,12 +386,16 @@ class SerializerMutation(DjangoMutation):
             _ALLOWED_SERIALIZER_META_KEYS,
         )
 
-        serializer_class = getattr(meta, "serializer_class", None)
-        if serializer_class is None:
-            raise ConfigurationError(
-                f"SerializerMutation {name}.Meta declares no serializer_class; set "
-                "Meta.serializer_class to a serializers.ModelSerializer subclass.",
-            )
+        # The presence clause is the shared ``require_backing_class`` (spec-039 M5);
+        # the two serializer-specific type-gates (Serializer, then ModelSerializer)
+        # stay here - their messages genuinely diverge from the form flavor's.
+        serializer_class = require_backing_class(
+            name,
+            meta,
+            key="serializer_class",
+            base_label="SerializerMutation",
+            expected_label="serializers.ModelSerializer",
+        )
         if not (
             isinstance(serializer_class, type)
             and issubclass(serializer_class, serializers.Serializer)
@@ -374,13 +411,16 @@ class SerializerMutation(DjangoMutation):
                 "serializers.Serializer has no backing model + no DjangoType to return.",
             )
 
-        model = cls._resolve_model(meta)
-        if model is None:
-            raise ConfigurationError(
-                f"SerializerMutation {name}.Meta.serializer_class {serializer_class.__name__} "
-                "resolves no model; a ModelSerializer must set Meta.model so the mutation has a "
-                "model + a DjangoType to return.",
-            )
+        # The "resolves no model" raise is the shared ``resolve_backed_model_or_raise``
+        # (spec-039 M5), run after the type-gates so ``Meta.serializer_class`` is a
+        # real class with a ``.__name__``.
+        model = resolve_backed_model_or_raise(
+            cls,
+            meta,
+            base_label="SerializerMutation",
+            key="serializer_class",
+            noun="ModelSerializer",
+        )
 
         operation = getattr(meta, "operation", None)
         if operation not in NON_DELETE_WRITE_OPERATIONS:
@@ -581,7 +621,7 @@ class SerializerMutation(DjangoMutation):
         del (
             primary_type
         )  # the serializer input derives from the serializer, not the model primary.
-        operation_kind = _SERIALIZER_OPERATION_INPUT_KIND[meta.operation]
+        operation_kind = NON_DELETE_OPERATION_INPUT_KIND[meta.operation]
         serializer_class = meta.serializer_class
         # rev6 #10 / rev2 P2: read the schema hook through the ONE guarded path, so the
         # determinism fingerprint is checked HERE and in ``input_type_name`` alike (no unguarded
@@ -626,60 +666,46 @@ class SerializerMutation(DjangoMutation):
                     injected_fields=meta.injected_fields,
                     field_map=field_map,
                 )
-            input_cls, shape = build_serializer_input_class(
-                serializer_class,
+            return _serializer_input_shape_for(
+                meta,
                 operation_kind=operation_kind,
-                fields=meta.fields,
-                exclude=meta.exclude,
-                optional_fields=meta.optional_fields,
                 field_map=field_map,
-                # rev6 #17: opt-in nested serializer inputs, built recursively during the walk.
-                nested_configs=meta.nested_fields,
             )
-            # Dedupe on the full descriptor: identical shapes reuse one class object
-            # (the materialize ledger then dedupes idempotently); distinct shapes keep
-            # their own classes + descriptor-derived names. This lookup-or-store is
-            # inline rather than via ``cached_build_input`` because the descriptor key is
-            # only knowable AFTER this build (see ``build_input``'s P1.7 note); routing it
-            # through the helper would require building the shape twice.
-            cached = _serializer_shape_build_cache.get(shape.cache_key)
-            if cached is not None:
-                return cached
-            _serializer_shape_build_cache[shape.cache_key] = (input_cls, shape)
-            return input_cls, shape
 
-        return build_and_stash_input(
+        input_cls = build_and_stash_input(
             cls,
             build=_build,
             materialize=materialize_serializer_input_class,
             specs_of=lambda shape: list(shape.field_specs),
         )
+        cls._input_type_name = input_cls.__name__
+        return input_cls
 
     @classmethod
     def input_type_name(cls, meta: _ValidatedMutationMeta) -> str:
         """Return the generated serializer-input class name (the name seam override).
 
         The serializer-flavor name single-sourced with ``build_input``'s name choice:
-        re-build the shape via the Slice-1 ``build_serializer_input_class`` and read
-        ``shape.type_name`` (the ``<Serializer>Input`` / ``<Serializer>PartialInput``
-        canonical name, or a descriptor-derived name for a divergent shape). The
-        Slice-1 generator owns the name derivation; there is no second name deriver
-        here (the descriptor carries ``type_name``), so the bind's materialized name
-        and the field-factory's ``data:`` ref cannot drift.
+        before bind it resolves the Slice-1 descriptor through
+        ``_serializer_input_shape_for``; after bind it reads the materialized name
+        stashed by ``build_input``. The Slice-1 generator owns the name derivation;
+        there is no second name deriver here (the descriptor carries
+        ``type_name``), so the bind's materialized name and the field-factory's
+        ``data:`` ref cannot drift.
         """
-        operation_kind = _SERIALIZER_OPERATION_INPUT_KIND[meta.operation]
-        _input_cls, shape = build_serializer_input_class(
-            meta.serializer_class,
+        operation_kind = NON_DELETE_OPERATION_INPUT_KIND[meta.operation]
+        # rev2 P2: the SAME guarded hook read as ``build_input`` (fingerprint-checked), so
+        # the type-name derivation never reads an unguarded field map. Run this even
+        # when the bound name is already stashed; explicit calls to this seam still
+        # enforce the determinism contract.
+        field_map = _checked_schema_field_map(cls, meta)
+        bound_name = cls.__dict__.get("_input_type_name")
+        if bound_name is not None:
+            return bound_name
+        _input_cls, shape = _serializer_input_shape_for(
+            meta,
             operation_kind=operation_kind,
-            fields=meta.fields,
-            exclude=meta.exclude,
-            optional_fields=meta.optional_fields,
-            # rev2 P2: the SAME guarded hook read as ``build_input`` (fingerprint-checked), so
-            # the type-name derivation never reads an unguarded field map.
-            field_map=_checked_schema_field_map(cls, meta),
-            # rev6 #17: the SAME nested opt-in as ``build_input`` (the nested build is idempotent
-            # via the shape cache + materialize ledger), so the name derivation matches the build.
-            nested_configs=meta.nested_fields,
+            field_map=field_map,
         )
         return shape.type_name
 
@@ -722,10 +748,10 @@ class SerializerMutation(DjangoMutation):
         against it (the ``forms/sets.py`` ``get_form_kwargs`` precedent).
         """
         del info  # the default ignores ``info``; an override may consult it.
-        kwargs: dict[str, Any] = {"data": data}
-        if instance is not None:
-            kwargs["instance"] = instance
-        return kwargs
+        # The "add ``instance`` only on update" clause is single-sited in
+        # ``mutations/sets.py::construction_kwargs`` (spec-039 Md7), shared with the
+        # form ``get_form_kwargs`` default.
+        return construction_kwargs(data=data, instance=instance)
 
     def get_serializer_save_kwargs(
         self,
@@ -748,43 +774,14 @@ class SerializerMutation(DjangoMutation):
         del info, data, instance  # the default injects nothing; an override may consult them.
         return {}
 
-    @classmethod
-    def resolve_sync(
-        cls,
-        info: Any,
-        *,
-        data: Any,
-        id: Any,  # noqa: A002  # ``id`` is the GraphQL arg name
-    ) -> Any:
-        """The sync serializer resolver seam (delegates to the Slice-3 serializer pipeline).
-
-        The D8 carry-forward from Slice 2 (which left ``SerializerMutation`` without
-        the overrides because ``rest_framework/resolvers.py`` did not exist yet -
-        an inert declaration inherited ``DjangoMutation``'s callable pair). Routes to
-        ``rest_framework/resolvers.py::resolve_serializer_sync`` (the
-        locate -> authorize -> decode -> construct -> validate -> save -> optimizer
-        re-fetch -> payload pipeline, riding the promoted shared write skeleton). The
-        import is local to keep ``rest_framework/sets.py`` free of a load-time edge
-        to the resolver module (the ``forms/sets.py`` precedent).
-        """
-        from .resolvers import resolve_serializer_sync
-
-        return resolve_serializer_sync(cls, info, data=data, id=id)
-
-    @classmethod
-    def resolve_async(
-        cls,
-        info: Any,
-        *,
-        data: Any,
-        id: Any,  # noqa: A002  # ``id`` is the GraphQL arg name
-    ) -> Any:
-        """The async serializer resolver seam (delegates to the Slice-3 serializer pipeline).
-
-        Routes to ``rest_framework/resolvers.py::resolve_serializer_async`` (the sync
-        body in one ``sync_to_async(thread_sensitive=True)`` call via the shared
-        ``run_pipeline_async`` boundary).
-        """
-        from .resolvers import resolve_serializer_async
-
-        return resolve_serializer_async(cls, info, data=data, id=id)
+    # The sync / async serializer resolver seams (delegate to the Slice-3 serializer
+    # pipeline: locate -> authorize -> decode -> construct -> validate -> save ->
+    # optimizer re-fetch -> payload, riding the promoted shared write skeleton), via
+    # the shared ``resolver_seams`` factory (spec-039 M1b). The generated seams'
+    # function-local import of ``rest_framework/resolvers.py`` keeps this module free
+    # of a load-time edge to the resolver module (the ``forms/sets.py`` precedent).
+    resolve_sync, resolve_async = resolver_seams(
+        "django_strawberry_framework.rest_framework.resolvers",
+        "resolve_serializer_sync",
+        "resolve_serializer_async",
+    )

@@ -54,7 +54,6 @@ from ..exceptions import ConfigurationError
 from ..mutations.inputs import (
     CREATE,
     PARTIAL,
-    _pascalize_token,
     relation_input_annotation,
 )
 from ..registry import register_subsystem_clear, registry
@@ -63,9 +62,12 @@ from ..types.converters import convert_scalar, scalar_for_field
 from ..types.relay import implements_relay_node
 from ..utils.inputs import (
     build_strawberry_input_class,
+    generated_input_type_name,
     graphql_camel_name,
+    guard_dropped_required,
     make_input_namespace,
-    normalize_field_name_sequence,
+    pascalize_token,
+    resolve_effective_fields,
 )
 from .converter import (
     FILE,
@@ -184,30 +186,6 @@ def get_form_fields(form_class: type[forms.BaseForm]) -> dict[str, forms.Field]:
     return dict(form_class.base_fields)
 
 
-def normalize_form_field_sequence(value: Any, *, label: str = "fields") -> tuple[str, ...] | None:
-    """Return ``Meta.fields`` / ``Meta.exclude`` as a tuple of names, or ``None``.
-
-    The form-flavor entry point: delegates to the shared
-    ``utils/inputs.py::normalize_field_name_sequence`` (spec-038 integration pass,
-    Finding I1 - the consolidation of this and ``mutations/sets.py::_normalize_field_sequence``
-    once both sites existed and were accepted) with the form-mutation flavor label,
-    so the bare-string and duplicate-name ``ConfigurationError`` messages stay
-    byte-identical to the pre-consolidation form wording. The field-existence
-    basis (a name not in ``form_class.base_fields``) is checked separately in
-    ``resolve_effective_form_fields``.
-
-    ``None`` means "unset". A bare string is rejected (it would iterate as
-    characters); a duplicate name is rejected (it would collapse silently when
-    the effective set is taken as a ``frozenset``). ``label`` names which key
-    (``fields`` / ``exclude``) is at fault.
-    """
-    return normalize_field_name_sequence(
-        value,
-        label=label,
-        flavor="DjangoFormMutation / DjangoModelFormMutation",
-    )
-
-
 def resolve_effective_form_fields(
     form_class: type[forms.BaseForm],
     *,
@@ -220,8 +198,7 @@ def resolve_effective_form_fields(
     ``base_fields`` (spec-038 Decision 7 P3):
 
     - ``fields`` and ``exclude`` are mutually exclusive;
-    - each is normalized (bare-string / duplicate rejection) via
-      ``normalize_form_field_sequence``;
+    - each is normalized (bare-string / duplicate rejection);
     - a name in neither ``base_fields`` raises ``ConfigurationError`` naming the
       unknown field (a typo like ``fields = ("emial",)`` fails loud, never
       silently shrinks the input);
@@ -231,43 +208,26 @@ def resolve_effective_form_fields(
 
     Preserves ``base_fields`` declaration order for the non-narrowed and the
     ``exclude`` cases; honors the caller's order for ``fields``.
+
+    The narrowing spine + the pinned error wording are single-sited in
+    ``utils/inputs.py::resolve_effective_fields`` (spec-039 M4), shared with the
+    serializer flavor; this thin wrapper supplies the form basis (``base_fields``)
+    and the form-flavor message knobs (the old ``normalize_form_field_sequence``
+    re-binding wrapper folds into the ``seq_flavor`` arg - spec-039 Mn3).
     """
-    fields = normalize_form_field_sequence(fields, label="fields")
-    exclude = normalize_form_field_sequence(exclude, label="exclude")
-    if fields is not None and exclude is not None:
-        raise ConfigurationError(
-            f"DjangoFormMutation for {form_class.__name__} declares both `fields` and `exclude`; "
-            "supply at most one.",
-        )
-
-    base = get_form_fields(form_class)
-    if fields is not None:
-        unknown = [name for name in fields if name not in base]
-        if unknown:
-            raise ConfigurationError(
-                f"DjangoFormMutation for {form_class.__name__} declares `fields` naming "
-                f"unknown form field(s): {sorted(unknown)!r}.",
-            )
-        effective = {name: base[name] for name in fields}
-    elif exclude is not None:
-        unknown = [name for name in exclude if name not in base]
-        if unknown:
-            raise ConfigurationError(
-                f"DjangoFormMutation for {form_class.__name__} declares `exclude` naming "
-                f"unknown form field(s): {sorted(unknown)!r}.",
-            )
-        excluded = set(exclude)
-        effective = {name: field for name, field in base.items() if name not in excluded}
-    else:
-        effective = dict(base)
-
-    if not effective:
-        raise ConfigurationError(
+    return resolve_effective_fields(
+        get_form_fields(form_class),
+        fields=fields,
+        exclude=exclude,
+        subject=f"DjangoFormMutation for {form_class.__name__}",
+        seq_flavor="DjangoFormMutation / DjangoModelFormMutation",
+        unknown_noun="unknown form field(s)",
+        empty_message=(
             f"DjangoFormMutation input for {form_class.__name__} has no fields; "
             "Meta.fields / Meta.exclude narrowed the form field set to empty (or the "
-            "form declares no fields). A form input must define at least one field.",
-        )
-    return effective
+            "form declares no fields). A form input must define at least one field."
+        ),
+    )
 
 
 def form_input_type_name(
@@ -285,24 +245,25 @@ def form_input_type_name(
     to the same effective set produce the same name (dedupe via the materialize
     ledger) while a different shape produces a different name.
 
-    The narrowed-shape suffix reuses ``mutations/inputs.py::_pascalize_token``
-    (the injective single-leading-capital token scheme) so the bare
-    concatenation of sorted field tokens is uniquely decomposable - two distinct
-    field sets never collide on one generated name. Reused rather than re-spelt
-    (the token scheme is subtle + injectivity-critical); the consolidation of the
-    token primitive into ``utils/inputs.py`` is flagged for the integration pass.
+    The narrowed-shape suffix reuses ``utils/inputs.py::pascalize_token`` (the
+    injective single-leading-capital token scheme, promoted from
+    ``mutations/inputs.py`` - spec-039 Md5) so the bare concatenation of sorted
+    field tokens is uniquely decomposable - two distinct field sets never collide on
+    one generated name. The suffix rule + the full-vs-narrowed branching are
+    single-sited in ``utils/inputs.py::generated_input_type_name`` (spec-039 M6).
 
     Identity is ``(form_class, operation_kind, frozenset(effective_field_names))``;
     ``operation_kind`` picks the ``Input`` / ``PartialInput`` suffix (a ``FORM``
     sentinel from a plain ``DjangoFormMutation`` falls under the ``Input``
     suffix - it is a create-shaped input).
     """
-    base = form_class.__name__
-    suffix = "PartialInput" if operation_kind == PARTIAL else "Input"
-    if frozenset(effective_field_names) == frozenset(full_field_names):
-        return f"{base}{suffix}"
-    token = "".join(_pascalize_token(name) for name in sorted(effective_field_names))
-    return f"{base}{token}{suffix}"
+    token = "".join(pascalize_token(name) for name in sorted(effective_field_names))
+    return generated_input_type_name(
+        form_class.__name__,
+        is_partial=operation_kind == PARTIAL,
+        is_full_shape=frozenset(effective_field_names) == frozenset(full_field_names),
+        token=token,
+    )
 
 
 def _model_column_for(form_class: type[forms.BaseForm], name: str) -> Any:
@@ -587,15 +548,22 @@ def guard_create_required_fields(
     narrowed shape FIRST must not suppress the guard for a later non-waiving
     mutation reusing the same cached shape. The guard is tied to the declaration,
     not the built input shape (spec-038 Decision 7 P2, the create-required guard).
+
+    The drop-detection (``required - effective - waived``) is single-sited in
+    ``utils/inputs.py::guard_dropped_required`` (spec-039 Md1), shared with the
+    serializer create guard; the form flavor passes no ``waived`` set (it has no
+    injected-field mechanism) and keeps its own pinned error wording.
     """
-    dropped_required = sorted(_required_form_field_names(form_class) - set(effective_field_names))
-    if dropped_required:
-        raise ConfigurationError(
+    guard_dropped_required(
+        _required_form_field_names(form_class),
+        effective_field_names,
+        make_error=lambda dropped: ConfigurationError(
             f"DjangoFormMutation create input for {form_class.__name__} drops required form "
-            f"field(s) {dropped_required!r} via Meta.fields / Meta.exclude; a bound form can "
+            f"field(s) {dropped!r} via Meta.fields / Meta.exclude; a bound form can "
             "never validate without them. Keep them in the input, or override get_form_kwargs "
             "/ get_form to supply them (which waives this guard).",
-        )
+        ),
+    )
 
 
 def guard_partial_required_column_less_fields(

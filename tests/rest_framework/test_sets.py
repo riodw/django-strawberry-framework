@@ -980,6 +980,27 @@ def test_input_type_name_runs_the_determinism_guard():
         DriftNameMut.input_type_name(DriftNameMut._mutation_meta)
 
 
+def test_input_type_name_reads_bound_name_after_finalize():
+    """After bind, ``input_type_name`` reuses the materialized name stashed by ``build_input``."""
+    _declare_products_primaries()
+    serializer_cls = _item_serializer()
+
+    class CreateItemViaSerializer(SerializerMutation):
+        class Meta:
+            serializer_class = serializer_cls
+            operation = "create"
+            permission_classes = []
+
+    finalize_django_types()
+
+    bound_name = CreateItemViaSerializer.__dict__["_input_type_name"]
+    assert bound_name == CreateItemViaSerializer._input_class.__name__
+    assert (
+        CreateItemViaSerializer.input_type_name(CreateItemViaSerializer._mutation_meta)
+        == bound_name
+    )
+
+
 # ---------------------------------------------------------------------------
 # Meta.nested_fields validation (spec-039 rev6 #17)
 # ---------------------------------------------------------------------------

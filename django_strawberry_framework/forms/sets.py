@@ -47,13 +47,13 @@ from django import forms
 
 from ..exceptions import ConfigurationError
 from ..mutations.inputs import (
-    CREATE,
     PARTIAL,
     build_payload_type,
     materialize_mutation_input_class,
 )
 from ..mutations.permissions import _PERMISSION_ASYNC_RECOURSE, DenyAll
 from ..mutations.sets import (
+    NON_DELETE_OPERATION_INPUT_KIND,
     NON_DELETE_WRITE_OPERATIONS,
     DjangoMutation,
     _hook_overridden,
@@ -61,9 +61,14 @@ from ..mutations.sets import (
     _ValidatedMutationMeta,
     build_and_stash_input,
     cached_build_input,
+    construction_kwargs,
     make_declaration_registry,
     non_delete_operation_error,
     reject_unknown_meta_keys,
+    require_backing_class,
+    resolve_backed_model_or_raise,
+    resolve_meta_model,
+    resolver_seams,
 )
 from ..utils.inputs import make_shape_build_cache
 from ..utils.querysets import reject_async_in_sync_context
@@ -224,24 +229,6 @@ def _cached_build_form_input(
     )
 
 
-def _require_form_class(name: str, meta: type, *, base_label: str) -> type:
-    """Return ``Meta.form_class`` or raise naming the missing key (shared form-flavor core).
-
-    Both flavors require a ``Meta.form_class``; an unset / ``None`` value is a
-    clean ``ConfigurationError`` naming the key (never a downstream
-    ``AttributeError`` on a missing class). ``base_label`` names the offending base
-    in the message.
-    """
-    form_class = getattr(meta, "form_class", None)
-    if form_class is None:
-        raise ConfigurationError(
-            f"{base_label} {name}.Meta declares no form_class; set Meta.form_class to a "
-            f"{'forms.ModelForm' if base_label == 'DjangoModelFormMutation' else 'forms.Form'} "
-            "subclass.",
-        )
-    return form_class
-
-
 def _resolve_effective_form_field_names(
     form_class: type,
     *,
@@ -311,10 +298,10 @@ def _default_get_form_kwargs(
     module-level function both bases reference so the default body never drifts.
     """
     del info  # the default ignores ``info``; an override may consult it.
-    kwargs: dict[str, Any] = {"data": data, "files": files}
-    if instance is not None:
-        kwargs["instance"] = instance
-    return kwargs
+    # The "add ``instance`` only on update" clause is single-sited in
+    # ``mutations/sets.py::construction_kwargs`` (spec-039 Md7), shared with the
+    # serializer ``get_serializer_kwargs`` default.
+    return construction_kwargs(data=data, files=files, instance=instance)
 
 
 def _default_get_form(
@@ -337,17 +324,6 @@ def _default_get_form(
     return form_class(
         **self.get_form_kwargs(info, data=data, files=files, instance=instance),
     )
-
-
-def _modelform_operation_kind(meta: _ValidatedMutationMeta) -> str:
-    """Map a ``DjangoModelFormMutation`` operation to its generator kind.
-
-    ``"create"`` -> the create-shaped ``CREATE`` input; ``"update"`` -> the
-    optional-widened ``PARTIAL`` input. Single-sourced so ``build_input`` and
-    ``input_type_name`` cannot drift on the mapping (the plain flavor carries the
-    fixed ``FORM`` sentinel and never consults this).
-    """
-    return CREATE if meta.operation == "create" else PARTIAL
 
 
 def _build_and_stash_form_input(
@@ -435,9 +411,7 @@ class DjangoModelFormMutation(DjangoMutation):
         no resolvable model" - the base validation raises a clean
         ``ConfigurationError`` (never a raw ``AttributeError``).
         """
-        form_class = getattr(meta, "form_class", None)
-        form_meta = getattr(form_class, "_meta", None)
-        return getattr(form_meta, "model", None)
+        return resolve_meta_model(meta, key="form_class", meta_attr="_meta")
 
     @classmethod
     def _validate_meta(cls, meta: type) -> _ValidatedMutationMeta:
@@ -472,20 +446,26 @@ class DjangoModelFormMutation(DjangoMutation):
             _ALLOWED_MODELFORM_META_KEYS,
         )
 
-        form_class = _require_form_class(name, meta, base_label="DjangoModelFormMutation")
+        form_class = require_backing_class(
+            name,
+            meta,
+            key="form_class",
+            base_label="DjangoModelFormMutation",
+            expected_label="forms.ModelForm",
+        )
         if not (isinstance(form_class, type) and issubclass(form_class, forms.ModelForm)):
             raise ConfigurationError(
                 f"DjangoModelFormMutation {name}.Meta.form_class must be a forms.ModelForm "
                 f"subclass; got {form_class!r}. (A plain forms.Form belongs on DjangoFormMutation.)",
             )
 
-        model = cls._resolve_model(meta)
-        if model is None:
-            raise ConfigurationError(
-                f"DjangoModelFormMutation {name}.Meta.form_class {form_class.__name__} resolves no "
-                "model; a ModelForm must set Meta.model so the mutation has a model + a "
-                "DjangoType to return.",
-            )
+        model = resolve_backed_model_or_raise(
+            cls,
+            meta,
+            base_label="DjangoModelFormMutation",
+            key="form_class",
+            noun="ModelForm",
+        )
 
         operation = getattr(meta, "operation", None)
         if operation not in NON_DELETE_WRITE_OPERATIONS:
@@ -555,7 +535,7 @@ class DjangoModelFormMutation(DjangoMutation):
         return _build_and_stash_form_input(
             cls,
             meta,
-            operation_kind=_modelform_operation_kind(meta),
+            operation_kind=NON_DELETE_OPERATION_INPUT_KIND[meta.operation],
             base=DjangoModelFormMutation,
         )
 
@@ -571,43 +551,17 @@ class DjangoModelFormMutation(DjangoMutation):
         shape-derived name for a narrowing), single-sourced with the bind's name
         choice in ``build_input``.
         """
-        return _form_input_type_name_for(meta, _modelform_operation_kind(meta))
+        return _form_input_type_name_for(meta, NON_DELETE_OPERATION_INPUT_KIND[meta.operation])
 
-    @classmethod
-    def resolve_sync(
-        cls,
-        info: Any,
-        *,
-        data: Any,
-        id: Any,  # noqa: A002  # ``id`` is the GraphQL arg name
-    ) -> Any:
-        """The sync ``ModelForm`` resolver seam (delegates to the Slice-3 form pipeline).
-
-        Routes to ``forms/resolvers.py::resolve_form_sync`` (the
-        decode -> locate -> authorize -> validate -> save -> optimizer re-fetch ->
-        payload pipeline). The import is local to keep ``forms/sets.py`` free of a
-        load-time edge to the resolver module.
-        """
-        from .resolvers import resolve_form_sync
-
-        return resolve_form_sync(cls, info, data=data, id=id)
-
-    @classmethod
-    def resolve_async(
-        cls,
-        info: Any,
-        *,
-        data: Any,
-        id: Any,  # noqa: A002  # ``id`` is the GraphQL arg name
-    ) -> Any:
-        """The async ``ModelForm`` resolver seam (delegates to the Slice-3 form pipeline).
-
-        Routes to ``forms/resolvers.py::resolve_form_async`` (the sync body in one
-        ``sync_to_async(thread_sensitive=True)`` call).
-        """
-        from .resolvers import resolve_form_async
-
-        return resolve_form_async(cls, info, data=data, id=id)
+    # The sync / async ``ModelForm`` resolver seams (delegate to the Slice-3 form
+    # pipeline), via the shared ``resolver_seams`` factory (spec-039 M1b). The
+    # generated seams' function-local import of ``forms/resolvers.py`` keeps
+    # ``forms/sets.py`` free of a load-time edge to the resolver module.
+    resolve_sync, resolve_async = resolver_seams(
+        "django_strawberry_framework.forms.resolvers",
+        "resolve_form_sync",
+        "resolve_form_async",
+    )
 
 
 class DjangoFormMutationMetaclass(type):
@@ -739,7 +693,13 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
             _ALLOWED_PLAIN_FORM_META_KEYS | {"operation"},
         )
 
-        form_class = _require_form_class(name, meta, base_label="DjangoFormMutation")
+        form_class = require_backing_class(
+            name,
+            meta,
+            key="form_class",
+            base_label="DjangoFormMutation",
+            expected_label="forms.Form",
+        )
         # Check ``ModelForm`` FIRST (Edge case P2): ``forms.ModelForm`` is NOT a
         # subclass of ``forms.Form`` - both are siblings under ``forms.BaseForm`` -
         # so a bare ``issubclass(_, forms.Form)`` gate would reject a ``ModelForm``
@@ -865,25 +825,17 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         """Return the generated form-input class name (the ``FORM``-sentinel create shape)."""
         return _form_input_type_name_for(meta, FORM)
 
-    @classmethod
-    def resolve_sync(cls, info: Any, *, data: Any) -> Any:
-        """The sync plain-form resolver seam (delegates to the Slice-3 form pipeline).
-
-        Routes to ``forms/resolvers.py::resolve_form_sync`` with no ``id`` (a
-        model-less form has no row to locate); the pipeline runs decode ->
-        authorize -> validate -> ``perform_mutate`` -> the ``{ ok errors }``
-        payload.
-        """
-        from .resolvers import resolve_form_sync
-
-        return resolve_form_sync(cls, info, data=data)
-
-    @classmethod
-    def resolve_async(cls, info: Any, *, data: Any) -> Any:
-        """The async plain-form resolver seam (delegates to the Slice-3 form pipeline)."""
-        from .resolvers import resolve_form_async
-
-        return resolve_form_async(cls, info, data=data)
+    # The sync / async plain-form resolver seams (delegate to the Slice-3 form
+    # pipeline), via the shared ``resolver_seams`` factory with ``with_id=False`` -
+    # a model-less form has no row to locate, so the seam signature is
+    # ``(info, *, data)`` (spec-039 M1b). The generated seams' function-local import
+    # keeps ``forms/sets.py`` free of a load-time edge to the resolver module.
+    resolve_sync, resolve_async = resolver_seams(
+        "django_strawberry_framework.forms.resolvers",
+        "resolve_form_sync",
+        "resolve_form_async",
+        with_id=False,
+    )
 
 
 def _bind_form_mutation(mutation_cls: type) -> None:

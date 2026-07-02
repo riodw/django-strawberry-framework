@@ -85,12 +85,16 @@ from ..optimizer.extension import (
 )
 from ..registry import registry
 from ..relay import GlobalIDDecode, decode_model_global_id
-from ..utils.inputs import graphql_camel_name
+from ..utils.inputs import graphql_camel_name, iter_provided_input_fields
 from ..utils.querysets import (
     apply_type_visibility_sync,
     initial_queryset,
     model_for,
+    pks_all_present,
     reject_async_in_sync_context,
+    related_visibility_queryset,
+    stringified_pks_present,
+    sync_pipeline_recourse,
     visibility_scoped_related_queryset,
 )
 from ..utils.relations import is_forward_many_to_many
@@ -102,12 +106,9 @@ from .permissions import _PERMISSION_ASYNC_RECOURSE
 # pipeline runs synchronously even on the async surface (it executes inside one
 # ``sync_to_async`` worker thread - spec-036 AR-M4), so an ``async def
 # get_queryset`` can never be awaited here regardless of operation context; the
-# recourse is to make the target hook sync.
-_MUTATION_ASYNC_RECOURSE = (
-    "A DjangoMutation runs its ORM pipeline synchronously (under one "
-    "sync_to_async call on the async surface), so it cannot await an async "
-    "get_queryset hook; redefine the target type's get_queryset as a sync method."
-)
+# recourse is to make the target hook sync. The sentence is single-sourced across
+# the three write flavors via ``sync_pipeline_recourse`` (spec-039 Md2).
+_MUTATION_ASYNC_RECOURSE = sync_pipeline_recourse("DjangoMutation")
 
 
 def run_write_pipeline_sync(
@@ -256,12 +257,9 @@ def _decode_relations(
     scalar_and_fk_attrs: dict[str, Any] = {}
     m2m_assignments: list[Any] = []
 
-    for field in data.__strawberry_definition__.fields:
-        python_name = field.python_name
-        value = getattr(data, python_name, strawberry.UNSET)
-        if value is strawberry.UNSET:
-            continue
-
+    # The ``UNSET``-strip walk is single-sited in ``iter_provided_input_fields``
+    # (spec-039 M2); the per-field kind routing below stays flavor-specific.
+    for python_name, value, field in iter_provided_input_fields(data):
         # A decode failure keys to the input field's GraphQL name (what the
         # client sent), e.g. ``categoryId`` - distinct from a ``full_clean``
         # error, which keys to the MODEL field name. ``graphql_name`` is the
@@ -485,7 +483,7 @@ def _decode_relation_id_set(
             continue
         result = decode_model_global_id(value, expected_model)
         if result.status is not GlobalIDDecode.OK:
-            return [], _relation_error(field_name)
+            return [], relation_field_error(field_name)
         pks.append(result.pk)
         needs_visibility = True
     if needs_visibility:
@@ -539,15 +537,40 @@ def _decode_relation_id_list(
     return _decode_relation_id_set(field_name, value, relation_field, info)
 
 
-def _relation_error(field_name: str) -> FieldError:
-    """Build the uniform wrong/invalid/hidden relation-id ``FieldError`` for ``field_name``.
+def type_check_relation_id(
+    value: Any,
+    *,
+    graphql_name: str,
+    related_model: type,
+) -> tuple[Any, FieldError | None]:
+    """Type-check + coerce ONE relation id to a pk WITHOUT a DB fetch (spec-039 M3).
 
-    The model-path alias for the shared ``relation_field_error`` leaf ctor: the
-    message text + leaf shape are single-sourced there (spec-039 integration), so
-    the ``036`` model path, the ``038`` form decoder, and the ``039`` serializer
-    decoder all render the identical ``"Invalid id for relation ..."`` envelope.
+    The "GlobalID -> ``decode_model_global_id`` (non-``OK`` -> uniform relation
+    error) | raw pk -> ``_coerce_relation_pk_or_none`` (``None`` -> uniform relation
+    error)" two-branch structural check the three write flavors share. Promoted here
+    (from the serializer's cleanly-factored ``_type_check_relation_id``) so the
+    single definition of "what counts as a well-formed relation id" is shared: the
+    serializer single/multi decoders call it, and the form single decoder calls it
+    (keeping only its ``empty_values`` pass-through + ``to_field_name`` reduction on
+    top). Neither branch touches the DB - visibility is confirmed separately by the
+    caller.
+
+    The model batched decoder (``_decode_relation_id_set``) deliberately does NOT use
+    this: its raw-pk half is a set-level all-or-nothing visibility / existence check
+    (``_raw_pk_relation_error``), a genuinely different contract; only its GlobalID
+    half mirrors the check here. A ``relay.GlobalID`` is decoded against the target
+    model (a non-``OK`` status is the uniform ``relation_field_error``); a raw pk is
+    coerced through the target pk field (``None`` -> the uniform error).
     """
-    return relation_field_error(field_name)
+    if isinstance(value, relay.GlobalID):
+        result = decode_model_global_id(value, related_model)
+        if result.status is not GlobalIDDecode.OK:
+            return None, relation_field_error(graphql_name)
+        return result.pk, None
+    pk = _coerce_relation_pk_or_none(related_model, value)
+    if pk is None:
+        return None, relation_field_error(graphql_name)
+    return pk, None
 
 
 def _relation_null_error(field_name: str) -> FieldError:
@@ -572,7 +595,7 @@ def _relation_membership_error(
     declared_pks: list[Any],
     query_pks: list[Any],
 ) -> FieldError | None:
-    """Return a ``_relation_error`` unless every ``declared_pks`` member is present in ``queryset``.
+    """Return a relation ``FieldError`` unless every ``declared_pks`` member is present in ``queryset``.
 
     The single no-existence-leak membership check the three relation guards share -
     visibility on the model path (``_relation_visibility_error``), visibility on the
@@ -588,12 +611,16 @@ def _relation_membership_error(
       ``GlobalID`` path; for a raw-pk set ``query_pks`` is the coerced subset (an
       uncoercible / out-of-range pk dropped so it never hits the backend), while
       ``declared_pks`` stays the full input - so a dropped pk is absent from the
-      present set and fails the subset check, the same not-found ``_relation_error``
-      a hidden / missing pk yields (no existence leak).
+      present set and fails the subset check, the same not-found relation error a
+      hidden / missing pk yields (no existence leak).
+
+    The query + str-coercion (``stringified_pks_present``) and the subset test
+    (``pks_all_present``) are single-sited in ``utils/querysets.py`` (spec-039 Md4),
+    shared with the serializer M2M decoder.
     """
-    present = {str(pk) for pk in queryset.filter(pk__in=query_pks).values_list("pk", flat=True)}
-    if not {str(pk) for pk in declared_pks} <= present:
-        return _relation_error(field_name)
+    present = stringified_pks_present(queryset, query_pks)
+    if not pks_all_present(declared_pks, present):
+        return relation_field_error(field_name)
     return None
 
 
@@ -752,8 +779,11 @@ def _raw_pk_relation_error(
     real_pks = [pk for pk in pks if pk is not None]
     if not real_pks:
         return None
-    related_type = registry.get(related_model)
-    if related_type is None:
+    # ``related_visibility_queryset`` single-sites the ``registry.get`` resolve + the
+    # visibility-scoping call (spec-039 Md3); ``None`` = no primary type (no
+    # visibility contract), whose per-surface tail stays explicit here.
+    queryset = related_visibility_queryset(related_model, info, _MUTATION_ASYNC_RECOURSE)
+    if queryset is None:
         if getattr(relation_field, "many_to_many", False):
             return _relation_existence_error(field_name, real_pks, related_model)
         return None
@@ -762,7 +792,6 @@ def _raw_pk_relation_error(
         for value in (_coerce_relation_pk_or_none(related_model, pk) for pk in real_pks)
         if value is not None
     ]
-    queryset = visibility_scoped_related_queryset(related_type, info, _MUTATION_ASYNC_RECOURSE)
     return _relation_membership_error(field_name, queryset, real_pks, coerced)
 
 
@@ -1384,33 +1413,48 @@ async def run_pipeline_async(
     return await sync_to_async(sync_body, thread_sensitive=True)(mutation_cls, info, data, id)
 
 
-def resolve_mutation_sync(
-    mutation_cls: type,
-    info: Any,
-    *,
-    data: Any = strawberry.UNSET,
-    id: Any = strawberry.UNSET,  # noqa: A002
-) -> Any:
-    """Sync pipeline entry the field's sync branch calls (spec-036 Decision 8).
+def make_resolver_entries(sync_body: Any) -> tuple[Any, Any]:
+    """Return the ``(resolve_sync, resolve_async)`` module-entry pair for a write flavor (spec-039 M1a).
 
-    A thin public alias for ``_run_pipeline_sync`` (normalizing the
-    ``UNSET``-default kwargs to the body's positional args) so the field factory
-    has a stable sync entry point distinct from the async one.
+    The two byte-parallel module-level entries every dispatcher-backed write flavor
+    exposes: a sync entry normalizing the ``UNSET``-default ``data`` / ``id`` kwargs
+    to ``sync_body``'s positional args, and an async entry running the SAME
+    ``sync_body`` through the shared ``run_pipeline_async`` boundary (one
+    ``sync_to_async(thread_sensitive=True)`` call). The model flavor
+    (``sync_body=_run_pipeline_sync``) and the form flavor
+    (``_run_form_pipeline_sync``) take the full pair; the serializer flavor takes
+    ONLY the async half (its sync entry is bespoke - it calls
+    ``run_write_pipeline_sync`` with decode/write lambdas directly, no
+    ``_run_*_pipeline_sync`` dispatcher), discarding the generated sync entry. Each
+    factory call produces FRESH functions, so per-flavor identity (the field
+    factory's ``resolve_sync.__func__`` comparisons) stays distinct.
     """
-    return _run_pipeline_sync(mutation_cls, info, data, id)
+
+    def resolve_sync(
+        mutation_cls: type,
+        info: Any,
+        *,
+        data: Any = strawberry.UNSET,
+        id: Any = strawberry.UNSET,  # noqa: A002
+    ) -> Any:
+        """Normalize the ``UNSET``-default kwargs to ``sync_body``'s positional args."""
+        return sync_body(mutation_cls, info, data, id)
+
+    async def resolve_async(
+        mutation_cls: type,
+        info: Any,
+        *,
+        data: Any = strawberry.UNSET,
+        id: Any = strawberry.UNSET,  # noqa: A002
+    ) -> Any:
+        """Run ``sync_body`` in one ``sync_to_async(thread_sensitive=True)`` call."""
+        return await run_pipeline_async(sync_body, mutation_cls, info, data, id)
+
+    return resolve_sync, resolve_async
 
 
-async def resolve_mutation_async(
-    mutation_cls: type,
-    info: Any,
-    *,
-    data: Any = strawberry.UNSET,
-    id: Any = strawberry.UNSET,  # noqa: A002
-) -> Any:
-    """Async pipeline entry: the sync body in one ``sync_to_async(thread_sensitive=True)`` (spec-036 AR-M4).
-
-    Delegates to the shared ``run_pipeline_async`` boundary (single-sourced with the
-    form flavor) so the ``transaction.atomic()`` + every ORM call run on one worker
-    thread, never interleaving ORM work with ``await``s.
-    """
-    return await run_pipeline_async(_run_pipeline_sync, mutation_cls, info, data, id)
+# The model-flavor module entry points (spec-036 Decision 8), via the shared factory
+# (spec-039 M1a). ``resolve_mutation_sync`` normalizes the ``UNSET`` kwargs to
+# ``_run_pipeline_sync``; ``resolve_mutation_async`` runs it through the shared async
+# boundary. The field factory (``mutations/fields.py``) reads both by name.
+resolve_mutation_sync, resolve_mutation_async = make_resolver_entries(_run_pipeline_sync)

@@ -50,8 +50,10 @@ from ..types.converters import convert_scalar, scalar_for_field
 from ..types.relay import implements_relay_node
 from ..utils.inputs import (
     build_strawberry_input_class,
+    generated_input_type_name,
     graphql_camel_name,
     make_input_namespace,
+    pascalize_token,
 )
 from ..utils.relations import is_forward_many_to_many
 
@@ -331,34 +333,14 @@ def _scalar_input_annotation(field: models.Field, type_name: str) -> Any:
     return convert_scalar(field, type_name, force_nullable=False)
 
 
-def _pascalize_token(name: str) -> str:
-    """Encode one field name as a single ``[A-Z][a-z0-9]*`` token for the input-name suffix.
-
-    A single leading capital with a fully-lowercased tail and underscores removed
-    (``is_private`` -> ``Isprivate``, ``category`` -> ``Category``). This shape is
-    load-bearing for the bare-concatenation suffix in ``mutation_input_type_name``:
-    because each token has NO interior capital and NO underscore, the concatenation
-    of tokens is uniquely decomposable at uppercase boundaries, so distinct field
-    sets never collide on one generated name.
-
-    Not ``utils/strings.py::pascal_case`` (which collapses underscores across the
-    whole name) and deliberately NOT the per-segment-capitalize form ``IsPrivate``:
-    an interior capital would make ``IsPrivate`` ambiguously re-decompose as the two
-    fields ``is`` + ``private``, which is the exact collision this guards against
-    (``("a_b", "c")`` -> ``AbC`` vs ``("a", "b_c")`` -> ``ABc``, distinct). It also
-    stays underscore-free so Strawberry's GraphQL name converter leaves a
-    PascalCase class name unchanged (an underscore would be mangled into a lowercased
-    segment tail in the GraphQL type name).
-    """
-    return name.replace("_", "").capitalize()
+# ``_pascalize_token`` was promoted to ``utils/inputs.py::pascalize_token`` (spec-039
+# Md5): at three consumers (model + form + serializer) the injective
+# single-leading-capital token encoder graduated to the shared input-name machinery,
+# kept visibly distinct from ``pascal_case``. This alias preserves the historical
+# ``mutations/inputs.py::_pascalize_token`` import path.
+_pascalize_token = pascalize_token
 
 
-# spec-039 Slice 1: ``_pascalize_token`` stays SITED here (P2.3). The form flavor
-# (``forms/inputs.py::form_input_type_name``) already imports it; the serializer
-# flavor (``rest_framework/inputs.py``) imports it the same way for its
-# ``SerializerInputShape``-derived divergent-shape name. No third PascalCase
-# encoder is added under ``rest_framework/`` - the injective single-leading-capital
-# token shape is subtle + injectivity-critical and must stay shared.
 def mutation_input_type_name(
     model: type[models.Model],
     operation_kind: str,
@@ -386,13 +368,19 @@ def mutation_input_type_name(
     is detected by comparing the effective set against ``full_field_names`` (the
     complete editable set for the model), so a ``Meta.fields`` that happens to
     name every editable column still resolves to the canonical name.
+
+    The ``PartialInput`` / ``Input`` suffix rule + the full-vs-narrowed branching are
+    single-sited in ``utils/inputs.py::generated_input_type_name`` (spec-039 M6); this
+    flavor supplies only its own token (the sorted-name ``pascalize_token``
+    concatenation) and full-shape decision.
     """
-    base = model.__name__
-    suffix = "Input" if operation_kind == CREATE else "PartialInput"
-    if frozenset(effective_field_names) == frozenset(full_field_names):
-        return f"{base}{suffix}"
-    token = "".join(_pascalize_token(name) for name in sorted(effective_field_names))
-    return f"{base}{token}{suffix}"
+    token = "".join(pascalize_token(name) for name in sorted(effective_field_names))
+    return generated_input_type_name(
+        model.__name__,
+        is_partial=operation_kind != CREATE,
+        is_full_shape=frozenset(effective_field_names) == frozenset(full_field_names),
+        token=token,
+    )
 
 
 class MutationInputShape(NamedTuple):

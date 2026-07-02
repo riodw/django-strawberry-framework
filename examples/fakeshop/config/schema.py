@@ -20,6 +20,11 @@ from apps.products.schema import Query as ProductsQuery
 from apps.scalars.schema import Mutation as ScalarsMutation
 from apps.scalars.schema import Query as ScalarsQuery
 
+# TODO(spec-040 Slice 1): compose the schema-only accounts auth surface once the
+# auth factories are implemented. Pseudocode:
+# import the accounts ``Query`` / ``Mutation`` types and add them to the top-level
+# Strawberry multiple-inheritance composition.
+# Slice 1 adds login/logout; Slice 2 extends the same app with register/me.
 from django_strawberry_framework import (
     DjangoOptimizerExtension,
     finalize_django_types,

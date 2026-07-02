@@ -785,6 +785,15 @@ def finalize_django_types() -> None:
 
     for module_path, attr in iter_subsystem_clears():
         _clear_if_importable(module_path, attr, lambda clear: clear())
+    # TODO(spec-040 Slice 1): bind auth declarations in this exact slot, after the
+    # pre-bind emit-ledger reset and before ``bind_mutations()``. Pseudocode:
+    # import ``django_strawberry_framework.auth.mutations::bind_auth_mutations``
+    # locally and call it before the existing mutation bind.
+    # ``bind_auth_mutations()`` validates the user model's primary ``DjangoType``
+    # for login/register/current_user with the auth-specific message before the
+    # register rider can fall through to ``_resolve_primary_type``'s generic
+    # mutation error. It also materializes ``LoginPayload`` / ``LogoutPayload`` and
+    # the ``CurrentUserAlias`` lazy return target before ``strawberry.Schema(...)``.
     bind_mutations()
     # Bind plain ``DjangoFormMutation`` declarations (spec-038 Slice 2 / Decision
     # 6 / Decision 13) in the SAME phase-2.5 window. The model-less plain-form

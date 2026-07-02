@@ -44,6 +44,11 @@ INSTALLED_APPS = [
     # `UniqueTogetherValidator` need no DRF app registry (Decision 13 / spec line
     # 969); DRF being a dev-group dependency keeps it importable in the test context.
     # Local
+    # TODO(spec-040 Slice 1): install the schema-only accounts app when the auth
+    # factories land. Pseudocode: add
+    # ``apps.accounts.apps.AccountsConfig`` to this local-app block.
+    # Keep it out of ``INSTALLED_APPS`` while the package auth factories are
+    # fail-loud placeholders so the current fakeshop schema remains importable.
     "apps.library.apps.LibraryConfig",
     "apps.products.apps.ProductsConfig",
     "apps.scalars.apps.ScalarsConfig",

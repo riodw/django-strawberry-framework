@@ -334,8 +334,9 @@ Revision history (kept inline so the spec is self-contained):
   `_resolve.__annotations__`, [`mutations/fields.py`][mutations-fields] — re-confirmed),
   so the auth factories do the same; `current_user`'s ref is
   `Optional[Annotated["CurrentUserAlias", strawberry.lazy("…auth.queries")]]` with
-  `bind_auth_mutations()` doing `setattr(auth.queries, "CurrentUserAlias", primary_type)`
-  → SDL `me: UserType`
+  `bind_auth_mutations()` calling the `auth.queries` alias namespace materializer
+  (`materialize_current_user_alias("CurrentUserAlias", primary_type)`) → SDL
+  `me: UserType`
   ([Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset)
   / [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
   **(P2, async gate boundary)** Decision 10 now pins that the permission gate runs
@@ -1593,11 +1594,13 @@ surface as the **primary** [`DjangoType`][glossary-djangotype] registered for
 payload resolution uses). The consumer declares it — their field selection, their
 [`Meta.interfaces`][glossary-metainterfaces], their visibility hook for directory
 reads. `bind_auth_mutations()` validates at phase 2.5: it resolves the user primary via
-[`registry.primary_for`][registry]`(get_user_model())` — **the same getter
+[`registry.get`][registry]`(get_user_model())` — **the same getter
 `_resolve_primary_type` uses**, so "what counts as a registered primary" stays
 single-sited and only the raise *message* differs between the auth check and the generic
-mutation bind (the [`docs/feedback.md`][feedback] D16 reuse directive) — and if any of the
-three user-typed fields was declared while that lookup returns `None`,
+mutation bind (the [`docs/feedback.md`][feedback] D16 reuse directive). It consults
+[`registry.types_for`][registry] only to split the no-registered-type message from the
+multiple-types-without-primary ambiguity message. If any of the three user-typed fields
+was declared while that lookup returns `None`,
 finalization fails with a [`ConfigurationError`][glossary-configurationerror] naming
 the missing registration and the fix ("declare a `DjangoType` with
 `Meta.model = get_user_model()`; mark it `Meta.primary = True` if the model has
@@ -1998,8 +2001,9 @@ sharing the named helper there would be a *bug*, so they carry a source comment.
   form declaration clears
   ([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
 - [ ] **D16** — `bind_auth_mutations()` resolves the primary via
-  [`registry.primary_for`][registry]`(get_user_model())`, the same getter
-  `_resolve_primary_type` uses; only the message differs
+  [`registry.get`][registry]`(get_user_model())`, the same getter
+  `_resolve_primary_type` uses; `registry.types_for` is consulted only to split
+  no-type vs ambiguous-type messages
   ([Decision 8](#decision-8--the-user-models-primary-djangotype-is-required-validated-at-bind)).
 - [ ] **D17 / P3** — the async fields wrap gate-then-work in ONE
   `sync_to_async(thread_sensitive=True)` boundary, single-sited across the three; a generic

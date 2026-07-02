@@ -323,6 +323,36 @@ Revision history (kept inline so the spec is self-contained):
   ([Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset)
   / [Edge cases](#edge-cases-and-constraints)), and the first-line `create_users(N)`
   seed rule (Rev 3, [Test plan](#test-plan)).
+- **Revision 6** — applied a fifth code-review pass ([`docs/feedback.md`][feedback]
+  Round 2; both new findings re-grounded against source before editing).
+  **(P2, return-typing mechanism)** the way the custom `login` / `logout` /
+  `current_user` factories attach their unresolved-at-class-body-time return types is
+  now pinned to the **field family's own signature-injection idiom**:
+  [`DjangoMutationField`][glossary-djangomutationfield] builds a per-resolver
+  `inspect.Signature` + `__annotations__` with a `strawberry.lazy` `Annotated` return
+  ref and assigns them onto its dispatcher (`_resolve.__signature__` /
+  `_resolve.__annotations__`, [`mutations/fields.py`][mutations-fields] — re-confirmed),
+  so the auth factories do the same; `current_user`'s ref is
+  `Optional[Annotated["CurrentUserAlias", strawberry.lazy("…auth.queries")]]` with
+  `bind_auth_mutations()` doing `setattr(auth.queries, "CurrentUserAlias", primary_type)`
+  → SDL `me: UserType`
+  ([Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset)
+  / [Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
+  **(P2, async gate boundary)** Decision 10 now pins that the permission gate runs
+  **inside** the `sync_to_async(thread_sensitive=True)` boundary on the async path, not
+  before it — decisively for `current_user`, whose gate argument `instance=request.user`
+  forces the `SimpleLazyObject` as it is computed (a sync ORM touch that would raise
+  `SynchronousOnlyOperation` outside the boundary); the async dispatcher wraps the whole
+  gate-then-session block in one sync helper, and the
+  [`SyncMisuseError`][glossary-syncmisuseerror] guard still fires inside that sync worker
+  ([Decision 10](#decision-10--sync--async-session-work-through-one-sync_to_asyncthread_sensitivetrue-boundary)
+  / [Edge cases](#edge-cases-and-constraints) / [Test plan](#test-plan)). The Round-2
+  review's other points — the Revision-5 error-keying / plaintext-pop / lifecycle-split
+  confirmations and the P3 session-rotation "rely on Django's native `auth.login` /
+  `auth.logout`" note — were verified **already addressed** (the latter by the
+  three-branch [Edge cases](#edge-cases-and-constraints) entry + the
+  [Borrowing posture](#borrowing-posture) "borrow the session semantics as-is") and
+  required no change.
 
 ## Key glossary references
 
@@ -1461,7 +1491,20 @@ This keeps the "every auth factory accepts `permission_classes=`" contract
 ([Goals](#goals) item 3) honest across all four surfaces.
 
 The return annotation is `<UserPrimaryType> | None` via a bind-materialized
-`strawberry.lazy` alias
+`strawberry.lazy` alias, attached through the **same signature-injection idiom the
+field family already uses** (the P2 typing-mechanism fix). At class-body time the
+user's primary type is not resolved, so — exactly as
+[`DjangoMutationField`][glossary-djangomutationfield] builds a per-resolver
+`inspect.Signature` + `__annotations__` whose return is a `strawberry.lazy` forward-ref
+and assigns them onto its dispatcher (`_resolve.__signature__` / `_resolve.__annotations__`,
+[`mutations/fields.py`][mutations-fields]) — the `current_user()` factory injects a
+return annotation of
+`Optional[Annotated["CurrentUserAlias", strawberry.lazy("django_strawberry_framework.auth.queries")]]`
+onto its dispatcher resolver. `bind_auth_mutations()` then does
+`setattr(auth.queries, "CurrentUserAlias", primary_type)` (the resolved user primary
+type), so Strawberry resolves the lazy ref to the concrete `UserType` at schema build
+and the SDL reads `me: UserType`. `login` / `logout` attach their `LoginPayload` /
+`LogoutPayload` return refs the same way, into the `mutations.inputs` namespace
 ([Decision 9](#decision-9--bind-lifecycle-a-declaration-ledger--bind_auth_mutations-at-phase-25--registered-clear-rows)).
 The resolver performs **no queryset work**: no
 [`get_queryset`][glossary-get_queryset-visibility-hook] re-run, no re-fetch — the
@@ -1596,11 +1639,17 @@ factories cannot resolve types eagerly; they follow the exact
 [`DjangoMutationField`][glossary-djangomutationfield] discipline:
 
 - Each factory call records a declaration in a module-level auth ledger (which
-  surfaces were declared, with which `permission_classes`) and returns a field
-  typed via `strawberry.lazy` forward-refs into the package namespaces —
-  `"LoginPayload"` / `"LogoutPayload"` in the `mutations.inputs` module path (where
-  `build_payload_type` materializes), and the `current_user` return alias in
-  `auth.queries`.
+  surfaces were declared, with which `permission_classes`) and returns a field whose
+  dispatcher resolver carries an **injected `__signature__` / `__annotations__`** — the
+  same mechanism [`DjangoMutationField`][glossary-djangomutationfield] uses
+  ([`mutations/fields.py`][mutations-fields] `_resolve.__signature__` /
+  `_resolve.__annotations__`) — with the return annotation a `strawberry.lazy`
+  forward-ref into the package namespaces: `"LoginPayload"` / `"LogoutPayload"` in the
+  `mutations.inputs` module path (where `build_payload_type` materializes), and the
+  `current_user` `"CurrentUserAlias"` in `auth.queries` (set to the resolved primary
+  type at bind — [Decision 7](#decision-7--current_user-returns-the-session-actor-nullable-and-does-not-re-run-get_queryset)).
+  Injecting the signature (rather than a static annotation) is required precisely
+  because the user primary type is unresolved at class-body time.
 **The exact phase-2.5 order** (the P1 lifecycle fix): the finalizer's pre-bind
 reset loop runs first, then `bind_auth_mutations()`, then `bind_mutations()`, then
 `bind_form_mutations()`:
@@ -1693,9 +1742,19 @@ resolution, the exact boundary discipline the `036` async pipeline pinned (one
 boundary, not per-step hops). `current_user`'s async path forces the lazy
 `request.user` inside the boundary (upstream's "access an attribute to force
 loading in async contexts" note — the `SynchronousOnlyOperation` guard).
-Where the reused write pipeline meets consumer hooks the standing
-[`SyncMisuseError`][glossary-syncmisuseerror] discipline applies unchanged (an
-`async def` `has_permission` is rejected, never treated as allow).
+**The permission gate runs inside the same boundary on the async path**, not before
+it (the P2 async-gate fix): `authorize_or_raise` → `check_permission` is synchronous,
+a consumer `has_permission` may touch `request.user` (a `SimpleLazyObject` whose
+attribute access triggers a sync ORM query), and — decisively for `current_user` —
+the gate's own `instance=request.user` argument forces that lazy object as it is
+*computed*, so evaluating the gate outside the boundary would raise
+`SynchronousOnlyOperation`. The async dispatcher therefore wraps the whole
+gate-then-session-work block in one sync helper run via
+`await sync_to_async(helper, thread_sensitive=True)()`. The
+[`SyncMisuseError`][glossary-syncmisuseerror] discipline is unaffected: a
+`sync_to_async(thread_sensitive=True)` worker is itself a sync context, so
+`reject_async_in_sync_context` still rejects an `async def` `has_permission` (never a
+silent allow) exactly as on the sync path.
 
 Alternatives considered (and rejected):
 
@@ -1882,11 +1941,13 @@ it).
   [Decision 11](#decision-11--session-transport-constraints-sessionmiddleware--authenticationmiddleware-the-channels-fallback-is-not-borrowed));
   the package adds no probe. The `tests/auth/` sessionless edge pins that the error
   is Django's, not a swallowed pass.
-- **Async contexts.** The session work runs inside one
+- **Async contexts.** The permission gate **and** the session work run inside one
   `sync_to_async(thread_sensitive=True)` boundary; `current_user` forces the lazy
-  user inside it (no `SynchronousOnlyOperation` leaks); an `async def`
-  `has_permission` raises [`SyncMisuseError`][glossary-syncmisuseerror] — never a
-  silent allow.
+  user inside it — including computing the gate's `instance=request.user` argument
+  (no `SynchronousOnlyOperation` leaks,
+  [Decision 10](#decision-10--sync--async-session-work-through-one-sync_to_asyncthread_sensitivetrue-boundary));
+  an `async def` `has_permission` raises [`SyncMisuseError`][glossary-syncmisuseerror]
+  even inside that sync worker — never a silent allow.
 - **The register payload under visibility.** The post-save re-fetch is by pk
   without [`get_queryset`][glossary-get_queryset-visibility-hook] (the `036`
   own-write exception), so a staff-only `UserType.get_queryset` cannot null the
@@ -1995,8 +2056,12 @@ aligned with the standing test-placement contract without weakening live coverag
   and the async resolver paths** (separate overrides, independently regressable);
   hash-before-`full_clean` ordering;
 - sync/async: both resolver paths; the one-boundary discipline; the async
-  `has_permission` → [`SyncMisuseError`][glossary-syncmisuseerror]; the
-  `current_user` lazy-user forcing;
+  `has_permission` → [`SyncMisuseError`][glossary-syncmisuseerror] (rejected even
+  inside the sync worker); the `current_user` lazy-user forcing — **including an async
+  `me` under a permission gate whose `instance=request.user` argument forces the lazy
+  object inside the boundary, asserting no `SynchronousOnlyOperation` leaks** (the
+  Revision-6 async-gate fix); the injected-signature return typing (the dispatcher's
+  `__annotations__` return ref resolves to the concrete `UserType` — SDL `me: UserType`);
 - the sessionless-request edge (Django's error propagates, not swallowed).
 
 **Cross-cutting:** the full suite green at `fail_under = 100`; `ruff format` +

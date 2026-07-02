@@ -1,70 +1,51 @@
-# Spec Review: Auth Mutations spec-040-auth_mutations-0_0_13
+# Spec Review (Round 2): Auth Mutations spec-040-auth_mutations-0_0_13
 
-Rigorous review of `docs/spec-040-auth_mutations-0_0_13.md` ahead of the `0.0.13` implementation.
-
----
-
-## 1. Critical Security & Correctness Gaps (P1)
-
-### Plaintext Password Leak in `register_mutation`
-- **The Risk**: If the raw password remains in the input attributes when constructing the user model, `model(**scalar_and_fk_attrs)` would instantiate the user with a plaintext password attribute (e.g., `user.password = raw_password`). This is a severe security hazard: other model hooks, signals, serialization libraries, or debug loggers could capture or output this plaintext string before `set_password` runs.
-- **The Avoidance**: The `decode_step` of the synthesized `Register` rider must explicitly pop `"password"` from the input dictionary *before* constructing the model instance or assigning attributes. The raw password must travel *only* within the extended tuple `(user, m2m_assignments, exclude, raw_password)` to the `write_step`.
-- **Validation**: Enforce a unit assertion in `tests/auth/test_mutations.py` verifying that the constructed user model instance never receives `"password"` in its attributes during the decode step.
-
-### Mis-keying of Password Validator Failures
-- **The Risk**: Django's password validators raise a list-style `ValidationError`. If the `ValidationError` is passed to the generic `validation_error_to_field_errors(exc)` utility, it will map it to `NON_FIELD_ERRORS` (`"__all__"`), because there is no field dictionary.
-- **The Avoidance**: In `Register`'s `write_step`, wrap the `validate_password` block and manually map the `ValidationError` to a `"password"`-keyed `FieldError`:
-  ```python
-  try:
-      validate_password(raw_password, user)
-  except ValidationError as e:
-      return [field_error("password", list(e.messages), codes=[leaf.code for leaf in e.error_list if leaf.code])]
-  ```
+Rigorous review of `docs/spec-040-auth_mutations-0_0_13.md` (Revision 5) ahead of the `0.0.13` implementation.
 
 ---
 
-## 2. Architectural & Design Consistencies (P2)
+## 1. Verification of Prior Findings & Revision 5 Integration
 
-### `current_user` Return Type Alias
-- **The Risk**: At class-body evaluation time (when `current_user()` is called), the consumer's primary `UserType` is not yet finalized or resolved. Thus, `current_user` must type its field return as `Optional[CurrentUserAlias]` via a lazy forward-reference.
-- **The Avoidance**:
-  - The `queries.py` module must register `CurrentUserAlias` as its emit ledger under `register_subsystem_clear`.
-  - During `bind_auth_mutations()`, resolve the user's primary type and bind it:
-    ```python
-    setattr(queries_module, "CurrentUserAlias", primary_type)
-    ```
-  - This ensures Strawberry successfully maps the alias to the concrete user type at schema compile time, generating `me: UserType` in the SDL.
-
-### Duck-Typed Permission Holders Constraint
-- **The Risk**: Because `login`, `logout`, and `current_user` are model-less fields rather than real subclasses of `DjangoMutation`, they use a custom duck-typed holder class to pass to `authorize_or_raise`.
-- **The Avoidance**: Custom `has_permission` hooks that inspect the `mutation` positional argument (e.g. reading `mutation.Meta.model` or checking inheritance) will raise an `AttributeError` or type mismatch at request time.
-- **The Remedy**: Document this limitation clearly: permission gates on the three model-less fields must only key on `info`, `operation`, or `data`, never on the `mutation` class itself. Add a test asserting that a gate introspecting `mutation` fails cleanly with a request-time exception, validating the `DenyAll` precedent.
+The Revision 5 changes perfectly capture and single-site resolve the critical gaps identified in the first review:
+- **P1 Error Keying resolved**: The spec now dictates that the register `write_step` intercepts list-style `ValidationError`s from `validate_password` at the call-site and maps them directly to `password`-keyed `FieldError`s, avoiding the non-dict `"__all__"` fallback.
+- **P1 Plaintext Password Leak resolved**: The explicit `decode_step` tuple signature extraction `(user, m2m_assignments, exclude, raw_password)` ensures that the raw password never touches the constructed model attributes in memory prior to hashing.
+- **P2 Lifecycle & Clear Split resolved**: Correct separation between `TypeRegistry.clear()` for declarations and `register_subsystem_clear` for emit artifacts is fully pinned.
 
 ---
 
-## 3. Implementation Detail & Edge Cases (P3)
+## 2. Round 2 Deep-Dive Implementation Findings
 
-### Multi-Pass Finalization and Ledger Isolation
-- **The Risk**: If the auth declaration ledger is added to `register_subsystem_clear`, it will be drained during the finalizer's pre-bind reset loop, before `bind_auth_mutations()` is ever invoked.
-- **The Avoidance**:
-  - Keep the **declaration** ledger (containing class-body registrations) on the `TypeRegistry.clear()` hand row alongside `clear_mutation_registry`. This ensures registrations survive re-finalize passes.
-  - Keep the **emit** ledgers (such as `LoginPayload`, `LogoutPayload` in `mutations.inputs` and `queries.CurrentUserAlias`) on the pre-bind reset loop (`register_subsystem_clear`), allowing them to be cleanly rebuilt.
+### P2: Resolving and Typing `current_user()` using Dispatcher Signature Injection
+- **The Finding**: At class-body time (when the `current_user()` field factory is evaluated), the consumer's primary type (e.g., `UserType`) is not yet resolved. Therefore, the resolver signature cannot be statically annotated with the actual class.
+- **The Avoidance**: To match the package's existing field factory design pattern established in `DjangoMutationField` (`mutations/fields.py`), the `current_user()` field factory must dynamically attach `__signature__` and `__annotations__` to its dispatcher resolver.
+- **The Concrete Type Signature**:
+  The return annotation on the dispatcher resolver must be:
+  `Optional[Annotated["CurrentUserAlias", strawberry.lazy("django_strawberry_framework.auth.queries")]]`
+  During `bind_auth_mutations()` finalization, the queries module must dynamically set `CurrentUserAlias = primary_type`. This ensures Strawberry resolves the lazy reference correctly at schema compile time.
 
-### Async Context Security & Lazy User Forcing
-- **The Risk**: Accessing `request.user` lazily in an async resolver can raise `SynchronousOnlyOperation` if it hasn't been fetched from the database yet.
-- **The Avoidance**: Within the async resolver for `current_user` or the permission checks, ensure that `request.user.is_authenticated` (or any attribute access) is fully evaluated inside the `sync_to_async(thread_sensitive=True)` worker block.
+### P2: Strict Thread-Safety & Lazy User Evaluation under `sync_to_async`
+- **The Finding**: In an async context, `request.user` is loaded lazily via a `SimpleLazyObject` wrapper. Accessing any attribute on `request.user` (including `is_authenticated`) triggers synchronous ORM queries, which raises a `SynchronousOnlyOperation` exception if done outside `sync_to_async`.
+- **The Avoidance**: Both the authentication check and the write-permission carrier validation must run inside the synchronous closure wrapped by `sync_to_async(thread_sensitive=True)`.
+- **Sync/Async Dispatcher Structure**:
+  - **Sync**:
+    - Extract user off request.
+    - Run permission gate checks via `authorize_or_raise`.
+    - Return user if authenticated, else `None`.
+  - **Async**:
+    - Wrap the entire permission check and user evaluation block inside a sync helper.
+    - Run the sync helper using `await sync_to_async(helper, thread_sensitive=True)()`.
 
-### Test Seeding Rule Compliance
-- **The Risk**: Violating the catalog/auth test seeding rules in `AGENTS.md`.
-- **The Avoidance**: Ensure every test in `examples/fakeshop/test_query/test_auth_api.py` begins with `create_users(N)` from `apps.products.services`. Do not hand-roll `User` objects or seed data outside the approved helper.
+### P3: Session Token Rotation and Token Validation
+- **The Finding**: In `login`'s resolver, `auth.login(request, user)` handles the session key cycling (the fixation defense). However, standard Django login rotates only the CSRF token on `rotate_token(request)`.
+- **The Avoidance**: Rely entirely on Django's native `auth.login` and `auth.logout` for session manipulation inside the `sync_to_async` boundary, avoiding any bespoke session key management that could diverge from the configured session backend.
 
 ---
 
-## 4. Concrete Bug-Avoidance Checklist
+## 3. Finalized Implementation Checklist
 
-- [ ] **Decode Pop**: Ensure `Register`'s `decode_step` pops `"password"` off before creating the model instance.
-- [ ] **Field-Keyed Password Errors**: Specifically catch `ValidationError` around `validate_password` and key to `"password"`.
-- [ ] **Pre-Bind Ordering**: Wire `bind_auth_mutations()` *before* `bind_mutations()` to prevent the generic `_resolve_primary_type` error from pre-empting the register-specific missing-type error.
-- [ ] **Alias Reset**: Add `current_user`'s alias namespace to `register_subsystem_clear` and the auth declaration ledger to `TypeRegistry.clear()`.
-- [ ] **Async Thread-Safety**: Ensure all Django session, authentication, and lazy user loading are strictly enclosed within a single `sync_to_async(thread_sensitive=True)` context.
-- [ ] **No DjangoModelPermission on Model-less fields**: Custom rate-limiters or IP-check permission classes must ignore the `mutation` parameter.
+- [ ] **Manual Password Error Keying**: Verify that `Register`'s `write_step` manually maps the `validate_password` `ValidationError` to `"password"`.
+- [ ] **Extended Decode Tuple**: Assert in the unit tests that `user` never carries a plaintext `password` attribute during or after the `decode_step`.
+- [ ] **Queries Alias Namespace**: Register `CurrentUserAlias` on `register_subsystem_clear` and ensure `queries.CurrentUserAlias` is set to the primary type inside `bind_auth_mutations()`.
+- [ ] **Type Signature Injection**: Attach `__signature__` and `__annotations__` to the `current_user` resolver dispatcher, matching `DjangoMutationField`'s injection pattern.
+- [ ] **Enclosed Async Lazy Loading**: Ensure all lazy evaluations (MRO, querysets, or user properties) are completely contained within the `sync_to_async` boundary on the async path.
+- [ ] **AGENTS.md Compliance**: Prepend `create_users(N)` as the first line of every live and internal auth test case.

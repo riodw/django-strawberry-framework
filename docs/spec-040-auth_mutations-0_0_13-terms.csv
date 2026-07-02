@@ -52,3 +52,41 @@ run_write_pipeline_sync,djangomutation,the shared write skeleton the rider's ste
 resolve_sync,djangomutation,the per-flavor resolver seam the rider overrides
 resolve_async,djangomutation,the async twin of the resolver seam; independently regressable
 register_subsystem_clear,finalize_django_types,the registry clear seam the auth ledger registers with; no own entry
+authorize_or_raise,djangomodelpermission,the shared permission gate the auth permission holders invoke by call; documented under DjangoModelPermission
+has_permission,djangomodelpermission,the overridable permission hook every auth factory routes permission_classes through
+_validate_permission_classes,djangomodelpermission,normalizes permission_classes; the auth AllowAny default rides its unset_default seam
+AllowAny,djangomodelpermission,the explicit empty permission_classes the auth factories default to; the documented inversion of deny-by-default
+_mutation_meta,djangomodelpermission,the duck-typed permission-meta snapshot check_permission reads; the auth holder carries a shaped copy
+validation_error_to_field_errors,fielderror-envelope,the generic ValidationError mapper the register write step deliberately bypasses for password
+field_error,fielderror-envelope,the FieldError leaf ctor the register write step calls directly to key password errors
+NON_FIELD_ERROR_KEY,fielderror-envelope,the __all__ sentinel an empty error path keys to
+save_or_field_errors,fielderror-envelope,the standing IntegrityError-to-envelope fallback the duplicate-username race rides
+decode_step,djangomutation,the per-flavor decode half of run_write_pipeline_sync the register rider overrides
+write_step,djangomutation,the per-flavor write half the register password/hash step overrides
+_run_pipeline_sync,djangomutation,hard-wires the model decode/write lambdas; the reason register needs its own step pair
+_model_decode_step,djangomutation,the default model decode the register decode step mirrors plus raw_password
+_model_write_step,djangomutation,the default model write that would persist plaintext; register overrides it
+_bind_mutation,djangomutation,the phase-2.5 binder deriving RegisterPayload from mutation_cls.__name__
+_resolve_model,djangomutation,the model-resolution seam; the auth permission holder is model-less
+_validate_meta,djangomutation,the Meta-validation seam in the DjangoMutation seam set
+_resolve_primary_type,djangomutation,the generic no-DjangoType raise bind_auth_mutations must pre-empt for register
+make_declaration_registry,djangomutation,the identity-deduped declaration-registry factory the auth ledgers reuse
+_primary_type,djangomutation,the denial-message target the permission holder carries (user primary or None)
+input_field_required,input-type-generation,the not-field.blank rule making email optional in RegisterInput
+build_input,input-type-generation,the input-build seam register pins RegisterInput through
+input_type_name,input-type-generation,the input-name seam overriding the model-derived default to RegisterInput
+input_module_path,input-type-generation,the input-namespace seam in the DjangoMutation seam set
+materialize_generated_input_class,input-type-generation,raises on a second distinct class under an existing input name
+TypeRegistry,finalize_django_types,the registry whose clear() hand-rows drain the auth declaration ledger
+clear_mutation_registry,finalize_django_types,the mutation declaration clear the auth declaration clear sits beside
+clear_form_mutation_registry,finalize_django_types,the form declaration clear the auth declaration clear sits beside
+iter_subsystem_clears,finalize_django_types,the pre-bind reset loop draining emit ledgers before bind_auth_mutations
+declaration ledger,finalize_django_types,the class-body-time record of declared surfaces; survives the pre-bind reset
+emit ledger,finalize_django_types,the pre-bind-cleared payload/alias namespace bind_auth_mutations materializes into
+bind_form_mutations,djangoformmutation,the phase-2.5 form bind running after bind_auth_mutations and bind_mutations
+reject_async_in_sync_context,syncmisuseerror,the guard raising SyncMisuseError on an async has_permission even inside the sync worker
+signature injection,djangomutationfield,the _resolve.__signature__ / __annotations__ idiom the auth factories reuse for lazy return types
+G2 gate,djangooptimizerextension,the mutation optimizer gate keeping select_related/prefetch_related but suppressing only() on the re-fetch
+Register,auth-mutations,the synthesized DjangoMutation rider whose __name__ Register yields RegisterPayload; documented under Auth mutations
+CurrentUserAlias,auth-mutations,the bind-materialized lazy alias current_user's return ref resolves to; documented under Auth mutations
+permission holder,auth-mutations,the module-internal class carrying the duck-typed permission shape for login/logout/current_user

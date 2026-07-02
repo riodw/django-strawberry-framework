@@ -583,6 +583,14 @@ class TypeRegistry:
             "clear_mutation_registry",
             lambda clear: clear(),
         )
+        # TODO(spec-040 Slice 1): co-clear the auth declaration ledger here, not
+        # through ``register_subsystem_clear``. Pseudocode: add an
+        # ``_clear_if_importable`` row for
+        # ``django_strawberry_framework.auth.mutations::clear_auth_mutation_registry``.
+        # Auth declarations must survive the finalizer's pre-bind input-namespace
+        # reset so ``bind_auth_mutations()`` can read them before
+        # ``bind_mutations()``. This row belongs beside the mutation / form
+        # declaration clears and is removed when Slice 1 ships the real call.
         # The disjoint plain-form ``DjangoFormMutation`` declaration registry
         # (``clear_form_mutation_registry``) so ``iter_form_mutations()`` is empty,
         # plus the per-pass form-input build cache (``clear_form_shape_build_cache``

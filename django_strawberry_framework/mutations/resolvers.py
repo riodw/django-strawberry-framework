@@ -1155,6 +1155,20 @@ def _model_decode_step(
     if decode_error is not None:
         return [decode_error]
 
+    # TODO(spec-040 Slice 2): add a small reusable exclusion seam here and in
+    # ``_decode_relations`` so ``Register`` can remove ``password`` before model
+    # construction without forking ``iter_provided_input_fields``. Pseudocode:
+    # thread ``excluded_input_fields=frozenset({"password"})`` into
+    # ``_decode_relations``; during its existing ``iter_provided_input_fields``
+    # loop, record any excluded provided values in an ``excluded_values`` map and
+    # ``continue`` before relation/scalar/null validation. Return that map beside
+    # ``scalar_and_fk_attrs`` / ``m2m_assignments`` so this function can append
+    # ``excluded_values["password"]`` to the decoded tuple that the register write
+    # step receives.
+    # The exclusion must preserve the UNSET-vs-null-vs-value rules and the
+    # AR-H2 ``exclude`` calculation. The register write step then validates the
+    # raw password, calls ``set_password()``, and delegates ``full_clean`` /
+    # ``save`` / M2M assignment back to the shared model write tail.
     if instance is None:
         target = model(**scalar_and_fk_attrs)
     else:
@@ -1411,6 +1425,12 @@ async def run_pipeline_async(
     synchronously inside that thread, while an ``async def get_queryset`` raises
     ``SyncMisuseError`` there (no awaiting context - the standing discipline).
     """
+    # TODO(spec-040 Slice 1): if the auth resolvers need the same one-boundary
+    # primitive, factor the core without changing the mutation-shaped public
+    # wrapper above. Pseudocode: expose a generic helper that runs an arbitrary
+    # callable inside one ``sync_to_async(thread_sensitive=True)`` worker.
+    # Auth's async login/logout/current_user path should wrap gate-then-session
+    # work in one worker, while this mutation entry keeps its current signature.
     return await sync_to_async(sync_body, thread_sensitive=True)(mutation_cls, info, data, id)
 
 

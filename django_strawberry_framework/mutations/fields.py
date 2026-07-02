@@ -61,6 +61,16 @@ from ..exceptions import ConfigurationError
 from .inputs import INPUTS_MODULE_PATH
 
 
+# TODO(spec-040 Slice 1): promote the lazy-ref + signature-attachment idiom below
+# into shared field-factory machinery before auth adds fixed factories. Pseudocode:
+# move ``_lazy_ref`` itself plus the ``__signature__`` / ``__annotations__``
+# assignment into one helper; build the return lazy ref there, derive an
+# ``inspect.Signature`` from the fixed field's keyword arguments, then attach both
+# signature artifacts to the dispatcher in one place.
+# ``login_mutation`` / ``logout_mutation`` / ``current_user`` need the same
+# ``__signature__`` / ``__annotations__`` path as ``DjangoMutationField`` because
+# their return types materialize at phase 2.5. Keeping this helper single-sited is
+# the DRY constraint from spec-040 Helper-reuse D12 / P1 / P2.
 def _validate_mutation_target(mutation_cls: Any) -> None:
     """Reject a bad ``DjangoMutationField`` target at the construction line (spec-036 / spec-038 Decision 5).
 

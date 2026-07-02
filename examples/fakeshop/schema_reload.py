@@ -36,9 +36,11 @@ import sys
 # Dependency-safe reload order: glossary precedes kanban because
 # ``kanban.schema``'s ``CardGlossaryTermType.term`` is a FK to
 # ``glossary.GlossaryTerm`` and finalize rejects the kanban registration unless
-# ``GlossaryTermType`` is already registered; the remaining apps are independent.
+# ``GlossaryTermType`` is already registered; the remaining apps are independent
+# (accounts references only ``auth.User``, no other fakeshop app - spec-040).
 # ``config.schema`` (the aggregate) is reloaded after all apps, then ``config.urls``.
 _PROJECT_APP_SCHEMA_MODULES = (
+    "apps.accounts.schema",
     "apps.glossary.schema",
     "apps.kanban.schema",
     "apps.library.schema",

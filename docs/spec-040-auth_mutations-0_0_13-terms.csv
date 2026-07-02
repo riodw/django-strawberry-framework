@@ -1,20 +1,9 @@
 term,anchor,notes
 Auth mutations,auth-mutations,the card subject; planned for 0.0.13 -> shipped at Slice 3
-login_mutation,auth-mutations,net-new factory; documented under the Auth mutations entry
-logout_mutation,auth-mutations,net-new factory; documented under the Auth mutations entry
-register_mutation,auth-mutations,net-new factory; documented under the Auth mutations entry
-current_user,auth-mutations,net-new query field factory; documented under the Auth mutations entry
-DjangoRegisterMutation,auth-mutations,the internal DjangoMutation rider register_mutation synthesizes
-bind_auth_mutations,auth-mutations,the phase-2.5 bind entry point; documented under the Auth mutations entry
-LoginPayload,auth-mutations,generated payload; documented under the Auth mutations entry
-LogoutPayload,auth-mutations,generated model-less payload; documented under the Auth mutations entry
-RegisterPayload,auth-mutations,generated payload; documented under the Auth mutations entry
-RegisterInput,auth-mutations,generated input (name-seam override); documented under the Auth mutations entry
 DjangoMutation,djangomutation,the 036 base the register rider subclasses
 DjangoMutationField,djangomutationfield,reused unchanged to expose the register rider
 DjangoFormMutation,djangoformmutation,source of the pinned { ok errors } payload shape logout reuses
 DjangoModelPermission,djangomodelpermission,the write-auth default the auth AllowAny inversion is defined against
-DenyAll,djangomodelpermission,the plain-form deny default the auth factories deliberately invert; no own entry
 FieldError,fielderror-envelope,the frozen envelope every auth mutation returns
 DjangoType,djangotype,the consumer-declared user type the payloads resolve
 DjangoOptimizerExtension,djangooptimizerextension,the register payload re-fetch rides the G2 path
@@ -27,8 +16,6 @@ apply_cascade_permissions,apply_cascade_permissions,the cascade seam named in th
 Meta.primary,metaprimary,the registry primary lookup resolving the user type
 Meta.model,metamodel,the register rider's synthesized Meta
 Meta.fields,metafields,the register rider's narrowed safe field set
-Meta.operation,djangomutation,the register rider's create operation; documented under DjangoMutation
-Meta.permission_classes,djangomodelpermission,the composability seam every factory accepts
 Meta.interfaces,metainterfaces,the consumer UserType's Relay declaration
 Input type generation,input-type-generation,the model-column generator reused unchanged (narrowed)
 only() projection,only-projection,suppressed under the mutation G2 gate on the re-fetch
@@ -42,87 +29,3 @@ Per-field permission hooks,per-field-permission-hooks,0.1.1 read gates; out of s
 DjangoListField,djangolistfield,the field-factory idiom precedent
 DjangoNodeField,djangonodefield,the field-factory idiom precedent
 Strictness mode,strictness-mode,unplanned deep selections under me remain strictness-visible
-refetch_optimized,djangomutation,the 036 by-pk-without-visibility re-fetch; documented under DjangoMutation
-build_payload_type,fielderror-envelope,the one payload builder emitting both shapes; documented with the envelope
-payload_object_slot,fielderror-envelope,the node/result slot rule; documented with the envelope
-request_from_info,djangomodelpermission,the shared request resolver named in the write-auth entry
-check_permission,djangomodelpermission,the overridable authorize hook the factories route through
-bind_mutations,djangomutation,the phase-2.5 bind the register rider rides
-run_write_pipeline_sync,djangomutation,the shared write skeleton the rider's step pair rides; documented under DjangoMutation
-resolve_sync,djangomutation,the per-flavor resolver seam the rider overrides
-resolve_async,djangomutation,the async twin of the resolver seam; independently regressable
-register_subsystem_clear,finalize_django_types,the registry clear seam the auth ledger registers with; no own entry
-authorize_or_raise,djangomodelpermission,the shared permission gate the auth permission holders invoke by call; documented under DjangoModelPermission
-has_permission,djangomodelpermission,the overridable permission hook every auth factory routes permission_classes through
-_validate_permission_classes,djangomodelpermission,normalizes permission_classes; the auth AllowAny default rides its unset_default seam
-AllowAny,djangomodelpermission,the explicit empty permission_classes the auth factories default to; the documented inversion of deny-by-default
-_mutation_meta,djangomodelpermission,the duck-typed permission-meta snapshot check_permission reads; the auth holder carries a shaped copy
-validation_error_to_field_errors,fielderror-envelope,the generic ValidationError mapper the register write step deliberately bypasses for password
-field_error,fielderror-envelope,the FieldError leaf ctor the register write step calls directly to key password errors
-NON_FIELD_ERROR_KEY,fielderror-envelope,the __all__ sentinel an empty error path keys to
-save_or_field_errors,fielderror-envelope,the standing IntegrityError-to-envelope fallback the duplicate-username race rides
-decode_step,djangomutation,the per-flavor decode half of run_write_pipeline_sync the register rider overrides
-write_step,djangomutation,the per-flavor write half the register password/hash step overrides
-_run_pipeline_sync,djangomutation,hard-wires the model decode/write lambdas; the reason register needs its own step pair
-_model_decode_step,djangomutation,the default model decode the register decode step mirrors plus raw_password
-_model_write_step,djangomutation,the default model write that would persist plaintext; register overrides it
-_bind_mutation,djangomutation,the phase-2.5 binder deriving RegisterPayload from mutation_cls.__name__
-_resolve_model,djangomutation,the model-resolution seam; the auth permission holder is model-less
-_validate_meta,djangomutation,the Meta-validation seam in the DjangoMutation seam set
-_resolve_primary_type,djangomutation,the generic no-DjangoType raise bind_auth_mutations must pre-empt for register
-make_declaration_registry,djangomutation,the identity-deduped declaration-registry factory the auth ledgers reuse
-_primary_type,djangomutation,the denial-message target the permission holder carries (user primary or None)
-input_field_required,input-type-generation,the not-field.blank rule making email optional in RegisterInput
-build_input,input-type-generation,the input-build seam register pins RegisterInput through
-input_type_name,input-type-generation,the input-name seam overriding the model-derived default to RegisterInput
-input_module_path,input-type-generation,the input-namespace seam in the DjangoMutation seam set
-materialize_generated_input_class,input-type-generation,raises on a second distinct class under an existing input name
-TypeRegistry,finalize_django_types,the registry whose clear() hand-rows drain the auth declaration ledger
-clear_mutation_registry,finalize_django_types,the mutation declaration clear the auth declaration clear sits beside
-clear_form_mutation_registry,finalize_django_types,the form declaration clear the auth declaration clear sits beside
-iter_subsystem_clears,finalize_django_types,the pre-bind reset loop draining emit ledgers before bind_auth_mutations
-declaration ledger,finalize_django_types,the class-body-time record of declared surfaces; survives the pre-bind reset
-emit ledger,finalize_django_types,the pre-bind-cleared payload/alias namespace bind_auth_mutations materializes into
-bind_form_mutations,djangoformmutation,the phase-2.5 form bind running after bind_auth_mutations and bind_mutations
-reject_async_in_sync_context,syncmisuseerror,the guard raising SyncMisuseError on an async has_permission even inside the sync worker
-signature injection,djangomutationfield,the _resolve.__signature__ / __annotations__ idiom the auth factories reuse for lazy return types
-G2 gate,djangooptimizerextension,the mutation optimizer gate keeping select_related/prefetch_related but suppressing only() on the re-fetch
-Register,auth-mutations,the synthesized DjangoMutation rider whose __name__ Register yields RegisterPayload; documented under Auth mutations
-CurrentUserAlias,auth-mutations,the bind-materialized lazy alias current_user's return ref resolves to; documented under Auth mutations
-permission holder,auth-mutations,the module-internal class carrying the duck-typed permission shape for login/logout/current_user
-derive_register_fields,auth-mutations,the model-argument register field-set helper (USERNAME_FIELD then REQUIRED_FIELDS then password); documented under Auth mutations
-editable_input_fields,input-type-generation,the standard unknown/non-editable rejection derive_register_fields delegates to
-iter_provided_input_fields,input-type-generation,the shared UNSET-strip provided-field walk the register decode reuses
-excluded_input_fields,djangomutation,the provided-marker-preserving exclusion seam threaded through _model_decode_step
-_decode_relations,djangomutation,the decode walk the exclusion seam threads into; the AR-H2 provided-marker home
-_AUTH_FAMILY_LABEL,auth-mutations,the shared request_from_info family-label constant every auth resolver reuses (D1); documented under Auth mutations
-_make_permission_holder,auth-mutations,the ONE holder-synthesis helper login/logout/current_user share (D3/P4); documented under Auth mutations
-materialize_current_user_alias,auth-mutations,the alias materializer bind_auth_mutations calls for CurrentUserAlias; never a hand-rolled setattr
-Session,auth-mutations,the pinned logout holder __name__; the denial-string target under the no-primary fallback
-surface-keyed bind,auth-mutations,bind_auth_mutations materializes only what the declared surfaces need; logout-only resolves no user primary
-one declaration per process,auth-mutations,the fixed-payload conflict rule; keyed on permission_classes alone with presentation kwargs excluded
-me,auth-mutations,the conventional current_user field name on the live surface; anonymous resolves to null
-exclusion seam,djangomutation,the excluded_input_fields decode parameter; extracts the protected value with its provided-marker preserved
-_provided_attr_names,djangomutation,the provided-attr walk feeding the AR-H2 create-path exclude the seam must not perturb
-_unprovided_exclude,djangomutation,the AR-H2 create-path full_clean exclude; still counts password as provided under the seam
-_ValidatedMutationMeta,djangomutation,the real validated Meta snapshot the duck-typed auth holder deliberately is not
-run_in_one_sync_boundary,djangomutation,the optional generic one-boundary primitive Decision 10 names as a P3 follow-on
-_full_clean_or_field_errors,fielderror-envelope,the shared full_clean-to-envelope step the register write step delegates to (D7)
-_lazy_ref,djangomutationfield,the shared Annotated/strawberry.lazy return-ref builder promoted to shared machinery (D12)
-is_async_callable,syncmisuseerror,the partial-aware async-callable predicate auth uses instead of inspect.iscoroutinefunction (D18)
-_PERMISSION_ASYNC_RECOURSE,syncmisuseerror,the standing async-permission recourse string reused by call; no new recourse string (D2)
-make_input_namespace,input-type-generation,the parked-global namespace trio owning the CurrentUserAlias slot (D13)
-materialize_mutation_input_class,input-type-generation,the mutation-input ledger pin the auth payload names ride (D10/D11)
-reload_all_project_schemas,finalize_django_types,the fakeshop complete-reload helper whose module list Slice 1 extends with apps.accounts.schema
-_PROJECT_APP_SCHEMA_MODULES,finalize_django_types,the schema_reload module list gaining the accounts row in the same slice as the compose
-_clear_if_importable,finalize_django_types,the clear-row iterator both TypeRegistry.clear and the pre-bind reset share
-relation_kind,get_queryset-visibility-hook,named only in the D-N3 deliberate non-reuse; register wires no relation-visibility helper
-is_forward_many_to_many,get_queryset-visibility-hook,named only in the D-N3 deliberate non-reuse; register wires no relation-visibility helper
-visible_related_object,get_queryset-visibility-hook,named only in the D-N3 deliberate non-reuse; register wires no relation-visibility helper
-visible_related_objects,get_queryset-visibility-hook,named only in the D-N3 deliberate non-reuse; register wires no relation-visibility helper
-registry.get,metaprimary,the primary getter bind_auth_mutations shares with _resolve_primary_type (D16); only the raise message differs
-registry.types_for,metaprimary,consulted only to split the no-type message from the ambiguous-type message at the auth bind
-_subsystem_clears,finalize_django_types,the canonical pre-bind clear-row list; emit/input-namespace clears only never declaration registries
-_synthesized_mutation_signature,djangomutationfield,the fields.py signature builder deriving <Name>Payload solely from mutation_cls.__name__
-build_payload,fielderror-envelope,the per-request payload assembler closing the shared write pipeline after refetch_optimized
-scalar_and_fk_attrs,djangomutation,the constructed-model attr map the register decode must never let password reach

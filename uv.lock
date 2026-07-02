@@ -215,7 +215,7 @@ wheels = [
 
 [[package]]
 name = "django-strawberry-framework"
-version = "0.0.12"
+version = "0.0.13"
 source = { editable = "." }
 dependencies = [
     { name = "django", version = "5.2.14", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },

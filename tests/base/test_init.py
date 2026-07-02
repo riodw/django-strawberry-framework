@@ -16,7 +16,7 @@ from django_strawberry_framework.types import converters
 
 
 def test_version():
-    assert __version__ == "0.0.12"
+    assert __version__ == "0.0.13"
 
 
 def test_logger_name_is_django_strawberry_framework():
@@ -45,9 +45,11 @@ def test_public_api_surface_is_pinned():
     # spec-037 Slice 3 adds the three file/upload symbols: ``Upload`` (the
     # re-exported Strawberry scalar) plus ``DjangoFileType`` / ``DjangoImageType``
     # (the structured read-output objects). spec-038 adds two form-mutation
-    # symbols (``DjangoFormMutation`` / ``DjangoModelFormMutation``); as the lone
-    # ``0.0.12`` card it owns the ``0.0.12`` cut (Decision 14), so ``test_version``
-    # is asserted at ``0.0.12`` above.
+    # symbols (``DjangoFormMutation`` / ``DjangoModelFormMutation``). spec-040
+    # widens NOTHING here: the auth factories are submodule-only by design
+    # (``django_strawberry_framework.auth``, spec-040 Decision 3 - opt-in by
+    # import, never a root export), and as the joint-cut owner it moves
+    # ``test_version`` to ``0.0.13`` above (spec-040 Decision 12).
     assert django_strawberry_framework.__all__ == (
         "BigInt",
         "DjangoConnection",

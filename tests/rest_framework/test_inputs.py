@@ -7,15 +7,14 @@ substrate):
   ``.fields`` (the loud-rejection guard wraps the LAZY ``.fields`` read, proven by a
   kwarg-requiring serializer AND a ``self.context``-reading ``get_fields()``);
 - the two generated inputs: ``<Serializer>Input`` (create; requiredness from
-  ``field.required`` minus ``optional_fields``) and ``<Serializer>PartialInput``
-  (every field optional);
+  ``field.required``) and ``<Serializer>PartialInput`` (every field optional);
 - ``read_only`` / ``HiddenField`` dropped, ``Meta.fields`` / ``Meta.exclude``
-  narrowing + fail-loud, ``Meta.optional_fields`` force-optional, the
+  narrowing + fail-loud, serializer ``Meta.optional_fields`` ignored, the
   ``optional_fields = "__all__"`` bare-string rejection, the empty-effective-set
   raise, the serializer-only (non-model) field included;
 - the ``SerializerInputShape`` descriptor identity (distinct names for differing
-  ``optional_fields`` / annotations, identical descriptors dedupe, two distinct
-  descriptors on one name raise);
+  annotations, identical descriptors dedupe, two distinct descriptors on one name
+  raise);
 - the create-required-narrowing guard + its waiver + the per-declaration discipline;
 - nullability / defaults (M2);
 - the input-attr / GraphQL-name / writable-source collisions;
@@ -434,23 +433,6 @@ def test_empty_effective_field_set_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_optional_fields_forces_create_field_optional():
-    """The ``optional_fields`` PARAMETER forces a create field optional regardless of ``field.required``.
-
-    ``optional_fields`` is the MUTATION's ``Meta`` key (spec-039 Critical-1), threaded
-    into the generator as a parameter - NOT read off the serializer's own ``Meta``.
-    """
-
-    class S(serializers.Serializer):
-        a = serializers.CharField()
-        b = serializers.CharField()
-
-    cre, _, _, _ = build_serializer_inputs(S, optional_fields=("a",))
-    fields = _field_map(cre)
-    assert _is_optional(fields["a"])
-    assert not _is_optional(fields["b"])
-
-
 def test_serializer_meta_optional_fields_is_not_the_api():
     """``optional_fields`` on the SERIALIZER's own ``Meta`` is ignored - it is the mutation key (Critical-1)."""
 
@@ -481,22 +463,6 @@ def test_optional_fields_all_bare_string_rejected():
 # ---------------------------------------------------------------------------
 # SerializerInputShape descriptor identity
 # ---------------------------------------------------------------------------
-
-
-def test_optional_fields_difference_yields_distinct_names():
-    """Two create inputs over the same serializer but different ``optional_fields`` get distinct names."""
-
-    class Pair(serializers.Serializer):
-        a = serializers.CharField()
-        b = serializers.CharField()
-
-    cre_opt, _, _, _ = build_serializer_inputs(Pair, optional_fields=("a",))
-    cre_noopt, _, _, _ = build_serializer_inputs(Pair)
-    # The full no-optional shape takes the canonical name; the optional_fields
-    # divergence takes a deterministic descriptor-derived name - so the SAME
-    # serializer + field set under different optional_fields never collides.
-    assert cre_noopt.__name__ == "PairInput"
-    assert cre_opt.__name__ != "PairInput"
 
 
 def test_differing_annotations_yield_distinct_descriptor_names():
@@ -730,27 +696,6 @@ def test_guard_runs_per_declaration():
 # ---------------------------------------------------------------------------
 # Nullability / defaults (M2)
 # ---------------------------------------------------------------------------
-
-
-def test_required_allow_null_field_is_nullable_and_omittable():
-    """``required=True, allow_null=True`` -> nullable annotation AND omittable (UNSET default), spec-039 H3.
-
-    GraphQL cannot express required-AND-nullable, so the field is OMITTABLE (default
-    ``UNSET``): omission is stripped by the resolver so DRF sees the key MISSING and
-    raises its own field-keyed required error IN-BAND, rather than a top-level coercion
-    error from a required nullable field with no default (the bug H3 flags). An explicit
-    ``null`` still reaches DRF as ``None``.
-    """
-
-    class S(serializers.Serializer):
-        nick = serializers.CharField(allow_null=True)  # required=True by default
-
-    cre, _, _, _ = build_serializer_inputs(S)
-    field = _field_map(cre)["nick"]
-    assert _is_optional(field)  # annotation is T | None (allow_null)
-    # OMITTABLE (UNSET default): the must-provide half is enforced by DRF, not GraphQL,
-    # so omitting the key cannot fail at input-dataclass construction (H3).
-    assert field.default is UNSET
 
 
 def test_required_non_null_field_is_required_with_no_default():

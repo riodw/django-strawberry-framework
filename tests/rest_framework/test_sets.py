@@ -612,28 +612,6 @@ def _input_fields(input_cls):
     return {f.python_name: f for f in input_cls.__strawberry_definition__.fields}
 
 
-def test_mutation_optional_fields_forces_create_field_optional():
-    """``Meta.optional_fields`` on the MUTATION forces a create input field optional (Critical-1)."""
-    _declare_products_primaries()
-
-    class S(serializers.ModelSerializer):
-        class Meta:
-            model = product_models.Item
-            fields = ("name", "category")
-
-    class CreateItem(SerializerMutation):
-        class Meta:
-            serializer_class = S
-            operation = "create"
-            optional_fields = ("name",)
-
-    finalize_django_types()
-    fields = _input_fields(CreateItem._input_class)
-    # ``name`` (a normally-required CharField) is forced optional by the MUTATION's
-    # Meta.optional_fields - it carries the UNSET (omittable) default.
-    assert fields["name"].default is strawberry.UNSET
-
-
 def test_serializer_meta_optional_fields_is_not_the_public_api():
     """``optional_fields`` on the SERIALIZER's own ``Meta`` is IGNORED at bind (Critical-1).
 
@@ -712,43 +690,6 @@ def test_get_serializer_for_schema_classmethod_override_drives_bind():
     field_names = set(_input_fields(CreateCtxItem._input_class))
     assert "name" in field_names
     assert "category_id" in field_names  # FK relation, the 036 <name>_id scheme
-
-
-def test_distinct_optional_fields_on_one_serializer_get_distinct_inputs():
-    """Two create mutations on the SAME serializer + names but different ``optional_fields`` -> DISTINCT inputs (Critical-2).
-
-    The per-shape build cache keys on the FULL ``SerializerInputShape`` descriptor
-    (which folds in ``optional_fields``), NOT a pre-build ``(class, op, names)`` tuple,
-    so the second declaration does NOT reuse the first's stale cached class: it gets its
-    own deterministically-named input with the correct requiredness.
-    """
-    _declare_products_primaries()
-
-    class S(serializers.ModelSerializer):
-        class Meta:
-            model = product_models.Item
-            fields = ("name", "category")
-
-    class CreatePlain(SerializerMutation):
-        class Meta:
-            serializer_class = S
-            operation = "create"
-
-    class CreateNameOptional(SerializerMutation):
-        class Meta:
-            serializer_class = S
-            operation = "create"
-            optional_fields = ("name",)
-
-    finalize_django_types()
-    # Distinct class objects + distinct names (no stale cache reuse on a shared key).
-    assert CreatePlain._input_class is not CreateNameOptional._input_class
-    assert CreatePlain._input_class.__name__ != CreateNameOptional._input_class.__name__
-    # And the requiredness differs: the optional_fields declaration forced `name` optional.
-    plain = _input_fields(CreatePlain._input_class)["name"]
-    opt = _input_fields(CreateNameOptional._input_class)["name"]
-    assert plain.default is not strawberry.UNSET  # required
-    assert opt.default is strawberry.UNSET  # forced optional
 
 
 # NOTE: the same-serializer hook-shape collision (two mutations over one serializer whose

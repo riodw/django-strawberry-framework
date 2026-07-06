@@ -35,6 +35,7 @@ TREE_LAST = "\u2514\u2500\u2500 "
 TREE_PIPE = "\u2502   "
 TREE_SPACE = "    "
 FAKESHOP_APP_NAMES = (
+    "accounts",
     "glossary",
     "kanban",
     "library",

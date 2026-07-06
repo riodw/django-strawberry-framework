@@ -290,7 +290,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── py.typed
 ├── registry.py                   # Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
-├── routers.py                    # planned by TODO-ALPHA-041-0.0.14 - Channels ASGI router (migration aid)
+├── routers.py                    # planned by WIP-ALPHA-041-0.0.14 - Channels ASGI router (migration aid)
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared across the FilterSet / OrderSet / AggregateSet family.
 ├── aggregates/    # planned by TODO-BETA-049-0.1.3 - Aggregation subsystem
@@ -392,7 +392,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
 ├── test_scalars.py               # Scalar tests for BigInt and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
-├── auth/    # Package-internal tests for the auth subsystem (spec-040).
+├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
 │   ├── test_mutations.py         # Package-internal tests for ``django_strawberry_framework/auth/mutations.py`` (spec-040).
 │   └── test_queries.py           # Package-internal tests for ``django_strawberry_framework/auth/queries.py`` (spec-040).
 ├── base/    # Frozen base tests for package configuration and version sanity.
@@ -438,7 +438,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_finalizer.py         # Finalizer tests for order binding, Meta.orderset_class promotion, and orphan validation.
 │   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
-├── rest_framework/    # Package for spec-039 package-internal DRF serializer-mutation tests.
+├── rest_framework/    # Package-internal DRF serializer-mutation tests (spec-039).
 │   ├── test_converter.py         # Converter tests for the DRF serializer-field -> Strawberry annotation registry (spec-039 Slice 1).
 │   ├── test_inputs.py            # Serializer-derived input tests for the generated ``<Serializer>Input`` / ``PartialInput`` (spec-039).
 │   ├── test_resolvers.py         # Serializer-mutation resolver internals a live products `/graphql/` cannot drive (spec-039 Slice 3).
@@ -555,7 +555,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
 ├── test_scalars.py               # Scalar tests for BigInt and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
-├── auth/    # Package-internal tests for the auth subsystem (spec-040).
+├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
 │   ├── test_mutations.py         # Package-internal tests for ``django_strawberry_framework/auth/mutations.py`` (spec-040).
 │   └── test_queries.py           # Package-internal tests for ``django_strawberry_framework/auth/queries.py`` (spec-040).
 ├── base/    # Frozen base tests for package configuration and version sanity.
@@ -604,7 +604,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_finalizer.py         # Finalizer tests for order binding, Meta.orderset_class promotion, and orphan validation.
 │   ├── test_inputs.py            # Order input tests for Ordering enum, input materialization, reset, and normalization.
 │   └── test_sets.py              # OrderSet tests for Meta collection, validation, sync/async apply, and permission scope.
-├── rest_framework/    # Package for spec-039 package-internal DRF serializer-mutation tests.
+├── rest_framework/    # Package-internal DRF serializer-mutation tests (spec-039).
 │   ├── test_converter.py         # Converter tests for the DRF serializer-field -> Strawberry annotation registry (spec-039 Slice 1).
 │   ├── test_inputs.py            # Serializer-derived input tests for the generated ``<Serializer>Input`` / ``PartialInput`` (spec-039).
 │   ├── test_resolvers.py         # Serializer-mutation resolver internals a live products `/graphql/` cannot drive (spec-039 Slice 3).
@@ -654,6 +654,7 @@ examples/fakeshop/    # A Django + Strawberry GraphQL example project that exerc
 │   ├── urls.py                   # URL routing for fakeshop's index, admin, auth, and GraphQL endpoints.
 │   └── wsgi.py                   # WSGI application entry point for the fakeshop example project.
 └── apps/    # Domain-app namespace imported as ``apps.<app_name>`` from the fakeshop project root.
+    ├── accounts/    # Schema-only fakeshop accounts app exercising the session-auth surface (spec-040).
     ├── glossary/    # Glossary app storing documentation terms and spec-term audit rows.
     ├── kanban/    # Kanban app storing board cards, dependencies, docs prose, and markdown export metadata.
     ├── library/    # Library app modeling branch, shelf, book, patron, and loan relations for acceptance queries.

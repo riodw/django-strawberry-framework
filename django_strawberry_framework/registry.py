@@ -18,6 +18,7 @@ fixture.
 from __future__ import annotations
 
 import importlib
+import sys
 from collections.abc import Callable, Iterable, Iterator
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -48,6 +49,23 @@ def _clear_if_importable(module_path: str, attr_name: str, action: Callable[[Any
     except ImportError:
         return
     action(target)
+
+
+def _clear_if_loaded(module_path: str, attr_name: str, action: Callable[[Any], None]) -> None:
+    """Like ``_clear_if_importable``, but only when ``module_path`` is ALREADY loaded.
+
+    The opt-in-preserving variant for co-clear rows whose target module is always
+    importable but must never be imported on behalf of a consumer who skipped it
+    (the auth subsystem's structural opt-in, spec-040 Decision 3: an auth-free
+    consumer never pays the ``django.contrib.auth`` machinery import - not at
+    finalize, and not at ``registry.clear()``). A module absent from
+    ``sys.modules`` has, by the F10 invariant, no clearable state, so skipping is
+    a correct no-op rather than a missed reset.
+    """
+    module = sys.modules.get(module_path)
+    if module is None:
+        return
+    action(getattr(module, attr_name))
 
 
 # The canonical pre-bind input-namespace clear list (spec-039 P1.6 / M4 - the
@@ -590,7 +608,12 @@ class TypeRegistry:
         # can read them before ``bind_mutations()``. The ledger is also the auth
         # holders' / register rider's same-args cache and conflict state, so this
         # clear resets a prior conflicting-``permission_classes`` raise too.
-        _clear_if_importable(
+        # ``_clear_if_loaded`` (never ``_clear_if_importable``): ``auth.mutations``
+        # is always importable, so the importable variant would silently import the
+        # whole auth subsystem into every auth-free consumer that calls
+        # ``registry.clear()``, breaking the structural opt-in the finalizer's
+        # ``sys.modules`` bind guard preserves.
+        _clear_if_loaded(
             "django_strawberry_framework.auth.mutations",
             "clear_auth_mutation_registry",
             lambda clear: clear(),

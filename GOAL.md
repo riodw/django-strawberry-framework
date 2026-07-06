@@ -455,7 +455,7 @@ The optimizer, scalar conversions, and relation resolution machinery are richer 
 
 ### Coming from DRF + `django-filter`
 
-Your existing `django_filters.FilterSet` migrates to `Meta.filterset_class` via a one-line parent-class swap to `django_strawberry_framework.filters.FilterSet`; the package's `FilterSet` IS a `django_filters.filterset.BaseFilterSet` subclass, so every `Filter` / `FilterMethod` / form-cleaning primitive you already use carries over unchanged. The `DjangoMutation` base ships today (`0.0.11`) for model-driven `create` / `update` / `delete` — a nested `class Meta: model = …; operation = "create"` auto-generates the `Input` / `PartialInput` types and surfaces validation through the shared `FieldError` envelope. Form-based mutations ship in `0.0.12` via `Meta.form_class` — `DjangoModelFormMutation` (a `ModelForm`) and `DjangoFormMutation` (a plain `Form`), each reusing the same `FieldError` envelope (populated from `form.errors`). The DRF `Serializer`-flavored mutation (`Meta.serializer_class`, the `SerializerMutation` shape below) lands in `0.0.13`, building on the same shipped base and reusing the same `FieldError` envelope.
+Your existing `django_filters.FilterSet` migrates to `Meta.filterset_class` via a one-line parent-class swap to `django_strawberry_framework.filters.FilterSet`; the package's `FilterSet` IS a `django_filters.filterset.BaseFilterSet` subclass, so every `Filter` / `FilterMethod` / form-cleaning primitive you already use carries over unchanged. The `DjangoMutation` base ships today (`0.0.11`) for model-driven `create` / `update` / `delete` — a nested `class Meta: model = …; operation = "create"` auto-generates the `Input` / `PartialInput` types and surfaces validation through the shared `FieldError` envelope. Form-based mutations ship in `0.0.12` via `Meta.form_class` — `DjangoModelFormMutation` (a `ModelForm`) and `DjangoFormMutation` (a plain `Form`), each reusing the same `FieldError` envelope (populated from `form.errors`). The DRF `Serializer`-flavored mutation (`Meta.serializer_class`, the `SerializerMutation` shape below) ships in `0.0.13`, building on the same shipped base and reusing the same `FieldError` envelope; `0.0.13` also adds the opt-in session-auth surface (`login` / `logout` / `register` + `current_user`, imported from the `django_strawberry_framework.auth` submodule).
 
 ```python
 from django_strawberry_framework.filters import FilterSet
@@ -487,7 +487,7 @@ class CreateCategory(DjangoMutation):
         operation = "create"
 
 
-# Coming in 0.0.13 — the DRF-serializer flavor on the same base:
+# Shipped in 0.0.13 — the DRF-serializer flavor on the same base:
 class CreateCategoryFromSerializer(SerializerMutation):
     class Meta:
         serializer_class = CategorySerializer
@@ -510,7 +510,7 @@ The project hits the goal when a Django developer can:
 3. **Add nested filtering / ordering / aggregation / search** without hand-built input or output types.
 4. **Enforce row, field, and cascade permissions declaratively** — the same hook covers reads and writes.
 5. **Rely on automatic ORM optimization** — nested GraphQL selections get the right `select_related` / `prefetch_related` / `only()` plan from one selection-tree walk that cooperates with consumer-shaped querysets.
-6. **Write mutations declaratively from `ModelForm`, `ModelSerializer`, or auto-generated `Input` types** — one shared `errors: list[FieldError]` envelope across every flavor, plus `Upload` scalar for `FileField` / `ImageField`. The auto-generated `Input`-type flavor — including the `Upload` scalar and the `FileField` / `ImageField` → `Upload` mutation-input mapping — ships for generated `DjangoMutation` inputs in `0.0.11`; the `ModelForm` flavor (`DjangoModelFormMutation`, plus the plain-`Form` `DjangoFormMutation` sibling) ships in `0.0.12`; only the `ModelSerializer` (`0.0.13`) flavor still lands later.
+6. **Write mutations declaratively from `ModelForm`, `ModelSerializer`, or auto-generated `Input` types** — one shared `errors: list[FieldError]` envelope across every flavor, plus `Upload` scalar for `FileField` / `ImageField`. The auto-generated `Input`-type flavor — including the `Upload` scalar and the `FileField` / `ImageField` → `Upload` mutation-input mapping — ships for generated `DjangoMutation` inputs in `0.0.11`; the `ModelForm` flavor (`DjangoModelFormMutation`, plus the plain-`Form` `DjangoFormMutation` sibling) ships in `0.0.12`; and the `ModelSerializer` flavor (`SerializerMutation`) ships in `0.0.13`.
 7. **Migrate from `graphene-django`, `strawberry-graphql-django`, `django-graphene-filters`, or DRF + `django-filter`** without bringing the source package along — the `Meta` mental model carries over; only the import line changes.
 
 The project misses the goal if users must routinely hand-build the same schema machinery the package is supposed to generate.
@@ -532,7 +532,7 @@ The destination is a Django-native, Strawberry-powered framework that makes rich
 
 Two example projects prove the goal:
 
-- **Fakeshop** (`examples/fakeshop/`) extends today's shipped demo — `products` already runs connection fields with filter / order sidecars, cascade row-level visibility, and `ModelForm`- plus `ModelSerializer`-driven create / update / delete and file-upload mutations, beside the `library` and `scalars` apps, and the schema-only `accounts` app already exercises the shipped auth mutations (`login` / `logout` / `register` / `me`) with the existing test users — into the full Relay-shaped showcase: the remaining aggregate / fieldset / search sidecars; image-upload mutations; sharded multi-database stress mode.
+- **Fakeshop** (`examples/fakeshop/`) extends today's shipped demo — `products` already runs connection fields with filter / order sidecars, cascade row-level visibility, and `ModelForm`-driven create / update / delete plus file-upload mutations, beside the `library` and `scalars` apps — into the full Relay-shaped showcase: the remaining aggregate / fieldset / search sidecars; image-upload mutations; sharded multi-database stress mode. `ModelSerializer`-driven mutations (`0.0.13`) and session-auth mutations exercised by the existing test users (the `accounts` app, `0.0.13`) now ship.
 - **Cookbook parity**: a Strawberry version of `django-graphene-filters`'s `recipes/schema.py` should be a clean port — same node graph (object types, attributes, values), same sidecar shape, equivalent capabilities. The astronomy example above is the structural reduction of that port; the full cookbook is the proof.
 
 For the per-card sequencing of each capability, see [`KANBAN.md`][kanban].

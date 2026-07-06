@@ -48,6 +48,7 @@ offending type cannot be fixed in place.
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -780,7 +781,6 @@ def finalize_django_types() -> None:
     # DRF-absent consumer and break schema construction for everyone). Each
     # owning ``inputs`` module registered its row at import time, so the rows
     # present here are exactly the subsystems the consumer actually imported.
-    from ..auth.mutations import bind_auth_mutations
     from ..mutations.sets import bind_mutations
     from ..registry import _clear_if_importable, iter_subsystem_clears
 
@@ -796,8 +796,14 @@ def finalize_django_types() -> None:
     # also materializes ``LoginPayload`` / ``LogoutPayload`` and the
     # ``CurrentUserAlias`` lazy return target before ``strawberry.Schema(...)``
     # resolves them - surface-keyed, each artifact only when its surface was
-    # declared (an empty auth ledger makes the call a no-op).
-    bind_auth_mutations()
+    # declared (an empty auth ledger makes the call a no-op). Guarded on
+    # ``sys.modules`` rather than a plain local import so a consumer who never
+    # imported the auth subsystem never pays its import (the opt-in contract):
+    # a declared auth surface implies the module is already loaded, so the guard
+    # can only skip a genuinely auth-free process.
+    auth_mutations = sys.modules.get("django_strawberry_framework.auth.mutations")
+    if auth_mutations is not None:
+        auth_mutations.bind_auth_mutations()
     bind_mutations()
     # Bind plain ``DjangoFormMutation`` declarations (spec-038 Slice 2 / Decision
     # 6 / Decision 13) in the SAME phase-2.5 window. The model-less plain-form

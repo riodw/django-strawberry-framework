@@ -1,1 +1,1 @@
-"""Schema-only fakeshop accounts app planned by spec-040."""
+"""Schema-only fakeshop accounts app exercising the session-auth surface (spec-040)."""

@@ -44,6 +44,7 @@ from django_strawberry_framework.mutations.resolvers import _model_decode_step
 from django_strawberry_framework.mutations.sets import _mutation_registry
 from django_strawberry_framework.registry import (
     _clear_if_importable,
+    _clear_if_loaded,
     iter_subsystem_clears,
     registry,
 )
@@ -202,6 +203,58 @@ def test_registry_clear_drains_ledger_and_resets_conflict_state():
     fresh_holder = _declared_auth_surface("login")
     assert fresh_holder is not stale_holder
     assert fresh_holder._mutation_meta.permission_classes == [_AllowAll]
+
+
+def test_clear_if_loaded_skips_and_never_imports_an_unloaded_module():
+    """The unloaded path: no action runs and the module is NOT imported as a side effect."""
+    import sys
+
+    module_path = "django_strawberry_framework.auth.queries_never_loaded_probe"
+    assert module_path not in sys.modules
+    ran = []
+    _clear_if_loaded(module_path, "does_not_matter", ran.append)
+    assert ran == []
+    assert module_path not in sys.modules
+
+
+def test_registry_clear_does_not_import_the_auth_subsystem():
+    """``registry.clear()`` in an auth-free process never imports ``auth.mutations``.
+
+    The structural opt-in (spec-040 Decision 3) covers BOTH consumer-reachable
+    paths: the finalizer's bind is guarded on ``sys.modules``, and the
+    ``TypeRegistry.clear()`` hand row rides ``_clear_if_loaded`` (never the
+    importing ``_clear_if_importable`` - ``auth.mutations`` is always importable,
+    so the importable variant would silently defeat the opt-in). Subprocess-based
+    so the assertion is deterministic regardless of what this worker already
+    imported.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    fakeshop = Path(__file__).resolve().parents[2] / "examples" / "fakeshop"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import django; "
+                "import os; "
+                f"import sys; sys.path.insert(0, {str(fakeshop)!r}); "
+                "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings'); "
+                "django.setup(); "
+                "import django_strawberry_framework.registry as r; "
+                "r.registry.clear(); "
+                "assert 'django_strawberry_framework.auth.mutations' not in sys.modules"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"subprocess failed: stdout={result.stdout!r}, stderr={result.stderr!r}"
+    )
 
 
 def test_factory_after_finalize_raises_the_standing_configuration_error():

@@ -59,6 +59,7 @@ def _check_method_name(field_path: str) -> str:
 # ``from ..utils.permissions import iter_input_items`` consumers (``filters/sets.py``,
 # the permission test suite) keep their import path.
 __all__ = [
+    "ChannelsRequestAdapter",
     "active_permission_field_paths",
     "active_permission_targets",
     "active_related_branches",
@@ -71,44 +72,90 @@ __all__ = [
 ]
 
 
+class ChannelsRequestAdapter:
+    """A request-like WRAPPER over Strawberry's ``ChannelsRequest`` (spec-041 Decision 11).
+
+    Strawberry's Channels consumers hand resolvers a dict context whose
+    ``"request"`` is a ``ChannelsRequest`` (a ``consumer`` + ``body`` dataclass)
+    with the authenticated actor at ``request.consumer.scope["user"]``. This
+    adapter is what ``request_from_info`` returns for that shape: ``.user`` /
+    ``.session`` / ``.scope`` are exposed explicitly from the consumer scope
+    (populated by ``AuthMiddlewareStack``), and EVERY other attribute is
+    delegated to the wrapped request via ``__getattr__`` - so consumer-written
+    ``check_<field>_permission`` hooks and DRF serializer overrides reading
+    ``request.headers`` / ``.COOKIES`` / ``.path`` / ``.method`` /
+    ``.consumer`` keep working under Channels instead of raising
+    ``AttributeError`` (spec-041 finding P1.1: the adapter must not silently
+    narrow the framework request contract).
+
+    Deliberately duck-typed: this module imports nothing from ``channels`` (the
+    package's second soft dependency stays soft), and the adapter works for
+    consumers who wire Strawberry's Channels consumers WITHOUT the package's
+    ``DjangoGraphQLProtocolRouter``.
+    """
+
+    def __init__(self, request: Any, scope: Mapping[str, Any]) -> None:
+        self._request = request
+        self._scope = scope
+
+    @property
+    def scope(self) -> Mapping[str, Any]:
+        """The Channels connection scope carried by the wrapped request's consumer."""
+        return self._scope
+
+    @property
+    def user(self) -> Any:
+        """The scope's ``user`` (``AuthMiddlewareStack``-populated); ``None`` when absent."""
+        return self._scope.get("user")
+
+    @property
+    def session(self) -> Any:
+        """The scope's ``session`` (``SessionMiddleware``-populated); ``None`` when absent."""
+        return self._scope.get("session")
+
+    def __getattr__(self, name: str) -> Any:
+        """Delegate every non-scope attribute to the wrapped ``ChannelsRequest``."""
+        return getattr(self._request, name)
+
+
+def _channels_request_adapter(context: Any) -> ChannelsRequestAdapter | None:
+    """Resolve a mapping context to the Channels adapter; ``None`` for every other shape.
+
+    Recognizes exactly the Strawberry-Channels context contract (a mapping whose
+    ``"request"`` value exposes ``consumer.scope`` as a mapping), duck-typed so
+    the helper never imports ``channels``. Any other shape returns ``None`` and
+    the caller's final family-labelled ``ConfigurationError`` stays
+    authoritative (Helper-reuse D-P2: this is the ONE place a new request shape
+    is supported - no local decoders in routers/auth/mutation/permission code).
+    """
+    if not isinstance(context, Mapping):
+        return None
+    request = context.get("request")
+    if request is None:
+        return None
+    consumer = getattr(request, "consumer", None)
+    scope = getattr(consumer, "scope", None)
+    if not isinstance(scope, Mapping):
+        return None
+    return ChannelsRequestAdapter(request, scope)
+
+
 def request_from_info(info: Any, *, family_label: str) -> Any:
     """Resolve the Django request from ``info.context``.
 
     Canonical Strawberry-Django shape: ``info.context.request``. The
     wrapper-less alternative (``info.context`` *is* a bare ``HttpRequest`` -- the
     Django test-client default) is also accepted so consumers work without
-    bespoke wiring. Any other shape raises ``ConfigurationError`` naming
-    ``family_label`` (``FilterSet`` / ``OrderSet`` / ``DjangoMutation``) so the
-    consumer sees which surface failed. The message is **family-neutral** (no
-    ``.apply`` suffix): the helper is shared by the filter / order ``apply`` seam
-    AND the mutation ``check_permission`` seam, which has no ``.apply`` method, so
-    hard-coding ``.apply`` would mis-describe the mutation caller (feedback CR-5).
+    bespoke wiring, and so is Strawberry's Channels consumer context (a mapping
+    whose ``"request"`` exposes ``consumer.scope`` -- resolved to the wrapping
+    ``ChannelsRequestAdapter``, spec-041 Decision 11). Any other shape raises
+    ``ConfigurationError`` naming ``family_label`` (``FilterSet`` / ``OrderSet``
+    / ``DjangoMutation``) so the consumer sees which surface failed. The message
+    is **family-neutral** (no ``.apply`` suffix): the helper is shared by the
+    filter / order ``apply`` seam AND the mutation ``check_permission`` seam,
+    which has no ``.apply`` method, so hard-coding ``.apply`` would mis-describe
+    the mutation caller (feedback CR-5).
     """
-    # TODO(spec-041 Slice 1): teach this shared helper the Strawberry-Channels
-    # mapping context once, instead of adding router/auth/mutation-local request
-    # decoders. This keeps every request-consuming surface on one contract.
-    #
-    # TODO(spec-041 Slice 1) pseudo-steps:
-    # - add a WRAPPING adapter beside this helper (spec-041 finding P1.1): it
-    #   holds the original Strawberry ``ChannelsRequest`` and its ``scope``;
-    # - expose ``adapter.user`` from ``scope.get("user")``, ``adapter.session``
-    #   from ``scope.get("session")``, and ``adapter.scope`` explicitly;
-    # - implement ``__getattr__`` to DELEGATE every other attribute to the
-    #   wrapped request, so consumer ``check_<field>_permission(request)`` hooks
-    #   and DRF serializer overrides reading ``request.headers`` / ``.COOKIES`` /
-    #   ``.path`` / ``.method`` / ``.consumer`` keep working under Channels
-    #   (a narrow ``.user`` / ``.session``-only adapter would raise
-    #   ``AttributeError`` only under Channels - the rejected shape);
-    # - add a private extractor that only recognizes mapping contexts;
-    # - read the mapping's ``"request"`` value, then duck-type
-    #   ``request.consumer.scope``;
-    # - accept only a mapping ``scope`` and return ``None`` for every other
-    #   shape so the existing final ``ConfigurationError`` remains authoritative;
-    # - return the wrapping adapter before the final error branch when a scope
-    #   is found.
-    #
-    # The adapter deliberately imports nothing from channels. It is a duck-typed
-    # request-like object; session-mutating auth work stays out of spec-041.
     context = getattr(info, "context", None)
     if context is None:
         raise ConfigurationError(
@@ -119,6 +166,9 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
         return request
     if isinstance(context, HttpRequest):
         return context
+    channels_request = _channels_request_adapter(context)
+    if channels_request is not None:
+        return channels_request
     raise ConfigurationError(
         f"{family_label} could not resolve a Django HttpRequest from `info.context` "
         f"(got {type(context).__name__}). Expected `info.context.request` or a bare HttpRequest.",

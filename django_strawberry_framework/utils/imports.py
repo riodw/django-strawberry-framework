@@ -55,21 +55,24 @@ def loaded_attr(module_path: str, attr_name: str) -> Any | None:
     return getattr(module, attr_name)
 
 
-# TODO(spec-041 Slice 1): add the raising optional-dependency primitive here:
-# ``require_optional_module(module_name, *, install_hint)``.
-#
-# TODO(spec-041 Slice 1) pseudo-steps:
-# - accept a module name plus a keyword-only ``install_hint``;
-# - import the module through ``importlib.import_module``;
-# - return the imported module object unchanged on success;
-# - on ``ImportError``, raise a new ``ImportError`` carrying ``install_hint`` and
-#   chain the original exception.
-#
-# Contract details:
-# - no memoization; absence tests must evict ``sys.modules`` and re-hit imports;
-# - NO ``feature_label`` parameter: the feature-specific text lives entirely in
-#   the caller's ``install_hint`` (spec-041 finding P2.5); an unused label
-#   parameter is ceremony, and this mirrors the ``require_drf()`` shape;
-# - do not swallow ``AttributeError``; this imports modules, not module attrs;
-# - keep this primitive generic, and keep feature-specific hint strings at the
-#   feature owner (``routers.py::_CHANNELS_INSTALL_HINT`` for spec-041).
+def require_optional_module(module_name: str, *, install_hint: str) -> Any:
+    """Import + return an optional module, or raise ``ImportError`` carrying ``install_hint``.
+
+    The RAISING optional-dependency primitive (spec-041 Decision 5): soft-dependency
+    guards (``routers.py::require_channels()``) wrap this instead of hand-rolling a
+    fourth import-handling pattern beside the best-effort helpers above. On success
+    the imported module object is returned unchanged; on ``ImportError`` a new
+    ``ImportError`` carrying the caller's ``install_hint`` is raised with the
+    original chained (``from exc``), so the consumer sees an actionable install
+    message with the real failure preserved underneath.
+
+    No memoization - each call re-runs the import so eviction-simulated absence
+    tests can evict ``sys.modules`` entries and re-hit the guard in one process.
+    There is deliberately NO ``feature_label`` parameter: the feature-specific
+    text lives entirely in the caller's ``install_hint`` (the ``require_drf()``
+    shape), and hint strings stay single-sited at the feature owner.
+    """
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as exc:
+        raise ImportError(install_hint) from exc

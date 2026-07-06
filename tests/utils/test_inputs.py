@@ -183,6 +183,19 @@ def test_safe_import_returns_none_for_unimportable_module():
             sys.modules[fake_name] = saved
 
 
+def test_safe_import_returns_none_for_missing_attribute_on_importable_module():
+    """``_safe_import`` keeps its attr-lenient shape: importable module, absent attr -> ``None``.
+
+    The wrapper deliberately diverges from its ``import_attr_if_importable``
+    delegate here (which fails loud on a missing attribute): the partial-load
+    lifecycle callers treat a module without the looked-up symbol as "nothing to
+    clear", not as a bug.
+    """
+    from django_strawberry_framework.utils.inputs import _safe_import
+
+    assert _safe_import("django_strawberry_framework.utils.inputs", "_not_a_real_attr") is None
+
+
 # ---------------------------------------------------------------------------
 # spec-039 promotions: InputFieldSpec / make_input_namespace / make_shape_build_cache
 # ---------------------------------------------------------------------------

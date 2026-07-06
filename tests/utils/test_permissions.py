@@ -34,22 +34,6 @@ class _Ctx:
         self.request = request
 
 
-# TODO(spec-041 Slice 1): add unit coverage for the Strawberry-Channels context
-# shape beside the existing helper tests, not in router tests only.
-#
-# TODO(spec-041 Slice 1) pseudo-steps:
-# - create distinct sentinel objects for user and session;
-# - wrap them in a fake ``consumer.scope`` mapping;
-# - wrap that consumer in a fake Channels request object;
-# - pass ``{"request": channels_request}`` as ``info.context``;
-# - assert the resolved adapter exposes the same user and session objects.
-#
-# Also pin unsupported mapping shapes:
-# - ``{"request": object()}`` still raises the family-labelled
-#   ``ConfigurationError``;
-# - a mapping with no ``"request"`` key still raises the same final error;
-# - the helper imports no ``channels`` modules, so this branch is safe in a
-#   channels-less environment.
 @pytest.mark.parametrize("family_label", ["FilterSet", "OrderSet"])
 def test_request_from_info_resolves_and_names_family(family_label):
     """``info.context.request`` and bare-HttpRequest both resolve; bad shapes name the family."""
@@ -67,6 +51,106 @@ def test_request_from_info_resolves_and_names_family(family_label):
     info_bad = type("Info", (), {"context": object()})()
     with pytest.raises(ConfigurationError, match=f"{family_label} could not resolve"):
         request_from_info(info_bad, family_label=family_label)
+
+
+# ---------------------------------------------------------------------------
+# request_from_info -- the Strawberry-Channels mapping context (spec-041
+# Decision 11). Duck-typed fakes only: this branch must work (and be testable)
+# with no ``channels`` import anywhere in the helper.
+# ---------------------------------------------------------------------------
+
+
+class _FakeConsumer:
+    def __init__(self, scope):
+        self.scope = scope
+
+
+class _FakeChannelsRequest:
+    """The ``ChannelsRequest`` duck shape: ``consumer`` + ``body`` + request attrs."""
+
+    def __init__(self, scope):
+        self.consumer = _FakeConsumer(scope)
+        self.body = b'{"query": "{ ping }"}'
+        self.method = "POST"
+        self.headers = {"content-type": "application/json"}
+
+
+def _channels_info(scope):
+    context = {"request": _FakeChannelsRequest(scope), "response": object()}
+    return type("Info", (), {"context": context})()
+
+
+def test_channels_context_resolves_to_a_wrapping_adapter():
+    """The mapping context resolves; ``.user`` / ``.session`` / ``.scope`` come from the scope."""
+    user, session = object(), object()
+    scope = {"user": user, "session": session, "type": "http"}
+    adapter = request_from_info(_channels_info(scope), family_label="FilterSet")
+    assert adapter.user is user
+    assert adapter.session is session
+    assert adapter.scope is scope
+
+
+def test_channels_adapter_delegates_unknown_attributes_to_the_wrapped_request():
+    """Non-scope attributes fall through to the original ``ChannelsRequest`` (finding P1.1)."""
+    scope = {"user": object()}
+    info = _channels_info(scope)
+    adapter = request_from_info(info, family_label="OrderSet")
+    wrapped = info.context["request"]
+    assert adapter.method == "POST"
+    assert adapter.headers is wrapped.headers
+    assert adapter.consumer is wrapped.consumer
+    assert adapter.body == wrapped.body
+    # A genuinely missing attribute is a normal AttributeError, not a swallow.
+    with pytest.raises(AttributeError):
+        _ = adapter.definitely_not_a_request_attribute
+
+
+def test_channels_adapter_scope_fields_default_to_none_when_middleware_absent():
+    """No ``AuthMiddlewareStack`` in the stack: ``.user`` / ``.session`` are ``None``, not errors."""
+    adapter = request_from_info(_channels_info({"type": "http"}), family_label="FilterSet")
+    assert adapter.user is None
+    assert adapter.session is None
+
+
+def test_channels_adapter_supports_permission_hooks_reading_both_kinds_of_attribute():
+    """A consumer-style gate reading one scope-backed and one delegated attribute succeeds."""
+    user = object()
+    adapter = request_from_info(_channels_info({"user": user}), family_label="FilterSet")
+
+    seen = {}
+
+    class _Gate:
+        def check_name_permission(self, request):
+            seen["user"] = request.user  # scope-backed
+            seen["method"] = request.method  # delegated to the wrapped request
+
+    invoke_permission_method(_Gate(), "name", adapter)
+    assert seen == {"user": user, "method": "POST"}
+
+
+@pytest.mark.parametrize(
+    "context",
+    [
+        {"request": object()},  # no ``consumer.scope`` duck shape
+        {"response": object()},  # no ``request`` key at all
+        {"request": None},
+        {},
+    ],
+)
+def test_non_channels_mapping_shapes_still_raise_the_family_labelled_error(context):
+    """Mapping contexts that are not Channels-shaped keep the final ``ConfigurationError``."""
+    info = type("Info", (), {"context": context})()
+    with pytest.raises(ConfigurationError, match="FilterSet could not resolve"):
+        request_from_info(info, family_label="FilterSet")
+
+
+def test_non_mapping_scope_is_not_recognized_as_channels():
+    """A ``consumer.scope`` that is not a mapping falls through to the final error."""
+    request = _FakeChannelsRequest({})
+    request.consumer.scope = ["not", "a", "mapping"]
+    info = type("Info", (), {"context": {"request": request}})()
+    with pytest.raises(ConfigurationError, match="OrderSet could not resolve"):
+        request_from_info(info, family_label="OrderSet")
 
 
 # ---------------------------------------------------------------------------

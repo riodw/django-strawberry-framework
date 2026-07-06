@@ -72,6 +72,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`apply_cascade_permissions`](#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [Auth mutations](#auth-mutations) | shipped (`0.0.13`) |
 | [`BigInt` scalar](#bigint-scalar) | shipped (`0.0.6`) |
+| [Channels request adapter](#channels-request-adapter) | planned for `0.0.14` |
 | [Choice enum generation](#choice-enum-generation) | shipped (`0.0.1`) |
 | [`ConfigurationError`](#configurationerror) | shipped (`0.0.1`) |
 | [Connection-aware optimizer planning](#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
@@ -93,6 +94,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`DjangoNodesField`](#djangonodesfield) | shipped (`0.0.9`) |
 | [`DjangoOptimizerExtension`](#djangooptimizerextension) | shipped (`0.0.2`) |
 | [`DjangoType`](#djangotype) | shipped (`0.0.5`) |
+| [Eviction-simulated absence](#eviction-simulated-absence) | shipped (`0.0.13`) |
 | [`FieldError` envelope](#fielderror-envelope) | shipped (`0.0.11`) |
 | [`FieldSet`](#fieldset) | planned for `0.1.1` |
 | [`FilterSet`](#filterset) | shipped (`0.0.8`) |
@@ -130,6 +132,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`Ordering`](#ordering) | shipped (`0.0.8`) |
 | [`OrderSet`](#orderset) | shipped (`0.0.8`) |
 | [`order_input_type`](#order_input_type) | shipped (`0.0.8`) |
+| [PEP 562 lazy export](#pep-562-lazy-export) | shipped (`0.0.13`) |
 | [Per-field permission hooks](#per-field-permission-hooks) | planned for `0.1.1` |
 | [Plan cache](#plan-cache) | shipped (`0.0.3`) |
 | [Queryset diffing](#queryset-diffing) | shipped (`0.0.3`) |
@@ -140,6 +143,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Relay Node integration](#relay-node-integration) | shipped (`0.0.5`) |
 | [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) | shipped (`0.0.9`) |
 | [`request_from_info`](#request_from_info) | shipped (`0.0.8`) |
+| [`require_optional_module`](#require_optional_module) | planned for `0.0.14` |
 | [Response-extensions debug middleware](#response-extensions-debug-middleware) | planned for `0.0.14` |
 | [`safe_wrap_connection_method`](#safe_wrap_connection_method) | shipped (`0.0.7`) |
 | [Scalar field conversion](#scalar-field-conversion) | shipped (`0.0.1`+) |
@@ -171,13 +175,13 @@ For readers exploring rather than looking up a specific term:
 - **Aggregation:** [`AggregateSet`](#aggregateset) · [`RelatedAggregate`](#relatedaggregate) · [`Meta.aggregate_class`](#metaaggregate_class) · [`get_child_queryset`](#get_child_queryset).
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
 - **Search:** [`Meta.search_fields`](#metasearch_fields).
-- **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoModelPermission`](#djangomodelpermission) · [Per-field permission hooks](#per-field-permission-hooks) · [`request_from_info`](#request_from_info).
+- **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoModelPermission`](#djangomodelpermission) · [Per-field permission hooks](#per-field-permission-hooks) · [`request_from_info`](#request_from_info) · [Channels request adapter](#channels-request-adapter).
 - **Relay:** [Relay Node integration](#relay-node-integration) · [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoNodesField`](#djangonodesfield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoMutationField`](#djangomutationfield) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
-- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware) · [Soft dependency](#soft-dependency) · [Joint version cut](#joint-version-cut).
-- **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Django Trac #37064 hardening](#django-trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase) · [Live-first coverage mandate](#live-first-coverage-mandate).
+- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware) · [Soft dependency](#soft-dependency) · [Joint version cut](#joint-version-cut) · [PEP 562 lazy export](#pep-562-lazy-export) · [`require_optional_module`](#require_optional_module).
+- **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Django Trac #37064 hardening](#django-trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase) · [Live-first coverage mandate](#live-first-coverage-mandate) · [Eviction-simulated absence](#eviction-simulated-absence).
 
 ---
 
@@ -239,6 +243,16 @@ JSON-safe scalar typically used to map Django's 64-bit integer fields `BigIntege
 Consumers register `BigInt` via the [`strawberry_config`](#strawberry_config) factory on their `strawberry.Schema(...)` call: `strawberry.Schema(query=Query, config=strawberry_config(), extensions=[lambda: _optimizer])` (the optimizer is a module-level singleton wrapped in a factory — see [`DjangoOptimizerExtension`](#djangooptimizerextension)). Direct `BigInt` annotations (`category: BigInt`, `@strawberry.field def big_id(self) -> BigInt: ...`) continue to work unchanged at the schema-declaration site; the registration path changes, not the symbol. The migration applies to any schema that resolves to `BigInt` — including [`DjangoType`](#djangotype) schemas whose fields are backed by `BigIntegerField` or `PositiveBigIntegerField` (resolved to `BigInt` by the [`Specialized scalar conversions`](#specialized-scalar-conversions) converter table) even when the consumer never imports or annotates `BigInt` directly.
 
 **See also:** [Scalar field conversion](#scalar-field-conversion) · [Specialized scalar conversions](#specialized-scalar-conversions).
+
+## Channels request adapter
+
+**Status:** planned for `0.0.14`.
+
+The request-like object [`request_from_info`](#request_from_info) returns for Strawberry's Channels context shape (planned with the `0.0.14` [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) card, its Decision 11). Strawberry's Channels consumers hand resolvers a dict context (`{"request": ChannelsRequest, "response": TemporalResponse}`) whose `ChannelsRequest` wraps `consumer` + `body`, with the authenticated actor at `request.consumer.scope["user"]`.
+
+The adapter **wraps** the original `ChannelsRequest` rather than replacing it with a narrow two-field object: it exposes `.user`, `.session`, and `.scope` explicitly from `consumer.scope`, and **delegates every other attribute to the wrapped request via `__getattr__`** — so consumer-written code that receives the resolved request (the [`FilterSet`](#filterset) / [`OrderSet`](#orderset) `check_<field>_permission` input gates, [`DjangoModelPermission`](#djangomodelpermission) overrides, DRF serializer hooks) keeps reading `request.headers`, `request.COOKIES`, `request.path`, `request.method`, or `request.consumer` under Channels instead of raising `AttributeError`. Duck-typed: `utils/permissions.py` imports nothing from `channels`, and the adapter works for consumers who wire Strawberry's Channels consumers without the router. Read path only — session-mutating [Auth mutations](#auth-mutations) over Channels stay deferred.
+
+**See also:** [`request_from_info`](#request_from_info) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Auth mutations](#auth-mutations).
 
 ## Choice enum generation
 
@@ -505,6 +519,16 @@ Validation contracts (errors surface as [`ConfigurationError`](#configurationerr
 - **Consumer-override surface (scalar and relation, annotation and assignment).** A consumer-written annotation (`category: AdminCategoryType`, `description: int`) or `strawberry.field(...)` assignment (`category = strawberry.field(resolver=...)`, `description = strawberry.field(resolver=...)`) on either a relation column or a scalar column is preserved; the four cases collectively form the `consumer_authored_fields` short-circuit. Non-`StrawberryField` class attributes that shadow a Django field name raise with a message naming the field, the column kind, and the remediation.
 
 **See also:** all [`Meta.*`](#index) keys · [`finalize_django_types`](#finalize_django_types) · [Definition-order independence](#definition-order-independence) · [Relay Node integration](#relay-node-integration).
+
+## Eviction-simulated absence
+
+**Status:** shipped (`0.0.13`).
+
+The [soft-dependency](#soft-dependency) test discipline: a dependency's absence is **simulated** inside the one dev environment — a `builtins.__import__` block plus strict `sys.modules` eviction with full restore (`tests/rest_framework/test_soft_dependency.py`; reused by the `0.0.14` channels card) — never a separate uninstalled CI matrix (one env, one `uv run pytest` gate).
+
+Two refinements the channels card pins. The restore is **two-sided**: a blocked-then-retried import re-executes the module and rebinds the parent package's attribute to a fresh module object, so the fixture saves/restores the parent attribute together with the `sys.modules` entries, putting the *original module object* back in both places — otherwise the attribute path and the import path hold two live modules with independent caches, an order-dependent identity flake under `pytest-xdist`. And eviction is also how **degraded** (present-but-incompatible) installs are tested: evicting the module drops its module-global class cache (`_ROUTER_CLASS`) with it, so a blocked builder import actually fires regardless of earlier construction tests. The install hint is drift-checked against a **re-typed literal** in the test file (the `_HINT_SUBSTRING` discipline) — a test asserting the imported constant against itself could never notice the hint drifting from the dev-group floor.
+
+**See also:** [Soft dependency](#soft-dependency) · [`SerializerMutation`](#serializermutation) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
 
 ## `FieldError` envelope
 
@@ -1012,6 +1036,16 @@ The helper validates its [`OrderSet`](#orderset) argument eagerly so a typo at t
 
 **See also:** [`OrderSet`](#orderset) · [`Ordering`](#ordering) · [`Meta.orderset_class`](#metaorderset_class).
 
+## PEP 562 lazy export
+
+**Status:** shipped (`0.0.13`).
+
+The module-level `__getattr__` mechanism (PEP 562) behind every [soft-dependency](#soft-dependency) symbol: the guarded name is materialized on first attribute access instead of at module import, so importing the module never pays for the optional integration, and the install-hint `ImportError` fires at the consumer's own `from ... import` line. Two package instances: the package root's `__getattr__` resolves the DRF names ([`SerializerMutation`](#serializermutation)) — deliberately kept **out** of the root `__all__`, so `from django_strawberry_framework import *` stays DRF-free; and `routers.py`'s resolves [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) (planned `0.0.14`) — deliberately listed **in** the submodule `__all__`, so `from ...routers import *` reaches for the name (star import calls `getattr` per `__all__` entry), fires the guard, and raises the same install hint as the explicit import.
+
+Because a lazily-exported name is never a static module global, the `__all__` line carries a scoped `# noqa: F822` (ruff's undefined-name-in-`__all__` check is a false positive for a PEP 562 export). Behavior matrix: `from module import name` triggers `__getattr__` and propagates its `ImportError`; unrelated attribute misses raise plain `AttributeError`, never the install hint.
+
+**See also:** [Soft dependency](#soft-dependency) · [`SerializerMutation`](#serializermutation) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
+
 ## Per-field permission hooks
 
 **Status:** planned for `0.1.1`.
@@ -1174,9 +1208,17 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 
 The shared request-resolution helper in `django_strawberry_framework/utils/permissions.py`: every framework surface that needs the acting user — the auth `current_user` query, mutation permission checks ([`DjangoModelPermission`](#djangomodelpermission)), the filter / order `check_*_permission` gates, and serializer-mutation hooks — resolves the Django request through this one function, never through a local decoder. Accepted context shapes: the canonical Strawberry-Django attribute shape (`info.context.request`) and a bare `HttpRequest` (the Django test-client default). Any other shape raises [`ConfigurationError`](#configurationerror) naming the caller's `family_label` (`FilterSet` / `OrderSet` / `DjangoMutation`) so the consumer sees which surface failed.
 
-Hard single-siting rule: every new request/context shape is supported inside this helper only — callers must not grow local request decoders. The `0.0.14` [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) card extends the helper with Strawberry's Channels context shape (a mapping context whose `"request"` value exposes `consumer.scope`, duck-typed with no `channels` import in `utils/`), resolving to a small request-like adapter exposing `.user` / `.session` from the scope for the read path; session-mutating [Auth mutations](#auth-mutations) over Channels stay deferred.
+Hard single-siting rule: every new request/context shape is supported inside this helper only — callers must not grow local request decoders. The `0.0.14` [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) card extends the helper with Strawberry's Channels context shape (a mapping context whose `"request"` value exposes `consumer.scope`, duck-typed with no `channels` import in `utils/`), resolving to the [Channels request adapter](#channels-request-adapter) — a wrapper exposing `.user` / `.session` / `.scope` from the scope and delegating every other attribute to the wrapped `ChannelsRequest` via `__getattr__` — for the read path; session-mutating [Auth mutations](#auth-mutations) over Channels stay deferred.
 
-**See also:** [`DjangoModelPermission`](#djangomodelpermission) · [Auth mutations](#auth-mutations) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
+**See also:** [Channels request adapter](#channels-request-adapter) · [`DjangoModelPermission`](#djangomodelpermission) · [Auth mutations](#auth-mutations) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
+
+## `require_optional_module`
+
+**Status:** planned for `0.0.14`.
+
+The raising optional-dependency primitive planned for `utils/imports.py` — the package's single optional-import owner, beside the best-effort `import_attr_if_importable` and the loaded-only `loaded_attr` — landing in Slice 1 of the `0.0.14` [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) card. Signature `require_optional_module(module_name, *, install_hint)`: imports the module via `importlib.import_module` and returns it unchanged; on `ImportError` raises a new `ImportError` carrying `install_hint`, chaining the original. No memoization — [eviction-simulated absence](#eviction-simulated-absence) tests must be able to re-hit real imports. **No `feature_label` parameter**: the feature-specific text lives entirely in the caller's `install_hint` (an unused label is ceremony), and hint strings stay single-sited at the feature owner (`routers.py::_CHANNELS_INSTALL_HINT`). `require_channels()` is a thin wrapper over it; migrating `require_drf()` onto the same primitive is a deliberate follow-on non-goal (its hint is byte-pinned by the `_HINT_SUBSTRING` tests).
+
+**See also:** [Soft dependency](#soft-dependency) · [Eviction-simulated absence](#eviction-simulated-absence) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
 
 ## Response-extensions debug middleware
 
@@ -1297,9 +1339,9 @@ It **deliberately does not adopt graphene-django's serializer-mutation keys**: i
 
 The package's architecture for optional integrations — `djangorestframework` (shipped `0.0.13`, [`SerializerMutation`](#serializermutation)) and `channels` (planned `0.0.14`, [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter)). Three parts, one discipline:
 
-- **One guard, one hint.** A `require_*()` function (`require_drf()`; `require_channels()` on the `0.0.14` card) wraps the optional import into a single `ImportError` whose message is one module-level install-hint constant (`_DRF_INSTALL_HINT` / `_CHANNELS_INSTALL_HINT`) naming the verified floor. No memoization, so absence tests can re-hit the guard. The shared primitive lives in `utils/imports.py` — the package's single optional-import owner (`import_attr_if_importable`, `loaded_attr`; `require_optional_module` lands with the channels card) — new optional-import handling belongs there, never hand-rolled at a new call site.
-- **Lazy name resolution.** A PEP 562 `__getattr__` (the package root for the DRF names; module-level in `routers.py` for the router) materializes the guarded symbol on first access, so `import django_strawberry_framework` never pays for an integration the consumer didn't ask for, and the install hint fires at the consumer's own `from ... import` line.
-- **Eviction-simulated absence tests.** Absence is simulated — a `builtins.__import__` block plus strict `sys.modules` eviction and restore (`tests/rest_framework/test_soft_dependency.py`) — never a separate uninstalled CI matrix. The install hint is drift-checked against a re-typed literal in the test file (the `_HINT_SUBSTRING` discipline), and the dependency gate adds the dev-group row and regenerates `uv.lock` in the same commit.
+- **One guard, one hint.** A `require_*()` function (`require_drf()`; `require_channels()` on the `0.0.14` card) wraps the optional import into a single `ImportError` whose message is one module-level install-hint constant (`_DRF_INSTALL_HINT` / `_CHANNELS_INSTALL_HINT`) naming the verified floor. No memoization, so absence tests can re-hit the guard. The shared primitive lives in `utils/imports.py` — the package's single optional-import owner (`import_attr_if_importable`, `loaded_attr`; [`require_optional_module`](#require_optional_module) lands with the channels card) — new optional-import handling belongs there, never hand-rolled at a new call site.
+- **Lazy name resolution.** A [PEP 562 lazy export](#pep-562-lazy-export) `__getattr__` (the package root for the DRF names; module-level in `routers.py` for the router) materializes the guarded symbol on first access, so `import django_strawberry_framework` never pays for an integration the consumer didn't ask for, and the install hint fires at the consumer's own `from ... import` line.
+- **[Eviction-simulated absence](#eviction-simulated-absence) tests.** Absence is simulated — a `builtins.__import__` block plus strict `sys.modules` eviction and restore (`tests/rest_framework/test_soft_dependency.py`) — never a separate uninstalled CI matrix. The install hint is drift-checked against a re-typed literal in the test file (the `_HINT_SUBSTRING` discipline), and the dependency gate adds the dev-group row and regenerates `uv.lock` in the same commit.
 
 **See also:** [`SerializerMutation`](#serializermutation) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
 

@@ -72,7 +72,8 @@ and [Risks](#risks-and-open-questions));
 [`spec-039-serializer_mutations-0_0_13.md`][spec-039] (the soft-dependency
 architecture this card generalizes — the single `require_*()` guard with one
 install-hint string, the dev-group + lockfile dependency gate, the
-absence-simulated-by-eviction test discipline, and the joint-cut version Decision
+[absence-simulated-by-eviction][glossary-eviction-simulated-absence] test
+discipline, and the joint-cut version Decision
 this spec mirrors); [`spec-021-apps-0_0_7.md`][spec-021] (the package's
 Django-integration surface conventions the new top-level module sits beside).
 [`docs/GLOSSARY.md`][glossary] carries
@@ -355,6 +356,29 @@ Revision history (kept inline so the spec is self-contained):
   missing-`Origin` WebSocket denial is documented and added as a third
   origin-validator test direction (verified against
   `channels/security/websocket.py`).
+- **Revision 9** — second full glossary-anchoring pass, over the post-review
+  spec. Four vocabulary entries the Revision-8 edits lean on were added to the
+  glossary DB and [`docs/GLOSSARY.md`][glossary] re-rendered:
+  [PEP 562 lazy export][glossary-pep-562-lazy-export] (the lazy-resolution
+  mechanism, including the `__all__` / `# noqa: F822` interplay),
+  [Eviction-simulated absence][glossary-eviction-simulated-absence] (the
+  absence-test discipline with the two-sided restore and the degraded-install
+  evict), [`require_optional_module`][glossary-require-optional-module] (the
+  Slice-1 primitive, no `feature_label`), and [Channels request
+  adapter][glossary-channels-request-adapter] (the Decision 11 wrapping
+  adapter). Two existing DB entries were corrected to the Revision-8 contract:
+  the [`request_from_info`][glossary-request-from-info] body's narrow-adapter
+  sentence became the wrapping adapter, and the [Soft
+  dependency][glossary-soft-dependency] body now cross-links the new entries —
+  the [`DjangoGraphQLProtocolRouter`][glossary-djangographqlprotocolrouter]
+  entry itself stays untouched until Slice 2's fold-in. The spec gained
+  glossary links for four already-existing entries it named without linking
+  ([`FilterSet`][glossary-filterset], [`OrderSet`][glossary-orderset],
+  [`DjangoModelPermission`][glossary-djangomodelpermission], and the
+  [per-field read hooks][glossary-per-field-permission-hooks] disambiguation
+  in Decision 11), four new skim-list bullets, and the companion terms CSV
+  grew from 22 to 30 rows with the `groups:` vocabulary re-homed under the
+  new anchors.
 
 ## Key glossary references
 
@@ -378,11 +402,30 @@ used throughout the spec:
   install-hint constant, PEP 562 lazy resolution, eviction-simulated absence
   tests, and the dev-group + lockfile dependency gate. `channels` becomes the
   package's second instance.
+- [PEP 562 lazy export][glossary-pep-562-lazy-export] — the lazy-resolution
+  mechanism itself: why a submodule star import fires the guard (`__all__`
+  names the lazy symbol, and `import *` calls `getattr` per entry) while the
+  root package stays channels-free, and why the `__all__` line carries a
+  scoped `# noqa: F822` (the name is never a static module global).
+- [Eviction-simulated absence][glossary-eviction-simulated-absence] — the test
+  discipline for both dependency states: the `builtins.__import__` block +
+  strict `sys.modules` eviction with the **two-sided** (parent-attribute)
+  restore, reused by the degraded-install path so the re-executed module has
+  no cached `_ROUTER_CLASS`.
+- [`require_optional_module`][glossary-require-optional-module] — the Slice-1
+  primitive added to [`utils/imports.py`][utils-imports] (module name +
+  keyword-only `install_hint`, no `feature_label`); `require_channels()` is a
+  thin wrapper over it, never a fourth hand-rolled import pattern.
 - [`request_from_info`][glossary-request-from-info] — the shared
   request-resolution helper every framework surface routes through; the
   [Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred)
   subject. This card teaches it the Strawberry-Channels context shape (reads
   only) under the hard no-local-decoders rule (Helper-reuse D-P2).
+- [Channels request adapter][glossary-channels-request-adapter] — what the
+  helper returns for that shape: a wrapper exposing `.user` / `.session` /
+  `.scope` from `consumer.scope` and delegating every other attribute to the
+  wrapped `ChannelsRequest`, so consumer hooks keep the full request contract
+  under Channels (finding P1.1).
 - [Joint version cut][glossary-joint-version-cut] — why no slice here bumps the
   version: four cards share `0.0.14`, and the last to land owns the version
   quintet and the release-status flips
@@ -999,7 +1042,8 @@ raises the same install-hint `ImportError` as the explicit `from ... import`
 (pinned by the channels-absent test plan). Because the symbol is never a real
 module global (it materializes through `__getattr__`), the `__all__` line
 carries a scoped `# noqa: F822` — ruff's "undefined name in `__all__`" is a
-false positive for a PEP 562 lazy export. The **root** package `__all__`
+false positive for a [PEP 562 lazy export][glossary-pep-562-lazy-export]. The
+**root** package `__all__`
 ([`__init__.py`][init]) stays unchanged and channels-free — the router is never
 re-exported there, so `from django_strawberry_framework import *` never touches
 the guard.
@@ -1060,7 +1104,8 @@ the same three-part architecture ([`spec-039`][spec-039] Decision 12, generalize
 
 1. **One guard, one hint — built on the shared optional-import owner.**
    `routers.py` defines `require_channels()` as a thin wrapper over
-   `utils/imports.py::require_optional_module(module_name, *, install_hint)` —
+   [`require_optional_module(module_name, *,
+   install_hint)`][glossary-require-optional-module] —
    the primitive Slice 1 adds to the package's single optional-import owner
    ([`utils/imports.py`][utils-imports]), so `routers.py` does not hand-roll a
    fourth import-handling pattern beside the registry / generated-input helpers
@@ -1077,8 +1122,9 @@ the same three-part architecture ([`spec-039`][spec-039] Decision 12, generalize
    `channels.routing.ProtocolTypeRouter`, so it **cannot** be defined at module
    import without paying the import. `routers.py` therefore defines the class
    inside a builder (`_build_router_class()`) and caches the built class in the
-   module global **`_ROUTER_CLASS`**, exposing it via a PEP 562 **module-level
-   `__getattr__`**: accessing `routers.DjangoGraphQLProtocolRouter` runs
+   module global **`_ROUTER_CLASS`**, exposing it via a [PEP 562
+   **module-level `__getattr__`**][glossary-pep-562-lazy-export]: accessing
+   `routers.DjangoGraphQLProtocolRouter` runs
    `require_channels()`, builds (or returns the cached) class, and hands it out.
    Because `_ROUTER_CLASS` is a module global, evicting `routers` from
    `sys.modules` drops the cache with the module — the property the
@@ -1258,9 +1304,11 @@ DaphneProcess`), so **importing** them requires `daphne` — hence the
 `channels[daphne]` extra on the dev-group row in
 [Decision 5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard);
 `routers.py` itself never touches daphne. The channels-absent path reuses the
-[`test_soft_dependency.py`][test-soft-dependency] discipline verbatim: absence
-is **simulated** by a `builtins.__import__` block plus strict `sys.modules`
-eviction (both `channels*` and `django_strawberry_framework.routers`) with full
+[`test_soft_dependency.py`][test-soft-dependency] discipline —
+[eviction-simulated absence][glossary-eviction-simulated-absence] — verbatim:
+absence is **simulated** by a `builtins.__import__` block plus strict
+`sys.modules` eviction (both `channels*` and
+`django_strawberry_framework.routers`) with full
 restore — **including the parent package's `routers` attribute**: the
 blocked-then-retried import re-executes `routers.py` and rebinds
 `django_strawberry_framework.routers` to a fresh module object, so restoring
@@ -1370,10 +1418,14 @@ on the sync consumer) — where `ChannelsRequest` is a dataclass wrapping
 [`ConfigurationError`][glossary-configurationerror]. The blast
 radius is **every** framework surface routed through the helper, and several of
 them hand the resolved request straight into consumer-written code:
-[`FilterSet._request_from_info`][filters-sets] and
-[`OrderSet._request_from_info`][orders-sets] pass it to
-`check_<field>_permission(self, request)` hooks;
-[`DjangoModelPermission.has_permission`][mutations-permissions] reads it; and
+[`FilterSet`][glossary-filterset]`._request_from_info` ([`filters/sets.py`][filters-sets]) and
+[`OrderSet`][glossary-orderset]`._request_from_info` ([`orders/sets.py`][orders-sets]) pass it to
+their `check_<field>_permission(self, request)` input gates (the
+`(self, request)`-shaped filter / order gates — distinct from the planned
+`info`-shaped [per-field read hooks][glossary-per-field-permission-hooks] on
+`FieldSet`);
+[`DjangoModelPermission`][glossary-djangomodelpermission]`.has_permission`
+([`mutations/permissions.py`][mutations-permissions]) reads it; and
 [`build_serializer_kwargs`][rf-resolvers] sets it as DRF's
 `context["request"]`. The auth `current_user` query and the default
 model-permission path need only `.user`, but those user-written hooks and
@@ -1389,7 +1441,8 @@ So this card fixes the root cause for the **read** half:
    *wrapping* adapter.** A mapping-style context carrying a `"request"` key
    whose value exposes `consumer.scope` (duck-typed — `utils/permissions.py`
    imports nothing from `channels`, so the helper stays soft-dependency-clean)
-   resolves to a request-like adapter. Crucially, the adapter **wraps the
+   resolves to the [Channels request
+   adapter][glossary-channels-request-adapter]. Crucially, the adapter **wraps the
    original Strawberry `ChannelsRequest`, it does not replace it with a
    two-field object**: it exposes `.user`, `.session`, and `.scope` explicitly
    from `consumer.scope`, and **delegates every other attribute to the wrapped
@@ -2045,20 +2098,28 @@ implemented-on-main docs update here; release-status wording defers to the joint
 <!-- docs/ -->
 [docs-readme]: README.md
 [glossary-auth-mutations]: GLOSSARY.md#auth-mutations
+[glossary-channels-request-adapter]: GLOSSARY.md#channels-request-adapter
 [glossary-configurationerror]: GLOSSARY.md#configurationerror
 [glossary-debug-toolbar-middleware]: GLOSSARY.md#debug-toolbar-middleware
 [glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
 [glossary-djangographqlprotocolrouter]: GLOSSARY.md#djangographqlprotocolrouter
+[glossary-djangomodelpermission]: GLOSSARY.md#djangomodelpermission
 [glossary-djangomutationfield]: GLOSSARY.md#djangomutationfield
 [glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
 [glossary-djangotype]: GLOSSARY.md#djangotype
+[glossary-eviction-simulated-absence]: GLOSSARY.md#eviction-simulated-absence
 [glossary-fielderror-envelope]: GLOSSARY.md#fielderror-envelope
+[glossary-filterset]: GLOSSARY.md#filterset
 [glossary-finalize-django-types]: GLOSSARY.md#finalize_django_types
 [glossary-get-queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
 [glossary-graphqltestcase]: GLOSSARY.md#graphqltestcase
 [glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
 [glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
+[glossary-orderset]: GLOSSARY.md#orderset
+[glossary-pep-562-lazy-export]: GLOSSARY.md#pep-562-lazy-export
+[glossary-per-field-permission-hooks]: GLOSSARY.md#per-field-permission-hooks
 [glossary-request-from-info]: GLOSSARY.md#request_from_info
+[glossary-require-optional-module]: GLOSSARY.md#require_optional_module
 [glossary-response-extensions-debug-middleware]: GLOSSARY.md#response-extensions-debug-middleware
 [glossary-serializermutation]: GLOSSARY.md#serializermutation
 [glossary-soft-dependency]: GLOSSARY.md#soft-dependency

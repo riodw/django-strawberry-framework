@@ -97,7 +97,8 @@ To complete the Alpha (pre-0.1.0) milestone: **90.9%**.
 
 | Card | Spec file |
 | --- | --- |
-| `DONE-040-0.0.13` - Auth mutations (login / logout / register) | [spec-040-auth_mutations-0_0_13.md](docs/spec-040-auth_mutations-0_0_13.md) |
+| `WIP-ALPHA-041-0.0.14` - Channels ASGI router (migration aid) | [spec-041-channels_router-0_0_14.md](docs/spec-041-channels_router-0_0_14.md) |
+| `DONE-040-0.0.13` - Auth mutations (login / logout / register) | [spec-040-auth_mutations-0_0_13.md](docs/SPECS/spec-040-auth_mutations-0_0_13.md) |
 | `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`) | [spec-039-serializer_mutations-0_0_13.md](docs/SPECS/spec-039-serializer_mutations-0_0_13.md) |
 | `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms) | [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md) |
 | `DONE-037-0.0.11` - Upload scalar and file / image field mapping | [spec-037-upload_file_image_mapping-0_0_11.md](docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md) |
@@ -142,19 +143,16 @@ To complete the Alpha (pre-0.1.0) milestone: **90.9%**.
 
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
 
-## To Do - Alpha (0.1.0)
-
-Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
-
 <a id="channels_asgi_router_migration_aid"></a>
-### [TODO-ALPHA-041-0.0.14 - Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
+### [WIP-ALPHA-041-0.0.14 - Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
 - Severity: Low
-- Status: Planned
+- Status: In progress
 - Relative size: S
 - Labels: `asgi`, `channels`, `django-integration`
+- Spec: [spec-041-channels_router-0_0_14.md](docs/spec-041-channels_router-0_0_14.md)
 
 #### Predicted files
 
@@ -202,7 +200,7 @@ planned
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
 - Severity: Low
-- Status: Planned
+- Status: In progress
 - Relative size: M
 - Labels: `debugging`, `django-integration`, `middleware`
 
@@ -253,7 +251,7 @@ planned
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
 - Severity: Low
-- Status: Planned
+- Status: In progress
 - Relative size: M
 - Labels: `graphql-api`, `test-client`, `tests`, `uploads`
 
@@ -321,7 +319,7 @@ planned
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
 - Severity: Low
-- Status: Planned
+- Status: In progress
 - Relative size: M
 - Labels: `debugging`, `graphql-api`, `middleware`
 
@@ -389,6 +387,10 @@ planned
 - Related: `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `TODO-ALPHA-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive. -> `TODO-ALPHA-042-0.0.14` - Debug-toolbar middleware
 - Related: `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `TODO-ALPHA-042-0.0.14`); this card is graphene-django parity only. -> `TODO-ALPHA-042-0.0.14` - Debug-toolbar middleware
 - Related: distinct from `TODO-ALPHA-042-0.0.14` (Django debug toolbar). -> `TODO-ALPHA-042-0.0.14` - Debug-toolbar middleware
+
+## To Do - Alpha (0.1.0)
+
+Cards required to reach feature parity with both upstreams (`⚛️ graphene-django` and `🍓 strawberry-graphql-django`). Each card targets its own `0.0.x` patch within the road to **0.1.0**. The final card in this column is the `0.1.0` release itself (cleanup, verification, alpha → beta cut-over). Cards in NNN order = planned ship order; dependency and parallelism notes live on each card.
 
 ## To Do - Beta (1.0.0)
 
@@ -1270,7 +1272,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Status: Shipped
 - Relative size: M
 - Labels: `auth`, `mutations`, `public-api`
-- Spec: [spec-040-auth_mutations-0_0_13.md](docs/spec-040-auth_mutations-0_0_13.md)
+- Spec: [spec-040-auth_mutations-0_0_13.md](docs/SPECS/spec-040-auth_mutations-0_0_13.md)
 
 #### Glossary terms
 

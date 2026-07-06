@@ -8,7 +8,7 @@ Django's `AuthMiddlewareStack` (so `scope["user"]` / the session machinery is pr
 on both protocols) and Channels' `AllowedHostsOriginValidator` (the WebSocket
 origin check) composed in. It is a Required 🍓 `strawberry-graphql-django` parity item
 (the card's own tag): [`strawberry_django/routers.py`][upstream-routers] ships
-`AuthGraphQLProtocolTypeRouter`, the ~30-line module that is the **single import**
+`AuthGraphQLProtocolTypeRouter`, a module whose class is ~30 lines of composition and the **single import**
 making ASGI / WebSocket migration painless — without an equivalent, a
 `strawberry-graphql-django` migrant using Channels loses their one-line ASGI
 entrypoint and must hand-compose `ProtocolTypeRouter` / `URLRouter` /
@@ -24,7 +24,7 @@ from Strawberry core (`strawberry.channels`'s `GraphQLHTTPConsumer` /
 `strawberry-graphql>=0.262.0` floor — export presence verified at the installed
 `strawberry-graphql` 0.316.0; the floor-version presence is upstream history,
 re-confirmed at the Slice-1 dependency gate), the routing
-and middleware classes come from `channels`, and the package contributes exactly the
+and middleware layers (classes and factory functions) come from `channels`, and the package contributes exactly the
 composition — the same composition upstream ships — under a **distinctly-ours symbol
 name** ([Decision 3](#decision-3--the-symbol-is-djangographqlprotocolrouter--distinctly-ours-pinned-now)).
 `channels` is a **soft dependency**
@@ -182,6 +182,33 @@ Revision history (kept inline so the spec is self-contained):
   `ValueError`-on-unmapped-scope (`lifespan`) behavior, and the
   auth-over-Channels risk framing (upstream's `auth/utils.py` reads
   `request.consumer.scope["user"]` — the request-shape divergence is real).
+- **Revision 3** — a second, independent adversarial review pass (reviewer
+  verified the Channels claims against the `4.2.1` **and** `4.3.2` sdists plus
+  PyPI release metadata; every finding re-verified against the sources before
+  editing; no blockers, four precision fixes). **(P3, factory-not-class)**
+  `AllowedHostsOriginValidator` (and `AuthMiddlewareStack`) are factory
+  *functions*, not classes — Test 4's isinstance target is the returned
+  `OriginValidator` instance, whose outermost hop is `.application` (only the
+  `BaseMiddleware` layers beneath carry `.inner`); Test 4 and the Risks
+  structural-assertion note now say so
+  ([Test plan](#test-plan) / [Risks](#risks-and-open-questions)). **(P3,
+  suite-vs-consumer DEBUG note)** the localhost-fallback edge case is split
+  into its consumer-facing half and an explicit "unreachable in this suite"
+  note — pytest-django defaults `DEBUG=False` and `setup_test_environment`
+  appends `"testserver"` to `ALLOWED_HOSTS` (both verified in the installed
+  packages), so Test 9's matching `Origin` is `http://testserver`, never the
+  localhost set ([Edge cases](#edge-cases-and-constraints)). **(P3, stale
+  quotes)** the two `docs/TREE.md` row quotes updated `TODO-ALPHA-041` →
+  `WIP-ALPHA-041` (the Slice-2 board re-render moved the annotation with the
+  card id; the substance — the row is reserved — was already correct), and the
+  intro's "~30-line module" tightened to "~30 lines of composition" (the
+  upstream file is 73 lines; the class body is the ~30). The pass also
+  re-confirmed Revision 2's floor facts independently (4.2.1 first with the
+  Django 5.2 classifier, 4.3.2 first with Django 6.0, via PyPI metadata — the
+  sdists ship no changelog) and the full verified-correct set (upstream parity
+  line-by-line, the daphne import chain, `close_old_connections` bracketing,
+  the PEP 562 behavior matrix, the graphene-django zero-channels sweep, link
+  targets on disk).
 
 ## Key glossary references
 
@@ -300,7 +327,7 @@ genuinely-unreachable-live case, not a live-first weakening
         ([Decision 10](#decision-10--version-bumps-are-owned-by-the-joint-0014-cut)).
   - [ ] [`docs/TREE.md`][tree] regenerated via
         [`scripts/build_tree_md.py`][build-tree-md] (never hand-edited): the
-        `routers.py` row moves from `planned by TODO-ALPHA-041-0.0.14` to the real
+        `routers.py` row moves from `planned by WIP-ALPHA-041-0.0.14` to the real
         docstring-derived row, and `tests/test_routers.py` appears in the test
         tree.
   - [ ] [`KANBAN.md`][kanban] card wrap: `WIP-ALPHA-041-0.0.14` → Done with the
@@ -356,7 +383,7 @@ anything.
 A true description of the repo as this spec is authored:
 
 - **No `routers.py` exists; [`docs/TREE.md`][tree] reserves it.** The target package
-  layout carries `routers.py # planned by TODO-ALPHA-041-0.0.14 - Channels ASGI
+  layout carries `routers.py # planned by WIP-ALPHA-041-0.0.14 - Channels ASGI
   router (migration aid)` — this card's row, unlike the `auth/` gap `spec-040` had
   to record as a risk. The test-layout section carries no `tests/test_routers.py`
   row yet; the regenerated tree adds it in Slice 2.
@@ -1071,14 +1098,16 @@ carries its reason.
   A sessionless project gets Channels' own error; the same constraint the shipped
   [Auth mutations][glossary-auth-mutations] document for the WSGI path, arising
   here from the middleware rather than the resolver.
-- **`AllowedHostsOriginValidator` reads `ALLOWED_HOSTS`.** A dev setup with
-  `ALLOWED_HOSTS = []` under `DEBUG` gets Channels' hardcoded localhost set
-  (`["localhost", "127.0.0.1", "[::1]"]` in `channels/security/websocket.py`,
-  mirroring Django's own `DEBUG` runserver behavior — Channels' code, not
-  Django's);
-  the WS test must send an `Origin` header matching the configured host or the
-  handshake is denied — asserted positively (matching origin connects) and
-  negatively (mismatched origin is denied) in the test plan.
+- **`AllowedHostsOriginValidator` reads `ALLOWED_HOSTS`.** Consumer-facing note:
+  a dev setup with `ALLOWED_HOSTS = []` under `DEBUG` gets Channels' hardcoded
+  localhost set (`["localhost", "127.0.0.1", "[::1]"]` in
+  `channels/security/websocket.py`, mirroring Django's own `DEBUG` runserver
+  behavior — Channels' code, not Django's). That fallback branch is
+  **unreachable in this package's own suite**: pytest-django defaults
+  `DEBUG=False` and Django's `setup_test_environment` appends `"testserver"` to
+  `ALLOWED_HOSTS`, so the WS test's matching `Origin` is `http://testserver` —
+  asserted positively (matching origin connects) and negatively (mismatched
+  origin is denied) in the test plan.
 - **The consumers execute the schema on the ASGI event loop.** Sync resolvers ride
   Channels' `database_sync_to_async` machinery inside the HTTP consumer; the
   package's sync/async twin discipline (every shipped surface has both paths) is
@@ -1135,7 +1164,11 @@ extensions-ride-along claim.
    route **after** the GraphQL route (ordering asserted — the regression a
    composition module exists to prevent).
 4. The `websocket` branch is `AllowedHostsOriginValidator`-wrapped **outside** the
-   `AuthMiddlewareStack` (wrapping order asserted).
+   `AuthMiddlewareStack` (wrapping order asserted). Assertion mechanics:
+   `AllowedHostsOriginValidator` is a factory *function*, not a class — the
+   isinstance target is the `OriginValidator` instance it returns, and that
+   outermost layer stores its wrapped app as `.application` (only the
+   `BaseMiddleware` layers beneath it carry `.inner`).
 5. A custom `url_pattern=` reaches the `re_path` on both branches.
 6. Repeated symbol access returns the identical cached class (the builder
    memoizes), and the class is subclassable (a consumer extension smoke check).
@@ -1255,7 +1288,10 @@ implemented-on-main docs update here; release-status wording defers to the joint
   (`#djangographqlprotocolrouter`) plus the card's reference edges move with it.
 - **`ProtocolTypeRouter` internals as an assertion target.** Tests 2–4 assert
   middleware wrapping order by inspecting Channels' composed application objects
-  (`.inner` chains). Channels' middleware classes are stable public API, but the
+  (the outermost WS layer is an `OriginValidator` instance holding `.application`
+  — `AllowedHostsOriginValidator` is a factory function — and the
+  `BaseMiddleware` layers beneath carry `.inner`). Channels' middleware
+  factories and classes are stable public API, but the
   attribute names are not contractual; if a Channels release reshapes them, the
   structural tests get noisy while the communicator tests (7–10) keep the truth.
   **Preferred posture:** keep both layers — the structural tests name the intent,

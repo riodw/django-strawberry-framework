@@ -45,11 +45,11 @@ def test_public_api_surface_is_pinned():
     # spec-037 Slice 3 adds the three file/upload symbols: ``Upload`` (the
     # re-exported Strawberry scalar) plus ``DjangoFileType`` / ``DjangoImageType``
     # (the structured read-output objects). spec-038 adds two form-mutation
-    # symbols (``DjangoFormMutation`` / ``DjangoModelFormMutation``). spec-040
-    # widens NOTHING here: the auth factories are submodule-only by design
-    # (``django_strawberry_framework.auth``, spec-040 Decision 3 - opt-in by
-    # import, never a root export), and as the joint-cut owner it moves
-    # ``test_version`` to ``0.0.13`` above (spec-040 Decision 12).
+    # symbols (``DjangoFormMutation`` / ``DjangoModelFormMutation``). spec-040 (the
+    # auth-mutations card) owns the ``0.0.13`` cut (Decision 12) jointly with the
+    # spec-039 serializer flavor, so ``test_version`` is asserted at ``0.0.13``
+    # above; the auth surface adds NO package-root exports (submodule-only per
+    # Decision 3), so ``__all__`` is unchanged.
     assert django_strawberry_framework.__all__ == (
         "BigInt",
         "DjangoConnection",

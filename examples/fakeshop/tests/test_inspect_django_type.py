@@ -42,6 +42,7 @@ _SCHEMA_MODULES = (
     "apps.scalars.schema",
     "apps.kanban.schema",
     "apps.glossary.schema",
+    "apps.accounts.schema",
 )
 
 
@@ -53,10 +54,20 @@ def _reload_inspect_schema() -> None:
     a sibling package test cleared the global registry. ``apps.scalars.schema``
     is reloaded too so the consumer-override demonstration type
     (``OverriddenScalarSpecimenType``) is registered + finalized for bare-name
-    inspection alongside the library types.
+    inspection alongside the library types. ``apps.accounts.schema`` (spec-040
+    Slice 1) is reloaded before ``config.schema`` so its ``UserType`` is
+    re-registered after the clear rather than left stranded in ``sys.modules``
+    (a foreign worker that already imported it would otherwise leave the cached
+    module unrefreshed, and the aggregate ``config.schema`` build would raise
+    ``DuplicatedTypeName`` on ``UserType``).
     """
     registry.clear()
-    for name in ("apps.library.schema", "apps.scalars.schema", "config.schema"):
+    for name in (
+        "apps.library.schema",
+        "apps.scalars.schema",
+        "apps.accounts.schema",
+        "config.schema",
+    ):
         module = sys.modules.get(name)
         if module is None:
             importlib.import_module(name)

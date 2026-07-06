@@ -176,6 +176,8 @@ A card cannot be saved with `status.key == "done"` unless it has BOTH:
 
 And `manage.py import_spec_terms` (the canonical tool that syncs each done card's `CardGlossaryTerm` + `GlossarySpecMention` rows from its `docs/spec-<NNN>-…-terms.csv`) requires **every anchor in that CSV to already exist as a `GlossaryTerm` row**.
 
+**A green `check_spec_glossary` does NOT prove the terms-CSV is importable by the done-card wrap.** `check_spec_glossary` is anchor-keyed and tolerates a many-term→one-anchor CSV grammar (it ignores the `term` column), so it can report OK on a CSV that `import_spec_terms` will reject: the importer treats the anchor as a `GlossarySpecMention` identity backed by a unique constraint and errors on duplicate anchors. Every shipping card's CSV must therefore be **one row per anchor** (fold any grouped member terms into the surviving row's `notes` cell). Before planning a card-wrap slice, verify importability with `import_spec_terms --check` (or confirm the one-row-per-anchor shape) — not the lenient authoring gate alone — so the collapse does not surface as a mid-wrap `CommandError`. Separately, `--check` may fail at baseline on an EARLIER done card whose `GlossarySpecMention` rows still point at a pre-archive `docs/` path after its spec was moved to `docs/SPECS/`; the plain `import_spec_terms` sync processes ALL done cards and reconciles that as a side effect, so a card-wrap's `db.sqlite3` diff legitimately spans more than the card being closed — verify `--check` passes for **all** done cards afterward and flag the wider diff to the maintainer.
+
 ### Procedure (move `WIP-…-<NNN>-<ver>` → `DONE-<NNN>-<ver>`)
 
 Run DB edits via `uv run python examples/fakeshop/manage.py shell`; regenerate from the repo root.

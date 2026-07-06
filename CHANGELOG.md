@@ -16,6 +16,15 @@ This project follows a milestone-style cadence during pre-`1.0.0`:
 
 See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of each patch.
 
+## [0.0.13] - 2026-07-06
+
+### Added
+- **DRF serializer-based mutations — `SerializerMutation`.** The serializer-validated write flavor on the DRF-shaped `class Meta` surface (`Meta.serializer_class` over a DRF `Serializer` / `ModelSerializer`, not Strawberry decorators), for consumers whose write validation already lives in a serializer. [`SerializerMutation`][glossary-serializermutation] rides the shipped [`DjangoMutation`][glossary-djangomutation] write pipeline via its overridable seams and reuses the byte-identical frozen [`FieldError`][glossary-fielderror-envelope] envelope `036` froze — a `serializer.is_valid()` field error keys to its field and the serializer's non-field errors key to the same `"__all__"` sentinel, returning a null-object payload rather than raising at the GraphQL boundary. `djangorestframework` is a **soft** dependency: `import django_strawberry_framework` and `from django_strawberry_framework import *` both stay DRF-free, and `SerializerMutation` is a lazy root export resolved through the package `__getattr__`, deliberately **not** in `__all__` (a DRF-absent consumer who reaches the symbol gets a single install-hint `ImportError`).
+- **Session-auth mutations — `login` / `logout` / `register` + the `current_user` query.** An opt-in authentication surface imported from the `django_strawberry_framework.auth` submodule (**no** package-root re-export — the four symbols are absent from `__all__`, so `from django_strawberry_framework import *` stays auth-free). `login_mutation()` / `logout_mutation()` / `register_mutation()` are field factories carrying a per-schema `permission_classes=` seam, and `current_user()` is the matching query helper (`me: UserType`). All ride the shared frozen [`FieldError`][glossary-fielderror-envelope] envelope; `register` is a [`DjangoMutation`][glossary-djangomutation] rider that adds `validate_password` + `set_password` over the shipped create pipeline (the plaintext password is validated then hashed — never persisted in the clear, asserted on both the sync and async paths). The family defaults to `AllowAny` — the documented inversion of the write family's deny-by-default [`DjangoModelPermission`][glossary-djangomodelpermission], since login and register must serve the anonymous caller — with every factory still accepting `permission_classes=` for a per-schema gate. The transport is Django's session framework only (no Channels until the `0.0.14` router card); the auth resolvers run through the same write-stack and `check_permission` / `authorize_or_raise` helpers by call rather than re-spelling them.
+
+### Changed
+- **`django_strawberry_framework.__version__` is now `0.0.13`.**
+
 ## [0.0.12] - 2026-06-23
 
 ### Added
@@ -302,6 +311,7 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [feedback]: docs/feedback.md
 [glossary]: docs/GLOSSARY.md
 [glossary-apply_cascade_permissions]: docs/GLOSSARY.md#apply_cascade_permissions
+[glossary-auth-mutations]: docs/GLOSSARY.md#auth-mutations
 [glossary-auto-typed-annotations]: docs/GLOSSARY.md#auto-typed-annotations
 [glossary-bigint-scalar]: docs/GLOSSARY.md#bigint-scalar
 [glossary-configurationerror]: docs/GLOSSARY.md#configurationerror
@@ -341,6 +351,7 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [glossary-relay-globalid-strategy]: docs/GLOSSARY.md#relay_globalid_strategy
 [glossary-safe-wrap-connection-method]: docs/GLOSSARY.md#safe_wrap_connection_method
 [glossary-scalar-field-conversion]: docs/GLOSSARY.md#scalar-field-conversion
+[glossary-serializermutation]: docs/GLOSSARY.md#serializermutation
 [glossary-specialized-scalar-conversions]: docs/GLOSSARY.md#specialized-scalar-conversions
 [glossary-strawberry-config]: docs/GLOSSARY.md#strawberry_config
 [glossary-strictness-mode]: docs/GLOSSARY.md#strictness-mode

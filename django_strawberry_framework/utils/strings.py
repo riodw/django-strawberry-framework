@@ -16,6 +16,7 @@ call site.
 """
 
 import functools
+from collections.abc import Callable
 
 
 @functools.lru_cache(maxsize=2048)
@@ -77,3 +78,33 @@ def pascal_case(name: str) -> str:
         ``"double__underscore"`` -> ``"DoubleUnderscore"``.
     """
     return "".join(part.capitalize() for part in name.split("_") if part)
+
+
+def pascal_case_or_raise(name: str, *, make_error: Callable[[str], Exception]) -> str:
+    """``pascal_case`` with the shared no-word-token guard (feedback P2.2).
+
+    Single-sites the no-token check both consumers wrap:
+    ``sets_mixins.py::ClassBasedTypeNameMixin.type_name_for`` and
+    ``filters/inputs.py::_pascal_case``. ``pascal_case`` returns ``""`` for an
+    input with no word-character tokens (``""``, ``"_"``, ``"__"``), which
+    would silently collide on downstream generated type names; ``make_error``
+    keeps each consumer's error type and message consumer-specific while the
+    emptiness check itself stays here.
+    """
+    pascal = pascal_case(name)
+    if not pascal:
+        raise make_error(name)
+    return pascal
+
+
+def graphql_camel_name(name: str) -> str:
+    """Lowercase the head, then ``PascalCase`` the rest (``galaxy_name`` -> ``galaxyName``).
+
+    Splits on ``_`` and drops empty tokens; returns ``name`` unchanged when it
+    has no word tokens (``""`` -> ``""``, ``"_"`` -> ``"_"``).
+    """
+    parts = [part for part in name.split("_") if part]
+    if not parts:
+        return name
+    head, *rest = parts
+    return head + "".join(part.capitalize() for part in rest)

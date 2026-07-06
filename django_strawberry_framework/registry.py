@@ -17,8 +17,6 @@ fixture.
 
 from __future__ import annotations
 
-import importlib
-import sys
 from collections.abc import Callable, Iterable, Iterator
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -26,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 from django.db import models
 
 from .exceptions import ConfigurationError
+from .utils.imports import import_attr_if_importable, loaded_attr
 
 if TYPE_CHECKING:  # pragma: no cover
     from .types.definition import DjangoTypeDefinition
@@ -38,15 +37,14 @@ def _clear_if_importable(module_path: str, attr_name: str, action: Callable[[Any
     The cycle-safe local-import shape that ``TypeRegistry.clear`` /
     ``TypeRegistry.unregister`` repeat for each subsystem co-clear (filter /
     order input namespaces + helper ledgers, the connection-class cache, the
-    root node-field ledger), single-sited per the 0.0.9 DRY pass
-    (``docs/feedback.md`` "Registry Clear Optional-Callback Pattern"). An
+    root node-field ledger), delegating the import handling to its single owner
+    ``utils/imports.py::import_attr_if_importable``. An
     unreachable subsystem (a partial-load build state where ``registry`` is
-    imported but a sidecar package is not) is skipped via ``ImportError`` so it
+    imported but a sidecar package is not) is skipped so it
     never prevents a LATER co-clear from running -- each block stays independent.
     """
-    try:
-        target = getattr(importlib.import_module(module_path), attr_name)
-    except ImportError:
+    target = import_attr_if_importable(module_path, attr_name)
+    if target is None:
         return
     action(target)
 
@@ -60,12 +58,13 @@ def _clear_if_loaded(module_path: str, attr_name: str, action: Callable[[Any], N
     consumer never pays the ``django.contrib.auth`` machinery import - not at
     finalize, and not at ``registry.clear()``). A module absent from
     ``sys.modules`` has, by the F10 invariant, no clearable state, so skipping is
-    a correct no-op rather than a missed reset.
+    a correct no-op rather than a missed reset. Delegates the loaded-module
+    lookup to its single owner ``utils/imports.py::loaded_attr``.
     """
-    module = sys.modules.get(module_path)
-    if module is None:
+    target = loaded_attr(module_path, attr_name)
+    if target is None:
         return
-    action(getattr(module, attr_name))
+    action(target)
 
 
 # The canonical pre-bind input-namespace clear list (spec-039 P1.6 / M4 - the

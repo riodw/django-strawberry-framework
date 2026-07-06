@@ -64,7 +64,6 @@ from ..utils.inputs import (
     InputFieldSpec,
     build_strawberry_input_class,
     generated_input_type_name,
-    graphql_camel_name,
     guard_dropped_required,
     make_input_namespace,
     make_shape_build_cache,
@@ -72,6 +71,7 @@ from ..utils.inputs import (
     pascalize_token,
     resolve_effective_fields,
 )
+from ..utils.strings import graphql_camel_name
 from .serializer_converter import (
     NESTED_MULTI,
     NESTED_SINGLE,

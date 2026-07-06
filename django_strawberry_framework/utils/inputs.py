@@ -24,7 +24,6 @@ cycle (same contract as ``utils/connections.py``).
 
 from __future__ import annotations
 
-import importlib
 import sys
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -33,6 +32,13 @@ from typing import Annotated, Any, ClassVar
 import strawberry
 
 from ..exceptions import ConfigurationError
+from .imports import import_attr_if_importable
+
+# ``utils/strings.py`` is the owner of ``graphql_camel_name`` (feedback P2.1);
+# re-imported here (the ``as`` form marks the explicit re-export) so existing
+# ``from ..utils.inputs import graphql_camel_name`` consumers keep their import
+# path.
+from .strings import graphql_camel_name as graphql_camel_name
 
 
 @dataclass(frozen=True)
@@ -183,19 +189,6 @@ def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
         cache.clear()
 
     return cache, clear_fn
-
-
-def graphql_camel_name(name: str) -> str:
-    """Lowercase the head, then ``PascalCase`` the rest (``galaxy_name`` -> ``galaxyName``).
-
-    Splits on ``_`` and drops empty tokens; returns ``name`` unchanged when it
-    has no word tokens (``""`` -> ``""``, ``"_"`` -> ``"_"``).
-    """
-    parts = [part for part in name.split("_") if part]
-    if not parts:
-        return name
-    head, *rest = parts
-    return head + "".join(part.capitalize() for part in rest)
 
 
 def pascalize_token(name: str) -> str:
@@ -570,13 +563,15 @@ def _safe_import(module_path: str, attr: str) -> Any:
     submodule reachable, another not) still clears whatever IS reachable. A
     ``None`` entry in ``sys.modules`` (the test-isolation way of simulating an
     unimportable submodule) raises ``ImportError`` here, same as the previous
-    inline ``from .submodule import X`` guards.
+    inline ``from .submodule import X`` guards. Delegates to
+    ``utils/imports.py::import_attr_if_importable`` but preserves this wrapper's
+    attr-lenient shape (a missing attr is ``None``, not ``AttributeError``) for
+    the partial-load lifecycle callers.
     """
     try:
-        module = importlib.import_module(module_path)
-    except ImportError:
+        return import_attr_if_importable(module_path, attr)
+    except AttributeError:
         return None
-    return getattr(module, attr, None)
 
 
 def clear_generated_input_namespace(

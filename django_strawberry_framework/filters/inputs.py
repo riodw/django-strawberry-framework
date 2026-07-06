@@ -37,11 +37,10 @@ from ..utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
     clear_generated_input_namespace,
-    graphql_camel_name,
     iter_set_subclasses,
     materialize_generated_input_class,
 )
-from ..utils.strings import pascal_case
+from ..utils.strings import graphql_camel_name, pascal_case_or_raise
 from .base import (
     ArrayFilter,
     GlobalIDFilter,
@@ -157,37 +156,33 @@ _materialized_names: dict[str, type] = {}
 # ---------------------------------------------------------------------------
 
 
-# Pascal-case helper for input-class names. Delegates the case conversion to
-# the shared ``utils.strings.pascal_case`` (single source of truth) and only
-# adds the load-bearing no-word-character guard documented below. Mirrors
-# ``sets_mixins.py::ClassBasedTypeNameMixin.type_name_for``, which pairs the
-# same shared helper with its own sibling guard for the indirect callers; this
-# wrapper is the ``RangeFilter``-specific counterpart for the direct caller.
+# Pascal-case helper for input-class names. The conversion AND the
+# no-word-character emptiness check both live in the shared
+# ``utils.strings.pascal_case_or_raise`` (feedback P2.2 single-siting, shared
+# with ``sets_mixins.py::ClassBasedTypeNameMixin.type_name_for``); this wrapper
+# only supplies the ``RangeFilter``-specific error.
 def _pascal_case(name: str) -> str:
-    """Return ``name`` converted to ``PascalCase`` via ``utils.strings.pascal_case``.
+    """Return ``name`` converted to ``PascalCase``, raising on a token-less input.
 
-    Raises ``ConfigurationError`` for inputs that contain no
-    word-character tokens (e.g. ``"_"``, ``""``, ``"__"``); the shared
-    helper returns ``""`` for such input, which would silently collide on
-    the downstream ``RangeInputType`` naming. Raising here surfaces the
-    real cause at the call site -- the one behaviour this thin wrapper adds
-    on top of ``utils.strings.pascal_case``.
-
-    Direct caller today: ``_build_range_input_class`` only. Indirect
-    callers (``_input_type_name_for``, ``_build_input_fields``'s
-    operator-bag class naming) route through
-    ``sets_mixins.py::ClassBasedTypeNameMixin.type_name_for`` and trip
-    its sibling no-word-character guard rather than this one - so the
-    error message below names the ``RangeFilter`` consumer specifically.
+    Delegates to ``utils.strings.pascal_case_or_raise``; an input with no
+    word-character tokens (e.g. ``"_"``, ``""``, ``"__"``) would silently
+    collide on the downstream ``RangeInputType`` naming, so it raises
+    ``ConfigurationError`` instead. Direct caller today:
+    ``_build_range_input_class`` only. Indirect callers
+    (``_input_type_name_for``, ``_build_input_fields``'s operator-bag class
+    naming) route through
+    ``sets_mixins.py::ClassBasedTypeNameMixin.type_name_for`` and trip the
+    same shared guard with its own error - so the error message below names
+    the ``RangeFilter`` consumer specifically.
     """
-    pascal = pascal_case(name)
-    if not pascal:
-        raise ConfigurationError(
-            f"_pascal_case received {name!r} which contains no word "
+    return pascal_case_or_raise(
+        name,
+        make_error=lambda bad: ConfigurationError(
+            f"_pascal_case received {bad!r} which contains no word "
             "characters; rename the RangeFilter's `field_name=` so its "
             "name has at least one alphanumeric token.",
-        )
-    return pascal
+        ),
+    )
 
 
 def _input_type_name_for(filterset_class: type[FilterSet]) -> str:

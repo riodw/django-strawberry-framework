@@ -103,6 +103,8 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`get_queryset` visibility hook](#get_queryset-visibility-hook) | shipped (`0.0.1`) |
 | [`GraphQLTestCase`](#graphqltestcase) | planned for `0.0.14` |
 | [Input type generation](#input-type-generation) | shipped (`0.0.11`) |
+| [Joint version cut](#joint-version-cut) | shipped (`0.0.13`) |
+| [Live-first coverage mandate](#live-first-coverage-mandate) | shipped (`0.0.4`) |
 | [`Meta.aggregate_class`](#metaaggregate_class) | planned for `0.1.3` |
 | [`Meta.choice_enum_names`](#metachoice_enum_names) | planned for `0.1.4` |
 | [`Meta.connection`](#metaconnection) | shipped (`0.0.9`) |
@@ -137,6 +139,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Relation handling](#relation-handling) | shipped (`0.0.1`+) |
 | [Relay Node integration](#relay-node-integration) | shipped (`0.0.5`) |
 | [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) | shipped (`0.0.9`) |
+| [`request_from_info`](#request_from_info) | shipped (`0.0.8`) |
 | [Response-extensions debug middleware](#response-extensions-debug-middleware) | planned for `0.0.14` |
 | [`safe_wrap_connection_method`](#safe_wrap_connection_method) | shipped (`0.0.7`) |
 | [Scalar field conversion](#scalar-field-conversion) | shipped (`0.0.1`+) |
@@ -145,6 +148,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Schema export management command](#schema-export-management-command) | shipped (`0.0.7`) |
 | [Schema introspection management command](#schema-introspection-management-command) | shipped (`0.0.9`) |
 | [`SerializerMutation`](#serializermutation) | shipped (`0.0.13`) |
+| [Soft dependency](#soft-dependency) | shipped (`0.0.13`) |
 | [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [strawberry_config](#strawberry_config) | shipped (`0.0.7`) |
 | [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
@@ -167,13 +171,13 @@ For readers exploring rather than looking up a specific term:
 - **Aggregation:** [`AggregateSet`](#aggregateset) · [`RelatedAggregate`](#relatedaggregate) · [`Meta.aggregate_class`](#metaaggregate_class) · [`get_child_queryset`](#get_child_queryset).
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
 - **Search:** [`Meta.search_fields`](#metasearch_fields).
-- **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoModelPermission`](#djangomodelpermission) · [Per-field permission hooks](#per-field-permission-hooks).
+- **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoModelPermission`](#djangomodelpermission) · [Per-field permission hooks](#per-field-permission-hooks) · [`request_from_info`](#request_from_info).
 - **Relay:** [Relay Node integration](#relay-node-integration) · [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoNodesField`](#djangonodesfield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoMutationField`](#djangomutationfield) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
-- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware).
-- **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Django Trac #37064 hardening](#django-trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase).
+- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware) · [Soft dependency](#soft-dependency) · [Joint version cut](#joint-version-cut).
+- **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Django Trac #37064 hardening](#django-trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase) · [Live-first coverage mandate](#live-first-coverage-mandate).
 
 ---
 
@@ -652,6 +656,22 @@ The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` 
 Editable-field selection drops the pk, `auto_now` / `auto_now_add` / `editable=False` columns, and reverse relations. A forward FK / OneToOne becomes a single `<field>_id` typed as the target's id — a `GlobalID` for a Relay-Node target, the raw pk scalar otherwise — type-checked against the relation target at decode (a wrong-type id is a [`FieldError`](#fielderror-envelope), never a cross-model pk lookup); an M2M becomes `list[<id>]` (replace-on-provide / clear-on-empty / unchanged-on-omit). The canonical full editable shape takes the stable `<Model>Input` / `<Model>PartialInput` name; a narrowed (`Meta.fields` / `Meta.exclude`) shape takes a deterministic shape-derived name, and two **distinct** shapes colliding on one generated name raise [`ConfigurationError`](#configurationerror) at finalization (identical shapes dedupe and share one type). All are materialized as module globals. The relation-override contract from `spec-010` holds: a consumer-authored input field is honored, not clobbered by a generated one.
 
 **See also:** [`DjangoMutation`](#djangomutation) · [`FieldError` envelope](#fielderror-envelope) · [`Upload` scalar](#upload-scalar).
+
+## Joint version cut
+
+**Status:** shipped (`0.0.13`).
+
+The release rule when multiple kanban cards share one patch version: the version bump and the public release-status wording are owned by the **last** card to land — the joint cut — never by an individual card's slices. First applied at the joint `0.0.13` cut ([`SerializerMutation`](#serializermutation) + [Auth mutations](#auth-mutations)); in force for `0.0.14`, where four cards share the line ([`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter), [Debug-toolbar middleware](#debug-toolbar-middleware), [`TestClient`](#testclient) / [`GraphQLTestCase`](#graphqltestcase), and [Response-extensions debug middleware](#response-extensions-debug-middleware)).
+
+Moved only by the cut — the version quintet: `[project].version` in `pyproject.toml`, `__version__`, `tests/base/test_init.py::test_version`, this glossary's package-version line, and the package's own `version` entry in `uv.lock`. Also deferred to the cut: the glossary status flips to `shipped (...)`, the `README.md` / `docs/README.md` "Coming next" → "Shipped today" moves, and the `CHANGELOG.md` bullets (which additionally require an explicit maintainer grant). `uv.lock` **dependency** entries are not version state — a card's own dependency-gate lock regeneration lands with that card.
+
+## Live-first coverage mandate
+
+**Status:** shipped (`0.0.4`).
+
+The repo's test-placement rule (pinned in `AGENTS.md` and `docs/TREE.md` #"Coverage priority"; established by the `0.0.4` testing shift): if a package line can be covered by a real fakeshop `/graphql/` GraphQL request, the covering test lives in the live acceptance suite (`examples/fakeshop/test_query/`); root `tests/` is reserved for package internals, invalid configuration, registry/finalizer mechanics, and paths genuinely unreachable through a realistic GraphQL request. Mock only when the real path is impossible.
+
+A package-tests placement for new surface area must be justified as genuinely-unreachable-live — e.g. the `0.0.14` [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter): the fakeshop example is WSGI-only (no `asgi.py`), so no live request can reach a Channels router line. When coverage is later promoted to the live tier, the package-only stand-in test is deleted rather than kept as duplicate weight (the package coverage gate, `fail_under = 100`, keeps the swap honest).
 
 ## `Meta.aggregate_class`
 
@@ -1148,6 +1168,16 @@ DJANGO_STRAWBERRY_FRAMEWORK = {
 
 **See also:** [`Meta.globalid_strategy`](#metaglobalid_strategy) · [Relay Node integration](#relay-node-integration) · [`ConfigurationError`](#configurationerror).
 
+## `request_from_info`
+
+**Status:** shipped (`0.0.8`).
+
+The shared request-resolution helper in `django_strawberry_framework/utils/permissions.py`: every framework surface that needs the acting user — the auth `current_user` query, mutation permission checks ([`DjangoModelPermission`](#djangomodelpermission)), the filter / order `check_*_permission` gates, and serializer-mutation hooks — resolves the Django request through this one function, never through a local decoder. Accepted context shapes: the canonical Strawberry-Django attribute shape (`info.context.request`) and a bare `HttpRequest` (the Django test-client default). Any other shape raises [`ConfigurationError`](#configurationerror) naming the caller's `family_label` (`FilterSet` / `OrderSet` / `DjangoMutation`) so the consumer sees which surface failed.
+
+Hard single-siting rule: every new request/context shape is supported inside this helper only — callers must not grow local request decoders. The `0.0.14` [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) card extends the helper with Strawberry's Channels context shape (a mapping context whose `"request"` value exposes `consumer.scope`, duck-typed with no `channels` import in `utils/`), resolving to a small request-like adapter exposing `.user` / `.session` from the scope for the read path; session-mutating [Auth mutations](#auth-mutations) over Channels stay deferred.
+
+**See also:** [`DjangoModelPermission`](#djangomodelpermission) · [Auth mutations](#auth-mutations) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
+
 ## Response-extensions debug middleware
 
 **Status:** planned for `0.0.14`.
@@ -1260,6 +1290,18 @@ It **deliberately does not adopt graphene-django's serializer-mutation keys**: i
 `djangorestframework` is a **soft** dependency: `import django_strawberry_framework` succeeds without DRF, and `from django_strawberry_framework import *` stays DRF-free. `SerializerMutation` is the one net-new public symbol — a lazy root export resolved through the package `__getattr__` under the soft DRF guard, **not** in `__all__`. A DRF-absent consumer who reaches a serializer-mutation module (or the root symbol) gets a single install-hint `ImportError` naming `djangorestframework>=3.17.0`.
 
 **See also:** [`DjangoMutation`](#djangomutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`FieldError` envelope](#fielderror-envelope) · [`DjangoModelPermission`](#djangomodelpermission).
+
+## Soft dependency
+
+**Status:** shipped (`0.0.13`).
+
+The package's architecture for optional integrations — `djangorestframework` (shipped `0.0.13`, [`SerializerMutation`](#serializermutation)) and `channels` (planned `0.0.14`, [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter)). Three parts, one discipline:
+
+- **One guard, one hint.** A `require_*()` function (`require_drf()`; `require_channels()` on the `0.0.14` card) wraps the optional import into a single `ImportError` whose message is one module-level install-hint constant (`_DRF_INSTALL_HINT` / `_CHANNELS_INSTALL_HINT`) naming the verified floor. No memoization, so absence tests can re-hit the guard. The shared primitive lives in `utils/imports.py` — the package's single optional-import owner (`import_attr_if_importable`, `loaded_attr`; `require_optional_module` lands with the channels card) — new optional-import handling belongs there, never hand-rolled at a new call site.
+- **Lazy name resolution.** A PEP 562 `__getattr__` (the package root for the DRF names; module-level in `routers.py` for the router) materializes the guarded symbol on first access, so `import django_strawberry_framework` never pays for an integration the consumer didn't ask for, and the install hint fires at the consumer's own `from ... import` line.
+- **Eviction-simulated absence tests.** Absence is simulated — a `builtins.__import__` block plus strict `sys.modules` eviction and restore (`tests/rest_framework/test_soft_dependency.py`) — never a separate uninstalled CI matrix. The install hint is drift-checked against a re-typed literal in the test file (the `_HINT_SUBSTRING` discipline), and the dependency gate adds the dev-group row and regenerates `uv.lock` in the same commit.
+
+**See also:** [`SerializerMutation`](#serializermutation) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
 
 ## Specialized scalar conversions
 

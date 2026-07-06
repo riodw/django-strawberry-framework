@@ -97,18 +97,20 @@ from django.db import transaction
 from django.forms.models import model_to_dict
 
 from ..mutations.resolvers import (
-    _unencodable_text_error,
     authorize_or_raise,
     make_resolver_entries,
     payload_cls_for,
-    raw_choice_value,
-    relation_field_error,
     run_write_pipeline_sync,
     save_or_field_errors,
-    type_check_relation_id,
 )
+from ..utils.errors import relation_field_error
 from ..utils.inputs import iter_provided_input_fields
 from ..utils.querysets import sync_pipeline_recourse, visible_related_object
+from ..utils.write_values import (
+    raw_choice_value,
+    type_check_relation_id,
+    unencodable_text_error,
+)
 from .converter import FILE, RELATION_MULTI, RELATION_SINGLE, FormInputFieldSpec
 from .inputs import get_form_fields
 
@@ -294,7 +296,7 @@ def _decode_form_data(
             # storability check belongs here; the form owns its own null / datetime
             # coercion (so the model path's ``_explicit_null_error`` /
             # ``_make_aware_if_naive`` siblings are intentionally absent).
-            text_error = _unencodable_text_error(spec.graphql_name, value)
+            text_error = unencodable_text_error(spec.graphql_name, value)
             if text_error is not None:
                 return {}, {}, text_error
             provided_data[spec.form_field_name] = raw_choice_value(value)
@@ -401,7 +403,7 @@ def _form_errors_to_field_errors(form: Any) -> list[Any]:
     sentinel byte-identically to a model ``full_clean()`` failure (Decision 8
     step 4). No parallel mapper.
     """
-    from ..mutations.resolvers import validation_error_to_field_errors
+    from ..utils.errors import validation_error_to_field_errors
 
     return validation_error_to_field_errors(ValidationError(form.errors.as_data()))
 

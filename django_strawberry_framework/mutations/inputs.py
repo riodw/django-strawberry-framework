@@ -51,11 +51,11 @@ from ..types.relay import implements_relay_node
 from ..utils.inputs import (
     build_strawberry_input_class,
     generated_input_type_name,
-    graphql_camel_name,
     make_input_namespace,
     pascalize_token,
 )
 from ..utils.relations import is_forward_many_to_many
+from ..utils.strings import graphql_camel_name
 
 # Module path the ``strawberry.lazy(...)`` marker references; pinned as a
 # single constant so any forward-ref and ``materialize_mutation_input_class``

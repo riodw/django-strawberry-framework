@@ -118,14 +118,14 @@ from rest_framework.exceptions import ValidationError as DRFValidationError
 from ..exceptions import ConfigurationError
 from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 from ..mutations.resolvers import (
-    _unencodable_text_error,
-    field_error,
     make_resolver_entries,
-    raw_choice_value,
-    relation_field_error,
     run_write_pipeline_sync,
     save_or_field_errors,
-    type_check_relation_id,
+)
+from ..utils.errors import (
+    field_error,
+    join_error_path,
+    relation_field_error,
     validation_error_to_field_errors,
 )
 from ..utils.inputs import iter_provided_input_fields
@@ -136,6 +136,11 @@ from ..utils.querysets import (
     sync_pipeline_recourse,
     visible_related_object,
     visible_related_objects,
+)
+from ..utils.write_values import (
+    raw_choice_value,
+    type_check_relation_id,
+    unencodable_text_error,
 )
 from .serializer_converter import (
     FILE,
@@ -291,7 +296,7 @@ def _decode_input_object(
     # stays serializer-specific.
     for python_name, value, _field in iter_provided_input_fields(data):
         spec = spec_by_attr[python_name]
-        field_path = _join_path(path_prefix, spec.graphql_name)
+        field_path = join_error_path(path_prefix, spec.graphql_name)
 
         if spec.kind in (RELATION_SINGLE, RELATION_MULTI):
             decoder = (
@@ -322,7 +327,7 @@ def _decode_input_object(
             # raw ``UnicodeEncodeError`` - a ``ValueError`` neither ``is_valid()`` nor
             # ``save_or_field_errors`` maps - escaping the envelope. Reject it here,
             # keyed to the input's (full-path) GraphQL field name.
-            text_error = _unencodable_text_error(field_path, value)
+            text_error = unencodable_text_error(field_path, value)
             if text_error is not None:
                 return {}, text_error
             provided_data[spec.target_name] = raw_choice_value(value)
@@ -357,7 +362,7 @@ def _decode_nested(
                 spec.nested_specs,
                 item,
                 info,
-                path_prefix=_join_path(path_prefix, str(index)),
+                path_prefix=join_error_path(path_prefix, str(index)),
             )
             if error is not None:
                 return None, error
@@ -414,7 +419,7 @@ def serializer_errors_to_field_errors(
             # Re-key THIS dict key to its GraphQL name and descend with the child level's map,
             # so every segment (not just the root) reports the GraphQL name (rev6 #17 review P2).
             segment, child_map = _rekey_segment(str(key), reverse_map)
-            child_prefix = _join_path(prefix, segment)
+            child_prefix = join_error_path(prefix, segment)
             flattened.extend(
                 serializer_errors_to_field_errors(value, child_map, prefix=child_prefix),
             )
@@ -425,7 +430,7 @@ def serializer_errors_to_field_errors(
         # list never occurs in DRF's error shape, but the guard keeps a stray leaf from dropping.
         flattened = []
         for index, item in enumerate(errors):
-            child_prefix = _join_path(prefix, str(index))
+            child_prefix = join_error_path(prefix, str(index))
             flattened.extend(
                 serializer_errors_to_field_errors(item, reverse_map, prefix=child_prefix),
             )
@@ -456,11 +461,6 @@ def _error_detail_codes(errors: Any) -> list[str]:
         return [code for code in (getattr(item, "code", None) for item in errors) if code]
     code = getattr(errors, "code", None)
     return [code] if code else []
-
-
-def _join_path(prefix: str, segment: str) -> str:
-    """Join a dotted-path prefix with a child segment (``items`` + ``0`` -> ``items.0``)."""
-    return f"{prefix}.{segment}" if prefix else segment
 
 
 def _rekey_segment(

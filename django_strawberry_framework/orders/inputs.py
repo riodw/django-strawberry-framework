@@ -33,10 +33,10 @@ from ..utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
     clear_generated_input_namespace,
-    graphql_camel_name,
     iter_set_subclasses,
     materialize_generated_input_class,
 )
+from ..utils.strings import graphql_camel_name
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only imports.
     from ..types.definition import DjangoTypeDefinition

@@ -67,13 +67,12 @@ Slice 4, NOT this slice.
 from __future__ import annotations
 
 import datetime
-from enum import Enum
 from typing import Any
 
 import strawberry
 from asgiref.sync import sync_to_async
 from django.conf import settings
-from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 from graphql import GraphQLError
@@ -85,7 +84,10 @@ from ..optimizer.extension import (
 )
 from ..registry import registry
 from ..relay import GlobalIDDecode, decode_model_global_id
-from ..utils.inputs import graphql_camel_name, iter_provided_input_fields
+
+# Moved to utils/errors.py (docs DRY review P1.2); re-exported for compatibility.
+from ..utils.errors import field_error, relation_field_error, validation_error_to_field_errors
+from ..utils.inputs import iter_provided_input_fields
 from ..utils.querysets import (
     apply_type_visibility_sync,
     initial_queryset,
@@ -98,8 +100,23 @@ from ..utils.querysets import (
     visibility_scoped_related_queryset,
 )
 from ..utils.relations import is_forward_many_to_many
-from .inputs import NON_FIELD_ERROR_KEY, FieldError, payload_object_slot
+from ..utils.strings import graphql_camel_name
+
+# Moved to utils/write_values.py (docs DRY review P1.2 / P1.4); re-exported for
+# compatibility.
+from ..utils.write_values import (
+    coerce_relation_pk_or_none,
+    raw_choice_value,
+    type_check_relation_id,  # noqa: F401 - re-exported for the form / serializer resolvers + tests.
+    unencodable_text_error,
+)
+from .inputs import FieldError, payload_object_slot
 from .permissions import _PERMISSION_ASYNC_RECOURSE
+
+# Compatibility aliases preserving the pre-move private names (internal call
+# sites and tests address these; the public owners live in utils/write_values.py).
+_unencodable_text_error = unencodable_text_error
+_coerce_relation_pk_or_none = coerce_relation_pk_or_none
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
 # async ``get_queryset`` is met inside the (sync) ORM pipeline. The whole
@@ -358,56 +375,6 @@ def _make_aware_if_naive(value: Any) -> Any:
     return value
 
 
-def _unencodable_text_error(field_name: str, value: Any) -> FieldError | None:
-    r"""Reject a string input that cannot be encoded for storage (unpaired surrogate).
-
-    A GraphQL ``String`` can carry lone UTF-16 surrogate code points (e.g. U+D800
-    via a JSON ``\ud800`` escape) that are not valid Unicode scalar values and
-    cannot be encoded to UTF-8. Such a value would otherwise reach a
-    DB-bound operation - ``validate_unique()``'s lookup query (a unique column) or
-    ``save()``'s INSERT (any text column) - where the backend raises a raw
-    ``UnicodeEncodeError``. That is a ``ValueError`` the resolver does NOT map (it is
-    neither the ``ValidationError`` ``full_clean`` raises nor the ``IntegrityError``
-    ``save`` raises), so it escapes as a top-level GraphQL error with ``data: null``
-    instead of the field-keyed envelope (feedback - surrogate text leak). Reject it
-    HERE, at decode, before any DB-bound work, as a ``FieldError`` naming the
-    offending input field - the same in-band envelope every other input failure
-    returns - so neither the unique-field ``validate_unique`` path nor the plain
-    ``save`` path can leak the raw exception. ``str.encode("utf-8")`` is the
-    universal storability test: a lone surrogate fails it, while every valid scalar
-    value (including an embedded ``NUL``) passes, so this rejects ONLY genuinely
-    unstorable text. A non-string value (an int, a JSON dict whose own encoder
-    escapes nested surrogates, a choice enum) is passed through unchanged.
-    """
-    if isinstance(value, str):
-        try:
-            value.encode("utf-8")
-        except UnicodeEncodeError:
-            return field_error(
-                field_name,
-                "Text contains invalid Unicode (unpaired surrogate code points).",
-                codes="invalid",
-            )
-    return None
-
-
-def raw_choice_value(value: Any) -> Any:
-    """Unwrap a choice-enum member to its raw Django choice value (spec-036 Decision 6).
-
-    A ``choices`` column resolves to the SAME generated Strawberry ``Enum`` on the
-    read ``DjangoType`` and the write input (the symmetric wire contract), so the
-    client's enum value arrives here as the ENUM MEMBER (e.g.
-    ``BookCirculationStatusEnum.available``), not the raw string. The member's
-    ``.value`` IS the Django choice value (``convert_choices_to_enum`` maps each
-    member to its choice value), so setting the member directly onto the model
-    would make ``full_clean()`` reject a perfectly valid choice (the member is not
-    ``== "available"``). Unwrapping to ``.value`` feeds Django the raw choice value
-    it stores and validates against. A non-enum scalar is passed through unchanged;
-    an explicit ``None`` (a provided null) stays ``None``.
-    """
-    return value.value if isinstance(value, Enum) else value
-
-
 def _relation_field_index(model: type) -> tuple[dict[str, Any], dict[str, Any]]:
     """Index a model's forward FK/OneToOne (by ``<field>_id`` attr) and M2M (by name).
 
@@ -557,42 +524,6 @@ def _decode_relation_id_list(
     return _decode_relation_id_set(field_name, value, relation_field, info)
 
 
-def type_check_relation_id(
-    value: Any,
-    *,
-    graphql_name: str,
-    related_model: type,
-) -> tuple[Any, FieldError | None]:
-    """Type-check + coerce ONE relation id to a pk WITHOUT a DB fetch (spec-039 M3).
-
-    The "GlobalID -> ``decode_model_global_id`` (non-``OK`` -> uniform relation
-    error) | raw pk -> ``_coerce_relation_pk_or_none`` (``None`` -> uniform relation
-    error)" two-branch structural check the three write flavors share. Promoted here
-    (from the serializer's cleanly-factored ``_type_check_relation_id``) so the
-    single definition of "what counts as a well-formed relation id" is shared: the
-    serializer single/multi decoders call it, and the form single decoder calls it
-    (keeping only its ``empty_values`` pass-through + ``to_field_name`` reduction on
-    top). Neither branch touches the DB - visibility is confirmed separately by the
-    caller.
-
-    The model batched decoder (``_decode_relation_id_set``) deliberately does NOT use
-    this: its raw-pk half is a set-level all-or-nothing visibility / existence check
-    (``_raw_pk_relation_error``), a genuinely different contract; only its GlobalID
-    half mirrors the check here. A ``relay.GlobalID`` is decoded against the target
-    model (a non-``OK`` status is the uniform ``relation_field_error``); a raw pk is
-    coerced through the target pk field (``None`` -> the uniform error).
-    """
-    if isinstance(value, relay.GlobalID):
-        result = decode_model_global_id(value, related_model)
-        if result.status is not GlobalIDDecode.OK:
-            return None, relation_field_error(graphql_name)
-        return result.pk, None
-    pk = _coerce_relation_pk_or_none(related_model, value)
-    if pk is None:
-        return None, relation_field_error(graphql_name)
-    return pk, None
-
-
 def _relation_null_error(field_name: str) -> FieldError:
     """Build the explicit-``null`` M2M ``FieldError`` for ``field_name`` (feedback P2).
 
@@ -683,34 +614,6 @@ def _relation_visibility_error(
     # ``pks`` are already coerced (the GlobalID path), so the asserted + queried sets
     # coincide.
     return _relation_membership_error(field_name, queryset, pks, pks)
-
-
-def _coerce_relation_pk_or_none(related_model: type, pk: Any) -> Any:
-    """Coerce a raw M2M pk through the target's pk field; ``None`` if uncoercible / out of range.
-
-    The raw-pk M2M counterpart to ``relay.py::_coerce_pk_or_none`` (which coerces a
-    ``GlobalID`` ``node_id`` through the resolved Strawberry type's id field). A
-    raw-pk relation has no Relay-Node type and so no ``resolve_id_attr`` seam: the
-    existence query filters on ``pk__in`` directly, so coercion is against
-    ``related_model._meta.pk``. Coercion is ``to_python`` **then**
-    ``run_validators`` - the same two-step the GlobalID path uses: ``to_python`` is
-    a pure cast that does NOT range-check, so a syntactically-numeric but
-    out-of-range literal (a pk beyond the backend's signed-64-bit column range)
-    would reach ``pk__in`` and raise a raw backend ``OverflowError`` (``Python int
-    too large to convert to SQLite INTEGER``); the field's ``integer_field_range``
-    Min/MaxValueValidators reject it here as a ``ValidationError`` instead. An
-    uncoercible / out-of-range pk is treated as "identifies no row" - excluded from
-    the existence query (below) and so absent from the visible set, which makes it
-    the same not-found ``relation_field_error`` as a genuinely missing pk, never a
-    backend crash (feedback - relation huge-pk crash).
-    """
-    pk_field = related_model._meta.pk
-    try:
-        value = pk_field.to_python(pk)
-        pk_field.run_validators(value)
-    except (ValueError, ValidationError):
-        return None
-    return value
 
 
 def _relation_existence_error(
@@ -936,84 +839,6 @@ def _unique_constraint_groups(model: type) -> list[set[str]]:
         if hasattr(field, "column") and getattr(field, "unique", False) and not field.primary_key
     )
     return groups
-
-
-def field_error(path: str, messages: Any, *, codes: Any = None) -> FieldError:
-    """Build ONE ``FieldError`` leaf for the shared envelope (spec-039 P2.4 / rev6 #4 / #13).
-
-    The single leaf constructor BOTH the flat Django mapper
-    (``validation_error_to_field_errors``) and the recursive DRF serializer
-    flattener (``rest_framework/resolvers.py::serializer_errors_to_field_errors``)
-    call, so the ``"__all__"`` sentinel + the message-container coercion + the
-    structured ``path`` / ``codes`` derivation cannot drift between the two flatteners
-    (nor across the three write flavors). An empty ``path`` (a model-wide / non-field
-    error) is normalized to the ``NON_FIELD_ERROR_KEY`` sentinel (pinned to Django's
-    ``"__all__"`` in ``mutations/inputs.py`` - AR-M3, single source). ``messages`` is
-    coerced to a ``list[str]``: a bare string becomes a one-element list, any other
-    iterable (a DRF ``ErrorDetail`` list, a tuple) is materialized as a list.
-
-    **Structured ``path`` (rev6 #13):** the dotted ``path`` string is split into segments
-    (``items.0.name`` -> ``["items", "0", "name"]``); an empty ``path`` (the root non-field
-    error) yields ``[]`` while ``field`` is the ``"__all__"`` sentinel - the documented
-    root rule. **Structured ``codes`` (rev6 #4):** the caller passes the DRF
-    ``ErrorDetail.code``s / Django ``ValidationError.code``s (or a framework code); ``None``
-    yields ``[]``.
-    """
-    key = path if path else NON_FIELD_ERROR_KEY
-    message_list = [messages] if isinstance(messages, str) else [str(m) for m in messages]
-    # rev6 #13 root rule: a model-wide / non-field error (an empty path, or the bare
-    # ``"__all__"`` sentinel as the WHOLE path - the DRF flattener joins the top-level
-    # non-field bucket to exactly that) carries an EMPTY ``path``, while ``field`` stays
-    # ``"__all__"``; a NESTED non-field error (``items.0.__all__``) keeps its segments. So
-    # the model + serializer flavors agree on the root-non-field shape.
-    segments = [] if not path or path == NON_FIELD_ERROR_KEY else path.split(".")
-    code_list = [codes] if isinstance(codes, str) else [str(c) for c in codes] if codes else []
-    return FieldError(field=key, messages=message_list, codes=code_list, path=segments)
-
-
-def relation_field_error(graphql_name: str) -> FieldError:
-    """Build the uniform invalid / hidden / wrong-model relation ``FieldError`` (spec-039 integration).
-
-    The single leaf constructor for the relation-decode error all three write
-    flavors raise - the ``036`` model path (``_decode_relation_id_set`` /
-    ``_relation_membership_error``), the ``038`` form decoder, and the ``039``
-    serializer decoder all call this DIRECTLY (spec-039 Mn1 folded away the former
-    per-flavor ``_relation_error`` / ``_relation_field_error`` aliases). A
-    wrong-model, hidden, missing, or uncoercible id all collapse to this one
-    field-keyed shape (no existence leak), keyed to the GraphQL wire name the
-    client sent (``categoryId``). Siblings the ``field_error`` leaf ctor above so
-    the ``"Invalid id for relation ..."`` message + leaf construction are single
-    sourced across every flavor (AR-H4).
-    """
-    return field_error(graphql_name, f"Invalid id for relation {graphql_name!r}.", codes="invalid")
-
-
-def validation_error_to_field_errors(exc: ValidationError) -> list[FieldError]:
-    """Map a Django ``ValidationError`` to the ``FieldError`` envelope (spec-036 Decision 7 / AR-M3).
-
-    Uses ``exc.error_dict`` when present (per-field), keying the model's
-    ``NON_FIELD_ERRORS`` bucket to the ``NON_FIELD_ERROR_KEY`` sentinel (pinned to
-    ``"__all__"`` in ``mutations/inputs.py`` - AR-M3, single source) so a
-    multi-field-constraint error surfaces under ``"__all__"``. Falls back to
-    ``exc.messages`` under the sentinel for a non-dict ``ValidationError``. The
-    single source for both the ``full_clean()`` failure and the
-    ``IntegrityError``-race fallback mapping. Both leaves are built through the
-    shared ``field_error`` leaf ctor (P2.4) so the sentinel + message coercion stay
-    single-sited with the recursive DRF flattener.
-    """
-    if hasattr(exc, "error_dict"):
-        errors: list[FieldError] = []
-        for field_name, field_errors in exc.error_dict.items():
-            path = "" if field_name == NON_FIELD_ERRORS else field_name
-            messages = [message for error in field_errors for message in error.messages]
-            # rev6 #4: preserve each leaf Django ``ValidationError.code`` alongside the
-            # message (``error.error_list`` is the flattened leaf list ``error.messages``
-            # reads; a ``None`` code is dropped).
-            codes = [leaf.code for error in field_errors for leaf in error.error_list if leaf.code]
-            errors.append(field_error(path, messages, codes=codes))
-        return errors
-    codes = [leaf.code for leaf in exc.error_list if leaf.code]
-    return [field_error("", list(exc.messages), codes=codes)]
 
 
 def _integrity_error_field_errors() -> list[FieldError]:

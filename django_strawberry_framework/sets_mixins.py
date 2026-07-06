@@ -42,11 +42,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-from django.db.models.constants import LOOKUP_SEP
 from django.utils.module_loading import import_string
 
 from .exceptions import ConfigurationError
-from .utils.strings import pascal_case
+from .utils.strings import pascal_case_or_raise
 
 
 class ClassBasedTypeNameMixin:
@@ -66,8 +65,8 @@ class ClassBasedTypeNameMixin:
     their own suffixes instead of re-deriving the convention inline.
 
     Port of ``django_graphene_filters/mixins.py::ClassBasedTypeNameMixin``,
-    using this package's ``utils.strings.pascal_case`` in place of the
-    cookbook's ``stringcase.pascalcase``.
+    using this package's ``utils.strings.pascal_case_or_raise`` in place of
+    the cookbook's ``stringcase.pascalcase``.
     """
 
     _root_type_suffix: str = "InputType"
@@ -82,20 +81,25 @@ class ClassBasedTypeNameMixin:
         guard the per-field segment would silently collapse to an empty
         string and the resulting type name would collide with the root
         ``f"{cls.__name__}{cls._root_type_suffix}"`` (or with a sibling
-        field's bag class). Raising here surfaces the real cause at the
+        field's bag class). The conversion + guard are the shared
+        ``utils.strings.pascal_case_or_raise`` (feedback P2.2, shared with
+        ``filters/inputs.py::_pascal_case``); ``pascal_case`` splits on
+        ``"_"`` and drops empty tokens, so a ``LOOKUP_SEP`` (``"__"``)
+        boundary PascalCases each path segment exactly as the previous
+        per-segment split did. Raising here surfaces the real cause at the
         call site for every consumer (``_build_input_fields`` operator-bag
         naming, future ``OrderSet`` / ``AggregateSet`` per-field naming).
         """
         if field_path is None:
             return f"{cls.__name__}{cls._root_type_suffix}"
-        parts = [pascal_case(part) for part in field_path.split(LOOKUP_SEP)]
-        pascal = "".join(parts)
-        if not pascal:
-            raise ConfigurationError(
-                f"{cls.__name__}.type_name_for received field_path {field_path!r} "
+        pascal = pascal_case_or_raise(
+            field_path,
+            make_error=lambda bad: ConfigurationError(
+                f"{cls.__name__}.type_name_for received field_path {bad!r} "
                 "which contains no word characters; rename the filter / field so "
                 "its name has at least one alphanumeric token.",
-            )
+            ),
+        )
         return f"{cls.__name__}{pascal}{cls._field_type_suffix}"
 
 

@@ -73,8 +73,8 @@ from ..scalars import Upload
 from ..types.converters import build_enum_from_choices, convert_scalar, scalar_for_field
 from ..types.relay import implements_relay_node
 from ..utils.converters import convert_with_mro
-from ..utils.inputs import InputFieldSpec, graphql_camel_name
-from ..utils.strings import pascal_case
+from ..utils.inputs import InputFieldSpec
+from ..utils.strings import graphql_camel_name, pascal_case
 
 # The decode kinds the reverse-map record carries, mirroring
 # ``forms/converter.py``'s module constants so the Slice 3 resolver + the tests

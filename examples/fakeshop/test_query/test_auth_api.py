@@ -100,7 +100,9 @@ def test_wrong_password_and_unknown_username_return_identical_envelope():
         {
             "field": "__all__",
             "messages": ["Incorrect username/password"],
-            "codes": ["invalid_login"],
+            # The pinned failed-login shape carries NO error code (the spec's
+            # user-facing contract is field + message only).
+            "codes": [],
         },
     ]
 

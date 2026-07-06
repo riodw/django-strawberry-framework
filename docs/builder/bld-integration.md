@@ -1,698 +1,355 @@
-# Build: Cross-slice integration pass — serializer_mutations / 0.0.13 (039)
+# Build: Cross-slice integration pass — auth_mutations / 0.0.13 (040)
 
-Spec reference: `docs/spec-039-serializer_mutations-0_0_13.md`
-Build plan: `docs/builder/build-039-serializer_mutations-0_0_13.md`
-Status: final-accepted
+Spec reference: `docs/spec-040-auth_mutations-0_0_13.md`
+Build plan: `docs/builder/build-040-auth_mutations-0_0_13.md`
+Status: **final-accepted** (Worker 1 final integration verification: the three consolidation carry-forwards are genuinely discharged in the working-tree diff, the DRY scan remains clean, the public surface is unchanged, and the focused regression suites are green. Worker 0 may now mark the integration checklist box `- [x]` and dispatch the final test-run gate `bld-final.md`).
 
-A consolidation loop IS warranted. The build is integration-clean on every axis except
-ONE live cross-slice DRY finding (the `relation_field_error` / `"Invalid id for relation …"`
-3-site near-copy), which — with the one-line L1 test cleanup that folds into the same loop —
-is exactly the cross-flavor consolidation this pass exists for. Worker 0 should dispatch a
-Worker 2 consolidation pass + Worker 3 review, then re-spawn Worker 1 to re-verify and set
-`final-accepted`. Everything else verifies clean and needs no rework.
+All three in-spec slices are `final-accepted` (`build-040-…` checklist boxes 1-3 are `- [x]`). This pass runs the six BUILD.md pre-steps, the integration checks, and the tree-wide staged-anchor sweep, then catalogs the three carry-forwards the per-slice final verifications routed here as concrete Worker-2 consolidation work items.
 
 ---
 
-## Required pre-work (per BUILD.md "Cross-slice integration pass")
+## Pre-step results (BUILD.md "Cross-slice integration pass" 1-6)
 
-### 1. Prior `bld-slice-*.md` artifacts read in slice order
+### Pre-step 1 — read every prior `bld-slice-*.md` in slice order
 
-All five read end-to-end (slices 0→4), all `Status: final-accepted`:
+Read all three in full, walking each artifact's `### What looks solid` / `### DRY findings` / `### Notes for Worker 1` for deferred follow-ups:
 
-- `bld-slice-0-drf_dependency_gate.md` — DRF dev-dep floor `>=3.17.0` (config-only; no package code).
-- `bld-slice-1-serializer_converter_inputs.md` — `serializer_converter.py` + `inputs.py` + the
-  four DRY promotions (P1.3 `make_shape_build_cache`, P1.4 `convert_with_mro`, P2.1
-  `InputFieldSpec`, P2.2 `make_input_namespace`). Carries the L1 finding (below).
-- `bld-slice-2-serializermutation_base.md` — `SerializerMutation` base, `Meta` validation,
-  the `register_subsystem_clear` seam (P1.6), the root `__getattr__` export, plus P1.2 / P1.7 /
-  P2.6 / P2.7 promotions. One pass-1 Medium (missing guard/waiver integration test) resolved
-  test-only in pass 2; `final-accepted` on re-pass.
-- `bld-slice-3-resolver_pipeline_live_surface.md` — `resolvers.py` sync/async pipeline +
-  products live surface + P1.5 `run_write_pipeline_sync` / P1.1 `visible_related_object` / P2.4
-  `field_error` promotions. Carries the `_relation_field_error` finding (below).
-- `bld-slice-4-docs_card_wrap.md` — implemented-on-main docs + DB-backed KANBAN card move
-  (DONE-039), no version bump. The spec Status header was reconciled to "IMPLEMENTED ON MAIN;
-  release deferred to joint 0.0.13 cut" at its final-verification.
+- `docs/builder/bld-slice-1-auth_substrate_login_logout.md` (`final-accepted`) — login/logout substrate, the surface-keyed declaration ledger + `bind_auth_mutations()` phase-2.5 wiring, `LoginPayload`/`LogoutPayload` materialization, the `TypeRegistry.clear()` declaration-clear hand row, the fakeshop `accounts` live surface. Deferred follow-ups it recorded: (a) the unused `_build_auth_field(permission_holder=...)` param (Worker-3 Low, routed to this pass); (b) the `resolvers.py` `run_pipeline_async` `TODO(spec-040 Slice 1)` generic-boundary anchor deliberately kept undischarged (auth-local was the plan's P3 safe default; spec Decision 10 P3 "may"), routed to this pass.
+- `docs/builder/bld-slice-2-register_current_user.md` (`final-accepted`) — the `Register` rider, `current_user`, the reusable `excluded_input_fields` exclusion seam, the fakeshop `register`/`me` surface. Pass-1 Worker-3 flagged a Medium-tier DRY duplication (`_declare_surface` / `_declare_register_surface` byte-duplicate the normalize+dedupe+conflict branch); **pass 2 CONSOLIDATED it** into the shared `_lookup_or_conflict` primitive (Worker-3 pass-2 `review-accepted`, Worker-1 final verification confirmed sound — 2 callers, conflict message single-sited, login/logout ledger behavior unperturbed). No residual duplication remains from this finding. It re-confirmed the two Slice-1 carry-forwards still open.
+- `docs/builder/bld-slice-3-docs_version_cut_wrap.md` (`final-accepted`) — docs + the `0.0.13` version cut + DB card wrap. Worker-3 raised **M1** (stale staging docstrings render into `docs/TREE.md`); Worker-1 final verification adjudicated M1 = defer to THIS integration pass (out-of-scope Slice-1/2 source, TREE is generated, cannot fix in-scope). It re-confirmed the two prior Slice-1 carry-forwards. It also verified the four DB-backed docs are byte-stable renders and `import_spec_terms --check` is OK for all 40 done cards.
 
-### 2. Static inspection helper coverage — CONFIRMED (refreshed this pass)
+### Pre-step 2 — static inspection helper coverage
 
-`scripts/review_inspect.py … --output-dir docs/shadow` was run this pass on every Python file
-with review-worthy logic touched by the build (all OK):
+`scripts/review_inspect.py … --output-dir docs/shadow` was run/refreshed this pass for every Python file the build touched that carries review-worthy logic:
 
-`rest_framework/{serializer_converter,inputs,sets,resolvers}.py`, `utils/{converters,inputs,querysets}.py`,
-`mutations/{sets,resolvers,inputs}.py`, `forms/{converter,inputs,sets,resolvers}.py`, `registry.py`,
-`types/finalizer.py`, `__init__.py`. No file with review-worthy logic was skipped. (Slice 0 was
-config-only — `pyproject.toml` + `uv.lock` — correctly no helper run, recorded in its artifact.
-Slice 4 was a doc/DB-wrap — no Python logic — correctly skipped.)
+- `django_strawberry_framework/auth/mutations.py` — refreshed this pass (new logic module, ~500 lines).
+- `django_strawberry_framework/auth/queries.py` — refreshed this pass.
+- `django_strawberry_framework/mutations/resolvers.py` — refreshed this pass (the exclusion-seam edit).
+- `django_strawberry_framework/mutations/inputs.py` / `django_strawberry_framework/types/finalizer.py` — refreshed (payload builder / phase-2.5 bind slot).
+- `django_strawberry_framework/mutations/fields.py` (the `attach_synthesized_signature` promotion) — Worker-3 ran the helper during Slice 1; the promotion is behavior-preserving (SDL byte-identical, 176 `tests/mutations/` green), so no refresh added signal here.
+- `django_strawberry_framework/registry.py` — the auth clear row is a single `_clear_if_importable(...)` string-based hand row (no logic); Slice-1 review covered it. No re-run needed.
+- Slice 3 touched no package `.py` logic beyond a one-line `__version__` string edit and a one-item `FAKESHOP_APP_NAMES` tuple addition to `scripts/build_tree_md.py` — the helper was correctly **skipped** for Slice 3 (recorded in that slice's plan, BUILD.md threshold not met). No review-worthy-logic file was left un-inspected.
 
-### 3. Repeated string literals — cross-overview comparison
+### Pre-step 3 — cross-slice Repeated-string-literals comparison
 
-The per-file "Repeated string literals" sections were compared across all build-touched overviews.
-**Within-file** repeats are all spec-meaningful and intentional: the per-flavor base label
-(`DjangoMutation` / `DjangoFormMutation` / `SerializerMutation`) is deliberately per-flavor, and the
-`operation` / `permission_classes` / `serializer_class` / `optional_fields` `Meta`-key names are
-necessarily restated where each flavor validates them — these mirror the existing model/form pattern
-and are NOT build-introduced cross-slice duplication.
+Compared the **Repeated string literals** sections across every shadow overview. **No cross-slice DRY candidate.** A literal shared by 2+ files would flag; none of the auth literals appears outside its owning file:
 
-The static inspector reports only within-file repeats, so the one genuine **cross-file** repeated
-literal was found by direct grep: the relation-decode message `"Invalid id for relation {…!r}."`
-appears LIVE in three modules (`forms/resolvers.py`, `rest_framework/resolvers.py`,
-`mutations/resolvers.py`). This is finding F-INT-1 below.
+- `auth/mutations.py` repeated literals: `2x "AuthMutation"`, `2x "password"`, `2x "Auth mutations"`, `2x "username"`. All **intra-file** and already adjudicated non-duplication in the Slice-1 review: `"AuthMutation"` = the `_AUTH_FAMILY_LABEL` constant definition vs a human-readable error-message prefix; `"username"` = the gate-`data` key (spec-pinned) vs the GraphQL arg parameter name (semantically distinct — coupling them would over-abstract); `"password"` = the `_PASSWORD` constant usage vs field-name prose; `"Auth mutations"` = the login-arm bind message prefix. `"RegisterInput"` is no longer a repeated literal — Slice-2 pass-2 named it once as `_REGISTER_INPUT` (L2 fix).
+- `auth/queries.py`: **None.**
+- `mutations/resolvers.py`: `2x "many_to_many"` — pre-existing package internal, unrelated to auth.
+- `mutations/inputs.py`: **None.**
+- `types/finalizer.py`: the `<unresolved>` / `connection` / `FilterSet` / `OrderSet` / bind-error-message fragments are all **pre-existing** finalizer internals (filters/orders binding), untouched by this build.
 
-### 4. Imports / dependency-direction — one-way boundary CONFIRMED
+No auth literal (`AuthMutation`, `password`, `username`, `Auth mutations`, `RegisterInput`, `CurrentUserAlias`) appears in any other slice's file. **No consolidation warranted.**
 
-- `rest_framework/` modules import only from `..utils`, `..mutations`, `..types`, `..relay`,
-  `..scalars`, `..exceptions`, `..registry` — and crucially **never from `..forms`** (it mirrors
-  `forms/` module-for-module structurally but does not import it; both ride the promoted `utils/`
-  helpers). Verified `serializer_converter.py` / `inputs.py` / `sets.py` / `resolvers.py` import
-  lists.
-- **Reverse-direction guard:** NO `utils/` / `mutations/` / `types/` / `forms/` / `registry.py`
-  module imports from `rest_framework/`. The one `rest_framework` reference in `registry.py`
-  (`:608`) is the **static string row** `"django_strawberry_framework.rest_framework.inputs"` in
-  the `register_subsystem_clear` canonical list — a string, NOT an import (F10: registration never
-  forces a DRF import). One-way direction holds.
+### Pre-step 4 — cross-slice Imports comparison (one-way dependency direction)
 
-### 5. Accepted-slice `What looks solid` / `DRY findings` / `Notes for Worker 1` walk
+Compared the **Imports** sections; confirmed a strictly one-way boundary. The auth module depends on `mutations/` + `utils/` + `registry` + `exceptions` — never the reverse:
 
-Two deferred follow-ups were explicitly routed to this pass (both confirmed at source below):
-F-INT-1 (`_relation_field_error` 3-site near-copy, Slice-3 Worker-3 + Worker-1) and F-INT-2 (L1
-vacuous assertion, Slice-1 Worker-3 + Worker-1). No other slice surfaced an unresolved DRY
-follow-up; every spec-mandated P1.x/P2.x promotion was verified single-sited at its own slice's
-final verification and re-verified here (DRY scan below).
+- `auth/mutations.py` imports (all lower-level): `..exceptions::ConfigurationError`; `..mutations.fields::{DjangoMutationField, _lazy_ref, attach_synthesized_signature}`; `..mutations.inputs::{INPUTS_MODULE_PATH, build_mutation_input, build_payload_type, materialize_mutation_input_class, payload_object_slot}`; `..mutations.resolvers::{_model_decode_step, _model_write_step, authorize_or_raise, field_error, make_resolver_entries, run_write_pipeline_sync}`; `..mutations.sets::{DjangoMutation, _validate_permission_classes, make_declaration_registry, register_mutation as register_model_mutation}`; `..registry::registry`; `..utils.permissions::request_from_info`; plus a **function-local** `from .queries import materialize_current_user_alias` (inside the bind — cycle-safe intra-package sibling call).
+- `auth/queries.py` imports: `..mutations.fields::_lazy_ref`; `..registry::register_subsystem_clear`; `..utils.inputs::make_input_namespace`; plus a **function-local** `from .mutations import {_AUTH_FAMILY_LABEL, _CURRENT_USER, _build_auth_field, _declare_surface, _run_in_one_boundary, authorize_or_raise, request_from_info}` (queries reuses the mutations substrate — correct direction: queries → mutations substrate, not vice-versa).
+- **No sibling imports outside the documented boundary.** Verified `mutations/*`, `utils/*`, and `registry.py` do NOT import from `auth/`. The only two references to `auth` outside the module are both intentional and boundary-safe: `types/finalizer.py` uses a **function-local** `from ..auth.mutations import bind_auth_mutations` inside `finalize_django_types` (the phase-2.5 slot, mirroring `bind_mutations`/`bind_form_mutations`), and `registry.py::TypeRegistry.clear` names the auth clear via a **string-based** `_clear_if_importable("django_strawberry_framework.auth.mutations", "clear_auth_mutation_registry", …)` hand row (no import statement). Both avoid a top-level cycle. The dependency direction is exactly what the spec requires: auth depends on mutations/utils/registry, not the reverse.
 
-### 6. Staged-anchor sweep (MANDATORY) — CLEAN
+### Pre-step 5 — walk accepted-slice `What looks solid` / `DRY findings` for deferred follow-ups
 
-`grep -rEn 'TODO\(spec-039|TODO-(ALPHA|BETA|STABLE)-039' .` (+ the card-id form
-`TODO-ALPHA-039-0.0.13`), excluding `KANBAN.md` / `KANBAN.html` / `BACKLOG.md` and the per-cycle
-`docs/builder/` scratch + the active `docs/spec-039-*` files:
+Walked all three. Deferred follow-ups surfaced (and routed below):
 
-- **Package source / tests / examples / scripts: ZERO staged `TODO(spec-039 …)` or
-  `TODO-…-039` anchors.** Every Slice-0..4 staged anchor was discharged in the slice that shipped
-  its work (verified per-slice; re-confirmed here):
-  `grep -rEn 'TODO\(spec-039|TODO-(ALPHA|BETA|STABLE)-039' django_strawberry_framework/ tests/ examples/ scripts/`
-  → no matches. (`rest_framework/` carries no TODO/FIXME at all.)
-- The only remaining matches tree-wide are **prose markdown link references** in the ARCHIVED
-  predecessor specs `docs/SPECS/spec-036-mutations-0_0_11.md` and
-  `docs/SPECS/spec-038-form_mutations-0_0_12.md` — `[`TODO-ALPHA-039-0.0.13`][kanban]`-style
-  links naming the board card. These are NOT staged work-anchors in shipped source/tests/comments;
-  they are historical-record cross-references to the kanban card-id, which legitimately still reads
-  `TODO-ALPHA-039` in those archived docs (the card's RELEASE is deferred to the joint `0.0.13`
-  cut, so its public board status flip is F8-deferred — Slice 4 moved the live DB card to
-  `DONE-039` via the ORM, but does not rewrite already-archived sibling specs). Not a finding.
+- Slice 1 `Notes for Worker 1`: the `resolvers.py` `run_pipeline_async` `TODO(spec-040 Slice 1)` anchor (carry-forward 2) and the unused `_build_auth_field(permission_holder=...)` param (carry-forward 3).
+- Slice 2 `DRY findings` / `Notes for Worker 1`: the `_declare_surface`/`_declare_register_surface` duplication — **resolved in-slice at pass 2** (`_lookup_or_conflict`), NOT a carry-forward. The `build_input`/`RegisterInput` seam note — Worker-1 confirmed faithful to Decision 6's already-worded input-name seam, no spec edit, no carry-forward.
+- Slice 3 `Notes for Worker 1` (M1) and Worker-1 final adjudication: the stale staging docstrings that render into `docs/TREE.md` (carry-forward 1).
 
-**Sweep result: CLEAN** (no undischarged staged anchor in any shipped source / test / comment).
+Note: `Slice 1` already promoted `attach_synthesized_signature` (the one signature-injector shared by `DjangoMutationField` and the auth dispatcher) and `Slice 2` already consolidated `_lookup_or_conflict` — **verified no residual duplication remains from either** (see Integration checks below).
 
----
+### Pre-step 6 — tree-wide staged-anchor sweep
 
-## The integration checks (per BUILD.md)
+`grep -rEn 'TODO\(spec-040|TODO-(ALPHA|BETA|STABLE)-040' .` (excluding `KANBAN.md` / `KANBAN.html` / `BACKLOG.md`):
 
-### Export surface — CONFIRMED (no over-broad export)
+**Exactly ONE surviving `TODO(spec-040 …)` anchor in shipped source:**
 
-- `django_strawberry_framework/__init__.py::__all__` is byte-unchanged from its documented
-  pre-build set; `SerializerMutation` is **NOT** in `__all__` (F1). Verified live:
-  `'SerializerMutation' in d.__all__` → `False`; `hasattr(d, 'SerializerMutation')` → `True`
-  (resolvable by NAME through the root `__getattr__`).
-- The ONLY public-surface change is the PEP-562 root `__getattr__` (`__init__.py:40-65`) routing
-  `SerializerMutation` through `require_drf()`, non-memoizing. `import django_strawberry_framework`
-  succeeds without DRF; `from … import *` stays DRF-free. This is the single net-new public surface
-  the spec authorizes (Decision 12 / F1 / DoD 8). No other module gained or broadened an export.
-
-### Duplicated helpers across slices — SINGLE-SITED (one finding: F-INT-1)
-
-Every spec-mandated promotion is defined EXACTLY ONCE (grep-verified at source this pass):
-
-| Helper | Single owning site |
-| --- | --- |
-| `convert_with_mro` (P1.4) | `utils/converters.py:28` |
-| `InputFieldSpec` (P2.1) | `utils/inputs.py:54` |
-| `make_input_namespace` (P2.2) | `utils/inputs.py:91` |
-| `make_shape_build_cache` (P1.3) | `utils/inputs.py:144` |
-| `NON_DELETE_WRITE_OPERATIONS` (P1.2) | `mutations/sets.py:112` |
-| `reject_unknown_meta_keys` (P2.7) | `mutations/sets.py:134` |
-| `_hook_overridden` (P2.6) | `mutations/sets.py:151` |
-| `cached_build_input` (P1.7) | `mutations/sets.py:165` |
-| `build_and_stash_input` (P1.7) | `mutations/sets.py:200` |
-| `register_subsystem_clear` / `iter_subsystem_clears` (P1.6) | `registry.py:72` / `:88` |
-| `run_write_pipeline_sync` (P1.5) | `mutations/resolvers.py:113` |
-| `field_error` (P2.4) | `mutations/resolvers.py:843` |
-| `visible_related_object` (P1.1) | `utils/querysets.py:208` |
-
-Forked-copy guards all 0: no `_VALID_SERIALIZER_OPERATIONS`, `_VALID_FORM_OPERATIONS`,
-`_cached_build_serializer_input`, `_build_and_stash_serializer_input`. `_serializer_shape_build_cache`
-is the legitimate Slice-1 `make_shape_build_cache()` pair (`rest_framework/inputs.py:693`), not a
-hand-rolled fork.
-
-The ONE duplicated-helper finding is F-INT-1 (`relation_field_error`), below — and it is a
-PRE-EXISTING two-site (forms + model) pattern at HEAD that Slice 3 extended to a third site
-following the established shape, surfaced for cross-flavor consolidation exactly here.
-
-### Inconsistent naming / error handling between slices — NONE
-
-`rest_framework/` mirrors `forms/` method-for-method (`_resolve_model` / `_validate_meta` /
-`build_input` / `input_type_name` / `input_module_path` / `resolve_sync` / `resolve_async`), uses
-the same `ConfigurationError` raising discipline, the same `FieldError` envelope + `NON_FIELD_ERROR_KEY`
-sentinel, and the same per-flavor base-label message shape via the shared
-`non_delete_operation_error` builder. Error keying is consistent: relation errors key to the GraphQL
-input name (F5), non-field errors normalize to `"__all__"` at every level via the shared sentinel.
-
-### Repeated ORM/queryset patterns that should be centralized — NONE outstanding
-
-The object-returning related-visibility pattern was the one ORM duplication risk; it is centralized
-in `utils/querysets.py::visible_related_object` (P1.1), called by both the form and serializer
-relation decoders. The model raw-pk path keeps its own `_raw_pk_relation_error` membership/visibility
-body (a different signature/behavior — set membership vs single-object resolve), correctly NOT folded
-(it is the message literal, not the queryset logic, that duplicates — see F-INT-1).
-
-### Misplaced responsibilities between modules — NONE
-
-Shared mechanics live in `utils/` (converter skeleton, input specs, namespaces, caches, querysets) and
-`mutations/` (the write-pipeline skeleton, the meta-validation helpers, the leaf error ctor, the
-clear-seam registration target in `registry.py`). `rest_framework/` holds only its genuinely-new
-logic (the DRF-field converter, the serializer input descriptor, the serializer pipeline callbacks,
-the recursive `serializer_errors_to_field_errors` flattener). The seam centerpiece
-`register_subsystem_clear` correctly lives in `registry.py` with string rows (F10).
-
-### Repeated string literals / dict keys / tuple shapes — one finding (F-INT-1)
-
-See pre-work step 3. The only cross-file repeated executable literal introduced/extended by the build
-is the relation-decode message (F-INT-1). Within-file Meta-key repeats are intentional per-flavor.
-
-### Comments telling one coherent story — YES
-
-The `rest_framework/` docstrings consistently cite the spec-036/038 precedents they reuse and the
-spec-039 decisions they implement; the `register_subsystem_clear` seam comments (registry/finalizer)
-tell one story about the string-row F10 design; the relocated/promoted helper bodies carry
-provenance comments pointing at their form-local origins. No contradictory narrative surfaced.
-
----
-
-## Findings
-
-### F-INT-1 (consolidation item) — `relation_field_error` 3-site near-copy / `"Invalid id for relation …"` repeated literal
-
-**A real, LIVE cross-flavor DRY finding worth a consolidation loop.** Confirmed at source this pass:
-
-- `django_strawberry_framework/forms/resolvers.py::_relation_field_error` (`:128-138`) — body
-  `return FieldError(field=graphql_name, messages=[f"Invalid id for relation {graphql_name!r}."])`
-  (with a function-local `from ..mutations.inputs import FieldError`; return-typed `Any`). LIVE: 3
-  call sites (`:192`, `:197`, `:201`).
-- `django_strawberry_framework/rest_framework/resolvers.py::_relation_field_error` (`:151-159`) —
-  **byte-identical executable body** (module-level `FieldError` import; return-typed `FieldError`).
-  LIVE: 3 call sites (`:220`, `:225`, `:229`).
-- `django_strawberry_framework/mutations/resolvers.py::_raw_pk_relation_error` (`:671`) — carries
-  the **same message literal** `f"Invalid id for relation {field_name!r}."` (`:515`, inside the
-  function's membership-error construction). LIVE: caller at `:465`. (This helper's surrounding
-  body — set-membership / visibility resolution — is genuinely different and must NOT be folded;
-  only the leaf `FieldError` + message construction duplicates.)
-
-**Why it is a finding now (not before):** spec-036 froze it as a model-path helper, spec-038 added
-the byte-identical forms copy; this build's Slice 3 added the third byte-identical
-`rest_framework/` copy. The spec import manifest (line ~2892) promoted the leaf `field_error(path,
-messages)` ctor (P2.4 — done) but did NOT list `_relation_field_error` for promotion, and the
-consolidation spans the 036 model path, so each slice correctly deferred it to this cross-slice pass
-(Slice-3 Worker-3 DRY finding + Slice-3 Worker-1 final-verification "Deferred work for the
-integration pass", and Worker-1 memory carry-in #1). Confirmed LIVE (not dead code) per the
-worker-1.md "grep the readers before recommending consolidation" rule: all three helpers have live
-callers.
-
-**Single-site target (recommended consolidation):** add a shared leaf ctor
-`relation_field_error(graphql_name)` in `mutations/resolvers.py`, sited **beside the P2.4-promoted
-`field_error`** (`mutations/resolvers.py:843`), returning
-`FieldError(field=graphql_name, messages=[f"Invalid id for relation {graphql_name!r}."])` — so the
-message text + leaf shape single-site once, exactly as P2.4 did for the generic leaf. Then re-point
-all three flavors:
-
-1. `forms/resolvers.py::_relation_field_error` → either delete the local helper and call the shared
-   `relation_field_error` directly at its 3 call sites, OR make it a one-line re-export that
-   delegates (prefer delete-and-call-direct unless the local name aids readability — Worker 2's call;
-   the form suite must stay byte-equivalent — the rendered message is identical).
-2. `rest_framework/resolvers.py::_relation_field_error` → same re-point (delete-and-call-direct or
-   thin delegate); the serializer relation-decode behavior + message are unchanged.
-3. `mutations/resolvers.py::_raw_pk_relation_error` → build its `FieldError` via the shared
-   `relation_field_error(field_name)` so the message literal is no longer re-spelled there. The
-   surrounding membership/visibility logic stays put.
-
-**Acceptance for the loop:** the message text exists in exactly ONE place; `grep -rn "Invalid id for
-relation" django_strawberry_framework/` returns a single executable-literal site (the shared ctor)
-plus only docstring/comment mentions; the `036` model + `038` form + `039` serializer resolver suites
-(`tests/mutations/`, `tests/forms/`, `tests/rest_framework/`, the live `test_products_api.py`) all
-stay green UNCHANGED (byte-equivalence proof). No new public export. This is exactly the cross-flavor
-single-siting the integration pass is for.
-
-### F-INT-2 (consolidation item, folds into the same loop) — L1 vacuous-tautology test assertion
-
-`tests/rest_framework/test_inputs.py:620` (`::test_allow_null_field_is_nullable_even_when_required`)
-reads:
-
-```python
-assert field.default is UNSET.__class__() or field.default is not UNSET
+```
+django_strawberry_framework/mutations/resolvers.py:1465:    # TODO(spec-040 Slice 1): if the auth resolvers need the same one-boundary
 ```
 
-`UNSET` is a singleton, so `UNSET.__class__() is UNSET` is True, and the line reduces to
-`(field.default is UNSET) or (field.default is not UNSET)` — a tautology that passes for ANY value
-and pins NOTHING. Confirmed at source this pass (Slice-1 Worker-3 L1 + Slice-1/Slice-3 Worker-1
-carry-ins). **Not a coverage gap:** the load-bearing M2 contract (a `required=True, allow_null=True`
-field is nullable WITHOUT an UNSET default, so it must be provided) is already pinned by line 619
-(`assert _is_optional(field)`) and line 622 (`assert field.default is not UNSET`). The fix is a
-one-line cleanup: delete line 620 (619+622 already pin the contract) or rewrite it to assert the
-actual `field.default` identity. Folds into the F-INT-1 consolidation loop at zero marginal cost
-(both touch the resolver/test surface; Worker 2's same pass can do both, Worker 3 reviews both).
+This is carry-forward 2 (below) — it must be discharged before build close.
 
-### No other findings
+**The `TODO-ALPHA-040-0.0.13` hits are all legitimate KANBAN card-id cross-references, NOT staged-work anchors** — they live in archived predecessor specs naming this card:
 
-No High/Medium DRY, naming, error-handling, responsibility, export, or comment-coherence finding.
-The build is integration-clean apart from F-INT-1 + F-INT-2.
+- `docs/SPECS/spec-036-mutations-0_0_11.md:568`, `docs/SPECS/spec-038-form_mutations-0_0_12.md:{616,888,2278}`, `docs/SPECS/spec-039-serializer_mutations-0_0_13.md:{49,528,1176,1238,1513,2707,3529,3549,3737}` — every one is a `[`TODO-ALPHA-040-0.0.13`][kanban]` reference-style link to the board card (the milestone-prefixed card-id form some specs use to reference a not-yet-Done card at authoring time). These are prose cross-references in **already-shipped** specs, not staged-anchor obligations, and BUILD.md's exclusion intent (KANBAN/BACKLOG naming board cards) extends to these prose card-id refs. No discharge obligation — leave as-is.
+
+The active spec `docs/spec-040-…md` and the `bld-*.md` / `build-040-*.md` cycle artifacts are excluded from the sweep as per-cycle scratch. Their `TODO-ALPHA-040` mentions are card-id references, not source anchors.
 
 ---
 
-## Deferred-work catalog seeds (for `bld-final.md` `### Deferred work catalog`)
+## Integration checks (BUILD.md)
 
-These are NOT integration findings to fix in this build — they are catalog entries for the next
-spec author / the joint cut. Recorded here so `bld-final.md` can build its catalog from this ledger:
-
-1. **Licensed joint-cut docs deferral (F8 / Decision 14).** The package version bump `0.0.12 →
-   0.0.13`, the GLOSSARY `shipped (0.0.13)` status flip (Slice 4 set `status_text="implemented on
-   main, releasing in \`0.0.13\`"` with the FK kept `planned`), the `README.md` / `docs/README.md`
-   "Coming next" → "Shipped today" move (README Status → `0.0.13`), and the `CHANGELOG.md` release
-   bullets are ALL deferred to the joint `0.0.13` cut shared with `WIP-ALPHA-040-0.0.13`. The card
-   `CHANGELOG.md` edit additionally requires an explicit maintainer prompt (`AGENTS.md` "Do not
-   update CHANGELOG.md unless explicitly instructed"). Source: Slice-0..4 build-plan flags + Slice-4
-   final verification.
-2. **Out-of-scope board-hygiene note (`planning_state` on done cards).** A `planning_state="In
-   progress"` residue on done cards (DONE-038 precedent) was observed out-of-scope by Slice-4
-   final verification; not this build's to fix. Catalog only.
-
-(F-INT-1 and F-INT-2 above are NOT deferred — they are this build's consolidation loop, to land
-before `bld-final.md`. If for any reason the loop is declined by the maintainer, they convert to
-catalog entries; otherwise they are discharged in-build.)
+- **Duplicated helpers across slices — none.** The auth surface is a rider layer; every write-stack helper is reused by call (verified against spec `## Helper-reuse obligations (DRY)` D1-D19 + D-N1-D-N3 across the Slice-1 and Slice-2 reviews). `Slice 1` promoted `attach_synthesized_signature` so `DjangoMutationField` and the auth dispatcher share ONE injector (proved byte-transparent vs `git show HEAD`). `Slice 2` consolidated `_declare_surface` / `_declare_register_surface` into `_lookup_or_conflict` (the normalize+dedupe+conflict-raise is single-sited — `grep "was already declared with different"` returns one hit; Worker-1 confirmed 2 callers, no Slice-1 ledger regression). No residual duplication from either.
+- **Inconsistent naming / error handling between slices — none.** All four surfaces gate through `authorize_or_raise` (one denial formatter, the `_primary_type`/holder-`__name__` fallback); all envelope errors ride `field_error` (`login` → empty path → `NON_FIELD_ERROR_KEY`; `register` password → direct `"password"` key; never a hard-coded `"__all__"`). Holder `__name__`s are pinned and test-asserted (`Login` / `Session` / `CurrentUser`). The three distinct bind-arm messages share the `_resolve_user_primary` getter, varying only the leading phrase.
+- **Repeated ORM/queryset patterns that should be centralized — none introduced.** Auth adds no new ORM pattern: `login`/`current_user` do NO queryset work (D-N1, source-commented); `register` rides the inherited `refetch_optimized` + the shared `_model_write_step` `full_clean`/`save` tail; the exclusion seam is a parameter on the existing `_model_decode_step`/`_decode_relations` path (one production caller, default path byte-behavior-identical — proved mechanically vs HEAD).
+- **Misplaced responsibilities between modules — none.** Auth resolvers/factories live under `auth/`; the write-stack primitives stay under `mutations/`; the phase-2.5 bind slot stays in `types/finalizer.py` (function-local import); the clear row stays in `registry.py` (string-based). One-way dependency direction confirmed (pre-step 4).
+- **Missing / too-broad exports introduced by the build — none.** `git diff HEAD -- django_strawberry_framework/__init__.py` changes ONLY the `__version__` string literal (`0.0.12` → `0.0.13`); `__all__` and the re-export list are **unchanged**. Auth is submodule-only (spec Decision 3) — the four factories are re-exported from `auth/__init__.py` only, absent from the package root `__all__`. `tests/base/test_init.py::test_public_api_surface_is_pinned` pins the unchanged tuple. Confirmed across all three slice reviews.
+- **Repeated string literals / dict keys / tuple shapes across slices — none.** See pre-step 3.
+- **Comments tell one coherent story — MOSTLY, with one residue = carry-forward 1.** The reuse-by-call comments, the three D-N* non-reuse source comments, and the Decision cross-refs read coherently across the new auth code. The exception is the stale "planned by spec-040" / "Slice 1" / "Slice 2" **staging** language in seven source docstrings (and two internal `auth/mutations.py` body comments), which now describe shipped behavior as planned and render into `docs/TREE.md` — cataloged as carry-forward 1.
 
 ---
 
-## Verdict
+## THREE carry-forwards → concrete Worker-2 consolidation work items
 
-`Status: revision-needed`. One consolidation loop:
+All three require Worker-2 SOURCE edits. Worker 1 plans/records them here; Worker 0 dispatches a Worker-2 consolidation pass, then Worker-3 review, then returns to Worker 1 for the final integration `final-accepted`. **`grep -rEn 'TODO\(spec-040'` must be clean, and the staging docstrings refreshed, before the build closes.**
 
-- **F-INT-1** — promote a shared `relation_field_error(graphql_name)` leaf ctor in
-  `mutations/resolvers.py` (beside `field_error`); re-point `forms/resolvers.py::_relation_field_error`,
-  `rest_framework/resolvers.py::_relation_field_error`, and
-  `mutations/resolvers.py::_raw_pk_relation_error`'s message construction; prove the model/form/
-  serializer suites stay byte-equivalent.
-- **F-INT-2** — fix the one-line vacuous assertion at `tests/rest_framework/test_inputs.py:620`
-  (delete it or rewrite to assert the real `field.default` identity), folded into the same loop.
+### Carry-forward 1 (M1) — refresh stale staging docstrings + regenerate `docs/TREE.md` IN THE SAME CHANGE
 
-Worker 0: dispatch Worker 2 (consolidation) + Worker 3 (review), then re-spawn Worker 1 to re-run
-this integration pass and set `final-accepted`. Everything else (staged-anchor sweep, export surface,
-single-sited promotions, one-way imports, comment coherence) is verified clean and needs no rework.
+Seven source files carry "planned by spec-040" / "Slice 1" / "Slice 2" STAGING language describing now-shipped behavior. `docs/TREE.md` is generated by `scripts/build_tree_md.py` and renders its per-file/per-directory descriptions **from these module docstrings' first lines** — so the docstring fix and a TREE regenerate MUST land together in the same change (a hand-edit of `docs/TREE.md` is reverted by the next regenerate). The full verified extent (grepped this pass, broader than the original Slice-3 escalation named):
+
+Module-docstring first lines (each renders into `docs/TREE.md`; TREE line refs in parens):
+
+- `django_strawberry_framework/auth/__init__.py:1` — `"""Opt-in session-auth field factories planned by spec-040.` plus lines 4-5 `"…after Slice 1/2 replace the fail-loud placeholders in mutations.py and queries.py."` → TREE:208, :297. **Both the "planned by spec-040" first line AND the "after Slice 1/2 replace the fail-loud placeholders" body sentence are stale.**
+- `django_strawberry_framework/auth/mutations.py:1` — `"""Opt-in session-auth mutation factories (spec-040 Slice 1: login / logout).` → TREE:209, :298. (The module also binds/holds login+logout+register+current_user substrate, so the "Slice 1: login / logout" framing under-describes it.)
+- `django_strawberry_framework/auth/queries.py:1` — `"""Opt-in session-auth query factory (spec-040 Slice 2: current_user / me).` → TREE:210, :299.
+- `examples/fakeshop/apps/accounts/__init__.py:1` — `"""Schema-only fakeshop accounts app planned by spec-040."""` → TREE:657.
+- `tests/auth/test_mutations.py:1` — `"""Package-internal auth mutation tests (spec-040 Slice 1 residue a live query cannot drive).` → TREE:396, :559.
+- `tests/auth/test_queries.py:1` — `"""Package-internal current_user tests (spec-040 Slice 2 residue a live query cannot drive).` → TREE:397, :560.
+- `examples/fakeshop/test_query/test_auth_api.py:1` — `"""Live /graphql/ auth API acceptance tests (spec-040 Slice 1/2: login/logout/register/me).` → TREE:524.
+
+Additionally (NOT rendered into TREE — internal-comment staleness in the same module, refresh for coherence with pre-step "comments tell one story"):
+
+- `django_strawberry_framework/auth/mutations.py:236` — `"…Auth-local for Slice 1; the…"` (a resolver-body comment).
+- `django_strawberry_framework/auth/mutations.py:305-306` — `"…(Slice 2 exercises the register arm; Slice 1 wires the ordering only)…"` (the `bind_auth_mutations` docstring — now that both arms shipped, the "Slice 2 exercises / Slice 1 wires" framing is stale).
+
+**Fix pattern (established this cycle):** mirror the already-completed `tests/auth/__init__.py` refresh (Slice 3 flipped it to `"""Package-internal tests for the opt-in auth subsystem (spec-040)…"""` — "planned" gone, `TODO(spec-040 Slice 1-2)` anchor removed). For each file above: flip "planned by spec-040" / "after Slice 1/2 replace the fail-loud placeholders" to shipped wording, and re-tag the `Slice N` / `Slice 1/2` provenance to non-staging `spec-040` (or `DONE-040-0.0.13` where historical provenance is useful) per AGENTS.md L26 ("shipped behavior folds into `docs/TREE.md` … the staged anchor is removed in the same change that ships the slice"). **Then re-run `scripts/build_tree_md.py`** so `docs/TREE.md` re-renders from the fixed docstrings (and re-verify `build_tree_md.py --check` exits 0 — no behavior change expected).
+
+Precise targets:
+- `django_strawberry_framework/auth/__init__.py::<module docstring>` (lines 1, 4-5)
+- `django_strawberry_framework/auth/mutations.py::<module docstring>` (line 1) + `::_build_auth_field #"Auth-local for Slice 1"` (line 236) + `::bind_auth_mutations #"Slice 2 exercises the register arm"` (lines 305-306)
+- `django_strawberry_framework/auth/queries.py::<module docstring>` (line 1)
+- `examples/fakeshop/apps/accounts/__init__.py::<module docstring>` (line 1)
+- `tests/auth/test_mutations.py::<module docstring>` (line 1)
+- `tests/auth/test_queries.py::<module docstring>` (line 1)
+- `examples/fakeshop/test_query/test_auth_api.py::<module docstring>` (line 1)
+- Regenerate: `scripts/build_tree_md.py` (run it; `docs/TREE.md` is the output — do NOT hand-edit it).
+
+### Carry-forward 2 — discharge the `resolvers.py::run_pipeline_async` `TODO(spec-040 Slice 1)` anchor
+
+`django_strawberry_framework/mutations/resolvers.py:1465` (inside `run_pipeline_async`) carries a `TODO(spec-040 Slice 1)` inviting the optional generic one-boundary primitive factoring. `Slice 1` deliberately kept the auth async boundary auth-local (`_run_in_one_boundary`) per the plan's P3 safe default (spec Decision 10 P3 says the generic primitive is a "may," not a "must"), so the work the anchor names was **not** taken. Per BUILD.md integration-pass step 6, a `TODO(spec-040 Slice 1)` anchor surviving in shipped source must be **discharged**: the auth async paths already ride one boundary via the auth-local `_run_in_one_boundary`, and the spec (Decision 10 P3) was already edited during Slice-1 final verification to record that auth-local is the shipped shape. So the discharge is: **remove the anchor** (the optional factoring is not being done), OR **re-tag it to non-TODO `spec-040` provenance** (e.g. a plain comment noting the auth async boundary is auth-local by design per Decision 10 P3, with no `TODO(` prefix). Recommended: convert the `TODO(spec-040 Slice 1):` prefix to a non-TODO provenance note (the surrounding pseudocode explaining the generic-primitive shape is worth keeping as a design note, just not as a live TODO). Do NOT change `run_pipeline_async`'s signature or behavior — the mutation-shaped public wrapper stays as-is.
+
+Precise target: `django_strawberry_framework/mutations/resolvers.py::run_pipeline_async #"TODO(spec-040 Slice 1)"` (line ~1465).
+
+### Carry-forward 3 — drop the unused `_build_auth_field(permission_holder=...)` param
+
+`django_strawberry_framework/auth/mutations.py::_build_auth_field` takes `permission_holder: type` as its first positional (line 185) and immediately `del`s it (line 206, comment "captured by the resolver closures, not read here"). The three call sites — `login_mutation` (mutations.py:468), `logout_mutation` (mutations.py:513), and `current_user` (queries.py:98) — each pass it, but the resolver bodies close over the outer `holder = record.holder`, not over this parameter, so it is genuinely dead (the `del` acknowledges it). Drop the parameter and its `del` line, and remove the argument from all three call sites. Low/cosmetic — no behavior impact; a minor API/readability cleanup on the module-internal helper.
+
+Precise targets:
+- `django_strawberry_framework/auth/mutations.py::_build_auth_field` — remove the `permission_holder: type` param (line 185) and the `del permission_holder` line (line 206).
+- Call sites to update (drop the passed `permission_holder` arg): `django_strawberry_framework/auth/mutations.py::login_mutation #"_build_auth_field("` (line 468), `::logout_mutation #"_build_auth_field("` (line 513), and `django_strawberry_framework/auth/queries.py::current_user #"_build_auth_field("` (line 98).
+
+---
+
+## Cross-slice DRY findings (beyond the three carry-forwards)
+
+**None.** The DRY-scan verdict is clean: no cross-slice duplicated helper, no shared repeated literal / dict key / tuple shape, no cross-slice near-copy. The two in-slice consolidations that already landed (`attach_synthesized_signature` in Slice 1, `_lookup_or_conflict` in Slice 2) leave no residual duplication. The only DRY-adjacent items are carry-forward 1's comment-coherence residue (staging docstrings) — a wording refresh, not a code-duplication fix.
+
+## Spec-changes note (Worker 1 only)
+
+No spec edit made in this integration pass. The two spec edits already made during the per-slice cycles remain the reconciled state: (Slice 1) Decision 10 P3 recorded the auth-local boundary as the shipped shape; (Slice 3 reconciliation) the `docs/spec-040-…-terms.csv` dedup to 30 one-per-anchor rows. Neither carry-forward here requires a spec-body change — carry-forward 1 is source-docstring/generated-doc residue, carry-forward 2 is spec-authorized (Decision 10 P3 already records the auth-local shape), and carry-forward 3 is a cosmetic dead-param removal.
+
+## Routing
+
+**A consolidation loop IS required** (the three carry-forwards are open source edits). Worker 0 must:
+
+1. Dispatch a **Worker 2 consolidation pass** to land carry-forwards 1-3 (M1 docstring refresh + `build_tree_md.py` regenerate in the SAME change; the `resolvers.py:1465` anchor discharge; the `_build_auth_field(permission_holder=...)` dead-param removal). No cross-slice DRY refactor beyond these three.
+2. Dispatch a **Worker 3 review pass** over that consolidation diff (must confirm: `grep -rEn 'TODO\(spec-040' --include='*.py'` is clean; `docs/TREE.md` no longer renders "planned by spec-040" / "Slice 1"/"Slice 2" staging strings and `build_tree_md.py --check` exits 0; the three call sites drop the `permission_holder` arg cleanly; `__init__.py` `__all__` still unchanged; the auth suite + `tests/mutations/` stay green).
+3. **Return to Worker 1** for a re-run of this integration pass to set `Status: final-accepted` once the three carry-forwards are discharged. Only then does Worker 0 mark the integration checklist box `- [x]` and proceed to the final test-run gate (`bld-final.md`).
+
+Do NOT set `final-accepted` on this artifact while the carry-forwards are unresolved.
 
 ---
 
 ## Build report (Worker 2)
 
-Consolidation pass discharging F-INT-1 + F-INT-2 exactly as scoped. No anchors discharged, no
-version bump, no scope broadening.
+Consolidation pass landing the three carry-forwards catalogued above. No cross-slice DRY refactor beyond these three; all edits are behavior-neutral (docstring/comment wording + a dead-param removal + a generated-doc regenerate).
 
 ### Files touched
 
-Grounded in `git status --short` (the tree carries Slice 0–4's accepted-but-uncommitted work; my
-consolidation diff is confined to these four files):
+Grounded in `git status --short` after both ruff invocations. The nine files below are this pass's diff (the rest of the working tree is the pre-existing Slice-1/2/3 build diff, the 8 `D` spec-039 prior-cycle deletions, the untracked spec-040 build artifacts, and the concurrent-writable DB/KANBAN/GLOSSARY — none of which this pass touched):
 
-- `django_strawberry_framework/mutations/resolvers.py` — **F-INT-1 single-site.** Added the shared
-  leaf ctor `relation_field_error(graphql_name) -> FieldError` (`:864`), sited immediately after the
-  P2.4-promoted `field_error` (`:843`), returning
-  `FieldError(field=graphql_name, messages=[f"Invalid id for relation {graphql_name!r}."])` — the
-  single home for the message text + leaf shape. Re-pointed the model-path leaf ctor
-  `_relation_error` (`:511`) to `return relation_field_error(field_name)` (kept the local name +
-  its 2 call sites `:457`/`:561` and the transitive `_raw_pk_relation_error` path untouched).
-- `django_strawberry_framework/forms/resolvers.py` — **F-INT-1 re-point.** `_relation_field_error`
-  (`:128`) now `return relation_field_error(graphql_name)`; removed the function-local
-  `from ..mutations.inputs import FieldError` (no other executable `FieldError(` use remained in the
-  file) and added `relation_field_error` to the existing `..mutations.resolvers` import block (`:107`).
-  Kept the local `_relation_field_error` name + its 3 call sites (`:192`/`:197`/`:201`).
-- `django_strawberry_framework/rest_framework/resolvers.py` — **F-INT-1 re-point.**
-  `_relation_field_error` (`:151`) now `return relation_field_error(graphql_name)`; added
-  `relation_field_error` to the existing `..mutations.resolvers` import block (`:122`). The
-  module-level `FieldError` import stays (22 annotation/docstring references). Kept the local name +
-  its 3 call sites (`:220`/`:225`/`:229`).
-- `tests/rest_framework/test_inputs.py` — **F-INT-2.** Deleted the vacuous-tautology line
-  (`assert field.default is UNSET.__class__() or field.default is not UNSET`) in
-  `test_allow_null_field_is_nullable_even_when_required`. The real M2 contract stays pinned by the
-  adjacent `assert _is_optional(field)` and `assert field.default is not UNSET`; the explanatory
-  comment was kept. `UNSET` is still referenced 11× elsewhere, so the import is untouched.
+**Carry-forward 1 (M1 — staging-docstring/comment refresh + TREE regenerate, same change):**
+
+- `django_strawberry_framework/auth/__init__.py` — module docstring: `"…field factories planned by spec-040."` → `"…field factories (spec-040)."`; the stale body sentence `"…after Slice 1/2 replace the fail-loud placeholders…"` → shipped wording naming the four now-shipped factories.
+- `django_strawberry_framework/auth/mutations.py` — module docstring first line `"(spec-040 Slice 1: login / logout)"` → `"+ shared auth substrate (spec-040)"` (the old first line under-described a module that now holds login/logout/register + the shared substrate + the bind); added a body paragraph enumerating the shipped contents. Plus the two internal body comments: `_run_in_one_boundary` docstring `"Auth-local for Slice 1; …deferred (spec Decision 10 P3 'may'…)"` → `"Auth-local by design (spec-040 Decision 10 P3): …a P3 'may', not a 'must', so the auth async boundary stays this one-helper shape…"`; `bind_auth_mutations` docstring `"(Slice 2 exercises the register arm; Slice 1 wires the ordering only)"` → `"(the ordering the register arm depends on)"`.
+- `django_strawberry_framework/auth/queries.py` — module docstring `"(spec-040 Slice 2: current_user / me)"` → `"(spec-040: current_user / me)"`; body `"sharing the Slice-1 auth substrate"` → `"sharing the auth substrate"`.
+- `examples/fakeshop/apps/accounts/__init__.py` — single-line docstring `"…accounts app planned by spec-040."` → `"…accounts app exercising the session-auth surface (spec-040)."`.
+- `tests/auth/test_mutations.py` — module docstring first line `"(spec-040 Slice 1 residue…)"` → `"(spec-040 residue…)"`.
+- `tests/auth/test_queries.py` — module docstring first line `"(spec-040 Slice 2 residue…)"` → `"(spec-040 residue…)"`.
+- `examples/fakeshop/test_query/test_auth_api.py` — module docstring first line `"(spec-040 Slice 1/2: login/logout/register/me)"` → `"(spec-040: login/logout/register/me)"`; body `"and (Slice 2) the register ->"` → `"and the register ->"`.
+- `docs/TREE.md` — **regenerated** via `uv run python scripts/build_tree_md.py` in the SAME change (renders per-file descriptions from the module docstrings' first lines). Now renders the refreshed shipped descriptions at TREE:208-210, :297-299 (auth package), :395-397, :558-560 (`tests/auth/`), :524 (`test_auth_api.py`), :657 (`accounts/`). No `"planned by spec-040"` / `"spec-040 Slice"` staging string remains in TREE.md (verified by grep, no matches). NOT hand-edited.
+
+**Carry-forward 2 (`TODO(spec-040 Slice 1)` anchor discharge):**
+
+- `django_strawberry_framework/mutations/resolvers.py` — `run_pipeline_async` body: the `# TODO(spec-040 Slice 1): …factor the core…` anchor (6 lines) → a non-TODO provenance comment recording that spec-040 kept the auth one-boundary need auth-local (Decision 10 P3 "may", not "must"), pointing at `auth/mutations.py::_run_in_one_boundary`. Design-note content preserved; `TODO(` prefix removed. `run_pipeline_async`'s signature and behavior unchanged (the `return await sync_to_async(...)` line is byte-identical).
+
+**Carry-forward 3 (dead `_build_auth_field(permission_holder=...)` param):**
+
+- `django_strawberry_framework/auth/mutations.py` — `_build_auth_field`: removed the leading `permission_holder: type` param and the `del permission_holder  # captured by the resolver closures, not read here.` line. Dropped the passed `holder` argument at the two mutation call sites (`login_mutation`, `logout_mutation`).
+- `django_strawberry_framework/auth/queries.py` — dropped the passed `holder` argument at the `current_user` call site.
+
+  Behavior-preserving: each factory still binds `holder = record.holder` and its resolver closures (`_login_body` / `_logout_body` / `_current_user_body`) close over that outer `holder` for `authorize_or_raise(holder, …)`. The param was genuinely dead (the pre-edit `del` acknowledged it), so removal is a no-op on runtime behavior. `holder` remains a live local in all three factories (ruff raised no unused-variable finding).
 
 ### Tests added or updated
 
-No tests added. One vacuous assertion deleted (F-INT-2). No production-behavior test was changed —
-the model/form/serializer suites staying green UNCHANGED is the byte-equivalence proof for the
-re-point.
-
-### Spec slice checklist (verbatim)
-
-This integration artifact carries no `### Spec slice checklist (verbatim)` section (it is the
-cross-slice consolidation artifact, not a slice). Nothing to tick.
+None. All three carry-forwards are behavior-neutral cleanups (docstring/comment wording + a dead-param removal + a doc regenerate), so no assertion changed. The dead-param removal needed no test tweak: no test constructs `_build_auth_field` directly (the three in-tree factory call sites were the only callers), and the existing auth suite reaches the synthesized resolver via `T.__strawberry_definition__.fields[i].base_resolver.wrapped_func`, which is unaffected by the private helper's arity.
 
 ### Validation run
 
-- `uv run ruff format .` — **PASS** (295 files left unchanged; the COM812-vs-formatter warning is a
-  pre-existing config note, not a change).
-- `uv run ruff check --fix .` — **PASS** ("All checks passed!"; no autofix churn).
-- `git status --short` after both ruff runs — my consolidation diff is confined to the four files
-  above; no tool churn introduced, nothing reverted. Did NOT touch `docs/feedback.md`,
-  `examples/fakeshop/db.sqlite3`, or any file outside scope (those entries pre-date this pass —
-  Slice 0–4's accepted work).
-- Acceptance gate: `grep -rn "Invalid id for relation {" django_strawberry_framework/` → **one**
-  executable-literal site (`mutations/resolvers.py:877`, inside the shared ctor). The other three
-  `"Invalid id for relation"` matches tree-wide are docstring/comment mentions only.
-- **Focused tests (no `--cov`):**
-  `uv run pytest tests/mutations tests/forms tests/rest_framework examples/fakeshop/test_query/test_products_api.py --no-cov`
-  → **545 passed** in ~105s. The model + form + serializer suites all green with no production-test
-  edit = the byte-equivalence proof for all three re-points.
+- `uv run ruff format .` — pass (`308 files left unchanged`; the standing COM812/formatter-conflict warning is pre-existing config noise, not a failure).
+- `uv run ruff check --fix .` — pass (`All checks passed!`). Re-run after the TREE regenerate: still `All checks passed!`.
+- `uv run python scripts/build_tree_md.py` then `--check` — regenerate wrote `docs/TREE.md`; `--check` exits 0 (`docs/TREE.md is up to date.`), so the docstring fix and TREE render landed together and are byte-stable.
+- `grep -rEn 'TODO\(spec-040' --include='*.py' .` — **clean** (no matches, exit 1). The only prior surviving anchor (`resolvers.py` `run_pipeline_async`) is discharged; the Slice-2 `_model_decode_step` anchor was already discharged in the accepted Slice-2 diff.
+- `git status --short` classification — identical file set to the pass start; no NEW untracked file and no unrelated tool churn appeared. This pass's 9 files (listed under `### Files touched`) carry my edits; every other modified/deleted/untracked entry is a pre-existing Slice-1/2/3 build file, an 8-file `D` spec-039 prior-cycle deletion, an untracked spec-040 build artifact, or a concurrent-writable DB/KANBAN/GLOSSARY per the task's enumerated baseline — left untouched, not reverted (AGENTS.md rule 34 + the task's explicit "not this pass's churn" list). `docs/TREE.md` changing is the intended M1 regenerate.
+- Focused tests (no `--cov*` flags):
+  - `uv run pytest tests/auth/ --no-cov -q` — **47 passed**.
+  - `uv run pytest examples/fakeshop/test_query/test_auth_api.py --no-cov -q -n0` — **12 passed** (live suite run `-n0` per the transactional-DB requirement).
+  - `uv run pytest tests/mutations/ --no-cov -q` — **176 passed** (guards against an over-correction from the `resolvers.py` comment edit; the resolvers module backs the whole mutations stack).
 
 ### Implementation notes
 
-- **Model re-point target is `_relation_error`, not `_raw_pk_relation_error`** (small spec
-  reconciliation — see Notes for Worker 1). The artifact named `_raw_pk_relation_error` as the model
-  re-spelling site, but grep showed the executable message literal lives in the model-path leaf ctor
-  `_relation_error` (`:511`, the `FieldError(...messages=[f"Invalid id for relation …"])` body);
-  `_raw_pk_relation_error` reaches it transitively via `_relation_membership_error → _relation_error`
-  and never re-spells the literal itself. Re-pointing `_relation_error` is the correct, minimal
-  single-siting: it covers BOTH of `_relation_error`'s direct callers (`:457` wrong-type, `:561`
-  membership) AND the `_raw_pk_relation_error` path, with the surrounding membership/visibility logic
-  untouched. Outcome is identical to the artifact's intent (one message site) and the model suite is
-  byte-equivalent.
-- **Kept the per-flavor local `_relation_field_error` / `_relation_error` names as thin delegates**
-  rather than deleting them and calling `relation_field_error` directly at the 6 call sites. The
-  artifact left this to Worker 2's call ("delete-and-call-direct OR thin delegate"). The local names
-  carry flavor-specific provenance docstrings (the form/serializer AR-H4 / 036-038 contract notes,
-  the model wrong/hidden/missing collapse) that read better at the decode call sites than a bare
-  cross-module call, and a thin delegate keeps each flavor's 3 call sites untouched — so the diff is
-  minimal and the per-flavor narrative survives. All three docstrings were updated to state they are
-  aliases of the single-sourced shared ctor.
-- **Forward reference is fine.** `_relation_error` (`:511`) calls `relation_field_error` (defined
-  later at `:864`); both are module-level functions resolved at call time, well after import, so the
-  ordering does not matter.
+- **`auth/mutations.py` module docstring — first-line rewrite is TREE-render-load-bearing.** `scripts/build_tree_md.py::first_python_docstring_sentence` takes the docstring's first non-blank line and requires it to end with `.` (raises `TreeRenderError` otherwise). The new first line ends `"(spec-040)."` and stays a single sentence; the enumerating body paragraph I added is NOT rendered into TREE (the package tree renders only the first sentence; only `apps/<app>/__init__.py` detail-paragraphs feed the "App roles" section, and `accounts/__init__.py` stays single-line so its `detail_paragraphs` returns `[]`). Verified against the script rather than guessing.
+- **Carry-forward-2 discharge shape — provenance comment, not deletion.** Chose the artifact's recommended path (re-tag to non-TODO `spec-040` provenance) over a bare delete, because the surrounding note explains WHY the auth boundary stayed auth-local (Decision 10 P3) — useful design context, just not a live TODO. Pointed it at `auth/mutations.py::_run_in_one_boundary` (symbol-qualified per AGENTS.md L27) so the cross-reference cannot drift on a line move.
+- **Param-removal ordering.** Removed the `del permission_holder` line together with the signature param (leaving a lone `del` of a now-undefined name would `NameError`); the two-line removal is atomic. Confirmed `holder` is still consumed by each factory's resolver closure before dropping the arg, so the three call sites lose only the redundant first positional.
 
 ### Notes for Worker 3
 
-- No `scripts/review_inspect.py` shadow file was used for this pass — the four edits are
-  small, mechanically-obvious delegations + one test-line deletion, evaluable from the diff alone.
-- The byte-equivalence proof is the 545-test focused run (model + form + serializer suites green with
-  zero production-test edits). The only test change is the F-INT-2 vacuous-line deletion.
-- Acceptance to re-confirm: `grep -rn "Invalid id for relation {" django_strawberry_framework/`
-  returns exactly one executable site (`mutations/resolvers.py:877`).
+- Shadow/helper: `scripts/review_inspect.py` was NOT re-run this pass — the edits are wording refreshes + a dead-param drop + a doc regenerate, adding zero review-worthy logic (no new branch, no new call, no signature change beyond a param removal). The Pre-step-2 shadow refresh from the integration pass still covers these files.
+- To re-verify the discharge cheaply: `grep -rEn 'TODO\(spec-040' --include='*.py' .` (expect no matches) and `uv run python scripts/build_tree_md.py --check` (expect exit 0). Then `git diff -- django_strawberry_framework/mutations/resolvers.py` — the only line touched inside `run_pipeline_async` besides the comment swap is unchanged (the `sync_to_async(...)` return is byte-identical); the large Slice-2 exclusion-seam hunk earlier in that same file is the pre-accepted Slice-2 diff, not this pass.
+- `git diff -- django_strawberry_framework/__init__.py` still changes only the `__version__` string (Slice-3 work) — this pass did NOT touch `__all__` or the re-export list; auth stays submodule-only.
+- The dead-param drop is a private module-internal helper (`_build_auth_field`), absent from any `__all__`; no public surface moved.
 
 ### Notes for Worker 1 (spec reconciliation)
 
-- **F-INT-1 model re-point site differs from the artifact's prose (mechanically-obvious, in-contract
-  drift).** The artifact (F-INT-1 / Verdict) named `mutations/resolvers.py::_raw_pk_relation_error`
-  as the model site that "re-spells the same message" and asked to re-point "its message
-  construction." In fact the message literal is NOT in `_raw_pk_relation_error`'s body — it lives in
-  the model-path leaf ctor `_relation_error` (`:511`), which `_raw_pk_relation_error` reaches
-  transitively through `_relation_membership_error → _relation_error`. I re-pointed `_relation_error`
-  (the actual literal site), which single-sites the message for the entire model path including the
-  `_raw_pk_relation_error` flow, with `_raw_pk_relation_error`'s membership/visibility body untouched.
-  This is the smaller, more faithful change and the artifact's acceptance gate (one message site,
-  byte-equivalent model suite) is met. Flagging for your final-verification audit — the outcome
-  matches the artifact's intent exactly; only the named function moved by one delegation hop.
-- No other drift. F-INT-2 was deletion exactly as the artifact expected (619+622 already pin the
-  contract).
+None. No spec-body change is needed: carry-forward 1 was source-docstring / generated-doc residue, carry-forward 2 is already spec-authorized (Decision 10 P3 records the auth-local shape, edited during Slice-1 final verification), and carry-forward 3 is a cosmetic dead-param removal. No plan-vs-implementation drift surfaced — all three carry-forwards landed exactly as catalogued.
 
 ---
 
 ## Review (Worker 3)
 
-Narrow review of the consolidation diff (the 4 files the loop touched). Slice 0–4's
-accepted-but-uncommitted work in the working tree is out of scope; `docs/feedback.md` and
-`db.sqlite3` ignored per dispatch.
+Focused review of the behavior-neutral consolidation diff (the nine scoped files), NOT a re-litigation of the three already-`final-accepted` slices. Verified each of the three carry-forwards was resolved correctly and behavior-neutrally, ran the required regression tests without `--cov*`, and confirmed the public surface.
 
-### High:
+### Item 1 — staging-docstring/comment refresh + TREE regenerate (M1)
 
-None.
+**Verified resolved.** Read all seven refreshed module docstrings and the two `auth/mutations.py` body comments; none describe shipped behavior as "planned" / "after Slice 1/2 replace the fail-loud placeholders" / "Slice N staging" any longer, and all read coherently as shipped:
 
-### Medium:
+- `auth/__init__.py::<module docstring>` — first line `"…field factories (spec-040)."`; body now names the four shipped factories and their homes. No "planned" / "after Slice 1/2" residue.
+- `auth/mutations.py::<module docstring>` — first line `"Opt-in session-auth mutation factories + shared auth substrate (spec-040)."` (ends `.`, single sentence — TREE-render-safe per `build_tree_md.py::first_python_docstring_sentence`); body enumerates login/logout/register + substrate + bind. No longer under-describes as "Slice 1: login / logout".
+- `auth/mutations.py::_run_in_one_boundary` (docstring, ~L239-242) — `"Auth-local by design (spec-040 Decision 10 P3): …a P3 'may', not a 'must'…"`. Reads as a shipped design rationale, not a Slice-1 staging note.
+- `auth/mutations.py::bind_auth_mutations` (docstring, ~L309-310) — `"…the register rider's generic ``_resolve_primary_type`` raise (the ordering the register arm depends on)."` The stale "Slice 2 exercises the register arm; Slice 1 wires the ordering only" framing is gone.
+- `auth/queries.py::<module docstring>` — `"(spec-040: current_user / me)"`; body `"sharing the auth substrate"` (Slice-1 qualifier dropped).
+- `examples/fakeshop/apps/accounts/__init__.py::<module docstring>` — single-line `"…accounts app exercising the session-auth surface (spec-040)."` (stays single-line, so `detail_paragraphs` returns `[]` and it renders one TREE line as before).
+- `tests/auth/test_mutations.py` / `tests/auth/test_queries.py::<module docstring>` — first lines `"(spec-040 residue…)"` (Slice-N qualifier dropped).
+- `examples/fakeshop/test_query/test_auth_api.py::<module docstring>` — `"(spec-040: login/logout/register/me)"`; the two `TODO(spec-040 Slice 1)` / `TODO(spec-040 Slice 2)` pseudocode anchor blocks are replaced by shipped prose; body `"and (Slice 2) the register ->"` → `"and the register ->"`.
 
-None.
+**TREE re-rendered correctly (GENERATED, not hand-edited).** `grep -nE 'planned by spec-040|spec-040 Slice' docs/TREE.md` returns NONE (exit 1). `uv run python scripts/build_tree_md.py --check` prints `docs/TREE.md is up to date.` and exits 0 — the docstring fix and the TREE regenerate landed together and are byte-stable (no pending drift, no hand-edit).
 
-### Low:
+**Inline-provenance-comment read (the remaining `spec-040 Slice N` strings in shipped source).** `grep -rn "spec-040 Slice" --include='*.py'` (excluding `docs/builder/` + `temp-tests/`) returns EXACTLY the eight strings the plan anticipated, and I read each in context:
 
-None.
+- `registry.py #"co-clear the auth declaration ledger here"` (L586) — explains WHY the auth clear is a direct hand row, not routed through `register_subsystem_clear` (ledger must survive the pre-bind reset). Design rationale.
+- `types/finalizer.py #"bind auth declarations in this exact slot"` (L788) — explains the load-bearing bind ordering (after emit-ledger reset, before `bind_mutations()`). Design rationale. (Note: it retains a parenthetical "and, in Slice 2, register / current_user" — a completed-history clause, reads as shipped, not a to-do.)
+- `mutations/resolvers.py #"the reusable exclusion seam (spec-040 Slice 2)"` (L252, L1182) — the `excluded_input_fields` seam docstrings citing the spec slice as the seam's origin/rationale. Design provenance.
+- `examples/fakeshop/schema_reload.py` (L40), `config/settings.py` (L47), `config/schema.py` (L25-27, L59) — cite the slice to explain why the accounts app is listed / composed and why it is dependency-independent (references only `auth.User`).
 
-### F-INT-1 single-siting — CONFIRMED (one executable message site)
+**Verdict: legitimate non-TODO design provenance, acceptable per AGENTS.md L26** — every one cites `spec-<NNN> Slice N` as the *rationale* for a load-bearing decision (bind ordering, co-clear seam, exclusion seam, dependency-safe reload order), carries NO `TODO(` prefix and no `NotImplementedError` pairing, is written in the same idiom the codebase already uses for `spec-036 Slice 4` / `spec-037` / `spec-038` / `spec-039 M1a` (present in the very same `config/schema.py` and `resolvers.py` comments), and does NOT render into TREE (these are body-comment / docstring-body lines, not module-docstring first lines — TREE staging grep is clean). AGENTS.md L26 explicitly sanctions `spec-<NNN>` provenance "where historical context is useful" as the replacement for a staged anchor. **Not a finding.**
 
-`grep -rn "Invalid id for relation" django_strawberry_framework/` returns exactly FOUR matches,
-exactly ONE of which is executable:
+### Item 2 — `resolvers.py` anchor discharge
 
-- `mutations/resolvers.py:877` — the ONE executable site, inside the shared leaf ctor
-  `relation_field_error(graphql_name)` (`:864`), sited immediately after the P2.4 `field_error`
-  ctor (`:846`). Body: `return FieldError(field=graphql_name, messages=[f"Invalid id for relation {graphql_name!r}."])`.
-- `mutations/resolvers.py:517` and `:874` — docstring mentions (the `_relation_error` and
-  `relation_field_error` docstrings).
-- `forms/resolvers.py:184` — a docstring/comment mention only (a `_to_form_key_value`-area note),
-  not executable.
+**Verified resolved.** `grep -rEn 'TODO\(spec-040' --include='*.py' .` is clean (exit 1, no matches) — no `TODO(spec-040` anchor survives anywhere in shipped `.py` source. The former `TODO(spec-040 Slice 1)` block inside the async pipeline core (`resolvers.py` ~L1465-1469) is now a non-`TODO(` provenance comment recording that spec-040 kept the auth one-boundary need auth-local (Decision 10 P3 "may", not "must") and pointing at `auth/mutations.py::_run_in_one_boundary` (symbol-qualified, drift-safe per AGENTS.md L27). The wrapper's signature is unchanged and the `return await sync_to_async(sync_body, thread_sensitive=True)(mutation_cls, info, data, id)` line (L1470) is intact — behavior unchanged.
 
-`grep -rn "def relation_field_error" django_strawberry_framework/` → defined exactly once
-(`mutations/resolvers.py:864`). The 3 flavors re-point onto it as minimal thin delegates, call sites
-and per-flavor docstrings preserved:
+### Item 3 — dead `_build_auth_field(permission_holder=...)` param removal
 
-- `forms/resolvers.py::_relation_field_error` (`:129`) → `return relation_field_error(graphql_name)`;
-  `relation_field_error` added to the `..mutations.resolvers` import block (`:107`); the prior
-  function-local `from ..mutations.inputs import FieldError` removed. 3 call sites unchanged.
-- `rest_framework/resolvers.py::_relation_field_error` (`:152`) →
-  `return relation_field_error(graphql_name)`; import added (`:122`); module-level `FieldError`
-  import retained (used in annotations). 3 call sites unchanged.
-- `mutations/resolvers.py::_relation_error` (`:511`) → `return relation_field_error(field_name)`
-  (the model-path delegate).
+**Verified resolved and behavior-preserving.** `grep -n permission_holder` across `auth/mutations.py` + `auth/queries.py` returns NOTHING — the param and its `del permission_holder` line are both gone. `_build_auth_field` (mutations.py::`_build_auth_field`, L189) now takes `payload_lazy_ref` as its leading positional. All three call sites pass the lazy ref first with no leading holder arg:
 
-### Worker 2's in-contract correction (`_relation_error`, not `_raw_pk_relation_error`) — VERIFIED CORRECT AND COMPLETE
+- `login_mutation` (L472): `_build_auth_field(_lazy_ref(_LOGIN_PAYLOAD, …), _sync, _async, params, …)`.
+- `logout_mutation` (L516): `_build_auth_field(_lazy_ref(_LOGOUT_PAYLOAD, …), _sync, _async, [], …)`.
+- `queries.py::current_user` (L98): `_build_auth_field(_lazy_ref(_CURRENT_USER_ALIAS, …) | None, _sync, _async, [], …)`.
 
-The artifact named `_raw_pk_relation_error` as the model re-spelling site. Worker 2 found the
-executable literal actually lives in the model-path leaf ctor `_relation_error` and re-pointed that
-instead. Verified by tracing the call chain in `mutations/resolvers.py`:
+Behavior-preservation confirmed by tracing the closures: each factory binds `holder = record.holder` (e.g. logout L498) and its resolver body calls `authorize_or_raise(holder, …)` (e.g. L504) closing over that outer local, NOT over the removed param. The removed param was `del`'d immediately in the pre-edit code and never read (Slice-1 review + the prior `del` comment both confirmed it dead), so removal is a runtime no-op. `holder` stays a live local in all three factories.
 
-- `_raw_pk_relation_error` (`:674`) ends `return _relation_membership_error(...)` (`:734`) — its
-  membership/visibility body does NOT re-spell the literal.
-- `_relation_membership_error` (`:537`) returns `_relation_error(field_name)` (`:564`) on a missing
-  member.
-- `_relation_error` (`:519`) → `relation_field_error(field_name)` → the shared ctor.
+### Regression
 
-So the entire model path — including the raw-pk flow (`_raw_pk_relation_error` →
-`_relation_membership_error` → `_relation_error`) AND `_relation_error`'s direct callers (`:457`
-wrong-type, `:461` via `_relation_visibility_error → _relation_membership_error`) — now routes
-through the shared ctor. `_raw_pk_relation_error`'s membership/visibility body is untouched
-(confirmed: neither `_raw_pk_relation_error` nor `_relation_membership_error` appears as a changed
-`+`/`-` line in the working-tree diff for `mutations/resolvers.py`). This is the correct, complete,
-minimal single-siting; no caller's semantics changed. Worker 2's choice is the smaller and more
-faithful change and the artifact's acceptance gate is met. No finding.
+No regression. Focused suites, no `--cov*` flags:
 
-### Byte-equivalence — CONFIRMED GREEN
-
-`uv run pytest tests/mutations tests/forms tests/rest_framework examples/fakeshop/test_query/test_products_api.py --no-cov`
-→ **545 passed** in 105s (matches Worker 2's report). The model + form + serializer suites stay green
-with zero production-test edits (the only test change is the F-INT-2 deletion), which IS the
-behavior-preserving proof for all three re-points.
-
-### F-INT-2 (L1 vacuous tautology) — CONFIRMED, no coverage lost
-
-`tests/rest_framework/test_inputs.py::test_allow_null_field_is_nullable_even_when_required` (`:611`):
-the vacuous `assert field.default is UNSET.__class__() or field.default is not UNSET` line was
-deleted. The adjacent assertions still pin the real M2 contract:
-
-- `:619` `assert _is_optional(field)` — the annotation is `T | None` (nullable from `allow_null`).
-- `:621` `assert field.default is not UNSET` — required: no UNSET default fabricated, so it must be
-  provided.
-
-Non-vacuity of the survivor verified: `utils/inputs.py` (`#"a required field gets NO class default"`,
-`:265`-`:287`) shows a required field gets no class default (so `.default is not UNSET`), while the
-companion `test_field_with_default_is_optional_no_fabricated_default` (`:624`) asserts the inverse
-(`field.default is UNSET` for `required=False`). The two are distinguishing; the M2 contract stays
-pinned. No real coverage lost. The explanatory comment was kept.
-
-### DRY findings
-
-No NEW duplication. The relation-decode message literal + leaf `FieldError` construction is now
-single-sourced in `relation_field_error` (`mutations/resolvers.py:864`), co-located with the P2.4
-`field_error` generic-leaf ctor. The three per-flavor local names (`_relation_field_error` ×2 +
-`_relation_error`) survive as one-line thin aliases — Worker 2's discretionary choice, explicitly
-authorized by the artifact ("delete-and-call-direct OR thin delegate"). Acceptable: each alias
-carries flavor-specific provenance docstrings (036/038/039 contract notes) that read better at the
-decode call sites than a bare cross-module call, all 6 call sites stay untouched, and the diff is
-minimal. The delegates own no logic beyond the single delegating return.
-
-### Static inspection helper
-
-Skipped, with reason recorded. The consolidation adds < 30 lines of new executable logic to any
-`django_strawberry_framework/` file: `mutations/resolvers.py` gains one shared ctor (a single
-`return` statement) plus a one-line delegation in `_relation_error`; `forms/` and `rest_framework/`
-each gain a one-line delegation + an import edit; the test file is a one-line deletion. BUILD.md
-requires the helper at ≥30 lines of new logic — far under threshold, so a reasoned skip per BUILD.md
-"Static inspection helper" judgment clause. (Coverage of every build-touched logic file was already
-confirmed in this artifact's pre-work step 2.)
+- `uv run pytest tests/auth/ tests/mutations/ --no-cov -q` — **223 passed** (47 auth + 176 mutations).
+- `uv run pytest examples/fakeshop/test_query/test_auth_api.py --no-cov -q -n0` — **12 passed** (live `/graphql/` suite, `-n0` per the transactional-DB requirement).
 
 ### Public-surface check
 
-`git diff -- django_strawberry_framework/__init__.py`: the only diff present is the Slice-2 PEP-562
-`__getattr__` (a TODO-comment → implementation swap), which is accepted Slice-2 work, NOT the
-consolidation — the consolidation's 4-file scope excludes `__init__.py`. The `__all__` tuple is
-byte-unchanged (grep for added/removed quoted members → zero); `SerializerMutation` remains absent
-from `__all__`. The consolidation introduced no public-surface change. Confirmed.
+`git diff HEAD -- django_strawberry_framework/__init__.py` changes ONLY the `__version__` string literal (`"0.0.12"` → `"0.0.13"`, the Slice-3 version cut). `__all__` and the re-export list are **unchanged** — auth stays submodule-only (spec Decision 3). No new public export introduced by the consolidation.
 
 ### CHANGELOG sanity
 
-Not applicable; consolidation did not modify CHANGELOG.md.
+Not applicable; the consolidation pass did not modify `CHANGELOG.md`.
 
-### Documentation / release sanity
+### Static inspection (helper) disposition
 
-Not applicable; consolidation did not modify docs/release/KANBAN/archive surfaces.
-
-### What looks solid
-
-- Single executable message site achieved; the model raw-pk path correctly routes through the shared
-  ctor transitively without folding the genuinely-different membership/visibility body.
-- Byte-equivalence proven by 545 green tests with zero production-test edits.
-- Delegates are minimal and the per-flavor narrative survives in docstrings.
-- `relation_field_error` correctly sited beside `field_error` so both leaf ctors are co-located.
+**Skipped, with reason.** The consolidation's only logic change is the `_build_auth_field` param removal (a signature-param drop + two-line `del` removal + three call-site arg drops — well under the 30-line BUILD.md threshold); the `resolvers.py` edit is comment-only, and the remaining eight files are docstring/comment wording + a generated-doc regenerate (zero new branch / call / logic). No file under `optimizer/` or `types/` gained logic. `scripts/review_inspect.py` was correctly not re-run (the Pre-step-2 shadow refresh already covers these files); a re-run would add no signal on behavior-neutral cleanup.
 
 ### Temp test verification
 
-No temp tests created. The 545-test focused run was the byte-equivalence proof; no review suspicion
-required isolating a behavior.
+None created. All three carry-forwards are behavior-neutral; the existing suites (auth 47 + mutations 176 + live 12) exercise the touched paths, and the dead-param removal has no behavior to pin (no test constructs `_build_auth_field` directly; the auth suite reaches the synthesized resolver via `__strawberry_definition__`, unaffected by the private helper's arity). Nothing to promote. `docs/builder/temp-tests/integration/` was never created — no disposition needed.
 
-### Notes for Worker 1 (spec reconciliation)
+### DRY findings
 
-- Worker 2's in-contract correction (model re-point at `_relation_error`, not `_raw_pk_relation_error`)
-  is verified correct, complete, and byte-equivalent — recorded above for your final-verification
-  audit. The outcome matches the artifact's intent exactly; only the named function moved by one
-  delegation hop. No spec edit implied.
+**None.** This pass introduced no new duplication; it is pure consolidation (docstring/comment refresh + a dead-param drop). The two prior in-slice consolidations (`attach_synthesized_signature` in Slice 1, `_lookup_or_conflict` in Slice 2) remain single-sited. Cross-slice DRY was already adjudicated clean by Worker 1's integration catalog above; nothing in the consolidation diff reopens it.
+
+### What looks solid
+
+- The `auth/mutations.py::<module docstring>` first-line rewrite is TREE-render-load-bearing (single sentence ending `.`), and the enumerating body paragraph is added below the first line so it does NOT feed the package-tree render — handled correctly (verified by `--check` exit 0).
+- The anchor discharge chose the design-note-preserving path (non-`TODO(` provenance comment) over a bare delete, and symbol-qualified the cross-reference (`::_run_in_one_boundary`) so it cannot drift on a line move.
+- The param-removal removed the `del` line atomically with the signature param (a lone `del` of an undefined name would `NameError`), and `holder` remains consumed by every factory's resolver closure.
+
+### New findings
+
+**None.** No High, Medium, or Low finding introduced by the consolidation. All three carry-forwards landed exactly as catalogued; the inline-provenance `spec-040 Slice N` strings are legitimate design provenance, not residual staging vocabulary.
 
 ### Review outcome
 
-`review-accepted`. The consolidation single-sites the relation-decode message to exactly one
-executable site, re-points all three flavors as minimal byte-equivalent delegates (545 tests green,
-zero production-test edits), correctly routes the model raw-pk path through the shared ctor via
-Worker 2's verified `_relation_error` correction, deletes the F-INT-2 vacuous tautology without
-losing coverage, introduces no new duplication, and leaves the public surface unchanged. No
-High/Medium/Low findings.
+**review-accepted.** All three carry-forwards are correctly and behavior-neutrally resolved: (1) staging docstrings/comments refreshed as shipped and `docs/TREE.md` re-rendered from them (`--check` exit 0, staging-string grep clean, inline `spec-040 Slice N` provenance judged acceptable per AGENTS.md L26); (2) the `TODO(spec-040 Slice 1)` anchor discharged to a non-TODO provenance comment with `run_pipeline_async`'s signature/behavior unchanged and NO `TODO(spec-040` surviving in any shipped `.py`; (3) the dead `permission_holder` param removed from `_build_auth_field` and all three call sites, proven behavior-preserving (closures close over `record.holder`). No regression (223 focused + 12 live green), public surface unchanged (only `__version__`), no new findings. This acceptance signals Worker 0 to return to Worker 1 for the final integration verification (`final-accepted` is Worker 1's to set — NOT set here).
 
 ---
 
-## Integration re-verification (Worker 1)
+## Final verification (Worker 1)
 
-Narrow re-verification of the consolidation loop (Worker 2 applied, Worker 3 set `review-accepted`).
-Confirms F-INT-1 + F-INT-2 are closed, re-runs the byte-equivalence proof, re-confirms the
-staged-anchor sweep, and finalizes the deferred-work catalog. No source/test edits by me; no spec
-edit needed (status header already accurate — see below).
+Re-ran this integration pass over the consolidation diff (Worker 2's build report + Worker 3's `review-accepted`) to confirm the three carry-forwards are genuinely discharged in the working tree, the DRY verdict still holds, the public surface is unchanged, and nothing regressed. All checks pass. **Setting the artifact top-level `Status: final-accepted`.**
 
-### Spec status-line re-verification — accurate, no edit
+### Carry-forward 1 (M1 staging docstrings + TREE) — DISCHARGED
 
-`docs/spec-039-…md:3-4` reads "Implemented on main; release deferred to the joint `0.0.13` cut
-(card `DONE-039-0.0.13`)" — reconciled by Slice 4's final verification and still accurate to the
-current state. No status-line edit required this pass.
+- `grep -nE 'planned by spec-040|spec-040 Slice' docs/TREE.md` → **no matches (exit 1)**. No staging string renders into TREE.
+- `uv run python scripts/build_tree_md.py --check` → `docs/TREE.md is up to date.` (**exit 0**) — the docstring refresh and the TREE regenerate are byte-stable and landed together; no pending drift, no hand-edit.
+- Read the refreshed docstrings/comments in the working tree: `auth/__init__.py` first line `"…field factories (spec-040)."` + body names the four shipped factories; `auth/mutations.py` first line `"…mutation factories + shared auth substrate (spec-040)."`; the `_run_in_one_boundary` docstring reads as a shipped design rationale ("Auth-local by design (spec-040 Decision 10 P3)…"); the `bind_auth_mutations` docstring dropped the "Slice 2 exercises / Slice 1 wires" staging framing; `auth/queries.py` module first line `"(spec-040: current_user / me)"` + body L3 `"sharing the auth substrate"`; `examples/fakeshop/apps/accounts/__init__.py`, `tests/auth/test_mutations.py`, `tests/auth/test_queries.py`, `examples/fakeshop/test_query/test_auth_api.py` all carry shipped wording (no "planned" / "after Slice 1/2 replace the placeholders" / "Slice N residue" staging). No STAGING vocabulary remains.
+- **Remaining inline `spec-040 Slice N` provenance — re-confirmed legitimate (AGENTS.md L26).** `grep -rnE 'spec-040 Slice|Slice-1 auth|planned by spec-040|after Slice' --include='*.py'` (excl. `docs/builder/`, `temp-tests/`) returns exactly the design-provenance strings Worker 3 enumerated (`registry.py #"co-clear the auth declaration ledger"`, `types/finalizer.py #"bind auth declarations in this exact slot"`, `mutations/resolvers.py` ×2 exclusion-seam docstrings, `schema_reload.py`, `config/schema.py` ×2, `config/settings.py`). Each cites the slice as the *rationale* for a load-bearing decision, carries no `TODO(` prefix and no `NotImplementedError` pairing, matches the codebase's existing `spec-036 Slice 2` / `spec-039 Slice 2` idiom, and none renders into TREE. Accepted per AGENTS.md L26 (staged TODO anchors are the removal target; factual `spec-<NNN>` provenance "where historical context is useful" is sanctioned).
+- **Minor coherence note (accepted, NOT a blocker):** `auth/queries.py::current_user` function docstring still reads `"sharing the Slice-1 auth machinery"` (`queries.py #"sharing the Slice-1 auth machinery"`), while the module docstring three lines above dropped the qualifier to `"sharing the auth substrate"`. This second occurrence was outside carry-forward 1's cataloged scope (which named only `queries.py::<module docstring>` line 1) and so was not touched by the consolidation. It is factual inline provenance (not staging vocabulary, not a `TODO(` anchor), does NOT render into TREE (`grep 'Slice-1 auth machinery' docs/TREE.md` → exit 1), and sits comfortably within the AGENTS.md L26 provenance idiom. It does not warrant re-opening the consolidation loop; recorded here so the next docstring-touching change can drop the lone qualifier for full within-module coherence.
 
-### F-INT-1 (relation-decode message single-siting) — CLOSED
+### Carry-forward 2 (`TODO(spec-040 Slice 1)` anchor) — DISCHARGED
 
-`grep -rn "Invalid id for relation" django_strawberry_framework/` → FOUR matches, **exactly ONE
-executable**:
+- `grep -rEn 'TODO\(spec-040' --include='*.py' .` → **no matches (exit 1)**. No `TODO(spec-040` anchor survives anywhere in shipped `.py`.
+- Read `mutations/resolvers.py::run_pipeline_async` in the working tree: the former `TODO(spec-040 Slice 1)` block is now a plain provenance comment ("spec-040 kept the auth one-boundary need auth-local (Decision 10 P3 'may', not 'must')…") pointing at `auth/mutations.py::_run_in_one_boundary` (symbol-qualified). The `return await sync_to_async(sync_body, thread_sensitive=True)(mutation_cls, info, data, id)` line is intact — signature and behavior unchanged.
 
-- `mutations/resolvers.py:877` — the ONE executable literal, inside the shared leaf ctor
-  `relation_field_error(graphql_name)` (`:864`), sited immediately after the P2.4 `field_error` ctor:
-  `return FieldError(field=graphql_name, messages=[f"Invalid id for relation {graphql_name!r}."])`.
-- `mutations/resolvers.py:517`, `:874`, `forms/resolvers.py:184` — docstring/comment mentions only.
+### Carry-forward 3 (dead `_build_auth_field(permission_holder=...)` param) — DISCHARGED
 
-`grep -rn "def relation_field_error" django_strawberry_framework/` → defined exactly once
-(`mutations/resolvers.py:864`). The three flavors are thin one-line delegates onto it, call sites and
-per-flavor provenance docstrings preserved (verified by reading each body):
+- `grep -rnE '\bpermission_holder\b' auth/mutations.py auth/queries.py` → **no matches (exit 1)** for the dead param (the `_make_permission_holder` factory symbol is distinct and stays). No `del permission_holder` line remains.
+- `_build_auth_field` (`auth/mutations.py::_build_auth_field`) now takes `payload_lazy_ref: Any` as its leading positional. All three call sites pass the lazy ref first with no leading holder arg: `login_mutation` (`_lazy_ref(_LOGIN_PAYLOAD, …)`), `logout_mutation` (`_lazy_ref(_LOGOUT_PAYLOAD, …)`), and `queries.py::current_user` (`_lazy_ref(_CURRENT_USER_ALIAS, …) | None`).
+- **Behavior-preserving:** each factory still binds `holder = record.holder` and its resolver body calls `authorize_or_raise(holder, …)` closing over that outer local (verified in `logout_mutation`: `holder = record.holder` then `authorize_or_raise(holder, info, _LOGOUT, None, instance=None)`), NOT over the removed param. Runtime no-op.
 
-- `forms/resolvers.py::_relation_field_error` (`:129`) → `return relation_field_error(graphql_name)`;
-  `relation_field_error` imported from `..mutations.resolvers` (`:107`); 3 call sites unchanged
-  (`:193`/`:198`/`:202`).
-- `rest_framework/resolvers.py::_relation_field_error` (`:152`) → `return relation_field_error(graphql_name)`;
-  import added (`:122`); module-level `FieldError` import retained (annotations); 3 call sites unchanged
-  (`:223`/`:228`/`:232`).
-- `mutations/resolvers.py::_relation_error` (`:511`) → `return relation_field_error(field_name)` (the
-  model-path delegate).
+### Public surface + DRY re-confirmation
 
-**Worker 2's correction (`_relation_error`, not `_raw_pk_relation_error`) — VERIFIED to fully
-single-site the model path including the raw-pk flow.** Traced the call chain at source: every model
-relation-error route terminates at `_relation_error` → `relation_field_error`, and no intervening body
-re-spells the literal:
+- `git diff HEAD -- django_strawberry_framework/__init__.py` changes ONLY the `__version__` string (`"0.0.12"` → `"0.0.13"`, the Slice-3 cut). `__all__` and the re-export list are **unchanged** — auth stays submodule-only (spec Decision 3).
+- **DRY scan verdict still holds.** The consolidation introduced no new cross-slice duplication: it is a docstring/comment refresh + a dead-param drop + a generated-doc regenerate. The two prior in-slice consolidations (`attach_synthesized_signature`, `_lookup_or_conflict`) remain single-sited; no residual duplication reopened. Comments now tell one coherent story across the auth code (the only wrinkle is the accepted `queries.py:52` provenance qualifier noted above).
 
-- direct wrong-type: `:457` → `_relation_error(field_name)`.
-- raw-pk flow: `:465` → `_raw_pk_relation_error` (`:674`, body returns `_relation_membership_error`,
-  no literal) → `_relation_membership_error` (`:537`, `:564` returns `_relation_error`).
-- existence: `_relation_existence_error` (`:637`) → `_relation_membership_error` → `_relation_error`.
-- visibility: `_relation_visibility_error` (`:568`) → `_relation_membership_error` → `_relation_error`.
+### Regression check (no `--cov*` flags)
 
-So `_raw_pk_relation_error`'s membership/visibility body is genuinely-different and correctly NOT
-folded; only the leaf message is single-sourced. F-INT-1 is RESOLVED.
+- `uv run pytest tests/auth/ tests/mutations/ --no-cov -q` → **223 passed** (47 auth + 176 mutations), 8.31s.
+- `uv run pytest examples/fakeshop/test_query/test_auth_api.py --no-cov -q -n0` → **12 passed** (live `/graphql/` suite, `-n0` per the transactional-DB requirement), 26.56s.
 
-### F-INT-2 (L1 vacuous tautology) — CLOSED, no coverage lost
+### Spec status-line re-verification
 
-`grep -n "UNSET.__class__()" tests/rest_framework/test_inputs.py` → no match (the line
-`assert field.default is UNSET.__class__() or field.default is not UNSET` is deleted). The real M2
-contract is still pinned by the adjacent survivors in
-`test_allow_null_field_is_nullable_even_when_required`:
+Spec `docs/spec-040-…md` status line (L72) reads "IN PROGRESS — Slices 1, 2, and 3 … all final-accepted; cross-slice integration pass + final test-run gate remain." This accurately describes the current state (the integration pass completes now; the final test-run gate `bld-final.md` still remains). No spec edit needed this pass.
 
-- `:619` `assert _is_optional(field)` — nullable via `allow_null` (annotation `T | None`).
-- `:621` `assert field.default is not UNSET` — `required=True` fabricates no UNSET default, so it must
-  be provided.
+### Final status
 
-Non-vacuity confirmed against the companion `:632`/`:634` (`required=False` → `field.default is UNSET`),
-which asserts the inverse — the two are distinguishing. F-INT-2 is RESOLVED.
-
-### Byte-equivalence — CONFIRMED GREEN
-
-`uv run pytest tests/mutations tests/forms tests/rest_framework examples/fakeshop/test_query/test_products_api.py --no-cov`
-→ **545 passed in 105.94s** (matches Worker 2 + Worker 3). Model + form + serializer suites green with
-zero production-test edits (the only test change is the F-INT-2 deletion) — the behavior-preserving
-proof for all three re-points.
-
-### Staged-anchor sweep (post-consolidation) — STILL CLEAN
-
-`grep -rEn 'TODO\(spec-039|TODO-(ALPHA|BETA|STABLE)-039' django_strawberry_framework/ tests/ examples/ scripts/`
-→ **ZERO matches**. No staged anchor in any shipped source / test / example / script. The only
-tree-wide hits remain prose markdown link-references in the archived predecessor specs
-(`docs/SPECS/spec-036|038`) naming the board card-id and the per-cycle `docs/builder/` scratch +
-active `docs/spec-039-*` files — not staged work-anchors. The consolidation introduced no new anchor.
-
-### Public-surface — UNCHANGED
-
-The consolidation's 4-file scope excludes `__init__.py`; `SerializerMutation` remains absent from
-`__all__` and resolvable only via the root `__getattr__` (per the integration-pass body above). No
-export drift this loop.
-
-### Finalized deferred-work catalog (for `bld-final.md` `### Deferred work catalog`)
-
-These are NOT this build's to fix — catalog entries for the next spec author / the joint cut:
-
-1. **Licensed joint-cut docs deferral (F8 / Decision 14).** The package version bump `0.0.12 →
-   0.0.13`; the GLOSSARY `shipped (0.0.13)` status flip (Slice 4 set `status_text="implemented on
-   main, releasing in \`0.0.13\`"` with the FK kept `planned`); the `README.md` / `docs/README.md`
-   "Coming next" → "Shipped today" move (README Status → `0.0.13`); and the `CHANGELOG.md` release
-   bullets are ALL deferred to the joint `0.0.13` cut shared with `WIP-ALPHA-040-0.0.13`. The
-   `CHANGELOG.md` edit additionally requires explicit maintainer authorization (`AGENTS.md` "Do not
-   update CHANGELOG.md unless explicitly instructed"). Source: Slice-0..4 build-plan flags + Slice-4
-   final verification + the deferred-work seeds above.
-2. **Out-of-scope board-hygiene note (`planning_state` on done cards).** A `planning_state="In
-   progress"` residue on done cards (DONE-038 precedent) was observed out-of-scope by Slice-4 final
-   verification; not this build's to fix. Catalog only.
-
-### Resolved this pass (moved out of the deferred catalog)
-
-- **F-INT-1** — RESOLVED. Shared `relation_field_error(graphql_name)` leaf ctor single-sites the
-  relation-decode message + leaf shape (`mutations/resolvers.py:864`); all three flavors re-point as
-  byte-equivalent delegates; the model raw-pk path routes through it transitively via the verified
-  `_relation_error` correction. One executable message site; 545 tests green with zero production-test
-  edits.
-- **F-INT-2** — RESOLVED. The vacuous tautology at `tests/rest_framework/test_inputs.py` is deleted;
-  the M2 contract stays pinned by the two adjacent survivors. No coverage lost.
-
-### Summary
-
-The consolidation loop closed both findings exactly as scoped, byte-equivalently. F-INT-1: one
-executable relation-decode message site (`mutations/resolvers.py:877`), three thin delegates, the
-model raw-pk flow correctly routed through the shared ctor via Worker 2's in-contract `_relation_error`
-correction (membership/visibility body untouched). F-INT-2: vacuous line deleted, contract still
-pinned. Byte-equivalence: 545 passed, zero production-test edits. Staged-anchor sweep: still CLEAN
-(zero in shipped trees). Public surface: unchanged. Spec status header: accurate, no edit. Two
-catalog entries handed to `bld-final.md` (licensed joint-cut docs deferral; out-of-scope board
-hygiene); F-INT-1 + F-INT-2 moved to "resolved this pass". `Status: final-accepted`. The
-integration pass is closed.
+**final-accepted.** The three consolidation carry-forwards are genuinely discharged in the working-tree diff (M1 staging docstrings refreshed + TREE re-rendered byte-stable; the `TODO(spec-040 Slice 1)` anchor converted to a non-TODO provenance comment with `run_pipeline_async` behavior unchanged; the dead `permission_holder` param removed from `_build_auth_field` and all three call sites, behavior-preserving). The DRY scan verdict still holds (no cross-slice duplication introduced), the public surface is unchanged (only `__version__`), the auth code's comments tell one coherent story, and the focused regression suites are green (223 focused + 12 live). One accepted, non-blocking coherence note recorded (the `auth/queries.py:52` inline `Slice-1` provenance qualifier). Worker 0 may now mark the integration checklist box `- [x]` and dispatch the final test-run gate (`bld-final.md`), which will also produce the `### Deferred work catalog`.

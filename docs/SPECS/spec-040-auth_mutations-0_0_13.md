@@ -1,6 +1,6 @@
 # Spec: Auth mutations — `login_mutation` / `logout_mutation` / `register_mutation` + the `current_user` query helper in an opt-in `auth/` module, riding the frozen `FieldError` envelope and the `DjangoMutation` foundation, and closing the joint `0.0.13` cut
 
-Planned for `0.0.13` (card [`WIP-ALPHA-040-0.0.13`][kanban]). This card adds the
+Shipped in `0.0.13` (card [`DONE-040-0.0.13`][kanban]). This card adds the
 package's **session-auth surface**: a new opt-in `django_strawberry_framework/auth/`
 module shipping the three most common Django auth flows as mutations —
 `login_mutation()`, `logout_mutation()`, `register_mutation()` — plus the
@@ -69,7 +69,7 @@ today" moves, and the `CHANGELOG.md` release bullets for **both** `0.0.13` cards
 requests it — [`AGENTS.md`][agents] #"Do not update CHANGELOG.md unless explicitly
 instructed"; this spec describes the edit but cannot grant the permission).
 
-Status: **PLANNED — no slice built yet.**
+Status: **SHIPPED (`0.0.13`) — all slices final-accepted; cross-slice integration pass + final test-run gate green.**
 Three slices: Slice 1 (**the auth substrate + `login` / `logout`, earned live** — the
 declaration ledger, the phase-2.5 bind, the payload materialization, the session
 resolver pair, and the fakeshop `accounts` live surface land in one commit per the
@@ -553,6 +553,13 @@ Project conventions to follow:
   and Slice 3 updates the wording from future to present.
 
 ## Slice checklist
+
+> **Historical planning text (post-ship note):** the `- [ ]` boxes below are
+> preserved as-authored and are intentionally not toggled here. The per-slice
+> completion record — every sub-check ticked at build time and audited at final
+> verification — lives in the build artifacts
+> (`docs/builder/bld-slice-*.md`, `bld-integration.md`, `bld-final.md`); all
+> slices are `final-accepted` per the status line at the top of this document.
 
 Each top-level item maps to one commit / PR. **Three slices: the auth substrate +
 `login` / `logout` earned live (Slice 1), `register` + `current_user` earned live
@@ -1086,8 +1093,9 @@ Consumer-visible behavior:
 
 ### Decision 1 — Spec filename and canonical naming
 
-This spec lives at `docs/spec-040-auth_mutations-0_0_13.md` with companion
-`docs/spec-040-auth_mutations-0_0_13-terms.csv`, per the
+This spec was authored at `docs/spec-040-auth_mutations-0_0_13.md` with companion
+`docs/spec-040-auth_mutations-0_0_13-terms.csv` (both archived post-ship to
+`docs/SPECS/`, where this document now lives), per the
 [`docs/SPECS/NEXT.md`][next] convention (`spec-<NNN>-<topic>-<X_Y_Z>.md`; NNN `040`
 from [`WIP-ALPHA-040-0.0.13`][kanban], topic slug `auth_mutations`, version segment
 `0_0_13`).
@@ -2032,7 +2040,15 @@ in ONE auth async helper the three async resolvers share** (the
 `mutation_cls` / `data` / `id`), so a follow-on **may** factor its
 `await sync_to_async(fn, thread_sensitive=True)(...)` core into a generic
 `run_in_one_sync_boundary(fn, *args)` primitive both the mutation entry and auth share
-(P3 — optional, only if it does not disturb the pinned `036` AR-M4 wording). The
+(P3 — optional, only if it does not disturb the pinned `036` AR-M4 wording). **Build
+note (Worker 1):** the P3 optional factoring WAS taken — the generic
+`run_in_one_sync_boundary(fn, *args, **kwargs)` primitive landed in
+[`mutations/resolvers.py`][mutations-resolvers], `run_pipeline_async` now rides it as
+its boundary core (the pinned `036` AR-M4 wording undisturbed), and the auth async
+paths (`_resolve_auth_async`, the register rider's `resolve_async`) share the same
+primitive rather than an auth-local copy. The `TODO(spec-040 Slice 1)` anchor at
+`::run_pipeline_async` that invited this factoring was discharged in the same change
+that shipped it. The
 [`SyncMisuseError`][glossary-syncmisuseerror] discipline is unaffected: a
 `sync_to_async(thread_sensitive=True)` worker is itself a sync context, so
 `reject_async_in_sync_context` still rejects an `async def` `has_permission` (never a
@@ -2648,9 +2664,10 @@ opt-in documentation) — plus the spec/CSV and the version-cut items the
 
 **Spec + companion CSV**
 
-1. `docs/spec-040-auth_mutations-0_0_13.md` (this document) and its companion
+1. `docs/spec-040-auth_mutations-0_0_13.md` (this document; archived post-ship to
+   `docs/SPECS/spec-040-auth_mutations-0_0_13.md`) and its companion
    `spec-040-auth_mutations-0_0_13-terms.csv` exist;
-   `uv run python scripts/check_spec_glossary.py --spec docs/spec-040-auth_mutations-0_0_13.md`
+   `uv run python scripts/check_spec_glossary.py --spec docs/SPECS/spec-040-auth_mutations-0_0_13.md`
    reports `OK: <N> terms`.
 
 **Slice 1 — auth substrate + `login` / `logout`, earned live**
@@ -2768,95 +2785,95 @@ opt-in documentation) — plus the spec/CSV and the version-cut items the
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[backlog]: ../BACKLOG.md
-[changelog]: ../CHANGELOG.md
-[contributing]: ../CONTRIBUTING.md
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
-[pyproject]: ../pyproject.toml
-[readme]: ../README.md
-[start]: ../START.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[backlog]: ../../BACKLOG.md
+[changelog]: ../../CHANGELOG.md
+[contributing]: ../../CONTRIBUTING.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
+[pyproject]: ../../pyproject.toml
+[readme]: ../../README.md
+[start]: ../../START.md
+[today]: ../../TODAY.md
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[feedback]: feedback.md
-[feedback2]: feedback2.md
-[glossary]: GLOSSARY.md
-[glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
-[glossary-auth-mutations]: GLOSSARY.md#auth-mutations
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-cross-subsystem-invariants]: GLOSSARY.md#cross-subsystem-invariants
-[glossary-definition-order-independence]: GLOSSARY.md#definition-order-independence
-[glossary-djangoformmutation]: GLOSSARY.md#djangoformmutation
-[glossary-djangographqlprotocolrouter]: GLOSSARY.md#djangographqlprotocolrouter
-[glossary-djangolistfield]: GLOSSARY.md#djangolistfield
-[glossary-djangomodelpermission]: GLOSSARY.md#djangomodelpermission
-[glossary-djangomutation]: GLOSSARY.md#djangomutation
-[glossary-djangomutationfield]: GLOSSARY.md#djangomutationfield
-[glossary-djangonodefield]: GLOSSARY.md#djangonodefield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-fielderror-envelope]: GLOSSARY.md#fielderror-envelope
-[glossary-fieldset]: GLOSSARY.md#fieldset
-[glossary-finalize_django_types]: GLOSSARY.md#finalize_django_types
-[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-graphqltestcase]: GLOSSARY.md#graphqltestcase
-[glossary-input-type-generation]: GLOSSARY.md#input-type-generation
-[glossary-metafields]: GLOSSARY.md#metafields
-[glossary-metainterfaces]: GLOSSARY.md#metainterfaces
-[glossary-metamodel]: GLOSSARY.md#metamodel
-[glossary-metaprimary]: GLOSSARY.md#metaprimary
-[glossary-only-projection]: GLOSSARY.md#only-projection
-[glossary-per-field-permission-hooks]: GLOSSARY.md#per-field-permission-hooks
-[glossary-serializermutation]: GLOSSARY.md#serializermutation
-[glossary-strictness-mode]: GLOSSARY.md#strictness-mode
-[glossary-syncmisuseerror]: GLOSSARY.md#syncmisuseerror
-[glossary-testclient]: GLOSSARY.md#testclient
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[feedback]: ../feedback.md
+[feedback2]: ../feedback2.md
+[glossary]: ../GLOSSARY.md
+[glossary-apply_cascade_permissions]: ../GLOSSARY.md#apply_cascade_permissions
+[glossary-auth-mutations]: ../GLOSSARY.md#auth-mutations
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-cross-subsystem-invariants]: ../GLOSSARY.md#cross-subsystem-invariants
+[glossary-definition-order-independence]: ../GLOSSARY.md#definition-order-independence
+[glossary-djangoformmutation]: ../GLOSSARY.md#djangoformmutation
+[glossary-djangographqlprotocolrouter]: ../GLOSSARY.md#djangographqlprotocolrouter
+[glossary-djangolistfield]: ../GLOSSARY.md#djangolistfield
+[glossary-djangomodelpermission]: ../GLOSSARY.md#djangomodelpermission
+[glossary-djangomutation]: ../GLOSSARY.md#djangomutation
+[glossary-djangomutationfield]: ../GLOSSARY.md#djangomutationfield
+[glossary-djangonodefield]: ../GLOSSARY.md#djangonodefield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-fielderror-envelope]: ../GLOSSARY.md#fielderror-envelope
+[glossary-fieldset]: ../GLOSSARY.md#fieldset
+[glossary-finalize_django_types]: ../GLOSSARY.md#finalize_django_types
+[glossary-get_queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-graphqltestcase]: ../GLOSSARY.md#graphqltestcase
+[glossary-input-type-generation]: ../GLOSSARY.md#input-type-generation
+[glossary-metafields]: ../GLOSSARY.md#metafields
+[glossary-metainterfaces]: ../GLOSSARY.md#metainterfaces
+[glossary-metamodel]: ../GLOSSARY.md#metamodel
+[glossary-metaprimary]: ../GLOSSARY.md#metaprimary
+[glossary-only-projection]: ../GLOSSARY.md#only-projection
+[glossary-per-field-permission-hooks]: ../GLOSSARY.md#per-field-permission-hooks
+[glossary-serializermutation]: ../GLOSSARY.md#serializermutation
+[glossary-strictness-mode]: ../GLOSSARY.md#strictness-mode
+[glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
+[glossary-testclient]: ../GLOSSARY.md#testclient
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[spec-034]: SPECS/spec-034-permissions-0_0_10.md
-[spec-035]: SPECS/spec-035-optimizer_hardening-0_0_10.md
-[spec-036]: SPECS/spec-036-mutations-0_0_11.md
-[spec-038]: SPECS/spec-038-form_mutations-0_0_12.md
-[spec-039]: SPECS/spec-039-serializer_mutations-0_0_13.md
+[next]: NEXT.md
+[spec-034]: spec-034-permissions-0_0_10.md
+[spec-035]: spec-035-optimizer_hardening-0_0_10.md
+[spec-036]: spec-036-mutations-0_0_11.md
+[spec-038]: spec-038-form_mutations-0_0_12.md
+[spec-039]: spec-039-serializer_mutations-0_0_13.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[conf]: ../django_strawberry_framework/conf.py
-[forms-sets]: ../django_strawberry_framework/forms/sets.py
-[init]: ../django_strawberry_framework/__init__.py
-[mutations-fields]: ../django_strawberry_framework/mutations/fields.py
-[mutations-inputs]: ../django_strawberry_framework/mutations/inputs.py
-[mutations-permissions]: ../django_strawberry_framework/mutations/permissions.py
-[mutations-resolvers]: ../django_strawberry_framework/mutations/resolvers.py
-[mutations-sets]: ../django_strawberry_framework/mutations/sets.py
-[registry]: ../django_strawberry_framework/registry.py
-[types-finalizer]: ../django_strawberry_framework/types/finalizer.py
-[utils-inputs]: ../django_strawberry_framework/utils/inputs.py
-[utils-permissions]: ../django_strawberry_framework/utils/permissions.py
-[utils-typing]: ../django_strawberry_framework/utils/typing.py
+[conf]: ../../django_strawberry_framework/conf.py
+[forms-sets]: ../../django_strawberry_framework/forms/sets.py
+[init]: ../../django_strawberry_framework/__init__.py
+[mutations-fields]: ../../django_strawberry_framework/mutations/fields.py
+[mutations-inputs]: ../../django_strawberry_framework/mutations/inputs.py
+[mutations-permissions]: ../../django_strawberry_framework/mutations/permissions.py
+[mutations-resolvers]: ../../django_strawberry_framework/mutations/resolvers.py
+[mutations-sets]: ../../django_strawberry_framework/mutations/sets.py
+[registry]: ../../django_strawberry_framework/registry.py
+[types-finalizer]: ../../django_strawberry_framework/types/finalizer.py
+[utils-inputs]: ../../django_strawberry_framework/utils/inputs.py
+[utils-permissions]: ../../django_strawberry_framework/utils/permissions.py
+[utils-typing]: ../../django_strawberry_framework/utils/typing.py
 
 <!-- tests/ -->
-[test-base-init]: ../tests/base/test_init.py
+[test-base-init]: ../../tests/base/test_init.py
 
 <!-- examples/ -->
-[config-schema]: ../examples/fakeshop/config/schema.py
-[config-settings]: ../examples/fakeshop/config/settings.py
-[config-urls]: ../examples/fakeshop/config/urls.py
-[create-users]: ../examples/fakeshop/apps/products/management/commands/create_users.py
-[schema-reload]: ../examples/fakeshop/schema_reload.py
-[test-query-readme]: ../examples/fakeshop/test_query/README.md
+[config-schema]: ../../examples/fakeshop/config/schema.py
+[config-settings]: ../../examples/fakeshop/config/settings.py
+[config-urls]: ../../examples/fakeshop/config/urls.py
+[create-users]: ../../examples/fakeshop/apps/products/management/commands/create_users.py
+[schema-reload]: ../../examples/fakeshop/schema_reload.py
+[test-query-readme]: ../../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->
 
 <!-- .venv/ -->
 
 <!-- External -->
-[upstream-auth-mutations]: ../../strawberry-django-main/strawberry_django/auth/mutations.py
-[upstream-auth-queries]: ../../strawberry-django-main/strawberry_django/auth/queries.py
-[upstream-auth-utils]: ../../strawberry-django-main/strawberry_django/auth/utils.py
+[upstream-auth-mutations]: ../../../strawberry-django-main/strawberry_django/auth/mutations.py
+[upstream-auth-queries]: ../../../strawberry-django-main/strawberry_django/auth/queries.py
+[upstream-auth-utils]: ../../../strawberry-django-main/strawberry_django/auth/utils.py

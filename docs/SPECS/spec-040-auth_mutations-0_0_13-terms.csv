@@ -1,0 +1,31 @@
+term,anchor,notes
+Auth mutations,auth-mutations,"the card subject; planned for 0.0.13 -> shipped at Slice 3 (groups: login_mutation, logout_mutation, register_mutation, current_user, DjangoRegisterMutation, bind_auth_mutations, LoginPayload, LogoutPayload, RegisterPayload, RegisterInput, Register, CurrentUserAlias, permission holder, derive_register_fields, _AUTH_FAMILY_LABEL, _make_permission_holder, materialize_current_user_alias, Session, surface-keyed bind, one declaration per process, me)"
+DjangoMutation,djangomutation,"the 036 base the register rider subclasses (groups: Meta.operation, refetch_optimized, bind_mutations, run_write_pipeline_sync, resolve_sync, resolve_async, decode_step, write_step, _run_pipeline_sync, _model_decode_step, _model_write_step, _bind_mutation, _resolve_model, _validate_meta, _resolve_primary_type, make_declaration_registry, _primary_type, excluded_input_fields, _decode_relations, exclusion seam, _provided_attr_names, _unprovided_exclude, _ValidatedMutationMeta, run_in_one_sync_boundary, scalar_and_fk_attrs)"
+DjangoMutationField,djangomutationfield,"reused unchanged to expose the register rider (groups: signature injection, _lazy_ref, _synthesized_mutation_signature)"
+DjangoFormMutation,djangoformmutation,source of the pinned { ok errors } payload shape logout reuses (groups: bind_form_mutations)
+DjangoModelPermission,djangomodelpermission,"the write-auth default the auth AllowAny inversion is defined against (groups: DenyAll, Meta.permission_classes, request_from_info, check_permission, authorize_or_raise, has_permission, _validate_permission_classes, AllowAny, _mutation_meta)"
+FieldError,fielderror-envelope,"the frozen envelope every auth mutation returns (groups: build_payload_type, payload_object_slot, validation_error_to_field_errors, field_error, NON_FIELD_ERROR_KEY, save_or_field_errors, _full_clean_or_field_errors, build_payload)"
+DjangoType,djangotype,the consumer-declared user type the payloads resolve
+DjangoOptimizerExtension,djangooptimizerextension,the register payload re-fetch rides the G2 path (groups: G2 gate)
+SerializerMutation,serializermutation,the sibling 0.0.13 card whose release flips land in Slice 3
+ConfigurationError,configurationerror,bind validation / post-finalize factory raise
+SyncMisuseError,syncmisuseerror,"async permission hooks rejected; never a silent allow (groups: reject_async_in_sync_context, is_async_callable, _PERMISSION_ASYNC_RECOURSE)"
+finalize_django_types,finalize_django_types,"phase 2.5 bind via bind_auth_mutations() (groups: register_subsystem_clear, TypeRegistry, clear_mutation_registry, clear_form_mutation_registry, iter_subsystem_clears, declaration ledger, emit ledger, reload_all_project_schemas, _PROJECT_APP_SCHEMA_MODULES, _clear_if_importable, _subsystem_clears)"
+get_queryset,get_queryset-visibility-hook,"the visibility hook deliberately NOT re-run for the session actor (groups: relation_kind, is_forward_many_to_many, visible_related_object, visible_related_objects)"
+apply_cascade_permissions,apply_cascade_permissions,the cascade seam named in the visibility discussion
+Meta.primary,metaprimary,"the registry primary lookup resolving the user type (groups: registry.get, registry.types_for)"
+Meta.model,metamodel,the register rider's synthesized Meta
+Meta.fields,metafields,the register rider's narrowed safe field set
+Meta.interfaces,metainterfaces,the consumer UserType's Relay declaration
+Input type generation,input-type-generation,"the model-column generator reused unchanged (narrowed) (groups: input_field_required, build_input, input_type_name, input_module_path, materialize_generated_input_class, editable_input_fields, iter_provided_input_fields, make_input_namespace, materialize_mutation_input_class)"
+only() projection,only-projection,suppressed under the mutation G2 gate on the re-fetch
+Definition-order independence,definition-order-independence,why the factories defer type resolution to bind
+Cross-subsystem invariants,cross-subsystem-invariants,the envelope-shared-across-flavors invariant
+DjangoGraphQLProtocolRouter,djangographqlprotocolrouter,the 0.0.14 Channels card the fallback defers to
+TestClient,testclient,the 0.0.14 test-client card; live auth tests use the raw Django client
+GraphQLTestCase,graphqltestcase,the 0.0.14 companion helper; out of scope pointer
+FieldSet,fieldset,0.1.1 read gates composing on top; out of scope pointer
+Per-field permission hooks,per-field-permission-hooks,0.1.1 read gates; out of scope pointer
+DjangoListField,djangolistfield,the field-factory idiom precedent
+DjangoNodeField,djangonodefield,the field-factory idiom precedent
+Strictness mode,strictness-mode,unplanned deep selections under me remain strictness-visible

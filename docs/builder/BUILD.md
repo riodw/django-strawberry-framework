@@ -135,6 +135,10 @@ A test that asserts only that an optimization is *observable* — an annotation 
 - **Batched/windowed/prefetch vs. N+1:** assert the **query count at two or more parent cardinalities** — equal count across cardinalities means the work is batched; count scaling with cardinality means N+1. An equality-only assertion is vacuous unless paired with an **absolute** expected count (some fallback shapes are also "equal across runs"). Derive the absolute count from a real run; never guess it.
 - **Right-path tests:** confirm the query under test actually exercises the intended path. An argument that silently routes a selection to a fallback (e.g. a sidecar `filter:` / `orderBy:` that disables a planned optimization) makes a "fast-path" test pass while pinning the fallback. Keep the test's query minimal so it can only take the path it claims to test.
 
+### Example-project schema changes must sync every schema-module list
+
+A slice that adds a new example-project app — or any new schema module — must register that module in **every** schema-module enumeration across the test trees, not only the shared reload helper. Some test harnesses carry their own private, hardcoded schema-module lists (cold-path `sys.modules` eviction tuples, bare-name reload loops), and a single file may hold more than one such seam. An omitted module leaves its types stranded-registered across a `registry.clear()` / reload, producing an **order-dependent** `DuplicatedTypeName` / `LazyType KeyError` at the aggregate schema build. This failure class is **invisible below the full parallel test run** — it passes in isolation, single-worker, and any one fixed file order. So when a slice adds an app or schema module: grep the whole test tree for private schema-module lists, sync the new module into each (dependency-safe order), and re-verify with the full parallel `uv run pytest --no-cov` — never a focused run. The final test-run gate's full sweep is the backstop that catches this; per-slice focused tests will not.
+
 ## Required plan structure
 
 `docs/builder/build-<NNN>-<topic>-<0_0_X>.md` must begin with:
@@ -338,6 +342,7 @@ If the slice's diff includes documentation, release metadata, KANBAN movement, o
 - active-spec archival, if planned, preserves the historical record and leaves the live follow-up source of truth in the durable doc named by the spec
 - when the slice copies verbatim text from the spec (e.g. KANBAN card bodies, CHANGELOG entries, GLOSSARY.md entry text), confirm character-for-character via `diff` against the spec source; for fenced-code drop-ins where the inner fence backtick count matches the outer, confirm the outer fence used four backticks (or another non-conflicting form) so markdown rendering is intact
 - no obsolete "coming soon", "planned", or old-version wording remains in files the slice deliberately updated
+- when the slice regenerates a **script-rendered** doc (e.g. a tree/index rendered from source module docstrings), confirm the source docstrings that feed it carry no **staging** language — "planned", "Slice N", "after Slice N", `TODO(` — that would render now-shipped behavior as unbuilt; the staging-docstring fix and the regenerate must land in the SAME change (a hand-edit of the generated doc is reverted by the next render). Distinguish staging docstrings (scrub) from provenance comments that cite a spec as design rationale (keep, per `AGENTS.md` "shipped behavior folds into `docs/TREE.md`")
 
 If the slice does not touch those surfaces, write `Not applicable; slice did not modify docs/release/KANBAN/archive surfaces.`.
 

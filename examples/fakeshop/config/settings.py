@@ -44,6 +44,9 @@ INSTALLED_APPS = [
     # `UniqueTogetherValidator` need no DRF app registry (Decision 13 / spec line
     # 969); DRF being a dev-group dependency keeps it importable in the test context.
     # Local
+    # spec-040 Slice 1: the schema-only accounts app supplies the example
+    # ``UserType`` over ``auth.User`` so ``apps.accounts.schema`` can register it
+    # and the auth ``login`` / ``logout`` surface resolves at finalize.
     "apps.accounts.apps.AccountsConfig",
     "apps.library.apps.LibraryConfig",
     "apps.products.apps.ProductsConfig",

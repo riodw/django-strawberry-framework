@@ -31,7 +31,6 @@ rider instead of tripping a stale conflict raise.
 from __future__ import annotations
 
 import functools
-import inspect
 from typing import Any
 
 import strawberry
@@ -45,8 +44,7 @@ from ..exceptions import ConfigurationError
 from ..mutations.fields import (
     DjangoMutationField,
     _lazy_ref,
-    attach_injected_signature,
-    base_resolver_params,
+    build_lazy_field_signature,
 )
 from ..mutations.inputs import (
     CREATE,
@@ -217,26 +215,51 @@ def _reject_conflicting_permission_classes(
         )
 
 
+def _declare_auth_surface(
+    surface: str,
+    label: str,
+    permission_classes: Any,
+    synthesize: Any,
+) -> type:
+    """Resolve one auth surface's declaration class (cached, conflict-checked, or fresh).
+
+    The ONE declaration path all four factories route through: normalize
+    ``permission_classes`` via the standard ``_validate_permission_classes`` with
+    the explicit empty-list default (the AllowAny semantics - the documented
+    inversion of the write family's deny-by-default; no ``AllowAny`` class exists,
+    spec-040 Decision 5), then either return the ledger-cached class (a
+    same-``permission_classes`` repeat call), raise on a conflicting repeat, or
+    mint a fresh class via ``synthesize(normalized)`` (a permission holder for the
+    fixed fields; the ``Register`` rider for ``register_mutation``). Ledger
+    RECORDING stays at the call sites - the fixed path appends to the auth ledger
+    only, while ``register_mutation`` appends to BOTH ledgers - so the every-call
+    re-record semantics (the reload contract) are explicit where they differ.
+    """
+    normalized = _validate_permission_classes(label, permission_classes, unset_default=())
+    declared_cls = _declared_auth_surface(surface)
+    if declared_cls is not None:
+        _reject_conflicting_permission_classes(surface, declared_cls, normalized)
+        return declared_cls
+    return synthesize(normalized)
+
+
 def _declare_fixed_auth_surface(surface: str, holder_name: str, permission_classes: Any) -> type:
     """Record (or re-record) one fixed auth surface; return its permission holder.
 
     The shared fixed-field declaration path ``login_mutation`` /
-    ``logout_mutation`` / ``current_user`` all route through: normalize
-    ``permission_classes`` via the standard ``_validate_permission_classes`` with
-    the explicit empty-list default (the AllowAny semantics - the documented
-    inversion of the write family's deny-by-default; no ``AllowAny`` class exists,
-    spec-040 Decision 5), then either return the identity-deduped cached holder (a
-    same-``permission_classes`` repeat call - re-registered so a drained ledger
-    re-appends, the reload contract) or raise on a conflicting repeat, or mint a
-    fresh holder and record it. The ``register_auth_mutation`` call also enforces
-    the standing declare-after-finalize ``ConfigurationError``.
+    ``logout_mutation`` / ``current_user`` all route through:
+    ``_declare_auth_surface`` resolves the holder (cached / conflict-raise /
+    fresh-minted via ``_make_permission_holder``), then the holder is
+    re-registered so a drained ledger re-appends (the reload contract). The
+    ``register_auth_mutation`` call also enforces the standing
+    declare-after-finalize ``ConfigurationError``.
     """
-    normalized = _validate_permission_classes(holder_name, permission_classes, unset_default=())
-    holder_cls = _declared_auth_surface(surface)
-    if holder_cls is not None:
-        _reject_conflicting_permission_classes(surface, holder_cls, normalized)
-    else:
-        holder_cls = _make_permission_holder(surface, holder_name, normalized)
+    holder_cls = _declare_auth_surface(
+        surface,
+        holder_name,
+        permission_classes,
+        lambda normalized: _make_permission_holder(surface, holder_name, normalized),
+    )
     register_auth_mutation(holder_cls)
     return holder_cls
 
@@ -261,7 +284,7 @@ async def _resolve_auth_async(resolve_body: Any, info: Any, kwargs: dict[str, An
 def _make_auth_field(
     *,
     resolve_body: Any,
-    arg_annotations: dict[str, Any],
+    arguments: list[tuple[str, Any]],
     return_annotation: Any,
     description: str | None,
     deprecation_reason: str | None,
@@ -276,8 +299,9 @@ def _make_auth_field(
     injected ``__signature__`` / ``__annotations__`` (the keyword-only GraphQL
     args + the ``strawberry.lazy`` return forward-ref, unresolved at class-body
     time) ride the promoted ``mutations/fields.py`` machinery -
-    ``base_resolver_params`` + ``attach_injected_signature`` + ``_lazy_ref``-built
-    refs - never a re-spelled copy.
+    ``build_lazy_field_signature`` over ``_lazy_ref``-built refs - never a
+    re-spelled copy. ``arguments`` is the ordered ``(name, annotation)`` list of
+    keyword-only GraphQL args (empty for ``logout`` / ``me``).
     """
 
     def _resolve(root: Any, info: Any, **kwargs: Any) -> Any:  # noqa: ARG001
@@ -285,13 +309,9 @@ def _make_auth_field(
             return _resolve_auth_async(resolve_body, info, kwargs)
         return resolve_body(info, **kwargs)
 
-    params, annotations = base_resolver_params()
-    for name, annotation in arg_annotations.items():
-        params.append(
-            inspect.Parameter(name, inspect.Parameter.KEYWORD_ONLY, annotation=annotation),
-        )
-        annotations[name] = annotation
-    attach_injected_signature(_resolve, params, annotations, return_annotation)
+    signature, annotations = build_lazy_field_signature(arguments, return_annotation)
+    _resolve.__signature__ = signature
+    _resolve.__annotations__ = annotations
     return strawberry.field(
         resolver=_resolve,
         description=description,
@@ -335,11 +355,11 @@ def _login_resolve_body(
     payload_cls = resolvers.payload_cls_for(holder_cls)
     slot = payload_object_slot(holder_cls._primary_type)
     if user is None:
-        error = resolvers.field_error(
-            "",
-            _INCORRECT_CREDENTIALS_MESSAGE,
-            codes="invalid_login",
-        )
+        # No error code, deliberately: the user-facing failed-login contract is
+        # ``field: "__all__"`` + the one undifferentiated message ONLY. A code
+        # would become public GraphQL surface the moment a consumer keys on it
+        # (a breaking change to ever rename), and the spec pins no code.
+        error = resolvers.field_error("", _INCORRECT_CREDENTIALS_MESSAGE)
         return resolvers.build_payload(payload_cls, slot, None, [error])
     auth.login(request, user)
     return resolvers.build_payload(payload_cls, slot, user, [])
@@ -385,7 +405,7 @@ def login_mutation(
     holder_cls = _declare_fixed_auth_surface("login", "Login", permission_classes)
     return _make_auth_field(
         resolve_body=functools.partial(_login_resolve_body, holder_cls),
-        arg_annotations={"username": str, "password": str},
+        arguments=[("username", str), ("password", str)],
         return_annotation=_lazy_ref("LoginPayload", INPUTS_MODULE_PATH),
         description=description,
         deprecation_reason=deprecation_reason,
@@ -412,7 +432,7 @@ def logout_mutation(
     holder_cls = _declare_fixed_auth_surface("logout", "Session", permission_classes)
     return _make_auth_field(
         resolve_body=functools.partial(_logout_resolve_body, holder_cls),
-        arg_annotations={},
+        arguments=[],
         return_annotation=_lazy_ref("LogoutPayload", INPUTS_MODULE_PATH),
         description=description,
         deprecation_reason=deprecation_reason,
@@ -639,12 +659,12 @@ def register_mutation(
     ``RegisterInput`` / ``RegisterPayload`` names cannot serve two
     permission-specialized classes); presentation kwargs never enter that key.
     """
-    normalized = _validate_permission_classes("Register", permission_classes, unset_default=())
-    rider_cls = _declared_auth_surface("register")
-    if rider_cls is not None:
-        _reject_conflicting_permission_classes("register", rider_cls, normalized)
-    else:
-        rider_cls = _synthesize_register_rider(normalized)
+    rider_cls = _declare_auth_surface(
+        "register",
+        "Register",
+        permission_classes,
+        _synthesize_register_rider,
+    )
     # The every-call re-record on BOTH ledgers (identity-deduped): a live ledger
     # is a no-op; a drained one re-appends, so the rider - and its auth-specific
     # bind validation - survive the complete-reload fixtures (Revision 4 P2).

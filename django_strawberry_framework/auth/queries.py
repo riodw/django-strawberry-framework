@@ -103,7 +103,7 @@ def current_user(
     holder_cls = _declare_fixed_auth_surface("current_user", "CurrentUser", permission_classes)
     return _make_auth_field(
         resolve_body=functools.partial(_current_user_resolve_body, holder_cls),
-        arg_annotations={},
+        arguments=[],
         return_annotation=_lazy_ref(CURRENT_USER_ALIAS_NAME, AUTH_QUERIES_MODULE_PATH) | None,
         description=description,
         deprecation_reason=deprecation_reason,

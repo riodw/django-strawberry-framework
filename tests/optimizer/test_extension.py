@@ -1309,6 +1309,114 @@ def test_cache_eviction_removes_old_entries(monkeypatch):
     assert ext.cache_info().size == 4
 
 
+def test_doc_key_cache_evicts_when_full(monkeypatch):
+    """B1: the cross-request document-key cache is a bounded LRU.
+
+    ``_doc_cache_entry`` memoizes the printed operation-plus-fragments key AND
+    the cache-relevant variable-name set across requests (keyed on the raw
+    source text), so a hot query neither prints nor re-walks its AST after
+    first sight. The cache is bounded so a long-lived process seeing many
+    distinct documents cannot grow it without limit: inserting past a shrunk
+    max evicts the least-recently-used entry while the newest survive.
+    """
+    from graphql import parse
+
+    import django_strawberry_framework.optimizer.extension as extension_module
+
+    monkeypatch.setattr(extension_module, "_MAX_DOC_KEY_CACHE_SIZE", 2)
+    monkeypatch.setattr(extension_module, "_doc_key_cache", OrderedDict())
+
+    ops = [parse(f"query Q{i} {{ field{i} }}").definitions[0] for i in range(3)]
+    for op in ops:
+        extension_module._doc_cache_entry(op, {})
+
+    # Three distinct documents into a size-2 cache: the first (LRU) is evicted,
+    # the two most-recent survive.
+    assert len(extension_module._doc_key_cache) == 2
+    cached_bodies = {body for (body, _name) in extension_module._doc_key_cache}
+    assert ops[0].loc.source.body not in cached_bodies
+    assert ops[1].loc.source.body in cached_bodies
+    assert ops[2].loc.source.body in cached_bodies
+
+
+def test_stash_union_skips_restash_when_subset():
+    """A re-publish whose sentinel set is already contained leaves the stash alone.
+
+    A nested fallback connection re-publishes the SAME plan once per parent row;
+    after the first row every ``_stash_union`` call carries a subset of what is
+    already stashed. The subset early-out skips the union (no per-row frozenset
+    reallocation) - observable as the stashed OBJECT staying identical - while a
+    genuinely new element still unions in.
+    """
+    context = SimpleNamespace()
+    DjangoOptimizerExtension._stash_union(context, "sentinels", frozenset({"a", "b"}))
+    first = context.sentinels
+
+    DjangoOptimizerExtension._stash_union(context, "sentinels", frozenset({"a"}))
+    assert context.sentinels is first  # subset: no re-stash, same object
+
+    DjangoOptimizerExtension._stash_union(context, "sentinels", frozenset({"c"}))
+    assert context.sentinels == frozenset({"a", "b", "c"})
+
+
+def test_get_or_build_plan_reuses_uncacheable_plan_within_execution(monkeypatch):
+    """B1: the per-execution memo reuses an uncacheable plan built earlier this execution.
+
+    A nested fallback connection pipeline calls ``_get_or_build_plan`` once per
+    parent row with an IDENTICAL cache key, and those plans are ``cacheable =
+    False`` so the cross-request cache never serves them. Within one
+    ``on_execute`` lifecycle the per-execution memo returns the plan built for the
+    first parent instead of re-running the walker for every subsequent parent -
+    collapsing N per-parent walks to one. The intra-execution reuse is NOT counted
+    as a cross-request cache hit (``cache_info`` reports the instance cache only).
+    """
+    from graphql import parse
+
+    import django_strawberry_framework.optimizer.extension as extension_module
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    builds = {"count": 0}
+
+    def _fake_plan_optimizations(
+        selections,
+        model,
+        *,
+        info,
+        source_type,
+    ):
+        builds["count"] += 1
+        return OptimizationPlan(prefetch_related=["items"], cacheable=False).finalize()
+
+    monkeypatch.setattr(extension_module, "plan_optimizations", _fake_plan_optimizations)
+
+    operation = parse("{ allItems { name } }").definitions[0]
+    info = SimpleNamespace(
+        operation=operation,
+        fragments={},
+        variable_values={},
+        path=SimpleNamespace(key="allItems", prev=None),
+    )
+
+    ext = DjangoOptimizerExtension()
+    gen = ext.on_execute()
+    next(gen)  # enter the lifecycle: installs the per-execution plan memo
+    try:
+        first = ext._get_or_build_plan([], Item, info, None)
+        second = ext._get_or_build_plan([], Item, info, None)
+    finally:
+        with contextlib.suppress(StopIteration):
+            next(gen)  # exit: resets the memo
+
+    # Built once, reused for the second call within the same execution.
+    assert builds["count"] == 1
+    assert second is first
+    # The uncacheable plan never entered the cross-request cache, and the
+    # intra-execution reuse did not inflate the hit counter.
+    assert ext.cache_info().size == 0
+    assert ext.cache_info().misses == 1
+    assert ext.cache_info().hits == 0
+
+
 @pytest.mark.django_db
 def test_filter_vars_do_not_affect_cache():
     """B1: variables not used in @skip/@include don't split cache entries."""

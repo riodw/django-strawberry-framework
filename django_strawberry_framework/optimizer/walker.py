@@ -842,8 +842,16 @@ def _selected_scalar_names(
     # the same type-condition classifier used by ``_walk_selections`` or prove
     # the helper only receives concretely typed relation child selections where
     # sibling fragments are GraphQL-invalid.
+    #
+    # No ``_merge_aliased_selections`` here (unlike ``_walk_selections``): this
+    # helper only builds a SET of scalar field names, and merging aliased
+    # duplicates before set insertion cannot change that set - two aliases of one
+    # field collapse to a single name either way, and merging never turns a
+    # scalar into a relation. Skipping the merge avoids a redundant second pass
+    # over the same child selections the caller re-walks when elision does not
+    # fire (the common case: any non-pk scalar selected).
     scalar_names: set[str] = set()
-    for sel in _merge_aliased_selections(_included_field_selections(selections)):
+    for sel in _included_field_selections(selections):
         django_name = snake_case(sel.name)
         django_field = field_map.get(django_name)
         if django_field is None or django_field.is_relation:
@@ -1039,7 +1047,27 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
     The main walker path passes fragment-inlined field selections here, so
     duplicate relation branches are combined before planning. The fragment
     passthrough below is retained for defensive direct helper use.
+
+    Fast path: when no two selections share a snake-cased field name (the
+    overwhelmingly common query shape - each field selected once), there is
+    nothing to merge, so the input list is returned unchanged instead of
+    rebuilding it into per-selection ``SimpleNamespace`` clones. Downstream
+    readers (``_response_keys`` / ``_selection_runtime_prefixes`` /
+    ``_aliased_arguments_diverge``) all ``getattr``-default the ``_optimizer_*``
+    markers a raw selection lacks, so the passthrough is shape-compatible. Any
+    fragment defensively forces the slow path (fragments cannot be deduped by
+    name and are passed through by the merge loop below unchanged).
     """
+    seen_names: set[str] = set()
+    for sel in selections:
+        if _is_fragment(sel):
+            break
+        key = snake_case(sel.name)
+        if key in seen_names:
+            break
+        seen_names.add(key)
+    else:
+        return selections
     seen: dict[str, Any] = {}
     result: list[Any] = []
     for sel in selections:

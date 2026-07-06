@@ -67,6 +67,7 @@ from .plans import diff_plan_for_queryset, lookup_paths, runtime_path_from_info
 from .selections import (
     ast_child_selections,
     ast_to_converted_selections,
+    converted_selections_cache,
     directive_variable_names,
     named_children,
     node_children_with_runtime_prefix,
@@ -294,7 +295,8 @@ def _collect_cache_relevant_var_names(operation: Any, fragments: dict[str, Any])
     non-root pagination variable names -- in ONE AST traversal
     (``_collect_cache_var_families``) -- so ``_build_cache_key`` folds one name
     set through its single ``(name, value)`` comprehension. The result is what
-    ``_pagination_var_names_cache`` memoizes per ``id(operation)``.
+    ``_doc_cache_entry`` memoizes cross-request alongside the rendered document
+    key (both are pure functions of the document text).
     """
     directive_names, pagination_names = _collect_cache_var_families(operation, fragments)
     return frozenset(directive_names | pagination_names)
@@ -372,6 +374,71 @@ def _print_operation_with_reachable_fragments(operation: Any, fragments: dict[st
         for fragment in _collect_reachable_fragment_definitions(operation, fragments)
     )
     return "\n".join(parts)
+
+
+_MAX_DOC_KEY_CACHE_SIZE = 256
+
+# Cross-request memo for the two document-derived cache-key ingredients - the
+# rendered document key AND the cache-relevant variable-NAME frozenset - keyed by
+# the operation's raw source text plus its name. Both values are pure functions
+# of the document text: two requests with byte-identical document text parse to
+# structurally identical ASTs, so the printed key and the ``@skip``/``@include``
+# plus nested-pagination name set are identical. Caching them together means a
+# hot query neither ``print_ast``s NOR re-walks its full operation AST
+# (``_collect_cache_relevant_var_names`` was the last remaining per-request AST
+# descent on the plan-cache-hit path) after first sight. The per-execution
+# ``_cache_key_parts_cache`` only dedupes within ONE request (keyed on
+# ``id(operation)``); this module-level LRU carries the far more valuable
+# cross-request reuse. Correctness-neutral under concurrency exactly like
+# ``_plan_cache`` - the cached value is deterministic, so a dropped or double
+# insert only changes hit rate. Bounded LRU so a long-lived process with many
+# distinct documents does not grow without limit.
+_doc_key_cache: "OrderedDict[tuple[str, str | None], tuple[str, frozenset[str]]]" = OrderedDict()
+
+
+def _doc_cache_entry(operation: Any, fragments: dict[str, Any]) -> tuple[str, frozenset[str]]:
+    """Return ``(doc_key, cache_relevant_var_names)``, memoized cross-request by source text.
+
+    Keys on ``(operation.loc.source.body, operation_name)``: the source body is
+    the WHOLE document text (every operation and fragment definition), so any
+    difference in a reachable fragment body is already reflected in it, and the
+    operation name disambiguates the operations of a multi-operation document
+    (which share one body). Falls back to computing directly - never caching -
+    for a programmatically built AST that carries no source ``loc`` (the cache
+    would have no stable text key); the per-execution ``id(operation)`` memo in
+    ``_build_cache_key`` still dedupes those within one execution.
+
+    ``_collect_cache_relevant_var_names`` is called through the module global
+    (not captured) so a test spy patched onto the module still intercepts the
+    miss-path collection.
+    """
+    loc = getattr(operation, "loc", None)
+    source = getattr(loc, "source", None)
+    body = getattr(source, "body", None)
+    if body is None:
+        return (
+            _print_operation_with_reachable_fragments(operation, fragments),
+            _collect_cache_relevant_var_names(operation, fragments),
+        )
+    name_node = getattr(operation, "name", None)
+    key = (body, getattr(name_node, "value", None))
+    cached = _doc_key_cache.get(key)
+    if cached is not None:
+        # ``move_to_end`` is the LRU promotion; guard the concurrent-eviction
+        # race the same way the plan cache does (one module cache is shared
+        # across all extension instances and threads).
+        with suppress(KeyError):
+            _doc_key_cache.move_to_end(key)
+        return cached
+    entry = (
+        _print_operation_with_reachable_fragments(operation, fragments),
+        _collect_cache_relevant_var_names(operation, fragments),
+    )
+    _doc_key_cache[key] = entry
+    if len(_doc_key_cache) > _MAX_DOC_KEY_CACHE_SIZE:
+        with suppress(KeyError):
+            _doc_key_cache.popitem(last=False)
+    return entry
 
 
 SelectionExtractor = Callable[[list[Any], Any], list[Any]]
@@ -482,29 +549,50 @@ _active_optimizer: "ContextVar[DjangoOptimizerExtension | None]" = ContextVar(
 )
 
 
-# Per-execution memo for the rendered document key: the selected operation
-# plus reachable named fragment definitions.  Set in ``on_execute`` and
-# reset on its way out so each execution gets its own dict; the ``ContextVar``
-# shape keeps async executions isolated even when they share the same
-# extension instance.  ``_build_cache_key`` reads from this dict before
-# recomputing, keyed by ``id(operation)``.
-_printed_ast_cache: ContextVar[dict[int, str] | None] = ContextVar(
-    "django_strawberry_framework_optimizer_printed_ast_cache",
-    default=None,
+# Per-execution memo for the operation-constant cache-key PARTS: the rendered
+# document key plus the fully RESOLVED ``(name, value)`` variable frozenset,
+# keyed by ``id(operation)``.  Both are constants within one execution (the
+# document and ``info.variable_values`` are fixed for the operation), so a
+# nested fallback connection pipeline that calls ``apply_connection_optimization``
+# -> ``_build_cache_key`` once per parent row pays one dict hit per row instead
+# of re-walking the operation AST and rebuilding the value frozenset.  Reusing
+# ONE frozenset object across rows also means its hash is computed once
+# (``frozenset`` memoizes its hash), so the per-row ``_plan_cache`` key hash
+# stays cheap.  This merges the formerly separate printed-AST and
+# variable-names memos: both were consulted on every ``_build_cache_key`` call
+# with the same ``id(operation)`` key, so keeping them apart bought nothing but
+# a second ``ContextVar`` read + dict get per row.  Same per-execution
+# ``ContextVar`` lifecycle as the plan memo below: set to an empty dict in
+# ``on_execute`` and reset on the way out, ``None`` (the default) when
+# ``_build_cache_key`` is called outside an ``on_execute`` lifecycle so the
+# lookup falls back to recomputing -- Decision 7.
+_cache_key_parts_cache: ContextVar[dict[int, tuple[str, frozenset[tuple[str, Any]]]] | None] = (
+    ContextVar(
+        "django_strawberry_framework_optimizer_cache_key_parts_cache",
+        default=None,
+    )
 )
 
 
-# Per-execution memo for the COMBINED ``@skip``/``@include`` directive plus
-# non-root pagination variable-NAME frozenset, keyed by ``id(operation)``.  A
-# nested fallback connection pipeline calls ``apply_connection_optimization`` ->
-# ``_build_cache_key`` once per parent row; without this memo each parent would
-# re-walk the full operation AST twice (directives + pagination).  Same
-# per-execution ``ContextVar`` lifecycle as ``_printed_ast_cache``: set to an
-# empty dict in ``on_execute`` and reset on the way out, ``None`` (the default)
-# when ``_build_cache_key`` is called outside an ``on_execute`` lifecycle so the
-# lookup falls back to recomputing -- Decision 7.
-_pagination_var_names_cache: ContextVar[dict[int, frozenset[str]] | None] = ContextVar(
-    "django_strawberry_framework_optimizer_pagination_var_names_cache",
+# Per-execution memo for BUILT plans, keyed by the same tuple as ``_plan_cache``.
+# Its job is the plans the cross-request ``_plan_cache`` deliberately refuses:
+# ``cacheable = False`` plans (those baking a request-scoped ``get_queryset``
+# queryset or a consumer ``Prefetch`` hint). A nested FALLBACK connection pipeline
+# calls ``apply_connection_optimization`` -> ``_get_or_build_plan`` once per parent
+# row with an IDENTICAL cache key (``runtime_path_from_info`` strips list indices,
+# so every parent shares one key), and because those plans are uncacheable the
+# cross-request cache never serves them - so without this memo each parent row
+# re-ran the full walker pass (and rebuilt the child queryset). Reusing the plan
+# built earlier in THIS execution collapses those N per-parent walks to one. Safe
+# because one execution has a single fixed ``info.context``, so a request-scoped
+# ``get_queryset`` baked into the plan filters identically for every parent (the
+# same reason a list field's single root walk reuses one child queryset across
+# all parents). Same per-execution ``ContextVar`` lifecycle as the memos above:
+# set to an empty dict in ``on_execute``, reset on the way out; ``None`` (the
+# default) outside an ``on_execute`` lifecycle disables the memo entirely, so
+# direct / test callers of ``_get_or_build_plan`` see unchanged behavior.
+_execution_plan_cache: ContextVar[dict[Any, Any] | None] = ContextVar(
+    "django_strawberry_framework_optimizer_execution_plan_cache",
     default=None,
 )
 
@@ -737,13 +825,15 @@ class DjangoOptimizerExtension(SchemaExtension):
         # Publish this instance so ``apply_connection_optimization`` can
         # discover it and share the instance-bound plan cache (Decision 11).
         instance_token = _active_optimizer.set(self)
-        ast_token = _printed_ast_cache.set({})
-        var_names_token = _pagination_var_names_cache.set({})
+        key_parts_token = _cache_key_parts_cache.set({})
+        plan_memo_token = _execution_plan_cache.set({})
+        converted_token = converted_selections_cache.set({})
         try:
             yield
         finally:
-            _pagination_var_names_cache.reset(var_names_token)
-            _printed_ast_cache.reset(ast_token)
+            converted_selections_cache.reset(converted_token)
+            _execution_plan_cache.reset(plan_memo_token)
+            _cache_key_parts_cache.reset(key_parts_token)
             _active_optimizer.reset(instance_token)
             _optimizer_active.reset(active_token)
 
@@ -872,6 +962,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         """
         if not info.field_nodes:
             return queryset
+
         # The O2 walker expects the children of the root field, so we build
         # the Strawberry-shaped selection list from ``field_nodes`` via the
         # package-owned ``ast_to_converted_selections`` adapter rather than
@@ -881,10 +972,19 @@ class DjangoOptimizerExtension(SchemaExtension):
         # ``type_condition=None``). The adapter mirrors the conversion but
         # builds a ``type_condition=None`` shell the fragment-aware substrate
         # in ``selections.py`` flows through unchanged.
-        selections = ast_to_converted_selections(info, info.field_nodes)
-        node_selections = selection_extractor(selections, info)
+        #
+        # Deferred behind a thunk: the conversion + extraction allocate a
+        # per-node ``SelectedField`` tree (with ``convert_arguments`` /
+        # ``convert_directives``), yet on a plan-cache HIT - the steady-state
+        # production path - that list is used for nothing. ``_get_or_build_plan``
+        # invokes the thunk ONLY when it actually has to build a plan, so a cache
+        # hit never pays the conversion.
+        def _node_selections() -> list[Any]:
+            selections = ast_to_converted_selections(info, info.field_nodes)
+            return selection_extractor(selections, info)
+
         plan = self._get_or_build_plan(
-            node_selections,
+            _node_selections,
             target_model,
             info,
             target_type,
@@ -905,7 +1005,7 @@ class DjangoOptimizerExtension(SchemaExtension):
 
     def _get_or_build_plan(
         self,
-        selections: list[Any],
+        selections: "list[Any] | Callable[[], list[Any]]",
         target_model: type,
         info: Any,
         origin: type | None,
@@ -916,6 +1016,22 @@ class DjangoOptimizerExtension(SchemaExtension):
         recency; misses run the walker, evict the least-recently-used quarter
         when full, insert iff the plan is ``cacheable``, and increment
         ``_cache_misses``.
+
+        ``selections`` is either the converted selection list or a zero-arg
+        callable that produces it. The callable form lets the caller defer the
+        AST -> converted-selection conversion until a build is actually needed,
+        so a cache hit never pays for it; it is invoked at most once, only on the
+        build path. Direct/test callers may still pass a plain list.
+
+        A second, per-execution memo (``_execution_plan_cache``) sits between the
+        cross-request cache and the walker for ``cacheable = False`` plans: those
+        never enter ``_plan_cache``, so a nested fallback connection pipeline that
+        calls this once per parent row (identical cache key each time) would
+        otherwise rebuild the same plan for every parent. An intra-execution memo
+        hit reuses that plan and does NOT touch the ``_cache_hits`` /
+        ``_cache_misses`` counters - those stay a report on the cross-request
+        instance cache alone (``cache_info``); the miss counter therefore counts
+        actual walker builds, one per distinct plan per execution.
 
         ``origin`` carries the resolver's actual Strawberry return type
         so primary-return and secondary-return resolvers on the same
@@ -940,7 +1056,18 @@ class DjangoOptimizerExtension(SchemaExtension):
                 self._plan_cache.move_to_end(cache_key)
             self._cache_hits += 1
             return cached_plan
-        plan = plan_optimizations(selections, target_model, info=info, source_type=origin)
+        # Per-execution reuse of an uncacheable plan already built this execution
+        # (the nested-fallback per-parent-row case). ``None`` outside an
+        # ``on_execute`` lifecycle, so direct/test callers skip this entirely.
+        exec_memo = _execution_plan_cache.get()
+        if exec_memo is not None:
+            memoized_plan = exec_memo.get(cache_key)
+            if memoized_plan is not None:
+                return memoized_plan
+        # Both caches missed: resolve the selections now (calling the thunk if the
+        # caller deferred conversion) and run the walker.
+        resolved_selections = selections() if callable(selections) else selections
+        plan = plan_optimizations(resolved_selections, target_model, info=info, source_type=origin)
         if plan.cacheable and len(self._plan_cache) >= _MAX_PLAN_CACHE_SIZE:
             # LRU eviction: drop the least-recently-used quarter at once to
             # amortise eviction cost across many subsequent inserts. Cache hits
@@ -951,6 +1078,11 @@ class DjangoOptimizerExtension(SchemaExtension):
                 self._plan_cache.popitem(last=False)
         if plan.cacheable:
             self._plan_cache[cache_key] = plan
+        elif exec_memo is not None:
+            # Uncacheable across requests, but reusable within THIS execution: a
+            # nested fallback connection re-entering per parent row gets the plan
+            # (and its already-built child queryset) back instead of re-walking.
+            exec_memo[cache_key] = plan
         self._cache_misses += 1
         return plan
 
@@ -1002,7 +1134,17 @@ class DjangoOptimizerExtension(SchemaExtension):
         overwriting it (spec-033 Decision 8).
         """
         existing = _get_context_value(context, key)
-        merged = existing | new if isinstance(existing, (frozenset, set)) else new
+        if isinstance(existing, (frozenset, set)):
+            # Subset early-out: a nested fallback connection re-publishes the
+            # SAME plan once per parent row, so after the first row ``new`` is
+            # already contained in the stash. Skipping the union avoids
+            # reallocating a growing frozenset per row - membership is
+            # observably identical either way.
+            if new <= existing:
+                return
+            merged = existing | new
+        else:
+            merged = new
         _stash_on_context(context, key, merged)
 
     @staticmethod
@@ -1091,45 +1233,33 @@ class DjangoOptimizerExtension(SchemaExtension):
         """
         operation = info.operation
         fragments = info.fragments or {}
-        # Memoize the rendered operation-plus-reachable-fragments document
-        # key per execution: many root resolvers in one operation share the
-        # same operation node, and ``print_ast`` is the heaviest step of
-        # cache-key construction.  The memo is a per-execution ``ContextVar``
-        # dict installed by ``on_execute``; if the extension is invoked
-        # outside an ``on_execute`` lifecycle (some test fixtures call
-        # ``_build_cache_key`` directly), fall back to recomputing.
-        memo = _printed_ast_cache.get()
-        if memo is None:
-            doc_key = _print_operation_with_reachable_fragments(operation, fragments)
-        else:
-            op_id = id(operation)
-            doc_key = memo.get(op_id)
-            if doc_key is None:
-                doc_key = _print_operation_with_reachable_fragments(operation, fragments)
-                memo[op_id] = doc_key
-        # Combined cache-relevant variable NAMES: the ``@skip``/``@include``
-        # directive variables plus the non-root pagination variables (whose
-        # resolved values Slice 1 bakes into windowed prefetch plans, so they
-        # must key the cache -- Decision 7).  Memoized per ``id(operation)`` in
-        # the same per-execution style as the printed-AST key: a nested fallback
-        # connection pipeline calls ``_build_cache_key`` once per parent row, so
-        # the full-operation walk must run once per operation, not per row.  The
-        # memo is ``None`` outside an ``on_execute`` lifecycle (direct test-only
-        # callers), in which case we recompute -- mirroring the printed-AST
-        # fallback above.
-        var_names_memo = _pagination_var_names_cache.get()
-        if var_names_memo is None:
-            relevant_var_names = _collect_cache_relevant_var_names(operation, fragments)
-        else:
-            op_id = id(operation)
-            relevant_var_names = var_names_memo.get(op_id)
-            if relevant_var_names is None:
-                relevant_var_names = _collect_cache_relevant_var_names(operation, fragments)
-                var_names_memo[op_id] = relevant_var_names
-        variable_values = info.variable_values or {}
-        relevant_vars = frozenset(
-            (k, variable_values[k]) for k in relevant_var_names if k in variable_values
-        )
+        # Memoize the operation-constant key parts per execution: the rendered
+        # document key AND the resolved ``(name, value)`` variable frozenset.
+        # Many root resolvers in one operation share the same operation node,
+        # and a nested fallback connection pipeline calls this once per parent
+        # row - both the document rendering and the variable resolution are
+        # constants for the operation (``info.variable_values`` is fixed per
+        # execution), so one dict hit replaces the AST work and the per-row
+        # frozenset rebuild.  On a memo miss the document-derived halves come
+        # from the cross-request ``_doc_cache_entry`` LRU (so a hot query pays
+        # neither ``print_ast`` nor the variable-name AST walk after first
+        # sight); only the value resolution runs per execution.  The memo is a
+        # per-execution ``ContextVar`` dict installed by ``on_execute``; if the
+        # extension is invoked outside an ``on_execute`` lifecycle (some test
+        # fixtures call ``_build_cache_key`` directly), fall back to
+        # recomputing -- Decision 7.
+        memo = _cache_key_parts_cache.get()
+        parts = memo.get(id(operation)) if memo is not None else None
+        if parts is None:
+            doc_key, relevant_var_names = _doc_cache_entry(operation, fragments)
+            variable_values = info.variable_values or {}
+            relevant_vars = frozenset(
+                (k, variable_values[k]) for k in relevant_var_names if k in variable_values
+            )
+            parts = (doc_key, relevant_vars)
+            if memo is not None:
+                memo[id(operation)] = parts
+        doc_key, relevant_vars = parts
         return (
             doc_key,
             relevant_vars,

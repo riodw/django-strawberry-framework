@@ -40,6 +40,7 @@ types and the stdlib.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from types import SimpleNamespace
 from typing import Any
 
@@ -53,6 +54,32 @@ from graphql.language.ast import (
 # ---------------------------------------------------------------------------
 # AST -> converted-selection adapter - the package-owned ``convert_selections``
 # ---------------------------------------------------------------------------
+
+
+# Per-execution memo for the converted-selection tree, keyed by the field
+# nodes' ids. ``prime_selected_fields`` runs the full AST -> ``SelectedField``
+# conversion on every connection resolution, and a nested FALLBACK connection
+# resolves once per parent row with a fresh Strawberry ``Info`` each time - but
+# graphql-core's executor caches collected sub-fields per execution
+# (``ExecutionContext._subfields_cache``), so every row's ``info.field_nodes``
+# is the SAME node group, and the conversion depends only on per-execution
+# constants (``info.fragments`` / ``info.variable_values``). Reusing the first
+# row's converted list collapses N per-row conversions to one. The key mirrors
+# graphql-core's own subfields-cache shape (the ids of the individual field
+# nodes, NOT the id of the wrapping list, which may be rebuilt or reused): AST
+# node ids are stable for the memo's whole lifetime because the document is
+# owned by the execution context that spans the same ``on_execute`` lifecycle.
+# Set to an empty dict / reset by ``DjangoOptimizerExtension.on_execute``
+# (``extension.py`` imports this name; this module stays stdlib +
+# graphql-core only). ``None`` (the default) outside an ``on_execute``
+# lifecycle disables the memo, so direct / test callers see unchanged behavior.
+# Consumers treat the converted list as read-only (the walker clones before
+# mutating; Strawberry's ``selected_fields`` readers only iterate), so sharing
+# one list across rows is safe.
+converted_selections_cache: ContextVar[dict[Any, list[Any]] | None] = ContextVar(
+    "django_strawberry_framework_converted_selections_cache",
+    default=None,
+)
 
 
 def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
@@ -97,7 +124,24 @@ def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
     ``info.selected_fields`` for normal (non-anonymous) queries the moment a
     connection primes it. Keep it a mirror - if Strawberry's ``convert_selections``
     gains a field or changes a shape, mirror the change here rather than diverging.
+
+    Memoized per execution via ``converted_selections_cache`` (see the
+    ``ContextVar`` comment above): within one ``on_execute`` lifecycle the same
+    field-node group converts once, so the per-parent-row
+    ``prime_selected_fields`` calls of a fallback connection pipeline reuse the
+    first row's list instead of re-running the conversion for every parent.
     """
+    memo = converted_selections_cache.get()
+    memo_key: Any = None
+    if memo is not None:
+        # One-node groups are the overwhelmingly common shape; key on the single
+        # node's id directly to skip the tuple build (graphql-core's own
+        # subfields cache makes the same trade).
+        memo_key = id(field_nodes[0]) if len(field_nodes) == 1 else tuple(map(id, field_nodes))
+        converted = memo.get(memo_key)
+        if converted is not None:
+            return converted
+
     from strawberry.types.nodes import (
         FragmentSpread,
         InlineFragment,
@@ -142,7 +186,10 @@ def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
                 )
         return out
 
-    return _convert(field_nodes)
+    converted = _convert(field_nodes)
+    if memo is not None:
+        memo[memo_key] = converted
+    return converted
 
 
 def prime_selected_fields(info: Any) -> None:
@@ -337,8 +384,10 @@ def included_field_selections(selections: list[Any]) -> list[Any]:
         if not should_include(selection):
             continue
         if is_fragment(selection):
+            # No defensive ``list(...)`` copy: the recursion only iterates the
+            # child collection, so any sequence shape passes through as-is.
             result.extend(
-                included_field_selections(list(getattr(selection, "selections", None) or [])),
+                included_field_selections(getattr(selection, "selections", None) or []),
             )
             continue
         result.append(selection)
@@ -352,9 +401,14 @@ def named_children(selection: Any, name: str) -> list[Any]:
         if not should_include(child):
             continue
         if is_fragment(child):
-            for fragment_child in getattr(child, "selections", None) or []:
-                fragment_shell = SimpleNamespace(selections=[fragment_child])
-                children.extend(named_children(fragment_shell, name))
+            # Recurse into the fragment directly: its own ``selections`` are the
+            # children to search, so re-entering ``named_children`` on the
+            # fragment iterates them (and descends nested fragments) with the
+            # same ``should_include`` / name-match rules. This avoids allocating
+            # a throwaway single-child ``SimpleNamespace`` shell per fragment
+            # child - the former shape, which wrapped each child only to give the
+            # recursion a ``.selections`` to walk.
+            children.extend(named_children(child, name))
             continue
         if getattr(child, "name", None) == name:
             children.append(child)

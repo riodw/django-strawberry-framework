@@ -251,3 +251,39 @@ def test_direct_child_selected_ignores_nested_field_selections():
         _field("pageInfo"),
     ]
     assert direct_child_selected(roots, "totalCount") is False
+
+
+def test_ast_to_converted_selections_memoized_per_execution():
+    """The converted-selection tree is reused within one installed memo lifecycle.
+
+    A nested fallback connection primes ``info.selected_fields`` once per parent
+    row, each time with the SAME field-node group (graphql-core's subfields
+    cache guarantees identity across rows). With the per-execution memo
+    installed (``on_execute`` does this in production), the conversion runs once
+    and later calls return the same list - keyed on the node ids, so a rebuilt
+    wrapper list of the same nodes still hits. Outside a lifecycle the memo is
+    disabled and every call converts fresh (unchanged direct-caller behavior).
+    """
+    from django_strawberry_framework.optimizer.selections import (
+        ast_to_converted_selections,
+        converted_selections_cache,
+    )
+
+    doc = parse("{ items { name } books { title } }")
+    field_nodes = list(doc.definitions[0].selection_set.selections)
+    info = SimpleNamespace(fragments={}, variable_values={})
+    single = field_nodes[:1]
+
+    token = converted_selections_cache.set({})
+    try:
+        first = ast_to_converted_selections(info, single)
+        assert ast_to_converted_selections(info, single) is first  # single-node id key
+        pair = ast_to_converted_selections(info, field_nodes)
+        # A rebuilt wrapper list of the same nodes hits too: keys are the node
+        # ids (the graphql-core subfields-cache shape), not the list id.
+        assert ast_to_converted_selections(info, list(field_nodes)) is pair
+    finally:
+        converted_selections_cache.reset(token)
+
+    # No memo installed: every call converts fresh.
+    assert ast_to_converted_selections(info, single) is not first

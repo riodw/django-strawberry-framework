@@ -84,6 +84,25 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
     AND the mutation ``check_permission`` seam, which has no ``.apply`` method, so
     hard-coding ``.apply`` would mis-describe the mutation caller (feedback CR-5).
     """
+    # TODO(spec-041 Slice 1): teach this shared helper the Strawberry-Channels
+    # mapping context once, instead of adding router/auth/mutation-local request
+    # decoders. This keeps every request-consuming surface on one contract.
+    #
+    # TODO(spec-041 Slice 1) pseudo-steps:
+    # - add a tiny scope-backed adapter beside this helper;
+    # - store the Channels ``scope`` mapping on the adapter;
+    # - expose ``adapter.user`` from ``scope.get("user")``;
+    # - expose ``adapter.session`` from ``scope.get("session")``;
+    # - add a private extractor that only recognizes mapping contexts;
+    # - read the mapping's ``"request"`` value, then duck-type
+    #   ``request.consumer.scope``;
+    # - accept only a mapping ``scope`` and return ``None`` for every other
+    #   shape so the existing final ``ConfigurationError`` remains authoritative;
+    # - return the adapter before the final error branch when a scope is found.
+    #
+    # The adapter deliberately imports nothing from channels. It is a duck-typed
+    # request-like object for read-path consumers that need ``.user`` and
+    # ``.session``; session-mutating auth work stays out of spec-041.
     context = getattr(info, "context", None)
     if context is None:
         raise ConfigurationError(

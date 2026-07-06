@@ -55,5 +55,19 @@ def loaded_attr(module_path: str, attr_name: str) -> Any | None:
     return getattr(module, attr_name)
 
 
-# TODO(spec-041 Slice 1): require_optional_module(module_name, *, install_hint,
-# feature_label) lands here with the channels router (Helper-reuse D-P1).
+# TODO(spec-041 Slice 1): add the raising optional-dependency primitive here:
+# ``require_optional_module(module_name, *, install_hint, feature_label)``.
+#
+# TODO(spec-041 Slice 1) pseudo-steps:
+# - accept a module name plus keyword-only ``install_hint`` and ``feature_label``;
+# - import the module through ``importlib.import_module``;
+# - return the imported module object unchanged on success;
+# - on ``ImportError``, raise a new ``ImportError`` carrying ``install_hint`` and
+#   chain the original exception.
+#
+# Contract details:
+# - no memoization; absence tests must evict ``sys.modules`` and re-hit imports;
+# - ``feature_label`` exists for docstrings / future diagnostics, not branching;
+# - do not swallow ``AttributeError``; this imports modules, not module attrs;
+# - keep this primitive generic, and keep feature-specific hint strings at the
+#   feature owner (``routers.py::_CHANNELS_INSTALL_HINT`` for spec-041).

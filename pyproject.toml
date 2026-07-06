@@ -44,6 +44,9 @@ dev = [
     "pillow>=10.0.0",
     "pytest>=9.0.2",
     "pytest-asyncio>=1.0.0",
+    # TODO(spec-041 Slice 1): add "channels[daphne]>=4.3.2" here and
+    # regenerate uv.lock in the same dependency-gate commit; keep channels
+    # out of [project].dependencies so the router remains a soft dependency.
     "pytest-cov>=7.0.0",
     "pytest-django>=4.5.2",
     "pytest-xdist>=3.8.0",

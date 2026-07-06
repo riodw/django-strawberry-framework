@@ -34,6 +34,22 @@ class _Ctx:
         self.request = request
 
 
+# TODO(spec-041 Slice 1): add unit coverage for the Strawberry-Channels context
+# shape beside the existing helper tests, not in router tests only.
+#
+# TODO(spec-041 Slice 1) pseudo-steps:
+# - create distinct sentinel objects for user and session;
+# - wrap them in a fake ``consumer.scope`` mapping;
+# - wrap that consumer in a fake Channels request object;
+# - pass ``{"request": channels_request}`` as ``info.context``;
+# - assert the resolved adapter exposes the same user and session objects.
+#
+# Also pin unsupported mapping shapes:
+# - ``{"request": object()}`` still raises the family-labelled
+#   ``ConfigurationError``;
+# - a mapping with no ``"request"`` key still raises the same final error;
+# - the helper imports no ``channels`` modules, so this branch is safe in a
+#   channels-less environment.
 @pytest.mark.parametrize("family_label", ["FilterSet", "OrderSet"])
 def test_request_from_info_resolves_and_names_family(family_label):
     """``info.context.request`` and bare-HttpRequest both resolve; bad shapes name the family."""

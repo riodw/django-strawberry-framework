@@ -2087,85 +2087,85 @@ implemented-on-main docs update here; release-status wording defers to the joint
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
-[pyproject]: ../pyproject.toml
-[readme]: ../README.md
-[start]: ../START.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
+[pyproject]: ../../pyproject.toml
+[readme]: ../../README.md
+[start]: ../../START.md
+[today]: ../../TODAY.md
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[glossary-auth-mutations]: GLOSSARY.md#auth-mutations
-[glossary-channels-request-adapter]: GLOSSARY.md#channels-request-adapter
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-debug-toolbar-middleware]: GLOSSARY.md#debug-toolbar-middleware
-[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
-[glossary-djangographqlprotocolrouter]: GLOSSARY.md#djangographqlprotocolrouter
-[glossary-djangomodelpermission]: GLOSSARY.md#djangomodelpermission
-[glossary-djangomutationfield]: GLOSSARY.md#djangomutationfield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-eviction-simulated-absence]: GLOSSARY.md#eviction-simulated-absence
-[glossary-fielderror-envelope]: GLOSSARY.md#fielderror-envelope
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-finalize-django-types]: GLOSSARY.md#finalize_django_types
-[glossary-get-queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
-[glossary-graphqltestcase]: GLOSSARY.md#graphqltestcase
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-pep-562-lazy-export]: GLOSSARY.md#pep-562-lazy-export
-[glossary-per-field-permission-hooks]: GLOSSARY.md#per-field-permission-hooks
-[glossary-request-from-info]: GLOSSARY.md#request_from_info
-[glossary-require-optional-module]: GLOSSARY.md#require_optional_module
-[glossary-response-extensions-debug-middleware]: GLOSSARY.md#response-extensions-debug-middleware
-[glossary-serializermutation]: GLOSSARY.md#serializermutation
-[glossary-soft-dependency]: GLOSSARY.md#soft-dependency
-[glossary-strawberry_config]: GLOSSARY.md#strawberry_config
-[glossary-syncmisuseerror]: GLOSSARY.md#syncmisuseerror
-[glossary-testclient]: GLOSSARY.md#testclient
-[glossary-upload-scalar]: GLOSSARY.md#upload-scalar
-[glossary]: GLOSSARY.md
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[glossary-auth-mutations]: ../GLOSSARY.md#auth-mutations
+[glossary-channels-request-adapter]: ../GLOSSARY.md#channels-request-adapter
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-debug-toolbar-middleware]: ../GLOSSARY.md#debug-toolbar-middleware
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangographqlprotocolrouter]: ../GLOSSARY.md#djangographqlprotocolrouter
+[glossary-djangomodelpermission]: ../GLOSSARY.md#djangomodelpermission
+[glossary-djangomutationfield]: ../GLOSSARY.md#djangomutationfield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-eviction-simulated-absence]: ../GLOSSARY.md#eviction-simulated-absence
+[glossary-fielderror-envelope]: ../GLOSSARY.md#fielderror-envelope
+[glossary-filterset]: ../GLOSSARY.md#filterset
+[glossary-finalize-django-types]: ../GLOSSARY.md#finalize_django_types
+[glossary-get-queryset-visibility-hook]: ../GLOSSARY.md#get_queryset-visibility-hook
+[glossary-graphqltestcase]: ../GLOSSARY.md#graphqltestcase
+[glossary-joint-version-cut]: ../GLOSSARY.md#joint-version-cut
+[glossary-live-first-coverage-mandate]: ../GLOSSARY.md#live-first-coverage-mandate
+[glossary-orderset]: ../GLOSSARY.md#orderset
+[glossary-pep-562-lazy-export]: ../GLOSSARY.md#pep-562-lazy-export
+[glossary-per-field-permission-hooks]: ../GLOSSARY.md#per-field-permission-hooks
+[glossary-request-from-info]: ../GLOSSARY.md#request_from_info
+[glossary-require-optional-module]: ../GLOSSARY.md#require_optional_module
+[glossary-response-extensions-debug-middleware]: ../GLOSSARY.md#response-extensions-debug-middleware
+[glossary-serializermutation]: ../GLOSSARY.md#serializermutation
+[glossary-soft-dependency]: ../GLOSSARY.md#soft-dependency
+[glossary-strawberry_config]: ../GLOSSARY.md#strawberry_config
+[glossary-syncmisuseerror]: ../GLOSSARY.md#syncmisuseerror
+[glossary-testclient]: ../GLOSSARY.md#testclient
+[glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
+[glossary]: ../GLOSSARY.md
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[spec-021]: SPECS/spec-021-apps-0_0_7.md
-[spec-039]: SPECS/spec-039-serializer_mutations-0_0_13.md
-[spec-040]: SPECS/spec-040-auth_mutations-0_0_13.md
+[next]: NEXT.md
+[spec-021]: spec-021-apps-0_0_7.md
+[spec-039]: spec-039-serializer_mutations-0_0_13.md
+[spec-040]: spec-040-auth_mutations-0_0_13.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[conf]: ../django_strawberry_framework/conf.py
-[filters-sets]: ../django_strawberry_framework/filters/sets.py
-[init]: ../django_strawberry_framework/__init__.py
-[mutations-permissions]: ../django_strawberry_framework/mutations/permissions.py
-[orders-sets]: ../django_strawberry_framework/orders/sets.py
-[rf-init]: ../django_strawberry_framework/rest_framework/__init__.py
-[rf-resolvers]: ../django_strawberry_framework/rest_framework/resolvers.py
-[utils-imports]: ../django_strawberry_framework/utils/imports.py
-[utils-permissions]: ../django_strawberry_framework/utils/permissions.py
+[conf]: ../../django_strawberry_framework/conf.py
+[filters-sets]: ../../django_strawberry_framework/filters/sets.py
+[init]: ../../django_strawberry_framework/__init__.py
+[mutations-permissions]: ../../django_strawberry_framework/mutations/permissions.py
+[orders-sets]: ../../django_strawberry_framework/orders/sets.py
+[rf-init]: ../../django_strawberry_framework/rest_framework/__init__.py
+[rf-resolvers]: ../../django_strawberry_framework/rest_framework/resolvers.py
+[utils-imports]: ../../django_strawberry_framework/utils/imports.py
+[utils-permissions]: ../../django_strawberry_framework/utils/permissions.py
 
 <!-- tests/ -->
-[test-base-init]: ../tests/base/test_init.py
-[test-list-field]: ../tests/test_list_field.py
-[test-soft-dependency]: ../tests/rest_framework/test_soft_dependency.py
-[test-utils-permissions]: ../tests/utils/test_permissions.py
-[tests-conftest]: ../tests/conftest.py
+[test-base-init]: ../../tests/base/test_init.py
+[test-list-field]: ../../tests/test_list_field.py
+[test-soft-dependency]: ../../tests/rest_framework/test_soft_dependency.py
+[test-utils-permissions]: ../../tests/utils/test_permissions.py
+[tests-conftest]: ../../tests/conftest.py
 
 <!-- examples/ -->
-[config-wsgi]: ../examples/fakeshop/config/wsgi.py
-[test-query-readme]: ../examples/fakeshop/test_query/README.md
+[config-wsgi]: ../../examples/fakeshop/config/wsgi.py
+[test-query-readme]: ../../examples/fakeshop/test_query/README.md
 
 <!-- scripts/ -->
-[build-kanban-md]: ../scripts/build_kanban_md.py
-[build-tree-md]: ../scripts/build_tree_md.py
+[build-kanban-md]: ../../scripts/build_kanban_md.py
+[build-tree-md]: ../../scripts/build_tree_md.py
 
 <!-- .venv/ -->
 
 <!-- External -->
-[cookbook-recipes-schema]: ../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
-[upstream-routers]: ../../strawberry-django-main/strawberry_django/routers.py
+[cookbook-recipes-schema]: ../../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
+[upstream-routers]: ../../../strawberry-django-main/strawberry_django/routers.py

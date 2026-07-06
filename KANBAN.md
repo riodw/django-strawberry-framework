@@ -97,7 +97,8 @@ To complete the Alpha (pre-0.1.0) milestone: **93.2%**.
 
 | Card | Spec file |
 | --- | --- |
-| `DONE-041-0.0.14` - Channels ASGI router (migration aid) | [spec-041-channels_router-0_0_14.md](docs/spec-041-channels_router-0_0_14.md) |
+| `WIP-ALPHA-042-0.0.14` - Debug-toolbar middleware | [spec-042-debug_toolbar-0_0_14.md](docs/spec-042-debug_toolbar-0_0_14.md) |
+| `DONE-041-0.0.14` - Channels ASGI router (migration aid) | [spec-041-channels_router-0_0_14.md](docs/SPECS/spec-041-channels_router-0_0_14.md) |
 | `DONE-040-0.0.13` - Auth mutations (login / logout / register) | [spec-040-auth_mutations-0_0_13.md](docs/SPECS/spec-040-auth_mutations-0_0_13.md) |
 | `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`) | [spec-039-serializer_mutations-0_0_13.md](docs/SPECS/spec-039-serializer_mutations-0_0_13.md) |
 | `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms) | [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md) |
@@ -144,7 +145,7 @@ To complete the Alpha (pre-0.1.0) milestone: **93.2%**.
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
 
 <a id="debug_toolbar_middleware"></a>
-### [TODO-ALPHA-042-0.0.14 - Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
+### [WIP-ALPHA-042-0.0.14 - Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
@@ -152,6 +153,7 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 - Status: In progress
 - Relative size: M
 - Labels: `debugging`, `django-integration`, `middleware`
+- Spec: [spec-042-debug_toolbar-0_0_14.md](docs/spec-042-debug_toolbar-0_0_14.md)
 
 #### Predicted files
 
@@ -288,7 +290,7 @@ planned
 - [ ] Output shape mirrors graphene's `DjangoDebugSQL` / `DjangoDebugException` field names where the chosen fidelity supports them; document any shape narrowing (e.g., omitted Postgres-specific fields) explicitly.
 - [ ] Off by default; opt-in via the extensions list passed to `strawberry.Schema(...)`.
 - [ ] Tests under `tests/extensions/test_debug.py` against a fakeshop request that emits SQL.
-- [ ] Documented as the response-side counterpart to `TODO-ALPHA-042-0.0.14`.
+- [ ] Documented as the response-side counterpart to `WIP-ALPHA-042-0.0.14`.
 
 #### Files likely touched
 
@@ -319,23 +321,23 @@ planned
 
 #### Why it matters
 
-- `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `TODO-ALPHA-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive.
+- `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `WIP-ALPHA-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive.
 - A Strawberry-native equivalent is a small `SchemaExtension` that captures SQL (through `django.db.connection.queries` or via a port of graphene's cursor-wrap mechanism — see Architectural posture) and exceptions and attaches the result to the response's `extensions` map.
-- `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `TODO-ALPHA-042-0.0.14`); this card is graphene-django parity only.
+- `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `WIP-ALPHA-042-0.0.14`); this card is graphene-django parity only.
 
 #### Other
 
 - developer experience.
 - graphene-django ships an in-response `DjangoDebug` SQL/exception subsystem; strawberry-graphql-django ships none.
-- distinct from `TODO-ALPHA-042-0.0.14` (Django debug toolbar).
+- distinct from `WIP-ALPHA-042-0.0.14` (Django debug toolbar).
 - a Strawberry `SchemaExtension` that captures SQL + exceptions into `extensions['debug']`; one design choice between porting graphene's cursor-wrap and reading `connection.queries`. Single extension module + tests.
 
 #### Card references
 
-- Related: Documented as the response-side counterpart to `TODO-ALPHA-042-0.0.14`. -> `TODO-ALPHA-042-0.0.14` - Debug-toolbar middleware
-- Related: `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `TODO-ALPHA-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive. -> `TODO-ALPHA-042-0.0.14` - Debug-toolbar middleware
-- Related: `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `TODO-ALPHA-042-0.0.14`); this card is graphene-django parity only. -> `TODO-ALPHA-042-0.0.14` - Debug-toolbar middleware
-- Related: distinct from `TODO-ALPHA-042-0.0.14` (Django debug toolbar). -> `TODO-ALPHA-042-0.0.14` - Debug-toolbar middleware
+- Related: Documented as the response-side counterpart to `WIP-ALPHA-042-0.0.14`. -> `WIP-ALPHA-042-0.0.14` - Debug-toolbar middleware
+- Related: `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `WIP-ALPHA-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive. -> `WIP-ALPHA-042-0.0.14` - Debug-toolbar middleware
+- Related: `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `WIP-ALPHA-042-0.0.14`); this card is graphene-django parity only. -> `WIP-ALPHA-042-0.0.14` - Debug-toolbar middleware
+- Related: distinct from `WIP-ALPHA-042-0.0.14` (Django debug toolbar). -> `WIP-ALPHA-042-0.0.14` - Debug-toolbar middleware
 
 ## To Do - Alpha (0.1.0)
 
@@ -1221,7 +1223,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Status: Shipped
 - Relative size: S
 - Labels: `asgi`, `channels`, `django-integration`
-- Spec: [spec-041-channels_router-0_0_14.md](docs/spec-041-channels_router-0_0_14.md)
+- Spec: [spec-041-channels_router-0_0_14.md](docs/SPECS/spec-041-channels_router-0_0_14.md)
 
 #### Glossary terms
 

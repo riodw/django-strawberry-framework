@@ -203,6 +203,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── py.typed
 ├── registry.py                   # Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
+├── routers.py                    # Channels ASGI router: GraphQL on HTTP + WebSocket in one import (spec-041).
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared across the FilterSet / OrderSet / AggregateSet family.
 ├── auth/    # Opt-in session-auth field factories (spec-040).
@@ -261,13 +262,16 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 └── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, and type unwrapping.
     ├── connections.py            # Connection planner/resolver shared contracts: window bounds + sidecar kwargs.
     ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters (spec-039 P1.4).
+    ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
+    ├── imports.py                # Optional-import handling for best-effort subsystem lookups (feedback P1.5 owner).
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
     ├── inputs.py                 # Generated-input substrate shared by the filter and order set families.
     ├── permissions.py            # Active-input permission traversal shared by the FilterSet and OrderSet families.
     ├── querysets.py              # Query-source + ``DjangoType.get_queryset`` visibility contract, single-sited.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
     ├── strings.py                # String-case helpers for the GraphQL <-> Django name boundary.
-    └── typing.py                 # Type-unwrapping helpers for Strawberry / Python / GraphQL types.
+    ├── typing.py                 # Type-unwrapping helpers for Strawberry / Python / GraphQL types.
+    └── write_values.py           # Neutral write-value primitives shared by the model, form, and serializer flavors.
 ```
 
 ## django_strawberry_framework (target package layout)
@@ -290,7 +294,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── py.typed
 ├── registry.py                   # Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
 ├── relay.py                      # Root Relay refetch fields - ``DjangoNodeField`` / ``DjangoNodesField``.
-├── routers.py                    # planned by WIP-ALPHA-041-0.0.14 - Channels ASGI router (migration aid)
+├── routers.py                    # Channels ASGI router: GraphQL on HTTP + WebSocket in one import (spec-041).
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared across the FilterSet / OrderSet / AggregateSet family.
 ├── aggregates/    # planned by TODO-BETA-049-0.1.3 - Aggregation subsystem
@@ -357,13 +361,16 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 └── utils/    # Cross-cutting helpers shared by every subsystem - relation shapes, string casing, and type unwrapping.
     ├── connections.py            # Connection planner/resolver shared contracts: window bounds + sidecar kwargs.
     ├── converters.py             # Fail-loud converter-dispatch skeleton shared by the form + serializer converters (spec-039 P1.4).
+    ├── errors.py                 # Neutral ``FieldError`` / write-error constructors shared by every write flavor.
+    ├── imports.py                # Optional-import handling for best-effort subsystem lookups (feedback P1.5 owner).
     ├── input_values.py           # Set-input traversal substrate shared by the FilterSet and OrderSet families.
     ├── inputs.py                 # Generated-input substrate shared by the filter and order set families.
     ├── permissions.py            # Active-input permission traversal shared by the FilterSet and OrderSet families.
     ├── querysets.py              # Query-source + ``DjangoType.get_queryset`` visibility contract, single-sited.
     ├── relations.py              # Relation-shape helpers shared by converters, resolvers, and the optimizer.
     ├── strings.py                # String-case helpers for the GraphQL <-> Django name boundary.
-    └── typing.py                 # Type-unwrapping helpers for Strawberry / Python / GraphQL types.
+    ├── typing.py                 # Type-unwrapping helpers for Strawberry / Python / GraphQL types.
+    └── write_values.py           # Neutral write-value primitives shared by the model, form, and serializer flavors.
 ```
 
 
@@ -390,6 +397,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 ├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
 ├── test_relay_connection.py      # Relation-as-Connection tests for cursor conformance and Relay field upgrades.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
+├── test_routers.py               # Tests for ``django_strawberry_framework.routers`` (spec-041).
 ├── test_scalars.py               # Scalar tests for BigInt and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
@@ -463,6 +471,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 └── utils/    # Package tests for shared utility helpers.
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
     ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039 P1.4).
+    ├── test_imports.py           # Tests for the shared optional-import raising guard (``utils/imports.py``, spec-041 Slice 1).
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
     ├── test_permissions.py       # Tests for the shared active-input permission substrate (``utils/permissions.py``).
@@ -553,6 +562,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 ├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
 ├── test_relay_connection.py      # Relation-as-Connection tests for cursor conformance and Relay field upgrades.
 ├── test_relay_node_field.py      # Root Relay refetch tests for DjangoNodeField and DjangoNodesField.
+├── test_routers.py               # Tests for ``django_strawberry_framework.routers`` (spec-041).
 ├── test_scalars.py               # Scalar tests for BigInt and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
@@ -629,6 +639,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 └── utils/    # Package tests for shared utility helpers.
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
     ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039 P1.4).
+    ├── test_imports.py           # Tests for the shared optional-import raising guard (``utils/imports.py``, spec-041 Slice 1).
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
     ├── test_permissions.py       # Tests for the shared active-input permission substrate (``utils/permissions.py``).

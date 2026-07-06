@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-07-02
+Last refreshed: 2026-07-06
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -81,15 +81,15 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**66.7% complete** toward `1.0.0` - 40 of 60 cards done (69.4% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**68.3% complete** toward `1.0.0` - 41 of 60 cards done (70.6% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 40/44 (90.9%) | 91.9% |
+| Alpha (pre-0.1.0) | 41/44 (93.2%) | 93.4% |
 | Beta (pre-1.0.0) | 0/15 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
-To complete the Alpha (pre-0.1.0) milestone: **90.9%**.
+To complete the Alpha (pre-0.1.0) milestone: **93.2%**.
 
 ## Board columns
 
@@ -97,7 +97,7 @@ To complete the Alpha (pre-0.1.0) milestone: **90.9%**.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-041-0.0.14` - Channels ASGI router (migration aid) | [spec-041-channels_router-0_0_14.md](docs/spec-041-channels_router-0_0_14.md) |
+| `DONE-041-0.0.14` - Channels ASGI router (migration aid) | [spec-041-channels_router-0_0_14.md](docs/spec-041-channels_router-0_0_14.md) |
 | `DONE-040-0.0.13` - Auth mutations (login / logout / register) | [spec-040-auth_mutations-0_0_13.md](docs/SPECS/spec-040-auth_mutations-0_0_13.md) |
 | `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`) | [spec-039-serializer_mutations-0_0_13.md](docs/SPECS/spec-039-serializer_mutations-0_0_13.md) |
 | `DONE-038-0.0.12` - Form-based mutations (Django Forms / ModelForms) | [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md) |
@@ -142,57 +142,6 @@ To complete the Alpha (pre-0.1.0) milestone: **90.9%**.
 ## In progress
 
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
-
-<a id="channels_asgi_router_migration_aid"></a>
-### [WIP-ALPHA-041-0.0.14 - Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
-
-- Priority: Low
-- Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Low
-- Status: In progress
-- Relative size: S
-- Labels: `asgi`, `channels`, `django-integration`
-- Spec: [spec-041-channels_router-0_0_14.md](docs/spec-041-channels_router-0_0_14.md)
-
-#### Predicted files
-
-- `django_strawberry_framework/routers.py` (planned)
-
-#### Planning note
-
-planned
-
-#### Definition of done
-
-- [ ] Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
-- [ ] `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
-- [ ] Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
-- [ ] Migration guide (`TODO-BETA-056-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/routers.py` — `AuthGraphQLProtocolTypeRouter` wrapping `ProtocolTypeRouter`, `URLRouter`, `AllowedHostsOriginValidator`, `AuthMiddlewareStack`, plus `GraphQLHTTPConsumer` / `GraphQLWSConsumer`.
-
-#### Architectural posture
-
-- The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`][goal] non-goal "a thin wrapper around `strawberry-graphql-django`".
-- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-056-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
-
-#### Why it matters
-
-- `strawberry-graphql-django` ships a small `routers.py` that builds a `ProtocolTypeRouter` over `GraphQLHTTPConsumer` and `GraphQLWSConsumer` for consumers using Channels. The module is ~30 lines but is the single import that makes ASGI / WebSocket migration painless.
-- Shipping a functionally-equivalent helper lets strawberry-graphql-django migrants update one import line in their ASGI entrypoint. This card exists primarily to reduce migration friction, not to expand the API surface.
-
-#### Other
-
-- small slice; explicit migration aid.
-- strawberry-graphql-django ships a Channels `ProtocolTypeRouter` helper; graphene-django ships none.
-- small `routers.py` (~30 lines) with a soft `channels` dependency; tests for both channels-present and channels-absent paths. Pure migration-aid card.
-
-#### Card references
-
-- Related: Migration guide (`TODO-BETA-056-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-056-0.1.6` - Migration and adoption guides
-- Related: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-056-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-056-0.1.6` - Migration and adoption guides
 
 <a id="debug_toolbar_middleware"></a>
 ### [TODO-ALPHA-042-0.0.14 - Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
@@ -1263,6 +1212,84 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
+<a id="channels_asgi_router_migration_aid"></a>
+### [DONE-041-0.0.14 - Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
+
+- Priority: Low
+- Parity: 🍓 strawberry-graphql-django (Required)
+- Severity: Low
+- Status: Shipped
+- Relative size: S
+- Labels: `asgi`, `channels`, `django-integration`
+- Spec: [spec-041-channels_router-0_0_14.md](docs/spec-041-channels_router-0_0_14.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
+| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
+| [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
+| [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
+| [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
+| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | planned for `0.0.14` |
+| [`request_from_info`](docs/GLOSSARY.md#request_from_info) | shipped (`0.0.8`) |
+| [Channels request adapter](docs/GLOSSARY.md#channels-request-adapter) | planned for `0.0.14` |
+| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
+| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.14` |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.14` |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+
+#### Package files
+
+- [`django_strawberry_framework/routers.py`](django_strawberry_framework/routers.py)
+- [`django_strawberry_framework/utils/imports.py`](django_strawberry_framework/utils/imports.py)
+- [`django_strawberry_framework/utils/permissions.py`](django_strawberry_framework/utils/permissions.py)
+- [`tests/test_routers.py`](tests/test_routers.py)
+- [`tests/utils/test_imports.py`](tests/utils/test_imports.py)
+- [`tests/utils/test_inputs.py`](tests/utils/test_inputs.py)
+- [`tests/utils/test_permissions.py`](tests/utils/test_permissions.py)
+
+#### Planning note
+
+planned
+
+#### Definition of done
+
+- [x] Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
+- [x] `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
+- [x] Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
+- [x] Migration guide (`TODO-BETA-056-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/routers.py` — `AuthGraphQLProtocolTypeRouter` wrapping `ProtocolTypeRouter`, `URLRouter`, `AllowedHostsOriginValidator`, `AuthMiddlewareStack`, plus `GraphQLHTTPConsumer` / `GraphQLWSConsumer`.
+
+#### Architectural posture
+
+- The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`][goal] non-goal "a thin wrapper around `strawberry-graphql-django`".
+- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-056-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
+
+#### Why it matters
+
+- `strawberry-graphql-django` ships a small `routers.py` that builds a `ProtocolTypeRouter` over `GraphQLHTTPConsumer` and `GraphQLWSConsumer` for consumers using Channels. The module is ~30 lines but is the single import that makes ASGI / WebSocket migration painless.
+- Shipping a functionally-equivalent helper lets strawberry-graphql-django migrants update one import line in their ASGI entrypoint. This card exists primarily to reduce migration friction, not to expand the API surface.
+
+#### Other
+
+- small slice; explicit migration aid.
+- strawberry-graphql-django ships a Channels `ProtocolTypeRouter` helper; graphene-django ships none.
+- small `routers.py` (~30 lines) with a soft `channels` dependency; tests for both channels-present and channels-absent paths. Pure migration-aid card.
+
+#### Card references
+
+- Related: Migration guide (`TODO-BETA-056-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-056-0.1.6` - Migration and adoption guides
+- Related: Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-056-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`. -> `TODO-BETA-056-0.1.6` - Migration and adoption guides
+
 <a id="auth_mutations_login_logout_register"></a>
 ### [DONE-040-0.0.13 - Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)
 
@@ -1393,8 +1420,8 @@ planned
 
 #### Package files
 
-- `django_strawberry_framework/rest_framework/` (historical)
-- `tests/rest_framework/` (historical)
+- [`django_strawberry_framework/rest_framework/`](django_strawberry_framework/rest_framework/)
+- [`tests/rest_framework/`](tests/rest_framework/)
 
 #### Planning note
 
@@ -1495,8 +1522,8 @@ needs spec
 
 #### Package files
 
-- `django_strawberry_framework/forms/` (historical)
-- `tests/forms/` (historical)
+- [`django_strawberry_framework/forms/`](django_strawberry_framework/forms/)
+- [`tests/forms/`](tests/forms/)
 
 #### Planning note
 

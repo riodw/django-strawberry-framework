@@ -233,8 +233,8 @@ Revision history (kept inline so the spec is self-contained):
   one-line-migration contract implements, applied to the ASGI entrypoint that
   `GOAL.md`'s coming-from-`strawberry-graphql-django` `Meta`-diff does not
   cover ([Problem statement](#problem-statement) / [Goals](#goals)).
-- **Revision 5** — applied the maintainer's written review (docs/feedback.md),
-  foundational items first. **(P1, single floor)** the public floor, install
+- **Revision 5** — applied a maintainer review, foundational items first.
+  **(P1, single floor)** the public floor, install
   hint, dev-group row, and test literal all move `4.2.1` → **`4.3.2`** — the
   package advertises `Framework :: Django :: 6.0` and `4.3.2` is the first
   Channels release with the Django 6.0 classifier, so the earlier split
@@ -270,8 +270,8 @@ Revision history (kept inline so the spec is self-contained):
   [Implementation plan](#implementation-plan) delta table added for the
   Worker 0 handoff; the "specs archive" sentence made precise about this
   repo's archive-at-next-spec workflow.
-- **Revision 6** — aligned the spec with the maintainer's `utils/` DRY review
-  (docs/feedback.md), whose prescribed refactors also landed in the repo in the
+- **Revision 6** — aligned the spec with a maintainer `utils/` DRY review,
+  whose prescribed refactors also landed in the repo in the
   same pass. **(Repo refactor, applied)** `utils/imports.py` now exists as the
   single optional-import owner (`import_attr_if_importable` fail-loud on a
   missing attribute, `loaded_attr` for the opt-in-preserving loaded-only reach;
@@ -322,6 +322,39 @@ Revision history (kept inline so the spec is self-contained):
   the symbol-level vocabulary — composition pieces, guard/hint constants,
   communicators, adapter parts — under their owning anchors, one unique
   anchor per row (the `import_spec_terms` requirement).
+- **Revision 8** — applied a second critical review (surfaced while adding the
+  `TODO(spec-041 Slice N)` source anchors), ten required pre-implementation
+  edits. **(P1)** the Channels request adapter now **wraps** the original
+  Strawberry `ChannelsRequest` — exposing `.user` / `.session` / `.scope`
+  explicitly and delegating other attributes via `__getattr__` — instead of a
+  narrow two-field object that would break `check_<field>_permission` hooks and
+  DRF serializer overrides reading `request.headers` / `.COOKIES` / etc. under
+  Channels ([Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred));
+  the degraded-install test (Test 17) now **evicts the `routers` module** (and
+  restores the parent attribute) before blocking a builder import, so the
+  re-executed module has no cached `_ROUTER_CLASS` and the block actually fires
+  (Helper-reuse D3); the incompatible-install wrap is **split** — a channels-half
+  failure names `channels>=4.3.2`, a `strawberry.channels` consumer failure
+  names **both** `channels>=4.3.2` and `strawberry-graphql>=0.262.0`
+  ([Error shapes](#error-shapes)); and an **authenticated-session communicator
+  test** (Test 18) was added to earn the "session user on the scope" claim, with
+  a weaken-the-wording fallback tracked in [Risks](#risks-and-open-questions).
+  **(P2)** `require_optional_module` drops the unused `feature_label` parameter;
+  `routers.py` declares `__all__ = ("DjangoGraphQLProtocolRouter",)` (submodule
+  star import opts into the guard,
+  [Decision 3](#decision-3--the-symbol-is-djangographqlprotocolrouter--distinctly-ours-pinned-now));
+  Test 10 proves schema pass-through with a recording extension (not
+  `DjangoOptimizerExtension`, kept ORM-free off the async consumer's sync-ORM
+  edge); the Strawberry-floor gate checks only the two imported consumers (not
+  the unused `GraphQLProtocolTypeRouter`); the HTTP-fallback-inside-`AuthMiddlewareStack`
+  behavior is documented as accepted upstream parity
+  ([Edge cases](#edge-cases-and-constraints)); and durable `docs/feedback.md`
+  citations were folded into owner-symbol / Decision references (the file is
+  transient scratch). **(P3)** the auth-mutation "if nearly free, add a smoke
+  test" hedge is removed (out of scope with a named follow-on owner), and the
+  missing-`Origin` WebSocket denial is documented and added as a third
+  origin-validator test direction (verified against
+  `channels/security/websocket.py`).
 
 ## Key glossary references
 
@@ -415,25 +448,31 @@ genuinely-unreachable-live case, not a live-first weakening
         ([Decision 5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard)).
   - [ ] **Strawberry-floor verification rides the same gate**: in an isolated
         throwaway venv (never the shared `.venv`), confirm
-        `strawberry.channels`'s `GraphQLHTTPConsumer` / `GraphQLWSConsumer` /
-        `GraphQLProtocolTypeRouter` import at the package's pinned
-        `strawberry-graphql==0.262.0` floor (with channels installed); if any
-        is missing at the floor, bump the project's Strawberry floor instead.
-        The command and outcome are recorded in the build artifact
+        `strawberry.channels`'s **`GraphQLHTTPConsumer` and `GraphQLWSConsumer`**
+        (the two symbols the builder actually imports — **not**
+        `GraphQLProtocolTypeRouter`, which the package does not use; gating an
+        unused upstream export is unnecessary coupling) import at the package's
+        pinned `strawberry-graphql==0.262.0` floor (with channels installed); if
+        either is missing at the floor, bump the project's Strawberry floor
+        instead. The command and outcome are recorded in the build artifact
         ([Definition of done](#definition-of-done)).
   - [ ] `utils/imports.py` gains
-        `require_optional_module(module_name, *, install_hint, feature_label)`
-        (with unit tests) — the shared optional-import owner the utils DRY
-        review established; `require_channels()` rides it
+        `require_optional_module(module_name, *, install_hint)`
+        (with unit tests) — the shared optional-import owner already established
+        in [`utils/imports.py`][utils-imports]; `require_channels()` rides it.
+        No `feature_label` parameter: the feature-specific text lives in the
+        caller's `install_hint`, so a second label parameter would be unused
+        ceremony (the `require_drf()` shape passes its hint the same way)
         ([Decision 5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard)
         / Helper-reuse D-P1).
   - [ ] `django_strawberry_framework/routers.py` (new) — the `require_channels()`
         guard (a thin `require_optional_module` wrapper; one
         `_CHANNELS_INSTALL_HINT` string, no
         memoization), the module-level PEP 562 `__getattr__` that materializes and
-        caches the `DjangoGraphQLProtocolRouter` class on first access (guard
-        first, then the class body subclassing
-        `channels.routing.ProtocolTypeRouter`), and the composition itself —
+        caches the `DjangoGraphQLProtocolRouter` class (in the module global
+        `_ROUTER_CLASS`) on first access (guard first, then the class body
+        subclassing `channels.routing.ProtocolTypeRouter`), and the composition
+        itself —
         HTTP: `AuthMiddlewareStack(URLRouter([graphql, *django_fallback]))`;
         WebSocket:
         `AllowedHostsOriginValidator(AuthMiddlewareStack(URLRouter([graphql])))` —
@@ -441,17 +480,29 @@ genuinely-unreachable-live case, not a live-first weakening
         ([Decision 5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard)
         / [Decision 6](#decision-6--constructor-parity-schema-django_applicationnone-url_patterngraphql-composition-borrowed-as-is)
         / [Decision 7](#decision-7--the-consumers-come-from-strawberrychannels-engine-owned-not-package-owned)).
-        No package-root re-export; the consumer path is
+        The module defines `__all__ = ("DjangoGraphQLProtocolRouter",)`
+        (submodule star import is an opt-in to the router, so it may raise the
+        install-hint `ImportError` when channels is absent); no package-root
+        re-export; the consumer path is
         `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`
         ([Decision 3](#decision-3--the-symbol-is-djangographqlprotocolrouter--distinctly-ours-pinned-now)).
-        The builder wraps present-but-incompatible import failures into the
-        actionable floor-naming `ImportError` ([Error shapes](#error-shapes)).
+        The builder wraps present-but-incompatible import failures into an
+        actionable `ImportError` — and names **which** half is broken
+        (channels vs the `strawberry.channels` consumers), separate from the
+        top-level channels-absent hint ([Error shapes](#error-shapes)).
   - [ ] [`django_strawberry_framework/utils/permissions.py`][utils-permissions]
         — `request_from_info()` learns the Strawberry-Channels context shape
         (mapping context with a `"request"` value exposing `consumer.scope`,
-        duck-typed, no `channels` import) and gains the request-like adapter
-        exposing `.user` / `.session` from the scope; unit tests for the new
-        branch land beside the helper's existing suite
+        duck-typed, no `channels` import) and returns a request-like adapter
+        that **wraps** the original Strawberry `ChannelsRequest`: it exposes
+        `.user` / `.session` / `.scope` from `consumer.scope` explicitly and
+        **delegates every other attribute to the wrapped request via
+        `__getattr__`**, so user-code hooks reading `request.headers`,
+        `request.COOKIES`, `request.path`, `request.method`, `request.consumer`,
+        etc. keep working under Channels instead of raising `AttributeError`
+        (finding P1.1 — the adapter must not silently narrow the framework
+        request contract); unit tests for the new branch land beside the
+        helper's existing suite
         ([Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred)).
   - [ ] `tests/test_routers.py` (new) — **channels-present**: construction /
         composition assertions (a `ProtocolTypeRouter` instance; `http` +
@@ -461,22 +512,33 @@ genuinely-unreachable-live case, not a live-first weakening
         `url_pattern`), plus real execution through Channels' own
         communicators — an `HttpCommunicator` GraphQL POST through the router
         resolving a query, a `WebsocketCommunicator` connect on the
-        `graphql-transport-ws` subprotocol passing the origin validator, and
-        the **package-realistic request-contract round trip** (a resolver
-        reading the actor through `request_from_info()`, Test 16), plus the
-        degraded partial-install error shape (Test 17). **channels-absent**: the
+        `graphql-transport-ws` subprotocol passing the origin validator (with
+        the mismatched- and **missing-`Origin`** denial directions), the
+        **package-realistic request-contract round trip** (a resolver reading
+        the actor through `request_from_info()`, both the anonymous read and a
+        user-code hook reading a delegated attribute, Test 16), the
+        **authenticated-session round trip** (a real user/session cookie flows
+        through `HttpCommunicator` and the resolver sees the authenticated
+        actor, Test 18), plus the degraded partial-install error shapes
+        (parametrized over a blocked channels import and a blocked
+        `strawberry.channels` consumer, Test 17). **channels-absent**: the
         eviction + `builtins.__import__`-block pattern from
         [`tests/rest_framework/test_soft_dependency.py`][test-soft-dependency] —
         `import django_strawberry_framework` and
         `import django_strawberry_framework.routers` both succeed;
         `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`
-        raises `ImportError` carrying the install hint; the root package import
+        (and `from ... import *`, since `__all__` names the lazy symbol) raise
+        `ImportError` carrying the install hint; the root package import
         stays channels-free — with the absence fixture saving/restoring the
         **parent package's `routers` attribute alongside** the `sys.modules`
         entries (the blocked-then-retried import re-executes `routers.py` and
         rebinds the parent attribute to a fresh module object; restoring only
         `sys.modules` would leave two live module objects with independent
-        class caches, an order-dependent flake under `pytest-xdist`)
+        class caches, an order-dependent flake under `pytest-xdist`). The
+        degraded-install path (Test 17) uses the **same** module-eviction +
+        parent-attribute-restore fixture so the freshly re-executed module has
+        no cached `_ROUTER_CLASS`, making the blocked builder import actually
+        fire regardless of any earlier construction test
         ([Test plan](#test-plan)).
   - [ ] Every new symbol carries its docstring (the [`docs/TREE.md`][tree] render
         fails on missing module docstrings) and any staged-but-not-implemented
@@ -807,18 +869,31 @@ Consumer-visible behavior:
   that covers the package's whole advertised Django range (through 6.0), never
   a lower floor that would strand a Django 6.0 user
   ([Decision 5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard)).
-- **`channels` present but incompatible** (too old for a required symbol, or a
-  partial install where `strawberry.channels` cannot import) —
-  `require_channels()` passes but a builder import fails: the builder wraps
-  that `ImportError` into an actionable one naming the installed state and the
-  `channels>=4.3.2` floor, chaining the original (`raise … from exc`) so the
-  real missing symbol stays visible — never a bare `AttributeError` or an
-  unexplained transitive `ImportError` at ASGI startup
+- **`channels` present but a builder import fails** — `require_channels()`
+  passes but the class body's imports then fail. The builder wraps that
+  `ImportError` into an actionable one and chains the original
+  (`raise … from exc`) so the real missing symbol stays visible — never a bare
+  `AttributeError` or an unexplained transitive `ImportError` at ASGI startup.
+  The wrap **names which half is broken**, because the builder imports from two
+  packages and reinstalling the wrong one wastes the consumer's time:
+  - a failing `channels.*` import (a Channels too old for a required symbol)
+    names the `channels>=4.3.2` floor;
+  - a failing `strawberry.channels` consumer import (`GraphQLHTTPConsumer` /
+    `GraphQLWSConsumer` absent — a broken or too-old Strawberry, or a partial
+    install) names **both** required halves: `channels>=4.3.2` **and**
+    `strawberry-graphql>=0.262.0` with the `strawberry.channels` consumers
+    importable.
+  This is a **separate** message from `_CHANNELS_INSTALL_HINT` (which is for
+  true top-level `channels` absence only); the Strawberry-floor gate exists
+  precisely because Strawberry is part of the dependency boundary, so the
+  runtime error shape reflects that
   ([Decision 5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard)).
 - **Cross-origin WebSocket** — the handshake is denied by
   `AllowedHostsOriginValidator` (connection closed before the GraphQL protocol
   starts); this is Channels' behavior, surfaced here because the router opts into
-  it deliberately.
+  it deliberately. A connection carrying **no `Origin` header at all** is
+  likewise denied unless `ALLOWED_HOSTS` contains `"*"`
+  ([Edge cases](#edge-cases-and-constraints)).
 - **Unroutable scope types** (e.g. `lifespan` from uvicorn) — Channels'
   `ProtocolTypeRouter` raises its own `ValueError` for scope types with no mapping;
   parity with upstream, documented in [Edge cases](#edge-cases-and-constraints).
@@ -912,6 +987,23 @@ mirroring the [`spec-040`][spec-040] Decision 3 structural-opt-in posture (a
 consumer who never deploys ASGI never types the import) and keeping
 [`__init__.py`][init]'s `__all__` channels-free by construction.
 
+**The submodule declares `__all__ = ("DjangoGraphQLProtocolRouter",)`.** Without
+it, `from django_strawberry_framework.routers import *` would leak the helper
+names (`require_channels`, whatever typing / `importlib` imports remain
+module-global) into the consumer's namespace. Pinning `__all__` to the one public
+symbol keeps the module's star surface clean — and, deliberately, makes
+`from ...routers import *` **opt into the router**: `import *` calls
+`getattr(module, "DjangoGraphQLProtocolRouter")`, which fires the PEP 562
+`__getattr__`, which runs `require_channels()`, so a channels-absent star import
+raises the same install-hint `ImportError` as the explicit `from ... import`
+(pinned by the channels-absent test plan). Because the symbol is never a real
+module global (it materializes through `__getattr__`), the `__all__` line
+carries a scoped `# noqa: F822` — ruff's "undefined name in `__all__`" is a
+false positive for a PEP 562 lazy export. The **root** package `__all__`
+([`__init__.py`][init]) stays unchanged and channels-free — the router is never
+re-exported there, so `from django_strawberry_framework import *` never touches
+the guard.
+
 Alternatives considered (and rejected):
 
 - **`AuthGraphQLProtocolTypeRouter` verbatim.** Rejected by the card itself: the
@@ -949,14 +1041,12 @@ Alternatives considered (and rejected):
   row (a shipped commitment in the docs) names the flat path. `strawberry_django`'s
   `integrations/` holds third-party *library* adapters (guardian), not transport.
 - **Colocating the guard in `rest_framework/__init__.py` as a generic
-  `require_soft_dependency(name, hint)`.** Rejected — and the deferral half of
-  this alternative was **superseded by the maintainer's utils DRY review**
-  (docs/feedback.md P1.5): the package now carries
-  `utils/imports.py` as the single optional-import owner
-  (`import_attr_if_importable` / `loaded_attr`, migrated from the registry and
-  generated-input clear paths), and Slice 1 adds
-  `require_optional_module(module_name, *, install_hint, feature_label)`
-  there — `require_channels()` is a thin `routers.py` wrapper passing
+  `require_soft_dependency(name, hint)`.** Rejected — the single optional-import
+  owner is [`utils/imports.py`][utils-imports] (which already carries
+  `import_attr_if_importable` / `loaded_attr`, migrated from the registry and
+  generated-input clear paths). Slice 1 adds
+  `require_optional_module(module_name, *, install_hint)` there —
+  `require_channels()` is a thin `routers.py` wrapper passing
   `_CHANNELS_INSTALL_HINT`, never a fourth hand-rolled import pattern. The
   DRF guard keeps its deliberately DRF-specific docstring contract and its
   byte-pinned hint; migrating it onto the shared primitive is a follow-on,
@@ -970,23 +1060,30 @@ the same three-part architecture ([`spec-039`][spec-039] Decision 12, generalize
 
 1. **One guard, one hint — built on the shared optional-import owner.**
    `routers.py` defines `require_channels()` as a thin wrapper over
-   `utils/imports.py::require_optional_module(module_name, *, install_hint,
-   feature_label)` — the primitive Slice 1 adds to the package's single
-   optional-import owner (the utils DRY review's P1.5 rule: `routers.py` must
-   not hand-roll a fourth import-handling pattern beside the registry /
-   generated-input helpers already migrated there). The wrapper passes the
-   single `_CHANNELS_INSTALL_HINT` string (naming `channels>=4.3.2`, the
-   verified floor), which stays defined in `routers.py` (D2: one hint, one
-   module constant). No memoization: each access re-fires
-   the guard so the absence test can evict modules and re-hit it, exactly the
-   [`require_drf()`][rf-init] contract.
+   `utils/imports.py::require_optional_module(module_name, *, install_hint)` —
+   the primitive Slice 1 adds to the package's single optional-import owner
+   ([`utils/imports.py`][utils-imports]), so `routers.py` does not hand-roll a
+   fourth import-handling pattern beside the registry / generated-input helpers
+   already migrated there. The primitive takes **no `feature_label`**: the
+   feature-specific text is entirely inside the caller's `install_hint`, so a
+   second label parameter would be dead ceremony (the `require_drf()` shape
+   passes its hint the same way). The wrapper passes the single
+   `_CHANNELS_INSTALL_HINT` string (naming `channels>=4.3.2`, the verified
+   floor), which stays defined in `routers.py` (D2: one hint, one module
+   constant). No memoization: each access re-fires the guard so the absence
+   test can evict modules and re-hit it, exactly the [`require_drf()`][rf-init]
+   contract.
 2. **A lazy class, materialized on first access.** The class body subclasses
    `channels.routing.ProtocolTypeRouter`, so it **cannot** be defined at module
    import without paying the import. `routers.py` therefore defines the class
-   inside a builder (`_build_router_class()`, module-cached) and exposes it via a
-   PEP 562 **module-level `__getattr__`**: accessing
-   `routers.DjangoGraphQLProtocolRouter` runs `require_channels()`, builds (or
-   returns the cached) class, and hands it out. `import
+   inside a builder (`_build_router_class()`) and caches the built class in the
+   module global **`_ROUTER_CLASS`**, exposing it via a PEP 562 **module-level
+   `__getattr__`**: accessing `routers.DjangoGraphQLProtocolRouter` runs
+   `require_channels()`, builds (or returns the cached) class, and hands it out.
+   Because `_ROUTER_CLASS` is a module global, evicting `routers` from
+   `sys.modules` drops the cache with the module — the property the
+   degraded-install and absence tests rely on (a re-executed module has no
+   cached class, so a blocked builder import actually fires). `import
    django_strawberry_framework.routers` itself imports nothing optional — the
    module stays importable everywhere (introspection, `docs/TREE.md` rendering,
    coverage collection), and the install-hint fires at the earliest moment the
@@ -995,16 +1092,20 @@ the same three-part architecture ([`spec-039`][spec-039] Decision 12, generalize
    `channels.routing` / `channels.auth` / `channels.security.websocket` **and**
    `strawberry.channels` (whose handlers import `channels.db` at module level —
    verified at the installed strawberry 0.316.0 — so it is equally unimportable
-   without channels; `require_channels()` runs first so every absence routes
-   through the one hint). **Degraded states are specified, not accidental**:
-   if `require_channels()` passes but a builder import then fails (a Channels
-   install too old for a required symbol, or a partial environment where
-   `strawberry.channels` cannot import), the builder catches that
-   `ImportError` and re-raises an actionable one naming the `channels>=4.3.2`
-   floor and chaining the original — deployment-time import paths deserve real
-   error messages, because the failure happens when ASGI imports the
-   application ([Error shapes](#error-shapes); tested in the
-   [Test plan](#test-plan)).
+   without channels; `require_channels()` runs first so every *channels-absent*
+   case routes through the one hint). **Degraded states are specified, not
+   accidental, and name which half is broken**: if `require_channels()` passes
+   but a builder import then fails, the builder catches that `ImportError` and
+   re-raises an actionable one, chaining the original. A failing `channels.*`
+   import (a Channels too old for a required symbol) names the `channels>=4.3.2`
+   floor; a failing `strawberry.channels` consumer import names **both**
+   `channels>=4.3.2` and `strawberry-graphql>=0.262.0` with the consumers
+   importable — so a broken Strawberry install does not send the consumer to
+   reinstall Channels. This builder-failure message is **separate** from
+   `_CHANNELS_INSTALL_HINT` (top-level channels absence only); deployment-time
+   import paths deserve real error messages, because the failure happens when
+   ASGI imports the application ([Error shapes](#error-shapes); both branches
+   pinned in the [Test plan](#test-plan)).
 3. **The dependency gate.** Slice 1 adds **`channels[daphne]>=4.3.2`** to
    `[dependency-groups].dev` and regenerates `uv.lock` in the same commit (the
    [`spec-039`][spec-039] Decision 14 lockfile discipline: a dev-dependency edit
@@ -1267,29 +1368,43 @@ on the sync consumer) — where `ChannelsRequest` is a dataclass wrapping
 `info.context.request` or a bare `HttpRequest`; a dict context fails
 `getattr(context, "request", None)` and raises
 [`ConfigurationError`][glossary-configurationerror]. The blast
-radius is **every** framework surface routed through the helper — the auth
-`current_user` query, mutation permission checks, filter / order
-`check_*_permission` gates, serializer-mutation hooks — not just auth mutations.
-A router that ships "the session transport" while the package's own request
-contract rejects the transport's context would be an incoherent integration.
+radius is **every** framework surface routed through the helper, and several of
+them hand the resolved request straight into consumer-written code:
+[`FilterSet._request_from_info`][filters-sets] and
+[`OrderSet._request_from_info`][orders-sets] pass it to
+`check_<field>_permission(self, request)` hooks;
+[`DjangoModelPermission.has_permission`][mutations-permissions] reads it; and
+[`build_serializer_kwargs`][rf-resolvers] sets it as DRF's
+`context["request"]`. The auth `current_user` query and the default
+model-permission path need only `.user`, but those user-written hooks and
+serializer overrides may read `request.headers`, `request.COOKIES`,
+`request.path`, `request.method`, `request.consumer`, or any other request
+attribute Strawberry's `ChannelsRequest` exposes. A router that ships "the
+session transport" while the package's own request contract rejects — or
+silently narrows — the transport's context would be an incoherent integration.
 
 So this card fixes the root cause for the **read** half:
 
-1. **`request_from_info()` recognizes the Channels shape.** A mapping-style
-   context carrying a `"request"` key whose value exposes `consumer.scope`
-   (duck-typed — `utils/permissions.py` imports nothing from `channels`, so the
-   helper stays soft-dependency-clean) resolves to a small request-like adapter
-   exposing `.user` (from `consumer.scope["user"]`) and `.session` (from
-   `consumer.scope["session"]`), enough for every read-path caller above. The
+1. **`request_from_info()` recognizes the Channels shape and returns a
+   *wrapping* adapter.** A mapping-style context carrying a `"request"` key
+   whose value exposes `consumer.scope` (duck-typed — `utils/permissions.py`
+   imports nothing from `channels`, so the helper stays soft-dependency-clean)
+   resolves to a request-like adapter. Crucially, the adapter **wraps the
+   original Strawberry `ChannelsRequest`, it does not replace it with a
+   two-field object**: it exposes `.user`, `.session`, and `.scope` explicitly
+   from `consumer.scope`, and **delegates every other attribute to the wrapped
+   request via `__getattr__`**, so the user-code hooks above keep working
+   instead of raising `AttributeError` only under Channels. This keeps the fix
+   DRY without narrowing the framework request contract (finding P1.1). The
    adapter is defined beside the helper, not in `routers.py` — it is a context
    shape, not a router feature, and it must work for consumers who wire
    Strawberry's Channels consumers *without* this card's router. The
    `family_label` parameter (and its family-named `ConfigurationError`
-   messages) is preserved unchanged. Per the utils DRY review (docs/feedback.md
-   P1.1), this is a **hard single-siting rule**: no local request decoders in
-   `routers.py`, `auth/queries.py`, `auth/mutations.py`,
-   `rest_framework/resolvers.py`, or any permission gate — every new request
-   shape is supported in `request_from_info()` only (Helper-reuse D-P2).
+   messages) is preserved unchanged. This is a **hard single-siting rule**: no
+   local request decoders in `routers.py`, `auth/queries.py`,
+   `auth/mutations.py`, `rest_framework/resolvers.py`, or any permission gate —
+   every new request shape is supported in
+   [`request_from_info()`][utils-permissions] only (Helper-reuse D-P2).
 2. **Auth *mutations* remain out of this card** ([Decision 2](#decision-2--card-scope-boundary-the-transport-router-ships-websocket-auth-semantics-and-fakeshop-asgi-stay-out)):
    `login` / `logout` / `register` mutate the session through
    `django.contrib.auth` against an `HttpRequest`, and Channels ships its own
@@ -1300,18 +1415,28 @@ So this card fixes the root cause for the **read** half:
    item, and the docs say `AuthMiddlewareStack` makes `scope["user"]` available
    and the package's *read* surfaces consume it — never that the package's
    session-mutating auth surfaces work over Channels.
-3. **Proven by a package-realistic communicator test**, not just plain-Strawberry
+3. **Proven by package-realistic communicator tests**, not just plain-Strawberry
    transport: a schema whose resolver reads the actor through
    `request_from_info()` executes through the router via `HttpCommunicator`
-   (Test 16), forcing the adapter to exist and the boundary to be exact.
+   (Test 16, forcing the adapter to exist and the delegation boundary to be
+   exact — the test's resolver reads both a scope-backed attribute and a
+   delegated one), and an **authenticated-session** round trip proves a real
+   session actor flows through `AuthMiddlewareStack` to the resolver (Test 18),
+   so the repeated "session user on the scope" claim is earned, not asserted.
 
 Alternatives considered (and rejected):
 
-- **Transport-only, docs-softening instead of the adapter.** Rejected by
-  maintainer review (docs/feedback.md): every `request_from_info()` caller
-  fails under the Channels context, so "transport-only" quietly ships a router
-  whose advertised sessions the package itself cannot read; the root-cause
-  helper extension is small, channels-import-free, and testable in this card.
+- **Transport-only, docs-softening instead of the adapter.** Rejected: every
+  `request_from_info()` caller fails under the Channels context, so
+  "transport-only" quietly ships a router whose advertised sessions the package
+  itself cannot read; the root-cause helper extension is small,
+  channels-import-free, and testable in this card.
+- **A narrow `.user` / `.session`-only adapter.** Rejected (finding P1.1): the
+  filter / order `check_<field>_permission` hooks and DRF serializer overrides
+  receive the resolved request and legitimately read `request.headers` /
+  `.COOKIES` / `.path` / `.method`, so a two-field adapter would turn working
+  consumer hooks into `AttributeError`s under Channels only. Wrapping and
+  delegating is the same single-siting with the full contract intact.
 - **Full auth-mutations-over-Channels support now.** Rejected: `channels.auth`
   login/logout semantics are async session mutations against the scope — auth
   subsystem work, invisible in this card's S sizing, tracked in
@@ -1339,10 +1464,10 @@ specified in the decisions cited; **no slice bumps the version** — the joint
 | File | Change | Slice |
 | --- | --- | --- |
 | [`pyproject.toml`][pyproject] + `uv.lock` | `channels[daphne]>=4.3.2` into `[dependency-groups].dev`; lock regenerated in the same commit | 1 |
-| `utils/imports.py` | `require_optional_module(module_name, *, install_hint, feature_label)` added to the shared optional-import owner, + unit tests (utils DRY review P1.5; Helper-reuse D-P1) | 1 |
-| `django_strawberry_framework/routers.py` (new) | `_CHANNELS_INSTALL_HINT` / `require_channels()` (thin `require_optional_module` wrapper) / `_build_router_class()` / PEP 562 `__getattr__` → `DjangoGraphQLProtocolRouter`; incompatible-install wrap ([Decision 5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard) / [6](#decision-6--constructor-parity-schema-django_applicationnone-url_patterngraphql-composition-borrowed-as-is) / [7](#decision-7--the-consumers-come-from-strawberrychannels-engine-owned-not-package-owned)) | 1 |
-| [`utils/permissions.py`][utils-permissions] | `request_from_info()` Channels-context branch + scope-backed request adapter ([Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred)) | 1 |
-| `tests/test_routers.py` (new) + helper unit tests | Tests 1–17 per the [Test plan](#test-plan) | 1 |
+| [`utils/imports.py`][utils-imports] | `require_optional_module(module_name, *, install_hint)` added to the shared optional-import owner (no `feature_label`), + unit tests (Helper-reuse D-P1) | 1 |
+| `django_strawberry_framework/routers.py` (new) | `__all__ = ("DjangoGraphQLProtocolRouter",)`; `_CHANNELS_INSTALL_HINT` + a separate builder-failure message / `require_channels()` (thin `require_optional_module` wrapper) / `_build_router_class()` caching in `_ROUTER_CLASS` / PEP 562 `__getattr__` → `DjangoGraphQLProtocolRouter`; split incompatible-install wrap ([Decision 3](#decision-3--the-symbol-is-djangographqlprotocolrouter--distinctly-ours-pinned-now) / [5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard) / [6](#decision-6--constructor-parity-schema-django_applicationnone-url_patterngraphql-composition-borrowed-as-is) / [7](#decision-7--the-consumers-come-from-strawberrychannels-engine-owned-not-package-owned)) | 1 |
+| [`utils/permissions.py`][utils-permissions] | `request_from_info()` Channels-context branch + a `ChannelsRequest`-wrapping adapter (`.user` / `.session` / `.scope` explicit, `__getattr__` delegation) ([Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred)) | 1 |
+| `tests/test_routers.py` (new) + helper unit tests | Tests 1–18 per the [Test plan](#test-plan) | 1 |
 | [`docs/GLOSSARY.md`][glossary] | Router entry body + [Auth mutations][glossary-auth-mutations] deferral rewrite; status flips deferred | 2 |
 | [`docs/TREE.md`][tree] | Regenerated (script-rendered) after the card flips Done | 2 |
 | [`KANBAN.md`][kanban] / `KANBAN.html` | Card wrap via DB edit + re-render | 2 |
@@ -1368,35 +1493,43 @@ carries its reason.
 - [ ] **D3** — the guard has **no memoization** and the `__getattr__` caches only
   the *built class* (not a successful guard result), so eviction-based absence
   tests can re-hit the guard — the non-memoizing contract from
-  [`__init__.py`][init]'s root `__getattr__`, adapted: the class cache must be
-  keyed so a `sys.modules` eviction of `routers` naturally drops it (a module
-  global, cleared with the module) — **and the eviction discipline is
+  [`__init__.py`][init]'s root `__getattr__`, adapted: the class cache is the
+  module global `_ROUTER_CLASS`, so a `sys.modules` eviction of `routers`
+  naturally drops it with the module — **and the eviction discipline is
   two-sided**: the absence fixture saves/restores the parent package's
   `routers` attribute together with the `sys.modules` entries, restoring the
   original module object to *both* places, so no test order can leave the
   attribute path and the import path holding different module objects (and
-  therefore different class caches)
+  therefore different `_ROUTER_CLASS` caches). **The degraded-install test
+  (Test 17) uses the same eviction + parent-attribute restore** *before*
+  blocking a builder import: without evicting `routers`, an earlier
+  construction test's cached `_ROUTER_CLASS` would satisfy the symbol access
+  and the blocked import would never fire — the test must observe
+  `_ROUTER_CLASS` unreachable because the module was re-executed, not mutated
+  in place, making it order-independent under normal pytest order and
+  `pytest-xdist`
   ([Decision 5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard)
   / [Decision 8](#decision-8--test-strategy-package-tests-only-communicator-driven-execution-eviction-simulated-absence)).
-- [ ] **D-P1** (revised by the utils DRY review, docs/feedback.md P1.5) — the
-  generic optional-import owner is **`utils/imports.py`**, which now exists
+- [ ] **D-P1** — the generic optional-import owner is
+  **[`utils/imports.py`][utils-imports]**, which already exists
   (`import_attr_if_importable` / `loaded_attr`, migrated from
   `registry.py`'s co-clear helpers and `utils/inputs.py::_safe_import`).
-  Slice 1 adds `require_optional_module(module_name, *, install_hint,
-  feature_label)` there (with its own unit tests) and `require_channels()`
-  is a thin wrapper over it — `routers.py` must NOT hand-roll a fourth
-  import-handling pattern. The hint string itself stays single-sited in
-  `routers.py` as `_CHANNELS_INSTALL_HINT` (D2). Migrating `require_drf()`
-  onto the same primitive is a deliberate non-goal here (its hint is
-  byte-pinned by `_HINT_SUBSTRING` tests; a separate follow-on)
+  Slice 1 adds `require_optional_module(module_name, *, install_hint)` there
+  (with its own unit tests) and `require_channels()` is a thin wrapper over it
+  — `routers.py` must NOT hand-roll a fourth import-handling pattern. There is
+  **no `feature_label`** parameter (the feature text lives in the caller's
+  `install_hint`; an unused label is ceremony). The hint string itself stays
+  single-sited in `routers.py` as `_CHANNELS_INSTALL_HINT` (D2). Migrating
+  `require_drf()` onto the same primitive is a deliberate non-goal here (its
+  hint is byte-pinned by `_HINT_SUBSTRING` tests; a separate follow-on)
   ([Decision 4](#decision-4--module-and-test-locations-a-top-level-routerspy-mirroring-both-upstreams-teststest_routerspy)
   / [Decision 5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard)).
-- [ ] **D-P2** (from the utils DRY review P1.1) — no local request decoders
-  anywhere in this card: not in `routers.py`, not in auth queries/mutations,
-  not in serializer-mutation kwargs, not in permission gates. The Channels
-  context shape is adapted **once**, in
-  [`request_from_info()`][utils-permissions], keeping the `family_label`
-  error-message contract
+- [ ] **D-P2** — no local request decoders anywhere in this card: not in
+  `routers.py`, not in auth queries/mutations, not in serializer-mutation
+  kwargs, not in permission gates. The Channels context shape is adapted
+  **once**, in [`request_from_info()`][utils-permissions], keeping the
+  `family_label` error-message contract and delegating unrecognized attributes
+  to the wrapped `ChannelsRequest`
   ([Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred)).
 - [ ] **D-N1** (non-reuse) — the router must NOT route through
   [`strawberry_config`][glossary-strawberry_config] or touch the consumer's
@@ -1434,6 +1567,19 @@ carries its reason.
   `URLRouter` has one route; a WS connect to any other path raises Channels'
   "No route found" error and the connection drops. Parity with upstream; a
   consumer multiplexing other WS consumers composes `ProtocolTypeRouter` by hand.
+- **The HTTP fallback runs *inside* `AuthMiddlewareStack`.** The borrowed
+  composition wraps the whole HTTP `URLRouter` — the GraphQL route **and** the
+  optional Django ASGI fallback — in one `AuthMiddlewareStack`
+  ([Borrowing posture](#borrowing-posture)). So a non-GraphQL HTTP request that
+  falls through to `django_application` first passes through Channels'
+  cookie / session / auth middleware (populating `scope["user"]` /
+  `scope["session"]`) before entering Django's own ASGI middleware stack. This
+  is **upstream parity and accepted for the one-import migration promise**: the
+  scope mutation is harmless for Django's ASGI app and the cost is a small
+  per-fallback-request overhead. This card does **not** introduce a separate,
+  un-wrapped fallback branch — doing so would break byte-compatible parity with
+  `AuthGraphQLProtocolTypeRouter`
+  ([Decision 6](#decision-6--constructor-parity-schema-django_applicationnone-url_patterngraphql-composition-borrowed-as-is)).
 - **`lifespan` scope.** Channels' `ProtocolTypeRouter` raises `ValueError` for
   scope types absent from the mapping. Uvicorn sends `lifespan` on startup and
   logs the failure as benign ("ASGI 'lifespan' protocol appears unsupported");
@@ -1456,6 +1602,15 @@ carries its reason.
   `ALLOWED_HOSTS`, so the WS test's matching `Origin` is `http://testserver` —
   asserted positively (matching origin connects) and negatively (mismatched
   origin is denied) in the test plan.
+- **A WebSocket handshake with no `Origin` header is denied.** The router opts
+  into `AllowedHostsOriginValidator`, and `OriginValidator.valid_origin`
+  returns `False` when the handshake carries no `Origin` header at all, unless
+  `ALLOWED_HOSTS` contains `"*"` (verified in `channels/security/websocket.py`:
+  `if parsed_origin is None and "*" not in self.allowed_origins: return False`).
+  So a non-browser WS client that omits `Origin` is rejected exactly like a
+  mismatched one. This is stable across the declared Channels floor, so the
+  test plan asserts it as a third origin direction (missing → denied); the
+  in-suite `ALLOWED_HOSTS` is `["testserver", ...]`, never `"*"`.
 - **The HTTP consumer is async; sync ORM resolvers are NOT threadpooled.** The
   parity consumer `GraphQLHTTPConsumer` subclasses Strawberry's
   `AsyncBaseHTTPView` and awaits `schema.execute(...)` directly on the ASGI
@@ -1511,9 +1666,12 @@ All in `tests/test_routers.py` (placement per
 The schema used by execution tests is a small module-local `strawberry.Schema`
 (a plain `Query` with a deterministic field is sufficient — router behavior is
 schema-agnostic, and avoiding `DjangoType` keeps these tests out of the [registry
-lifecycle][glossary-finalize-django-types]); one test uses a `DjangoType`-bearing schema to prove the
-extensions-ride-along claim, and one exercises the package's shared request
-helper through the router (Test 16 — the package-realistic migration risk, per
+lifecycle][glossary-finalize-django-types] and off the async consumer's sync-ORM
+edge). One test proves the schema (with its extensions) passes through
+**unchanged** using a custom recording Strawberry extension rather than the
+optimizer (Test 10, kept ORM-free so it cannot trip `SynchronousOnlyOperation`
+under the async consumer), and one exercises the package's shared request helper
+through the router (Test 16 — the package-realistic migration risk, per
 [Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred)).
 The structural walks (Tests 2–4) live behind small intent-named test helpers —
 `unwrap_origin_validator()` / `unwrap_auth_stack()` — so a future Channels
@@ -1527,7 +1685,7 @@ contract, not as attribute spelunking.
    exactly `http` and `websocket` — framed as a **current-shape parity
    assertion** owned by the upstream-parity contract (upstream maps exactly
    these two), not as the primary source of truth: the behavior tests (7–10,
-   16) are what the mapping must actually deliver, and a deliberate future
+   16, 18) are what the mapping must actually deliver, and a deliberate future
    addition (an explicit `lifespan` handler, say) moves this assertion with a
    recorded decision rather than failing mysteriously.
 2. The `http` branch is `AuthMiddlewareStack`-wrapped and, without
@@ -1545,7 +1703,9 @@ contract, not as attribute spelunking.
    `.inner`.
 5. A custom `url_pattern=` reaches the `re_path` on both branches.
 6. Repeated symbol access returns the identical cached class (the builder
-   memoizes), and the class is subclassable (a consumer extension smoke check).
+   memoizes into `_ROUTER_CLASS`), and the class is subclassable (a consumer
+   extension smoke check). `routers.__all__ == ("DjangoGraphQLProtocolRouter",)`
+   (the star-surface pin, [Decision 3](#decision-3--the-symbol-is-djangographqlprotocolrouter--distinctly-ours-pinned-now)).
 
 **Channels-present — execution through communicators:**
 
@@ -1555,17 +1715,37 @@ contract, not as attribute spelunking.
    the fallback app (a minimal recording ASGI callable), and without it does not
    resolve.
 9. `WebsocketCommunicator` connect to `/graphql` on the `graphql-transport-ws`
-   subprotocol with a matching `Origin` header is accepted; with a mismatched
-   `Origin` the handshake is denied (the validator, both directions).
-10. A schema constructed with [`strawberry_config()`][glossary-strawberry_config]
-    and [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] executes
-    through the router unchanged (extensions-ride-along; a scalar from the
-    package's map round-trips).
+   subprotocol: with a matching `Origin` header (`http://testserver`) the
+   handshake is accepted; with a **mismatched** `Origin` it is denied; and with
+   **no `Origin` header at all** it is denied (the three origin directions —
+   `AllowedHostsOriginValidator` treats a missing origin as invalid unless
+   `ALLOWED_HOSTS` contains `"*"`, [Edge cases](#edge-cases-and-constraints)).
+10. **Schema pass-through, proven without forcing sync ORM.** The router must
+    hand the consumer's schema object to the consumers unchanged, not rebuild
+    it. This is proven the async-safe way: a schema carrying a **custom
+    Strawberry extension that records it executed** (no ORM, no `DjangoType`)
+    runs through the router via `HttpCommunicator` and the recorder fires —
+    proving the exact schema object (extensions intact) reached the consumer.
+    `DjangoOptimizerExtension` is deliberately **kept out of this execution
+    test**: under the async `GraphQLHTTPConsumer`, a real `DjangoType` / ORM
+    resolver would trip the same `SynchronousOnlyOperation` edge case the spec
+    documents, and a trivial optimizer-installed schema proves nothing about
+    the optimizer anyway. The "a `strawberry_config()` +
+    [`DjangoOptimizerExtension`][glossary-djangooptimizerextension] schema is
+    accepted and passed through" claim is asserted **structurally** in the
+    composition tests (the schema object the consumer holds `is` the one passed
+    in). Real optimizer behavior under Channels — if ever wanted — is a
+    separate async-ORM test with its own async-safe setup, not a ride-along
+    here.
 
 **Channels-absent (simulated via the eviction + import-block pattern):**
 
 11. `import django_strawberry_framework` succeeds and
-    `from django_strawberry_framework import *` binds no router name.
+    `from django_strawberry_framework import *` binds no router name (the root
+    package stays channels-free). By contrast, the **submodule** star import
+    `from django_strawberry_framework.routers import *` raises the install-hint
+    `ImportError` — `__all__` names the lazy symbol, so `import *` reaches for
+    it and fires the guard ([Decision 3](#decision-3--the-symbol-is-djangographqlprotocolrouter--distinctly-ours-pinned-now)).
 12. `import django_strawberry_framework.routers` succeeds.
 13. `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`
     raises `ImportError` whose message contains `channels>=4.3.2` — matched
@@ -1593,27 +1773,57 @@ contract, not as attribute spelunking.
     `HttpCommunicator`: the `AuthMiddlewareStack`-populated `scope["user"]`
     resolves through the Channels-context adapter (an anonymous request yields
     `AnonymousUser` — no session fixture needed; the assertion is that the
-    helper *resolves* rather than raising `ConfigurationError`). This is the
-    package-realistic migration test: it proves a framework-shaped schema, not
-    just plain Strawberry transport, runs under the router. The adapter's
-    unit-level shape tests (mapping context recognized, `.user` / `.session`
-    exposed, non-Channels shapes still rejected with the family-labeled
-    `ConfigurationError`) live beside the helper's existing suite.
+    helper *resolves* rather than raising `ConfigurationError`). The **same
+    resolver also reads a delegated attribute** (e.g. `request.method` /
+    `request.headers`) to prove the adapter's `__getattr__` delegation to the
+    wrapped `ChannelsRequest` works end-to-end, not just the scope-backed
+    fields — the P1.1 contract. This is the package-realistic migration test:
+    it proves a framework-shaped schema, not just plain Strawberry transport,
+    runs under the router. The adapter's **unit-level shape tests** (mapping
+    context recognized; `.user` / `.session` / `.scope` exposed from the scope;
+    a *delegated* attribute returns the wrapped request's value; a fake
+    permission method reading **one delegated and one scope-backed** attribute
+    succeeds; non-Channels shapes still rejected with the family-labeled
+    `ConfigurationError`) live beside the helper's existing suite in
+    [`tests/utils/test_permissions.py`][test-utils-permissions].
+
+18. **Authenticated-session round trip.** A user and session are created
+    async-safely (`database_sync_to_async` / the test session store), and the
+    session cookie is sent through `HttpCommunicator` to a resolver that reads
+    the actor via `request_from_info()`; the resolver sees the **authenticated**
+    user, not `AnonymousUser`. This is what actually earns the repeated
+    "session user on the scope" claim (finding P1.4) — Test 16 only proves the
+    contract does not raise; Test 18 proves a real session actor flows through
+    `AuthMiddlewareStack`. (If this harness proves fragile at build time, the
+    fallback is the honest-wording path recorded in
+    [Risks](#risks-and-open-questions), not a silent drop.)
 
 **Channels-present-but-degraded (simulated partial installs):**
 
-17. With `channels` importable but a builder-required module blocked (evict +
-    block `channels.security.websocket`, the same fixture machinery as the
-    absent path), symbol access raises the **actionable** incompatibility
-    `ImportError` naming the `channels>=4.3.2` floor with the original
-    `ImportError` chained (`__cause__`) — never a bare transitive error at
-    what would be ASGI-startup time ([Error shapes](#error-shapes)).
+17. **Parametrized over the two builder halves**, each in its own case, using
+    the **same module-eviction + parent-attribute-restore fixture as the
+    absent path** so the re-executed `routers` module has no cached
+    `_ROUTER_CLASS` and the blocked import actually fires (without the evict, an
+    earlier construction test's cache would satisfy the access and the block
+    would be a no-op — the order-dependence finding P1.2):
+    - **(a) a blocked `channels.*` builder import** (evict `routers` + block
+      `channels.security.websocket`): symbol access raises the actionable
+      incompatibility `ImportError` naming the `channels>=4.3.2` floor;
+    - **(b) a blocked `strawberry.channels` consumer import** (evict `routers` +
+      block the `strawberry.channels` consumer symbol): symbol access raises the
+      **separate** builder-failure `ImportError` naming **both**
+      `channels>=4.3.2` and `strawberry-graphql>=0.262.0` with the consumers
+      importable — proving a broken Strawberry install is not misreported as a
+      Channels problem.
+    Both chain the original `ImportError` (`__cause__`), never a bare transitive
+    error at what would be ASGI-startup time ([Error shapes](#error-shapes)).
 
 Coverage: the package gate is `fail_under = 100`; the builder body, both branches
-of the guard, the incompatible-install wrap, the `__getattr__` hit/miss paths,
-the fallback-present / fallback-absent constructor branches, and the
-`request_from_info()` Channels-shape branch (plus its adapter) are all reached
-by the list above.
+of the guard, **both** incompatible-install wrap messages (channels-half and
+strawberry-half), the `__getattr__` hit/miss paths, the fallback-present /
+fallback-absent constructor branches, and the `request_from_info()`
+Channels-shape branch (plus the wrapping adapter's explicit and delegated
+attribute paths) are all reached by the list above.
 
 ## Doc updates
 
@@ -1679,11 +1889,25 @@ implemented-on-main docs update here; release-status wording defers to the joint
   execution over Channels consumers remains unverified") so the shipped docs
   stop over-promising, and the mutating-path verification lands with the
   [`TestClient`][glossary-testclient] card (`TODO-ALPHA-043-0.0.14`, whose
-  helpers make protocol-level assertions cheap) or a dedicated follow-on if it
-  proves broken. **Fallback:** if the Slice-1 communicator tests happen to make
-  the check nearly free, a single smoke test (login mutation through
-  `HttpCommunicator`) is added — as evidence for the re-worded GLOSSARY
-  sentence, not as a shipped compatibility claim.
+  helpers make protocol-level assertions cheap), and if that card does not
+  absorb it, a **dedicated follow-on card for Channels auth-mutation semantics**
+  is filed. This card adds **no** login-mutation test — the earlier "if nearly
+  free, add a smoke test" hedge is removed (finding P3.11): auth mutations over
+  Channels are cleanly out of scope here, with a named owner, not a maybe.
+- **The authenticated-session test may need a careful async-safe harness.**
+  Test 18 creates a user/session and sends the session cookie through
+  `HttpCommunicator`; the session/user creation must be async-safe
+  (`database_sync_to_async` or the test session store) because
+  `AuthMiddlewareStack` resolves the user on the event loop. **Preferred
+  answer:** the test lands and the "session user on the scope" wording stays as
+  written, now earned. **Fallback (finding P1.4):** if the harness proves
+  fragile, the card keeps Test 16 (the contract resolves without raising) and
+  **weakens the user-facing wording** to the honest minimum — "the card
+  composes `AuthMiddlewareStack` and proves the package can read the Channels
+  request shape; full authenticated session-cookie behavior is delegated to
+  Channels and not asserted by this card" — with the gap tracked here. The
+  wording and the test move together; the docs never claim more than the suite
+  proves.
 - **The card's name hedge.** "final name pinned during implementation" vs. this
   spec pinning `DjangoGraphQLProtocolRouter` now
   ([Decision 3](#decision-3--the-symbol-is-djangographqlprotocolrouter--distinctly-ours-pinned-now)).
@@ -1719,9 +1943,12 @@ implemented-on-main docs update here; release-status wording defers to the joint
 - **Auth-*mutation* execution over Channels consumers** (the session-mutating
   half; the read-path request contract ships in this card per
   [Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred))
-  — scoped to the [`TestClient`][glossary-testclient] card or a follow-on per
-  [Risks](#risks-and-open-questions); the [Auth mutations][glossary-auth-mutations]
-  GLOSSARY wording is corrected in Slice 2 either way.
+  — scoped to the [`TestClient`][glossary-testclient] card
+  (`TODO-ALPHA-043-0.0.14`), or a **dedicated follow-on card** if that card does
+  not absorb it ([Risks](#risks-and-open-questions)). This card adds no
+  login-mutation test (the "if nearly free" hedge is removed); the
+  [Auth mutations][glossary-auth-mutations] GLOSSARY wording is corrected in
+  Slice 2 either way.
 - **Fakeshop ASGI activation / Channels acceptance lane** — the
   fakeshop-activation card [`TODO-BETA-053-0.1.5`][kanban] if ever.
 - **Subscriptions as a package surface** — no card; the router transports whatever
@@ -1746,6 +1973,12 @@ implemented-on-main docs update here; release-status wording defers to the joint
       symbol access raises `ImportError` carrying the single install hint naming
       the verified floor (the card's DoD, sharpened by
       [Decision 5](#decision-5--soft-channels-dependency-a-lazy-module-__getattr__--one-require_channels-guard)).
+- [ ] `routers.py` defines `__all__ = ("DjangoGraphQLProtocolRouter",)`, so
+      `from ...routers import *` exposes only the router (and opts into the
+      guard when channels is absent); `require_optional_module` takes no
+      `feature_label`
+      ([Decision 3](#decision-3--the-symbol-is-djangographqlprotocolrouter--distinctly-ours-pinned-now)
+      / Helper-reuse D-P1).
 - [ ] The constructor is byte-compatible with upstream
       (`(schema, django_application=None, url_pattern="^graphql")`) and the
       composition matches [Decision 6](#decision-6--constructor-parity-schema-django_applicationnone-url_patterngraphql-composition-borrowed-as-is)
@@ -1757,21 +1990,28 @@ implemented-on-main docs update here; release-status wording defers to the joint
       hint string, and this spec's Risks note agree on the **single** floor —
       one value covering the whole advertised Django range through 6.0.
 - [ ] The Strawberry-floor gate ran: `strawberry.channels`'s
-      `GraphQLHTTPConsumer` / `GraphQLWSConsumer` / `GraphQLProtocolTypeRouter`
-      confirmed importable at `strawberry-graphql==0.262.0` in an isolated
-      throwaway venv (never the shared `.venv`), or the project's Strawberry
-      floor was bumped instead; the command and outcome are recorded in the
-      build artifact.
+      **`GraphQLHTTPConsumer` and `GraphQLWSConsumer`** (the two symbols the
+      builder imports — not the unused `GraphQLProtocolTypeRouter`) confirmed
+      importable at `strawberry-graphql==0.262.0` in an isolated throwaway venv
+      (never the shared `.venv`), or the project's Strawberry floor was bumped
+      instead; the command and outcome are recorded in the build artifact.
 - [ ] `tests/test_routers.py` covers both dependency states per the
       [Test plan](#test-plan) — including at least one real `HttpCommunicator`
-      GraphQL round trip, both origin-validator directions, the
-      **package-realistic request-contract round trip** (Test 16), and the
-      degraded partial-install error shape (Test 17) — and the package
-      coverage gate (`fail_under = 100`) holds with `routers.py` included.
-- [ ] `request_from_info()` resolves Strawberry's Channels context (the
-      mapping-shaped context and its `consumer.scope`-backed adapter with
-      `.user` / `.session`), with unit tests beside the helper's suite and no
-      `channels` import added to `utils/`
+      GraphQL round trip, **all three** origin-validator directions (match /
+      mismatch / missing), the **package-realistic request-contract round
+      trip** with a delegated-attribute read (Test 16), the
+      **authenticated-session round trip** (Test 18, or the weakened-wording
+      fallback per [Risks](#risks-and-open-questions)), and **both** degraded
+      partial-install error shapes (channels-half and strawberry-half, Test 17)
+      — and the package coverage gate (`fail_under = 100`) holds with
+      `routers.py` included.
+- [ ] `request_from_info()` resolves Strawberry's Channels context: the
+      mapping-shaped context and a **`ChannelsRequest`-wrapping** adapter that
+      exposes `.user` / `.session` / `.scope` and **delegates other attributes
+      to the wrapped request via `__getattr__`** (so user permission hooks and
+      DRF serializer overrides keep reading `request.headers` / `.COOKIES` /
+      etc. under Channels — finding P1.1), with unit tests beside the helper's
+      suite and no `channels` import added to `utils/`
       ([Decision 11](#decision-11--the-package-request-contract-works-under-channels-request_from_info-learns-the-channels-context-shape-reads-auth-mutations-stay-deferred)).
 - [ ] The migration-guide handoff row content is recorded for
       [`TODO-BETA-056-0.1.6`][kanban]
@@ -1839,14 +2079,20 @@ implemented-on-main docs update here; release-status wording defers to the joint
 
 <!-- django_strawberry_framework/ -->
 [conf]: ../django_strawberry_framework/conf.py
+[filters-sets]: ../django_strawberry_framework/filters/sets.py
 [init]: ../django_strawberry_framework/__init__.py
+[mutations-permissions]: ../django_strawberry_framework/mutations/permissions.py
+[orders-sets]: ../django_strawberry_framework/orders/sets.py
 [rf-init]: ../django_strawberry_framework/rest_framework/__init__.py
+[rf-resolvers]: ../django_strawberry_framework/rest_framework/resolvers.py
+[utils-imports]: ../django_strawberry_framework/utils/imports.py
 [utils-permissions]: ../django_strawberry_framework/utils/permissions.py
 
 <!-- tests/ -->
 [test-base-init]: ../tests/base/test_init.py
 [test-list-field]: ../tests/test_list_field.py
 [test-soft-dependency]: ../tests/rest_framework/test_soft_dependency.py
+[test-utils-permissions]: ../tests/utils/test_permissions.py
 [tests-conftest]: ../tests/conftest.py
 
 <!-- examples/ -->

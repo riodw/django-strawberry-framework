@@ -10,10 +10,25 @@ from __future__ import annotations
 
 from typing import Any
 
+# The one public symbol is resolved lazily via the PEP 562 module ``__getattr__``
+# below, so it is never a real module global; ruff's F822 (undefined name in
+# ``__all__``) is a false positive here. Listing it is deliberate: ``from
+# ...routers import *`` should opt into the router and thus the channels guard
+# (spec-041 finding P2.6).
+__all__ = ("DjangoGraphQLProtocolRouter",)  # noqa: F822 - PEP 562 lazy export
+
 _CHANNELS_INSTALL_HINT = (
     "DjangoGraphQLProtocolRouter requires channels, which is not installed. Install it "
     "with `pip install 'channels>=4.3.2'` (the package's verified Channels floor)."
 )
+
+# TODO(spec-041 Slice 1): add a SEPARATE builder-failure hint (spec-041 finding
+# P1.3) for present-but-incompatible installs, distinct from
+# _CHANNELS_INSTALL_HINT (which is top-level channels absence only). A failing
+# channels.* import names `channels>=4.3.2`; a failing strawberry.channels
+# consumer import names BOTH `channels>=4.3.2` and `strawberry-graphql>=0.262.0`
+# with the consumers importable, so a broken Strawberry install is not
+# misreported as a missing-channels problem.
 
 _ROUTER_CLASS: type[Any] | None = None
 
@@ -26,8 +41,8 @@ def require_channels() -> Any:
     #
     # TODO(spec-041 Slice 1) pseudo-steps:
     # - call ``require_optional_module`` with module name ``channels``;
-    # - pass ``_CHANNELS_INSTALL_HINT`` as the single public hint string;
-    # - pass ``DjangoGraphQLProtocolRouter`` as the feature label;
+    # - pass ``_CHANNELS_INSTALL_HINT`` as the single public hint string
+    #   (``require_optional_module`` takes NO ``feature_label`` - finding P2.5);
     # - return the imported module object unchanged.
     #
     # The helper must not memoize success or failure. The router class cache
@@ -54,7 +69,11 @@ def _build_router_class() -> type[Any]:
     #   ``AllowedHostsOriginValidator``, ``re_path``, ``GraphQLHTTPConsumer``,
     #   and ``GraphQLWSConsumer`` inside one builder try block;
     # - wrap builder import failures from present-but-incompatible installs in
-    #   an actionable ``ImportError`` that still chains the original exception;
+    #   an actionable ``ImportError`` that still chains the original exception,
+    #   naming WHICH half is broken (spec-041 finding P1.3): a ``channels.*``
+    #   failure names ``channels>=4.3.2``; a ``strawberry.channels`` consumer
+    #   failure names both ``channels>=4.3.2`` and
+    #   ``strawberry-graphql>=0.262.0`` with the consumers importable;
     # - define the router subclass with signature
     #   ``(schema, django_application=None, url_pattern="^graphql")``;
     # - build the HTTP URLs as GraphQL first, optional Django fallback second;

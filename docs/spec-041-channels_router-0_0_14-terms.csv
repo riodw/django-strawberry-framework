@@ -1,0 +1,16 @@
+term,anchor,notes
+DjangoGraphQLProtocolRouter,djangographqlprotocolrouter,the subject of the spec; GLOSSARY status planned for 0.0.14 until the joint cut flips it
+Auth mutations,auth-mutations,the 0.0.13 surface whose Channels/websocket-auth deferral points at this card; wording corrected in Slice 2
+SerializerMutation,serializermutation,the soft-dependency precedent (require_drf / lazy root export) Decision 5 generalizes
+TestClient,testclient,sibling 0.0.14 card (TODO-ALPHA-043) owning HTTP-level test ergonomics and the auth-over-Channels verification hand-off
+GraphQLTestCase,graphqltestcase,sibling 0.0.14 card surface named beside TestClient
+Debug-toolbar middleware,debug-toolbar-middleware,sibling 0.0.14 card (TODO-ALPHA-042) sharing the joint cut
+Response-extensions debug middleware,response-extensions-debug-middleware,sibling 0.0.14 card (TODO-ALPHA-044) sharing the joint cut
+DjangoOptimizerExtension,djangooptimizerextension,extensions-ride-along claim: a schema built with the optimizer keeps it under Channels (test 10)
+strawberry_config,strawberry_config,D-N1 non-reuse: the router must not reshape the consumer's schema config; test 10 uses it
+SyncMisuseError,syncmisuseerror,edge case: async get_queryset misuse raises identically under Channels transport
+Upload,upload-scalar,multipart-over-Channels edge case; ergonomics deferred to the TestClient card
+DjangoType,djangotype,test-plan note (schema-agnostic tests avoid DjangoType; one test uses a DjangoType-bearing schema) and Decision 2 no-new-Meta-key boundary
+DjangoConnectionField,djangoconnectionfield,Decision 3 naming-family precedent for the Django* prefix
+DjangoMutationField,djangomutationfield,Decision 3 naming-family precedent for the Django* prefix
+get_queryset,get_queryset-visibility-hook,edge-case mention: resolver dispatch (and its sync/async misuse guard) is transport-independent

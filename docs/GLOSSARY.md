@@ -151,7 +151,10 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Schema audit](#schema-audit) | shipped (`0.0.3`) |
 | [Schema export management command](#schema-export-management-command) | shipped (`0.0.7`) |
 | [Schema introspection management command](#schema-introspection-management-command) | shipped (`0.0.9`) |
+| [Schema reload discipline](#schema-reload-discipline) | shipped |
+| [`seed_data`](#seed_data) | shipped |
 | [`SerializerMutation`](#serializermutation) | shipped (`0.0.13`) |
+| [Single-upstream parity](#single-upstream-parity) | shipped |
 | [Soft dependency](#soft-dependency) | shipped (`0.0.13`) |
 | [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
 | [strawberry_config](#strawberry_config) | shipped (`0.0.7`) |
@@ -180,8 +183,8 @@ For readers exploring rather than looking up a specific term:
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoMutationField`](#djangomutationfield) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
-- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware) · [Soft dependency](#soft-dependency) · [Joint version cut](#joint-version-cut) · [PEP 562 lazy export](#pep-562-lazy-export) · [`require_optional_module`](#require_optional_module).
-- **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Django Trac #37064 hardening](#django-trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase) · [Live-first coverage mandate](#live-first-coverage-mandate) · [Eviction-simulated absence](#eviction-simulated-absence).
+- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware) · [Soft dependency](#soft-dependency) · [Joint version cut](#joint-version-cut) · [PEP 562 lazy export](#pep-562-lazy-export) · [`require_optional_module`](#require_optional_module) · [Single-upstream parity](#single-upstream-parity).
+- **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Django Trac #37064 hardening](#django-trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase) · [Live-first coverage mandate](#live-first-coverage-mandate) · [Eviction-simulated absence](#eviction-simulated-absence) · [Schema reload discipline](#schema-reload-discipline) · [`seed_data`](#seed_data).
 
 ---
 
@@ -1325,6 +1328,22 @@ The positional `type` argument dispatches by shape: a **dotted** object path (`a
 
 **See also:** [Schema export management command](#schema-export-management-command) · [`DjangoType`](#djangotype) · [Relay Node integration](#relay-node-integration) · [Scalar field conversion](#scalar-field-conversion).
 
+## Schema reload discipline
+
+**Status:** shipped.
+
+The fakeshop suites' order-independence-by-reconstruction rule, single-sited in `examples/fakeshop/schema_reload.py`: any test that rebuilds the aggregate `config.schema` calls `reload_all_project_schemas()`, which clears the global type registry, re-imports every contributing app's `apps.<app>.schema` in dependency-safe order (`glossary` before `kanban`, whose card-term type FKs into the glossary app), then reloads `config.schema` + `config.urls` and clears Django's URL caches.
+
+The rule exists because package tests under root `tests/` call `registry.clear()` for isolation while `config.schema` composes every app's `Query` / `Mutation`: a partial (one-app) reload leaves the other apps unregistered, so the combined build raises a `LazyType` `KeyError` — or `DuplicatedTypeName` when a stale re-imported schema module survives in `sys.modules` — under collection orders that did not happen to pre-materialize the types. `pytest-xdist`'s `--dist loadscope` localizes the flake to whichever worker drew both files, which is why the reload must be complete and per-test rather than fixed by ordering. Every `test_query/` acceptance suite's autouse fixture delegates to the helper (via `test_query/conftest.py`); package tests that execute real GraphQL through fakeshop (e.g. the [Debug-toolbar middleware](#debug-toolbar-middleware) suite) call it on fixture setup, before any URLconf steps.
+
+## `seed_data`
+
+**Status:** shipped.
+
+fakeshop's deterministic catalog seed helper (`apps.products.services.seed_data(count, db_alias="default")`): for every discovered Faker provider it ensures one `Category`, one `Property` per provider method, and at least `count` `Item` rows (creating only the shortfall), each new `Item` carrying one `Entry` per `Property`. `is_private` flags alternate by sorted index for an exact, run-deterministic 50/50 public/private split.
+
+The repo's seed-helper rule: a test that needs products-app rows starts with `seed_data(1)` (or an explicit `seed_data(N)`) as its first executable line rather than hand-building models — so SQL-emitting tests (optimizer-shape assertions, the [Debug-toolbar middleware](#debug-toolbar-middleware) SQL-panel tests) hit real rows through the same path as every other suite.
+
 ## `SerializerMutation`
 
 **Status:** shipped (`0.0.13`).
@@ -1336,6 +1355,12 @@ It **deliberately does not adopt graphene-django's serializer-mutation keys**: i
 `djangorestframework` is a **soft** dependency: `import django_strawberry_framework` succeeds without DRF, and `from django_strawberry_framework import *` stays DRF-free. `SerializerMutation` is the one net-new public symbol — a lazy root export resolved through the package `__getattr__` under the soft DRF guard, **not** in `__all__`. A DRF-absent consumer who reaches a serializer-mutation module (or the root symbol) gets a single install-hint `ImportError` naming `djangorestframework>=3.17.0`.
 
 **See also:** [`DjangoMutation`](#djangomutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`FieldError` envelope](#fielderror-envelope) · [`DjangoModelPermission`](#djangomodelpermission).
+
+## Single-upstream parity
+
+**Status:** shipped.
+
+The honest-parity posture for Alpha cards whose surface exists in only one of the two reference libraries. `KANBAN.md`'s "Alpha cards must claim upstream parity" decision requires each Alpha card to name its upstream equivalents in `strawberry-graphql-django` (🍓) and `graphene-django` (⚛️); when only one upstream ships the surface, the card claims parity with that single upstream and records the other's absence plainly instead of fabricating an equivalent. Precedents: [Auth mutations](#auth-mutations) (spec-040), [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) (spec-041), and the [Debug-toolbar middleware](#debug-toolbar-middleware) (spec-042 — 🍓-only: `graphene-django`'s debug story is the in-response `DjangoDebug` subsystem tracked by the [Response-extensions debug middleware](#response-extensions-debug-middleware) sibling card).
 
 ## Soft dependency
 

@@ -64,7 +64,7 @@ from .optimizer.plans import (
     deterministic_order,
     ends_in_unique_column,
 )
-from .optimizer.selections import direct_child_selected, prime_selected_fields
+from .optimizer.selections import direct_child_selected, named_children, prime_selected_fields
 from .optimizer.walker import _relation_connection_to_attr
 from .types.resolvers import _check_n1
 from .utils.connections import (
@@ -176,16 +176,35 @@ def _resolve_from_window(
     info: Info,
     offset: int,
     limit: int | None,
+    reverse: bool = False,
     want_count: bool,
     **kwargs: Any,
 ) -> Any:
     """Build the Relay connection straight from the windowed prefetch rows.
 
     The single edge / cursor / ``pageInfo`` / ``totalCount`` derivation shared
-    by both ``resolve_connection`` paths (Decision 5). Returns ``None`` to tell
-    the caller the window is an *ambiguous empty* one (``limit == 0`` /
-    ``offset > 0``) that must fall back to the per-parent pipeline so
-    ``first: 0`` / overshot ``after:`` preserve byte-identical results.
+    by both ``resolve_connection`` paths (Decision 5).
+
+    The historically-ambiguous empty shapes (``offset > 0`` overshot ``after:``,
+    ``limit == 0`` ``first: 0``) are served from MARKER rows (connection window
+    rigor, workstream C): ``apply_window_pagination`` keeps each partition's
+    row 1 for these shapes, so an empty rows list now PROVES the parent has no
+    children (serve the zero page), and a marker-only list carries the real
+    ``_dst_total_count`` (serve the empty page with true count/flags). Markers
+    (row 1 when ``offset > 0``; every row when ``limit == 0``) are excluded
+    from edge building, so cursors are untouched. Page flags for the served
+    empty pages replicate Strawberry's ``ListConnection`` arithmetic exactly
+    (``has_previous_page = offset > 0`` even for a childless parent - the
+    pipeline computes ``start > 0`` before looking at the data;
+    ``has_next_page = total > offset``, the "would the overfetch have yielded
+    a row" predicate) - byte parity with the per-parent pipeline is the bar.
+
+    Returns ``None`` to tell the caller the window cannot be served and must
+    fall back to the per-parent pipeline: a reversed ``last: 0`` window
+    (upstream's ``edges[-0:]`` quirk serves ALL edges - only the pipeline
+    reproduces it), or a count-less window whose selection requests a
+    count-derived field (the workstream-B defensive tail - see the ``total``
+    read below).
 
     Cursor math is the positional offset cursor ``_dst_row_number - 1`` for
     EVERY window, including the ``last``-only reversed one: Slice 1's
@@ -204,33 +223,85 @@ def _resolve_from_window(
     """
     rows = window.rows
     if not rows:
-        # An empty window is fast-pathable ONLY when it proves the parent
-        # genuinely has no related rows: offset == 0 and a positive upper bound.
-        # limit == 0 (first: 0) or offset > 0 (overshot after:) are AMBIGUOUS -
-        # the optimized window is empty for the same shape as a genuinely empty
-        # parent, so the fast path must not infer totalCount = 0 (Decision 5).
-        if offset == 0 and (limit is None or limit > 0):
-            conn = cls(
-                edges=[],
-                page_info=relay.PageInfo(
-                    start_cursor=None,
-                    end_cursor=None,
-                    has_previous_page=False,
-                    has_next_page=False,
-                ),
-            )
-            if want_count:
-                setattr(conn, _TOTAL_COUNT_ATTR, 0)
-            return conn
-        return None
+        if reverse and limit == 0:
+            # ``last: 0``: upstream ``ListConnection`` slices ``edges[-0:]``,
+            # which is the WHOLE list - only the per-parent pipeline reproduces
+            # that quirk, so the (always-empty) reversed window falls back.
+            return None
+        # With marker rows planned for the ambiguous shapes (workstream C), an
+        # empty forward window now PROVES the parent has no related rows for
+        # EVERY shape - a parent with children would have kept its row 1. Page
+        # flags replicate the pipeline: ``has_previous_page = offset > 0``
+        # (``ListConnection`` computes ``start > 0`` before looking at the
+        # data), ``has_next_page`` False (no row survived the overfetch probe).
+        conn = cls(
+            edges=[],
+            page_info=relay.PageInfo(
+                start_cursor=None,
+                end_cursor=None,
+                has_previous_page=offset > 0,
+                has_next_page=False,
+            ),
+        )
+        if want_count:
+            setattr(conn, _TOTAL_COUNT_ATTR, 0)
+        return conn
 
+    # Marker exclusion (workstream C): for the ambiguous shapes the window
+    # keeps each partition's row 1 as a marker alongside the page rows. The
+    # page proper is the rows past the offset (``limit == 0`` has no page at
+    # all); a marker that IS a page row is impossible (page rows have
+    # ``row_number > offset >= 1``). Reversed windows never plan markers.
+    ambiguous = not reverse and (offset > 0 or limit == 0)
+    if ambiguous:
+        page_rows = (
+            [] if limit == 0 else [row for row in rows if getattr(row, WINDOW_ROW_NUMBER) > offset]
+        )
+    else:
+        page_rows = rows
+    if not page_rows:
+        # Marker-only window: children exist (the marker is one) but the page
+        # is empty. Serve the true count and the pipeline's flag arithmetic:
+        # ``has_previous_page = offset > 0`` (``start > 0``);
+        # ``has_next_page = total > offset`` (the overfetch probe - for
+        # ``first: 0`` a row exists past the offset; for an overshot ``after:``
+        # ``total <= offset`` by construction, so it is False).
+        total = getattr(rows[-1], WINDOW_TOTAL_COUNT, None)
+        if total is None:
+            return None  # workstream-B drift guard: never infer a count.
+        conn = cls(
+            edges=[],
+            page_info=relay.PageInfo(
+                start_cursor=None,
+                end_cursor=None,
+                has_previous_page=offset > 0,
+                has_next_page=total > offset,
+            ),
+        )
+        if want_count:
+            setattr(conn, _TOTAL_COUNT_ATTR, total)
+        return conn
+    # The count is annotated CONDITIONALLY (workstream B): the walker plans it
+    # only when the selection can observe it (``totalCount`` /
+    # ``pageInfo.hasNextPage``) or the window shape needs it. A count-less row
+    # with either observer requested means the plan-time predicate and this
+    # resolve-time read have DRIFTED (they share the selection walk in
+    # ``optimizer/selections.py``, so by construction this is unreachable
+    # until they diverge) - fall back per-parent rather than serve a wrong
+    # flag/count, checked BEFORE any edge is built so the fallback discards no
+    # work. Without an observer, the missing count is inert: the
+    # ``has_next_page=False`` below is a placeholder that is never serialized.
+    last_row = page_rows[-1]
+    total = getattr(last_row, WINDOW_TOTAL_COUNT, None)
+    if total is None and (want_count or _has_next_page_requested(info)):
+        return None
     edge_class = _window_edge_class(cls)
     edges = [
         edge_class.resolve_edge(
             cls.resolve_node(node, info=info, **kwargs),
             cursor=getattr(node, WINDOW_ROW_NUMBER) - 1,
         )
-        for node in rows
+        for node in page_rows
     ]
     # Row numbers are forward and the rows are forward-ordered, so the page
     # flags are the upstream forward-window comparisons against the partition's
@@ -239,16 +310,16 @@ def _resolve_from_window(
     # row is short of the total. These hold for the reversed ``last``-only window
     # too because its row numbers stay forward (``last: 2`` of 5 -> rows 4, 5 ->
     # hasPrevious True, hasNext False - matching the pipeline).
-    first_rn = getattr(rows[0], WINDOW_ROW_NUMBER)
-    last_row = rows[-1]
-    total = getattr(last_row, WINDOW_TOTAL_COUNT)
+    first_rn = getattr(page_rows[0], WINDOW_ROW_NUMBER)
     conn = cls(
         edges=edges,
         page_info=relay.PageInfo(
             start_cursor=edges[0].cursor,
             end_cursor=edges[-1].cursor,
             has_previous_page=first_rn > 1,
-            has_next_page=getattr(last_row, WINDOW_ROW_NUMBER) < total,
+            has_next_page=(
+                False if total is None else getattr(last_row, WINDOW_ROW_NUMBER) < total
+            ),
         ),
     )
     if want_count:
@@ -306,13 +377,15 @@ def _consume_window(
         info=info,
         offset=bounds.offset,
         limit=bounds.limit,
+        reverse=bounds.reverse,
         want_count=want_count,
         **kwargs,
     )
     if built is not None:
         return built
-    # Ambiguous-empty window: recover the per-parent queryset and run the
-    # shipped pipeline so totalCount / pageInfo stay byte-identical.
+    # Unservable window (reversed ``last: 0`` quirk, or the workstream-B drift
+    # guard): recover the per-parent queryset and run the shipped pipeline so
+    # the results stay byte-identical.
     return _consume_fallback(
         cls,
         nodes.fallback(),
@@ -389,6 +462,28 @@ def _total_count_requested(info: Info) -> bool:
     return any(
         direct_child_selected(selected_field.selections, "totalCount")
         for selected_field in info.selected_fields
+    )
+
+
+def _has_next_page_requested(info: Info) -> bool:
+    """Return whether the query selects ``pageInfo { hasNextPage }``.
+
+    The ``hasNextPage`` sibling of ``_total_count_requested``: the window fast
+    path derives ``hasNextPage`` from the partition's ``_dst_total_count``
+    (``row_number < total``), and workstream B makes that annotation
+    conditional - so when a window arrives WITHOUT the count,
+    ``_resolve_from_window`` consults this predicate to decide whether the
+    missing annotation is observable (defensive per-parent fallback) or inert
+    (placeholder flag, never serialized). Same walk discipline as the
+    plan-time ``optimizer/selections.py::connection_count_required``: direct
+    ``pageInfo`` children through fragment wrappers only, then a direct
+    ``hasNextPage`` under each - sharing ``named_children`` /
+    ``direct_child_selected`` so the two halves cannot drift independently.
+    """
+    return any(
+        direct_child_selected(getattr(page_info, "selections", None) or [], "hasNextPage")
+        for selected_field in info.selected_fields
+        for page_info in named_children(selected_field, "pageInfo")
     )
 
 
@@ -1065,19 +1160,22 @@ def _build_connection_resolver(target_type: type, resolver: Callable | None) -> 
 
 
 def _window_rows_are_annotated(rows: list) -> bool:
-    """Return whether every row carries the windowed-prefetch annotations.
+    """Return whether every row carries the windowed-prefetch row number.
 
     Upstream's own integrity probe (``resolve_optimized_connection_by_prefetch``
     falls back on a missing annotation): a ``to_attr`` list whose rows lack
-    ``_dst_row_number`` / ``_dst_total_count`` is a consumer's own prefetch
-    write, not the walker's window, and must NOT be consumed as one. An empty
-    list has no rows to probe and is still a valid window candidate (a
-    genuinely-empty or ambiguous-empty page); the empty case is classified in
+    ``_dst_row_number`` is a consumer's own prefetch write, not the walker's
+    window, and must NOT be consumed as one. ``_dst_total_count`` is NOT
+    probed: the walker annotates it conditionally (connection window rigor,
+    workstream B - only when ``totalCount`` / ``hasNextPage`` / the window
+    shape needs it), so a count-less page is still the walker's window. The
+    collision probe stays sound on the row number alone because the ``_dst_``
+    namespace is package-reserved (spec-033 Decision 4). An empty list has no
+    rows to probe and is still a valid window candidate (a genuinely-empty or
+    ambiguous-empty page); the empty case is classified in
     ``resolve_connection`` where the slice metadata is known.
     """
-    return all(
-        hasattr(row, WINDOW_ROW_NUMBER) and hasattr(row, WINDOW_TOTAL_COUNT) for row in rows
-    )
+    return all(hasattr(row, WINDOW_ROW_NUMBER) for row in rows)
 
 
 def _build_relation_connection_resolver(

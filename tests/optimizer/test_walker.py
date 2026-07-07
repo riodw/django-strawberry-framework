@@ -2409,7 +2409,13 @@ def test_relation_connections_slot_recorded_on_partial_finalize_rerun(monkeypatc
 
 
 def test_nested_connection_planned_as_windowed_prefetch():
-    """A nested connection plans a windowed ``Prefetch`` under the ``_dst_`` ``to_attr``."""
+    """A nested connection plans a windowed ``Prefetch`` under the ``_dst_`` ``to_attr``.
+
+    ``edges { node { title } }`` with ``first: 3`` selects neither ``totalCount``
+    nor ``pageInfo { hasNextPage }``, so the conditional-count contract
+    (workstream B) plans the row-number window WITHOUT ``_dst_total_count`` -
+    the common cheap-page shape.
+    """
     from django_strawberry_framework.optimizer.plans import (
         WINDOW_ROW_NUMBER,
         WINDOW_TOTAL_COUNT,
@@ -2437,9 +2443,89 @@ def test_nested_connection_planned_as_windowed_prefetch():
         assert prefetch.prefetch_through == "books"
         annotations = prefetch.queryset.query.annotations
         assert WINDOW_ROW_NUMBER in annotations
-        assert WINDOW_TOTAL_COUNT in annotations
-        # Deterministic total order ends in the pk tiebreaker.
-        assert prefetch.queryset.query.annotations  # window present
+        # Nothing in the selection observes the count -> not annotated.
+        assert WINDOW_TOTAL_COUNT not in annotations
+    finally:
+        registry.clear()
+
+
+@pytest.mark.parametrize(
+    ("count_observer", "expected"),
+    [
+        pytest.param(None, False, id="edges-only"),
+        pytest.param("totalCount", True, id="total-count"),
+        pytest.param("hasNextPage", True, id="page-info-has-next"),
+        pytest.param("hasPreviousPage", False, id="page-info-has-previous-only"),
+    ],
+)
+def test_nested_connection_total_count_planned_only_when_observable(count_observer, expected):
+    """The count window follows ``connection_count_required`` (workstream B).
+
+    ``totalCount`` and ``pageInfo { hasNextPage }`` are the two selections the
+    fast path derives from ``_dst_total_count``; ``hasPreviousPage`` (row-number
+    only) and plain edges do NOT keep the annotation. ``first: N`` with no
+    ``after`` keeps ``offset == 0`` so the shape itself never forces the count.
+    """
+    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
+
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        connection = _conn_sel(
+            "booksConnection",
+            node_selections=[_sel("title")],
+            arguments={"first": 3},
+        )
+        if count_observer == "totalCount":
+            connection.selections.append(_sel("totalCount"))
+        elif count_observer is not None:
+            connection.selections.append(
+                _sel("pageInfo", selections=[_sel(count_observer)]),
+            )
+        plan = plan_optimizations(
+            [connection],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert (WINDOW_TOTAL_COUNT in prefetch.queryset.query.annotations) is expected
+    finally:
+        registry.clear()
+
+
+def test_nested_connection_offset_window_forces_total_count():
+    """An ``after``-offset window keeps the count even with no count observer.
+
+    ``offset > 0`` is an ambiguous-empty SHAPE (overshot ``after:`` and
+    zero-children parents produce the same empty page), so the marker-window
+    classification (workstream C) serves its counts from ``_dst_total_count``
+    regardless of what the selection observes - the walker forces the
+    annotation for these shapes.
+    """
+    from strawberry.relay.utils import to_base64
+
+    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
+
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": "3", "after": to_base64("arrayconnection", "1")},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert WINDOW_TOTAL_COUNT in prefetch.queryset.query.annotations
     finally:
         registry.clear()
 
@@ -3584,3 +3670,419 @@ def test_mutation_id_only_relation_still_records_elision():
 # node walk.
 
 # Helper-move (Decision 9) no-regression lives in test_extension.py (unmodified).
+
+
+# ---------------------------------------------------------------------------
+# Consumer-assigned relation gate (connection window rigor, workstream D -
+# the strawberry-django #697 bug class).
+# ---------------------------------------------------------------------------
+
+
+def _shelf_types_with_consumer_books(namespace_extra=None, meta_extra=None):
+    """Register ``BookType`` + a ``ShelfType`` whose ``books`` the consumer owns.
+
+    ``namespace_extra`` lands on the ``ShelfType`` class body (the assigned
+    ``strawberry.field(resolver=...)`` corner); ``meta_extra`` extends its
+    ``Meta`` (the ``optimizer_hints`` opt-in).
+    """
+    import strawberry
+    from apps.library.models import Book, Shelf
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class BookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title", "shelf")
+
+    def _curated_books(root) -> list[BookType]:
+        return list(root.books.order_by("title")[:2])
+
+    namespace = {
+        "__annotations__": {},
+        "books": strawberry.field(resolver=_curated_books),
+        **(namespace_extra or {}),
+    }
+    meta_ns = {"model": Shelf, "fields": ("id", "code", "books"), **(meta_extra or {})}
+    namespace["Meta"] = type("Meta", (), meta_ns)
+    shelf_type = type("ShelfType", (DjangoType,), namespace)
+    finalize_django_types()
+    return Shelf, shelf_type
+
+
+def test_consumer_assigned_relation_left_fully_unplanned():
+    """A consumer-owned relation gets NO prefetch, NO resolver keys, NO columns.
+
+    The #697-class gap: the walker used to trust the model shape for a
+    relation whose generated resolver the consumer REPLACED
+    (``finalizer.py`` skips attaching one via
+    ``consumer_assigned_relation_fields``) - paying a speculative Prefetch the
+    consumer's resolver may never consume AND recording
+    ``planned_resolver_keys`` for the walked subtree, which silenced the
+    subtree's real N+1 under strictness. The Decision-6 fallback discipline
+    applies instead: fully unplanned, strictness-visible. Sibling scalars keep
+    their projection.
+    """
+    registry.clear()
+    try:
+        shelf_model, shelf_type = _shelf_types_with_consumer_books()
+        plan = plan_optimizations(
+            [_sel("code"), _sel("books", selections=[_sel("title"), _sel("shelf")])],
+            shelf_model,
+            info=_fake_info(),
+            source_type=shelf_type,
+        )
+        assert list(plan.prefetch_related) == []
+        assert list(plan.select_related) == []
+        assert list(plan.planned_resolver_keys) == []
+        # The consumer field contributes nothing; sibling scalars still project.
+        assert "code" in plan.only_fields
+        assert not any("books" in f for f in plan.only_fields)
+    finally:
+        registry.clear()
+
+
+def test_consumer_assigned_relation_with_hint_plans_per_the_hint():
+    """An explicit ``OptimizerHint`` is the documented opt-in for delegating resolvers."""
+    from django_strawberry_framework import OptimizerHint
+
+    registry.clear()
+    try:
+        shelf_model, shelf_type = _shelf_types_with_consumer_books(
+            meta_extra={"optimizer_hints": {"books": OptimizerHint.prefetch_related()}},
+        )
+        plan = plan_optimizations(
+            [_sel("books", selections=[_sel("title")])],
+            shelf_model,
+            info=_fake_info(),
+            source_type=shelf_type,
+        )
+        # The hint dispatch planned the prefetch and recorded the key.
+        assert len(plan.prefetch_related) == 1
+        assert plan.planned_resolver_keys
+    finally:
+        registry.clear()
+
+
+def test_default_relations_still_plan_grandchildren_under_resolvers():
+    """The strawberry-django #697 bug proper is ABSENT: default paths always descend.
+
+    Upstream's optimizer silently drops nested hints when a field has a base
+    resolver unless it is FK/O2O with a select_related store declaration
+    (strawberry-graphql/strawberry-django#697 / #904 - prefetch declarations
+    are dropped). This package's generated relation resolvers are the default
+    path and the walker ALWAYS descends: a prefetched many-relation's child
+    queryset carries the grandchild ``select_related`` + projected columns.
+    This pin names the upstream bug so a future refactor that reintroduces the
+    early-return shape fails here.
+    """
+    registry.clear()
+    try:
+        from apps.library.models import Book, Genre, Shelf
+
+        from django_strawberry_framework import DjangoType, finalize_django_types
+
+        class ShelfType(DjangoType):
+            class Meta:
+                model = Shelf
+                fields = ("id", "code")
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title", "shelf")
+
+        class GenreType(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+
+        finalize_django_types()
+        plan = plan_optimizations(
+            [
+                _sel(
+                    "books",
+                    selections=[_sel("title"), _sel("shelf", selections=[_sel("code")])],
+                ),
+            ],
+            Genre,
+            info=_fake_info(),
+            source_type=GenreType,
+        )
+        prefetch = _prefetch_entry(plan)
+        child_query = prefetch.queryset.query
+        # The grandchild relation is planned INSIDE the prefetch child queryset.
+        assert "shelf" in (child_query.select_related or {})
+        assert plan.planned_resolver_keys
+    finally:
+        registry.clear()
+
+
+def test_refusing_nested_fetch_strategy_leaves_selection_unplanned():
+    """A strategy returning ``False`` -> no prefetch, no keys, no child leakage.
+
+    The seam's Decision-6 discipline (``optimizer/nested_fetch.py``): the
+    walker records resolver identities and merges the child sub-plan ONLY
+    after the strategy accepted, so a refusal behaves exactly like the other
+    fallback shapes - the per-parent access stays strictness-visible and the
+    parent plan absorbs nothing from the throwaway child build.
+    """
+    from django_strawberry_framework.optimizer.nested_fetch import _active_strategy
+
+    registry.clear()
+    refusing = SimpleNamespace(name="refuse-all", plan=lambda request, plan: False)
+    token = _active_strategy.set(refusing)
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        assert list(plan.prefetch_related) == []
+        assert list(plan.planned_resolver_keys) == []
+        # No child-plan leakage either (the sub-plan merge is post-acceptance).
+        assert not any("title" in f for f in plan.only_fields)
+    finally:
+        _active_strategy.reset(token)
+        registry.clear()
+
+
+def test_lateral_strategy_plans_a_lateral_queryset_through_the_walker():
+    """With the lateral strategy active, the walker's request plans a
+    ``LateralQuerySet`` whose body is the identical windowed queryset.
+
+    The seam integration pin for ``optimizer/lateral_fetch.py``: the walker
+    hands the same ``NestedConnectionRequest`` regardless of strategy; the
+    lateral backend attaches its spec-carrying queryset and the plan records
+    the resolver identities exactly as the windowed default would.
+    """
+    from django_strawberry_framework.optimizer.lateral_fetch import (
+        LATERAL_STRATEGY,
+        LateralQuerySet,
+    )
+    from django_strawberry_framework.optimizer.nested_fetch import _active_strategy
+    from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
+
+    registry.clear()
+    token = _active_strategy.set(LATERAL_STRATEGY)
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        (entry,) = plan.prefetch_related
+        assert isinstance(entry.queryset, LateralQuerySet)
+        assert WINDOW_ROW_NUMBER in entry.queryset.query.annotations
+        spec = entry.queryset._dst_lateral_spec
+        assert spec.parent_link_table == "library_book_genres"
+        assert spec.parent_link_column == "genre_id"
+        assert plan.planned_resolver_keys != []
+    finally:
+        _active_strategy.reset(token)
+        registry.clear()
+
+
+def test_select_related_paths_carry_their_resolver_keys():
+    """Each ``select_related`` path records the resolver keys it satisfies.
+
+    The B8 directive-to-metadata coupling
+    (``plans.py::OptimizationPlan.select_path_resolver_keys``): when
+    reconciliation drops a path a consumer projection cannot traverse, the
+    keys recorded here leave ``planned_resolver_keys`` with it. Written at
+    the single ``select_related`` append site, so hint-forced selects are
+    covered too.
+    """
+    plan = plan_optimizations([_sel("category")], Item)
+    assert plan.select_related == ("category",)
+    keys = plan.select_path_resolver_keys["category"]
+    assert keys
+    assert set(keys) <= set(plan.planned_resolver_keys)
+
+
+@pytest.mark.parametrize("strategy_name", ["windowed", "lateral"])
+@pytest.mark.parametrize(
+    ("shape", "reason"),
+    [
+        (lambda qs: qs[:10], "sliced"),
+        (lambda qs: qs.select_for_update(), "select_for_update"),
+        (lambda qs: qs.union(qs.model._default_manager.none()), "combined"),
+    ],
+)
+def test_unsafe_child_queryset_left_unplanned_under_both_strategies(strategy_name, shape, reason):
+    """Unsafe consumer ``get_queryset`` shapes never reach a fetch strategy.
+
+    feedback2 P0-3: a sliced child queryset used to crash INSIDE
+    ``apply_window_pagination`` (Django: "Cannot reorder a query once a
+    slice has been taken") before any fallback, and ``select_for_update`` /
+    combined querysets cannot be represented by either strategy's SQL. The
+    shared gate (``nested_fetch.py::unwindowable_child_queryset_reason``)
+    runs BEFORE strategy dispatch, so the outcome is the Decision-6
+    fully-unplanned fallback - no prefetch, no resolver keys, strictness
+    sees the per-parent access - identically under both built-in strategies.
+    """
+    from apps.library.models import Book, Genre
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+    from django_strawberry_framework.optimizer.nested_fetch import (
+        _active_strategy,
+        resolve_strategy,
+    )
+
+    registry.clear()
+    token = _active_strategy.set(resolve_strategy(strategy_name))
+    try:
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+            @classmethod
+            def get_queryset(cls, queryset, info):
+                return shape(queryset)
+
+        class GenreType(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+
+        finalize_django_types()
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            Genre,
+            info=_fake_info(),
+            source_type=GenreType,
+        )
+        assert not any(
+            getattr(pf, "to_attr", None) == "_dst_books_connection" for pf in plan.prefetch_related
+        ), reason
+        assert plan.planned_resolver_keys == (), reason
+    finally:
+        _active_strategy.reset(token)
+        registry.clear()
+
+
+def test_last_zero_connection_left_fully_unplanned():
+    """``last: 0`` plans nothing: no window prefetch, no resolver keys.
+
+    feedback2 P0-3: the reversed window for ``last: 0`` always came back
+    empty and was discarded at resolve time - a dead query per request whose
+    recorded resolver keys silenced strictness over the real per-parent
+    fallback. The walker now treats the shape like ``UnwindowableConnection``
+    (fully unplanned, Decision-6 discipline).
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"last": 0},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        assert not any(
+            getattr(pf, "to_attr", None) == "_dst_books_connection" for pf in plan.prefetch_related
+        )
+        assert plan.planned_resolver_keys == ()
+    finally:
+        registry.clear()
+
+
+def test_plan_rejects_to_attr_prefetch_hint_on_generated_relation():
+    """B4 + feedback2 P0-4: ``Prefetch(..., to_attr=...)`` hints fail loud.
+
+    Django lands ``to_attr`` rows on that attribute, but the GENERATED
+    relation resolver reads ``_prefetched_objects_cache[accessor]`` - the
+    hint would record the relation as planned (silencing strictness) while
+    every row still lazy-loads. Plan time raises a ``ConfigurationError``
+    naming the field and the two fixes (drop ``to_attr``, or own the
+    resolver).
+    """
+    registry.clear()
+    explicit = Prefetch("items", queryset=Item.objects.only("name"), to_attr="bucket")
+
+    class CategoryType:
+        @classmethod
+        def has_custom_get_queryset(cls):
+            return False
+
+    _register_type_definition(
+        Category,
+        CategoryType,
+        optimizer_hints={"items": OptimizerHint.prefetch(explicit)},
+    )
+    try:
+        with pytest.raises(
+            ConfigurationError,
+            match="to_attr='bucket'.*CategoryType.items",
+        ):
+            plan_optimizations([_sel("items", selections=[_sel("name")])], Category)
+    finally:
+        registry.clear()
+
+
+def test_consumer_assigned_relation_may_hint_prefetch_with_to_attr():
+    """The one ``to_attr`` shape that is allowed: a consumer-assigned resolver.
+
+    The consumer owns the field's resolver
+    (``definition.consumer_assigned_relation_fields``), so only THEIR code
+    reads the attribute - the generated-resolver cache contract is not in
+    play. The hint plans verbatim, ``to_attr`` intact.
+    """
+    from apps.library.models import Book
+
+    registry.clear()
+    explicit = Prefetch(
+        "books",
+        queryset=Book.objects.only("id", "title", "shelf_id"),
+        to_attr="curated_books",
+    )
+    try:
+        shelf_model, shelf_type = _shelf_types_with_consumer_books(
+            meta_extra={"optimizer_hints": {"books": OptimizerHint.prefetch(explicit)}},
+        )
+        plan = plan_optimizations(
+            [_sel("books", selections=[_sel("title")])],
+            shelf_model,
+            info=_fake_info(),
+            source_type=shelf_type,
+        )
+        (entry,) = plan.prefetch_related
+        assert entry.to_attr == "curated_books"
+    finally:
+        registry.clear()

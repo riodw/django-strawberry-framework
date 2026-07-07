@@ -686,6 +686,74 @@ class TestApplyWindowPagination:
         assert "ROW_NUMBER()" in sql
         assert "COUNT(" in sql
 
+    def test_ambiguous_shapes_keep_partition_marker_row(self):
+        """``offset > 0`` / ``limit == 0`` windows keep each partition's row 1.
+
+        The marker-row disambiguation (connection window rigor, workstream C):
+        the historically-ambiguous empty shapes OR the range filter with
+        ``row_number == 1`` so an empty prefetch list proves zero children and
+        a marker-only list carries the real count. The SQL shape pin: the
+        row-number predicate appears with BOTH the range bound and the
+        ``= 1`` alternative.
+        """
+        overshot = self._windowed(offset=5, limit=2)
+        sql = str(overshot.query).upper()
+        assert "> 5" in sql
+        assert "<= 7" in sql
+        assert "= 1" in sql  # the marker alternative
+        assert " OR " in sql
+
+        first_zero = self._windowed(offset=0, limit=0)
+        sql = str(first_zero.query).upper()
+        assert "= 1" in sql
+
+        # Unbounded overshoot (offset without a finite limit) still markers.
+        unbounded = self._windowed(offset=3, limit=None)
+        sql = str(unbounded.query).upper()
+        assert "> 3" in sql
+        assert "= 1" in sql
+
+    def test_unambiguous_shapes_plan_no_marker(self):
+        """Plain ``first: N`` (offset 0, positive bound) and reverse windows add no marker."""
+        plain = self._windowed(offset=0, limit=3)
+        sql = str(plain.query).upper()
+        assert "<= 3" in sql
+        assert " OR " not in sql
+
+        # The reversed (last-only) window never markers - ``last: 0`` falls
+        # back per-parent for upstream's ``edges[-0:]`` serve-all quirk.
+        reverse_zero = self._windowed(offset=0, limit=0, reverse=True)
+        sql = str(reverse_zero.query).upper()
+        assert WINDOW_ROW_NUMBER_REVERSED.upper() in sql
+        assert " OR " not in sql
+
+    def test_with_total_count_false_omits_count_annotation(self):
+        """``with_total_count=False`` drops the count window, keeping the row filters.
+
+        The conditional-count contract (connection window rigor, workstream B):
+        the walker passes ``False`` when nothing in the selection observes the
+        count; the row-number annotation and its range filters are untouched.
+        """
+        qs = self._windowed(offset=2, limit=3, with_total_count=False)
+        annotations = qs.query.annotations
+        assert WINDOW_ROW_NUMBER in annotations
+        assert WINDOW_TOTAL_COUNT not in annotations
+        sql = str(qs.query).upper()
+        assert "ROW_NUMBER()" in sql
+        assert WINDOW_TOTAL_COUNT.upper() not in sql
+        # The range filters still apply without the count annotation.
+        assert ">" in sql
+        assert "<=" in sql
+
+    def test_with_total_count_false_reverse_branch_still_bounds(self):
+        """The reverse (last-only) branch honors ``with_total_count=False`` too."""
+        qs = self._windowed(offset=0, limit=2, reverse=True, with_total_count=False)
+        annotations = qs.query.annotations
+        assert WINDOW_ROW_NUMBER_REVERSED in annotations
+        assert WINDOW_ROW_NUMBER in annotations
+        assert WINDOW_TOTAL_COUNT not in annotations
+        assert "<= 2" in str(qs.query).upper()
+
     def test_applies_order_by_to_queryset_not_just_the_window(self):
         """The deterministic order is applied to the queryset's own ``ORDER BY``.
 
@@ -731,6 +799,21 @@ class TestApplyWindowPagination:
         sql = str(qs.query).upper()
         assert WINDOW_ROW_NUMBER_REVERSED.upper() in sql
         assert "<= 2" in sql
+
+    def test_reverse_branch_applies_offset_filter_when_present(self):
+        """``reverse=True`` with a non-zero ``offset`` still applies the forward gt-filter.
+
+        The walker never plans this combination (``after`` + ``last`` raises
+        ``UnwindowableConnection`` at bounds derivation), but the helper's
+        contract is the full ``(offset, limit, reverse)`` surface for direct
+        callers: the forward offset filter composes with the reversed bound
+        rather than being silently dropped.
+        """
+        qs = self._windowed(offset=2, limit=3, reverse=True)
+        sql = str(qs.query).upper()
+        assert "> 2" in sql
+        assert WINDOW_ROW_NUMBER_REVERSED.upper() in sql
+        assert "<= 3" in sql
 
     def test_reverse_branch_with_none_limit_adds_no_upper_filter(self):
         """``reverse=True, limit=None`` annotates the reversed window but adds no bound.
@@ -914,3 +997,151 @@ class TestReverseOrderBy:
 
         expr = F("name")
         assert _reverse_order_by([expr]) == [expr]
+
+
+class TestPruneUnsupportableSelectRelated:
+    """B8 relation-aware reconciliation: ``prune_unsupportable_select_related``.
+
+    Django refuses ``select_related`` through a deferred relation field
+    ("cannot be both deferred and traversed"), so a plan reconciled against
+    a consumer-projected queryset must drop untraversable paths BEFORE
+    apply - and drop the resolver keys those paths satisfied, so strictness
+    sees the per-row fallback instead of a phantom plan. Every kept-path
+    case COMPILES the applied queryset (``str(qs.query)``): the runtime
+    behavior Django enforces, not just the plan shape.
+    """
+
+    @staticmethod
+    def _reconcile(plan, queryset):
+        """The extension's full B8 pipeline: prune, then diff, then apply."""
+        from django_strawberry_framework.optimizer.plans import (
+            prune_unsupportable_select_related,
+        )
+
+        pruned = prune_unsupportable_select_related(plan, queryset)
+        delta, queryset = diff_plan_for_queryset(pruned, queryset)
+        return pruned, delta.apply(queryset)
+
+    def test_consumer_only_drops_blocked_path_and_its_resolver_keys(self):
+        plan = OptimizationPlan(
+            select_related=["category"],
+            only_fields=["name", "category_id"],
+            planned_resolver_keys=["category-key", "unrelated-key"],
+            select_path_resolver_keys={"category": ("category-key",)},
+        ).finalize()
+        pruned, applied = self._reconcile(plan, Item.objects.only("name"))
+        assert pruned is not plan
+        assert pruned.select_related == ()
+        assert pruned.planned_resolver_keys == ("unrelated-key",)
+        assert "category-key" not in pruned.finalized_planned_resolver_keys
+        # The review's runtime bar: the applied queryset COMPILES (the old
+        # behavior raised FieldError at SQL generation).
+        assert 'JOIN "products_category"' not in str(applied.query)
+        # The original (cached) plan is untouched.
+        assert plan.select_related == ("category",)
+        assert "category-key" in plan.finalized_planned_resolver_keys
+
+    def test_projection_loading_the_connector_keeps_the_path(self):
+        plan = OptimizationPlan(
+            select_related=["category"],
+            planned_resolver_keys=["category-key"],
+            select_path_resolver_keys={"category": ("category-key",)},
+        ).finalize()
+        # The attname form counts as loading the connector.
+        pruned, applied = self._reconcile(plan, Item.objects.only("name", "category_id"))
+        assert pruned is plan  # same object: nothing to prune.
+        assert 'JOIN "products_category"' in str(applied.query)
+
+    def test_dotted_projection_keeps_root_and_drops_deeper_path(self):
+        from apps.library.models import Book
+
+        plan = OptimizationPlan(
+            select_related=["shelf", "shelf__branch"],
+            planned_resolver_keys=["shelf-key", "branch-key"],
+            select_path_resolver_keys={
+                "shelf": ("shelf-key",),
+                "shelf__branch": ("branch-key",),
+            },
+        ).finalize()
+        # only("title", "shelf__code"): shelf traversable (dotted entry loads
+        # the connector), but branch is deferred AT THE SHELF LEVEL.
+        pruned, applied = self._reconcile(plan, Book.objects.only("title", "shelf__code"))
+        assert pruned.select_related == ("shelf",)
+        assert pruned.planned_resolver_keys == ("shelf-key",)
+        compiled = str(applied.query)
+        assert 'JOIN "library_shelf"' in compiled
+        assert 'JOIN "library_branch"' not in compiled
+
+    def test_consumer_defer_drops_path_keys_and_nested_only_fields(self):
+        from apps.library.models import Book
+
+        plan = OptimizationPlan(
+            select_related=["shelf", "shelf__branch"],
+            only_fields=["title", "shelf_id", "shelf__code"],
+            planned_resolver_keys=["shelf-key", "branch-key"],
+            select_path_resolver_keys={
+                "shelf": ("shelf-key",),
+                "shelf__branch": ("branch-key",),
+            },
+        ).finalize()
+        pruned, applied = self._reconcile(plan, Book.objects.defer("shelf"))
+        assert pruned.select_related == ()
+        assert pruned.planned_resolver_keys == ()
+        # The nested projection entry is only valid alongside the dropped
+        # join; the plain root columns stay (defer composes with only()).
+        assert pruned.only_fields == ("title", "shelf_id")
+        assert 'JOIN "library_shelf"' not in str(applied.query)
+
+    def test_defer_of_an_unrelated_column_prunes_nothing(self):
+        from apps.library.models import Book
+
+        plan = OptimizationPlan(
+            select_related=["shelf"],
+            select_path_resolver_keys={"shelf": ("shelf-key",)},
+            planned_resolver_keys=["shelf-key"],
+        ).finalize()
+        pruned, applied = self._reconcile(plan, Book.objects.defer("subtitle"))
+        assert pruned is plan
+        assert 'JOIN "library_shelf"' in str(applied.query)
+
+    def test_unresolvable_path_is_dropped_conservatively(self):
+        # A path the model cannot resolve (planner drift, exotic doubles)
+        # drops rather than gambles on a FieldError at compile time.
+        from apps.library.models import Book
+
+        plan = OptimizationPlan(select_related=["mystery"]).finalize()
+        pruned, _ = self._reconcile(plan, Book.objects.only("title"))
+        assert pruned.select_related == ()
+
+    def test_no_consumer_projection_returns_the_same_plan(self):
+        plan = OptimizationPlan(
+            select_related=["category"],
+            planned_resolver_keys=["category-key"],
+        ).finalize()
+        from django_strawberry_framework.optimizer.plans import (
+            prune_unsupportable_select_related,
+        )
+
+        assert prune_unsupportable_select_related(plan, Item.objects.all()) is plan
+
+
+def test_consumer_projection_and_traversal_defensive_shapes():
+    """``_consumer_projection`` / ``_select_path_traversable`` defensive tails.
+
+    Non-queryset inputs and malformed ``deferred_loading`` shapes report no
+    projection (the prune then no-ops), and a scalar mid-path segment - no
+    related model to resolve the next segment against - is conservatively
+    untraversable. None of these shapes is producible by a real consumer
+    queryset, so the tails are pinned directly in one sweep.
+    """
+    from apps.library.models import Book
+
+    from django_strawberry_framework.optimizer.plans import (
+        _consumer_projection,
+        _select_path_traversable,
+    )
+
+    assert _consumer_projection(SimpleNamespace()) is None
+    malformed = SimpleNamespace(query=SimpleNamespace(deferred_loading=("only-one",)))
+    assert _consumer_projection(malformed) is None
+    assert _select_path_traversable("title__upper", frozenset({"title"}), False, Book) is False

@@ -504,3 +504,32 @@ def direct_child_selected(selection_roots: Any, name: str) -> bool:
         return getattr(selection, "name", None) == name
 
     return any(_check(child) for child in selection_roots)
+
+
+def connection_count_required(selection: Any) -> bool:
+    """Return whether a connection selection needs the partition total count.
+
+    The plan-time half of the conditional ``_dst_total_count`` contract
+    (connection window rigor, workstream B): the window annotates the
+    ``Count(1) OVER (PARTITION BY ...)`` only when something in the selection
+    can OBSERVE it - ``totalCount`` as a direct child of the connection, or
+    ``hasNextPage`` under a direct ``pageInfo`` child (the fast path derives
+    ``hasNextPage`` as ``row_number < total``; cursors and ``hasPreviousPage``
+    need only ``_dst_row_number``). Both walks recurse through fragment
+    wrappers only, via the same ``named_children`` / ``direct_child_selected``
+    primitives the resolve-time predicates use
+    (``connection.py::_total_count_requested`` and its ``hasNextPage``
+    sibling), so plan-time and resolve-time can only drift if this module
+    does - and the resolve-time defensive fallback covers even that.
+
+    Alias-merged selections carry the UNION of every alias's children
+    (``walker.py::_merge_aliased_selections``), so one alias selecting
+    ``totalCount`` conservatively keeps the count for the shared window.
+    """
+    children = getattr(selection, "selections", None) or []
+    if direct_child_selected(children, "totalCount"):
+        return True
+    return any(
+        direct_child_selected(getattr(page_info, "selections", None) or [], "hasNextPage")
+        for page_info in named_children(selection, "pageInfo")
+    )

@@ -52,6 +52,11 @@ _DISPATCH_UID = "django_strawberry_framework.conf.reload_settings"
 # matching the "no opt-in boilerplate" stance of the patch modules.
 APPLY_UPSTREAM_PATCHES_KEY = "APPLY_UPSTREAM_PATCHES"
 
+# Default nested-connection fetch strategy for ``DjangoOptimizerExtension``
+# instances constructed without an explicit ``nested_connection_strategy=``
+# (see ``optimizer/nested_fetch.py``). Defaults to ``"windowed"``.
+NESTED_CONNECTION_STRATEGY_KEY = "NESTED_CONNECTION_STRATEGY"
+
 
 def _normalize_user_settings(value: Any) -> dict[str, Any]:
     """Validate and normalize a ``DJANGO_STRAWBERRY_FRAMEWORK`` candidate.
@@ -180,6 +185,19 @@ def upstream_patches_enabled() -> bool:
     only a missing key falls back to the default.
     """
     return bool(getattr(settings, APPLY_UPSTREAM_PATCHES_KEY, True))
+
+
+def nested_connection_strategy_setting() -> str:
+    """The configured default nested-connection fetch strategy name.
+
+    Reads ``DJANGO_STRAWBERRY_FRAMEWORK["NESTED_CONNECTION_STRATEGY"]``,
+    defaulting to ``"windowed"`` when the key (or the whole settings dict)
+    is absent. Consumed by ``optimizer/nested_fetch.py::resolve_strategy``
+    at ``DjangoOptimizerExtension`` construction; validation (unknown-name
+    ``ConfigurationError``) happens there, where the strategy registry
+    lives.
+    """
+    return getattr(settings, NESTED_CONNECTION_STRATEGY_KEY, "windowed")
 
 
 def reload_settings(setting: str, value: Any, **kwargs: Any) -> None:

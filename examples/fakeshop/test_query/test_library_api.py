@@ -586,11 +586,13 @@ def test_library_relation_override_shapes_http_response_data():
             ],
         },
     }
-    # The optimizer still plans the relation, but the consumer override
-    # re-shapes it with order_by("-code"), bypassing the prefetched cache.
-    # The observable baseline is root query + planned prefetch + one
-    # override manager query per Branch row.
-    assert len(captured) == 4
+    # The consumer override OWNS the relation (workstream D - the
+    # strawberry-django #697 bug class): the walker leaves ``shelves``
+    # fully unplanned, so the historical speculative prefetch (a query the
+    # override's ``order_by("-code")`` re-query never consumed) is GONE.
+    # The observable baseline is root query + one override manager query
+    # per Branch row - and nothing else.
+    assert len(captured) == 3
 
 
 @pytest.mark.django_db
@@ -607,21 +609,23 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
 
     Query count derivation (rev6 M6, spec-016 #"pin the assertion to exact query count" - exact ``assertNumQueries(N)``):
       * 1 SELECT for the ``Branch`` root queryset (the ``DjangoListField``
-        default resolver returns ``Branch._default_manager.all()``; the
-        root-gated ``DjangoOptimizerExtension`` plans
-        ``prefetch_related("shelves")`` for the nested ``shelves`` selection).
-      * 1 SELECT for the planned ``prefetch_related("shelves")`` prefetch
-        (loads all ``Shelf`` rows for the two seeded branches).
+        default resolver returns ``Branch._default_manager.all()``).
+      * 0 SELECTs for a ``shelves`` prefetch: the consumer override on
+        ``BranchType.shelves`` OWNS the relation, so the walker leaves it
+        fully unplanned (workstream D) - the historical speculative
+        ``prefetch_related("shelves")`` query (which the override's
+        ``order_by("-code")`` re-query never consumed) no longer runs.
       * 2 SELECTs (one per seeded ``Branch``) for the consumer-override
         ``BranchType.shelves`` resolver at ``apps/library/schema.py`` (which
-        evaluates ``self.shelves.order_by("-code")`` and bypasses the
-        prefetch cache). This mirrors the baseline established by
+        evaluates ``self.shelves.order_by("-code")``). This mirrors the
+        baseline established by
         ``test_library_relation_override_shapes_http_response_data`` above
         for the same nested-selection shape.
 
-    Total: 1 + 1 + 2 = 4 queries. If a future maintainer adds ``order_by`` to
-    the new field, removes the consumer override on ``BranchType.shelves``, or
-    changes the seeded branch count, recompute N accordingly.
+    Total: 1 + 0 + 2 = 3 queries. If a future maintainer adds ``order_by`` to
+    the new field, removes the consumer override on ``BranchType.shelves`` (or
+    opts it back into planning with an ``OptimizerHint``), or changes the
+    seeded branch count, recompute N accordingly.
     """
     _seed_branch_with_two_shelves("ListField West")
     _seed_branch_with_two_shelves("ListField East")
@@ -651,11 +655,12 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
     assert set(branches_by_name) == {"ListField West", "ListField East"}
     for branch in branches_by_name.values():
         assert {shelf["code"] for shelf in branch["shelves"]} == {"A-1", "B-2"}
-    assert len(captured) == 4
+    assert len(captured) == 3
     assert "library_branch" in captured[0]["sql"]
+    # The two per-branch consumer-override queries; no prefetch query precedes
+    # them (workstream D - the relation is consumer-owned, so unplanned).
     assert "library_shelf" in captured[1]["sql"]
     assert "library_shelf" in captured[2]["sql"]
-    assert "library_shelf" in captured[3]["sql"]
 
 
 @pytest.mark.django_db
@@ -5921,3 +5926,414 @@ def test_golden_sdl_products_serializer_input():
         ("node", "ItemType", None),
         ("errors", "[FieldError!]!", None),
     ]
+
+
+# ---------------------------------------------------------------------------
+# M2M duplicate-through-join tripwires (connection window rigor, workstream A).
+#
+# The windowed nested-connection prefetch partitions by an M2M relation name
+# (plans.py::window_partition_for_prefetch), which joins the through table at
+# plan time. Django's prefetch filtering then applies the parent predicate with
+# django/db/models/fields/related_descriptors.py::_filter_prefetch_queryset
+# #"reuse_all=True", which REUSES that join. On older Django generations (and
+# in a hypothetical refactor that moves the window annotation after prefetch
+# filtering) the predicate would add a SECOND through-table join instead -
+# cartesian row duplication that inflates ``_dst_row_number`` partitions and
+# ``_dst_total_count``. The prior live tests could not catch that: their data
+# shapes attach each child to exactly one parent, so a duplicate join has
+# fan-out x1 and produces correct-looking pages. These two tests seed
+# OVERLAP-shaped graphs (children shared across parents, both M2M directions)
+# and pin the per-parent pages, the counts, the fixed query count, and the
+# exact number of through-table joins in the captured window SQL.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_nested_books_connection_overlap_single_through_join():
+    """Reverse-M2M windows stay per-parent-exact when books span genres.
+
+    Five books spread across three genres, every book in 2+ genres: a
+    duplicate through-table join would multiply each book row once per extra
+    membership, corrupting the ``ROW_NUMBER`` partitions (duplicated edges,
+    inflated ``hasNextPage``). The window must page each genre's OWN books in
+    pk order, in one prefetch query whose SQL joins ``library_book_genres``
+    exactly once.
+    """
+    shelf = _seed_shelf()
+    books = [
+        models.Book.objects.create(title=f"Overlap-{index}", shelf=shelf) for index in range(5)
+    ]
+    genres = [models.Genre.objects.create(name=f"Overlap genre {index}") for index in range(3)]
+    memberships = {
+        0: (
+            0,
+            1,
+            2,
+            3,
+        ),  # Overlap genre 0 <- books 0-3
+        1: (
+            1,
+            2,
+            3,
+            4,
+        ),  # Overlap genre 1 <- books 1-4
+        2: (0, 2, 4),  # Overlap genre 2 <- books 0, 2, 4
+    }
+    for genre_index, book_indexes in memberships.items():
+        for book_index in book_indexes:
+            books[book_index].genres.add(genres[genre_index])
+
+    query = """
+    query {
+      allLibraryGenresConnection {
+        edges {
+          node {
+            name
+            booksConnection(first: 2) {
+              edges { node { title } }
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+      }
+    }
+    """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+
+    edges = payload["data"]["allLibraryGenresConnection"]["edges"]
+    expected_pages = {
+        "Overlap genre 0": ["Overlap-0", "Overlap-1"],
+        "Overlap genre 1": ["Overlap-1", "Overlap-2"],
+        "Overlap genre 2": ["Overlap-0", "Overlap-2"],
+    }
+    assert len(edges) == 3
+    for edge in edges:
+        node = edge["node"]
+        books_conn = node["booksConnection"]
+        titles = [book_edge["node"]["title"] for book_edge in books_conn["edges"]]
+        # Per-parent pk-ordered page - a duplicated join would repeat titles
+        # or leak another parent's books into the page.
+        assert titles == expected_pages[node["name"]]
+        # Every genre carries >2 books, so the flag (derived from the window's
+        # per-partition count) is True; an inflated count stays True, but a
+        # partition corrupted by duplicates surfaces above in the titles.
+        assert books_conn["pageInfo"]["hasNextPage"] is True
+
+    # Root genres-connection query + ONE windowed prefetch (never per-parent).
+    assert len(captured) == 2
+    prefetch_sql = captured[1]["sql"]
+    # The tripwire: the through table is joined exactly once - the window's
+    # partition join, REUSED by the prefetch's parent predicate.
+    assert prefetch_sql.count('JOIN "library_book_genres"') == 1
+
+
+@pytest.mark.django_db
+def test_nested_genres_connection_overlap_single_through_join():
+    """Forward-M2M windows keep exact ``totalCount`` when genres span books.
+
+    The forward direction of the tripwire above, riding ``genresConnection``
+    (target ``GenreType``, ``total_count`` opted in): three books sharing
+    genres from a pool of five. ``_dst_total_count`` is ``Count(1) OVER
+    (PARTITION BY ...)`` - a duplicate through-table join inflates it
+    directly, so the exact per-parent ``totalCount`` is the sharpest live
+    signal this shape has.
+    """
+    shelf = _seed_shelf()
+    genres = [models.Genre.objects.create(name=f"Shared genre {index}") for index in range(5)]
+    memberships = {
+        "Parable": (0, 1, 2),  # genres 0-2
+        "Fledgling": (1, 2, 3),  # genres 1-3
+        "Survivor": (0, 2, 4),  # genres 0, 2, 4
+    }
+    for title, genre_indexes in memberships.items():
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        for genre_index in genre_indexes:
+            book.genres.add(genres[genre_index])
+
+    query = """
+    query {
+      allLibraryBooks {
+        title
+        genresConnection(first: 2) {
+          edges { node { name } }
+          totalCount
+          pageInfo { hasNextPage }
+        }
+      }
+    }
+    """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+
+    expected_pages = {
+        "Parable": ["Shared genre 0", "Shared genre 1"],
+        "Fledgling": ["Shared genre 1", "Shared genre 2"],
+        "Survivor": ["Shared genre 0", "Shared genre 2"],
+    }
+    books = payload["data"]["allLibraryBooks"]
+    assert len(books) == 3
+    for book in books:
+        genres_conn = book["genresConnection"]
+        names = [genre_edge["node"]["name"] for genre_edge in genres_conn["edges"]]
+        assert names == expected_pages[book["title"]]
+        # Every book carries exactly 3 genres; a duplicated join would report
+        # an inflated multiple here.
+        assert genres_conn["totalCount"] == 3
+        assert genres_conn["pageInfo"]["hasNextPage"] is True
+
+    # Root books-list query + ONE windowed prefetch.
+    assert len(captured) == 2
+    prefetch_sql = captured[1]["sql"]
+    assert prefetch_sql.count('JOIN "library_book_genres"') == 1
+
+
+@pytest.mark.django_db
+def test_nested_cheap_page_window_omits_total_count_annotation():
+    """The common cheap-page shape compiles NO ``_dst_total_count`` window.
+
+    Conditional total count (connection window rigor, workstream B - the
+    MrThearMan-optimizer lesson): ``edges`` + cursors + ``hasPreviousPage``
+    derive from ``_dst_row_number`` alone, so the per-partition ``Count(1)
+    OVER`` is dropped from the window SQL for this shape. The page itself
+    stays exact and the two-query cost holds - the annotation is the only
+    thing that changed. ``hasNextPage`` / ``totalCount`` shapes keep the
+    count; their existing pins above re-run unchanged.
+    """
+    shelf = _seed_shelf()
+    for index in range(3):
+        _seed_genre_with_books(
+            f"Cheap-{index}",
+            shelf,
+            (f"Cheap-{index}-a", f"Cheap-{index}-b", f"Cheap-{index}-c"),
+        )
+    query = """
+    query {
+      allLibraryGenresConnection {
+        edges {
+          node {
+            booksConnection(first: 2) {
+              edges { cursor node { title } }
+              pageInfo { hasPreviousPage startCursor }
+            }
+          }
+        }
+      }
+    }
+    """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+
+    edges = payload["data"]["allLibraryGenresConnection"]["edges"]
+    assert len(edges) == 3
+    for index, edge in enumerate(edges):
+        books_conn = edge["node"]["booksConnection"]
+        titles = [book_edge["node"]["title"] for book_edge in books_conn["edges"]]
+        assert titles == [f"Cheap-{index}-a", f"Cheap-{index}-b"]
+        assert books_conn["pageInfo"]["hasPreviousPage"] is False
+        assert books_conn["pageInfo"]["startCursor"] == books_conn["edges"][0]["cursor"]
+
+    # Two queries (root + one window), and the window SQL carries the row
+    # number but NOT the count aggregate.
+    assert len(captured) == 2
+    window_sql = captured[1]["sql"]
+    assert "_dst_row_number" in window_sql
+    assert "_dst_total_count" not in window_sql
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "args",
+    ["first: 0", 'first: 2, after: "YXJyYXljb25uZWN0aW9uOjk5"'],
+)
+def test_nested_ambiguous_empty_served_from_marker_in_fixed_queries(args):
+    """``first: 0`` / overshot ``after:`` serve true counts in TWO queries live.
+
+    The marker-row disambiguation (connection window rigor, workstream C)
+    live over /graphql/: these shapes historically fell back per-parent
+    (2 + N queries for N parents); the window now keeps each partition's
+    row 1, so every parent's empty page serves the TRUE ``totalCount`` and
+    pipeline-parity ``pageInfo`` from the same single window query. Three
+    parents, still two queries - the N+1 disproof for the previously
+    ambiguous shapes.
+    """
+    shelf = _seed_shelf()
+    for index in range(3):
+        _seed_genre_with_books(
+            f"Marker-{index}",
+            shelf,
+            (f"Marker-{index}-a", f"Marker-{index}-b", f"Marker-{index}-c"),
+        )
+    query = f"""
+    query {{
+      allLibraryGenresConnection {{
+        edges {{
+          node {{
+            booksConnection({args}) {{
+              edges {{ node {{ title }} }}
+              pageInfo {{ hasNextPage hasPreviousPage }}
+            }}
+          }}
+        }}
+      }}
+    }}
+    """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+
+    overshot = "after" in args
+    edges = payload["data"]["allLibraryGenresConnection"]["edges"]
+    assert len(edges) == 3
+    for edge in edges:
+        books_conn = edge["node"]["booksConnection"]
+        assert books_conn["edges"] == []
+        # Pipeline-parity flags (pinned against ListConnection in
+        # tests/test_relay_connection.py): first: 0 -> a next page exists
+        # (3 books past position 0); overshot after -> a previous page exists
+        # (start > 0) and nothing follows.
+        assert books_conn["pageInfo"]["hasNextPage"] is (not overshot)
+        assert books_conn["pageInfo"]["hasPreviousPage"] is overshot
+
+    # Root genres-connection + ONE window query - never 2 + parent_count.
+    assert len(captured) == 2
+
+
+@pytest.mark.django_db
+def test_library_card_projection_survives_select_related_relation():
+    """B8 root fix (feedback2 P0-1), live: consumer ``.only()`` + ``select_related``.
+
+    ``allLibraryCardsProjected`` returns ``.only("barcode")`` while the query
+    selects the forward ``patron`` relation - ``PatronType`` has no
+    visibility hook, so the walker plans a REAL ``select_related("patron")``.
+    Pre-fix the optimizer applied it on top of the projection and every
+    request failed with ``FieldError: Field MembershipCard.patron cannot be
+    both deferred and traversed using select_related at the same time``. The
+    relation-aware prune drops the path (and its strictness keys - the
+    package pin lives in ``tests/optimizer/test_extension.py``), so the
+    response is correct and the relation resolves per row.
+    """
+    _seed_library_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryCardsProjected { barcode patron { name } }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": {
+            "allLibraryCardsProjected": [
+                {"barcode": "CARD-1", "patron": {"name": "Ada"}},
+            ],
+        },
+    }
+    # The dropped join resolves per row: root card page (patron_id stayed
+    # deferred), the deferred ``patron_id`` load, then the patron row.
+    assert len(captured) == 3
+    assert "library_patron" not in captured[0]["sql"]
+
+
+@pytest.mark.django_db
+def test_library_card_deferred_projection_survives_select_related():
+    """B8 root fix, defer flavor, live: ``.defer("patron")`` + ``select_related``.
+
+    Django raises the same deferred-and-traversed ``FieldError`` for a
+    ``defer()`` projection, so the prune's defer-mode rules (exact entries
+    defer; everything else stays loaded) must drop the planned
+    ``select_related("patron")`` live. Cheaper than the ``.only()`` sibling:
+    the plan's own ``only()`` projection chains AFTER the consumer
+    ``defer()`` and re-loads the ``patron_id`` connector (Django's
+    defer-then-only replacement semantics), so no per-row deferred loads
+    fire - just the root page and the patron fetch.
+    """
+    _seed_library_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryCardsDeferred { barcode patron { name } }
+            }
+            """,
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "data": {
+            "allLibraryCardsDeferred": [
+                {"barcode": "CARD-1", "patron": {"name": "Ada"}},
+            ],
+        },
+    }
+    assert len(captured) == 2
+    assert "library_patron" not in captured[0]["sql"]
+
+
+@pytest.mark.django_db
+def test_nested_connection_last_zero_serves_quirk_via_per_parent_fallback():
+    """``last: 0`` live: the serve-all quirk through the fallback, no dead window.
+
+    Upstream ``ListConnection`` slices ``edges[-0:]`` - the WHOLE list - so
+    ``last: 0`` returns every edge. The walker plans NOTHING for the shape
+    (feedback2 P0-3): live queries pay the root query plus the per-parent
+    pipeline (count + edges per genre for ``totalCount``), and NO discarded
+    reversed-window query rides along.
+    """
+    shelf = _seed_shelf()
+    for index in range(2):
+        _seed_genre_with_books(
+            f"LastZero-{index}",
+            shelf,
+            (f"LastZero-{index}-a", f"LastZero-{index}-b", f"LastZero-{index}-c"),
+        )
+    query = """
+    query {
+      allLibraryGenresConnection {
+        edges {
+          node {
+            booksConnection(last: 0) {
+              edges { node { title } }
+              pageInfo { hasNextPage hasPreviousPage }
+            }
+          }
+        }
+      }
+    }
+    """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    edges = payload["data"]["allLibraryGenresConnection"]["edges"]
+    assert len(edges) == 2
+    for index, edge in enumerate(edges):
+        books_conn = edge["node"]["booksConnection"]
+        # The upstream ``edges[-0:]`` quirk: ALL three edges served.
+        assert [e["node"]["title"] for e in books_conn["edges"]] == [
+            f"LastZero-{index}-a",
+            f"LastZero-{index}-b",
+            f"LastZero-{index}-c",
+        ]
+        assert books_conn["pageInfo"] == {"hasNextPage": False, "hasPreviousPage": False}
+    # Root genres connection + one per-parent pipeline query per genre = 3 -
+    # and no window SQL anywhere (pre-fix: a discarded reversed window added
+    # one more query per request and hid the fallback from strictness).
+    assert len(captured) == 3
+    assert not any("_dst_row_number" in entry["sql"] for entry in captured)

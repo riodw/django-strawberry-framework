@@ -1,0 +1,168 @@
+"""Parent/child join-condition taxonomy for nested-connection fetch planning.
+
+The shared vocabulary for HOW a child row joins back to its parent, classified
+once per relation field instead of re-derived from ``relation_kind`` string
+checks at each consumer. Modeled on graph-node's join-condition taxonomy (its
+RFC-0001 "types A-D": derived vs stored x scalar vs list), translated to the
+four Django relation shapes the package plans:
+
+======================  =====================  ==========================
+Django relation          graph-node analog      join shape
+======================  =====================  ==========================
+reverse ``ForeignKey``   B (child stores one    ``DIRECT_FK`` - the child
+(``reverse_many_to_one``) parent id)            table carries the parent id
+reverse ``OneToOne``     B, scalar cardinality  ``DIRECT_FK``
+forward ``M2M`` /        A (child derives a     ``THROUGH_TABLE`` - the
+reverse ``M2M``          parent-id list)        join table owns the attach
+forward FK / O2O         D (parent stores the   ``UNSUPPORTED`` - single-
+(``forward_single``)     child id)              valued; nothing to window
+======================  =====================  ==========================
+
+One classification (``classify_relation_join``) carries every join-derived
+fact the fetch strategies need:
+
+- ``windowable`` + ``partition_expr`` - the windowed-prefetch strategy's
+  ``PARTITION BY`` input (previously derived ad hoc by
+  ``plans.py::window_partition_for_prefetch``, now a shim over this module).
+- ``parent_join_column`` - the child-side column Django needs loaded to
+  attach prefetched rows to parents (previously
+  ``walker.py::_connector_only_field``, now a shim too).
+- ``through_model`` + ``lateral_shape`` - the Postgres LATERAL strategy's
+  join-SQL selector (``optimizer/lateral_fetch.py``: a ``DIRECT_FK`` shape
+  correlates the child table directly; a ``THROUGH_TABLE`` shape joins the
+  M2M through table inside the lateral subquery; ``UNSUPPORTED`` never
+  plans).
+
+The classifier takes the RAW Django relation field (or rel descriptor), not a
+``FieldMeta``: the forward-M2M reverse query name lives only on
+``field.remote_field``. Defensive ``getattr`` fallbacks preserve the exact
+test-double contract the two shims' direct callers rely on
+(``reverse_connector_attname`` / ``target_field_attname`` synthetic shapes).
+"""
+
+from __future__ import annotations
+
+import enum
+from dataclasses import dataclass
+from typing import Any
+
+from ..utils.relations import RelationKind, relation_kind
+
+
+class LateralJoinShape(enum.Enum):
+    """How a lateral (or correlated) child subquery would join to one parent."""
+
+    DIRECT_FK = "direct_fk"
+    THROUGH_TABLE = "through_table"
+    UNSUPPORTED = "unsupported"
+
+
+# The relation kinds a windowed prefetch can partition: every many-valued
+# shape plus the reverse one-to-one (whose child row also carries the parent
+# id). Single-valued FORWARD relations have no windowable parent partition.
+_WINDOWABLE_KINDS: frozenset[str] = frozenset(
+    {"many", "reverse_many_to_one", "reverse_one_to_one"},
+)
+
+
+@dataclass(frozen=True)
+class RelationJoinDescriptor:
+    """Everything join-shaped one relation field implies for fetch planning.
+
+    ``partition_expr`` is the parent-side partition the windowed strategy
+    hands to ``PARTITION BY`` (``None`` when not ``windowable``);
+    ``parent_join_column`` is the child-side connector column the prefetch
+    attach reads (``None`` when no column resolves - the caller logs and
+    degrades); ``through_model`` is the M2M join table when
+    ``lateral_shape`` is ``THROUGH_TABLE``.
+    """
+
+    kind: RelationKind
+    windowable: bool
+    partition_expr: str | None
+    parent_join_column: str | None
+    through_model: type | None
+    lateral_shape: LateralJoinShape
+
+
+def _partition_expr(field: Any) -> str | None:
+    """The parent-side partition expression Django's prefetch attach uses.
+
+    ``remote_field.attname or remote_field.name`` - exactly what upstream's
+    ``_optimize_prefetch_queryset`` partitions by (spec-033 Decision 4):
+    child FK attname for reverse FK / reverse O2O (``"shelf_id"``), the
+    child's forward M2M field name for a reverse M2M (``"genres"``), and the
+    target's reverse query name for a forward M2M (``"books"`` - NOT the
+    accessor when ``related_name`` is absent).
+    """
+    remote_field = getattr(field, "remote_field", None)
+    return getattr(remote_field, "attname", None) or getattr(remote_field, "name", None)
+
+
+def _parent_join_column(field: Any, kind: RelationKind) -> str | None:
+    """The child-side column Django needs loaded to attach rows to parents.
+
+    The relation-kind-specific connector (the former
+    ``walker.py::_connector_only_field`` body, moved verbatim): the child FK
+    attname for a reverse FK / reverse one-to-one, the target field's attname
+    for a forward single-valued relation, and the related model's pk attname
+    for an M2M (the join table owns the attach, so the child only needs its
+    pk). ``getattr`` fallbacks keep the synthetic test-double contract.
+    """
+    if getattr(field, "one_to_many", False) or kind == "reverse_one_to_one":
+        return getattr(getattr(field, "field", None), "attname", None) or getattr(
+            field,
+            "reverse_connector_attname",
+            None,
+        )
+    if not getattr(field, "many_to_many", False):
+        return getattr(getattr(field, "target_field", None), "attname", None) or getattr(
+            field,
+            "target_field_attname",
+            None,
+        )
+    related_model = getattr(field, "related_model", None)
+    if related_model is None:
+        return None
+    return related_model._meta.pk.attname
+
+
+def _through_model(field: Any) -> type | None:
+    """The M2M join table: ``field.through`` (rel side) or ``remote_field.through``."""
+    through = getattr(field, "through", None)
+    if through is not None:
+        return through
+    return getattr(getattr(field, "remote_field", None), "through", None)
+
+
+def classify_relation_join(field: Any) -> RelationJoinDescriptor:
+    """Classify one raw Django relation field into its join descriptor.
+
+    Pure and side-effect-free; safe to call at plan time on every nested
+    connection (the field flag reads are attribute lookups). Never raises -
+    an unwindowable or unresolvable shape classifies as
+    ``windowable=False`` / ``partition_expr=None`` and the caller decides the
+    fallback posture (``window_partition_for_prefetch`` keeps its historical
+    ``OptimizerError`` contract on top of this).
+    """
+    kind = relation_kind(field)
+    is_m2m = bool(getattr(field, "many_to_many", False))
+    windowable = kind in _WINDOWABLE_KINDS
+    partition = _partition_expr(field) if windowable else None
+    if is_m2m:
+        lateral_shape = LateralJoinShape.THROUGH_TABLE
+        through = _through_model(field)
+    elif windowable:
+        lateral_shape = LateralJoinShape.DIRECT_FK
+        through = None
+    else:
+        lateral_shape = LateralJoinShape.UNSUPPORTED
+        through = None
+    return RelationJoinDescriptor(
+        kind=kind,
+        windowable=windowable and partition is not None,
+        partition_expr=partition,
+        parent_join_column=_parent_join_column(field, kind),
+        through_model=through,
+        lateral_shape=lateral_shape,
+    )

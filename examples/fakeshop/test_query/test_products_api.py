@@ -1445,25 +1445,31 @@ def test_products_categories_filter_by_relay_own_pk_global_id_in():
     ``CategoryType`` is a Relay node, so ``id`` is a GlobalID; the ``in``
     lookup resolves to ``GlobalIDMultipleChoiceFilter`` and each element is
     decoded + type-validated before the ``id__in`` clause runs. No
-    permission gate guards ``id``, so this works anonymously.
+    permission gate guards ``id``, so this works anonymously (the targets
+    are PUBLIC rows, visible under the activated cascade - spec-034 Slice 4).
 
-    Picks two PUBLIC categories so they are visible under the activated cascade
-    (spec-034 Slice 4) - anonymous sees only `is_private=False` categories (the
-    deterministic `% 2` split makes ~half private), and the GlobalID `in`-decode
-    subject is orthogonal to which specific rows are chosen.
+    The two target categories carry EXPLICIT multi-digit pks: the ``in``
+    filter must consume the whole decoded id list in ONE predicate.
+    Regression pin for the first-Postgres-run find: per-element delegation
+    applied ``pk__in="26"`` and Django iterated the STRING, exploding the
+    clause to ``IN ('2','6')`` - correct by accident for the single-digit
+    pks a fresh-per-test SQLite database hands out, broken the moment a
+    Postgres sequence (which never rewinds across rolled-back tests)
+    passed 9.
     """
     seed_data(1)
-    categories = list(models.Category.objects.filter(is_private=False).order_by("id")[:2])
+    models.Category.objects.create(name="gid-in-alpha", description="d", is_private=False, pk=126)
+    models.Category.objects.create(name="gid-in-beta", description="d", is_private=False, pk=128)
     gids = ", ".join(
-        f'"{relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(category.pk))}"'
-        for category in categories
+        f'"{relay.GlobalID(type_name=models.Category._meta.label_lower, node_id=str(pk))}"'
+        for pk in (126, 128)
     )
     _assert_graphql_data(
         f"query {{ allCategories(filter: {{ id: {{ in: [{gids}] }} }}) "
         "{ edges { node { name } } } }",
         {
             "allCategories": {
-                "edges": [{"node": {"name": category.name}} for category in categories],
+                "edges": [{"node": {"name": "gid-in-alpha"}}, {"node": {"name": "gid-in-beta"}}],
             },
         },
     )

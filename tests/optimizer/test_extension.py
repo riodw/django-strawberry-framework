@@ -4520,3 +4520,57 @@ def test_plan_with_cascading_hook_uncacheable():
 # is correctly narrowed; assert strictness ``warn`` emits no optimizer warning
 # and strictness ``raise`` returns no "Unplanned N+1" GraphQL error for the
 # sibling branch the resolver never runs.
+
+
+@pytest.mark.django_db
+def test_b8_pruned_select_related_stays_strictness_visible():
+    """B8 + B3: the pruned relation's resolver keys leave the strictness set.
+
+    Dropping ``select_related("category")`` for the consumer projection must
+    ALSO drop the resolver keys that path satisfied - otherwise strictness
+    would trust a directive that was never applied while the generated
+    resolver lazy-loads. Under ``strictness="raise"`` the per-row access is
+    a visible unplanned N+1; the projection-free counterpart plans normally
+    and stays silent.
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def projected_items(self) -> list[ItemType]:
+            return Item.objects.order_by("id").only("name")
+
+        @strawberry.field
+        def planned_items(self) -> list[ItemType]:
+            return Item.objects.order_by("id")
+
+    finalize_django_types()
+    schema = strawberry.Schema(
+        query=Query,
+        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+    )
+    # Strictness sentinels stash on the context: execution needs a real
+    # context object (the standing strictness-test convention).
+    projected = schema.execute_sync(
+        "{ projectedItems { name category { name } } }",
+        context_value=SimpleNamespace(),
+    )
+    assert projected.errors is not None
+    assert any("Unplanned N+1" in str(error) for error in projected.errors)
+
+    planned = schema.execute_sync(
+        "{ plannedItems { name category { name } } }",
+        context_value=SimpleNamespace(),
+    )
+    assert planned.errors is None, planned.errors

@@ -419,13 +419,31 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
     field_class = _GlobalIDMultipleChoiceField
 
     def filter(self, qs: Any, value: Any) -> Any:
-        """Decode + validate every GlobalID; delegate to the parent filter."""
+        """Decode + validate every GlobalID; apply the lookup-shaped predicate.
+
+        The ``in`` lookup consumes the WHOLE decoded list in one predicate.
+        Upstream ``MultipleChoiceFilter.filter`` instead ORs one predicate
+        PER element, which for ``lookup_expr="in"`` produced
+        ``pk__in="26"`` - Django iterates the STRING and the clause
+        explodes to ``IN ('2','6')``. That was correct by accident for
+        single-digit pks, which is all a fresh-per-test SQLite database
+        ever produces; the first Postgres run surfaced it the moment a
+        sequence (which never rewinds across rolled-back tests) passed 9.
+        Non-``in`` lookups (per-element semantics, e.g. a multi-valued
+        relation's ``exact``) keep the upstream OR delegation.
+        """
         if value is None:
             return super().filter(qs, None)
         node_ids = [
             _decode_and_validate_global_id(item, self, index=idx) for idx, item in enumerate(value)
         ]
-        return super().filter(qs, node_ids)
+        if self.lookup_expr != "in":
+            return super().filter(qs, node_ids)
+        if not node_ids:
+            return qs
+        if self.distinct:
+            qs = qs.distinct()
+        return self.get_method(qs)(**{f"{self.field_name}__{self.lookup_expr}": node_ids})
 
 
 class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):

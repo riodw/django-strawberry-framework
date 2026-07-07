@@ -38,11 +38,11 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from django.core.exceptions import FieldDoesNotExist
-from django.db.models import Count, Prefetch, Window
+from django.db.models import Count, Prefetch, Q, Window
 from django.db.models.functions import RowNumber
 
 from ..exceptions import OptimizerError
-from ..utils.relations import relation_kind
+from .join_taxonomy import classify_relation_join
 
 
 def _lookup_path(entry: Any) -> str:
@@ -174,6 +174,20 @@ class OptimizationPlan:
     """Resolver keys elided because the source row already carries the target id."""
     planned_resolver_keys: Sequence[str] = field(default_factory=_indexed_list)
     """Resolver keys for relations covered by this plan, used by B3 strictness."""
+    select_path_resolver_keys: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    """Resolver keys satisfied by each ``select_related`` path (directive coupling).
+
+    Written by ``walker.py::_plan_select_relation`` at the single site that
+    appends to ``select_related``. This is the explicit directive-to-metadata
+    coupling B8 reconciliation needs: when a consumer projection makes a
+    ``select_related`` path Django-invalid
+    (``prune_unsupportable_select_related``), the keys recorded for that path
+    (and its nested sub-paths) must leave ``planned_resolver_keys`` with it -
+    otherwise strictness would treat the relation as planned while the
+    generated resolver lazy-loads. Excluded from ``is_empty`` (pure
+    metadata); mutated only during walker construction, matching the
+    ``cacheable`` single-writer convention.
+    """
     finalized_fk_id_elisions: frozenset[str] | None = None
     """Frozen membership set for ``fk_id_elisions`` after ``finalize()``."""
     finalized_planned_resolver_keys: frozenset[str] | None = None
@@ -449,6 +463,136 @@ def _consumer_only_fields(queryset: Any) -> frozenset[str] | None:
     return frozenset(field_set)
 
 
+def prune_unsupportable_select_related(plan: OptimizationPlan, queryset: Any) -> OptimizationPlan:
+    """Drop ``select_related`` paths a consumer projection cannot traverse.
+
+    Django refuses to traverse a deferred relation field: applying planned
+    ``select_related("category")`` on a consumer queryset carrying
+    ``.only("name")`` (or ``.defer("category")``) compiles to ``FieldError:
+    Field ... cannot be both deferred and traversed using select_related at
+    the same time``. The B8 root fix is relation-aware: keep a path only
+    when every connector it traverses is loaded by the consumer projection
+    (``_select_path_traversable``); drop the rest BEFORE the plan is
+    published or applied.
+
+    A dropped path also surrenders its resolver metadata: the keys recorded
+    for it (``select_path_resolver_keys`` - including every nested sub-path,
+    which can never outlive its prefix here because traversability fails at
+    the same segment) leave ``planned_resolver_keys``, so strictness sees
+    the relation's per-row lazy loads instead of trusting a directive that
+    was never applied. Under a ``defer()`` projection the plan's nested
+    ``only_fields`` entries below a dropped path are removed too (they are
+    only valid alongside the ``select_related`` join); under ``.only()``
+    the existing consumer-wins rule in ``diff_plan_for_queryset`` already
+    drops ``only_fields`` wholesale.
+
+    Returns ``plan`` unchanged (same object) when the consumer has no
+    projection or every path survives - the overwhelmingly common shape.
+    Never mutates: the pruned plan is a finalized ``replace`` copy, so B1's
+    cached plan stays intact.
+    """
+    if not plan.select_related:
+        return plan
+    projection = _consumer_projection(queryset)
+    if projection is None:
+        return plan
+    names, defer_mode = projection
+    model = getattr(queryset, "model", None)
+    unsupported = [
+        path
+        for path in plan.select_related
+        if not _select_path_traversable(path, names, defer_mode, model)
+    ]
+    if not unsupported:
+        return plan
+    dropped_keys: set[str] = set()
+    for path in unsupported:
+        dropped_keys.update(plan.select_path_resolver_keys.get(path, ()))
+    dropped_prefixes = tuple(f"{path}__" for path in unsupported)
+    return replace(
+        plan,
+        select_related=[p for p in plan.select_related if p not in unsupported],
+        planned_resolver_keys=[k for k in plan.planned_resolver_keys if k not in dropped_keys],
+        only_fields=[f for f in plan.only_fields if not f.startswith(dropped_prefixes)],
+    ).finalize()
+
+
+def _consumer_projection(queryset: Any) -> tuple[frozenset[str], bool] | None:
+    """The consumer's deferred-loading projection as ``(names, defer_mode)``.
+
+    ``None`` when the consumer restricted nothing (the default
+    ``(frozenset(), True)`` state, a malformed shape, or a non-QuerySet
+    input). Unlike ``_consumer_only_fields`` this keeps ``defer()``
+    projections too: ``defer("category")`` blocks ``select_related``
+    traversal exactly like an omitting ``.only(...)`` does.
+    """
+    query = getattr(queryset, "query", None)
+    deferred_loading = getattr(query, "deferred_loading", None)
+    if deferred_loading is None:
+        return None
+    try:
+        names, defer_flag = deferred_loading
+    except (TypeError, ValueError):
+        return None
+    if not names:
+        return None
+    return frozenset(names), bool(defer_flag)
+
+
+def _select_path_traversable(
+    path: str,
+    names: frozenset[str],
+    defer_mode: bool,
+    model: Any,
+) -> bool:
+    """Whether ``select_related(path)`` is Django-valid under the projection.
+
+    Walks the path one relation segment at a time, mirroring Django's
+    deferred-loading rule at each level (pinned empirically; the error is
+    ``Field X cannot be both deferred and traversed using select_related``):
+
+    - ``defer()`` mode: a segment is blocked when the projection defers it
+      at that level (by field name or attname).
+    - ``.only()`` mode: a level is RESTRICTED when the projection names any
+      column at it; a restricted level loads a segment only when some entry
+      leads with the segment's name or attname (a dotted entry like
+      ``"category__code"`` loads its connector). An unrestricted deeper
+      level (no entries under the prefix) loads every column.
+
+    Unresolvable segments (no model, unknown field) return ``False`` -
+    conservatively dropping the path costs a fallback query, never a
+    ``FieldError``.
+    """
+    current_model = model
+    prefix = ""
+    for segment in path.split("__"):
+        if current_model is None:
+            return False
+        try:
+            field_obj = current_model._meta.get_field(segment)
+        except FieldDoesNotExist:
+            return False
+        aliases = {segment}
+        attname = getattr(field_obj, "attname", None)
+        if attname:
+            aliases.add(attname)
+        scoped = (
+            {name[len(prefix) :] for name in names if name.startswith(prefix)}
+            if prefix
+            else set(names)
+        )
+        if defer_mode:
+            # A dotted defer entry ("shelf__branch") defers a column at a
+            # DEEPER level; only an exact entry at this level blocks it.
+            if aliases & {entry for entry in scoped if "__" not in entry}:
+                return False
+        elif scoped and not (aliases & {entry.split("__", 1)[0] for entry in scoped}):
+            return False
+        prefix = f"{prefix}{segment}__"
+        current_model = getattr(field_obj, "related_model", None)
+    return True
+
+
 def _optimizer_can_absorb(
     opt_entry: Any,
     consumer_paths: Sequence[str],
@@ -572,22 +716,25 @@ def window_partition_for_prefetch(field: Any) -> str:
     ``FieldMeta``. Raises ``OptimizerError`` for a single-valued forward relation
     or any kind without a windowable partition, so ``_plan_connection_relation``
     leaves the selection unplanned and falls back per-parent rather than guessing.
+
+    A thin shim over ``optimizer/join_taxonomy.py::classify_relation_join``
+    (the single join-condition classifier both fetch strategies share); kept
+    exported with the historical raise contract so direct callers and test
+    pins are unchanged.
     """
-    kind = relation_kind(field)
-    if kind not in ("many", "reverse_many_to_one", "reverse_one_to_one"):
+    descriptor = classify_relation_join(field)
+    if descriptor.kind not in ("many", "reverse_many_to_one", "reverse_one_to_one"):
         raise OptimizerError(
             f"window_partition_for_prefetch: relation {getattr(field, 'name', field)!r} "
-            f"has kind {kind!r}, which has no windowable parent partition; "
+            f"has kind {descriptor.kind!r}, which has no windowable parent partition; "
             "the nested connection falls back to per-parent resolution.",
         )
-    remote_field = getattr(field, "remote_field", None)
-    partition = getattr(remote_field, "attname", None) or getattr(remote_field, "name", None)
-    if partition is None:
+    if descriptor.partition_expr is None:
         raise OptimizerError(
             f"window_partition_for_prefetch: could not resolve a parent partition for "
             f"relation {getattr(field, 'name', field)!r}; falling back to per-parent.",
         )
-    return partition
+    return descriptor.partition_expr
 
 
 def apply_window_pagination(
@@ -598,6 +745,7 @@ def apply_window_pagination(
     offset: int = 0,
     limit: int | None = None,
     reverse: bool = False,
+    with_total_count: bool = True,
 ) -> Any:
     """Annotate row-number / total-count windows and filter to the requested slice.
 
@@ -611,9 +759,19 @@ def apply_window_pagination(
     shared ``deterministic_order`` helper (the cursor-parity invariant).
 
     Annotates ``_dst_row_number`` (``RowNumber()`` partitioned by ``partition_by``,
-    ordered by ``order_by``) and ``_dst_total_count`` (``Count(1)`` partitioned the
-    same way), then filters to the requested row-number range. The annotations
-    compose with ``.only()`` (they are annotations, not deferred columns).
+    ordered by ``order_by``) and - when ``with_total_count`` - ``_dst_total_count``
+    (``Count(1)`` partitioned the same way), then filters to the requested
+    row-number range. The annotations compose with ``.only()`` (they are
+    annotations, not deferred columns).
+
+    ``with_total_count`` is the conditional-count contract (connection window
+    rigor, workstream B; the MrThearMan-optimizer lesson): the per-partition
+    count costs on every row, so the walker passes ``False`` when nothing in
+    the selection can observe it
+    (``selections.py::connection_count_required``). The default ``True``
+    preserves every direct caller; the fast path treats a missing annotation
+    as "not planned" and degrades safely
+    (``connection.py::_resolve_from_window`` #"defensive per-parent").
 
     The same ``order_by`` tuple is also applied to the queryset itself via
     ``.order_by(*order_by)``: the SQL window only determines the ROW-NUMBER
@@ -636,19 +794,19 @@ def apply_window_pagination(
     - the offset filter still applies.
     """
     queryset = queryset.order_by(*order_by)
-    queryset = queryset.annotate(
-        **{
-            WINDOW_ROW_NUMBER: Window(
-                RowNumber(),
-                partition_by=partition_by,
-                order_by=order_by,
-            ),
-            WINDOW_TOTAL_COUNT: Window(Count(1), partition_by=partition_by),
-        },
-    )
-    if offset:
-        queryset = queryset.filter(**{f"{WINDOW_ROW_NUMBER}__gt": offset})
+    annotations = {
+        WINDOW_ROW_NUMBER: Window(
+            RowNumber(),
+            partition_by=partition_by,
+            order_by=order_by,
+        ),
+    }
+    if with_total_count:
+        annotations[WINDOW_TOTAL_COUNT] = Window(Count(1), partition_by=partition_by)
+    queryset = queryset.annotate(**annotations)
     if reverse:
+        if offset:
+            queryset = queryset.filter(**{f"{WINDOW_ROW_NUMBER}__gt": offset})
         queryset = queryset.annotate(
             **{
                 WINDOW_ROW_NUMBER_REVERSED: Window(
@@ -661,10 +819,32 @@ def apply_window_pagination(
         if limit is not None and limit != sys.maxsize:
             queryset = queryset.filter(**{f"{WINDOW_ROW_NUMBER_REVERSED}__lte": limit})
         return queryset
+    range_q: Q | None = None
+    if offset:
+        range_q = Q(**{f"{WINDOW_ROW_NUMBER}__gt": offset})
     # ``limit is None`` / ``sys.maxsize`` => no upper bound (relay's last-only
     # forward shape sets ``end = sys.maxsize``; the offset filter alone applies).
     if limit is not None and limit >= 0 and limit != sys.maxsize:
-        queryset = queryset.filter(**{f"{WINDOW_ROW_NUMBER}__lte": offset + limit})
+        upper = Q(**{f"{WINDOW_ROW_NUMBER}__lte": offset + limit})
+        range_q = upper if range_q is None else (range_q & upper)
+    if range_q is not None:
+        if offset > 0 or limit == 0:
+            # Marker rows (connection window rigor, workstream C - the
+            # graph-node lesson "keep the parent's group identifiable in the
+            # result", adapted to windowed prefetch): ``offset > 0`` (overshot
+            # ``after:``) and ``limit == 0`` (``first: 0``) produce an empty
+            # page for BOTH a parent whose children all sit before the offset
+            # and a parent with no children at all - historically ambiguous,
+            # forcing a per-parent fallback. Keeping each partition's ROW 1
+            # alongside the page rows disambiguates in the same single query:
+            # an empty ``to_attr`` list now PROVES zero children, while a
+            # marker-only list carries the real ``_dst_total_count`` (the
+            # walker forces ``with_total_count`` for these shapes). The
+            # resolve side (``connection.py::_resolve_from_window``) excludes
+            # row 1 from edge building for these shapes, so cursors are
+            # untouched; the cost is at most one extra row per parent.
+            range_q = range_q | Q(**{WINDOW_ROW_NUMBER: 1})
+        queryset = queryset.filter(range_q)
     return queryset
 
 

@@ -19,6 +19,7 @@ from graphql.language.ast import FragmentDefinitionNode
 
 from django_strawberry_framework.optimizer.selections import (
     ast_child_selections,
+    connection_count_required,
     direct_child_selected,
     directive_variable_names,
     included_field_selections,
@@ -312,3 +313,66 @@ def test_included_field_selections_returns_input_list_when_already_flat():
     inlined = included_field_selections(with_fragment)
     assert inlined is not with_fragment
     assert [s.name for s in inlined] == ["a", "c"]
+
+
+def test_connection_count_required_matrix():
+    """``connection_count_required`` fires on ``totalCount`` / ``pageInfo.hasNextPage`` only.
+
+    The plan-time half of the conditional ``_dst_total_count`` contract
+    (workstream B): cursors and ``hasPreviousPage`` derive from the row number
+    alone, so neither keeps the count; fragment wrappers are descended at both
+    levels; directive-excluded observers do not fire (live ``@skip`` args are
+    already evaluated on converted selections).
+    """
+    edges_only = _field("conn", selections=[_field("edges", selections=[_field("node")])])
+    assert connection_count_required(edges_only) is False
+
+    total = _field("conn", selections=[_field("edges"), _field("totalCount")])
+    assert connection_count_required(total) is True
+
+    has_next = _field(
+        "conn",
+        selections=[_field("pageInfo", selections=[_field("hasNextPage")])],
+    )
+    assert connection_count_required(has_next) is True
+
+    previous_only = _field(
+        "conn",
+        selections=[
+            _field("pageInfo", selections=[_field("hasPreviousPage"), _field("endCursor")]),
+        ],
+    )
+    assert connection_count_required(previous_only) is False
+
+    # Fragment wrappers descend at the connection level AND inside pageInfo.
+    fragment_wrapped = _field(
+        "conn",
+        selections=[
+            _fragment(
+                selections=[
+                    _field("pageInfo", selections=[_fragment(selections=[_field("hasNextPage")])]),
+                ],
+            ),
+        ],
+    )
+    assert connection_count_required(fragment_wrapped) is True
+
+    # Directive-excluded observers do not fire.
+    skipped = _field(
+        "conn",
+        selections=[_field("totalCount", directives={"skip": {"if": True}})],
+    )
+    assert connection_count_required(skipped) is False
+
+    # A node-level totalCount deep inside edges { node { ... } } is the INNER
+    # connection's business, not this one's.
+    nested_only = _field(
+        "conn",
+        selections=[
+            _field(
+                "edges",
+                selections=[_field("node", selections=[_field("totalCount")])],
+            ),
+        ],
+    )
+    assert connection_count_required(nested_only) is False

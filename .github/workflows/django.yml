@@ -115,3 +115,47 @@ jobs:
         run: |
           uv pip install coveralls
           uv run coveralls
+
+  test-postgres:
+    # The Postgres tier: the FULL suite against a real Postgres server via the
+    # FAKESHOP_PG_DSN settings branch. This is where @pytest.mark.pg tests
+    # (vendor-specific SQL, e.g. the LATERAL nested-fetch strategy) actually
+    # execute, and where the whole suite proves vendor portability. Same
+    # fail_under=100 gate: the code is structured so no line is
+    # Postgres-only-reachable (pure SQL builders + stubbed-connection tests
+    # cover strategy internals on sqlite), so coverage holds on both tiers.
+    name: Postgres - Python 3.14 - Django latest
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: fakeshop
+          POSTGRES_PASSWORD: fakeshop
+          POSTGRES_DB: fakeshop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U fakeshop"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          enable-cache: true
+          cache-suffix: test-postgres
+      - name: Set up Python 3.14
+        run: uv python install 3.14
+      - name: Install dependencies (with the pg group)
+        run: uv sync --python 3.14 --group pg
+      - name: Install latest Django
+        run: |
+          uv pip install "Django" --upgrade
+          uv run django-admin --version
+      - name: Run Tests (Postgres)
+        env:
+          FAKESHOP_PG_DSN: postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop
+        run: uv run pytest

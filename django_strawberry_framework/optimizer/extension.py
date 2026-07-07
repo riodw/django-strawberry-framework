@@ -63,7 +63,14 @@ from ._context import (
     stash_on_context as _stash_on_context,
 )
 from .hints import hint_is_skip
-from .plans import diff_plan_for_queryset, lookup_paths, runtime_path_from_info
+from .nested_fetch import _active_strategy as _active_nested_strategy
+from .nested_fetch import resolve_strategy
+from .plans import (
+    diff_plan_for_queryset,
+    lookup_paths,
+    prune_unsupportable_select_related,
+    runtime_path_from_info,
+)
 from .selections import (
     ast_child_selections,
     ast_to_converted_selections,
@@ -782,7 +789,13 @@ class DjangoOptimizerExtension(SchemaExtension):
     consumer wrote ``Model.objects`` or ``Model.objects.all()``.
     """
 
-    def __init__(self, strictness: str = "off", *, execution_context: Any = None) -> None:
+    def __init__(
+        self,
+        strictness: str = "off",
+        *,
+        execution_context: Any = None,
+        nested_connection_strategy: Any = None,
+    ) -> None:
         # Explicitly accept ``execution_context`` because Strawberry
         # instantiates extension classes with that keyword when an
         # extension *class* (not an instance) is passed in
@@ -794,6 +807,14 @@ class DjangoOptimizerExtension(SchemaExtension):
             msg = f"strictness must be 'off', 'warn', or 'raise', got {strictness!r}"
             raise ValueError(msg)
         self.strictness = strictness
+        # The nested-connection fetch strategy is fixed per extension INSTANCE
+        # at construction (``None`` reads the ``NESTED_CONNECTION_STRATEGY``
+        # setting, defaulting to windowed; ``"auto"`` vendor-sniffs the default
+        # DB alias eagerly): the plan cache below is instance-bound, so pinning
+        # the strategy here guarantees one cache never mixes plans from two
+        # strategies (``optimizer/nested_fetch.py``). Unknown names raise
+        # ``ConfigurationError`` at construction, not at query time.
+        self.nested_connection_strategy = resolve_strategy(nested_connection_strategy)
         self._plan_cache: OrderedDict[
             tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...], type | None],
             Any,
@@ -825,6 +846,10 @@ class DjangoOptimizerExtension(SchemaExtension):
         # Publish this instance so ``apply_connection_optimization`` can
         # discover it and share the instance-bound plan cache (Decision 11).
         instance_token = _active_optimizer.set(self)
+        # Publish the instance's nested-connection fetch strategy for the
+        # walker (which cannot import this module - the dependency points the
+        # other way; see ``nested_fetch.py::active_strategy``).
+        strategy_token = _active_nested_strategy.set(self.nested_connection_strategy)
         key_parts_token = _cache_key_parts_cache.set({})
         plan_memo_token = _execution_plan_cache.set({})
         converted_token = converted_selections_cache.set({})
@@ -834,6 +859,7 @@ class DjangoOptimizerExtension(SchemaExtension):
             converted_selections_cache.reset(converted_token)
             _execution_plan_cache.reset(plan_memo_token)
             _cache_key_parts_cache.reset(key_parts_token)
+            _active_nested_strategy.reset(strategy_token)
             _active_optimizer.reset(instance_token)
             _optimizer_active.reset(active_token)
 
@@ -989,6 +1015,15 @@ class DjangoOptimizerExtension(SchemaExtension):
             info,
             target_type,
         )
+        # B8 pre-publish prune: a consumer projection - an ``.only`` or
+        # ``.defer`` call on the returned queryset - can make a planned
+        # ``select_related`` path Django-invalid (a field cannot be both
+        # deferred and traversed). The prune drops those paths AND their
+        # resolver keys BEFORE the sentinels publish, so strictness accounts
+        # for the relation as the per-row fallback it now is. Same-object
+        # return on the common no-projection shape; the cached plan is never
+        # mutated.
+        plan = prune_unsupportable_select_related(plan, queryset)
         self._publish_plan_to_context(plan, info)
         if plan.is_empty:
             return queryset

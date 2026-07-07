@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
@@ -11,7 +12,7 @@ from django.db.models import Prefetch
 from graphql import OperationType
 from strawberry import relay
 
-from ..exceptions import ConfigurationError, OptimizerError
+from ..exceptions import ConfigurationError
 from ..registry import registry
 from ..utils.connections import (
     UnwindowableConnection,
@@ -24,18 +25,23 @@ from ..utils.strings import snake_case
 from . import logger
 from .field_meta import FieldMeta
 from .hints import OptimizerHint, hint_is_skip
+from .join_taxonomy import classify_relation_join
+from .nested_fetch import (
+    NestedConnectionRequest,
+    active_strategy,
+    unwindowable_child_queryset_reason,
+)
 from .plans import (
     OptimizationPlan,
     append_prefetch_unique,
     append_unique,
     append_unique_many,
-    apply_window_pagination,
     deterministic_order,
     resolver_key,
     runtime_path_from_info,
-    window_partition_for_prefetch,
 )
 from .selections import (
+    connection_count_required,
     included_field_selections,
     is_fragment,
     named_children,
@@ -418,6 +424,30 @@ def _walk_selections(
                 append_unique(plan.only_fields, f"{prefix}{django_name}")
             continue
 
+        # Consumer-assigned relation fields are FULLY unplanned without an
+        # explicit hint (connection window rigor, workstream D - the
+        # strawberry-django #697 bug class). The consumer replaced the
+        # generated relation resolver (``finalizer.py::finalize_django_types``
+        # skips attaching one via this same frozenset), so the walker cannot
+        # know what their resolver fetches: a speculative model-shaped
+        # ``Prefetch`` may pay a query nobody consumes, and - worse -
+        # recording ``planned_resolver_keys`` for the walked subtree would
+        # short-circuit ``types/resolvers.py::_check_n1`` for every generated
+        # resolver under the consumer's OWN returned instances, silencing a
+        # real N+1 under strictness. Leaving the selection unplanned (no
+        # ``Prefetch``, no resolver keys, no connector column) is the
+        # Decision-6 fallback discipline: strictness SEES the per-parent
+        # accesses, and a delegating resolver opts back in with an explicit
+        # ``OptimizerHint`` (``force_select`` / ``force_prefetch`` /
+        # ``prefetch(...)``) - the hint dispatch below runs when one is
+        # declared. Consumer-assigned SCALAR shadows are unaffected (the
+        # scalar branch above projects columns, which is harmless).
+        consumer_assigned = (
+            definition is not None and django_name in definition.consumer_assigned_relation_fields
+        )
+        if consumer_assigned and hints_map.get(django_name) is None:
+            continue
+
         full_path = f"{prefix}{django_name}"
         runtime_paths, resolver_identities = _resolver_identities_for(
             sel,
@@ -442,6 +472,7 @@ def _walk_selections(
             runtime_paths=runtime_paths,
             resolver_identities=resolver_identities,
             enable_only=enable_only,
+            consumer_assigned=consumer_assigned,
         ):
             continue
 
@@ -515,6 +546,14 @@ def _plan_select_relation(
         append_unique_many(plan.fk_id_elisions, resolver_identities)
         return
     append_unique(plan.select_related, full_path)
+    # Couple the directive to the resolver metadata it satisfies (B8): if
+    # reconciliation later drops this path because a consumer projection
+    # cannot traverse it (``plans.py::prune_unsupportable_select_related``),
+    # these keys leave ``planned_resolver_keys`` with it.
+    recorded = plan.select_path_resolver_keys.get(full_path, ())
+    plan.select_path_resolver_keys[full_path] = recorded + tuple(
+        key for key in resolver_identities if key not in recorded
+    )
     if django_field.related_model is not None:
         _walk_selections(
             sel.selections,
@@ -672,6 +711,7 @@ def _apply_hint(
     runtime_paths: tuple[tuple[str, ...], ...],
     resolver_identities: tuple[str, ...],
     enable_only: bool = True,
+    consumer_assigned: bool = False,
 ) -> bool:
     """Apply a Meta-level ``OptimizerHint`` to ``plan``; return ``True`` when handled.
 
@@ -683,10 +723,33 @@ def _apply_hint(
     dispatch in that case. ``OptimizerHint.__post_init__`` already
     rejects conflicting flag combinations, so the priority order here
     is documentation, not collision arbitration.
+
+    ``consumer_assigned`` marks a relation whose resolver the consumer
+    supplied (``definition.consumer_assigned_relation_fields``) - the one
+    shape allowed to hint a ``Prefetch(..., to_attr=...)``, because only the
+    consumer's own resolver can honor the attribute contract.
     """
     if hint_is_skip(hint):
         return True
     if hint.prefetch_obj is not None:
+        hinted_to_attr = getattr(hint.prefetch_obj, "to_attr", None)
+        if hinted_to_attr and not consumer_assigned:
+            # feedback2 P0-4: Django lands ``to_attr`` rows on that attribute
+            # instead of ``_prefetched_objects_cache[accessor]`` - which is
+            # what the GENERATED relation resolver reads. Accepting the hint
+            # would record the relation as planned (silencing strictness)
+            # while every row still lazy-loads. Only a consumer-assigned
+            # resolver can consume the attribute, so anything else fails
+            # loud at plan time with the fix spelled out.
+            raise ConfigurationError(
+                f"OptimizerHint.prefetch(Prefetch(..., to_attr={hinted_to_attr!r})) on "
+                f"{type_cls.__name__}.{django_name}: the generated relation resolver "
+                "reads Django's prefetch cache by accessor name and would ignore rows "
+                "landed on the to_attr (per-row lazy loads behind a plan strictness "
+                "trusts). Drop to_attr from the hinted Prefetch, or assign your own "
+                "resolver for the field (consumer-assigned relations may hint with "
+                "to_attr because their resolver owns the attribute contract).",
+            )
         # ``_apply_hint`` is only entered when ``_resolve_optimizer_hints``
         # returned a non-empty hints map, which it cannot do for
         # ``type_cls is None`` (it short-circuits to ``{}``). The hint
@@ -919,21 +982,13 @@ def _connector_only_field(parent_field: Any) -> str | None:
     the attach, so the child only needs its pk). Returns ``None`` when no column
     resolves. Shared by ``_ensure_connector_only_fields`` (the list-prefetch
     projection) and the scalar-only connection-window projection.
+
+    A thin shim over ``optimizer/join_taxonomy.py::classify_relation_join``
+    (which carries the moved-verbatim connector derivation as
+    ``parent_join_column``), kept under the historical name for its two
+    callers and the direct test-double pins.
     """
-    kind = relation_kind(parent_field)
-    if parent_field.one_to_many or kind == "reverse_one_to_one":
-        return getattr(getattr(parent_field, "field", None), "attname", None) or getattr(
-            parent_field,
-            "reverse_connector_attname",
-            None,
-        )
-    if not parent_field.many_to_many:
-        return getattr(getattr(parent_field, "target_field", None), "attname", None) or getattr(
-            parent_field,
-            "target_field_attname",
-            None,
-        )
-    return parent_field.related_model._meta.pk.attname
+    return classify_relation_join(parent_field).parent_join_column
 
 
 def _order_entry_field_name(entry: Any) -> str | None:
@@ -1400,14 +1455,27 @@ def _plan_connection_relation(
         append_unique_many(plan.planned_resolver_keys, resolver_identities)
         return
     offset, limit, reverse = window
+    if reverse and limit == 0:
+        # (b) ``last: 0``: upstream ``ListConnection`` slices ``edges[-0:]``,
+        # which is the WHOLE list - only the per-parent pipeline reproduces
+        # that quirk, so a planned reversed window would always come back
+        # empty and be discarded by ``_resolve_from_window``'s fallback
+        # return. Plan nothing (feedback2 P0-3 follow-through): no dead
+        # window query riding every request, and no resolver keys - the
+        # per-parent fallback stays strictness-visible like the other
+        # Decision-6 fallback shapes. ``_resolve_from_window`` keeps its own
+        # ``last: 0`` guard as the defensive tail for direct callers.
+        return
 
-    # (g, partition) also pure; resolve the parent partition before the child build
-    # so an unsupported relation kind falls back without leaking child metadata.
-    try:
-        partition_by = window_partition_for_prefetch(
-            _raw_relation_field(model, relation_field_name),
-        )
-    except OptimizerError:
+    # (g, partition) also pure; classify the join before the child build so an
+    # unsupported relation kind (single-valued forward, or a shape with no
+    # resolvable parent partition) falls back without leaking child metadata.
+    # The RAW field (not the ``FieldMeta``) also rides the strategy request:
+    # the lateral backend reads ``remote_field`` / through metadata that only
+    # the raw descriptor carries.
+    raw_relation_field = _raw_relation_field(model, relation_field_name)
+    join = classify_relation_join(raw_relation_field)
+    if not join.windowable:
         return
 
     # (a) Unwrap edges { node }; scalar-only selections plan with [] node children.
@@ -1415,8 +1483,24 @@ def _plan_connection_relation(
     scalar_only = not node_selections
     node_sel = SimpleNamespace(selections=node_selections)
 
+    # (c, pre-build safety probe) a consumer ``get_queryset`` can return
+    # states no strategy can window - and that the child build itself cannot
+    # even project (``.only()`` after ``union()`` raises
+    # ``NotSupportedError`` before any gate below would run). Probe the
+    # hook's output BEFORE building the child plan and fall back fully
+    # unplanned (feedback2 P0-3; the classifier is the strategy seam's
+    # ``unwindowable_child_queryset_reason``).
+    if (
+        has_custom_get_queryset
+        and unwindowable_child_queryset_reason(
+            _build_child_queryset(django_field, target_type, info, True),
+        )
+        is not None
+    ):
+        return
+
     # (c) Build the child plan/queryset exactly like the list prefetch path, but
-    # against a THROWAWAY sub-plan so the DISTINCT guard below can fall back
+    # against a THROWAWAY sub-plan so a strategy refusal below can fall back
     # without leaking the child's resolver keys / fk-id elisions / cacheable flip
     # into the parent (Decision 6 / DoD-4 "no planned_resolver_keys entry"). The
     # parent plan absorbs the child metadata only on the success path.
@@ -1433,16 +1517,10 @@ def _plan_connection_relation(
         has_custom_get_queryset=has_custom_get_queryset,
         enable_only=enable_only,
     )
-    # (c, DISTINCT guard) the window's Count(1) OVER would over-count pre-DISTINCT
-    # rows (SQL evaluates windows before DISTINCT), so a distinct child queryset
-    # falls back per-parent (Decision 4 / Decision 6 shape 4).
-    if child_queryset.query.distinct:
-        return
-
-    # Success path: merge the child metadata the sub-plan absorbed into the parent.
-    _merge_child_plan_metadata(plan, sub_plan)
-    if not sub_plan.cacheable:
-        plan.cacheable = False
+    # No post-build re-check: the pre-build probe above is the single gate
+    # (feedback2 P0-3). Without a custom ``get_queryset`` the build composes
+    # ``.all()`` + ``.only()`` + nested prefetches - none of which can
+    # introduce a sliced/locked/combined/distinct/values state.
 
     # (d) Deterministic total order shared with the resolve-time pipeline.
     effective = tuple(child_queryset.query.order_by) or tuple(
@@ -1462,22 +1540,49 @@ def _plan_connection_relation(
             enable_only=enable_only,
         )
 
-    windowed_queryset = apply_window_pagination(
-        child_queryset,
-        partition_by=partition_by,
-        order_by=order_by,
+    # Conditional total count (workstream B): annotate the per-partition
+    # ``Count(1) OVER`` only when the selection can observe it (``totalCount``
+    # or ``pageInfo.hasNextPage``, via the shared
+    # ``selections.py::connection_count_required``) or the window SHAPE needs
+    # it - ``offset > 0`` / ``limit == 0`` are the ambiguous-empty shapes whose
+    # markers serve their counts from it (workstream C), and an unbounded limit
+    # (``None`` / relay's ``sys.maxsize`` sentinel) keeps the count
+    # conservatively. The common ``first: N`` page selecting only
+    # edges/cursors/``hasPreviousPage`` drops the annotation.
+    with_total_count = (
+        offset > 0
+        or limit is None
+        or limit == 0
+        or limit == sys.maxsize
+        or connection_count_required(sel)
+    )
+    # (g) Hand the fully-resolved fetch request to the active strategy (the
+    # nested_fetch.py seam): the windowed prefetch is the default backend; a
+    # strategy returning ``False`` leaves the selection unplanned, keeping the
+    # Decision-6 strictness contract (no resolver identities recorded).
+    request = NestedConnectionRequest(
+        django_field=raw_relation_field,
+        relation_field_name=relation_field_name,
+        prefix=prefix,
+        child_queryset=child_queryset,
+        join=join,
+        order_by=tuple(order_by),
         offset=offset,
         limit=limit,
         reverse=reverse,
+        with_total_count=with_total_count,
+        to_attr=_relation_connection_to_attr(relation_field_name),
+        lookup=f"{prefix}{instance_accessor(django_field)}",
     )
-    append_prefetch_unique(
-        plan.prefetch_related,
-        Prefetch(
-            f"{prefix}{instance_accessor(django_field)}",
-            queryset=windowed_queryset,
-            to_attr=_relation_connection_to_attr(relation_field_name),
-        ),
-    )
+    if not active_strategy().plan(request, plan):
+        return
+    # Success path: merge the child metadata the sub-plan absorbed into the
+    # parent only now - a strategy that refused (like every earlier fallback
+    # shape) must leak no child resolver keys / fk-id elisions / cacheable
+    # flip into the parent plan (the Decision-6 no-leakage contract).
+    _merge_child_plan_metadata(plan, sub_plan)
+    if not sub_plan.cacheable:
+        plan.cacheable = False
     # (h) Record resolver identities so strictness (Slice 4) sees the field as planned.
     append_unique_many(plan.planned_resolver_keys, resolver_identities)
 

@@ -127,6 +127,32 @@ if os.environ.get("FAKESHOP_SHARDED") == "1":  # pragma: no cover
         "NAME": BASE_DIR / "db_shard_b.sqlite3",
     }
 
+# Postgres tier - additive, mutually exclusive with FAKESHOP_SHARDED.
+# ``FAKESHOP_PG_DSN`` (e.g. ``postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop``)
+# swaps the ``default`` alias to Postgres so the FULL suite runs against a real
+# Postgres server - the vendor tier the optimizer's LATERAL-join fetch strategy
+# (and any other ``connection.vendor``-sensitive behavior) is verified on.
+# Local: ``docker compose -f docker-compose.postgres.yml up -d`` then
+# ``FAKESHOP_PG_DSN=postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop uv run pytest``.
+# CI: the ``test-postgres`` job in ``.github/workflows/django.yml`` provides the
+# server via a GitHub Actions service container.
+# Requires the ``pg`` dependency group (``uv sync --group pg`` installs
+# psycopg); the DSN is parsed with the stdlib so the default sqlite install
+# carries no Postgres dependency.
+_pg_dsn = os.environ.get("FAKESHOP_PG_DSN")
+if _pg_dsn:  # pragma: no cover
+    from urllib.parse import urlsplit
+
+    _pg = urlsplit(_pg_dsn)
+    DATABASES["default"] = {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": _pg.path.lstrip("/"),
+        "USER": _pg.username or "",
+        "PASSWORD": _pg.password or "",
+        "HOST": _pg.hostname or "",
+        "PORT": str(_pg.port or ""),
+    }
+
 
 # ---------------------------------------------------------------------------
 # Auth

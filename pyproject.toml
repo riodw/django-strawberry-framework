@@ -54,6 +54,12 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff>=0.15.0",
 ]
+# Postgres test tier (opt-in): ``uv sync --group pg`` adds the driver the
+# ``FAKESHOP_PG_DSN`` settings branch needs. Kept out of ``dev`` so the
+# default sqlite workflow carries no compiled Postgres dependency.
+pg = [
+    "psycopg[binary]>=3.2",
+]
 
 [build-system]
 requires = ["hatchling"]

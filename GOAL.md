@@ -1,7 +1,5 @@
 # GOAL
 
-- /Users/riordenweber/projects/django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
-
 ## North star
 
 `django-strawberry-framework` should be **the DRF-shaped, `class Meta`-driven Django integration for Strawberry GraphQL**. The destination is the developer experience proven by `django-graphene-filters` — declarative `Meta` classes, automatic input-type generation, rich filter / order / aggregate / fieldset sidecars, layered permissions including cascade visibility — on a modern Strawberry foundation, without Graphene runtime baggage.
@@ -404,7 +402,7 @@ class CelestialBodyFieldSet(FieldSet):
         return _resolve_date(root.updated_date, info, "astronomy.view_celestialbody")
 ```
 
-That is the entire `astronomy` app. **Six files, ~270 lines of consumer code total**, and it ships a richly-shaped Relay-node GraphQL API with: filtering across all fields and the FK relation; ordering across all fields and the FK relation; per-field aggregates with a custom stat; per-field redaction, denial, and tiered visibility; cascade row-level permissions; full-text-like search across two fields plus the relation; choice-enum generation for `body_type`; FK-id elision for `{ celestialBody { galaxy { id } } }`; N+1-safe queryset planning across every nested selection. The shipped `0.0.12` surface already does all but three of these — the per-field aggregates, the fieldset redaction / denial / tiered visibility, and the relation-aware search. The remaining Layer-3 cards in [`KANBAN.md`][kanban] bring those sidecars online between now and `1.0.0`.
+That is the entire `astronomy` app. **Six files, ~270 lines of consumer code total**, and it ships a richly-shaped Relay-node GraphQL API with: filtering across all fields and the FK relation; ordering across all fields and the FK relation; per-field aggregates with a custom stat; per-field redaction, denial, and tiered visibility; cascade row-level permissions; full-text-like search across two fields plus the relation; choice-enum generation for `body_type`; FK-id elision for `{ celestialBody { galaxy { id } } }`; N+1-safe queryset planning across every nested selection. The shipped `0.0.13` surface already does all but three of these — the per-field aggregates, the fieldset redaction / denial / tiered visibility, and the relation-aware search. The remaining Layer-3 cards in [`KANBAN.md`][kanban] bring those sidecars online between now and `1.0.0`.
 
 ## Migration shape
 
@@ -499,7 +497,7 @@ GraphQL becomes another transport for the same business logic — no parallel fi
 
 ## Working reference
 
-`django-graphene-filters` is the working feature-complete reference. The goal is not to copy its Graphene internals — it's to recreate **what the package enables for the schema author**: declarative filter / order / aggregate / fieldset sidecars, lazy related class references, generated input / output types with stable class-derived names, layered permissions including cascade visibility, async aggregate paths, and Relay-node-shaped output. The `Galaxy` / `CelestialBody` example above is a structural twin of the `django-graphene-filters` `recipes` cookbook (`ObjectType` / `Object` / `Attribute` / `Value`), reduced to two models so the shape stays legible. The per-feature shipped / planned breakdown lives in [`docs/GLOSSARY.md`][glossary].
+`django-graphene-filters` is the working feature-complete reference. The goal is not to copy its Graphene internals — it's to recreate **what the package enables for the schema author**: declarative filter / order / aggregate / fieldset sidecars, lazy related class references, generated input / output types with stable class-derived names, layered permissions including cascade visibility, async aggregate paths, and Relay-node-shaped output. The `Galaxy` / `CelestialBody` example above is a structural twin of the `django-graphene-filters` `recipes` cookbook ([`recipes/schema.py`][cookbook-schema]: `ObjectType` / `Object` / `Attribute` / `Value`), reduced to two models so the shape stays legible. The per-feature shipped / planned breakdown lives in [`docs/GLOSSARY.md`][glossary].
 
 ## Success criteria
 
@@ -532,8 +530,8 @@ The destination is a Django-native, Strawberry-powered framework that makes rich
 
 Two example projects prove the goal:
 
-- **Fakeshop** (`examples/fakeshop/`) extends today's shipped demo — `products` already runs connection fields with filter / order sidecars, cascade row-level visibility, and `ModelForm`-driven create / update / delete plus file-upload mutations, beside the `library` and `scalars` apps — into the full Relay-shaped showcase: the remaining aggregate / fieldset / search sidecars; image-upload mutations; sharded multi-database stress mode. `ModelSerializer`-driven mutations (`0.0.13`) and session-auth mutations exercised by the existing test users (the `accounts` app, `0.0.13`) now ship.
-- **Cookbook parity**: a Strawberry version of `django-graphene-filters`'s `recipes/schema.py` should be a clean port — same node graph (object types, attributes, values), same sidecar shape, equivalent capabilities. The astronomy example above is the structural reduction of that port; the full cookbook is the proof.
+- **Fakeshop** (`examples/fakeshop/`) extends today's shipped demo — `products` already runs connection fields with filter / order sidecars, cascade row-level visibility, and `ModelForm`-driven create / update / delete plus file-upload mutations, beside the `library`, `scalars`, `kanban`, and `glossary` apps — into the full Relay-shaped showcase: the remaining aggregate / fieldset / search sidecars; image-upload mutations; sharded multi-database stress mode. `ModelSerializer`-driven mutations (`0.0.13`) and session-auth mutations exercised by the existing test users (the `accounts` app, `0.0.13`) now ship.
+- **Cookbook parity**: a Strawberry version of `django-graphene-filters`'s [`recipes/schema.py`][cookbook-schema] should be a clean port — same node graph (object types, attributes, values), same sidecar shape, equivalent capabilities. The astronomy example above is the structural reduction of that port; the full cookbook is the proof.
 
 For the per-card sequencing of each capability, see [`KANBAN.md`][kanban].
 
@@ -563,3 +561,6 @@ For the per-card sequencing of each capability, see [`KANBAN.md`][kanban].
 <!-- .venv/ -->
 
 <!-- External -->
+
+<!-- Sibling checkout (the working feature-complete reference) -->
+[cookbook-schema]: ../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py

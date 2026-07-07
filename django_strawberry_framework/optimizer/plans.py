@@ -45,11 +45,6 @@ from ..exceptions import OptimizerError
 from ..utils.relations import relation_kind
 
 
-def _identity(value: Any) -> Any:
-    """Return ``value`` for default index keys."""
-    return value
-
-
 def _lookup_path(entry: Any) -> str:
     """Return the prefetch lookup path for an entry (string or ``Prefetch``).
 
@@ -75,7 +70,12 @@ class _IndexedList(list[Any]):
 
     __slots__ = ("_key", "_seen")
 
-    def __init__(self, values: Iterable[Any] = (), *, key: Any = _identity) -> None:
+    def __init__(self, values: Iterable[Any] = (), *, key: Any = None) -> None:
+        # ``key=None`` means "index by the value itself". The identity case
+        # previously routed through a ``_identity`` key callable; ``append_unique``
+        # is the walker's single hottest call (one per scalar projection, connector
+        # column, and resolver key), so the identity branch is inlined to skip a
+        # Python-level call per append.
         super().__init__()
         self._key = key
         self._seen: set[Any] = set()
@@ -83,23 +83,34 @@ class _IndexedList(list[Any]):
             self.append_unique(value)
 
     def append_unique(self, value: Any) -> None:
-        """Append ``value`` once, using the sidecar index when the key is hashable."""
-        index_key = self._key(value)
+        """Append ``value`` once, using the sidecar index when the key is hashable.
+
+        The hashable path runs inside one ``try`` (zero-cost when nothing raises)
+        rather than the previous probe-``try`` plus a ``contextlib.suppress``
+        around the ``add`` - a per-call context-manager allocation this hot loop
+        could feel. The consolidation is safe because ``in`` and ``add`` hash the
+        SAME key: when the membership probe passed, the ``add`` cannot raise
+        ``TypeError``, so the appended-then-failed-to-index state is unreachable.
+        """
+        key = self._key
+        index_key = value if key is None else key(value)
         try:
             if index_key in self._seen:
                 return
-        except TypeError:
-            if value in self:
-                return
-        super().append(value)
-        with contextlib.suppress(TypeError):
+            super().append(value)
             self._seen.add(index_key)
+        except TypeError:
+            # Unhashable index key: fall back to a linear membership scan and
+            # leave the sidecar index untouched (nothing hashable to record).
+            if value not in self:
+                super().append(value)
 
     def append(self, value: Any) -> None:
         """Append directly and keep the sidecar index useful for later helper calls."""
         super().append(value)
+        key = self._key
         with contextlib.suppress(TypeError):
-            self._seen.add(self._key(value))
+            self._seen.add(value if key is None else key(value))
 
     def extend(self, values: Iterable[Any]) -> None:
         """Extend directly and keep the sidecar index useful for later helper calls."""

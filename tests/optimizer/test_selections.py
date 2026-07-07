@@ -287,3 +287,28 @@ def test_ast_to_converted_selections_memoized_per_execution():
 
     # No memo installed: every call converts fresh.
     assert ast_to_converted_selections(info, single) is not first
+
+
+def test_included_field_selections_returns_input_list_when_already_flat():
+    """The fragment-free, fully-included shape passes through without a rebuild.
+
+    The common query shape (no fragments, nothing directive-excluded) would
+    flatten to an identical list, so the helper returns the INPUT list object -
+    the walker calls this once per level, and both callers only iterate the
+    result. A fragment or a directive-excluded field anywhere forces the
+    rebuild path (asserted via identity: the result is a fresh list).
+    """
+    flat = [_field("a"), _field("b")]
+    assert included_field_selections(flat) is flat
+
+    # ``@include(if: False)``-excluded field: rebuild (a fresh, filtered list).
+    with_excluded = [_field("a"), _field("b", directives={"include": {"if": False}})]
+    rebuilt = included_field_selections(with_excluded)
+    assert rebuilt is not with_excluded
+    assert [s.name for s in rebuilt] == ["a"]
+
+    # Fragment present: rebuild with the fragment body inlined.
+    with_fragment = [_field("a"), _fragment(selections=[_field("c")])]
+    inlined = included_field_selections(with_fragment)
+    assert inlined is not with_fragment
+    assert [s.name for s in inlined] == ["a", "c"]

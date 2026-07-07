@@ -333,7 +333,12 @@ def is_fragment(selection: Any) -> bool:
 
 def should_include(selection: Any) -> bool:
     """Evaluate ``@skip`` / ``@include`` directives on a converted selection."""
-    directives = getattr(selection, "directives", None) or {}
+    directives = getattr(selection, "directives", None)
+    # Directive-free selections are the overwhelmingly common shape, and this
+    # predicate runs once per selection per walk level; skip the two dict
+    # probes when there is nothing to evaluate.
+    if not directives:
+        return True
     skip = directives.get("skip")
     if skip is not None:
         value = skip.get("if")
@@ -378,7 +383,19 @@ def included_field_selections(selections: list[Any]) -> list[Any]:
     selections. Returning a flat field list lets alias/relation merging combine
     duplicate relation branches before generated child ``Prefetch`` querysets
     are built.
+
+    Fast path: when no selection is a fragment and none is directive-excluded
+    (the overwhelmingly common query shape), the flatten/filter loop would
+    rebuild an identical list - so the input list is returned unchanged
+    instead, mirroring ``walker._merge_aliased_selections``'s passthrough.
+    Both callers (the walker's level descent and the FK-id-elision scalar
+    scan) only iterate the result, so sharing the caller's list is safe.
     """
+    for selection in selections:
+        if is_fragment(selection) or not should_include(selection):
+            break
+    else:
+        return selections
     result: list[Any] = []
     for selection in selections:
         if not should_include(selection):

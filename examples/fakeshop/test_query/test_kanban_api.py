@@ -21,6 +21,7 @@ import pytest
 from apps.glossary import models as glossary_models
 from apps.kanban import models
 from django.test import Client
+from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
 
 
@@ -209,11 +210,6 @@ def _seed_board():
         "current_tracked_path": current_tracked_path,
         "historical_tracked_path": historical_tracked_path,
     }
-
-
-def _post_graphql(query: str, *, client: Client | None = None):
-    graphql_client = client or Client()
-    return graphql_client.post("/graphql/", data={"query": query}, content_type="application/json")
 
 
 def _graphql_data(query: str, *, client: Client | None = None):

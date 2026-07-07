@@ -27,6 +27,7 @@ from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import Client, override_settings
+from graphql_client import post_graphql as _post_graphql
 
 
 @pytest.fixture(autouse=True)
@@ -55,10 +56,6 @@ def _png_bytes() -> bytes:
     buffer = io.BytesIO()
     Image.new("RGB", (_IMAGE_WIDTH, _IMAGE_HEIGHT)).save(buffer, format="PNG")
     return buffer.getvalue()
-
-
-def _post_graphql(query: str):
-    return Client().post("/graphql/", data={"query": query}, content_type="application/json")
 
 
 def _introspect_type(name: str, selection: str) -> dict:

@@ -32,6 +32,9 @@ def test_reverse_fk_classifies_direct_fk():
         parent_join_column="category_id",
         through_model=None,
         lateral_shape=LateralJoinShape.DIRECT_FK,
+        # The resolved child-side FK object (the lateral join's link field).
+        parent_link_field=Item._meta.get_field("category"),
+        through_child_field=None,
     )
 
 
@@ -46,6 +49,9 @@ def test_forward_m2m_classifies_through_table():
     assert descriptor.parent_join_column == Genre._meta.pk.attname
     assert descriptor.through_model is Book.genres.through
     assert descriptor.lateral_shape is LateralJoinShape.THROUGH_TABLE
+    # Through-link FK pair: parent side (Book) / child side (Genre).
+    assert descriptor.parent_link_field.attname == "book_id"
+    assert descriptor.through_child_field.attname == "genre_id"
 
 
 def test_reverse_m2m_classifies_through_table():
@@ -57,6 +63,9 @@ def test_reverse_m2m_classifies_through_table():
     assert descriptor.parent_join_column == Book._meta.pk.attname
     assert descriptor.through_model is Book.genres.through
     assert descriptor.lateral_shape is LateralJoinShape.THROUGH_TABLE
+    # The sides swap on the reverse rel: parent is Genre, child is Book.
+    assert descriptor.parent_link_field.attname == "genre_id"
+    assert descriptor.through_child_field.attname == "book_id"
 
 
 def test_forward_single_classifies_unsupported():
@@ -125,3 +134,6 @@ def test_m2m_double_without_related_model_has_no_connector():
     assert descriptor.partition_expr == "posts"
     assert descriptor.parent_join_column is None
     assert descriptor.lateral_shape is LateralJoinShape.THROUGH_TABLE
+    # No through model -> no resolvable through-link FK pair either.
+    assert descriptor.parent_link_field is None
+    assert descriptor.through_child_field is None

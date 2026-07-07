@@ -153,6 +153,7 @@ TRACKED_FILE_PATHS = (
     "tests/mutations/test_resolvers.py",
     "tests/mutations/test_sets.py",
     "tests/optimizer/__init__.py",
+    "tests/optimizer/conftest.py",
     "tests/optimizer/test_definition_order.py",
     "tests/optimizer/test_extension.py",
     "tests/optimizer/test_field_meta.py",

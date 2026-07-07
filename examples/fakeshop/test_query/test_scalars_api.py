@@ -16,8 +16,8 @@ from uuid import UUID
 import pytest
 from apps.scalars import models
 from django.db import connection
-from django.test import Client
 from django.test.utils import CaptureQueriesContext
+from graphql_client import post_graphql as _post_graphql
 
 
 @pytest.fixture(autouse=True)
@@ -94,15 +94,6 @@ def _seed_nullable_specimen(**overrides):
 def _seed_tag(label: str, *, active: bool = True):
     """Seed a ``ScalarSpecimenTag`` with the given label and active flag."""
     return models.ScalarSpecimenTag.objects.create(label=label, active=active)
-
-
-def _post_graphql(query: str):
-    client = Client()
-    return client.post(
-        "/graphql/",
-        data={"query": query},
-        content_type="application/json",
-    )
 
 
 def _query_one_specimen() -> dict:

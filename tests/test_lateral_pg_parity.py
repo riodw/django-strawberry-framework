@@ -17,30 +17,18 @@ import strawberry
 from apps.library.models import Book, Branch, Genre, Loan, Patron, Shelf
 from django.db import connection as db_connection
 from django.test.utils import CaptureQueriesContext
-from strawberry import relay
+from strategy_schemas import build_strategy_schema, make_django_type
 from strawberry.relay.utils import to_base64
 
-from django_strawberry_framework import (
-    DjangoListField,
-    DjangoOptimizerExtension,
-    DjangoType,
-    finalize_django_types,
-    strawberry_config,
-)
-from django_strawberry_framework.connection import _connection_type_cache
-from django_strawberry_framework.registry import registry
+from django_strawberry_framework import DjangoListField, finalize_django_types
 
 pytestmark = [pytest.mark.pg, pytest.mark.django_db]
 
 
 @pytest.fixture(autouse=True)
-def _isolate_global_registry():
-    """Clear the registry and connection-type cache around each test."""
-    registry.clear()
-    _connection_type_cache.clear()
-    yield
-    registry.clear()
-    _connection_type_cache.clear()
+def _isolate_global_registry(isolate_global_registry):
+    """Every test here declares fresh ``DjangoType`` classes - opt the module
+    into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
 
 def _make_type(
@@ -50,11 +38,13 @@ def _make_type(
     *,
     total_count=False,
 ):
-    """Declare a Relay-Node ``DjangoType`` over ``model``."""
-    meta_attrs = {"model": model, "fields": fields, "interfaces": (relay.Node,)}
-    if total_count:
-        meta_attrs["connection"] = {"total_count": True}
-    return type(name, (DjangoType,), {"Meta": type("Meta", (), meta_attrs)})
+    """Declare a Relay-Node ``DjangoType``; the shared core owns the boilerplate."""
+    return make_django_type(
+        name,
+        model,
+        fields,
+        meta_extra={"connection": {"total_count": True}} if total_count else None,
+    )
 
 
 def _library_schemas():
@@ -92,16 +82,12 @@ def _library_schemas():
         ),
     )
 
-    def _schema(strategy):
-        return strawberry.Schema(
-            query=query_cls,
-            config=strawberry_config(),
-            extensions=[
-                lambda: DjangoOptimizerExtension(nested_connection_strategy=strategy),
-            ],
-        )
-
-    return _schema("windowed"), _schema("lateral")
+    # The strategy-mounting seam is the shared ``strategy_schemas`` builder -
+    # the SAME construction the nested-fetch benchmark compares.
+    return (
+        build_strategy_schema(query_cls, "windowed"),
+        build_strategy_schema(query_cls, "lateral"),
+    )
 
 
 def _seed_library():
@@ -144,7 +130,13 @@ def _assert_parity(
     expect_lateral=True,
     count_free=False,
 ):
-    """Execute under both strategies; pin identical data and the lateral cost."""
+    """Execute under both strategies; pin identical data and the lateral cost.
+
+    Returns ``(data, captured)`` - the (parity-asserted) response data plus
+    the lateral run's ``CaptureQueriesContext`` - so tests that layer extra
+    SQL-shape asserts (the through-once tripwire) reuse this preamble instead
+    of re-spelling the capture/compare.
+    """
     windowed_schema, lateral_schema = _library_schemas()
     windowed = windowed_schema.execute_sync(query)
     assert windowed.errors is None, windowed.errors
@@ -164,7 +156,7 @@ def _assert_parity(
         assert "CROSS JOIN LATERAL" not in executed_sql
     if count_free:
         assert "_dst_total_count" not in executed_sql
-    return windowed.data
+    return windowed.data, captured
 
 
 _CHEAP_PAGE = "edges { cursor node { title } } pageInfo { hasPreviousPage startCursor }"
@@ -203,7 +195,7 @@ _OVERSHOOT_CURSOR = to_base64("arrayconnection", "49")
 def test_reverse_fk_parity_across_pagination_shapes(arguments, page, count_free):
     """Every reverse-FK pagination shape: identical data, two queries, real lateral."""
     _seed_library()
-    data = _assert_parity(
+    data, _ = _assert_parity(
         f"{{ shelves {{ id booksConnection{arguments} {{ {page} }} }} }}",
         count_free=count_free,
     )
@@ -214,17 +206,9 @@ def test_reverse_m2m_parity_joins_the_through_table_once():
     """Reverse M2M over overlapping genre membership: parity plus a single
     through-table join in the lateral SQL (the duplicate-join tripwire)."""
     _seed_library()
-    windowed_schema, lateral_schema = _library_schemas()
     query = f"{{ genres {{ id booksConnection(first: 2) {{ {_FULL_PAGE} }} }} }}"
-    windowed = windowed_schema.execute_sync(query)
-    assert windowed.errors is None, windowed.errors
-    with CaptureQueriesContext(db_connection) as captured:
-        lateral = lateral_schema.execute_sync(query)
-    assert lateral.errors is None, lateral.errors
-    assert _canonical(lateral.data) == _canonical(windowed.data)
-    assert len(captured) == 2
+    data, captured = _assert_parity(query)
     lateral_sql = captured[1]["sql"]
-    assert "CROSS JOIN LATERAL" in lateral_sql
     # The duplicate-join tripwire, lateral edition: each lateral branch scans
     # the through table exactly once (as FROM, joining the child) - a second
     # join would re-inflate the row numbers the way the historical M2M
@@ -234,7 +218,7 @@ def test_reverse_m2m_parity_joins_the_through_table_once():
     assert lateral_sql.count('FROM "library_book_genres"') == 1
     # Overlap sanity: every genre relates to four books (5 two-genre shelf-A
     # books + the two-genre loner distribute evenly); each page shows 2 of 4.
-    by_name = {genre["id"]: genre for genre in lateral.data["genres"]}
+    by_name = {genre["id"]: genre for genre in data["genres"]}
     counts = sorted(genre["booksConnection"]["totalCount"] for genre in by_name.values())
     assert counts == [4, 4, 4]
 

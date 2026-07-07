@@ -16,10 +16,8 @@ from django.db.models import Prefetch
 
 from django_strawberry_framework import DjangoOptimizerExtension
 from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
 from django_strawberry_framework.optimizer.nested_fetch import (
     WINDOWED_STRATEGY,
-    NestedConnectionRequest,
     WindowedPrefetchStrategy,
     _active_strategy,
     _strategy_for_vendor,
@@ -31,29 +29,12 @@ from django_strawberry_framework.optimizer.plans import (
     WINDOW_TOTAL_COUNT,
     OptimizationPlan,
 )
+from tests.optimizer.conftest import nested_connection_request
 
 
 def _books_request(**overrides):
     """A minimal valid request for the reverse-M2M ``Genre.books`` relation."""
-    from apps.library.models import Book
-
-    field = Genre._meta.get_field("books")
-    values = {
-        "django_field": field,
-        "relation_field_name": "books",
-        "prefix": "",
-        "child_queryset": Book.objects.all(),
-        "join": classify_relation_join(field),
-        "order_by": ("pk",),
-        "offset": 0,
-        "limit": 2,
-        "reverse": False,
-        "with_total_count": True,
-        "to_attr": "_dst_books_connection",
-        "lookup": "books",
-    }
-    values.update(overrides)
-    return NestedConnectionRequest(**values)
+    return nested_connection_request(Genre, "books", **overrides)
 
 
 def test_windowed_strategy_attaches_windowed_prefetch():

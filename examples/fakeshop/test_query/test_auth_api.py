@@ -19,6 +19,7 @@ import pytest
 from apps.products.services import TEST_USER_PASSWORD, create_users
 from django.contrib.auth import get_user_model
 from django.test import Client
+from graphql_client import post_graphql as _post_graphql
 
 # A password that passes all four fakeshop ``AUTH_PASSWORD_VALIDATORS`` and is
 # unrelated to any seeded username (the similarity validator must not bite).
@@ -49,18 +50,6 @@ def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
     exercises the spec-040 reload-preservation contract.
     """
     reload_all_project_app_schemas()
-
-
-def _post_graphql(query: str, *, client: Client | None = None, variables: dict | None = None):
-    graphql_client = client or Client()
-    payload: dict = {"query": query}
-    if variables is not None:
-        payload["variables"] = variables
-    return graphql_client.post(
-        "/graphql/",
-        data=payload,
-        content_type="application/json",
-    )
 
 
 def _graphql_data(query: str, *, client: Client | None = None, variables: dict | None = None):

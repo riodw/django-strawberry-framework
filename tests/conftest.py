@@ -65,6 +65,28 @@ def _tracking_get_new_connection(self, conn_params):
 sqlite_base.DatabaseWrapper.get_new_connection = _tracking_get_new_connection
 
 
+@pytest.fixture
+def isolate_global_registry():
+    """Clear the global registry and the connection-type cache around a test.
+
+    The shared test-isolation invariant for modules that declare fresh
+    function-scope ``DjangoType`` classes: connection classes are cached on
+    ``target_type`` identity, so a discarded class must not leak into a later
+    test's identity check (the ``tests/test_connection.py`` fixture shape).
+    Opt-in - modules wrap it in their own thin ``autouse=True`` fixture so the
+    invariant has ONE implementation without imposing the clears on suites
+    that use the shipped fakeshop types.
+    """
+    from django_strawberry_framework.connection import _connection_type_cache
+    from django_strawberry_framework.registry import registry
+
+    registry.clear()
+    _connection_type_cache.clear()
+    yield
+    registry.clear()
+    _connection_type_cache.clear()
+
+
 @pytest.fixture(autouse=True)
 def _close_context_local_db_connections():
     """Close per-task SQLite connections an async test left open.

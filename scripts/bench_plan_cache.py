@@ -40,41 +40,16 @@ Usage::
 from __future__ import annotations
 
 import argparse
-import os
 import statistics
-import sys
 import time
-from pathlib import Path
 from typing import Any
 
-_FAKESHOP = Path(__file__).resolve().parent.parent / "examples" / "fakeshop"
+from _bench_common import bootstrap_fakeshop_django
 
 # Below this many measured iterations, warm-vs-cold timing deltas are dominated
 # by noise (a single sample can even make ``cold`` look faster than ``warm``),
 # so the per-request walk delta is suppressed rather than reported as if real.
 _MIN_RELIABLE_ITERATIONS = 100
-
-
-def _bootstrap_django() -> None:
-    """Configure Django against an in-memory DB and migrate + seed it.
-
-    The in-memory override happens before any connection is opened, so the
-    on-disk ``db.sqlite3`` is never read or written.
-    """
-    sys.path.insert(0, str(_FAKESHOP))
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-
-    import django
-    from django.conf import settings
-
-    django.setup()
-    # Repoint the default alias at an in-process database so migrate/seed/query
-    # all hit throwaway state, never the committed fixture file.
-    settings.DATABASES["default"]["NAME"] = ":memory:"
-
-    from django.core.management import call_command
-
-    call_command("migrate", run_syncdb=True, verbosity=0)
 
 
 # Candidate queries. Mix of cacheable shapes (the headline) and a known
@@ -164,7 +139,7 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=3, help="Item rows per Faker provider to seed")
     args = parser.parse_args()
 
-    _bootstrap_django()
+    bootstrap_fakeshop_django("sqlite-memory")
 
     from apps.products.services import seed_data
     from config.schema import _optimizer, schema

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sys
 from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
@@ -37,8 +36,10 @@ from .plans import (
     append_unique,
     append_unique_many,
     deterministic_order,
+    order_entry_name_and_direction,
     resolver_key,
     runtime_path_from_info,
+    window_range_plan,
 )
 from .selections import (
     connection_count_required,
@@ -477,31 +478,70 @@ def _walk_selections(
             continue
 
         relation_plan_kind, _ = plan_relation(django_field, target_type, info)
-        if relation_plan_kind == "prefetch":
-            _plan_prefetch_relation(
-                sel,
-                django_field,
-                target_type,
-                plan,
-                prefix,
-                info,
-                runtime_paths,
-                resolver_identities,
-                enable_only=enable_only,
-            )
-        else:
-            _plan_select_relation(
-                sel,
-                django_field,
-                target_type,
-                plan,
-                prefix,
-                full_path,
-                info,
-                runtime_paths,
-                resolver_identities,
-                enable_only=enable_only,
-            )
+        _dispatch_single_relation(
+            prefer_prefetch=relation_plan_kind == "prefetch",
+            sel=sel,
+            django_field=django_field,
+            target_type=target_type,
+            plan=plan,
+            prefix=prefix,
+            full_path=full_path,
+            info=info,
+            runtime_paths=runtime_paths,
+            resolver_identities=resolver_identities,
+            enable_only=enable_only,
+        )
+
+
+def _dispatch_single_relation(
+    *,
+    prefer_prefetch: bool,
+    sel: Any,
+    django_field: Any,
+    target_type: type | None,
+    plan: OptimizationPlan,
+    prefix: str,
+    full_path: str,
+    info: Any | None,
+    runtime_paths: tuple[tuple[str, ...], ...],
+    resolver_identities: tuple[str, ...],
+    enable_only: bool = True,
+) -> None:
+    """Route one relation selection to the prefetch or the select planner.
+
+    The single owner of the ``_plan_prefetch_relation`` /
+    ``_plan_select_relation`` argument threading its three deciders share:
+    the cardinality dispatch in ``_walk_selections`` (``plan_relation``'s
+    verdict), and the two hint branches in ``_apply_hint`` (``force_select``'s
+    custom-``get_queryset`` downgrade and ``force_prefetch``). Only the
+    DECISION (``prefer_prefetch``) differs per site; ``full_path`` is a
+    select-only concern (``select_related`` resolves query paths).
+    """
+    if prefer_prefetch:
+        _plan_prefetch_relation(
+            sel,
+            django_field,
+            target_type,
+            plan,
+            prefix,
+            info,
+            runtime_paths,
+            resolver_identities,
+            enable_only=enable_only,
+        )
+    else:
+        _plan_select_relation(
+            sel,
+            django_field,
+            target_type,
+            plan,
+            prefix,
+            full_path,
+            info,
+            runtime_paths,
+            resolver_identities,
+            enable_only=enable_only,
+        )
 
 
 def _plan_select_relation(
@@ -682,9 +722,7 @@ def _build_prefetch_child_queryset(
         enable_only=enable_only,
     )
     _ensure_connector_only_fields(child_plan, django_field, enable_only=enable_only)
-    _merge_child_plan_metadata(parent_plan, child_plan)
-    if not child_plan.cacheable:
-        parent_plan.cacheable = False
+    _absorb_child_plan(parent_plan, child_plan)
     child_queryset = child_plan.apply(
         _build_child_queryset(
             django_field,
@@ -799,42 +837,32 @@ def _apply_hint(
                 f"Django requires prefetch_related for {kind} relations; "
                 "use OptimizerHint.prefetch_related() or OptimizerHint.prefetch(obj) instead.",
             )
-        if _target_has_custom_get_queryset(target_type):
-            _plan_prefetch_relation(
-                sel,
-                django_field,
-                target_type,
-                plan,
-                prefix,
-                info,
-                runtime_paths,
-                resolver_identities,
-                enable_only=enable_only,
-            )
-        else:
-            _plan_select_relation(
-                sel,
-                django_field,
-                target_type,
-                plan,
-                prefix,
-                full_path,
-                info,
-                runtime_paths,
-                resolver_identities,
-                enable_only=enable_only,
-            )
+        _dispatch_single_relation(
+            prefer_prefetch=_target_has_custom_get_queryset(target_type),
+            sel=sel,
+            django_field=django_field,
+            target_type=target_type,
+            plan=plan,
+            prefix=prefix,
+            full_path=full_path,
+            info=info,
+            runtime_paths=runtime_paths,
+            resolver_identities=resolver_identities,
+            enable_only=enable_only,
+        )
         return True
     if hint.force_prefetch:
-        _plan_prefetch_relation(
-            sel,
-            django_field,
-            target_type,
-            plan,
-            prefix,
-            info,
-            runtime_paths,
-            resolver_identities,
+        _dispatch_single_relation(
+            prefer_prefetch=True,
+            sel=sel,
+            django_field=django_field,
+            target_type=target_type,
+            plan=plan,
+            prefix=prefix,
+            full_path=full_path,
+            info=info,
+            runtime_paths=runtime_paths,
+            resolver_identities=resolver_identities,
             enable_only=enable_only,
         )
         return True
@@ -873,15 +901,23 @@ def _prefetch_hint_for_path(
     )
 
 
-def _merge_child_plan_metadata(
-    parent_plan: OptimizationPlan,
-    child_plan: OptimizationPlan,
-) -> None:
-    """Propagate resolver metadata from a child queryset plan to the root plan."""
+def _absorb_child_plan(parent_plan: OptimizationPlan, child_plan: OptimizationPlan) -> None:
+    """Absorb an ACCEPTED child queryset plan's metadata into the parent plan.
+
+    Resolver metadata (``fk_id_elisions`` / ``planned_resolver_keys``) plus
+    the ``cacheable`` propagation: a non-cacheable child (request-scoped
+    consumer queryset, custom hook) must poison the parent's cacheability, or
+    the plan cache could serve one request's child queryset to the next.
+    Folded in here - rather than a separate line at each absorb site - so a
+    future third site cannot forget it (the cache-poisoning hazard the plan
+    docstring warns about).
+    """
     for key in child_plan.fk_id_elisions:
         append_unique(parent_plan.fk_id_elisions, key)
     for key in child_plan.planned_resolver_keys:
         append_unique(parent_plan.planned_resolver_keys, key)
+    if not child_plan.cacheable:
+        parent_plan.cacheable = False
 
 
 def _selected_scalar_names(
@@ -994,15 +1030,14 @@ def _connector_only_field(parent_field: Any) -> str | None:
 def _order_entry_field_name(entry: Any) -> str | None:
     """Return the field name an ``order_by`` entry references, or ``None``.
 
-    Handles the two shapes ``deterministic_order`` produces: a string
-    (optionally ``-``-prefixed for descending) and an ``OrderBy`` wrapping an
-    ``F``-like expression with a ``.name``. Anything else (a raw expression with
-    no resolvable name) returns ``None``.
+    A thin shim over the shared entry parser
+    (``plans.py::order_entry_name_and_direction`` - one dash rule, one
+    expression unwrap for every consumer of the ``deterministic_order``
+    entry vocabulary), kept under the historical name for its caller and
+    test pins; this projection needs only the name half.
     """
-    if isinstance(entry, str):
-        return entry[1:] if entry.startswith("-") else entry
-    expression = getattr(entry, "expression", None)
-    return getattr(expression, "name", None)
+    parsed = order_entry_name_and_direction(entry)
+    return parsed[0] if parsed is not None else None
 
 
 def _concrete_order_columns(order_by: Sequence[Any], model: type[models.Model]) -> list[str]:
@@ -1544,18 +1579,15 @@ def _plan_connection_relation(
     # ``Count(1) OVER`` only when the selection can observe it (``totalCount``
     # or ``pageInfo.hasNextPage``, via the shared
     # ``selections.py::connection_count_required``) or the window SHAPE needs
-    # it - ``offset > 0`` / ``limit == 0`` are the ambiguous-empty shapes whose
-    # markers serve their counts from it (workstream C), and an unbounded limit
-    # (``None`` / relay's ``sys.maxsize`` sentinel) keeps the count
-    # conservatively. The common ``first: N`` page selecting only
-    # edges/cursors/``hasPreviousPage`` drops the annotation.
-    with_total_count = (
-        offset > 0
-        or limit is None
-        or limit == 0
-        or limit == sys.maxsize
-        or connection_count_required(sel)
-    )
+    # it (``window_range_plan.requires_total_count``: the ambiguous-empty
+    # marker shapes serve their counts from it, workstream C, and an unbounded
+    # limit keeps the count conservatively). The common ``first: N`` page
+    # selecting only edges/cursors/``hasPreviousPage`` drops the annotation.
+    with_total_count = window_range_plan(
+        offset=offset,
+        limit=limit,
+        reverse=reverse,
+    ).requires_total_count or connection_count_required(sel)
     # (g) Hand the fully-resolved fetch request to the active strategy (the
     # nested_fetch.py seam): the windowed prefetch is the default backend; a
     # strategy returning ``False`` leaves the selection unplanned, keeping the
@@ -1576,13 +1608,11 @@ def _plan_connection_relation(
     )
     if not active_strategy().plan(request, plan):
         return
-    # Success path: merge the child metadata the sub-plan absorbed into the
+    # Success path: absorb the child metadata the sub-plan collected into the
     # parent only now - a strategy that refused (like every earlier fallback
     # shape) must leak no child resolver keys / fk-id elisions / cacheable
     # flip into the parent plan (the Decision-6 no-leakage contract).
-    _merge_child_plan_metadata(plan, sub_plan)
-    if not sub_plan.cacheable:
-        plan.cacheable = False
+    _absorb_child_plan(plan, sub_plan)
     # (h) Record resolver identities so strictness (Slice 4) sees the field as planned.
     append_unique_many(plan.planned_resolver_keys, resolver_identities)
 

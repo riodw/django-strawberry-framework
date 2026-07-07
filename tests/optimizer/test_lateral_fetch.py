@@ -17,7 +17,6 @@ from django.db import connections
 from django.db.models import F, Prefetch, Value
 from django.db.models.fields.related_descriptors import _filter_prefetch_queryset
 
-from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
 from django_strawberry_framework.optimizer.lateral_fetch import (
     LATERAL_STRATEGY,
     LateralPrefetchStrategy,
@@ -27,39 +26,17 @@ from django_strawberry_framework.optimizer.lateral_fetch import (
     _fetch_lateral_rows,
     build_lateral_sql,
 )
-from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
 from django_strawberry_framework.optimizer.plans import (
     WINDOW_ROW_NUMBER,
     WINDOW_TOTAL_COUNT,
     OptimizationPlan,
 )
+from tests.optimizer.conftest import nested_connection_request as _request
 
 
 def _quote(name):
     """The identifier quoting the pure-builder tests pin against."""
     return f'"{name}"'
-
-
-def _request(field_owner, field_name, **overrides):
-    """A minimal valid ``NestedConnectionRequest`` for one library relation."""
-    field = field_owner._meta.get_field(field_name)
-    child_model = field.related_model
-    values = {
-        "django_field": field,
-        "relation_field_name": field_name,
-        "prefix": "",
-        "child_queryset": child_model.objects.all(),
-        "join": classify_relation_join(field),
-        "order_by": ("pk",),
-        "offset": 0,
-        "limit": 2,
-        "reverse": False,
-        "with_total_count": True,
-        "to_attr": f"_dst_{field_name}_connection",
-        "lookup": field_name,
-    }
-    values.update(overrides)
-    return NestedConnectionRequest(**values)
 
 
 def _shelf_books_request(**overrides):

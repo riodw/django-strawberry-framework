@@ -28,6 +28,7 @@ from apps.products.models import Category, Item, Property
 from django.db import connection as db_connection
 from django.db import models as djmodels
 from django.http import HttpRequest
+from strategy_schemas import make_django_type
 from strawberry import relay
 
 from django_strawberry_framework import (
@@ -57,40 +58,14 @@ def _path(*keys):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_global_registry():
-    """Clear the global registry and the connection-type cache around each test.
-
-    Connection classes are cached on ``target_type`` identity; function-scope
-    ``DjangoType`` fixtures are recreated fresh each test, so clearing the
-    cache keeps a discarded class from leaking into a later test's identity
-    check (the ``tests/test_connection.py`` fixture shape).
-    """
-    registry.clear()
-    _connection_type_cache.clear()
-    yield
-    registry.clear()
-    _connection_type_cache.clear()
+def _isolate_global_registry(isolate_global_registry):
+    """Every test here declares fresh ``DjangoType`` classes - opt the module
+    into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
 
-def _make_type(
-    name,
-    model,
-    fields,
-    *,
-    node=True,
-    meta_extra=None,
-    namespace_extra=None,
-):
-    """Declare a ``DjangoType`` over ``model`` (Relay-Node-shaped by default)."""
-    meta_attrs = {"model": model, "fields": fields}
-    if node:
-        meta_attrs["interfaces"] = (relay.Node,)
-    if meta_extra:
-        meta_attrs.update(meta_extra)
-    namespace = {"Meta": type("Meta", (), meta_attrs)}
-    if namespace_extra:
-        namespace.update(namespace_extra)
-    return type(name, (DjangoType,), namespace)
+# The shared declaration core (``tests/conftest.py``) already matches this
+# module's historical signature exactly.
+_make_type = make_django_type
 
 
 def _schema_with_root(declaring_type, *, field_name="objs"):

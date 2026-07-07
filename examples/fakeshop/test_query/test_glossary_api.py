@@ -3,7 +3,7 @@
 import pytest
 from apps.glossary import models
 from apps.kanban import models as kanban_models
-from django.test import Client
+from graphql_client import post_graphql as _post_graphql
 
 
 @pytest.fixture(autouse=True)
@@ -107,10 +107,6 @@ def _seed_glossary():
         notes="Primary ordering sidecar.",
         order=0,
     )
-
-
-def _post_graphql(query: str):
-    return Client().post("/graphql/", data={"query": query}, content_type="application/json")
 
 
 def _graphql_data(query: str):

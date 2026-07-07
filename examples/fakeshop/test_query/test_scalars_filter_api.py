@@ -16,7 +16,7 @@ import uuid
 
 import pytest
 from apps.scalars import models
-from django.test import Client
+from graphql_client import assert_graphql_data as _assert_graphql_data
 
 _DATE = datetime.date(2021, 6, 15)
 _DATETIME = datetime.datetime(2021, 6, 15, 9, 30, tzinfo=datetime.timezone.utc)
@@ -51,19 +51,6 @@ def _seed_specimen(label: str, **overrides):
     }
     defaults.update(overrides)
     return models.ScalarSpecimen.objects.create(**defaults)
-
-
-def _post_graphql(query: str):
-    return Client().post("/graphql/", data={"query": query}, content_type="application/json")
-
-
-def _assert_graphql_data(query: str, expected: dict):
-    response = _post_graphql(query)
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    assert payload["data"] == expected
-    return response
 
 
 @pytest.mark.django_db

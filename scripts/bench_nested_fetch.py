@@ -34,40 +34,11 @@ The script migrates and RESEEDS the library tables in the target database
 from __future__ import annotations
 
 import argparse
-import os
 import statistics
-import sys
 import time
-from pathlib import Path
 from typing import Any
 
-_FAKESHOP = Path(__file__).resolve().parent.parent / "examples" / "fakeshop"
-
-
-def _bootstrap_django() -> None:
-    """Configure Django against the FAKESHOP_PG_DSN Postgres database."""
-    sys.path.insert(0, str(_FAKESHOP))
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-    if not os.environ.get("FAKESHOP_PG_DSN"):
-        sys.exit(
-            "FAKESHOP_PG_DSN is required: the lateral strategy only executes on "
-            "Postgres, so there is nothing to compare on SQLite. Start the "
-            "throwaway server (docker compose -f docker-compose.postgres.yml up -d) "
-            "and re-run with FAKESHOP_PG_DSN=postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop.",
-        )
-
-    import django
-
-    django.setup()
-
-    from django.db import connection
-
-    if connection.vendor != "postgresql":
-        sys.exit(f"Expected a postgresql connection, got {connection.vendor!r}.")
-
-    from django.core.management import call_command
-
-    call_command("migrate", run_syncdb=True, verbosity=0)
+from _bench_common import bootstrap_fakeshop_django
 
 
 def _seed(parents: int, children: int) -> None:
@@ -108,50 +79,27 @@ def _seed(parents: int, children: int) -> None:
 
 
 def _build_schemas() -> dict[str, Any]:
-    """One finalized type graph, one schema per mode (the parity-test shape)."""
+    """One finalized type graph, one schema per mode (the parity-test shape).
+
+    Type declaration and strategy mounting come from the shared
+    ``strategy_schemas`` module (importable once ``bootstrap_fakeshop_django``
+    put the example project on ``sys.path``) - the SAME builders the pg
+    parity suite uses, so the bench and the correctness tests cannot compare
+    differently-constructed schemas.
+    """
     import strawberry
     from apps.library.models import Book, Shelf
-    from strawberry import relay
+    from strategy_schemas import build_strategy_schema, make_django_type
 
-    from django_strawberry_framework import (
-        DjangoListField,
-        DjangoOptimizerExtension,
-        DjangoType,
-        finalize_django_types,
-        strawberry_config,
-    )
+    from django_strawberry_framework import DjangoListField, finalize_django_types
 
-    type(
+    make_django_type(
         "BookType",
-        (DjangoType,),
-        {
-            "Meta": type(
-                "Meta",
-                (),
-                {
-                    "model": Book,
-                    "fields": ("id", "title"),
-                    "interfaces": (relay.Node,),
-                    "connection": {"total_count": True},
-                },
-            ),
-        },
+        Book,
+        ("id", "title"),
+        meta_extra={"connection": {"total_count": True}},
     )
-    shelf_type = type(
-        "ShelfType",
-        (DjangoType,),
-        {
-            "Meta": type(
-                "Meta",
-                (),
-                {
-                    "model": Shelf,
-                    "fields": ("id", "code", "books"),
-                    "interfaces": (relay.Node,),
-                },
-            ),
-        },
-    )
+    shelf_type = make_django_type("ShelfType", Shelf, ("id", "code", "books"))
     finalize_django_types()
     query_cls = strawberry.type(
         type(
@@ -163,23 +111,10 @@ def _build_schemas() -> dict[str, Any]:
             },
         ),
     )
-
-    def _schema(strategy: str | None) -> Any:
-        extensions = []
-        if strategy is not None:
-            extensions = [
-                lambda: DjangoOptimizerExtension(nested_connection_strategy=strategy),
-            ]
-        return strawberry.Schema(
-            query=query_cls,
-            config=strawberry_config(),
-            extensions=extensions,
-        )
-
     return {
-        "windowed": _schema("windowed"),
-        "lateral": _schema("lateral"),
-        "per-parent": _schema(None),
+        "windowed": build_strategy_schema(query_cls, "windowed"),
+        "lateral": build_strategy_schema(query_cls, "lateral"),
+        "per-parent": build_strategy_schema(query_cls, None),
     }
 
 
@@ -247,7 +182,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    _bootstrap_django()
+    bootstrap_fakeshop_django("pg")
 
     import django.conf
 

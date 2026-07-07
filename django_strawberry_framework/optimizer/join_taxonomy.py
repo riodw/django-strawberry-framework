@@ -75,6 +75,16 @@ class RelationJoinDescriptor:
     attach reads (``None`` when no column resolves - the caller logs and
     degrades); ``through_model`` is the M2M join table when
     ``lateral_shape`` is ``THROUGH_TABLE``.
+
+    ``parent_link_field`` / ``through_child_field`` are the resolved LINK
+    FIELD OBJECTS a correlated fetch joins on (the lateral backend today;
+    any future strategy or the polymorphic work reads the same resolved
+    facts instead of re-walking ``remote_field`` / ``m2m_field_name``):
+    for ``DIRECT_FK`` the child-side FK whose column carries the parent id
+    (``through_child_field`` is ``None``); for ``THROUGH_TABLE`` the through
+    table's parent-side FK and child-side FK respectively; ``None`` when the
+    shape is ``UNSUPPORTED`` or the field cannot resolve them (synthetic
+    doubles - the classifier never raises).
     """
 
     kind: RelationKind
@@ -83,6 +93,8 @@ class RelationJoinDescriptor:
     parent_join_column: str | None
     through_model: type | None
     lateral_shape: LateralJoinShape
+    parent_link_field: Any = None
+    through_child_field: Any = None
 
 
 def _partition_expr(field: Any) -> str | None:
@@ -135,6 +147,28 @@ def _through_model(field: Any) -> type | None:
     return getattr(getattr(field, "remote_field", None), "through", None)
 
 
+def _through_link_fields(field: Any, through: type | None) -> tuple[Any, Any]:
+    """The M2M through table's (parent-side FK, child-side FK) for ``field``.
+
+    Resolved from the forward ``ManyToManyField``'s own naming
+    (``m2m_field_name`` / ``m2m_reverse_field_name``), which stays correct
+    for self-referential M2Ms where scanning through-model FKs by target
+    would be ambiguous. ``field`` is either the forward field (parent owns
+    it) or the ``ManyToManyRel`` (parent is the target; the sides swap).
+    ``(None, None)`` when the through model or the naming API is missing
+    (synthetic doubles) - the classifier never raises.
+    """
+    forward_field = getattr(field, "field", None) or field
+    if through is None or not hasattr(forward_field, "m2m_field_name"):
+        return None, None
+    through_meta = through._meta
+    source_fk = through_meta.get_field(forward_field.m2m_field_name())
+    target_fk = through_meta.get_field(forward_field.m2m_reverse_field_name())
+    if forward_field is field:
+        return source_fk, target_fk  # forward: parent side is the source FK.
+    return target_fk, source_fk  # reverse: parent side is the target FK.
+
+
 def classify_relation_join(field: Any) -> RelationJoinDescriptor:
     """Classify one raw Django relation field into its join descriptor.
 
@@ -149,12 +183,18 @@ def classify_relation_join(field: Any) -> RelationJoinDescriptor:
     is_m2m = bool(getattr(field, "many_to_many", False))
     windowable = kind in _WINDOWABLE_KINDS
     partition = _partition_expr(field) if windowable else None
+    parent_link_field = None
+    through_child_field = None
     if is_m2m:
         lateral_shape = LateralJoinShape.THROUGH_TABLE
         through = _through_model(field)
+        parent_link_field, through_child_field = _through_link_fields(field, through)
     elif windowable:
         lateral_shape = LateralJoinShape.DIRECT_FK
         through = None
+        # The child-side FK carrying the parent id (a rel descriptor's
+        # ``.field``); ``None`` on a synthetic double without one.
+        parent_link_field = getattr(field, "field", None)
     else:
         lateral_shape = LateralJoinShape.UNSUPPORTED
         through = None
@@ -165,4 +205,6 @@ def classify_relation_join(field: Any) -> RelationJoinDescriptor:
         parent_join_column=_parent_join_column(field, kind),
         through_model=through,
         lateral_shape=lateral_shape,
+        parent_link_field=parent_link_field,
+        through_child_field=through_child_field,
     )

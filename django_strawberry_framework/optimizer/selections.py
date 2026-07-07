@@ -506,6 +506,36 @@ def direct_child_selected(selection_roots: Any, name: str) -> bool:
     return any(_check(child) for child in selection_roots)
 
 
+def connection_total_count_selected(selection: Any) -> bool:
+    """Return whether ``selection`` (a connection field) selects ``totalCount``.
+
+    ``totalCount`` as a DIRECT child of the connection, through fragment
+    wrappers only (``direct_child_selected``). The single implementation of
+    the count-observability walk: the plan-time
+    ``connection_count_required`` and the resolve-time
+    ``connection.py::_total_count_requested`` both call it, so the two
+    halves of the conditional ``_dst_total_count`` contract share one walk
+    by construction.
+    """
+    children = getattr(selection, "selections", None) or []
+    return direct_child_selected(children, "totalCount")
+
+
+def connection_has_next_page_selected(selection: Any) -> bool:
+    """Return whether ``selection`` selects ``pageInfo { hasNextPage }``.
+
+    The ``hasNextPage`` sibling of ``connection_total_count_selected``: a
+    direct ``pageInfo`` child (through fragment wrappers, alias-merged via
+    ``named_children``), then a direct ``hasNextPage`` under it. Shared by
+    the plan-time ``connection_count_required`` and the resolve-time
+    ``connection.py::_has_next_page_requested``.
+    """
+    return any(
+        direct_child_selected(getattr(page_info, "selections", None) or [], "hasNextPage")
+        for page_info in named_children(selection, "pageInfo")
+    )
+
+
 def connection_count_required(selection: Any) -> bool:
     """Return whether a connection selection needs the partition total count.
 
@@ -515,21 +545,17 @@ def connection_count_required(selection: Any) -> bool:
     can OBSERVE it - ``totalCount`` as a direct child of the connection, or
     ``hasNextPage`` under a direct ``pageInfo`` child (the fast path derives
     ``hasNextPage`` as ``row_number < total``; cursors and ``hasPreviousPage``
-    need only ``_dst_row_number``). Both walks recurse through fragment
-    wrappers only, via the same ``named_children`` / ``direct_child_selected``
-    primitives the resolve-time predicates use
+    need only ``_dst_row_number``). Both walks live in the two per-selection
+    primitives above, which the resolve-time predicates
     (``connection.py::_total_count_requested`` and its ``hasNextPage``
-    sibling), so plan-time and resolve-time can only drift if this module
-    does - and the resolve-time defensive fallback covers even that.
+    sibling) call too, so plan-time and resolve-time share ONE
+    implementation of each walk - and the resolve-time defensive fallback
+    covers even a drift in this module.
 
     Alias-merged selections carry the UNION of every alias's children
     (``walker.py::_merge_aliased_selections``), so one alias selecting
     ``totalCount`` conservatively keeps the count for the shared window.
     """
-    children = getattr(selection, "selections", None) or []
-    if direct_child_selected(children, "totalCount"):
-        return True
-    return any(
-        direct_child_selected(getattr(page_info, "selections", None) or [], "hasNextPage")
-        for page_info in named_children(selection, "pageInfo")
+    return connection_total_count_selected(selection) or connection_has_next_page_selected(
+        selection,
     )

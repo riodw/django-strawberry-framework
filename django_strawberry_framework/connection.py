@@ -64,7 +64,11 @@ from .optimizer.plans import (
     deterministic_order,
     ends_in_unique_column,
 )
-from .optimizer.selections import direct_child_selected, named_children, prime_selected_fields
+from .optimizer.selections import (
+    connection_has_next_page_selected,
+    connection_total_count_selected,
+    prime_selected_fields,
+)
 from .optimizer.walker import _relation_connection_to_attr
 from .types.resolvers import _check_n1
 from .utils.connections import (
@@ -73,6 +77,7 @@ from .utils.connections import (
     connection_sidecar_inputs_from_kwargs,
     derive_connection_window_bounds,
     has_connection_sidecar_input,
+    is_ambiguous_empty_window,
 )
 from .utils.querysets import (
     apply_type_visibility_async,
@@ -103,6 +108,50 @@ _TOTAL_COUNT_ATTR = "_django_total_count"
 # return as-is. A module-level object so the identity check is unambiguous and
 # can never collide with a legitimate ``resolve_connection`` return.
 _NOT_A_WINDOW: Any = object()
+
+
+def _set_total_count(conn: Any, *, want_count: bool, value: Any) -> Any:
+    """Attach the captured ``totalCount`` to ``conn`` when it was requested.
+
+    The single writer of ``_TOTAL_COUNT_ATTR`` (the selection-gating contract:
+    an unrequested count stays the ``None`` default the ``total_count``
+    resolver returns verbatim). ``value`` may be a zero-arg callable evaluated
+    only when the count IS wanted, so callers can pass a lazy ``.count()``
+    without spelling the guard themselves. Returns ``conn`` for tail-position
+    use.
+    """
+    if want_count:
+        setattr(conn, _TOTAL_COUNT_ATTR, value() if callable(value) else value)
+    return conn
+
+
+def _empty_page_connection(
+    cls: type,
+    *,
+    offset: int,
+    has_next_page: bool,
+    want_count: bool,
+    total: int,
+) -> Any:
+    """Build the edge-less connection the window fast path serves.
+
+    One home for the pipeline-parity-bearing empty-page shape (the zero-children
+    page and the marker-only empty page differ ONLY in ``has_next_page`` and the
+    served ``total``): ``has_previous_page = offset > 0`` replicates
+    ``ListConnection``'s ``start > 0`` arithmetic, computed before the data is
+    consulted - a childless parent with ``after:`` still reports a previous
+    page, exactly like the per-parent pipeline.
+    """
+    conn = cls(
+        edges=[],
+        page_info=relay.PageInfo(
+            start_cursor=None,
+            end_cursor=None,
+            has_previous_page=offset > 0,
+            has_next_page=has_next_page,
+        ),
+    )
+    return _set_total_count(conn, want_count=want_count, value=total)
 
 
 @dataclass
@@ -230,29 +279,26 @@ def _resolve_from_window(
             return None
         # With marker rows planned for the ambiguous shapes (workstream C), an
         # empty forward window now PROVES the parent has no related rows for
-        # EVERY shape - a parent with children would have kept its row 1. Page
-        # flags replicate the pipeline: ``has_previous_page = offset > 0``
-        # (``ListConnection`` computes ``start > 0`` before looking at the
-        # data), ``has_next_page`` False (no row survived the overfetch probe).
-        conn = cls(
-            edges=[],
-            page_info=relay.PageInfo(
-                start_cursor=None,
-                end_cursor=None,
-                has_previous_page=offset > 0,
-                has_next_page=False,
-            ),
+        # EVERY shape - a parent with children would have kept its row 1.
+        # ``has_next_page`` False: no row survived the overfetch probe.
+        return _empty_page_connection(
+            cls,
+            offset=offset,
+            has_next_page=False,
+            want_count=want_count,
+            total=0,
         )
-        if want_count:
-            setattr(conn, _TOTAL_COUNT_ATTR, 0)
-        return conn
 
     # Marker exclusion (workstream C): for the ambiguous shapes the window
     # keeps each partition's row 1 as a marker alongside the page rows. The
     # page proper is the rows past the offset (``limit == 0`` has no page at
     # all); a marker that IS a page row is impossible (page rows have
-    # ``row_number > offset >= 1``). Reversed windows never plan markers.
-    ambiguous = not reverse and (offset > 0 or limit == 0)
+    # ``row_number > offset >= 1``). Reversed windows never plan markers. The
+    # predicate is the shared plan-time/resolve-time contract
+    # (``utils/connections.py::is_ambiguous_empty_window``), so what the
+    # window PLANNED as ambiguous and what this consume path CLASSIFIES as
+    # ambiguous cannot drift.
+    ambiguous = is_ambiguous_empty_window(offset, limit, reverse=reverse)
     if ambiguous:
         page_rows = (
             [] if limit == 0 else [row for row in rows if getattr(row, WINDOW_ROW_NUMBER) > offset]
@@ -262,25 +308,19 @@ def _resolve_from_window(
     if not page_rows:
         # Marker-only window: children exist (the marker is one) but the page
         # is empty. Serve the true count and the pipeline's flag arithmetic:
-        # ``has_previous_page = offset > 0`` (``start > 0``);
         # ``has_next_page = total > offset`` (the overfetch probe - for
         # ``first: 0`` a row exists past the offset; for an overshot ``after:``
         # ``total <= offset`` by construction, so it is False).
         total = getattr(rows[-1], WINDOW_TOTAL_COUNT, None)
         if total is None:
             return None  # workstream-B drift guard: never infer a count.
-        conn = cls(
-            edges=[],
-            page_info=relay.PageInfo(
-                start_cursor=None,
-                end_cursor=None,
-                has_previous_page=offset > 0,
-                has_next_page=total > offset,
-            ),
+        return _empty_page_connection(
+            cls,
+            offset=offset,
+            has_next_page=total > offset,
+            want_count=want_count,
+            total=total,
         )
-        if want_count:
-            setattr(conn, _TOTAL_COUNT_ATTR, total)
-        return conn
     # The count is annotated CONDITIONALLY (workstream B): the walker plans it
     # only when the selection can observe it (``totalCount`` /
     # ``pageInfo.hasNextPage``) or the window shape needs it. A count-less row
@@ -322,9 +362,7 @@ def _resolve_from_window(
             ),
         ),
     )
-    if want_count:
-        setattr(conn, _TOTAL_COUNT_ATTR, total)
-    return conn
+    return _set_total_count(conn, want_count=want_count, value=total)
 
 
 def _consume_window(
@@ -454,14 +492,14 @@ def _total_count_requested(info: Info) -> bool:
     predicate fire (a spurious ``COUNT`` and, on a non-queryset source, a
     spurious M1-guard raise).
 
-    Delegates the "direct child through fragment wrappers only" walk to the
-    shared ``optimizer/selections.py::direct_child_selected`` (the 0.0.9 DRY
-    pass, ``docs/feedback.md`` Major 2) so the count-detection's
-    fragment-descent rule cannot drift from the optimizer's selection planning.
+    Delegates the whole walk to the shared per-selection primitive
+    ``optimizer/selections.py::connection_total_count_selected`` - the SAME
+    implementation the plan-time ``connection_count_required`` uses - so the
+    resolve-time count detection cannot drift from the optimizer's plan-time
+    predicate (the conditional ``_dst_total_count`` contract's invariant).
     """
     return any(
-        direct_child_selected(selected_field.selections, "totalCount")
-        for selected_field in info.selected_fields
+        connection_total_count_selected(selected_field) for selected_field in info.selected_fields
     )
 
 
@@ -474,16 +512,15 @@ def _has_next_page_requested(info: Info) -> bool:
     conditional - so when a window arrives WITHOUT the count,
     ``_resolve_from_window`` consults this predicate to decide whether the
     missing annotation is observable (defensive per-parent fallback) or inert
-    (placeholder flag, never serialized). Same walk discipline as the
-    plan-time ``optimizer/selections.py::connection_count_required``: direct
-    ``pageInfo`` children through fragment wrappers only, then a direct
-    ``hasNextPage`` under each - sharing ``named_children`` /
-    ``direct_child_selected`` so the two halves cannot drift independently.
+    (placeholder flag, never serialized). Delegates the whole walk to the
+    shared per-selection primitive
+    ``optimizer/selections.py::connection_has_next_page_selected`` - the same
+    implementation the plan-time ``connection_count_required`` uses - so the
+    two halves cannot drift independently.
     """
     return any(
-        direct_child_selected(getattr(page_info, "selections", None) or [], "hasNextPage")
+        connection_has_next_page_selected(selected_field)
         for selected_field in info.selected_fields
-        for page_info in named_children(selected_field, "pageInfo")
     )
 
 
@@ -777,9 +814,9 @@ def _guard_total_count_countable(nodes: Any, *, want_count: bool) -> None:
 def _attach_count_sync(conn: Any, nodes: Any, *, want_count: bool) -> Any:
     """Attach the post-filter pre-slice count to a resolved connection (sync)."""
     _guard_total_count_countable(nodes, want_count=want_count)
-    if want_count:
-        setattr(conn, _TOTAL_COUNT_ATTR, nodes.count())
-    return conn
+    # The bound ``.count`` is passed lazily: ``_set_total_count`` only calls
+    # it when the count was requested (no COUNT query otherwise).
+    return _set_total_count(conn, want_count=want_count, value=nodes.count)
 
 
 async def _attach_count_async(conn_awaitable: Any, nodes: Any, *, want_count: bool) -> Any:
@@ -794,7 +831,10 @@ async def _attach_count_async(conn_awaitable: Any, nodes: Any, *, want_count: bo
     conn = await conn_awaitable
     _guard_total_count_countable(nodes, want_count=want_count)
     if want_count:
-        setattr(conn, _TOTAL_COUNT_ATTR, await nodes.acount())
+        # The ``await`` keeps this step explicitly colored (the package's
+        # sync/async convention); the attr write itself still routes through
+        # the single ``_set_total_count`` writer.
+        _set_total_count(conn, want_count=True, value=await nodes.acount())
     return conn
 
 

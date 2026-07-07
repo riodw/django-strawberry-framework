@@ -8,6 +8,8 @@ from django.contrib.auth import get_user_model
 from django.db import connection
 from django.test import Client
 from django.test.utils import CaptureQueriesContext
+from graphql_client import assert_graphql_data as _assert_graphql_data
+from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
 
 from django_strawberry_framework.testing.relay import global_id_for
@@ -56,25 +58,6 @@ def _seed_branch_with_two_shelves(name: str = "Override"):
     branch = models.Branch.objects.create(name=name, city="Boston")
     models.Shelf.objects.create(code="A-1", topic="First floor", branch=branch)
     models.Shelf.objects.create(code="B-2", topic="Second floor", branch=branch)
-
-
-def _post_graphql(query: str, *, client: Client | None = None, variables: dict | None = None):
-    graphql_client = client or Client()
-    payload: dict = {"query": query}
-    if variables is not None:
-        payload["variables"] = variables
-    return graphql_client.post(
-        "/graphql/",
-        data=payload,
-        content_type="application/json",
-    )
-
-
-def _assert_graphql_data(query: str, expected: dict):
-    response = _post_graphql(query)
-    assert response.status_code == 200
-    assert response.json() == {"data": expected}
-    return response
 
 
 def _field_type(type_info: dict, field_name: str) -> dict:

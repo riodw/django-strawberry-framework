@@ -42,6 +42,7 @@ from django.db.models import Count, Prefetch, Q, Window
 from django.db.models.functions import RowNumber
 
 from ..exceptions import OptimizerError
+from ..utils.connections import is_ambiguous_empty_window
 from .join_taxonomy import classify_relation_join
 
 
@@ -432,21 +433,20 @@ def _consumer_prefetch_lookups(queryset: Any) -> list[Any]:
     return list(getattr(queryset, "_prefetch_related_lookups", ()) or ())
 
 
-def _consumer_only_fields(queryset: Any) -> frozenset[str] | None:
-    """Return the consumer-applied ``.only()`` field set, or ``None``.
+def deferred_loading_of(queryset: Any) -> tuple[frozenset[str], bool] | None:
+    """Return a queryset's raw ``(names, defer_flag)`` deferred-loading state.
 
-    Centralizes the brittle Django-private contract for
-    ``QuerySet.query.deferred_loading``, a ``(field_set, defer_flag)``
-    tuple where ``defer_flag is False`` means ``.only()`` was applied
-    (Django's "load only this set" mode) and ``defer_flag is True`` is
-    the default ``.defer()``-or-nothing mode.
+    THE single reader of the brittle Django-private contract for
+    ``QuerySet.query.deferred_loading``, a ``(field_set, defer_flag)`` tuple
+    where ``defer_flag is False`` means ``.only()`` was applied (Django's
+    "load only this set" mode) and ``defer_flag is True`` is the default
+    ``.defer()``-or-nothing mode. Every consumer builds on this one unpack
+    (``_consumer_only_fields``, ``_consumer_projection``, the lateral
+    backend's projection read) so a future Django rename has one fix.
 
-    Returns the non-empty only-set when the consumer applied ``.only()``;
-    returns ``None`` otherwise (no ``.only()`` applied, ``.defer()`` mode,
-    or the attribute is missing on a non-QuerySet input). The wildcard
-    ``.only()`` with no args is not a meaningful consumer projection
-    (Django collapses it to the default empty set in defer mode) and is
-    handled implicitly by the non-empty check.
+    Returns ``None`` when the state is unreadable: the attribute is missing
+    (a non-QuerySet input, e.g. a test double) or the tuple shape is
+    malformed.
     """
     query = getattr(queryset, "query", None)
     deferred_loading = getattr(query, "deferred_loading", None)
@@ -456,11 +456,26 @@ def _consumer_only_fields(queryset: Any) -> frozenset[str] | None:
         field_set, defer_flag = deferred_loading
     except (TypeError, ValueError):
         return None
-    if defer_flag is not False:
+    return frozenset(field_set), bool(defer_flag)
+
+
+def _consumer_only_fields(queryset: Any) -> frozenset[str] | None:
+    """Return the consumer-applied ``.only()`` field set, or ``None``.
+
+    Returns the non-empty only-set when the consumer applied ``.only()``;
+    returns ``None`` otherwise (no ``.only()`` applied, ``.defer()`` mode,
+    or the deferred-loading state is unreadable - see
+    ``deferred_loading_of``). The wildcard ``.only()`` with no args is not a
+    meaningful consumer projection (Django collapses it to the default empty
+    set in defer mode) and is handled implicitly by the non-empty check.
+    """
+    loading = deferred_loading_of(queryset)
+    if loading is None:
         return None
-    if not field_set:
+    field_set, defer_flag = loading
+    if defer_flag or not field_set:
         return None
-    return frozenset(field_set)
+    return field_set
 
 
 def prune_unsupportable_select_related(plan: OptimizationPlan, queryset: Any) -> OptimizationPlan:
@@ -521,22 +536,18 @@ def _consumer_projection(queryset: Any) -> tuple[frozenset[str], bool] | None:
     """The consumer's deferred-loading projection as ``(names, defer_mode)``.
 
     ``None`` when the consumer restricted nothing (the default
-    ``(frozenset(), True)`` state, a malformed shape, or a non-QuerySet
-    input). Unlike ``_consumer_only_fields`` this keeps ``defer()``
-    projections too: ``defer("category")`` blocks ``select_related``
-    traversal exactly like an omitting ``.only(...)`` does.
+    ``(frozenset(), True)`` state, or an unreadable deferred-loading state -
+    see ``deferred_loading_of``). Unlike ``_consumer_only_fields`` this keeps
+    ``defer()`` projections too: ``defer("category")`` blocks
+    ``select_related`` traversal exactly like an omitting ``.only(...)`` does.
     """
-    query = getattr(queryset, "query", None)
-    deferred_loading = getattr(query, "deferred_loading", None)
-    if deferred_loading is None:
+    loading = deferred_loading_of(queryset)
+    if loading is None:
         return None
-    try:
-        names, defer_flag = deferred_loading
-    except (TypeError, ValueError):
-        return None
+    names, defer_flag = loading
     if not names:
         return None
-    return frozenset(names), bool(defer_flag)
+    return names, defer_flag
 
 
 def _select_path_traversable(
@@ -633,6 +644,103 @@ WINDOW_TOTAL_COUNT = "_dst_total_count"
 WINDOW_ROW_NUMBER_REVERSED = "_dst_row_number_reversed"
 
 
+@dataclass(frozen=True)
+class WindowRangePlan:
+    """The pure window-range DECISIONS one ``(offset, limit, reverse)`` slice implies.
+
+    The single owner of the range/marker arithmetic both window renderers
+    consume - ``apply_window_pagination`` (Django ``Q`` objects) and the
+    lateral backend's ``build_lateral_sql`` (raw SQL). The two dialects cannot
+    share rendering, but sharing THESE decisions is the byte-parity invariant:
+    if a bound or the marker condition changed in only one renderer, lateral
+    pages would silently diverge from windowed pages.
+
+    ``limit`` is normalized (relay's ``sys.maxsize`` sentinel becomes ``None``
+    = "no upper bound"); ``lower_bound`` is the exclusive forward-row-number
+    floor (rows with ``_dst_row_number > lower_bound``; ``None`` = no floor);
+    ``upper_bound`` is the inclusive ceiling - on the FORWARD row number
+    (``offset + limit``) for a forward window, on the REVERSED row number
+    (the literal ``limit``) for a reversed one; ``add_marker_rows`` keeps each
+    partition's row 1 for the ambiguous-empty shapes (workstream C);
+    ``plain_first_page`` marks the unambiguous ``first: N`` shape a renderer
+    MAY express as a plain ``ORDER BY``/``LIMIT`` instead of a row-number
+    filter (the lateral backend does, for the Postgres planner's sake);
+    ``requires_total_count`` marks the shapes whose resolution needs the
+    partition count regardless of the selection (marker shapes serve their
+    counts from it; an unbounded window keeps it conservatively).
+    """
+
+    offset: int
+    limit: int | None
+    reverse: bool
+    lower_bound: int | None
+    upper_bound: int | None
+    add_marker_rows: bool
+    plain_first_page: bool
+    requires_total_count: bool
+
+
+def window_range_plan(*, offset: int, limit: int | None, reverse: bool) -> WindowRangePlan:
+    """Resolve one slice window into its shared ``WindowRangePlan``.
+
+    Pure and renderer-agnostic. Owns the two sentinel rules spelled once for
+    every consumer:
+
+    - ``limit is None`` OR relay's ``sys.maxsize`` means "no upper bound"
+      (the offset floor still applies). Normalized here so no renderer ever
+      sees ``sys.maxsize``.
+    - A NEGATIVE limit is not a valid window and is treated as unbounded
+      (unreachable through ``SliceMetadata`` - it raises on negative
+      ``first`` / ``last`` - but direct callers get one deliberate rule
+      instead of the historical per-renderer drift).
+    """
+    if limit == sys.maxsize:
+        limit = None
+    lower_bound = offset if offset else None
+    bounded = limit is not None and limit >= 0
+    upper_bound = (limit if reverse else offset + limit) if bounded else None
+    ambiguous = is_ambiguous_empty_window(offset, limit, reverse=reverse)
+    return WindowRangePlan(
+        offset=offset,
+        limit=limit,
+        reverse=reverse,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+        add_marker_rows=ambiguous and (lower_bound is not None or upper_bound is not None),
+        plain_first_page=not reverse and offset == 0 and bounded and limit > 0,
+        requires_total_count=ambiguous or limit is None,
+    )
+
+
+def order_entry_name_and_direction(entry: Any) -> tuple[str, bool] | None:
+    """Parse one order entry into ``(field name, descending)``, or ``None``.
+
+    The single parser of the ``deterministic_order`` entry vocabulary (the de
+    facto contract every order consumer must track): a string entry with ONE
+    optional leading ``-`` for descending (Django's ``order_by`` contract -
+    ``"--name"`` is not a valid order ref, so only the first dash is
+    direction), or an ``OrderBy``-like expression wrapping an ``F`` with a
+    ``.name`` (direction from its ``descending`` flag). Anything else - a raw
+    expression with no resolvable name, a bare ``"-"`` - returns ``None`` and
+    the caller decides its fallback posture.
+
+    Shared by the walker's order-column projection
+    (``walker.py::_order_entry_field_name``), the unique-terminal check
+    (``ends_in_unique_column`` below), and the lateral backend's column
+    resolution (``lateral_fetch.py::_order_columns``); historically each
+    spelled its own parse and two disagreed on dash stripping.
+    """
+    if isinstance(entry, str):
+        descending = entry.startswith("-")
+        name = entry[1:] if descending else entry
+        return (name, descending) if name else None
+    expression = getattr(entry, "expression", None)
+    name = getattr(expression, "name", None)
+    if name is None:
+        return None
+    return name, bool(getattr(entry, "descending", False))
+
+
 def ends_in_unique_column(effective: tuple, model: type) -> bool:
     """Return whether the effective ordering's terminal entry is a unique total order.
 
@@ -654,13 +762,10 @@ def ends_in_unique_column(effective: tuple, model: type) -> bool:
     """
     if not effective:
         return False
-    terminal = effective[-1]
-    if isinstance(terminal, str):
-        ref: str | None = terminal.lstrip("-")
-    else:
-        ref = getattr(getattr(terminal, "expression", None), "name", None)
-    if not ref:
+    parsed = order_entry_name_and_direction(effective[-1])
+    if parsed is None:
         return False
+    ref = parsed[0]
     pk = model._meta.pk
     if ref in ("pk", pk.name, pk.attname):
         return True
@@ -792,7 +897,13 @@ def apply_window_pagination(
     ``_dst_row_number_reversed`` window with the reversed order filters
     ``__lte=limit``. ``limit is None`` (or ``sys.maxsize``) means "no upper bound"
     - the offset filter still applies.
+
+    The range/marker DECISIONS (bounds, sentinel handling, the ambiguous-shape
+    marker) come from the shared ``window_range_plan`` - the same plan
+    ``build_lateral_sql`` renders as raw SQL - so the two window dialects
+    cannot drift; this function owns only the ``Q``-object rendering.
     """
+    range_plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
     queryset = queryset.order_by(*order_by)
     annotations = {
         WINDOW_ROW_NUMBER: Window(
@@ -804,9 +915,9 @@ def apply_window_pagination(
     if with_total_count:
         annotations[WINDOW_TOTAL_COUNT] = Window(Count(1), partition_by=partition_by)
     queryset = queryset.annotate(**annotations)
-    if reverse:
-        if offset:
-            queryset = queryset.filter(**{f"{WINDOW_ROW_NUMBER}__gt": offset})
+    if range_plan.reverse:
+        if range_plan.lower_bound is not None:
+            queryset = queryset.filter(**{f"{WINDOW_ROW_NUMBER}__gt": range_plan.lower_bound})
         queryset = queryset.annotate(
             **{
                 WINDOW_ROW_NUMBER_REVERSED: Window(
@@ -816,19 +927,19 @@ def apply_window_pagination(
                 ),
             },
         )
-        if limit is not None and limit != sys.maxsize:
-            queryset = queryset.filter(**{f"{WINDOW_ROW_NUMBER_REVERSED}__lte": limit})
+        if range_plan.upper_bound is not None:
+            queryset = queryset.filter(
+                **{f"{WINDOW_ROW_NUMBER_REVERSED}__lte": range_plan.upper_bound},
+            )
         return queryset
     range_q: Q | None = None
-    if offset:
-        range_q = Q(**{f"{WINDOW_ROW_NUMBER}__gt": offset})
-    # ``limit is None`` / ``sys.maxsize`` => no upper bound (relay's last-only
-    # forward shape sets ``end = sys.maxsize``; the offset filter alone applies).
-    if limit is not None and limit >= 0 and limit != sys.maxsize:
-        upper = Q(**{f"{WINDOW_ROW_NUMBER}__lte": offset + limit})
+    if range_plan.lower_bound is not None:
+        range_q = Q(**{f"{WINDOW_ROW_NUMBER}__gt": range_plan.lower_bound})
+    if range_plan.upper_bound is not None:
+        upper = Q(**{f"{WINDOW_ROW_NUMBER}__lte": range_plan.upper_bound})
         range_q = upper if range_q is None else (range_q & upper)
     if range_q is not None:
-        if offset > 0 or limit == 0:
+        if range_plan.add_marker_rows:
             # Marker rows (connection window rigor, workstream C - the
             # graph-node lesson "keep the parent's group identifiable in the
             # result", adapted to windowed prefetch): ``offset > 0`` (overshot

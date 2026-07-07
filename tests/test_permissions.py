@@ -54,10 +54,10 @@ from django.db import connection as db_connection
 from django.db import models
 from django.http import HttpRequest
 from graphql import GraphQLError
+from strategy_schemas import make_django_type
 
 from django_strawberry_framework import (
     DjangoOptimizerExtension,
-    DjangoType,
     finalize_django_types,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -135,12 +135,19 @@ def _make_type(
     keeps the *selected* surface scalar-only so finalization never has to resolve a
     relation field to a (possibly-unregistered) target type - the cascade walks the
     model's ``_meta.get_fields()`` edges regardless of what the type exposes (the
-    "Meta.fields-excluded FK edges still cascade" edge case).
+    "Meta.fields-excluded FK edges still cascade" edge case). The declaration
+    core is the shared ``tests/conftest.py::make_django_type``.
     """
-    namespace = {"Meta": type("Meta", (), {"model": model, "fields": fields, "primary": primary})}
-    if get_queryset is not None:
-        namespace["get_queryset"] = classmethod(get_queryset)
-    return type(name, (DjangoType,), namespace)
+    return make_django_type(
+        name,
+        model,
+        fields,
+        node=False,
+        meta_extra={"primary": primary},
+        namespace_extra=(
+            {"get_queryset": classmethod(get_queryset)} if get_queryset is not None else None
+        ),
+    )
 
 
 # =============================================================================

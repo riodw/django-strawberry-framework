@@ -92,6 +92,26 @@ def has_connection_sidecar_kwargs(kwargs: dict[str, Any]) -> bool:
     return has_connection_sidecar_input(filter_input=filter_input, order_by_input=order_by_input)
 
 
+def is_ambiguous_empty_window(offset: int, limit: int | None, *, reverse: bool = False) -> bool:
+    """Whether this window shape can produce an AMBIGUOUS empty page.
+
+    ``offset > 0`` (an overshot ``after:``) and ``limit == 0`` (``first: 0``)
+    both yield an empty page for a parent whose children all sit outside the
+    range AND for a parent with no children at all - historically forcing a
+    per-parent fallback. Workstream C disambiguates these shapes with marker
+    rows; reversed (``last``-only) windows never plan markers.
+
+    The plan-time/resolve-time contract shared - like the sidecar-kwarg family
+    above - by everything that must agree on "ambiguous": the window builders
+    that ADD the marker rows (``plans.py::window_range_plan``, feeding both
+    ``apply_window_pagination`` and the lateral SQL), the walker's forced
+    ``with_total_count`` for these shapes, and the resolver that CONSUMES rows
+    as marker-classified (``connection.py::_resolve_from_window``). One
+    predicate so the plan side and the consume side cannot drift.
+    """
+    return not reverse and (offset > 0 or limit == 0)
+
+
 @dataclass(frozen=True)
 class ConnectionWindowBounds:
     """The slice window ``(offset, limit, reverse)`` derived from pagination args.

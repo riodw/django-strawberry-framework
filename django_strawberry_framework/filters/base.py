@@ -84,6 +84,22 @@ class _EmptyListAwareFilterMethod(FilterMethod):
         return self.method(qs, self.f.field_name, value)
 
 
+def _apply_lookup_predicate(filter_instance: Any, qs: Any, value: Any) -> Any:
+    """Apply ``distinct`` + ONE ``<field>__<lookup>`` predicate carrying ``value``.
+
+    The whole-value-in-one-predicate form (never upstream's per-element OR
+    delegation) that both ``ArrayFilter.filter`` and the ``GlobalID`` ``in``
+    fix depend on: for a list-shaped ``value`` under ``lookup_expr="in"``,
+    splitting per element would hand Django a scalar rhs it iterates
+    (``pk__in="26"`` -> ``IN ('2','6')``). Shared so the two call sites - and
+    any future list-lookup filter - cannot drift back to per-element form.
+    """
+    if filter_instance.distinct:
+        qs = qs.distinct()
+    lookup = f"{filter_instance.field_name}__{filter_instance.lookup_expr}"
+    return filter_instance.get_method(qs)(**{lookup: value})
+
+
 class ArrayFilterMethod(_EmptyListAwareFilterMethod):
     """Empty-list-aware `FilterMethod` for `ArrayFilter` (see the shared base)."""
 
@@ -127,10 +143,7 @@ class ArrayFilter(TypedFilter):
         """Apply the lookup; `[]` is a real value (not `EMPTY_VALUES`-ish)."""
         if value in EMPTY_VALUES and value != []:
             return qs
-        if self.distinct:
-            qs = qs.distinct()
-        lookup = f"{self.field_name}__{self.lookup_expr}"
-        return self.get_method(qs)(**{lookup: value})
+        return _apply_lookup_predicate(self, qs, value)
 
 
 def validate_range(value: Any) -> None:
@@ -441,9 +454,7 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
             return super().filter(qs, node_ids)
         if not node_ids:
             return qs
-        if self.distinct:
-            qs = qs.distinct()
-        return self.get_method(qs)(**{f"{self.field_name}__{self.lookup_expr}": node_ids})
+        return _apply_lookup_predicate(self, qs, node_ids)
 
 
 class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):

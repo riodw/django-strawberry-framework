@@ -37,6 +37,8 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import connection
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
+from graphql_client import assert_graphql_data as _assert_graphql_data
+from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
 
 
@@ -59,27 +61,6 @@ def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
     ``import conftest`` boundary.
     """
     reload_all_project_app_schemas()
-
-
-def _post_graphql(query: str, *, client: Client | None = None, variables: dict | None = None):
-    graphql_client = client or Client()
-    payload: dict = {"query": query}
-    if variables is not None:
-        payload["variables"] = variables
-    return graphql_client.post(
-        "/graphql/",
-        data=payload,
-        content_type="application/json",
-    )
-
-
-def _assert_graphql_data(query: str, expected: dict, *, client: Client | None = None):
-    response = _post_graphql(query, client=client)
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    assert payload["data"] == expected
-    return response
 
 
 def _staff_client() -> Client:

@@ -53,24 +53,28 @@ limits) is a query parameter; nothing user-controlled is interpolated.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from typing import Any
 
 from django.db import connections
-from django.db.models import Prefetch, QuerySet
+from django.db.models import QuerySet
 from django.db.models.expressions import Window
 from django.db.models.query import ModelIterable
 
 from .join_taxonomy import LateralJoinShape
-from .nested_fetch import WINDOWED_STRATEGY, NestedConnectionRequest
+from .nested_fetch import (
+    WINDOWED_STRATEGY,
+    NestedConnectionRequest,
+    attach_windowed_prefetch,
+)
 from .plans import (
     WINDOW_ROW_NUMBER,
     WINDOW_ROW_NUMBER_REVERSED,
     WINDOW_TOTAL_COUNT,
     OptimizationPlan,
-    append_prefetch_unique,
-    apply_window_pagination,
+    deferred_loading_of,
+    order_entry_name_and_direction,
+    window_range_plan,
 )
 
 #: The ``unnest`` alias/column the lateral SQL binds parent ids to. The
@@ -191,40 +195,31 @@ def build_lateral_sql(
         f" WHERE {link_table}.{qn(spec.parent_link_column)} = {pid}"
     )
 
-    # The range predicate, mirroring ``apply_window_pagination`` exactly.
+    # The range predicate: the shared ``window_range_plan`` decisions (the
+    # same plan ``apply_window_pagination`` renders as ``Q`` objects), here
+    # rendered as raw SQL - only the rendering is lateral-specific.
     range_parts: list[str] = []
     params: list = [list(parent_ids)]
-    plain_first_page = (
-        not spec.reverse
-        and spec.offset == 0
-        and spec.limit is not None
-        and spec.limit != sys.maxsize
-        and spec.limit > 0
-    )
-    if plain_first_page:
+    range_plan = window_range_plan(offset=spec.offset, limit=spec.limit, reverse=spec.reverse)
+    if range_plan.plain_first_page:
         # ``first: N``: in-branch ORDER BY + LIMIT (see the docstring). The
         # row numbers are computed BEFORE the limit applies, so the returned
         # rows carry rn 1..N exactly as the filtered shape would.
         lateral_sql += f" ORDER BY {order_sql(descending_flip=False)} LIMIT %s"
-        params.append(spec.limit)
+        params.append(range_plan.limit)
         where_sql = ""
-    elif spec.reverse:
-        if spec.offset:
-            range_parts.append(f"{rn} > %s")
-            params.append(spec.offset)
-        if spec.limit is not None and spec.limit != sys.maxsize:
-            range_parts.append(f"{window}.{qn(WINDOW_ROW_NUMBER_REVERSED)} <= %s")
-            params.append(spec.limit)
-        where_sql = " AND ".join(range_parts)
     else:
-        if spec.offset:
+        if range_plan.lower_bound is not None:
             range_parts.append(f"{rn} > %s")
-            params.append(spec.offset)
-        if spec.limit is not None and spec.limit >= 0 and spec.limit != sys.maxsize:
-            range_parts.append(f"{rn} <= %s")
-            params.append(spec.offset + spec.limit)
+            params.append(range_plan.lower_bound)
+        if range_plan.upper_bound is not None:
+            bound_column = (
+                f"{window}.{qn(WINDOW_ROW_NUMBER_REVERSED)}" if range_plan.reverse else rn
+            )
+            range_parts.append(f"{bound_column} <= %s")
+            params.append(range_plan.upper_bound)
         where_sql = " AND ".join(range_parts)
-        if range_parts and (spec.offset > 0 or spec.limit == 0):
+        if range_plan.add_marker_rows:
             # Workstream C's ambiguous-shape marker: keep each parent's row 1
             # so an empty page and a childless parent stay distinguishable.
             where_sql = f"({where_sql}) OR {rn} = 1"
@@ -425,24 +420,13 @@ class LateralPrefetchStrategy:
         spec = _build_lateral_spec(request)
         if spec is None:
             return WINDOWED_STRATEGY.plan(request, plan)
-        windowed_queryset = apply_window_pagination(
-            request.child_queryset,
-            partition_by=request.join.partition_expr,
-            order_by=request.order_by,
-            offset=request.offset,
-            limit=request.limit,
-            reverse=request.reverse,
-            with_total_count=request.with_total_count,
+        # The shared windowed floor (``attach_windowed_prefetch``) with the
+        # lateral spec riding alongside: the lateral body IS the windowed body.
+        return attach_windowed_prefetch(
+            request,
+            plan,
+            wrap=lambda queryset: _as_lateral_queryset(queryset, spec),
         )
-        append_prefetch_unique(
-            plan.prefetch_related,
-            Prefetch(
-                request.lookup,
-                queryset=_as_lateral_queryset(windowed_queryset, spec),
-                to_attr=request.to_attr,
-            ),
-        )
-        return True
 
 
 #: The shared lateral-strategy singleton (stateless, like the windowed one).
@@ -493,67 +477,46 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
     order_columns = _order_columns(request.order_by, child_meta)
     if order_columns is None:
         return None
-    select_columns = _select_columns(query, child_meta)
+    select_columns = _select_columns(child_queryset, child_meta)
     if select_columns is None:
         return None
-    if request.join.lateral_shape is LateralJoinShape.THROUGH_TABLE:
-        parent_link_field, through_child_field = _through_link(request.django_field)
-        through_meta = parent_link_field.model._meta
-        return LateralWindowSpec(
-            model=child_queryset.model,
-            db_table=child_meta.db_table,
-            select_columns=select_columns,
-            order_columns=order_columns,
-            parent_link_field=parent_link_field,
-            parent_link_table=through_meta.db_table,
-            parent_link_column=parent_link_field.column,
-            through_table=through_meta.db_table,
-            through_child_column=through_child_field.column,
-            child_pk_column=child_pk_column,
-            prefetch_value_aliases=(f"_prefetch_related_val_{parent_link_field.attname}",),
-            offset=request.offset,
-            limit=request.limit,
-            reverse=request.reverse,
-            with_total_count=request.with_total_count,
+    # Only the five link-shaped fields differ between the two join shapes;
+    # the resolved link FIELD OBJECTS come from the request's join descriptor
+    # (``join_taxonomy.classify_relation_join`` owns everything join-shaped a
+    # relation field implies - this function only READS it).
+    join = request.join
+    parent_link_field = join.parent_link_field
+    if join.lateral_shape is LateralJoinShape.THROUGH_TABLE:
+        through_table = parent_link_field.model._meta.db_table
+        parent_link_table = through_table
+        through_child_column = join.through_child_field.column
+        prefetch_value_aliases: tuple[str, ...] = (
+            f"_prefetch_related_val_{parent_link_field.attname}",
         )
-    # DIRECT_FK: the child table itself carries the parent id (reverse FK /
-    # reverse one-to-one; the walker never plans forward-single relations).
-    parent_link_field = request.django_field.field
+    else:
+        # DIRECT_FK: the child table itself carries the parent id (reverse FK /
+        # reverse one-to-one; the walker never plans forward-single relations).
+        through_table = None
+        parent_link_table = child_meta.db_table
+        through_child_column = None
+        prefetch_value_aliases = ()
     return LateralWindowSpec(
         model=child_queryset.model,
         db_table=child_meta.db_table,
         select_columns=select_columns,
         order_columns=order_columns,
         parent_link_field=parent_link_field,
-        parent_link_table=child_meta.db_table,
+        parent_link_table=parent_link_table,
         parent_link_column=parent_link_field.column,
-        through_table=None,
-        through_child_column=None,
+        through_table=through_table,
+        through_child_column=through_child_column,
         child_pk_column=child_pk_column,
-        prefetch_value_aliases=(),
+        prefetch_value_aliases=prefetch_value_aliases,
         offset=request.offset,
         limit=request.limit,
         reverse=request.reverse,
         with_total_count=request.with_total_count,
     )
-
-
-def _through_link(field: Any) -> tuple[Any, Any]:
-    """The M2M through table's (parent-side FK, child-side FK) for ``field``.
-
-    Resolved from the forward ``ManyToManyField``'s own naming
-    (``m2m_field_name`` / ``m2m_reverse_field_name``), which stays correct
-    for self-referential M2Ms where scanning through-model FKs by target
-    would be ambiguous. ``field`` is either the forward field (parent owns
-    it) or the ``ManyToManyRel`` (parent is the target; the sides swap).
-    """
-    forward_field = getattr(field, "field", field)
-    through_meta = forward_field.remote_field.through._meta
-    source_fk = through_meta.get_field(forward_field.m2m_field_name())
-    target_fk = through_meta.get_field(forward_field.m2m_reverse_field_name())
-    if forward_field is field:
-        return source_fk, target_fk  # forward: parent side is the source FK.
-    return target_fk, source_fk  # reverse: parent side is the target FK.
 
 
 def _order_columns(order_by: tuple, child_meta: Any) -> tuple[tuple[str, bool], ...] | None:
@@ -569,9 +532,11 @@ def _order_columns(order_by: tuple, child_meta: Any) -> tuple[tuple[str, bool], 
     for entry in order_by:
         if not isinstance(entry, str):
             return None
-        descending = entry.startswith("-")
-        name = entry[1:] if descending else entry
-        if not name or name == "?" or "__" in name:
+        parsed = order_entry_name_and_direction(entry)
+        if parsed is None:
+            return None
+        name, descending = parsed
+        if name == "?" or "__" in name:
             return None
         if name == "pk":
             name = child_meta.pk.attname
@@ -585,15 +550,18 @@ def _order_columns(order_by: tuple, child_meta: Any) -> tuple[tuple[str, bool], 
     return tuple(columns)
 
 
-def _select_columns(query: Any, child_meta: Any) -> tuple[tuple[str, str], ...] | None:
+def _select_columns(queryset: Any, child_meta: Any) -> tuple[tuple[str, str], ...] | None:
     """The loaded ``(attname, column)`` projection in concrete-field order.
 
     Mirrors the ``.only()`` deferred-loading shape the walker plans (names
     plus the pk); the full projection when nothing is deferred. A ``defer()``
     shape (exclusion list) is not a walker product - downgrade rather than
-    re-implement Django's defer semantics.
+    re-implement Django's defer semantics. The Django-private
+    ``deferred_loading`` read goes through the shared
+    ``plans.py::deferred_loading_of`` (never ``None`` here - the strategy
+    only reaches this with a real ``QuerySet``).
     """
-    names, defer = query.deferred_loading
+    names, defer = deferred_loading_of(queryset)
     if defer:
         if names:
             return None

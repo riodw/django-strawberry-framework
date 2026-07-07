@@ -34,6 +34,7 @@ windowed default.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -139,6 +140,48 @@ class NestedConnectionStrategy(Protocol):
         """Attach fetch directives for one nested connection; ``True`` = planned."""
 
 
+def attach_windowed_prefetch(
+    request: NestedConnectionRequest,
+    plan: OptimizationPlan,
+    *,
+    wrap: Callable[[Any], Any] | None = None,
+) -> bool:
+    """Window the request's child queryset and carry it as a ``to_attr`` Prefetch.
+
+    The correctness FLOOR every strategy shares: ``apply_window_pagination``
+    over ``request.child_queryset`` (spec-033's windowed prefetch, verbatim),
+    attached under ``request.lookup`` / ``request.to_attr``. The windowed
+    strategy calls it bare; the lateral strategy passes ``wrap`` to rebind the
+    windowed queryset as its ``LateralQuerySet`` (same ORM body, lateral spec
+    alongside). A future strategy (e.g. a portable correlated-subquery
+    backend) inherits the floor - and any new window parameter - by calling
+    this instead of copying the argument threading.
+
+    Always returns ``True`` (the strategy-protocol "planned" verdict) so
+    strategy ``plan`` bodies can end with ``return attach_windowed_prefetch(...)``.
+    """
+    windowed_queryset = apply_window_pagination(
+        request.child_queryset,
+        partition_by=request.join.partition_expr,
+        order_by=request.order_by,
+        offset=request.offset,
+        limit=request.limit,
+        reverse=request.reverse,
+        with_total_count=request.with_total_count,
+    )
+    if wrap is not None:
+        windowed_queryset = wrap(windowed_queryset)
+    append_prefetch_unique(
+        plan.prefetch_related,
+        Prefetch(
+            request.lookup,
+            queryset=windowed_queryset,
+            to_attr=request.to_attr,
+        ),
+    )
+    return True
+
+
 class WindowedPrefetchStrategy:
     """The default: spec-033's windowed prefetch, moved verbatim from the walker."""
 
@@ -146,24 +189,7 @@ class WindowedPrefetchStrategy:
 
     def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
         """Window the child queryset and carry it as a ``to_attr`` Prefetch."""
-        windowed_queryset = apply_window_pagination(
-            request.child_queryset,
-            partition_by=request.join.partition_expr,
-            order_by=request.order_by,
-            offset=request.offset,
-            limit=request.limit,
-            reverse=request.reverse,
-            with_total_count=request.with_total_count,
-        )
-        append_prefetch_unique(
-            plan.prefetch_related,
-            Prefetch(
-                request.lookup,
-                queryset=windowed_queryset,
-                to_attr=request.to_attr,
-            ),
-        )
-        return True
+        return attach_windowed_prefetch(request, plan)
 
 
 #: The shared default-strategy singleton (stateless, so one instance serves

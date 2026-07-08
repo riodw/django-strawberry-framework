@@ -22,6 +22,13 @@
 #   None for the test, then restore the saved values on teardown.
 # - Evict tests.middleware.debug_toolbar_urls again on teardown so the next
 #   import recomputes urlpatterns under that test's DEBUG value.
+# - Keep this fixture LOCAL to this file for Slice 1; do NOT promote it to a
+#   package-wide helper yet (too many moving parts, P3.1). Name the inner pieces
+#   clearly: _evict_debug_toolbar_urlconf(), _debug_toolbar_cache_state() (the
+#   _panel_classes/_urlpatterns + show-toolbar callback-cache save/clear/restore),
+#   and _middleware_with_debug_toolbar(real_middleware). Factor to a shared
+#   helper only if a later card (e.g. response-extensions) needs the same
+#   machinery.
 #
 # Toolbar-present real-request pseudo-code:
 # - Mark the present-path group with pytest.mark.django_db.
@@ -51,11 +58,22 @@
 #   assert the body is exactly the probe payload with no debugToolbar key.
 #
 # Toolbar-absent pseudo-code:
-# - Reuse the channels two-sided restore discipline, targeting
-#   debug_toolbar*, django_strawberry_framework.middleware.debug_toolbar, and
-#   the parent django_strawberry_framework.middleware.debug_toolbar attribute.
-# - The import blocker must intercept only absolute top-level debug_toolbar
-#   imports so the package leaf reaches require_debug_toolbar().
+# - Keep the two-sided restore discipline, targeting debug_toolbar*,
+#   django_strawberry_framework.middleware.debug_toolbar, and the parent
+#   django_strawberry_framework.middleware "debug_toolbar" attribute.
+# - Simulate absence with an IMPORTLIB-COMPATIBLE sentinel, NOT a bare
+#   builtins.__import__ block (P1.1): evict debug_toolbar* from sys.modules,
+#   then set sys.modules["debug_toolbar"] = None for the absence context.
+#   require_debug_toolbar() calls require_optional_module("debug_toolbar") ->
+#   importlib.import_module(...), which routes through
+#   importlib._bootstrap._gcd_import and does NOT consult builtins.__import__ -
+#   a __import__ block is therefore a no-op for the guard (it re-imports the
+#   still-installed toolbar and the assertion fails for the wrong reason). A
+#   None entry in sys.modules makes importlib.import_module raise
+#   ModuleNotFoundError, which the guard wraps in the hint. (Empirically
+#   verified against the installed `channels`: block -> no raise; None sentinel
+#   -> raises. Same sentinel shape documented in
+#   utils/imports.py::import_attr_if_importable.)
 # - Assert import django_strawberry_framework and import
 #   django_strawberry_framework.middleware both succeed.
 # - Assert importing the leaf raises ImportError with the re-typed literal
@@ -63,7 +81,18 @@
 # - After restore, assert the leaf imports again in the same process and the
 #   parent attribute is the same object as sys.modules[leaf_name].
 # - Assert require_debug_toolbar() returns the imported top-level debug_toolbar
-#   module when present and raises the install hint under the import block.
+#   module when present and raises the install hint under the None sentinel.
+#
+# Present-but-broken-install pseudo-code (degraded path, P1.2):
+# - Leave a real/importable top-level debug_toolbar, but set
+#   sys.modules["debug_toolbar.middleware"] = None (or monkeypatch
+#   importlib.import_module narrowly for that exact submodule). Then:
+#   require_debug_toolbar() PASSES (it imports only the top-level package), but
+#   the leaf module's own `import debug_toolbar.middleware` statement fails.
+#   Assert importing the leaf raises the RAW ImportError naming
+#   debug_toolbar.middleware WITHOUT _DEBUG_TOOLBAR_INSTALL_HINT, and __cause__
+#   is the original failing import. Proves the guard wraps only the top-level
+#   package and never misreports a broken install as "not installed".
 #
 # Targeted-unit pseudo-code:
 # - StreamingHttpResponse: after stock _postprocess completes, assert the
@@ -71,6 +100,13 @@
 # - _get_payload with toolbar.request_id = None returns None.
 # - _get_payload with a panel whose has_content is false emits title None while
 #   preserving subtitle behavior.
+# - _get_payload when the decoded JSON body is NOT an object (e.g. a JSON list)
+#   returns None, so the JSON path leaves the body unmodified (the P2.3 guard).
+# - process_view with view_func.view_class set to a non-class (e.g. the string
+#   "not-a-class"): assert request._is_graphiql is False and no exception - the
+#   isinstance(view, type) guard (P2.1) short-circuits before issubclass, which
+#   would otherwise raise TypeError. This is the JSON/HTML negatives' blind spot:
+#   Tests 7-8 only drive real class/function views, never a broken view_class.
 # - HTML and JSON mutation paths refresh Content-Length only when that header
 #   was already present.
 #

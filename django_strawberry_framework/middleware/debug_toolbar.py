@@ -47,6 +47,12 @@ implemented yet.
 #      toolbar.request_id is missing.
 #    - Decode response.content using response.charset.
 #    - json.loads(..., object_pairs_hook=collections.OrderedDict).
+#    - Guard non-object bodies: if the decoded payload is not a dict, return
+#      None (P2.3). A JSON list/scalar is not a valid single GraphQL response,
+#      but a malformed test view or a future batch-response shape could emit
+#      one; without the guard `payload["debugToolbar"] = ...` raises and this
+#      dev-only tool turns an unusual response into a 500. Deliberate, documented
+#      divergence from upstream, which assumes json.loads returns a mapping.
 #    - Attach a top-level debugToolbar object with requestId and panels.
 #    - Iterate reversed(toolbar.enabled_panels).
 #    - Skip the TemplatesPanel entry.
@@ -56,8 +62,15 @@ implemented yet.
 # 5. Implement DebugToolbarMiddleware by subclassing the stock toolbar class:
 #    - process_view:
 #        view = getattr(view_func, "view_class", None)
-#        request._is_graphiql = bool(view and issubclass(view, BaseView))
-#      Do not call super(); stock debug-toolbar defines no process_view hook.
+#        request._is_graphiql = isinstance(view, type) and issubclass(view, BaseView)
+#      Guard with isinstance(view, type) BEFORE issubclass (P2.1): this
+#      middleware is installed globally, so process_view runs for non-GraphQL
+#      traffic too. A non-class `view_class` attribute (some decorators/helpers
+#      attach one) would make a bare `issubclass` raise TypeError and 500 an
+#      unrelated view. Deliberate, documented divergence from upstream's
+#      `bool(view and issubclass(...))`; every real Strawberry Django view still
+#      matches. Do not call super(); stock debug-toolbar defines no process_view
+#      hook.
 #    - _postprocess:
 #        response = super()._postprocess(request, response, toolbar)
 #        if response.streaming: return response
@@ -87,6 +100,10 @@ implemented yet.
 #    - No helper extraction for the local operationName sniff; its broad
 #      exception semantics are upstream-specific and should not become a
 #      generic JSON parsing helper.
+#    - Exactly two deliberate robustness divergences from upstream's verbatim
+#      shape, both narrow and both pinned by a targeted unit: the
+#      isinstance(view, type) guard in process_view (P2.1) and the non-dict
+#      payload bail in _get_payload (P2.3). No other behavior differs.
 
 raise NotImplementedError(
     "TODO(spec-042 Slice 1): DebugToolbarMiddleware is not implemented yet; "

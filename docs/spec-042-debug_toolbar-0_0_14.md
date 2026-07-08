@@ -165,9 +165,10 @@ Revision history (kept inline so the spec is self-contained):
   "no package-specific mutation", not "no touch"); the absence import blocker
   pinned to absolute top-level `debug_toolbar` names only (the
   `tests/test_routers.py` scoping), so the leaf always reaches
-  `require_debug_toolbar()`; and the template-port checklist gained a
-  mechanical guard (Test 16) asserting the five copied-asset invariants as
-  substring checks.
+  `require_debug_toolbar()` (**this last point superseded by Revision 5** — the
+  `importlib`-based guard needs a `sys.modules` sentinel, not a `__import__`
+  block); and the template-port checklist gained a mechanical guard (Test 16)
+  asserting the five copied-asset invariants as substring checks.
 - **Revision 4** — fourth-review absorption (2026-07-07, source-verified
   against the debug-toolbar 7.0.0 tag). Two factual corrections: the
   missing-URLconf failure mode rewritten everywhere it appears (User-facing
@@ -187,6 +188,36 @@ Revision history (kept inline so the spec is self-contained):
   prerequisite, surfacing on `/graphql/` under this middleware); and the
   template-port paragraph corrected to a byte-identical copy claim (the
   upstream asset contains no Django template tags to adapt).
+- **Revision 5** — fifth-review absorption (2026-07-08), verified empirically
+  before absorbing. **P1 — the absence-test mechanism.** The toolbar-absent
+  fixture no longer copies the router/DRF `builtins.__import__` block:
+  `require_debug_toolbar()` is a thin
+  [`require_optional_module`][glossary-require-optional-module] wrapper, i.e. an
+  `importlib.import_module("debug_toolbar")` call, and `importlib` routes
+  through `importlib._bootstrap._gcd_import` — it does **not** consult
+  `builtins.__import__`. So the block is a no-op for the guard: it re-imports
+  the still-installed toolbar, and the raise (if any) comes from a later
+  hintless statement-import, not the wrapped guard — Tests 10/12 would have
+  failed for the wrong reason. Corrected to an importlib-compatible
+  `sys.modules["debug_toolbar"] = None` sentinel everywhere the mechanism is
+  prescribed (this glossary bullet, Decision 9, D3, the Slice checklist, the
+  Test-plan header, Tests 10/12); the eviction + **two-sided restore**
+  discipline is unchanged. This supersedes Revision 3's "the leaf always reaches
+  `require_debug_toolbar()` under the block" reasoning. **P1 — the degraded
+  path.** A present-but-broken-install test (Test 11a) was added so the numbered
+  plan actually pins what the [Error shapes](#error-shapes) prose already
+  claimed it pinned. **P2 — two narrow, documented robustness divergences** from
+  the verbatim upstream borrow, each pinned by a targeted unit: `process_view`
+  guards `issubclass` with `isinstance(view, type)` so a non-class `view_class`
+  on unrelated global traffic cannot `TypeError`/500 (a `TypeError` was
+  reproduced); `_get_payload` bails to `None` on a non-object JSON body.
+  **Documentation:** `application/graphql-response+json` stated explicitly out
+  of scope (a follow-up compatibility item); a strict-CSP caveat added for the
+  inline GraphiQL bridge script; the dependency-floor prose reworded off
+  "current release" to a verified-floor claim (`7.0.0` confirmed on PyPI as the
+  first release carrying the `Framework :: Django :: 6.0` classifier). No change
+  to the template-port guard (already substring-based, not a golden file) or the
+  fixture-locality question (already file-local; inner-helper names now named).
 
 ## Key glossary references
 
@@ -219,9 +250,12 @@ used throughout the spec:
   import time
   ([Decision 5](#decision-5--soft-django-debug-toolbar-dependency-an-import-time-require_debug_toolbar-guard-the-rest_framework-shape)).
 - [Eviction-simulated absence][glossary-eviction-simulated-absence] — the test
-  discipline for the toolbar-absent path: a `builtins.__import__` block plus
-  strict `sys.modules` eviction with the **two-sided** (parent-attribute)
-  restore, exactly the [`spec-041`][spec-041] refinement.
+  discipline for the toolbar-absent path: strict `sys.modules` eviction with the
+  **two-sided** (parent-attribute) restore, exactly the [`spec-041`][spec-041]
+  refinement — but the absence itself is simulated with an importlib-compatible
+  `sys.modules["debug_toolbar"] = None` sentinel, **not** the router/DRF
+  `builtins.__import__` block, because the guard imports via `importlib`, which
+  the block does not intercept (Decision 9, Revision 5).
 - [`require_optional_module`][glossary-require-optional-module] — the raising
   optional-import primitive [`spec-041`][spec-041] Slice 1 landed in
   [`utils/imports.py`][utils-imports]; `require_debug_toolbar()` is a thin
@@ -390,14 +424,18 @@ in-process fakeshop request tests.
         units (streaming early-out, no-`request_id` bail / `has_content`
         false, header-present `Content-Length` refreshes) and the
         template-port guard over the five copied-asset invariants.
-        **toolbar-absent**: the eviction + `builtins.__import__`-block pattern
-        from [`tests/rest_framework/test_soft_dependency.py`][test-soft-dependency]
-        with the two-sided parent-attribute restore — `import
-        django_strawberry_framework` and `import
+        **toolbar-absent**: the eviction + two-sided parent-attribute restore
+        pattern from
+        [`tests/rest_framework/test_soft_dependency.py`][test-soft-dependency],
+        but with an importlib-compatible `sys.modules["debug_toolbar"] = None`
+        sentinel in place of the `builtins.__import__` block (the guard imports
+        via `importlib`, which the block does not intercept — Revision 5) —
+        `import django_strawberry_framework` and `import
         django_strawberry_framework.middleware` both succeed; `import
         django_strawberry_framework.middleware.debug_toolbar` raises
         `ImportError` carrying the install hint (matched against a re-typed
-        literal, the `_HINT_SUBSTRING` drift-catch discipline)
+        literal, the `_HINT_SUBSTRING` drift-catch discipline); plus the
+        present-but-broken-install degraded test (Test 11a)
         ([Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence)
         / [Test plan](#test-plan)).
   - [ ] Every new symbol carries its docstring (the [`docs/TREE.md`][tree] render
@@ -648,17 +686,29 @@ is consistent with the module's shape: everything hard lives in
 - **`_get_payload(request, response, toolbar) -> dict | None`** — module-level
   helper: bail (`None`) when the toolbar assigned no `request_id`; otherwise
   decode the JSON response body (`force_str` with the response charset,
-  `object_pairs_hook=OrderedDict`), attach
+  `object_pairs_hook=OrderedDict`), **bail (`None`) again if the decoded body is
+  not a mapping** (the P2.3 guard — see below), attach
   `payload["debugToolbar"] = {"panels": {...}, "requestId": toolbar.request_id}`,
   and fill `panels` from `reversed(toolbar.enabled_panels)` with each panel's
   `title` (only when `panel.has_content`, called if callable) and
   `nav_subtitle` (called if callable), **skipping `TemplatesPanel`** (its
-  content churns per request and floods the payload).
+  content churns per request and floods the payload). The non-mapping bail is
+  the card's second deliberate divergence from upstream (which does
+  `payload = json.loads(...)` then `payload["debugToolbar"] = ...` assuming a
+  dict): a valid single GraphQL response is always a JSON object, but a
+  malformed test view or a future batch-response shape could decode to a list or
+  scalar, and without the guard the subscript-assign raises and this dev-only
+  tool turns an unusual response into a 500. `if not isinstance(payload, dict):
+  return None` keeps the toolbar silent on such responses instead. Test 14
+  pins it.
 - **`DebugToolbarMiddleware(debug_toolbar.middleware.DebugToolbarMiddleware)`**
   with exactly two methods:
-  - `process_view` — `request._is_graphiql = bool(view and issubclass(view,
-    BaseView))` where `view = getattr(view_func, "view_class", None)` and
-    `BaseView` is `strawberry.django.views.BaseView`.
+  - `process_view` — `request._is_graphiql = isinstance(view, type) and
+    issubclass(view, BaseView)` where `view = getattr(view_func, "view_class",
+    None)` and `BaseView` is `strawberry.django.views.BaseView`. The
+    `isinstance(view, type)` guard is a deliberate, narrow divergence from
+    upstream's `bool(view and issubclass(...))` — see
+    [Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge).
   - `_postprocess` (decorated `@override`) — call `super()._postprocess(...)`
     first (the stock toolbar does its own work: handle insertion into the
     GraphiQL HTML page, history tracking); return early for
@@ -881,6 +931,29 @@ Consumer-visible behavior:
   the overrides pass everything through, and the stock toolbar behavior is all
   that remains. The GLOSSARY body documents the detection contract so this
   reads as designed behavior, not silence.
+- **A GraphQL JSON response whose media type is not `application/json`** — the
+  JSON-injection path keys on `Content-Type == "application/json"` exactly as
+  upstream does, so a response served as `application/graphql-response+json`
+  (the GraphQL-over-HTTP "watershed" media type) is **not** injected. This is
+  **in scope as a documented non-goal, not a defect** (P2.2): Strawberry's
+  Django view returns `application/json` today, so the card matches upstream and
+  does not diverge for a media type the engine does not yet emit. Broadening the
+  sniff to a `{"application/json", "application/graphql-response+json"}` set is a
+  clean follow-up compatibility card if/when Strawberry emits the newer type;
+  pinning the decision here keeps the gap explicit rather than a silent future
+  regression. (Contrast the two divergences the card *does* take — the
+  `isinstance` and non-mapping guards — which prevent crashes rather than add a
+  speculative feature.)
+- **A strict Content Security Policy on the GraphiQL page** — the HTML path
+  appends an inline `<script>` (the ported bridge asset) to the GraphiQL
+  response, matching upstream and its `django-graphiql-debug-toolbar` lineage. A
+  strict CSP without an `unsafe-inline` / matching hash for that script will
+  **block it**: the server-side toolbar history still records, but the GraphiQL
+  page will not consume or strip the `debugToolbar` key from JSON responses, so
+  a non-IDE client watching that endpoint could observe the extra top-level
+  `debugToolbar` key. Dev-only, but real; the Slice-2 GLOSSARY / user-facing
+  note must say a CSP consumer has to allow the toolbar script path or accept
+  that the GraphiQL DOM updates will not run (P2.4).
 
 ## Architectural decisions
 
@@ -1107,7 +1180,8 @@ lazy-symbol][glossary-pep-562-lazy-export] variant:
    literal** — and deliberately above upstream's `>=6.0.0`: per
    [PyPI metadata][debug-toolbar-pypi],
    `django-debug-toolbar` `6.0.0` (2025-07-25) classifies Django 4.2–5.2 only,
-   while `7.0.0` (the current release) is the first carrying the
+   while `7.0.0` is the **first checked release whose metadata covers the
+   package's advertised Django 6.0 range** — it carries the
    `Framework :: Django :: 6.0` classifier, with `django>=5.2` and
    `python>=3.10` — exactly matching the package's own floors
    ([`pyproject.toml`][pyproject]: `Django>=5.2`, `requires-python >=3.10`,
@@ -1164,15 +1238,21 @@ already owns"):
 - **`process_view(request, view_func, *args, **kwargs)`** — resolve
   `view = getattr(view_func, "view_class", None)` (the attribute Django's
   `View.as_view()` sets on the returned callable) and tag
-  `request._is_graphiql = bool(view and issubclass(view, BaseView))`. The
-  override does not chain to `super()` — and does not need to: the stock
-  `debug_toolbar.middleware.DebugToolbarMiddleware` defines no `process_view`
-  of its own (it is a `__call__` / `__acall__`-style middleware across the
-  toolbar's whole `3.8`–`6.x` line), so there is no stock hook to preserve.
-  Mirroring upstream exactly keeps the diff-against-upstream empty. (Verified
-  against the upstream source: its `process_view` body is the two lines above,
-  no `super()` call — and against the toolbar sources: no stock `process_view`
-  to chain to.)
+  `request._is_graphiql = isinstance(view, type) and issubclass(view,
+  BaseView)`. The override does not chain to `super()` — and does not need to:
+  the stock `debug_toolbar.middleware.DebugToolbarMiddleware` defines no
+  `process_view` of its own (it is a `__call__` / `__acall__`-style middleware
+  across the toolbar's whole `3.8`–`6.x` line), so there is no stock hook to
+  preserve. This method's one deliberate divergence from upstream (the first of
+  the module's two — the other is `_get_payload`'s non-mapping bail) is the
+  `isinstance(view, type)` guard in front of `issubclass`: upstream writes
+  `bool(view and issubclass(...))`, which raises `TypeError` if a `view_class`
+  attribute is ever a non-class, and this middleware runs `process_view` for
+  **all** global traffic (see
+  [Decision 7](#decision-7--strawberry-view-detection-issubclass-against-strawberrydjangoviewsbaseview-engine-owned--resolving-the-cards-djangographqlview-hedge)).
+  Otherwise mirroring upstream. (Verified against the upstream source: its
+  `process_view` body is the two lines above modulo that guard, no `super()`
+  call — and against the toolbar sources: no stock `process_view` to chain to.)
 - **`_postprocess(request, response, toolbar)`** — chain to
   `super()._postprocess(...)` **first**. What the stock method does at 7.0.0,
   in order: generates stats and server timing for **every** enabled panel;
@@ -1205,7 +1285,10 @@ already owns"):
     a payload — re-encode `response.content = json.dumps(payload,
     cls=DjangoJSONEncoder)` and refresh `Content-Length`.
 - **`_get_payload`** — `None` when the toolbar assigned no `request_id`
-  (nothing to reference); otherwise decode the response body with the
+  (nothing to reference); `None` again when the decoded body is not a mapping
+  (the P2.3 divergence: a non-object JSON body would otherwise make the
+  `debugToolbar` subscript-assign raise and 500 the request); otherwise decode
+  the response body with the
   response's own charset, attach `debugToolbar = {"panels": ..., "requestId":
   toolbar.request_id}` from `reversed(toolbar.enabled_panels)` — per panel,
   `title` only when `panel.has_content` (else `None`, which the frontend
@@ -1262,7 +1345,7 @@ This is the "Strawberry stays as the engine" line ([`README.md`][readme])
 applied to view identity, the same way [`spec-041`][spec-041] Decision 7
 applied it to the Channels consumers.
 
-Two mechanical notes the implementation carries:
+Three mechanical notes the implementation carries:
 
 - `strawberry.django.views` is **Strawberry core's** Django integration (inside
   the pinned `strawberry-graphql>=0.262.0` floor — presence re-confirmed at the
@@ -1275,6 +1358,23 @@ Two mechanical notes the implementation carries:
   function `__dict__` via `functools.wraps` — so the fakeshop view is detected
   through its decorator, and the test plan pins exactly that path (the tests
   drive fakeshop's real decorated URL).
+- **The `issubclass` call is guarded with `isinstance(view, type)`** — the one
+  deliberate divergence from upstream's verbatim `bool(view and
+  issubclass(view, BaseView))`, added because this middleware is installed
+  globally and `process_view` runs for **every** request, GraphQL or not.
+  `view = getattr(view_func, "view_class", None)` is normally `None` (function
+  views) or a class (`View.as_view()`), but nothing forbids an unrelated
+  decorator or helper from attaching a **non-class** `view_class`; a bare
+  `issubclass(non_class, BaseView)` raises `TypeError`, which — on the global
+  middleware path — would 500 an unrelated view. `isinstance(view, type)`
+  short-circuits to `False` first (reproduced: `issubclass("x", BaseView)`
+  raises `TypeError: issubclass() arg 1 must be a class`). This is a strict
+  robustness improvement, not a detection change: `None` and every real view
+  class resolve identically to upstream, so no legitimate Strawberry view's
+  detection differs. It joins the card's other documented divergences (the
+  `middleware/` rename, the `>=7.0.0` floor, the dropped `@override`) rather
+  than silently breaking the "borrow verbatim" posture, and Test 14a pins the
+  non-class case the real-request tests cannot reach.
 
 Alternatives considered (and rejected):
 
@@ -1464,24 +1564,38 @@ regardless of what ran earlier on the worker. The absence / guard tests
 execute GraphQL and skip the reload.
 
 The toolbar-absent path reuses the
-[eviction-simulated absence][glossary-eviction-simulated-absence] discipline
-verbatim: a `builtins.__import__` block scoped exactly the way
-[`tests/test_routers.py`][test-routers]'s is — it intercepts only **absolute,
-top-level** imports whose name is `debug_toolbar` or starts with
-`debug_toolbar.` (never the package leaf
-`django_strawberry_framework.middleware.debug_toolbar`, never relative
-imports), so the leaf module itself always imports far enough for
-`require_debug_toolbar()` to wrap the absence in the install hint rather than
-dying on a raw import failure — plus strict
-`sys.modules` eviction of `debug_toolbar*` and
+[eviction-simulated absence][glossary-eviction-simulated-absence] discipline —
+strict `sys.modules` eviction of `debug_toolbar*` and
 `django_strawberry_framework.middleware.debug_toolbar`, with the **two-sided
 restore** (the parent `middleware` package's `debug_toolbar` attribute is
 saved/restored alongside the `sys.modules` entries, putting the original module
 object back in both places — the [`spec-041`][spec-041] Revision-2 refinement
-that closes the `pytest-xdist` order-dependence hole). The install hint is
-matched against a **re-typed literal** in the test file (the `_HINT_SUBSTRING`
-drift-catch discipline — a test asserting the imported constant against itself
-could never notice the hint drifting from the dev-group floor).
+that closes the `pytest-xdist` order-dependence hole) — but simulates the
+absence itself with an **importlib-compatible `sys.modules["debug_toolbar"] =
+None` sentinel, not the `builtins.__import__` block the router/DRF fixtures
+use** (Revision 5). The distinction is load-bearing here in a way it is not for
+the router: `require_debug_toolbar()` is a thin
+[`require_optional_module`][glossary-require-optional-module] wrapper, i.e. an
+`importlib.import_module("debug_toolbar")` call, and `importlib` routes through
+`importlib._bootstrap._gcd_import` — it does **not** consult
+`builtins.__import__`. A `__import__` block is therefore a no-op for this guard:
+it re-imports the still-installed toolbar and the guard returns it, so the raise
+(if any) would come from a later hintless statement-import rather than the
+wrapped guard — Tests 10/12 would fail for the wrong reason. A `None` entry in
+`sys.modules` is the documented importlib absence sentinel: `import_module`
+raises `ModuleNotFoundError` (`"import of debug_toolbar halted; None in
+sys.modules"`), which the guard catches and re-raises as the install hint.
+(Empirically verified against the installed `channels`: under a `__import__`
+block `importlib.import_module` still returns the real module; under the `None`
+sentinel it raises. The same sentinel shape is documented in
+[`utils/imports.py`][utils-imports]'s `import_attr_if_importable`.) The block is
+still fine for the DRF/router fixtures — DRF's guard is a direct `import`
+statement, and the router's builder statement-imports `channels.*` submodules
+that the block *does* see — but this guard's importlib shape needs the sentinel.
+The install hint is matched against a **re-typed literal** in the test file (the
+`_HINT_SUBSTRING` drift-catch discipline — a test asserting the imported
+constant against itself could never notice the hint drifting from the dev-group
+floor).
 
 Alternatives considered (and rejected):
 
@@ -1590,20 +1704,29 @@ deliberate *non*-reuse carries its reason (the [`spec-040`][spec-040] /
   (the `_HINT_SUBSTRING` drift-catch discipline from
   [`test_soft_dependency.py`][test-soft-dependency], now three-for-three across
   the soft dependencies).
-- [ ] **D3** — the toolbar-absent fixture reuses the eviction /
-  `builtins.__import__`-block / **two-sided restore** pattern (the
-  [`spec-041`][spec-041] refinement: the parent `middleware` package's
-  attribute is saved/restored together with the `sys.modules` entries, so no
-  test order leaves the attribute path and the import path holding different
-  module objects). Structure copied, target names swapped. **This is the third
-  copy of the absence fixture** (DRF, router, now toolbar), so the shape is now
-  clear enough to name the follow-on extraction — a small `tests/` helper that
-  (a) evicts a set of package-owned and third-party module names, (b) supports
-  parent-attribute save/restore, and (c) takes a pluggable import-blocker
-  predicate. Extracting it is an **in-slice call only if it does not churn the
-  existing DRF/router absence tests**; do not block this card on it, and do not
-  let the third copy drift silently from the two-sided-restore discipline —
-  whichever way the call goes, the three copies must stay behavior-identical.
+- [ ] **D3** — the toolbar-absent fixture reuses the eviction + **two-sided
+  restore** pattern (the [`spec-041`][spec-041] refinement: the parent
+  `middleware` package's attribute is saved/restored together with the
+  `sys.modules` entries, so no test order leaves the attribute path and the
+  import path holding different module objects), but simulates the absence with
+  an importlib-compatible `sys.modules["debug_toolbar"] = None` sentinel rather
+  than the `builtins.__import__` block the DRF/router fixtures use — because the
+  guard imports via `importlib`, which the block does not intercept
+  ([Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence),
+  Revision 5). The eviction + restore structure is copied and target names
+  swapped; the absence *mechanism* is deliberately not. **This is the third copy
+  of the absence fixture** (DRF, router, now toolbar) — but the three are **not**
+  behavior-identical, and that is the point: DRF blocks a direct `import`
+  statement, the router blocks `channels.*` submodule statement-imports its
+  builder runs, and this guard needs the `None` sentinel because
+  `importlib.import_module` bypasses the block. So **do not factor a shared
+  absence helper in this card.** A premature extraction with a single "pluggable
+  import-blocker predicate" would encode the wrong assumption that all guards
+  share one absence mechanism; the correct extraction (deferred to a dedicated
+  cleanup card) must support **both** the block shape (direct/statement-import
+  guards) **and** the sentinel shape (importlib guards). Do not block this card
+  on it, and do not let the toolbar copy drift from the two-sided-restore
+  discipline.
 - [ ] **D4** — the guard has **no memoization**, and the module holds **no
   class cache to manage**: unlike the router's `_ROUTER_CLASS`, the class is a
   plain module global, so `sys.modules` eviction alone fully resets the
@@ -1873,13 +1996,17 @@ catalog helper.
    acceptable — the contract under test is "unrelated JSON bodies are never
    mutated", not "the stock toolbar ignores the request".
 
-**Toolbar-absent (simulated via the eviction + import-block pattern):**
+**Toolbar-absent (simulated via eviction + a `sys.modules["debug_toolbar"] =
+None` importlib sentinel — Revision 5; the `builtins.__import__` block the
+router/DRF fixtures use is a no-op for this `importlib`-based guard):**
 
 9. `import django_strawberry_framework` and
    `import django_strawberry_framework.middleware` both succeed;
    `from django_strawberry_framework import *` binds no toolbar name.
 10. `import django_strawberry_framework.middleware.debug_toolbar` raises
-    `ImportError` whose message contains `django-debug-toolbar>=7.0.0` —
+    `ImportError` whose message contains `django-debug-toolbar>=7.0.0` — the
+    **hint**, not the bare `ModuleNotFoundError` (proving `require_debug_toolbar()`
+    wrapped it, which the sentinel makes possible and the block would not) —
     matched against the **re-typed literal** in the test file (the
     `_HINT_SUBSTRING` discipline), with the original `ImportError` chained
     (`__cause__`).
@@ -1889,14 +2016,31 @@ catalog helper.
     the two-sided-restore invariant (D3), making the present-path tests
     order-independent under `pytest-xdist`.
 
+**Test 11a — present-but-broken install (degraded path).** Leave a
+real/importable top-level `debug_toolbar` but make its `middleware` submodule
+unimportable (`sys.modules["debug_toolbar.middleware"] = None`, or a narrow
+`importlib.import_module` monkeypatch for that exact submodule).
+`require_debug_toolbar()` **passes** (it imports only the top-level package),
+then the leaf's own `import debug_toolbar.middleware` statement fails: assert
+`import django_strawberry_framework.middleware.debug_toolbar` raises the **raw**
+`ImportError` naming `debug_toolbar.middleware` — **without**
+`_DEBUG_TOOLBAR_INSTALL_HINT` — and that `__cause__` is the original failing
+import. This pins the [Error shapes](#error-shapes) contract that the guard
+wraps only the top-level package and never misreports a broken install as "not
+installed" (the numbered plan previously claimed to pin this but did not —
+Revision 5).
+
 **Guard unit shape:**
 
 12. `require_debug_toolbar()` returns the imported `debug_toolbar` module when
     present (identity with `sys.modules["debug_toolbar"]`), and under the
-    import block raises the hint-carrying `ImportError` — the thin-wrapper
+    `None` sentinel raises the hint-carrying `ImportError` — the thin-wrapper
     contract over
     [`require_optional_module`][glossary-require-optional-module] (whose own
     unit tests, landed with [`spec-041`][spec-041], are not duplicated here).
+    (Under a `builtins.__import__` block this assertion would fail: the guard's
+    `importlib.import_module` call bypasses the block and returns the still
+    installed toolbar — Revision 5.)
 
 **Coverage-only targeted units** (branches the real toolbar lifecycle does not
 naturally expose through Tests 1–8; unmarked, no database, direct calls with
@@ -1925,7 +2069,21 @@ or use a real toolbar instance where that is simpler:
     so the bail never fires in the real-request tests. The same test (or a
     sibling case) drives a stub panel with `has_content` false, since real
     default panels do not reliably produce both `has_content` outcomes across
-    toolbar versions.
+    toolbar versions. A further sibling case drives the **non-object-body bail**
+    (the P2.3 guard): a response whose decoded JSON is a list (not a mapping)
+    makes `_get_payload` return `None`, so the JSON path leaves the body
+    unmodified. A valid single GraphQL response is always an object, so this
+    branch is unreachable through the real-request tests.
+
+**Test 14a — `process_view` non-class `view_class` guard.** Call `process_view`
+with a `view_func` whose `view_class` attribute is a non-class value (e.g. the
+string `"not-a-class"`) and assert `request._is_graphiql` is `False` with **no
+exception**. The `isinstance(view, type)` guard (P2.1) short-circuits before
+`issubclass`, which would otherwise raise `TypeError` and 500 the request.
+Tests 7–8 only drive real class/function views, so this guard — which matters
+precisely because the middleware runs for **all** global traffic, not just
+GraphQL — is unreachable through them.
+
 15. **`Content-Length` refresh branches, HTML and JSON** — build responses
     with `Content-Length` explicitly pre-set, run the mutation paths, and
     assert the header equals `len(response.content)` after. These units cover
@@ -1953,11 +2111,14 @@ Test 1; JSON — Tests 3/5), the non-GraphiQL early-out (HTML — Test 7; JSON �
 Test 8), the introspection skip (Test 4), the `operationName` except-branch
 (Test 5), the `TemplatesPanel` skip and the `has_content`-true panel path
 (Test 3), and the panel-route round trip (Test 6). Reached by the
-**absence / guard tests (9–12)**: the guard's raise path and the
-import-surface matrix. Reached **only by the targeted units (13–15)**: the
-streaming early-out, the no-`request_id` bail and the `has_content`-false
-branch, and both header-present `Content-Length` refreshes. The template-port
-guard (16) earns no Python coverage — the asset is markup and JavaScript, not
+**absence / guard tests (9–12, incl. the degraded-install Test 11a)**: the
+guard's raise path, the import-surface matrix, and the raw-`ImportError`
+propagation for a present-but-broken install. Reached **only by the targeted
+units (13–15, incl. 14a)**: the streaming early-out, the no-`request_id` bail /
+`has_content`-false / non-object-body branches of `_get_payload`, the
+`isinstance(view, type)` detection guard, and both header-present
+`Content-Length` refreshes. The template-port guard (16) earns no Python
+coverage — the asset is markup and JavaScript, not
 counted lines; it exists to pin the port's five invariants mechanically. If
 implementation finds another
 branch unreachable through real requests, it gets its own targeted unit the

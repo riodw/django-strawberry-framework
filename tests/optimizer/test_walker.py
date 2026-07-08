@@ -3856,6 +3856,137 @@ def test_refusing_nested_fetch_strategy_leaves_selection_unplanned():
         registry.clear()
 
 
+def test_connection_custom_get_queryset_builds_base_child_queryset_once():
+    """Nested connection planning calls the visibility hook once, not once per gate.
+
+    The base child queryset is the contract value: build it once, classify that
+    value, then apply the child plan to the same queryset. A double call would
+    duplicate permission work and allow a non-idempotent hook to pass the safety
+    gate with one queryset but plan a different one.
+    """
+    from apps.library.models import Book, Genre
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    calls = 0
+    registry.clear()
+    try:
+
+        class BookType(DjangoType):
+            class Meta:
+                model = Book
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+            @classmethod
+            def get_queryset(cls, queryset, info):
+                nonlocal calls
+                calls += 1
+                return queryset
+
+        class GenreType(DjangoType):
+            class Meta:
+                model = Genre
+                fields = ("id", "name", "books")
+                interfaces = (relay.Node,)
+
+        finalize_django_types()
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            Genre,
+            info=_fake_info(),
+            source_type=GenreType,
+        )
+        assert calls == 1
+        prefetch = _prefetch_entry(plan)
+        assert prefetch.to_attr == "_dst_books_connection"
+        assert plan.planned_resolver_keys != ()
+    finally:
+        registry.clear()
+
+
+class _DistinctChildManager(models.Manager):
+    """Default manager whose base ``.all()`` is unsafe for window planning."""
+
+    def get_queryset(self):
+        return super().get_queryset().distinct()
+
+
+class _DistinctParent(models.Model):
+    name = models.CharField(max_length=32)
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+class _DistinctChild(models.Model):
+    title = models.CharField(max_length=32)
+    parent = models.ForeignKey(_DistinctParent, related_name="children", on_delete=models.CASCADE)
+
+    objects = _DistinctChildManager()
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+def test_connection_default_manager_unsafe_queryset_is_left_unplanned():
+    """Unsafe default-manager child querysets are classified before child planning.
+
+    A target type without custom ``get_queryset`` still has consumer code in the
+    relation's default manager. If that manager returns ``distinct()``, the
+    nested connection must fall back fully unplanned rather than relying on
+    strategy-specific late guards.
+    """
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    registry.clear()
+    try:
+
+        class DistinctChildType(DjangoType):
+            class Meta:
+                model = _DistinctChild
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+        class DistinctParentType(DjangoType):
+            class Meta:
+                model = _DistinctParent
+                fields = ("id", "name", "children")
+                interfaces = (relay.Node,)
+
+        finalize_django_types()
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "childrenConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            _DistinctParent,
+            info=_fake_info(),
+            source_type=DistinctParentType,
+        )
+        assert not any(
+            getattr(pf, "to_attr", None) == "_dst_children_connection"
+            for pf in plan.prefetch_related
+        )
+        assert plan.planned_resolver_keys == ()
+    finally:
+        registry.clear()
+
+
 def test_lateral_strategy_plans_a_lateral_queryset_through_the_walker():
     """With the lateral strategy active, the walker's request plans a
     ``LateralQuerySet`` whose body is the identical windowed queryset.

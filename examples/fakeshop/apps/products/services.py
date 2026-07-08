@@ -33,16 +33,19 @@ Estimating created rows for a given count (X):
         X=50  ->  10149 rows
 """
 
+from __future__ import annotations
+
 import inspect
 import pkgutil
 import random
 from collections.abc import Callable
 from decimal import Decimal
-
-from faker import Faker
-from faker.providers import BaseProvider
+from typing import TYPE_CHECKING
 
 from apps.products.models import Category, Entry, Item, Property
+
+if TYPE_CHECKING:
+    from faker import Faker
 
 
 def _is_safe_generator(fake: Faker, method_name: str) -> bool:
@@ -77,6 +80,7 @@ def discover_providers(fake: Faker) -> dict[str, list[str]]:
     Nothing is hardcoded - the result is entirely driven by introspecting Faker.
     """
     import faker.providers as fp
+    from faker.providers import BaseProvider
 
     base_methods = set(dir(BaseProvider))
 
@@ -171,6 +175,8 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
     Returns:
         A summary dict with counts of newly created rows.
     """
+    from faker import Faker
+
     fake = Faker()
     providers = discover_providers(fake)
 
@@ -282,6 +288,7 @@ def create_users(count: int = 1, db_alias: str = "default") -> dict[str, int]:
     """
     from django.contrib.auth import get_user_model
     from django.contrib.auth.models import Permission
+    from faker import Faker
 
     User = get_user_model()
     user_manager = User.objects.db_manager(db_alias)

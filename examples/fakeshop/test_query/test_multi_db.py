@@ -49,6 +49,7 @@ import strawberry
 from apps.library import models
 from django.test import Client, override_settings
 from django.urls import clear_url_caches, path
+from graphql_client import assert_graphql_success as _graphql_data
 from strawberry.django.views import GraphQLView
 from strawberry.types import Info
 
@@ -186,18 +187,11 @@ def test_using_shard_b_resolver_returns_rows_seeded_on_shard_b(_build_test_schem
     with override_settings(ROOT_URLCONF=__name__):
         clear_url_caches()
         try:
-            response = client.post(
-                "/graphql/",
-                data={"query": query},
-                content_type="application/json",
-            )
+            data = _graphql_data(query, client=client)
         finally:
             clear_url_caches()
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    titles = {b["title"] for b in payload["data"]["booksOnShardB"]}
+    titles = {b["title"] for b in data["booksOnShardB"]}
     assert titles == {"A", "B"}
 
 
@@ -227,17 +221,10 @@ def test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver(_bu
     with override_settings(ROOT_URLCONF=__name__):
         clear_url_caches()
         try:
-            response = client.post(
-                "/graphql/",
-                data={"query": query},
-                content_type="application/json",
-            )
+            data = _graphql_data(query, client=client)
         finally:
             clear_url_caches()
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    titles = {b["title"] for b in payload["data"]["booksOnShardB"]}
+    titles = {b["title"] for b in data["booksOnShardB"]}
     assert titles == {"shard-b-only"}
     assert "default-only" not in titles  # explicit negative pin

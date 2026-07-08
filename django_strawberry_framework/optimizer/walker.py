@@ -17,6 +17,7 @@ from ..utils.connections import (
     UnwindowableConnection,
     derive_connection_window_bounds,
     has_connection_sidecar_kwargs,
+    window_range_plan,
 )
 from ..utils.querysets import apply_type_visibility_sync
 from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
@@ -39,7 +40,6 @@ from .plans import (
     order_entry_name_and_direction,
     resolver_key,
     runtime_path_from_info,
-    window_range_plan,
 )
 from .selections import (
     connection_count_required,
@@ -711,6 +711,41 @@ def _build_prefetch_child_queryset(
     non-``QUERY`` operation the ``Prefetch`` is still built but its child
     queryset carries no deferred-loading mask.
     """
+    base_queryset = _build_child_queryset(
+        django_field,
+        target_type,
+        info,
+        has_custom_qs=has_custom_get_queryset,
+    )
+    return _build_prefetch_child_queryset_from_base(
+        sel,
+        django_field,
+        parent_plan,
+        info,
+        runtime_paths,
+        base_queryset=base_queryset,
+        enable_only=enable_only,
+    )
+
+
+def _build_prefetch_child_queryset_from_base(
+    sel: Any,
+    django_field: Any,
+    parent_plan: OptimizationPlan,
+    info: Any | None,
+    runtime_paths: tuple[tuple[str, ...], ...],
+    *,
+    base_queryset: Any,
+    enable_only: bool = True,
+) -> Any:
+    """Apply the child optimization plan to an already-built base queryset.
+
+    This is the queryset-boundary abstraction: the visibility/default-manager
+    base queryset is built once by the caller, then every child-plan writer
+    operates on that single value. Nested connections classify that base before
+    this helper runs so unsafe manager or hook shapes fall back before
+    projection or window planning can touch them.
+    """
     child_plan = OptimizationPlan()
     _walk_selections(
         sel.selections,
@@ -723,15 +758,7 @@ def _build_prefetch_child_queryset(
     )
     _ensure_connector_only_fields(child_plan, django_field, enable_only=enable_only)
     _absorb_child_plan(parent_plan, child_plan)
-    child_queryset = child_plan.apply(
-        _build_child_queryset(
-            django_field,
-            target_type,
-            info,
-            has_custom_qs=has_custom_get_queryset,
-        ),
-    )
-    return child_queryset
+    return child_plan.apply(base_queryset)
 
 
 def _apply_hint(
@@ -1518,20 +1545,19 @@ def _plan_connection_relation(
     scalar_only = not node_selections
     node_sel = SimpleNamespace(selections=node_selections)
 
-    # (c, pre-build safety probe) a consumer ``get_queryset`` can return
-    # states no strategy can window - and that the child build itself cannot
-    # even project (``.only()`` after ``union()`` raises
-    # ``NotSupportedError`` before any gate below would run). Probe the
-    # hook's output BEFORE building the child plan and fall back fully
-    # unplanned (feedback2 P0-3; the classifier is the strategy seam's
-    # ``unwindowable_child_queryset_reason``).
-    if (
-        has_custom_get_queryset
-        and unwindowable_child_queryset_reason(
-            _build_child_queryset(django_field, target_type, info, True),
-        )
-        is not None
-    ):
+    # (c, pre-build safety gate) the base child queryset comes from consumer
+    # code even without a target ``get_queryset``: a custom default manager's
+    # ``.all()`` can still return distinct/sliced/combined/values/locking
+    # shapes no fetch strategy can window. Build that base exactly once,
+    # classify it unconditionally, and feed the same value into child-plan
+    # application on the success path.
+    base_queryset = _build_child_queryset(
+        django_field,
+        target_type,
+        info,
+        has_custom_qs=has_custom_get_queryset,
+    )
+    if unwindowable_child_queryset_reason(base_queryset) is not None:
         return
 
     # (c) Build the child plan/queryset exactly like the list prefetch path, but
@@ -1542,20 +1568,18 @@ def _plan_connection_relation(
     sub_plan = OptimizationPlan()
     if has_custom_get_queryset:
         sub_plan.cacheable = False
-    child_queryset = _build_prefetch_child_queryset(
+    child_queryset = _build_prefetch_child_queryset_from_base(
         node_sel,
         django_field,
-        target_type,
         sub_plan,
         info,
         runtime_paths,
-        has_custom_get_queryset=has_custom_get_queryset,
+        base_queryset=base_queryset,
         enable_only=enable_only,
     )
-    # No post-build re-check: the pre-build probe above is the single gate
-    # (feedback2 P0-3). Without a custom ``get_queryset`` the build composes
-    # ``.all()`` + ``.only()`` + nested prefetches - none of which can
-    # introduce a sliced/locked/combined/distinct/values state.
+    # No post-build re-check: the classified base queryset is the single
+    # strategy-independent gate; later child-plan application only adds the
+    # package's optimizer directives.
 
     # (d) Deterministic total order shared with the resolve-time pipeline.
     effective = tuple(child_queryset.query.order_by) or tuple(

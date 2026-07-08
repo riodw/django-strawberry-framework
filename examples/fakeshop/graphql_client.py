@@ -1,14 +1,14 @@
 """Shared live-``/graphql/`` HTTP helpers for the fakeshop acceptance suites.
 
-The one ``Client().post("/graphql/", ...)`` wrapper (and its status-200 +
-data-equality assert) every ``test_query`` module historically re-declared -
-single-sited here like ``schema_reload.py`` (importable via ``pytest.ini``'s
-``pythonpath = examples/fakeshop``) so the live-tier request shape has ONE
-implementation (docs/feedback.md DRY pass, T5). Superset signature: modules
-that never pass ``client`` / ``variables`` simply omit them.
+Single-sites the live-tier request contracts: JSON GraphQL posts, raw-body posts,
+status-code assertions, parsed payload extraction, GraphQL-error rejection, and
+exact-data assertions. Superset signatures keep simple callers terse while
+letting variable-driven and custom-client tests use the same envelope.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from django.test import Client
 
@@ -26,13 +26,53 @@ def post_graphql(query: str, *, client: Client | None = None, variables: dict | 
     )
 
 
-def assert_graphql_data(query: str, expected: dict, *, client: Client | None = None):
+def post_graphql_raw(body: str | bytes, *, client: Client | None = None):
+    """POST a raw JSON body to the live ``/graphql/`` endpoint."""
+    graphql_client = client or Client()
+    return graphql_client.post(
+        "/graphql/",
+        data=body,
+        content_type="application/json",
+    )
+
+
+def graphql_payload(
+    query: str,
+    *,
+    client: Client | None = None,
+    variables: dict | None = None,
+) -> dict[str, Any]:
+    """POST ``query`` and return parsed JSON after asserting HTTP 200."""
+    response = post_graphql(query, client=client, variables=variables)
+    assert response.status_code == 200
+    return response.json()
+
+
+def assert_graphql_success(
+    query: str,
+    *,
+    client: Client | None = None,
+    variables: dict | None = None,
+) -> dict[str, Any]:
+    """POST ``query``, assert HTTP 200 and no GraphQL errors, then return ``data``."""
+    payload = graphql_payload(query, client=client, variables=variables)
+    assert "errors" not in payload, payload
+    return payload["data"]
+
+
+def assert_graphql_data(
+    query: str,
+    expected: dict,
+    *,
+    client: Client | None = None,
+    variables: dict | None = None,
+):
     """POST ``query`` and assert a 200, no ``errors``, and exact ``data`` equality.
 
     Returns the response so callers can layer extra asserts (headers, query
     capture) on top of the shared preamble.
     """
-    response = post_graphql(query, client=client)
+    response = post_graphql(query, client=client, variables=variables)
     assert response.status_code == 200
     payload = response.json()
     assert "errors" not in payload, payload

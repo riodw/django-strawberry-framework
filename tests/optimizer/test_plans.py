@@ -366,8 +366,8 @@ class TestConsumerOnlyFields:
 
         Django's contract is ``(field_set, defer_flag)``; a future Django
         version (or a test double) returning a non-iterable, a non-2-tuple,
-        or any other unpacking-incompatible value falls through to ``None``
-        instead of crashing the optimizer.
+        a non-iterable field set, or any other malformed value falls through
+        to ``None`` instead of crashing the optimizer.
         """
         bad_three_tuple = SimpleNamespace(
             query=SimpleNamespace(
@@ -375,8 +375,10 @@ class TestConsumerOnlyFields:
             ),
         )
         bad_scalar = SimpleNamespace(query=SimpleNamespace(deferred_loading=42))
+        bad_field_set = SimpleNamespace(query=SimpleNamespace(deferred_loading=(None, False)))
         assert _consumer_only_fields(bad_three_tuple) is None
         assert _consumer_only_fields(bad_scalar) is None
+        assert _consumer_only_fields(bad_field_set) is None
 
     def test_returns_none_for_wildcard_only_with_empty_field_set(self):
         """Pins the ``not field_set`` branch.

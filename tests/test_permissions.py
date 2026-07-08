@@ -136,7 +136,7 @@ def _make_type(
     relation field to a (possibly-unregistered) target type - the cascade walks the
     model's ``_meta.get_fields()`` edges regardless of what the type exposes (the
     "Meta.fields-excluded FK edges still cascade" edge case). The declaration
-    core is the shared ``tests/conftest.py::make_django_type``.
+    core is the shared ``examples/fakeshop/strategy_schemas.py::make_django_type``.
     """
     return make_django_type(
         name,

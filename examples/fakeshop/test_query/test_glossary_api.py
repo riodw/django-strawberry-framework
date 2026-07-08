@@ -3,7 +3,7 @@
 import pytest
 from apps.glossary import models
 from apps.kanban import models as kanban_models
-from graphql_client import post_graphql as _post_graphql
+from graphql_client import assert_graphql_success as _graphql_data
 
 
 @pytest.fixture(autouse=True)
@@ -107,14 +107,6 @@ def _seed_glossary():
         notes="Primary ordering sidecar.",
         order=0,
     )
-
-
-def _graphql_data(query: str):
-    response = _post_graphql(query)
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    return payload["data"]
 
 
 @pytest.mark.django_db

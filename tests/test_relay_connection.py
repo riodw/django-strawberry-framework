@@ -63,8 +63,8 @@ def _isolate_global_registry(isolate_global_registry):
     into the shared registry/connection-cache isolation (``tests/conftest.py``)."""
 
 
-# The shared declaration core (``tests/conftest.py``) already matches this
-# module's historical signature exactly.
+# The shared declaration core (``examples/fakeshop/strategy_schemas.py``)
+# already matches this module's historical signature exactly.
 _make_type = make_django_type
 
 
@@ -826,10 +826,12 @@ def _genres_list_schema(*, optimizer=False, book_total_count=False, strictness="
     pins; it is only meaningful with ``optimizer=True`` (no extension stashes
     no sentinel - the no-op baseline).
     """
-    book_meta = {"model": Book, "fields": ("id", "title"), "interfaces": (relay.Node,)}
-    if book_total_count:
-        book_meta["connection"] = {"total_count": True}
-    type("BookType", (DjangoType,), {"Meta": type("Meta", (), book_meta)})
+    make_django_type(
+        "BookType",
+        Book,
+        ("id", "title"),
+        meta_extra={"connection": {"total_count": True}} if book_total_count else None,
+    )
     genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
     finalize_django_types()
     query_cls = strawberry.type(
@@ -857,13 +859,12 @@ def _genres_filterable_book_schema(*, strictness="raise"):
             model = Book
             fields = {"title": ["exact"]}
 
-    book_meta = {
-        "model": Book,
-        "fields": ("id", "title"),
-        "interfaces": (relay.Node,),
-        "filterset_class": _BookFilter,
-    }
-    type("BookType", (DjangoType,), {"Meta": type("Meta", (), book_meta)})
+    make_django_type(
+        "BookType",
+        Book,
+        ("id", "title"),
+        meta_extra={"filterset_class": _BookFilter},
+    )
     genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
     finalize_django_types()
     query_cls = strawberry.type(
@@ -1610,13 +1611,12 @@ def test_fast_path_ignores_window_when_sidecar_kwargs_present():
             model = Book
             fields = {"title": ["exact"]}
 
-    book_meta = {
-        "model": Book,
-        "fields": ("id", "title"),
-        "interfaces": (relay.Node,),
-        "filterset_class": _BookFilter,
-    }
-    type("BookType", (DjangoType,), {"Meta": type("Meta", (), book_meta)})
+    make_django_type(
+        "BookType",
+        Book,
+        ("id", "title"),
+        meta_extra={"filterset_class": _BookFilter},
+    )
     genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
     finalize_django_types()
     query_cls = strawberry.type(
@@ -1707,21 +1707,11 @@ def test_outer_total_count_predicate_ignores_nested_total_count():
     is NOT selected - only the nested one is.
     """
     _seed_library_books(["a", "b", "c"])
-    type(
+    make_django_type(
         "BookType",
-        (DjangoType,),
-        {
-            "Meta": type(
-                "Meta",
-                (),
-                {
-                    "model": Book,
-                    "fields": ("id", "title"),
-                    "interfaces": (relay.Node,),
-                    "connection": {"total_count": True},
-                },
-            ),
-        },
+        Book,
+        ("id", "title"),
+        meta_extra={"connection": {"total_count": True}},
     )
     genre_type = _make_type(
         "GenreType",
@@ -2393,10 +2383,12 @@ def test_resolve_from_window_last_zero_stays_a_defensive_guard():
 
 def _windowed_book_connection_class(*, total_count=False):
     """A real generated ``<TypeName>Connection`` class for direct-call pins."""
-    book_meta = {"model": Book, "fields": ("id", "title"), "interfaces": (relay.Node,)}
-    if total_count:
-        book_meta["connection"] = {"total_count": True}
-    book_type = type("BookType", (DjangoType,), {"Meta": type("Meta", (), book_meta)})
+    book_type = make_django_type(
+        "BookType",
+        Book,
+        ("id", "title"),
+        meta_extra={"connection": {"total_count": True}} if total_count else None,
+    )
     finalize_django_types()
     return _connection_type_for(book_type)
 

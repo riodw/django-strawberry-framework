@@ -56,8 +56,14 @@ def _opened_outside_main_thread_sync_context() -> bool:
 def _install_postgres_connection_tracking() -> None:
     """Wrap the Postgres backend's connection factory with stray tracking."""
     try:
+        from django.core.exceptions import ImproperlyConfigured
         from django.db.backends.postgresql import base as postgres_base
-    except ImportError:  # psycopg absent: the sqlite-only coverage tier.
+    except ImportError:
+        return
+    except ImproperlyConfigured as error:
+        if str(error) != "Error loading psycopg2 or psycopg module":
+            raise
+        # psycopg absent: the sqlite-only coverage tier.
         return
     original = postgres_base.DatabaseWrapper.get_new_connection
     if getattr(original, "_dst_tracks_stray_connections", False):

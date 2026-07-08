@@ -29,6 +29,7 @@ in ``optimizer/walker.py::_coerce_pagination_int``; this helper assumes its
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -110,6 +111,63 @@ def is_ambiguous_empty_window(offset: int, limit: int | None, *, reverse: bool =
     predicate so the plan side and the consume side cannot drift.
     """
     return not reverse and (offset > 0 or limit == 0)
+
+
+@dataclass(frozen=True)
+class WindowRangePlan:
+    """The pure window-range decisions one ``(offset, limit, reverse)`` slice implies.
+
+    Shared by the ORM window renderer and lateral SQL renderer so bounds,
+    marker rows, and count requirements cannot drift. ``limit`` is normalized
+    (Relay's ``sys.maxsize`` sentinel becomes ``None`` = no upper bound);
+    ``lower_bound`` is the exclusive forward-row-number floor; ``upper_bound``
+    is the inclusive ceiling; ``add_marker_rows`` keeps each partition's row 1
+    for ambiguous empty-window shapes; ``plain_first_page`` marks the
+    unambiguous ``first: N`` shape a renderer may express as plain
+    ``ORDER BY``/``LIMIT``; ``requires_total_count`` marks windows whose
+    resolution needs the partition count regardless of the selected fields.
+    """
+
+    offset: int
+    limit: int | None
+    reverse: bool
+    lower_bound: int | None
+    upper_bound: int | None
+    add_marker_rows: bool
+    plain_first_page: bool
+    requires_total_count: bool
+
+
+def window_range_plan(*, offset: int, limit: int | None, reverse: bool) -> WindowRangePlan:
+    """Resolve one slice window into its shared ``WindowRangePlan``.
+
+    Pure and renderer-agnostic. Owns the two sentinel rules spelled once for
+    every consumer:
+
+    - ``limit is None`` OR Relay's ``sys.maxsize`` means "no upper bound"
+      (the offset floor still applies). Normalized here so no renderer ever
+      sees ``sys.maxsize``.
+    - A negative limit is not a valid window and is treated as unbounded
+      (unreachable through ``SliceMetadata`` - it raises on negative
+      ``first`` / ``last`` - but direct callers get one deliberate rule
+      instead of per-renderer drift).
+    """
+    if limit == sys.maxsize:
+        limit = None
+    lower_bound = offset if offset else None
+    bounded = limit is not None and limit >= 0
+    upper_bound = (limit if reverse else offset + limit) if bounded else None
+    ambiguous = is_ambiguous_empty_window(offset, limit, reverse=reverse)
+    return WindowRangePlan(
+        offset=offset,
+        limit=limit,
+        reverse=reverse,
+        lower_bound=lower_bound,
+        upper_bound=upper_bound,
+        add_marker_rows=ambiguous and (lower_bound is not None or upper_bound is not None),
+        plain_first_page=not reverse and offset == 0 and bounded and limit > 0,
+        requires_total_count=ambiguous or limit is None,
+    )
 
 
 @dataclass(frozen=True)

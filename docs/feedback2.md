@@ -1,246 +1,371 @@
-# Critical review — spec-042-debug_toolbar-0_0_14.md (pre-implementation)
+# Review of HEAD Commit 678b1306
 
-Fourth review round (after the three rounds absorbed as Revisions 1–3). Every
-load-bearing claim was re-verified against the actual sources before writing
-this: the upstream `strawberry_django/middlewares/debug_toolbar.py` and its
-template (read byte-for-byte from the local `strawberry-django-main` checkout),
-the `django-debug-toolbar` **7.0.0** sources (`middleware.py`, `toolbar.py`,
-`views.py`, `settings.py`, `apps.py`, `templates/debug_toolbar/base.html` —
-fetched at the 7.0.0 tag), live PyPI metadata, the installed strawberry 0.316.0
-views module, and the repo itself (fakeshop settings/urls, `pytest.ini`,
-`schema_reload.py`, `tests/test_routers.py`, `utils/imports.py`,
-`pyproject.toml`).
+Verdict: this is a real DRY pass, but it is not finished. I would not revert
+the commit - it does consolidate several duplicated optimizer contracts in the
+right direction - but I would not call it done until the child-queryset planning
+seam is fixed. The main weakness is not that code was added; it is that some of
+the new code centralizes contracts without moving the abstraction boundary far
+enough.
 
-**Verdict: the spec is in strong shape — the borrowed mechanism, the
-soft-dependency design, the floor argument, and the test architecture all
-survive adversarial checking. But do not start production code until the two
-P1 findings are fixed: the spec's stated failure mode for a missing
-`debug_toolbar_urls()` is factually wrong at the pinned floor, and Test 6 as
-specified can pass against the exact failure it exists to catch.** Both are
-spec-text fixes, not design changes. Two P2 precision edits and one P3 nit
-follow. Everything else I tried to break is listed as verified-correct at the
-bottom so the implementer knows what was already grounded.
+The size concern is valid. The full commit is `1348 insertions / 652 deletions`
+for a net `+696`. A large part of that is not implementation: `[docs/feedback.md][feedback-md]`
+alone adds `420` lines. Excluding that review artifact, the commit is roughly
+`+276` lines. The package code is the growth center at `+595 / -321`, net
+`+274`; tests, scripts, and fakeshop helpers are nearly flat overall. So the
+DRY pass did remove test/script duplication, but the optimizer package grew to
+encode shared contracts that were previously implicit or duplicated.
 
----
+## What Improved
 
-## P1.1 — The missing-URLconf failure mode is wrong: it is a hard `NoReverseMatch` on EVERY toolbar-processed request, not "handle renders, panel clicks fail"
+The best part of the commit is that several correctness-sensitive decisions now
+have one owner:
 
-**Where:** User-facing API ("All three pieces are load-bearing: without the
-URLconf the injected toolbar renders its handle and the JSON payload carries a
-`requestId`, but the toolbar's per-panel content fetches (`render_panel`) have
-no route to resolve, so clicking a panel fails"), Test 6's rationale ("Without
-it the JSON tests can pass while every panel click 404s because the URLconf
-was omitted"), and the Slice-2 GLOSSARY item that will inherit this wording.
+- `[plans.py][plans-py]::window_range_plan` is a strong consolidation. The ORM
+  window renderer and the lateral SQL renderer now share the same bound,
+  marker-row, `sys.maxsize`, and count-requirement decisions. This is the kind
+  of DRY that prevents real pagination drift.
+- `[nested_fetch.py][nested-fetch-py]::attach_windowed_prefetch` removes the
+  duplicated "apply window pagination, wrap in `Prefetch`, attach to plan" body
+  between the windowed and lateral strategies. That is a clean strategy seam.
+- `[join_taxonomy.py][join-taxonomy-py]::classify_relation_join` is a useful
+  shared vocabulary for partition expressions, connector columns, and lateral
+  join fields. The old shape required every consumer to rediscover relation
+  topology.
+- `[plans.py][plans-py]::deferred_loading_of` is the right idea: the private
+  `query.deferred_loading` contract should be read in one place.
+- `[selections.py][selections-py]::connection_total_count_selected` and
+  `[selections.py][selections-py]::connection_has_next_page_selected` correctly
+  make plan-time count annotation and resolve-time count consumption use the
+  same selection walk.
+- `[connection.py][connection-py]::_set_total_count` and
+  `[connection.py][connection-py]::_empty_page_connection` remove repeated
+  connection-object construction and count-attribute writes without changing the
+  observable Relay behavior.
+- `[filters/base.py][filters-base-py]::_apply_lookup_predicate` is a good small
+  extraction. It keeps the "whole list as one `__in` predicate" fix from
+  splitting again between `ArrayFilter` and `GlobalIDMultipleChoiceFilter`.
+- `[examples/fakeshop/strategy_schemas.py][strategy-schemas-py]`,
+  `[examples/fakeshop/graphql_client.py][graphql-client-py]`, and
+  `[tests/optimizer/conftest.py][tests-optimizer-conftest-py]` are good test
+  harness consolidation starts.
 
-**Evidence (7.0.0, verified in the tagged sources):**
+I also rechecked the prior `.only()` plus optimizer `select_related()` crash
+class with a direct compile probe. The current ordering in
+`[extension.py][extension-py]::DjangoOptimizerExtension.optimize_queryset`
+prunes unsupported `select_related` paths before publishing strictness metadata
+and before applying the plan. A probe with `Item.objects.only("name")` and a
+planned `select_related("category")` now prunes to an empty select plan and
+compiles.
 
-1. The stock `_postprocess` renders the toolbar **unconditionally**, for every
-   response it processes — HTML and JSON alike:
+## Findings
 
-   ```python
-   # debug_toolbar/middleware.py::DebugToolbarMiddleware._postprocess
-   # Always render the toolbar for the history panel, even if it is not
-   # included in the response.
-   rendered = toolbar.render_toolbar()
-   ```
+### P1. Child queryset construction is still at the wrong abstraction boundary
 
-2. `render_toolbar()` renders `debug_toolbar/base.html`, and that template
-   reverses the djdt namespace at render time:
+Where: `[walker.py][walker-py]::_plan_connection_relation`,
+`[walker.py][walker-py]::_build_prefetch_child_queryset`,
+`[walker.py][walker-py]::_build_child_queryset`, and
+`[nested_fetch.py][nested-fetch-py]::unwindowable_child_queryset_reason`.
 
-   ```
-   data-render-panel-url="{% url 'djdt:render_panel' %}"
-   {% url 'djdt:history_sidebar' as history_url %}
-   ```
+The commit adds the right classifier, but the walker uses it too narrowly and
+too early:
 
-3. `render_toolbar`'s `except` clause catches only `TemplateSyntaxError` (to
-   raise the staticfiles `ImproperlyConfigured`). `NoReverseMatch` is **not**
-   caught — it propagates out of the middleware.
+```python
+if (
+    has_custom_get_queryset
+    and unwindowable_child_queryset_reason(
+        _build_child_queryset(django_field, target_type, info, True),
+    )
+    is not None
+):
+    return
 
-So with the middleware listed but `debug_toolbar_urls()` absent, the `djdt`
-namespace is unregistered and **the first toolbar-processed request — the
-GraphiQL page GET or any tagged JSON POST — dies with `NoReverseMatch`**
-(under `DEBUG=True`, the Django error page). Nothing renders a handle; no JSON
-payload is produced; no panel click is ever reached. The toolbar itself treats
-this as an error setup: `debug_toolbar/apps.py` ships a system check keyed on
-exactly `show_toolbar_changed and not toolbar_urls_installed`.
+child_queryset = _build_prefetch_child_queryset(...)
+```
 
-**Why it matters:** the paragraph is the consumer-facing contract, Slice 2
-copies it into the GLOSSARY body, and a support question ("I added the
-middleware and my whole GraphQL endpoint 500s") would be answered wrongly by
-the package's own docs. It also misstates Test 6's value.
+That means a custom target `get_queryset` is called once for the safety probe
+and then called again inside `_build_prefetch_child_queryset`. This violates the
+DRY goal in the most important place: the visibility hook is the source of the
+child queryset contract, and the commit now asks it for the same thing twice.
 
-**Required edits:**
+Why this matters:
 
-- Rewrite the User-facing API sentence: all three pieces are load-bearing
-  because **omitting the URLconf breaks every toolbar-processed request with
-  `NoReverseMatch`** (the stock postprocess renders the toolbar — which
-  reverses `djdt:` routes — for every processed response, JSON included), not
-  because panel clicks alone would fail.
-- Fix Test 6's rationale: the JSON tests could not "pass while panel clicks
-  404" — without the URLconf they crash loudly. Test 6's real, still-valid
-  value is proving the injected `requestId` is **usable** (the id round-trips
-  to stored panel content through the real route), which Tests 3/5 alone do
-  not prove. Keep the test; fix the justification.
-- Carry the corrected wording into the Slice-2 GLOSSARY checklist item.
+- A custom `get_queryset` can be non-trivial. Calling it twice can double
+  permission work, query construction work, request-context reads, or accidental
+  side effects.
+- A non-idempotent hook can pass the probe and return a different queryset to
+  the actual plan.
+- Unsafe states from the related model's default manager are not classified at
+  all when `has_custom_get_queryset` is false. A custom default manager can still
+  produce `distinct()`, `values()`, `select_for_update()`, a combined queryset,
+  or a sliced queryset. The comment says the build composes only `.all()` plus
+  optimizer additions, but `_default_manager.all()` is already consumer code.
 
----
+Root-cause fix: split "build the base child queryset" from "apply the child
+optimization plan" and make the base queryset a single value that flows through
+the rest of the planner. A good shape would be:
 
-## P1.2 — Test 6's "non-empty `content`" assertion is satisfied by the failure path
+```python
+base_queryset = _build_child_queryset(django_field, target_type, info, has_custom_get_queryset)
+reason = unwindowable_child_queryset_reason(base_queryset)
+if reason is not None:
+    return
 
-**Where:** Test plan, Test 6 ("assert … a JSON response … whose `content`
-value is **non-empty** — stored SQL-panel content, not merely a 200 that
-proves a URL exists") and the matching DoD bullet.
+child_queryset, sub_plan = _build_prefetch_child_queryset_from_base(
+    node_sel,
+    django_field,
+    target_type,
+    parent_plan,
+    info,
+    runtime_paths,
+    base_queryset=base_queryset,
+    has_custom_get_queryset=has_custom_get_queryset,
+    enable_only=enable_only,
+)
+```
 
-**Evidence (7.0.0, `debug_toolbar/views.py::render_panel`):** when
-`DebugToolbar.fetch()` finds nothing for the given `request_id`, the view does
-**not** 404 or return empty content — it returns **200 JSON with non-empty
-`content`**:
+This removes the duplicate hook call and applies the safety classifier to every
+base queryset, including default-manager shapes. It also keeps the pre-build
+classification before `.only()` can crash on combined/sliced querysets.
 
-> "Data for this panel isn't available anymore. Please reload the page and
-> retry."
+### P1. The unsafe-child-queryset contract is declared strategy-independent, but lateral still partly enforces it itself
 
-So a broken store round-trip (wrong id captured, per-test store isolation
-eating the record, an id from a different toolbar instance) produces exactly
-the response shape Test 6 accepts: 200, JSON, `content`/`scripts` keys,
-non-empty `content`. The assertion is not stronger than the "merely a 200" it
-claims to improve on.
+Where: `[nested_fetch.py][nested-fetch-py]::unwindowable_child_queryset_reason`
+and `[lateral_fetch.py][lateral-fetch-py]::_extract_parent_ids`.
 
-**Required edit:** pin the success direction, not just the shape. Assert the
-fallback message is **absent** and at least one SQL-panel-specific marker is
-**present** (the rendered SQL panel content contains the operation's SELECT —
-e.g. the products table name from the seeded query). That makes the test fail
-when the id fails to resolve, which is its entire reason to exist.
+The new classifier says `distinct`, `sliced`, `combined`, `values`, and
+`select_for_update` are states no fetch strategy can window safely. That is the
+right policy. But because the walker only invokes the classifier for custom
+target hooks, other querysets can still reach the strategy layer. Lateral then
+has fetch-time fallback checks for some of those states, while the windowed path
+does not have the same late guard.
 
----
+That weakens the DRY contract: one module names the strategy-independent safety
+rule, but the enforcement still depends on which backend happens to see the
+queryset later.
 
-## P2.3 — Decision 6 under-describes what `super()._postprocess(...)` does, and the precise description is load-bearing
+Fix this together with P1 above: classify the single base child queryset
+unconditionally in the walker before any strategy request is created. Then keep
+the lateral fetch-time checks as defensive drift guards, not as part of the
+primary correctness path.
 
-**Where:** Decision 6 ("the stock method inserts the toolbar handle into HTML
-responses and records history — the package must not re-implement or skip
-it"), echoed in the targeted-units preamble.
+### P2. `deferred_loading_of` does not satisfy its own defensive contract
 
-**What the stock method actually does at 7.0.0, in order:** generates stats
-and server timing for **every** enabled panel; **renders and stores the
-toolbar for every processed response** (the "Always render the toolbar for
-the history panel" line — JSON responses included); adds panel headers; and
-only then, conditionally, inserts the handle into processable HTML.
+Where: `[plans.py][plans-py]::deferred_loading_of`.
 
-**Why the precision matters:** (a) the unconditional render/store is the
-mechanism that makes this whole card work — it is why a JSON operation gets a
-history row and stored panel content that `render_panel` can later serve;
-Test 6 depends on it. (b) It is why P1.1's `NoReverseMatch` fires for JSON
-requests too, not just the IDE page. (c) It tells the implementer that every
-tagged JSON operation pays a full server-side toolbar render in dev — expected
-upstream-parity behavior, but the kind of surprise a spec this thorough should
-state. One tightened paragraph in Decision 6 covers all three.
+The docstring says malformed deferred-loading state returns `None`. It only
+catches unpacking errors. A malformed but correctly sized tuple still escapes:
 
----
+```python
+deferred_loading = (None, False)
+return frozenset(field_set), bool(defer_flag)
+```
 
-## P2.4 — The toolbar's staticfiles prerequisite goes unmentioned while adjacent prerequisites are documented
+I verified that a simple test double with `(None, False)` raises:
 
-**Where:** Edge cases ("The consumer must list the package in
-`INSTALLED_APPS`" — documents the package's template resolution requirement
-and even the `APP_DIRS=False` variant, but not the analogous toolbar-side
-requirement).
+```text
+TypeError: 'NoneType' object is not iterable
+```
 
-**Evidence:** `render_toolbar` converts a `TemplateSyntaxError` into
-`ImproperlyConfigured` explicitly naming `django.contrib.staticfiles` and
-`STATIC_URL`. Because this middleware routes GraphQL traffic through the stock
-render on every processed response (P2.3), a consumer without staticfiles hits
-that error on their **GraphQL** endpoint, and will plausibly file it against
-this package. Fakeshop ships staticfiles + `STATIC_URL` (verified), so the
-test plan is unaffected.
+Production Django querysets will normally have a valid set here, so this is not
+a common runtime bug. It is still a bad defensive helper because this commit
+advertises it as the one safe reader of a brittle private contract. The fix is
+small: wrap the `frozenset(field_set)` conversion in the same `try` block and
+return `None` on `TypeError`.
 
-**Suggested edit (small):** one edge-case bullet — the toolbar requires
-`django.contrib.staticfiles` + `STATIC_URL` (its own documented install
-prerequisite); with this middleware the failure surfaces on `/graphql/`
-traffic; the GLOSSARY body names the fix alongside the existing
-`TemplateDoesNotExist` note.
+### P2. The new `WindowRangePlan` is probably in the wrong module
 
----
+Where: `[plans.py][plans-py]::WindowRangePlan` and
+`[plans.py][plans-py]::window_range_plan`.
 
-## P3.5 — The template-port checklist hedges about `{% ... %}` tags that do not exist
+The helper is pure connection-window arithmetic. It is not specific to
+`OptimizationPlan`, and it is now shared by the walker, the ORM window renderer,
+and lateral SQL. Architecturally it belongs next to
+`[utils/connections.py][utils-connections-py]::derive_connection_window_bounds`
+and `[utils/connections.py][utils-connections-py]::is_ambiguous_empty_window`.
 
-**Where:** Borrowing posture ("Only the surrounding template comment and, if
-needed, the app-namespace path in any `{% ... %}` tag change; the script body
-is byte-for-byte upstream's").
+Leaving it in `plans.py` works today, but it makes unrelated code import the
+optimizer plan module for pagination arithmetic. Moving it to
+`utils/connections.py` would make the contract more portable and reduce the
+chance that future resolver-side code grows another copy instead of importing
+from the optimizer package.
 
-**Evidence:** the upstream template was read in full — it is a single
-`<script>` IIFE with **no Django template tags at all** (no `{% load %}`, no
-`{% static %}`, no `{% url %}`; even the "surrounding template comment" is
-absent — the file starts at `<script>`). The only rename in this card is the
-`render_to_string(...)` path in the middleware, which is not in the asset.
+### P2. Test helper code is imported directly from `conftest.py`
 
-**Suggested edit:** drop the hedge and say the port is a byte-identical copy
-of the file (plus, if desired, one new header comment crediting upstream); all
-five Test-16 invariants were verified present in the upstream asset verbatim
-(`JSON.parse` wrapper, `Response.prototype.json` wrapper,
-`delete data.debugToolbar`, `djDebug.setAttribute("data-request-id", ...)`,
-per-panel title/subtitle DOM updates).
+Where: `[tests/optimizer/conftest.py][tests-optimizer-conftest-py]`,
+`[tests/optimizer/test_nested_fetch.py][test-nested-fetch-py]`, and
+`[tests/optimizer/test_lateral_fetch.py][test-lateral-fetch-py]`.
 
----
+The shared `nested_connection_request` builder is useful, but direct imports
+from `tests.optimizer.conftest` are a weak pattern. `conftest.py` is pytest
+fixture/configuration surface, not a general helper module. It works because
+`tests` is importable as a package, but it creates a brittle precedent and can
+interact badly with pytest import modes.
 
-## Verified correct — checked and survived (do not re-litigate)
+Move the builder to something like `tests/optimizer/builders.py` or
+`tests/optimizer/_builders.py`, then import it from there. If a fixture is ever
+needed, `conftest.py` can wrap the helper.
 
-- **Upstream module borrowed accurately.** The local
-  `strawberry-django-main/strawberry_django/middlewares/debug_toolbar.py` was
-  read in full; the spec's description matches line-for-line: `_HTML_TYPES`
-  set, `_get_payload` (request-id bail; `force_str` with response charset;
-  `object_pairs_hook=OrderedDict`; `reversed(toolbar.enabled_panels)`;
-  `TemplatesPanel` skip; `title` only when `has_content`; callable-called
-  title/subtitle), `process_view` (`view_class` + `issubclass(view, BaseView)`,
-  no `super()` call), `_postprocess` (`super()` first; streaming early-out;
-  first-segment content-type sniff; HTML append + `Content-Length` refresh;
-  exact `application/json` gate; broad-except `operationName`;
-  `IntrospectionQuery` skip; `DjangoJSONEncoder` re-encode + refresh).
-- **Stock middleware facts at 7.0.0.** No `process_view` on the stock class;
-  `_postprocess(self, request, response, toolbar)` exists with that signature;
-  `async_capable = True`; `show_toolbar` checks `settings.DEBUG` first, then
-  `REMOTE_ADDR in INTERNAL_IPS`.
-- **The cache-hygiene contract is right, and necessary.**
-  `show_toolbar_func_or_path` is `@cache`-decorated and **no**
-  `setting_changed` receiver clears it (the receiver in
-  `debug_toolbar/settings.py` clears only `get_config` / `get_panels`);
-  `DebugToolbar._panel_classes` / `_urlpatterns` are receiver-untouched class
-  caches. The fixture's mandatory `cache_clear()` + save/clear/restore is
-  exactly correct — a stale resolved callback would otherwise outlive the
-  per-test `DEBUG_TOOLBAR_CONFIG` override.
-- **`debug_toolbar_urls()` is `DEBUG`-gated** and returns `[]` when `DEBUG` is
-  false — the fixture's import-ordering/eviction contract for the test URLconf
-  is justified.
-- **`render_panel` responds JSON with `content` / `scripts` keys** off
-  `request_id` / `panel_id` query params (with the P1.2 fallback caveat).
-- **The floor argument holds against live PyPI.** Latest is 7.0.0 (uploaded
-  2026-06-19), `requires-python >=3.10`, `django>=5.2`, classifiers
-  `Django :: 5.2` + `Django :: 6.0`; `6.0.0` is 2025-07-25 as the spec says.
-  `>=7.0.0` as the single floor for the advertised range is correct, and
-  upstream's `>=6.0.0` is correctly not copied.
-- **`strawberry.django.views.BaseView` exists** in the installed 0.316.0 with
-  `GraphQLView` / `AsyncGraphQLView` subclassing it; fakeshop wires
-  `ensure_csrf_cookie(GraphQLView.as_view(..., graphql_ide="graphiql"))` at
-  `graphql/` (so Test 3 exercises detection through the real decorator), and
-  `/login/` is Django's `LoginView` (Test 7's class-based negative exists).
-- **Test 5's mechanism is sound.** Strawberry renders the IDE only when the
-  `Accept` header contains `text/html` or `*/*` (verified in
-  `strawberry/http/base.py`); `HTTP_ACCEPT="application/json"` deterministically
-  selects the JSON branch, and `json.loads(b"")` raising → inject matches the
-  documented GET edge case.
-- **Repo-state claims are all true post-spec-041.** `require_optional_module`
-  is landed in `utils/imports.py` (routers.py rides it); `tests/test_routers.py`
-  exists with the import-blocker scoped to absolute top-level names (the
-  scoping this spec's absence fixture copies); `tests/__init__.py` exists, so
-  the dotted `ROOT_URLCONF = "tests.middleware.debug_toolbar_urls"` is
-  importable under pytest's rootdir insertion;
-  `schema_reload.reload_all_project_schemas()` exists, reloads `config.urls`,
-  and clears URL caches; `pytest.ini` matches every quoted property
-  (`pythonpath = examples/fakeshop`, `--dist loadscope`, `-W error`-equivalent
-  `filterwarnings = error`, no `django_debug_mode`); fakeshop's checked-in
-  `DEBUG = True` + pytest-django's forced `False` is as described;
-  `pyproject.toml`'s hatchling wheel packages the package directory wholesale
-  (the template ships with no build-config change);
-  `apps.products.services.seed_data` exists.
-- **Decision 5's guard-shape reasoning is sound** (import-time guard in a
-  dedicated opt-in leaf; the `middleware/__init__.py` stays clean for
-  walkers), and the degraded-install posture (raw `ImportError` from a
-  class-body submodule import, no second wrap) is consistent with the
-  single-package boundary — unlike the router's two-package builder.
+### P2. The new `make_django_type` helper is good but under-used
+
+Where: `[examples/fakeshop/strategy_schemas.py][strategy-schemas-py]`,
+`[tests/test_relay_connection.py][test-relay-connection-py]`, and
+`[tests/test_permissions.py][test-permissions-py]`.
+
+The helper is a good seed, but the commit only converts a small slice of the
+dynamic `DjangoType` declarations. The repo still has many local
+`type(..., (DjangoType,), {"Meta": ...})` builders, including several in files
+this commit touched. Some are special cases and should stay explicit, but many
+look mechanically convertible.
+
+If the goal is "DRY as possible," this should become a deliberate test-builder
+utility with a clearer home and broader adoption plan. Otherwise it reads as a
+third helper style rather than a consolidated one.
+
+Also fix the stale comments introduced by this commit:
+
+- `[tests/test_permissions.py][test-permissions-py]::_make_type` says the
+  declaration core is `tests/conftest.py::make_django_type`.
+- `[tests/test_relay_connection.py][test-relay-connection-py]` has the same
+  wording.
+
+The helper actually lives in `[examples/fakeshop/strategy_schemas.py][strategy-schemas-py]`.
+
+### P2. The GraphQL HTTP helper is too narrow to remove much duplication
+
+Where: `[examples/fakeshop/graphql_client.py][graphql-client-py]` and the live
+acceptance tests under `examples/fakeshop/test_query/`.
+
+`post_graphql` is useful, and replacing repeated `Client().post("/graphql/")`
+calls is good. But `assert_graphql_data` only covers the exact-data happy path.
+The live acceptance suite still has a large amount of repeated:
+
+```python
+assert response.status_code == 200
+payload = response.json()
+assert "errors" not in payload, payload
+```
+
+That means the helper added a new abstraction but left most of the DRY payoff
+unclaimed. It should grow into a fuller live GraphQL test harness:
+
+- `graphql_payload(query, *, client=None, variables=None)` returning parsed JSON
+  after the status-code assert.
+- `assert_graphql_success(query, *, client=None, variables=None)` returning the
+  `data` payload and failing on GraphQL errors.
+- `assert_graphql_data(..., variables=None)` so variable-driven tests do not
+  fall back to manual posting.
+- `post_graphql_raw(body, *, client=None)` for the raw-body tests currently
+  keeping a local helper in `[test_products_api.py][test-products-api-py]`.
+
+That would turn the helper from "one wrapper" into the single live request
+contract the acceptance tier actually uses.
+
+### P2. `[docs/feedback.md][feedback-md]` should probably not be part of this implementation commit
+
+The commit title is a code refactor, but it adds a 420-line review artifact.
+That accounts for most of the perceived line growth in the full diff. If
+`feedback.md` is intentional project documentation for this workstream, keep it.
+If it is working feedback, it should not live in the implementation commit.
+
+At minimum, separate the review artifact from the code refactor in commit
+history. That makes the DRY implementation easier to audit and keeps future
+line-count review from being distorted by non-code text.
+
+### P3. Benchmark bootstrap consolidation is okay, but the SQLite mode still depends on no connection opening during `django.setup()`
+
+Where: `[scripts/_bench_common.py][bench-common-py]::bootstrap_fakeshop_django`
+and `[scripts/bench_plan_cache.py][bench-plan-cache-py]`.
+
+The helper preserves the old behavior: call `django.setup()`, then mutate
+`settings.DATABASES["default"]["NAME"] = ":memory:"`, then migrate. That works
+as long as no import during setup opens the default connection first. It is not
+a new regression, but moving it into a shared helper makes the assumption more
+important.
+
+If this helper is going to be reused beyond the current benchmark scripts,
+consider setting the in-memory database before `django.setup()` in the
+`sqlite-memory` branch, or explicitly closing/reconfiguring the connection after
+the settings mutation.
+
+## File-by-File Notes
+
+| File | Review |
+| --- | --- |
+| `[connection.py][connection-py]` | Good DRY work. `_set_total_count`, `_empty_page_connection`, and shared selection predicates reduce real duplication without hiding behavior. |
+| `[filters/base.py][filters-base-py]` | Good small extraction. `_apply_lookup_predicate` matches the actual bug class: keep list values whole for `__in`. |
+| `[join_taxonomy.py][join-taxonomy-py]` | Useful consolidation. Keep it, but consider adding self-referential M2M coverage because the through-link side swap is easy to regress. |
+| `[lateral_fetch.py][lateral-fetch-py]` | Better after `attach_windowed_prefetch` and join descriptor reuse. `_select_columns` should defensively handle `deferred_loading_of(...) is None` if the helper promises unreadable states return `None`. |
+| `[nested_fetch.py][nested-fetch-py]` | The new safety classifier is the right abstraction, but the walker must apply it unconditionally to the single built base queryset. |
+| `[plans.py][plans-py]` | Strong consolidation for range planning and order parsing. Fix `deferred_loading_of`, and consider moving pure window arithmetic to `utils/connections.py`. |
+| `[selections.py][selections-py]` | Good DRY improvement. Count-observability now has one implementation for plan and resolve. |
+| `[walker.py][walker-py]` | Main remaining problem. The new helper routing is cleaner, but child queryset construction still happens twice for custom hooks and safety classification is not broad enough. |
+| `[utils/connections.py][utils-connections-py]` | `is_ambiguous_empty_window` belongs here and is a good addition. `WindowRangePlan` probably belongs here too. |
+| `[examples/fakeshop/graphql_client.py][graphql-client-py]` | Good start, but too narrow for the acceptance suite's repeated success/error envelope checks. |
+| `[examples/fakeshop/strategy_schemas.py][strategy-schemas-py]` | Useful shared schema builder. The type-builder half needs a clearer adoption boundary so the repo does not end up with three dynamic-type idioms. |
+| `[scripts/_bench_common.py][bench-common-py]` | Useful script DRY. Watch the SQLite setup ordering assumption. |
+| `[tests/optimizer/conftest.py][tests-optimizer-conftest-py]` | Helper is useful, but should move out of `conftest.py` if tests import it directly. |
+
+## Bottom Line
+
+This commit is not a fake DRY pass. It does consolidate duplicated contracts
+that matter for optimizer correctness. The added code is mostly doing real work.
+
+The commit is also not as DRY as it should be yet. The child-queryset build and
+safety gate need a root-cause refactor before this can be considered finished:
+build the base child queryset once, classify it once for every relation, and
+feed that same queryset into the child plan. After that, clean up the helper
+placement/comment drift and either remove `[docs/feedback.md][feedback-md]`
+from the implementation commit or separate it into its own commit.
+
+I did not run pytest. I reviewed the `HEAD^..HEAD` diff, read the changed
+optimizer and helper files, ran a direct compile probe for the
+`.only()`/`select_related()` prune path, and ran a direct malformed
+`deferred_loading_of` probe.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+[conftest-root]: ../conftest.py
+
+<!-- docs/ -->
+[feedback-md]: feedback.md
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+[connection-py]: ../django_strawberry_framework/connection.py
+[extension-py]: ../django_strawberry_framework/optimizer/extension.py
+[filters-base-py]: ../django_strawberry_framework/filters/base.py
+[join-taxonomy-py]: ../django_strawberry_framework/optimizer/join_taxonomy.py
+[lateral-fetch-py]: ../django_strawberry_framework/optimizer/lateral_fetch.py
+[nested-fetch-py]: ../django_strawberry_framework/optimizer/nested_fetch.py
+[plans-py]: ../django_strawberry_framework/optimizer/plans.py
+[selections-py]: ../django_strawberry_framework/optimizer/selections.py
+[utils-connections-py]: ../django_strawberry_framework/utils/connections.py
+[walker-py]: ../django_strawberry_framework/optimizer/walker.py
+
+<!-- tests/ -->
+[test-lateral-fetch-py]: ../tests/optimizer/test_lateral_fetch.py
+[test-lateral-pg-parity-py]: ../tests/test_lateral_pg_parity.py
+[test-nested-fetch-py]: ../tests/optimizer/test_nested_fetch.py
+[test-permissions-py]: ../tests/test_permissions.py
+[test-relay-connection-py]: ../tests/test_relay_connection.py
+[tests-conftest-py]: ../tests/conftest.py
+[tests-optimizer-conftest-py]: ../tests/optimizer/conftest.py
+
+<!-- examples/ -->
+[graphql-client-py]: ../examples/fakeshop/graphql_client.py
+[kanban-constants-py]: ../examples/fakeshop/apps/kanban/constants.py
+[strategy-schemas-py]: ../examples/fakeshop/strategy_schemas.py
+[test-products-api-py]: ../examples/fakeshop/test_query/test_products_api.py
+
+<!-- scripts/ -->
+[bench-common-py]: ../scripts/_bench_common.py
+[bench-nested-fetch-py]: ../scripts/bench_nested_fetch.py
+[bench-plan-cache-py]: ../scripts/bench_plan_cache.py
+
+<!-- .venv/ -->
+
+<!-- External -->

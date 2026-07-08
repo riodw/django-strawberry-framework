@@ -38,7 +38,9 @@ from django.db import connection
 from django.test import Client, override_settings
 from django.test.utils import CaptureQueriesContext
 from graphql_client import assert_graphql_data as _assert_graphql_data
+from graphql_client import assert_graphql_success as _graphql_data
 from graphql_client import post_graphql as _post_graphql
+from graphql_client import post_graphql_raw as _post_graphql_raw
 from strawberry import relay
 
 
@@ -164,7 +166,7 @@ def test_create_item_happy_path():
     category = models.Category.objects.first()
     client = _login_with_perm("view_item_1", "add_item")
 
-    response = _post_graphql(
+    data = _graphql_data(
         _CREATE_ITEM,
         client=client,
         variables={
@@ -174,10 +176,7 @@ def test_create_item_happy_path():
             },
         },
     )
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    result = payload["data"]["createItem"]
+    result = data["createItem"]
     assert result["errors"] == []
     assert result["node"] == {"name": "LiveWidget", "category": {"name": category.name}}
     created = models.Item.objects.get(name="LiveWidget", category=category)
@@ -208,15 +207,12 @@ def test_update_item_non_colliding_partial_update():
     )
     client = _login_with_perm("staff_1", "change_item")
 
-    response = _post_graphql(
+    data = _graphql_data(
         _UPDATE_ITEM,
         client=client,
         variables={"id": _global_id("products.item", item.pk), "d": {"name": "After"}},
     )
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    result = payload["data"]["updateItem"]
+    result = data["updateItem"]
     assert result["errors"] == []
     assert result["node"] == {"name": "After"}
     item.refresh_from_db()
@@ -243,11 +239,8 @@ def test_delete_item_happy_path():
     gid = _global_id("products.item", item.pk)
     client = _login_with_perm("staff_1", "delete_item")
 
-    response = _post_graphql(_DELETE_ITEM, client=client, variables={"id": gid})
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    result = payload["data"]["deleteItem"]
+    data = _graphql_data(_DELETE_ITEM, client=client, variables={"id": gid})
+    result = data["deleteItem"]
     assert result["errors"] == []
     assert result["node"]["name"] == "Doomed"
     assert result["node"]["category"] == {"name": category.name}
@@ -271,15 +264,12 @@ def test_create_category_happy_path():
     seed_data(1)
     client = _login_with_perm("view_category_1", "add_category")
 
-    response = _post_graphql(
+    data = _graphql_data(
         _CREATE_CATEGORY,
         client=client,
         variables={"d": {"name": "zzz_live_cat"}},
     )
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    result = payload["data"]["createCategory"]
+    result = data["createCategory"]
     assert result["errors"] == []
     assert result["node"] == {"name": "zzz_live_cat"}
     assert models.Category.objects.filter(name="zzz_live_cat").exists()
@@ -2028,18 +2018,12 @@ def test_cascade_composes_with_filter_and_order_live():
 # ---------------------------------------------------------------------------
 
 
-def _post_raw_body(body: bytes, *, client: Client | None = None):
-    """POST raw bytes to ``/graphql/`` as ``application/json`` (bypasses JSON encoding)."""
-    graphql_client = client or Client()
-    return graphql_client.post("/graphql/", data=body, content_type="application/json")
-
-
 @pytest.mark.django_db(transaction=True)
 def test_post_invalid_utf8_json_body_returns_400_not_500():
     """An invalid-UTF-8 byte inside an otherwise-JSON body -> controlled 400."""
     body = b'{"query":"{ __typename }","variables":{"d":"\xff\xfe\xfa"}}'
 
-    response = _post_raw_body(body)
+    response = _post_graphql_raw(body)
 
     assert response.status_code == 400
 
@@ -2047,7 +2031,7 @@ def test_post_invalid_utf8_json_body_returns_400_not_500():
 @pytest.mark.django_db(transaction=True)
 def test_post_raw_binary_body_returns_400_not_500():
     """A wholly non-UTF-8 binary body -> controlled 400, never a 500."""
-    response = _post_raw_body(bytes(range(256)) * 4)
+    response = _post_graphql_raw(bytes(range(256)) * 4)
 
     assert response.status_code == 400
 
@@ -2072,7 +2056,7 @@ def test_post_non_object_json_body_returns_400_not_500(body):
     400. A JSON *array* body is deliberately excluded here - that is upstream's
     batch path, which the patch passes through untouched.
     """
-    response = _post_raw_body(body)
+    response = _post_graphql_raw(body)
 
     assert response.status_code == 400
 

@@ -2,14 +2,12 @@
 
 Happy-path coverage via in-process ``call_command``. Bare-name resolution needs
 a finalized registry, so the bare-name tests run under a registry-clear +
-reload fixture mirroring
-``examples/fakeshop/test_query/test_library_api.py::_reload_library_project_schema``;
+reload fixture backed by ``schema_reload.reload_all_project_schemas``;
 the cold-path ``--schema`` test instead simulates a cold CLI process by evicting
 the schema modules from ``sys.modules`` so the ``--schema`` import re-runs
 registration + finalization on its own.
 """
 
-import importlib
 import sys
 from io import StringIO
 
@@ -47,32 +45,17 @@ _SCHEMA_MODULES = (
 
 
 def _reload_inspect_schema() -> None:
-    """Clear the registry and reload the library + project schema modules.
+    """Clear the registry and reload the full project schema.
 
-    Mirrors ``test_library_api.py``'s reload pattern so bare-name resolution
-    is order-independent: a test run alone behaves identically to one run after
-    a sibling package test cleared the global registry. ``apps.scalars.schema``
-    is reloaded too so the consumer-override demonstration type
-    (``OverriddenScalarSpecimenType``) is registered + finalized for bare-name
-    inspection alongside the library types. ``apps.accounts.schema`` (spec-040
-    Slice 1) is reloaded before ``config.schema`` so its ``UserType`` is
-    re-registered after the clear rather than left stranded in ``sys.modules``
-    (a foreign worker that already imported it would otherwise leave the cached
-    module unrefreshed, and the aggregate ``config.schema`` build would raise
-    ``DuplicatedTypeName`` on ``UserType``).
+    Bare-name resolution must be order-independent: a test run alone behaves
+    identically to one run after a sibling package test cleared the global
+    registry or stranded a cached app schema module. Delegate to the shared
+    full-reload helper so every contributing app is re-registered before the
+    aggregate ``config.schema`` build.
     """
-    registry.clear()
-    for name in (
-        "apps.library.schema",
-        "apps.scalars.schema",
-        "apps.accounts.schema",
-        "config.schema",
-    ):
-        module = sys.modules.get(name)
-        if module is None:
-            importlib.import_module(name)
-        else:
-            importlib.reload(module)
+    from schema_reload import reload_all_project_schemas
+
+    reload_all_project_schemas()
 
 
 @pytest.fixture

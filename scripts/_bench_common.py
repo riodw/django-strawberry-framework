@@ -39,15 +39,15 @@ def bootstrap_fakeshop_django(mode: str) -> None:
             "and re-run with FAKESHOP_PG_DSN=postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop.",
         )
 
-    import django
-
-    django.setup()
-
     if mode == "sqlite-memory":
         from django.conf import settings
 
         settings.DATABASES["default"]["NAME"] = ":memory:"
-    else:
+    import django
+
+    django.setup()
+
+    if mode != "sqlite-memory":
         from django.db import connection
 
         if connection.vendor != "postgresql":

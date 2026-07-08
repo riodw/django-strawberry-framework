@@ -29,7 +29,7 @@ from django_strawberry_framework.optimizer.plans import (
     WINDOW_TOTAL_COUNT,
     OptimizationPlan,
 )
-from tests.optimizer.conftest import nested_connection_request
+from tests.optimizer._builders import nested_connection_request
 
 
 def _books_request(**overrides):

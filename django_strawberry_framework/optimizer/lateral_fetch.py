@@ -61,6 +61,7 @@ from django.db.models import QuerySet
 from django.db.models.expressions import Window
 from django.db.models.query import ModelIterable
 
+from ..utils.connections import window_range_plan
 from .join_taxonomy import LateralJoinShape
 from .nested_fetch import (
     WINDOWED_STRATEGY,
@@ -74,7 +75,6 @@ from .plans import (
     OptimizationPlan,
     deferred_loading_of,
     order_entry_name_and_direction,
-    window_range_plan,
 )
 
 #: The ``unnest`` alias/column the lateral SQL binds parent ids to. The
@@ -558,10 +558,13 @@ def _select_columns(queryset: Any, child_meta: Any) -> tuple[tuple[str, str], ..
     shape (exclusion list) is not a walker product - downgrade rather than
     re-implement Django's defer semantics. The Django-private
     ``deferred_loading`` read goes through the shared
-    ``plans.py::deferred_loading_of`` (never ``None`` here - the strategy
-    only reaches this with a real ``QuerySet``).
+    ``plans.py::deferred_loading_of``; unreadable shapes downgrade to the
+    windowed strategy instead of escaping a private-contract error.
     """
-    names, defer = deferred_loading_of(queryset)
+    loading = deferred_loading_of(queryset)
+    if loading is None:
+        return None
+    names, defer = loading
     if defer:
         if names:
             return None

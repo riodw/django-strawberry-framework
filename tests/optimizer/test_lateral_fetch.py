@@ -31,7 +31,7 @@ from django_strawberry_framework.optimizer.plans import (
     WINDOW_TOTAL_COUNT,
     OptimizationPlan,
 )
-from tests.optimizer.conftest import nested_connection_request as _request
+from tests.optimizer._builders import nested_connection_request as _request
 
 
 def _quote(name):
@@ -183,6 +183,13 @@ def test_spec_downgrades_on_columnless_primary_key():
         model=SimpleNamespace(_meta=SimpleNamespace(pk=SimpleNamespace(column=None))),
     )
     assert _build_lateral_spec(_request(Shelf, "books", child_queryset=fake_queryset)) is None
+
+
+def test_spec_downgrades_on_unreadable_deferred_loading():
+    """Unreadable projection state downgrades instead of raising in the lateral path."""
+    queryset = Book.objects.all()
+    queryset.query.deferred_loading = (None, False)
+    assert _build_lateral_spec(_request(Shelf, "books", child_queryset=queryset)) is None
 
 
 # ---------------------------------------------------------------------------

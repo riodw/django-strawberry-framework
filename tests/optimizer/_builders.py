@@ -1,9 +1,9 @@
 """Shared builders for the optimizer test package.
 
-One home for the ``NestedConnectionRequest`` builder both strategy test
-modules (``test_nested_fetch.py`` / ``test_lateral_fetch.py``) parameterize:
-a new field on the request dataclass then touches this ONE builder instead of
-per-module copies (docs/feedback.md DRY pass, T1).
+One home for the ``NestedConnectionRequest`` builder both strategy test modules
+(``test_nested_fetch.py`` / ``test_lateral_fetch.py``) parameterize: a new field
+on the request dataclass then touches this one builder instead of per-module
+copies.
 """
 
 from typing import Any

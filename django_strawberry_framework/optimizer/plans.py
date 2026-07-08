@@ -32,7 +32,6 @@ in a single pass once the walk completes.
 from __future__ import annotations
 
 import contextlib
-import sys
 from collections.abc import Iterable, MutableSequence, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -42,7 +41,7 @@ from django.db.models import Count, Prefetch, Q, Window
 from django.db.models.functions import RowNumber
 
 from ..exceptions import OptimizerError
-from ..utils.connections import is_ambiguous_empty_window
+from ..utils.connections import window_range_plan
 from .join_taxonomy import classify_relation_join
 
 
@@ -454,9 +453,9 @@ def deferred_loading_of(queryset: Any) -> tuple[frozenset[str], bool] | None:
         return None
     try:
         field_set, defer_flag = deferred_loading
+        return frozenset(field_set), bool(defer_flag)
     except (TypeError, ValueError):
         return None
-    return frozenset(field_set), bool(defer_flag)
 
 
 def _consumer_only_fields(queryset: Any) -> frozenset[str] | None:
@@ -642,74 +641,6 @@ def _optimizer_can_absorb(
 WINDOW_ROW_NUMBER = "_dst_row_number"
 WINDOW_TOTAL_COUNT = "_dst_total_count"
 WINDOW_ROW_NUMBER_REVERSED = "_dst_row_number_reversed"
-
-
-@dataclass(frozen=True)
-class WindowRangePlan:
-    """The pure window-range DECISIONS one ``(offset, limit, reverse)`` slice implies.
-
-    The single owner of the range/marker arithmetic both window renderers
-    consume - ``apply_window_pagination`` (Django ``Q`` objects) and the
-    lateral backend's ``build_lateral_sql`` (raw SQL). The two dialects cannot
-    share rendering, but sharing THESE decisions is the byte-parity invariant:
-    if a bound or the marker condition changed in only one renderer, lateral
-    pages would silently diverge from windowed pages.
-
-    ``limit`` is normalized (relay's ``sys.maxsize`` sentinel becomes ``None``
-    = "no upper bound"); ``lower_bound`` is the exclusive forward-row-number
-    floor (rows with ``_dst_row_number > lower_bound``; ``None`` = no floor);
-    ``upper_bound`` is the inclusive ceiling - on the FORWARD row number
-    (``offset + limit``) for a forward window, on the REVERSED row number
-    (the literal ``limit``) for a reversed one; ``add_marker_rows`` keeps each
-    partition's row 1 for the ambiguous-empty shapes (workstream C);
-    ``plain_first_page`` marks the unambiguous ``first: N`` shape a renderer
-    MAY express as a plain ``ORDER BY``/``LIMIT`` instead of a row-number
-    filter (the lateral backend does, for the Postgres planner's sake);
-    ``requires_total_count`` marks the shapes whose resolution needs the
-    partition count regardless of the selection (marker shapes serve their
-    counts from it; an unbounded window keeps it conservatively).
-    """
-
-    offset: int
-    limit: int | None
-    reverse: bool
-    lower_bound: int | None
-    upper_bound: int | None
-    add_marker_rows: bool
-    plain_first_page: bool
-    requires_total_count: bool
-
-
-def window_range_plan(*, offset: int, limit: int | None, reverse: bool) -> WindowRangePlan:
-    """Resolve one slice window into its shared ``WindowRangePlan``.
-
-    Pure and renderer-agnostic. Owns the two sentinel rules spelled once for
-    every consumer:
-
-    - ``limit is None`` OR relay's ``sys.maxsize`` means "no upper bound"
-      (the offset floor still applies). Normalized here so no renderer ever
-      sees ``sys.maxsize``.
-    - A NEGATIVE limit is not a valid window and is treated as unbounded
-      (unreachable through ``SliceMetadata`` - it raises on negative
-      ``first`` / ``last`` - but direct callers get one deliberate rule
-      instead of the historical per-renderer drift).
-    """
-    if limit == sys.maxsize:
-        limit = None
-    lower_bound = offset if offset else None
-    bounded = limit is not None and limit >= 0
-    upper_bound = (limit if reverse else offset + limit) if bounded else None
-    ambiguous = is_ambiguous_empty_window(offset, limit, reverse=reverse)
-    return WindowRangePlan(
-        offset=offset,
-        limit=limit,
-        reverse=reverse,
-        lower_bound=lower_bound,
-        upper_bound=upper_bound,
-        add_marker_rows=ambiguous and (lower_bound is not None or upper_bound is not None),
-        plain_first_page=not reverse and offset == 0 and bounded and limit > 0,
-        requires_total_count=ambiguous or limit is None,
-    )
 
 
 def order_entry_name_and_direction(entry: Any) -> tuple[str, bool] | None:

@@ -43,6 +43,17 @@ def require_drf() -> Any:
     ``import django_strawberry_framework.rest_framework`` - can be imported to reach
     the guard, and the guard re-runs on each call (no memoization, so the absent-DRF
     test can evict modules and re-hit it).
+
+    NB: this guard keeps its own ``import rest_framework`` statement rather than
+    delegating to ``utils/imports.py::require_optional_module`` (as
+    ``routers.py::require_channels()`` does). The two are NOT interchangeable here:
+    DRF's ``rest_framework/__init__.py`` is minimal, so the absence test's
+    ``builtins.__import__`` block (``tests/rest_framework/test_soft_dependency.py``)
+    only intercepts a direct ``import rest_framework`` statement - a
+    ``require_optional_module`` call routes through ``importlib.import_module``, which
+    bypasses that block and re-imports the still-installed DRF, defeating the
+    simulated-absence discipline. Aligning this onto the primitive requires moving
+    that fixture to a ``sys.modules[...] = None`` sentinel first.
     """
     try:
         import rest_framework

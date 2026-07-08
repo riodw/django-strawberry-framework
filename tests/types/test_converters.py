@@ -666,8 +666,7 @@ def test_bigint_resolver_returning_bool_raises_via_schema_execution():
 # not collide with the prior synthetic apps (``test_bigint``,
 # ``test_choice_enums``). Sentinel-branch tests monkey-patch
 # ``converters._ARRAY_FIELD_CLS = _FakeArrayField`` BEFORE declaring the
-# ``DjangoType`` (Decision 7 spec #"calls `monkeypatch.setattr(converters, \"_ARRAY_FIELD_CLS\", _FakeArrayField)` *before* declaring the `DjangoType`"). Helper-resolver tests use
-# ``sys.modules`` manipulation per Decision 7 spec #"Synthetic-model declaration patterns". The
+# ``DjangoType`` (Decision 7 spec #"calls `monkeypatch.setattr(converters, \"_ARRAY_FIELD_CLS\", _FakeArrayField)` *before* declaring the `DjangoType`"). The
 # introspection helpers (``_introspect_field_type`` /
 # ``_walk_introspected_type``) defined in the BigInt section above are
 # reused verbatim by every owner-introspection test below.
@@ -678,34 +677,6 @@ def test_bigint_resolver_returning_bool_raises_via_schema_execution():
 # sentinel-monkeypatch pattern; consumer-facing coverage stays package-
 # internal until the example project gains a postgres test matrix.
 # ---------------------------------------------------------------------------
-
-
-def test_resolve_array_field_returns_class_when_postgres_fields_importable(monkeypatch):
-    """``_resolve_array_field()`` returns the ``ArrayField`` class when the
-    ``django.contrib.postgres.fields`` module is importable.
-    """
-    import sys
-    import types as _types
-
-    fake = _types.ModuleType("django.contrib.postgres.fields")
-    fake.ArrayField = _FakeArrayField
-    monkeypatch.setitem(sys.modules, "django.contrib.postgres.fields", fake)
-    from django_strawberry_framework.types.converters import _resolve_array_field
-
-    assert _resolve_array_field() is _FakeArrayField
-
-
-def test_resolve_array_field_returns_none_when_postgres_fields_unimportable(monkeypatch):
-    """``_resolve_array_field()`` returns ``None`` when the postgres-contrib
-    fields module is unavailable. Setting ``sys.modules[name] = None`` forces
-    the next ``import name`` to raise ``ImportError``.
-    """
-    import sys
-
-    monkeypatch.setitem(sys.modules, "django.contrib.postgres.fields", None)
-    from django_strawberry_framework.types.converters import _resolve_array_field
-
-    assert _resolve_array_field() is None
 
 
 def test_array_field_of_int_maps_to_list_int_via_fake_sentinel(monkeypatch):
@@ -1063,34 +1034,6 @@ def test_real_array_field_compatible_with_strawberry():
 # stays covered here against synthetic models. Migration to live HTTP is
 # gated on the example project gaining a postgres test matrix.
 # ---------------------------------------------------------------------------
-
-
-def test_resolve_hstore_field_returns_class_when_postgres_fields_importable(monkeypatch):
-    """``_resolve_hstore_field()`` returns the ``HStoreField`` class when the
-    ``django.contrib.postgres.fields`` module is importable.
-    """
-    import sys
-    import types as _types
-
-    fake = _types.ModuleType("django.contrib.postgres.fields")
-    fake.HStoreField = _FakeHStoreField
-    monkeypatch.setitem(sys.modules, "django.contrib.postgres.fields", fake)
-    from django_strawberry_framework.types.converters import _resolve_hstore_field
-
-    assert _resolve_hstore_field() is _FakeHStoreField
-
-
-def test_resolve_hstore_field_returns_none_when_postgres_fields_unimportable(monkeypatch):
-    """``_resolve_hstore_field()`` returns ``None`` when the postgres-contrib
-    fields module is unavailable. Setting ``sys.modules[name] = None`` forces
-    the next ``import name`` to raise ``ImportError``.
-    """
-    import sys
-
-    monkeypatch.setitem(sys.modules, "django.contrib.postgres.fields", None)
-    from django_strawberry_framework.types.converters import _resolve_hstore_field
-
-    assert _resolve_hstore_field() is None
 
 
 def test_hstore_field_maps_to_json_scalar_via_fake_sentinel(monkeypatch):

@@ -70,6 +70,7 @@ from ..exceptions import ConfigurationError
 from ..optimizer.field_meta import FieldMeta
 from ..registry import registry
 from ..scalars import BigInt
+from ..utils.imports import import_attr_if_importable
 from ..utils.strings import pascal_case
 
 
@@ -216,34 +217,21 @@ _GRAPHQL_RESERVED_ENUM_VALUES = frozenset(
 )
 
 
-def _resolve_array_field() -> type[models.Field] | None:
-    """Soft-import postgres ``ArrayField``.
-
-    Returns ``None`` if ``django.contrib.postgres.fields`` is unavailable so
-    package import succeeds on dev environments without the postgres driver.
-    """
-    try:
-        from django.contrib.postgres.fields import ArrayField
-    except ImportError:
-        return None
-    return ArrayField
-
-
-def _resolve_hstore_field() -> type[models.Field] | None:
-    """Soft-import postgres ``HStoreField``.
-
-    Returns ``None`` if ``django.contrib.postgres.fields`` is unavailable so
-    package import succeeds on dev environments without the postgres driver.
-    """
-    try:
-        from django.contrib.postgres.fields import HStoreField
-    except ImportError:
-        return None
-    return HStoreField
-
-
-_ARRAY_FIELD_CLS: type[models.Field] | None = _resolve_array_field()
-_HSTORE_FIELD_CLS: type[models.Field] | None = _resolve_hstore_field()
+# Soft-import the postgres-only field classes through the shared optional-import
+# owner (``utils/imports.py::import_attr_if_importable``) rather than hand-rolling a
+# try/except per field: ``None`` when ``django.contrib.postgres.fields`` is
+# unavailable (package import still succeeds on a dev environment without the
+# postgres driver), and a loud ``AttributeError`` if that module is importable but
+# somehow missing the expected class -- a broken environment that should fail rather
+# than silently degrade.
+_ARRAY_FIELD_CLS: type[models.Field] | None = import_attr_if_importable(
+    "django.contrib.postgres.fields",
+    "ArrayField",
+)
+_HSTORE_FIELD_CLS: type[models.Field] | None = import_attr_if_importable(
+    "django.contrib.postgres.fields",
+    "HStoreField",
+)
 
 
 def scalar_for_field(field: models.Field) -> Any:

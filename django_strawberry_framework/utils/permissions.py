@@ -171,7 +171,9 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
         return channels_request
     raise ConfigurationError(
         f"{family_label} could not resolve a Django HttpRequest from `info.context` "
-        f"(got {type(context).__name__}). Expected `info.context.request` or a bare HttpRequest.",
+        f"(got {type(context).__name__}). Expected `info.context.request`, a bare "
+        "HttpRequest, or a Strawberry Channels mapping context with "
+        '`context["request"].consumer.scope`.',
     )
 
 

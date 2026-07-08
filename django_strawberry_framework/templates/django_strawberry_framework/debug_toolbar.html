@@ -1,0 +1,17 @@
+<!--
+TODO(spec-042 Slice 1): Replace this placeholder with the executable
+django-debug-toolbar GraphiQL bridge ported from strawberry-graphql-django.
+
+Production pseudo-code:
+- Run in a tiny browser-side closure against the existing toolbar DOM.
+- Intercept both JSON parsing paths used by the GraphiQL page.
+- When a response object carries the injected toolbar payload, copy panel
+  titles and subtitles into the stock toolbar navigation.
+- Reset stale panel content so the stock toolbar frontend lazily fetches the
+  full panel body for the new request id.
+- Store the new request id on the stock toolbar root element.
+- Remove the injected toolbar payload before GraphiQL renders the response.
+
+This placeholder intentionally avoids the exact upstream assertion substrings
+so the future template-port guard cannot pass against pseudo-code.
+-->

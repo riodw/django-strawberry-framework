@@ -16,18 +16,24 @@ model. They cover:
 Storage-backend fault injection and corrupt-image dimension edges stay in the
 package-internal ``tests/types/test_resolvers.py`` (they need a mocked
 non-filesystem backend, unreachable from a live request).
+
+The suite drives through the package's own ``TestClient`` (spec-043 Slice 1):
+the JSON posts earn the helper's happy-path lines live, and the two multipart
+mutations earn the owned path-keyed ``files=`` builder - the nested
+input-object shape (``data.attachment`` / ``data.image``) combined with a named
+operation is exactly the envelope the engine base's map builder cannot produce.
 """
 
 import io
-import json
 
 import pytest
 from apps.scalars import models
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import Client, override_settings
-from graphql_client import post_graphql as _post_graphql
+from django.test import override_settings
+
+from django_strawberry_framework.testing import TestClient
 
 
 @pytest.fixture(autouse=True)
@@ -59,13 +65,11 @@ def _png_bytes() -> bytes:
 
 
 def _introspect_type(name: str, selection: str) -> dict:
-    response = _post_graphql(
-        f'query {{ __type(name: "{name}") {{ {selection} }} }}',
-    )
-    assert response.status_code == 200
-    body = response.json()
-    assert "errors" not in body, body
-    return body["data"]["__type"]
+    # ``assert_no_errors=True`` (the TestClient default) replaces the old
+    # hand-rolled "errors" not-in-body assertion.
+    res = TestClient().query(f'query {{ __type(name: "{name}") {{ {selection} }} }}')
+    assert res.response.status_code == 200
+    return res.data["__type"]
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +104,7 @@ def test_populated_file_and_image_resolve_subfields_over_http(tmp_path):
         specimen.image.save("pic.png", ContentFile(image_bytes), save=False)
         specimen.save()
 
-        response = _post_graphql(
+        res = TestClient().query(
             """
             query {
               allMediaSpecimens {
@@ -111,10 +115,8 @@ def test_populated_file_and_image_resolve_subfields_over_http(tmp_path):
             }
             """,
         )
-        assert response.status_code == 200
-        body = response.json()
-        assert "errors" not in body, body
-        rows = body["data"]["allMediaSpecimens"]
+        assert res.response.status_code == 200
+        rows = res.data["allMediaSpecimens"]
         assert len(rows) == 1, rows
         row = rows[0]
 
@@ -143,14 +145,12 @@ def test_empty_required_file_resolves_to_null_over_http(tmp_path):
     with override_settings(MEDIA_ROOT=str(tmp_path)):
         models.MediaSpecimen.objects.create(label="empty")
 
-        response = _post_graphql(
+        res = TestClient().query(
             "{ allMediaSpecimens { label attachment { url } image { url } } }",
         )
-        assert response.status_code == 200
-        body = response.json()
+        assert res.response.status_code == 200
 
-    assert "errors" not in body, body
-    row = body["data"]["allMediaSpecimens"][0]
+    row = res.data["allMediaSpecimens"][0]
     assert row["label"] == "empty"
     assert row["attachment"] is None
     assert row["image"] is None
@@ -188,6 +188,12 @@ def test_multipart_create_uploads_real_files_over_http(tmp_path):
     multipart request parse -> schema execution -> JSON response. The caller is a
     superuser so the default ``DjangoModelPermission`` ``add_mediaspecimen`` gate
     passes (write-auth is exercised on its own in the products suite).
+
+    The spec-043 scenario-5 vehicle: the nested two-file input object rides
+    ``TestClient``'s path-keyed ``files=`` contract (each key is the variable
+    path a ``None`` placeholder marks), combined with ``operation_name=`` so
+    ``operationName`` is proven to land INSIDE the multipart ``operations``
+    field - the exact envelope the engine base's map builder cannot produce.
     """
     mutation = """
     mutation Create($data: MediaSpecimenInput!) {
@@ -203,27 +209,28 @@ def test_multipart_create_uploads_real_files_over_http(tmp_path):
     """
     with override_settings(MEDIA_ROOT=str(tmp_path)):
         user = get_user_model().objects.create_superuser("uploader", "uploader@example.com", "pw")
-        client = Client()
-        client.force_login(user)
+        client = TestClient()
 
-        operations = {
-            "query": mutation,
-            "variables": {"data": {"label": "uploaded", "attachment": None, "image": None}},
-        }
-        file_map = {"0": ["variables.data.attachment"], "1": ["variables.data.image"]}
-        response = client.post(
-            "/graphql/",
-            data={
-                "operations": json.dumps(operations),
-                "map": json.dumps(file_map),
-                "0": SimpleUploadedFile("up.txt", b"multipart bytes", content_type="text/plain"),
-                "1": SimpleUploadedFile("up.png", _png_bytes(), content_type="image/png"),
-            },
-        )
-        assert response.status_code == 200
-        body = response.json()
-        assert "errors" not in body, body
-        payload = body["data"]["createMediaSpecimen"]
+        with client.login(user):
+            res = client.query(
+                mutation,
+                variables={"data": {"label": "uploaded", "attachment": None, "image": None}},
+                files={
+                    "data.attachment": SimpleUploadedFile(
+                        "up.txt",
+                        b"multipart bytes",
+                        content_type="text/plain",
+                    ),
+                    "data.image": SimpleUploadedFile(
+                        "up.png",
+                        _png_bytes(),
+                        content_type="image/png",
+                    ),
+                },
+                operation_name="Create",
+            )
+        assert res.response.status_code == 200
+        payload = res.data["createMediaSpecimen"]
         assert payload["errors"] == []
         result = payload["result"]
 
@@ -263,23 +270,20 @@ def test_multipart_create_media_specimen_image_via_form_over_http(tmp_path):
     }
     """
     with override_settings(MEDIA_ROOT=str(tmp_path)):
-        operations = {
-            "query": mutation,
-            "variables": {"data": {"label": "form-uploaded", "image": None}},
-        }
-        file_map = {"0": ["variables.data.image"]}
-        response = Client().post(
-            "/graphql/",
-            data={
-                "operations": json.dumps(operations),
-                "map": json.dumps(file_map),
-                "0": SimpleUploadedFile("form.png", _png_bytes(), content_type="image/png"),
+        res = TestClient().query(
+            mutation,
+            variables={"data": {"label": "form-uploaded", "image": None}},
+            files={
+                "data.image": SimpleUploadedFile(
+                    "form.png",
+                    _png_bytes(),
+                    content_type="image/png",
+                ),
             },
+            operation_name="Create",
         )
-        assert response.status_code == 200
-        body = response.json()
-        assert "errors" not in body, body
-        payload = body["data"]["createMediaSpecimenImageViaForm"]
+        assert res.response.status_code == 200
+        payload = res.data["createMediaSpecimenImageViaForm"]
         assert payload["errors"] == []
         result = payload["result"]
 

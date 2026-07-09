@@ -43,6 +43,8 @@ from graphql_client import post_graphql as _post_graphql
 from graphql_client import post_graphql_raw as _post_graphql_raw
 from strawberry import relay
 
+from django_strawberry_framework.testing import TestClient
+
 
 @pytest.fixture(autouse=True)
 def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
@@ -506,6 +508,85 @@ def test_create_item_missing_model_perm_is_denied_no_write():
     assert "Not authorized" in payload["errors"][0]["message"]
     assert models.Item.objects.count() == before
     assert not models.Item.objects.filter(name="NoPermWidget").exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_item_login_bracket_via_test_client():
+    """spec-043 scenario 4: ``TestClient.login()`` scopes write auth to the bracket.
+
+    The write-auth-gated ``createItem`` on ONE client instance: denied anonymous
+    (a top-level ``GraphQLError`` and no write - the scenario-2 errors outcome
+    through ``assert_no_errors=False``), succeeds inside
+    ``with client.login(user_with_perm):``, and is denied again after the block -
+    the force-login/logout bracket proven live. The caller holds the explicit
+    ``add_item`` codename (NOT a superuser), so the ``DjangoModelPermission``
+    codename path runs, exactly as in the raw-client denial tests above.
+    """
+    from django.contrib.auth.models import Permission
+
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    variables = {
+        "d": {"name": "BracketWidget", "categoryId": _global_id("products.category", category.pk)},
+    }
+    User = get_user_model()
+    user = User.objects.get(username="view_item_1")
+    user.user_permissions.add(
+        Permission.objects.get(codename="add_item", content_type__app_label="products"),
+    )
+    user = User.objects.get(pk=user.pk)  # drop the stale perm cache
+
+    client = TestClient()
+
+    denied = client.query(_CREATE_ITEM, variables=variables, assert_no_errors=False)
+    assert denied.response.status_code == 200  # GraphQL denials still ride HTTP 200
+    assert denied.data is None
+    assert "Not authorized" in denied.errors[0]["message"]
+    assert not models.Item.objects.filter(name="BracketWidget").exists()
+
+    with client.login(user):
+        granted = client.query(_CREATE_ITEM, variables=variables)
+        assert granted.errors is None
+        assert granted.data["createItem"]["errors"] == []
+        assert granted.data["createItem"]["node"]["name"] == "BracketWidget"
+    assert models.Item.objects.filter(name="BracketWidget", category=category).exists()
+
+    denied_again = client.query(_CREATE_ITEM, variables=variables, assert_no_errors=False)
+    assert denied_again.data is None
+    assert "Not authorized" in denied_again.errors[0]["message"]
+
+
+@pytest.mark.django_db
+def test_operation_name_dispatch_via_test_client():
+    """spec-043 scenarios 1 + 3: the typed ``Response`` and ``operationName`` dispatch.
+
+    A two-operation document with ``operation_name="ItemNames"`` executes ONLY
+    the named SECOND operation (an ``allItems``-only ``data`` proves the name
+    rode the JSON body); the same document with no ``operation_name`` executes
+    the FIRST operation - Strawberry's HTTP layer defaults an absent
+    ``operationName`` to the document's first operation (verified live; bare
+    graphql-core would instead error with "Must provide operation name"), so
+    the first-operation result is the absent-key proof. The named call doubles
+    as the JSON happy path: variables in the envelope, the typed ``errors`` /
+    ``data`` split, and the raw ``HttpResponse`` riding along.
+    """
+    seed_data(1)
+    document = """
+    query CategoryNames { allCategories { edges { node { name } } } }
+    query ItemNames($first: Int) { allItems(first: $first) { edges { node { name } } } }
+    """
+    client = TestClient()
+
+    res = client.query(document, variables={"first": 1}, operation_name="ItemNames")
+    assert res.errors is None
+    assert res.response.status_code == 200
+    assert res.response["Content-Type"].startswith("application/json")
+    assert list(res.data.keys()) == ["allItems"]  # the named second op; the first never ran
+    assert len(res.data["allItems"]["edges"]) == 1
+
+    unnamed = client.query(document, variables={"first": 1})
+    assert list(unnamed.data.keys()) == ["allCategories"]  # absent key -> first operation
 
 
 @pytest.mark.django_db(transaction=True)

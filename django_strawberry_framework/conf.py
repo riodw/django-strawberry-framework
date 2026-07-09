@@ -57,6 +57,15 @@ APPLY_UPSTREAM_PATCHES_KEY = "APPLY_UPSTREAM_PATCHES"
 # (see ``optimizer/nested_fetch.py``). Defaults to ``"windowed"``.
 NESTED_CONNECTION_STRATEGY_KEY = "NESTED_CONNECTION_STRATEGY"
 
+# Project-wide GraphQL endpoint for the ``testing/client.py`` test-client
+# family (``TestClient`` / ``AsyncTestClient`` / ``GraphQLTestMixin``) -
+# graphene-django's ``TESTING_ENDPOINT`` knob, package-namespaced (spec-043
+# Decision 7). Defaults to ``"/graphql/"`` (trailing slash - fakeshop's
+# mount, Strawberry's own base default, and Django's ``APPEND_SLASH``
+# convention; graphene's slash-less ``"/graphql"`` is a documented
+# non-borrow).
+TESTING_ENDPOINT_KEY = "TESTING_ENDPOINT"
+
 
 def _normalize_user_settings(value: Any) -> dict[str, Any]:
     """Validate and normalize a ``DJANGO_STRAWBERRY_FRAMEWORK`` candidate.
@@ -198,6 +207,21 @@ def nested_connection_strategy_setting() -> str:
     lives.
     """
     return getattr(settings, NESTED_CONNECTION_STRATEGY_KEY, "windowed")
+
+
+def testing_endpoint_setting() -> str:
+    """The configured project-wide GraphQL endpoint for the test-client family.
+
+    Reads ``DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]``, defaulting to
+    ``"/graphql/"`` when the key (or the whole settings dict) is absent.
+    Consumed by ``testing/client.py`` at ``TestClient`` construction and per
+    ``GraphQLTestMixin.query()`` call, as the lowest rungs of the endpoint
+    precedence ladder (per-call ``url=`` > constructor ``path=`` > class-attr
+    ``GRAPHQL_URL`` > this setting > default). No validation beyond the shared
+    malformed-dict guard: a wrong endpoint string surfaces as an ordinary 404
+    at request time, where the failure names the actual response.
+    """
+    return getattr(settings, TESTING_ENDPOINT_KEY, "/graphql/")
 
 
 def reload_settings(setting: str, value: Any, **kwargs: Any) -> None:

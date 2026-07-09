@@ -1,8 +1,23 @@
-"""Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
+"""Consumer-facing test utilities - the GraphQL test-client family + connection-method wrapping.
 
 Currently exports
 -----------------
 
+- :class:`TestClient` / :class:`AsyncTestClient` - live ``/graphql/`` HTTP
+  test clients for consumer test suites (spec-043): thin wrappers over
+  ``django.test.Client`` / ``django.test.AsyncClient`` posting GraphQL
+  operations (JSON, or multipart when ``files=`` is provided) and returning
+  the typed :class:`Response`. Endpoint from
+  ``DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]`` (default
+  ``"/graphql/"``), overridable per instance (``path=``) and per call
+  (``url=``).
+- :class:`Response` - the typed result (``errors`` / ``data`` /
+  ``extensions``, subclassing ``strawberry.test.client.Response``) carrying
+  the raw ``django.http.HttpResponse`` as ``response``.
+- :class:`GraphQLTestMixin` / :class:`GraphQLTestCase` /
+  :class:`GraphQLTransactionTestCase` - the graphene-django-shaped unittest
+  family: ``self.query(...)`` through the test case's own ``self.client``,
+  plus the ``assertResponseNoErrors`` / ``assertResponseHasErrors`` helpers.
 - :func:`safe_wrap_connection_method` - cooperative wrap helper that
   declines to clobber Django's ``_DatabaseFailure`` wrapper. The
   wrap-time mirror of the unwrap-time backstop the package installs in
@@ -23,21 +38,27 @@ Currently exports
   including the secondary-emitter decode asymmetry. Keeping them out of this
   ``__init__`` also keeps ``import django_strawberry_framework.testing``
   light - the submodule's ``types``-package imports are paid only by suites
-  that import it.
-
-Future exports (tracked in ``docs/GLOSSARY.md``; planned for
-``0.0.14``):
-
-- ``TestClient``, ``AsyncTestClient`` - live ``/graphql/`` HTTP clients
-  for consumer test suites.
-- ``GraphQLTestCase`` - a ``django.test.TestCase`` subclass that
-  bundles the common patterns.
-
-The subpackage exists now so consumers have a stable import path
-(``from django_strawberry_framework.testing import ...``) regardless of
-which utility lands first.
+  that import it (the client module's own ``django.test`` /
+  ``strawberry.test`` imports are already paid by any process running Django
+  tests, which is the only process that imports ``testing`` at all).
 """
 
 from django_strawberry_framework.testing._wrap import safe_wrap_connection_method
+from django_strawberry_framework.testing.client import (
+    AsyncTestClient,
+    GraphQLTestCase,
+    GraphQLTestMixin,
+    GraphQLTransactionTestCase,
+    Response,
+    TestClient,
+)
 
-__all__ = ["safe_wrap_connection_method"]
+__all__ = [
+    "AsyncTestClient",
+    "GraphQLTestCase",
+    "GraphQLTestMixin",
+    "GraphQLTransactionTestCase",
+    "Response",
+    "TestClient",
+    "safe_wrap_connection_method",
+]

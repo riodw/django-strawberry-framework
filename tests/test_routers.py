@@ -8,13 +8,15 @@ Both dependency states are exercised (spec-041 Decision 8):
   the package-realistic request contract (a resolver reading the actor through
   ``request_from_info()``, Test 16), and the authenticated-session round trip
   (Test 18);
-- **channels-absent** - simulated via the ``builtins.__import__`` block +
-  strict ``sys.modules`` eviction with the TWO-SIDED restore (the parent
-  package's ``routers`` attribute is saved/restored alongside the module
-  entries, so the attribute path and the import path never end up holding two
-  live module objects with independent class caches);
+- **channels-absent** - simulated via the shared ``sys.modules[...] = None``
+  sentinel (``tests/_soft_dependency.py``) + strict ``sys.modules`` eviction with
+  the TWO-SIDED restore (the parent package's ``routers`` attribute is
+  saved/restored alongside the module entries, so the attribute path and the
+  import path never end up holding two live module objects with independent class
+  caches);
 - **channels-present-but-degraded** - the same eviction discipline with one
-  builder import blocked, pinning the split actionable error shapes (Test 17).
+  builder submodule set to a ``None`` sentinel, pinning the split actionable error
+  shapes (Test 17).
 
 The execution schema is module-local and ORM-free: the async
 ``GraphQLHTTPConsumer`` executes on the event loop, where sync ORM would raise
@@ -22,8 +24,6 @@ The execution schema is module-local and ORM-free: the async
 deterministic scalar field is sufficient (spec-041 Test plan).
 """
 
-import builtins
-import contextlib
 import importlib
 import json
 import sys
@@ -40,6 +40,7 @@ from channels.testing import HttpCommunicator, WebsocketCommunicator
 import django_strawberry_framework
 import django_strawberry_framework.routers as routers_module
 from django_strawberry_framework.utils.permissions import request_from_info
+from tests._soft_dependency import evicted_modules, simulated_absence
 
 # The hint floors are deliberately RE-TYPED literals, matching
 # ``tests/rest_framework/test_soft_dependency.py``'s ``_HINT_SUBSTRING``
@@ -340,78 +341,32 @@ async def test_schema_object_passes_through_unchanged_with_extensions_intact():
 
 # ---------------------------------------------------------------------------
 # Channels-absent + degraded installs: the eviction-simulated states
-# (Tests 11-15, 17). Absence is SIMULATED (the DRF soft-dependency discipline):
-# a ``builtins.__import__`` block + strict ``sys.modules`` eviction/restore,
-# two-sided (the parent package's ``routers`` attribute is restored to the SAME
-# original module object as ``sys.modules``, because a blocked-then-retried
-# import re-executes ``routers.py`` and rebinds the attribute to a fresh module
-# with its own empty ``_ROUTER_CLASS`` cache).
+# (Tests 11-15, 17). Absence is SIMULATED with the shared ``None`` sentinel +
+# strict ``sys.modules`` eviction/restore, two-sided (the parent package's
+# ``routers`` attribute is restored to the SAME original module object as
+# ``sys.modules``, because a retried import re-executes ``routers.py`` and rebinds
+# the attribute to a fresh module with its own empty ``_ROUTER_CLASS`` cache).
+# Evicting ``django_strawberry_framework.routers`` drops that cache so the guard
+# actually re-fires (``routers.py::_build_router_class`` short-circuits on a warm
+# cache without calling ``require_channels``).
 # ---------------------------------------------------------------------------
 
-_EVICT_PREFIXES = (
+_CHANNELS_PREFIXES = (
     "channels",
     "strawberry.channels",
     "daphne",
     "django_strawberry_framework.routers",
 )
 
-_REAL_IMPORT = builtins.__import__
-
-
-def _should_evict(name):
-    return any(name == prefix or name.startswith(prefix + ".") for prefix in _EVICT_PREFIXES)
-
-
-@contextlib.contextmanager
-def _evicted_router_state(is_blocked_name):
-    """Evict the router + channels modules and block matching ABSOLUTE imports.
-
-    ``is_blocked_name`` decides which top-level (``level == 0``) import names
-    raise; relative imports (the re-executed ``routers.py`` reaching its own
-    ``.utils.imports``) always pass through so the guard itself stays reachable.
-    Teardown restores every evicted module AND the parent package's ``routers``
-    attribute to the original module object (the two-sided restore, spec-041
-    Decision 8 / Helper-reuse D3).
-    """
-    saved = {name: sys.modules.pop(name) for name in list(sys.modules) if _should_evict(name)}
-    saved_parent_attr = getattr(django_strawberry_framework, "routers", None)
-
-    def _blocking_import(
-        name,
-        globals=None,  # noqa: A002 - mirrors builtins.__import__'s exact signature
-        locals=None,  # noqa: A002 - mirrors builtins.__import__'s exact signature
-        fromlist=(),
-        level=0,
-    ):
-        if level == 0 and is_blocked_name(name):
-            raise ImportError(f"No module named {name!r} (simulated absence)")
-        return _REAL_IMPORT(name, globals, locals, fromlist, level)
-
-    builtins.__import__ = _blocking_import
-    try:
-        yield
-    finally:
-        builtins.__import__ = _REAL_IMPORT
-        # Drop any partially-imported modules created under the block, then
-        # restore the originally-evicted real modules.
-        for name in list(sys.modules):
-            if _should_evict(name):
-                del sys.modules[name]
-        sys.modules.update(saved)
-        if saved_parent_attr is not None:
-            django_strawberry_framework.routers = saved_parent_attr
-        else:  # pragma: no cover - the module import at file top makes this unreachable
-            with contextlib.suppress(AttributeError):
-                delattr(django_strawberry_framework, "routers")
-
-
-def _channels_absent_name(name):
-    return name == "channels" or name.startswith("channels.")
-
 
 @pytest.fixture
 def _simulate_channels_absent():
-    with _evicted_router_state(_channels_absent_name):
+    with simulated_absence(
+        "channels",
+        *_CHANNELS_PREFIXES,
+        parent=django_strawberry_framework,
+        attr="routers",
+    ):
         yield
 
 
@@ -449,8 +404,13 @@ def test_restore_is_two_sided_and_the_present_path_works_again():
     modules with independent ``_ROUTER_CLASS`` caches - the order-dependent
     Test-6 identity flake under ``pytest-xdist``.
     """
-    with _evicted_router_state(_channels_absent_name):
-        # Re-execute the module under the block (the rebinding the restore must undo).
+    with simulated_absence(
+        "channels",
+        *_CHANNELS_PREFIXES,
+        parent=django_strawberry_framework,
+        attr="routers",
+    ):
+        # Re-execute the module under absence (the rebinding the restore must undo).
         importlib.import_module("django_strawberry_framework.routers")
         with pytest.raises(ImportError, match=_HINT_SUBSTRING):
             exec("from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter", {})
@@ -471,44 +431,42 @@ def test_unrelated_attribute_miss_stays_a_plain_attribute_error(_simulate_channe
         _ = mod.DefinitelyNotARouter
 
 
-def _blocked_channels_security(name):
-    return name == "channels.security.websocket"
-
-
-def _blocked_strawberry_channels(name):
-    return name == "strawberry.channels" or name.startswith("strawberry.channels.")
-
-
 @pytest.mark.parametrize(
-    ("is_blocked_name", "expected_substrings"),
+    ("broken_submodule", "expected_substrings"),
     [
         pytest.param(
-            _blocked_channels_security,
+            "channels.security.websocket",
             [_HINT_SUBSTRING],
             id="channels-half",
         ),
         pytest.param(
-            _blocked_strawberry_channels,
+            "strawberry.channels",
             [_HINT_SUBSTRING, _STRAWBERRY_FLOOR_SUBSTRING],
             id="strawberry-half",
         ),
     ],
 )
 def test_degraded_partial_install_raises_the_split_actionable_errors(
-    is_blocked_name,
+    broken_submodule,
     expected_substrings,
 ):
     """Test 17: present-but-incompatible installs name WHICH half is broken.
 
-    Uses the same eviction + parent-attribute-restore discipline as the absent
-    path so the re-executed module has no cached ``_ROUTER_CLASS`` and the
-    blocked builder import actually fires (order-independence, finding P1.2).
-    A failing ``channels.*`` import names the channels floor; a failing
+    Same eviction + two-sided-restore discipline as the absent path (so the
+    re-executed module has no cached ``_ROUTER_CLASS`` and the builder import
+    actually fires, order-independence finding P1.2), but here the top-level
+    ``channels`` re-imports cleanly and only one builder SUBMODULE is a ``None``
+    sentinel: a failing ``channels.*`` import names the channels floor; a failing
     ``strawberry.channels`` consumer import names BOTH halves, so a broken
-    Strawberry install is never misreported as a Channels problem. Both chain
-    the original ``ImportError``.
+    Strawberry install is never misreported as a Channels problem. Both chain the
+    original ``ImportError``.
     """
-    with _evicted_router_state(is_blocked_name):
+    with evicted_modules(
+        *_CHANNELS_PREFIXES,
+        parent=django_strawberry_framework,
+        attr="routers",
+    ):
+        sys.modules[broken_submodule] = None
         with pytest.raises(ImportError) as exc_info:
             exec("from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter", {})
         message = str(exc_info.value)

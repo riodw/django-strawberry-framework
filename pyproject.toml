@@ -49,6 +49,12 @@ dev = [
     # required only to IMPORT channels.testing) so tests/test_routers.py can
     # exercise the channels-present path (spec-041 Decision 5).
     "channels[daphne]>=4.3.2",
+    # django-debug-toolbar is a SOFT dependency of the package ([project].dependencies
+    # is untouched); the dev group installs it so tests/middleware/test_debug_toolbar.py
+    # can exercise the toolbar-present path (spec-042 Decision 5). The >=7.0.0 floor is
+    # deliberately above upstream's >=6.0.0: 7.0.0 is the first release carrying the
+    # Framework :: Django :: 6.0 classifier the package itself advertises.
+    "django-debug-toolbar>=7.0.0",
     "pytest-cov>=7.0.0",
     "pytest-django>=4.5.2",
     "pytest-xdist>=3.8.0",

@@ -1,17 +1,63 @@
-<!--
-TODO(spec-042 Slice 1): Replace this placeholder with the executable
-django-debug-toolbar GraphiQL bridge ported from strawberry-graphql-django.
+<script>
+  (function (JSON, Response) {
+    const djDebug = document.getElementById("djDebug");
+    function update(data) {
+      if (
+        data === null ||
+        typeof data !== "object" ||
+        !Object.prototype.hasOwnProperty.call(data, "debugToolbar")
+      ) {
+        return data;
+      }
 
-Production pseudo-code:
-- Run in a tiny browser-side closure against the existing toolbar DOM.
-- Intercept both JSON parsing paths used by the GraphiQL page.
-- When a response object carries the injected toolbar payload, copy panel
-  titles and subtitles into the stock toolbar navigation.
-- Reset stale panel content so the stock toolbar frontend lazily fetches the
-  full panel body for the new request id.
-- Store the new request id on the stock toolbar root element.
-- Remove the injected toolbar payload before GraphiQL renders the response.
+      // Payload scrubbing is mandatory; DOM updates are best-effort. Capture the
+      // debug payload and strip the server-only "debugToolbar" key BEFORE any
+      // DOM-dependent work, so a missing toolbar handle - or a panel present in
+      // the payload whose content/nav node is absent from the current toolbar
+      // DOM - can never leak the key back into the GraphiQL response.
+      const toolbar = data.debugToolbar;
+      delete data.debugToolbar;
 
-This placeholder intentionally avoids the exact upstream assertion substrings
-so the future template-port guard cannot pass against pseudo-code.
--->
+      if (djDebug === null) return data;
+
+      Object.entries(toolbar.panels).forEach(([id, panel]) => {
+        if (panel.title) {
+          const content = djDebug.querySelector(`#${id}`);
+          if (content === null) return;
+
+          content
+            .querySelector(".djDebugPanelTitle")
+            .querySelector("h3").textContent = panel.title;
+
+          content.querySelector(".djdt-scroll").innerHTML = "";
+
+          if (content.querySelector(".djdt-loader") === null) {
+            const loader = document.createElement("div");
+            loader.className = "djdt-loader";
+            content.querySelector(".djDebugPanelContent").prepend(loader);
+          }
+        }
+        if (panel.subtitle) {
+          const nav = document.getElementById(`djdt-${id}`);
+          if (nav !== null) {
+            nav.querySelector("small").textContent = panel.subtitle;
+          }
+        }
+      });
+      djDebug.setAttribute("data-request-id", toolbar.requestId);
+
+      return data;
+    }
+
+    const origParse = JSON.parse;
+    JSON.parse = function () {
+      return update(origParse.apply(this, arguments));
+    };
+
+    const origJson = Response.prototype.json
+    Response.prototype.json = function () {
+      return origJson.apply(this, arguments).then((data) => update(data));
+    };
+
+  })(JSON, Response);
+</script>

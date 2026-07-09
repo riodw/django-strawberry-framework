@@ -1,0 +1,23 @@
+term,anchor,notes
+TestClient,testclient,the client-pair glossary entry; one row also covers AsyncTestClient (async twin — same shape) and Response (the typed result dataclass — re-exported public name); status flip rides the joint cut
+GraphQLTestCase,graphqltestcase,the unittest-family glossary entry (mixin-first shape); one row also covers GraphQLTestMixin (the reusable mixin both concrete cases compose) and GraphQLTransactionTestCase (the TransactionTestCase combination)
+Upload,upload-scalar,the card's DONE-037-0.0.11 dependency; the multipart files= path
+soft dependency,soft-dependency,cited as the contrast — this card needs none of the machinery
+eviction-simulated absence,eviction-simulated-absence,cited as the contrast — no absence matrix in this card's test plan
+PEP 562 export,pep-562-lazy-export,negative mention in Decision 5 (no lazy export needed)
+joint version cut,joint-version-cut,Decision 12 — the 0.0.14 bump deferral
+live-first coverage mandate,live-first-coverage-mandate,Decision 11 — the switchover IS the live-tier coverage
+Schema reload discipline,schema-reload-discipline,request-driving package tests' fixture obligation
+seed_data,seed_data,the seed-helper rule applied in the test plan
+Auth mutations,auth-mutations,the Channels-verification disjunction this spec resolves to the follow-on
+Debug-toolbar middleware,debug-toolbar-middleware,landed 0.0.14 predecessor (DONE-042); async-smoke handoff not adopted
+Response-extensions debug middleware,response-extensions-debug-middleware,to-do 0.0.14 sibling
+DjangoGraphQLProtocolRouter,djangographqlprotocolrouter,landed 0.0.14 predecessor; explicitly not this card's transport
+FieldError,fielderror-envelope,why the typed Response needs no envelope-specific surface
+DjangoOptimizerExtension,djangooptimizerextension,the query-count invariant the switchover must preserve
+ConfigurationError,configurationerror,explicitly NOT raised by this card (conf.py's existing seam only)
+request_from_info,request_from_info,D-N1 non-reuse — resolver-context decoding is not this module's job
+safe_wrap_connection_method,safe_wrap_connection_method,the testing subpackage's existing root export (locality contrast in Decision 4)
+DjangoListField,djangolistfield,D-N3 non-reuse — is_async_callable detection not borrowed
+DjangoType,djangotype,Decision 3 — the Django* prefix marks schema-side public API (contrast: test utilities are namespaced by module path)
+DjangoConnectionField,djangoconnectionfield,Decision 3 — schema-side Django* public API the test-utility names are deliberately unlike

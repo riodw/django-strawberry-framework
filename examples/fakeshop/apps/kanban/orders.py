@@ -42,12 +42,6 @@ class RelativeSizeOrder(OrderSet):
         fields = "__all__"
 
 
-class PlanningStateOrder(OrderSet):
-    class Meta:
-        model = models.PlanningState
-        fields = "__all__"
-
-
 class UpstreamOrder(OrderSet):
     class Meta:
         model = models.Upstream
@@ -144,7 +138,6 @@ __all__ = (
     "LabelOrder",
     "MilestoneOrder",
     "ParityLevelOrder",
-    "PlanningStateOrder",
     "PriorityOrder",
     "RelativeSizeOrder",
     "SectionOrder",

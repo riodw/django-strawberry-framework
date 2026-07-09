@@ -51,8 +51,6 @@ def _seed_board():
     xl = models.RelativeSize.objects.create(key="xl", label="XL", order=4, rank=4)
     size_m = models.RelativeSize.objects.create(key="m", label="M", order=2, rank=2)
     high = models.Priority.objects.create(key="high", label="High", order=0)
-    shipped = models.PlanningState.objects.create(key="shipped", label="Shipped", order=4)
-    planned = models.PlanningState.objects.create(key="planned", label="Planned", order=0)
     graphene = models.Upstream.objects.create(
         key="graphene_django",
         label="graphene-django",
@@ -111,7 +109,6 @@ def _seed_board():
         target_version=version,
         priority=high,
         relative_size=xl,
-        planning_state=shipped,
     )
     models.SpecDoc.objects.create(
         card=filters_card,
@@ -153,7 +150,6 @@ def _seed_board():
         target_version=version,
         priority=high,
         relative_size=size_m,
-        planning_state=planned,
     )
     conn_card.changed_files.add(historical_tracked_path)
     reference = models.CardReference.objects.create(
@@ -596,7 +592,6 @@ def test_select_board_docs_and_lookup_roots_for_static_dashboard():
             }
           }
           allKanbanPriorities { key }
-          allKanbanPlanningStates { key }
           allKanbanParityLevels { key }
           allKanbanSections { key }
           allKanbanReferenceKinds { key }
@@ -624,7 +619,6 @@ def test_select_board_docs_and_lookup_roots_for_static_dashboard():
                 },
             ],
             "allKanbanPriorities": [{"key": "high"}],
-            "allKanbanPlanningStates": [{"key": "planned"}, {"key": "shipped"}],
             "allKanbanParityLevels": [{"key": "required"}, {"key": "adjacent"}],
             "allKanbanSections": [{"key": "scope"}],
             "allKanbanReferenceKinds": [{"key": "dependency"}],
@@ -842,7 +836,6 @@ def test_select_multi_fk_fanout_and_second_hop():
             status { key }
             priority { key }
             relativeSize { key rank }
-            planningState { key }
             milestone { key }
             targetVersion { number milestone { key } }
           }
@@ -855,7 +848,6 @@ def test_select_multi_fk_fanout_and_second_hop():
                     "status": {"key": "todo"},
                     "priority": {"key": "high"},
                     "relativeSize": {"key": "m", "rank": 2},
-                    "planningState": {"key": "planned"},
                     "milestone": {"key": "alpha"},
                     "targetVersion": {"number": "0.0.8", "milestone": {"key": "alpha"}},
                 },
@@ -1004,7 +996,6 @@ def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields():
         "targetVersion",
         "priority",
         "relativeSize",
-        "planningState",
     ):
         field_type = fields[name]["type"]
         while field_type.get("ofType") is not None:

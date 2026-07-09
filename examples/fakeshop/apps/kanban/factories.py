@@ -72,10 +72,6 @@ def make_relative_size(key: str = "m", *, rank: int = 2, **defaults):
     return _lookup(models.RelativeSize, key, rank=rank, **defaults)
 
 
-def make_planning_state(key: str = "planned", **defaults):
-    return _lookup(models.PlanningState, key, **defaults)
-
-
 def make_upstream(key: str = "graphene_django", *, emoji: str = "⚛️", **defaults):
     return _lookup(models.Upstream, key, emoji=emoji, **defaults)
 
@@ -146,7 +142,6 @@ def make_card(**fields):
     fields.setdefault("milestone", target_version.milestone)
     fields.setdefault("status", make_status())
     fields.setdefault("relative_size", make_relative_size())
-    fields.setdefault("planning_state", make_planning_state())
     fields.setdefault("number", _next_card_number())
     fields.setdefault("title", f"Card {_seq()}: {fake.sentence(nb_words=4).rstrip('.')}")
     requested_status = fields["status"]

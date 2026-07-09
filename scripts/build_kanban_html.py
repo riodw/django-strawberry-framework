@@ -47,9 +47,6 @@ query StaticKanbanDashboard {
     relativeSize {
       ...RelativeSizeFields
     }
-    planningState {
-      ...PlanningStateFields
-    }
     spec {
       id
       uuid {
@@ -166,9 +163,6 @@ query StaticKanbanDashboard {
   allKanbanRelativeSizes {
     ...RelativeSizeFields
   }
-  allKanbanPlanningStates {
-    ...PlanningStateFields
-  }
   allKanbanUpstreams {
     ...UpstreamFields
   }
@@ -253,18 +247,6 @@ fragment RelativeSizeFields on RelativeSizeType {
   order
   rank
   description
-  createdDate
-  updatedDate
-}
-
-fragment PlanningStateFields on PlanningStateType {
-  id
-  uuid {
-    id
-  }
-  key
-  label
-  order
   createdDate
   updatedDate
 }
@@ -378,12 +360,6 @@ fragment CardLinkFields on CardType {
     id
     number
   }
-  planningState {
-    id
-    key
-    label
-    order
-  }
 }
 
 fragment OutgoingReferenceFields on CardReferenceType {
@@ -459,7 +435,6 @@ LOOKUP_FIELDS = {
     "allKanbanTargetVersions": "targetVersions",
     "allKanbanPriorities": "priorities",
     "allKanbanRelativeSizes": "relativeSizes",
-    "allKanbanPlanningStates": "planningStates",
     "allKanbanUpstreams": "upstreams",
     "allKanbanParityLevels": "parityLevels",
     "allKanbanSections": "sections",

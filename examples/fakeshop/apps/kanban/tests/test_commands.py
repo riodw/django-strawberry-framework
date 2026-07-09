@@ -24,7 +24,6 @@ PLANNED_TEST_FILE = "tests/planned_only/test_planned_only.py"
 @pytest.fixture(autouse=True)
 def _command_lookups(db):
     kf.make_status("todo")
-    kf.make_planning_state("planned")
     kf.make_section("dependencies_note")
     kf.make_card_reference_kind("dependency")
     kf.make_relative_size("s", rank=1)

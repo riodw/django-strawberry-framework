@@ -20,7 +20,6 @@ for _model in (
     models.Status,
     models.Priority,
     models.RelativeSize,
-    models.PlanningState,
     models.Upstream,
     models.ParityLevel,
     models.Section,
@@ -87,14 +86,12 @@ class CardAdmin(admin.ModelAdmin):
         "target_version",
         "priority",
         "relative_size",
-        "planning_state",
     )
     list_filter = (
         "status",
         "milestone",
         "priority",
         "relative_size",
-        "planning_state",
     )
     search_fields = ("title",)
     autocomplete_fields = (

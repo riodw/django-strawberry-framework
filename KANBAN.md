@@ -61,7 +61,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 - `0.0.7` shipped 2026-05-27 with seven cards: `DONE-020-0.0.7` (`DjangoListField`), `DONE-021-0.0.7` (`apps.py` and Django app config), `DONE-022-0.0.7` (schema-export management command), `DONE-023-0.0.7` (multi-database cooperation contract), `DONE-024-0.0.7` (Django Trac #37064 hardening + `safe_wrap_connection_method` consumer helper), `DONE-025-0.0.7` (warning-free scalar registration via `StrawberryConfig.scalar_map`), and `DONE-026-0.0.7` (scalar conversion end-to-end coverage in the fakeshop example with the new `apps.scalars` app plus a `BigIntegerField` on `apps.library.Patron`). Full card detail lives under the `## Done` board column below. Tag: `0.0.7` at commit `72f6cd9`.
 - `0.0.8` shipped both planned read-side subsystems: the Filtering subsystem as `DONE-027-0.0.8` and the Ordering subsystem as `DONE-028-0.0.8`.
-- `0.0.12` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
+- `0.0.14` is the active patch. `DONE-029-0.0.9` (`DjangoType` consumer-DX cleanup) has shipped; the Relay connection cohort is complete — `DONE-030-0.0.9` (`DjangoConnectionField`, the central read-side primitive), `DONE-031-0.0.9` (Django-model-based GlobalID encoding), and `DONE-032-0.0.9` (the full Relay story) have shipped; `DONE-033-0.0.9` (connection-aware optimizer planning) has shipped, closing out the cohort. The version bump from `0.0.8` is owned by the joint `0.0.9` cut, not any single card, per Decision 11 of `docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md`. Blocked future cards stay in their normal planning columns with derived `blocked` badges, outside the active in-progress column.
 - Strategic differentiation roadmap (post-`0.0.6`) captured in [`BACKLOG.md`][backlog]: items neither `graphene-django` nor `strawberry-graphql-django` ship cleanly that should land on the roadmap once parity items are shipped.
 
 ### Still not implemented
@@ -148,7 +148,7 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Status: In progress
+- Status: WIP
 - Relative size: M
 - Labels: `graphql-api`, `test-client`, `tests`, `uploads`
 - Spec: [spec-043-test_client-0_0_14.md](docs/spec-043-test_client-0_0_14.md)
@@ -156,10 +156,6 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 #### Predicted files
 
 - `django_strawberry_framework/testing/client.py` (planned)
-
-#### Planning note
-
-planned
 
 #### Dependencies
 
@@ -216,7 +212,7 @@ planned
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
-- Status: In progress
+- Status: To Do
 - Relative size: M
 - Labels: `debugging`, `graphql-api`, `middleware`
 
@@ -224,10 +220,6 @@ planned
 
 - `django_strawberry_framework/extensions/debug.py` (planned)
 - `tests/extensions/` (planned)
-
-#### Planning note
-
-planned
 
 #### Definition of done
 
@@ -297,7 +289,7 @@ Cards that complete the django-graphene-filters Layer-3 richness on top of parit
 ### [TODO-BETA-045-0.1.0 - Beta release (cleanup, verification, alpha → beta)](KANBAN.html#beta_release_cleanup_verification_alpha_beta)
 
 - Priority: High
-- Status: Planned
+- Status: To Do
 - Relative size: M
 - Labels: `cleanup`, `release`, `tests`
 
@@ -305,10 +297,6 @@ Cards that complete the django-graphene-filters Layer-3 richness on top of parit
 
 - [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
 - [`tests/base/test_init.py`](tests/base/test_init.py)
-
-#### Planning note
-
-planned
 
 #### Definition of done
 
@@ -353,7 +341,7 @@ planned
 ### [TODO-BETA-046-0.1.1 - `FieldSet`](KANBAN.html#fieldset)
 
 - Priority: High
-- Status: Needs spec
+- Status: To Do
 - Relative size: M
 - Labels: `fieldsets`, `layer-3`, `public-api`
 
@@ -427,7 +415,7 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 ### [TODO-BETA-047-0.1.2 - `Meta.search_fields` support](KANBAN.html#metasearch_fields_support)
 
 - Priority: High
-- Status: Planned
+- Status: To Do
 - Relative size: M
 - Labels: `connections`, `filters`, `public-api`, `search`
 
@@ -498,7 +486,7 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 ### [TODO-BETA-048-0.1.2 - Postgres full-text search filter primitives](KANBAN.html#postgres_full_text_search_filter_primitives)
 
 - Priority: Medium
-- Status: Planned
+- Status: To Do
 - Relative size: M
 - Labels: `filters`, `public-api`, `search`
 
@@ -572,7 +560,7 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 ### [TODO-BETA-049-0.1.3 - Aggregation subsystem](KANBAN.html#aggregation_subsystem)
 
 - Priority: Medium-high
-- Status: Planned
+- Status: To Do
 - Relative size: L
 - Labels: `aggregations`, `filters`, `layer-3`, `public-api`
 
@@ -640,7 +628,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 ### [TODO-BETA-050-0.1.3 - Layer 3 Meta key promotion](KANBAN.html#layer_3_meta_key_promotion)
 
 - Priority: Low
-- Status: Planned
+- Status: To Do
 - Relative size: XS
 - Labels: `cleanup`, `layer-3`, `public-api`
 
@@ -660,7 +648,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required)
-- Status: Needs spec
+- Status: To Do
 - Relative size: L
 - Labels: `layer-3`, `permissions`, `public-api`, `security`
 
@@ -724,7 +712,7 @@ Strawberry port of graphene-django's node-level sentinel redaction — the third
 ### [TODO-BETA-052-0.1.4 - Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
 
 - Priority: Low-medium
-- Status: Planned
+- Status: To Do
 - Relative size: S
 - Labels: `choice-enums`, `public-api`, `schema`, `stable-api`
 
@@ -734,10 +722,6 @@ Strawberry port of graphene-django's node-level sentinel redaction — the third
 - [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
 - [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
 - [`tests/types/test_converters.py`](tests/types/test_converters.py)
-
-#### Planning note
-
-planned
 
 #### Definition of done
 
@@ -767,7 +751,7 @@ planned
 ### [TODO-BETA-053-0.1.5 - Fakeshop GraphQL schema activation](KANBAN.html#fakeshop_graphql_schema_activation)
 
 - Priority: Medium
-- Status: Planned
+- Status: To Do
 - Relative size: S
 - Labels: `example-app`, `graphql-api`, `relay`, `schema`
 
@@ -803,7 +787,7 @@ Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-
 ### [TODO-BETA-054-0.1.5 - Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
 
 - Priority: Medium
-- Status: Planned
+- Status: To Do
 - Relative size: S
 - Labels: `example-app`, `graphql-api`, `layer-3`, `tests`
 
@@ -820,7 +804,7 @@ Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-
 ### [TODO-BETA-055-0.1.6 - Mutation transactions and idempotency](KANBAN.html#mutation_transactions_and_idempotency)
 
 - Priority: High
-- Status: Needs spec
+- Status: To Do
 - Relative size: S
 - Labels: `mutations`, `performance`, `security`
 
@@ -887,13 +871,9 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 ### [TODO-BETA-056-0.1.6 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
 
 - Priority: Medium
-- Status: Planned
+- Status: To Do
 - Relative size: M
 - Labels: `docs`, `guides`, `public-api`
-
-#### Planning note
-
-planned
 
 #### Definition of done
 
@@ -921,7 +901,7 @@ planned
 ### [TODO-BETA-057-0.1.7 - Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
 
 - Priority: Medium-high
-- Status: Planned
+- Status: To Do
 - Relative size: M
 - Labels: `adversarial-testing`, `hardening`, `tests`
 
@@ -929,10 +909,6 @@ planned
 
 - [`examples/fakeshop/test_query/README.md`](examples/fakeshop/test_query/README.md)
 - [`tests/`](tests/)
-
-#### Planning note
-
-planned
 
 #### Definition of done
 
@@ -968,7 +944,7 @@ planned
 ### [TODO-BETA-058-0.1.7 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
 
 - Priority: High
-- Status: Needs spec
+- Status: To Do
 - Relative size: S
 - Labels: `debugging`, `developer-tools`, `graphql-api`, `optimizer`, `performance`, `query-planning`
 
@@ -1026,7 +1002,7 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
-- Status: Needs spec
+- Status: To Do
 - Relative size: M
 - Labels: `config`, `filters`, `public-api`
 
@@ -1089,7 +1065,7 @@ Recreate django-graphene-filters' configurable filter-tree key namespace — `DJ
 ### [TODO-STABLE-060-1.0.0 - Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
 
 - Priority: Critical
-- Status: Planned
+- Status: To Do
 - Relative size: L
 - Labels: `cleanup`, `release`, `stable-api`, `tests`
 
@@ -1149,7 +1125,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: M
 - Labels: `debugging`, `django-integration`, `middleware`
 - Spec: [spec-042-debug_toolbar-0_0_14.md](docs/SPECS/spec-042-debug_toolbar-0_0_14.md)
@@ -1186,10 +1162,6 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 #### Package files
 
 - `django_strawberry_framework/middleware/debug_toolbar.py` (historical)
-
-#### Planning note
-
-planned
 
 #### Definition of done
 
@@ -1229,7 +1201,7 @@ planned
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: S
 - Labels: `asgi`, `channels`, `django-integration`
 - Spec: [spec-041-channels_router-0_0_14.md](docs/SPECS/spec-041-channels_router-0_0_14.md)
@@ -1279,10 +1251,6 @@ planned
 - [`tests/utils/test_inputs.py`](tests/utils/test_inputs.py)
 - [`tests/utils/test_permissions.py`](tests/utils/test_permissions.py)
 
-#### Planning note
-
-planned
-
 #### Definition of done
 
 - [x] Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
@@ -1320,7 +1288,7 @@ planned
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: M
 - Labels: `auth`, `mutations`, `public-api`
 - Spec: [spec-040-auth_mutations-0_0_13.md](docs/SPECS/spec-040-auth_mutations-0_0_13.md)
@@ -1360,10 +1328,6 @@ planned
 | [`DjangoNodeField`](docs/GLOSSARY.md#djangonodefield) | shipped (`0.0.9`) |
 | [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
 
-#### Planning note
-
-planned
-
 #### Definition of done
 
 - [x] Implement `django_strawberry_framework/auth/` with `login_mutation`, `logout_mutation`, `register_mutation`, and a `current_user` query helper, each composable with the existing permissions surface.
@@ -1393,7 +1357,7 @@ planned
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
-- Status: In progress
+- Status: Done
 - Relative size: L
 - Labels: `mutations`, `public-api`, `serializers`
 - Spec: [spec-039-serializer_mutations-0_0_13.md](docs/SPECS/spec-039-serializer_mutations-0_0_13.md)
@@ -1446,10 +1410,6 @@ planned
 - [`django_strawberry_framework/rest_framework/`](django_strawberry_framework/rest_framework/)
 - [`tests/rest_framework/`](tests/rest_framework/)
 
-#### Planning note
-
-needs spec
-
 #### Dependencies
 
 - `DONE-036-0.0.11` - Mutations + auto-generated Input types
@@ -1501,7 +1461,7 @@ needs spec
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
-- Status: In progress
+- Status: Done
 - Relative size: L
 - Labels: `forms`, `mutations`, `public-api`
 - Spec: [spec-038-form_mutations-0_0_12.md](docs/SPECS/spec-038-form_mutations-0_0_12.md)
@@ -1546,10 +1506,6 @@ needs spec
 
 - [`django_strawberry_framework/forms/`](django_strawberry_framework/forms/)
 - [`tests/forms/`](tests/forms/)
-
-#### Planning note
-
-needs spec
 
 #### Dependencies
 
@@ -1602,7 +1558,7 @@ needs spec
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: M
 - Labels: `converters`, `mutations`, `scalars`, `uploads`
 - Spec: [spec-037-upload_file_image_mapping-0_0_11.md](docs/SPECS/spec-037-upload_file_image_mapping-0_0_11.md)
@@ -1637,10 +1593,6 @@ needs spec
 - [`django_strawberry_framework/mutations/`](django_strawberry_framework/mutations/)
 - [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
 - [`tests/types/test_converters.py`](tests/types/test_converters.py)
-
-#### Planning note
-
-planned
 
 #### Definition of done
 
@@ -1679,7 +1631,7 @@ planned
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: XL
 - Labels: `graphql-api`, `mutations`, `permissions`, `public-api`
 - Spec: [spec-036-mutations-0_0_11.md](docs/SPECS/spec-036-mutations-0_0_11.md)
@@ -1732,10 +1684,6 @@ planned
 - [`django_strawberry_framework/mutations/`](django_strawberry_framework/mutations/)
 - [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
 - [`tests/mutations/`](tests/mutations/)
-
-#### Planning note
-
-needs spec
 
 #### Dependencies
 
@@ -1793,7 +1741,7 @@ needs spec
 
 - Priority: Medium-high
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: M
 - Labels: `hardening`, `optimizer`, `performance`, `query-planning`
 - Spec: [spec-035-optimizer_hardening-0_0_10.md](docs/SPECS/spec-035-optimizer_hardening-0_0_10.md)
@@ -1911,7 +1859,7 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: L
 - Labels: `optimizer`, `permissions`, `public-api`, `security`
 - Spec: [spec-034-permissions-0_0_10.md](docs/SPECS/spec-034-permissions-0_0_10.md)
@@ -2046,7 +1994,7 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Planned
+- Status: Done
 - Relative size: M
 - Labels: `connections`, `optimizer`, `query-planning`, `relay`
 - Spec: [spec-033-connection_optimizer-0_0_9.md](docs/SPECS/spec-033-connection_optimizer-0_0_9.md)
@@ -2102,10 +2050,6 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 - [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
 - [`tests/optimizer/`](tests/optimizer/)
 
-#### Planning note
-
-planned
-
 #### Definition of done
 
 - [x] New spec at `docs/spec-033-connection_optimizer-0_0_9.md` (the canonical structured filename).
@@ -2149,7 +2093,7 @@ planned
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Status: Planned
+- Status: Done
 - Relative size: XL
 - Labels: `connections`, `graphql-api`, `permissions`, `public-api`, `relay`
 - Spec: [spec-032-full_relay-0_0_9.md](docs/SPECS/spec-032-full_relay-0_0_9.md)
@@ -2315,7 +2259,7 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
-- Status: Needs spec
+- Status: Done
 - Relative size: M
 - Labels: `config`, `public-api`, `registry`, `relay`, `stable-api`, `types`, `versioning`
 - Spec: [spec-031-globalid_encoding-0_0_9.md](docs/SPECS/spec-031-globalid_encoding-0_0_9.md)
@@ -2430,7 +2374,7 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Status: Planned
+- Status: Done
 - Relative size: L
 - Labels: `connections`, `filters`, `optimizer`, `ordering`, `public-api`, `relay`
 - Spec: [spec-030-connection_field-0_0_9.md](docs/SPECS/spec-030-connection_field-0_0_9.md)
@@ -2576,7 +2520,7 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Status: Planned
+- Status: Done
 - Relative size: M
 - Labels: `cleanup`, `developer-tools`, `public-api`, `types`
 - Spec: [spec-029-consumer_dx_cleanup-0_0_9.md](docs/SPECS/spec-029-consumer_dx_cleanup-0_0_9.md)
@@ -2676,7 +2620,7 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: L
 - Labels: `filters`, `graphql-api`, `layer-3`, `ordering`, `public-api`
 - Spec: [spec-028-orders-0_0_8.md](docs/SPECS/spec-028-orders-0_0_8.md)
@@ -2743,10 +2687,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 - [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
 - [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
 
-#### Planning note
-
-shipped
-
 #### Definition of done
 
 - [x] Add `docs/spec-028-orders-0_0_8.md`.
@@ -2776,7 +2716,7 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: XL
 - Labels: `example-app`, `filters`, `graphql-api`, `public-api`
 - Spec: [spec-027-filters-0_0_8.md](docs/SPECS/spec-027-filters-0_0_8.md)
@@ -2856,10 +2796,6 @@ shipped
 - [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
 - [`django_strawberry_framework/types/relay.py`](django_strawberry_framework/types/relay.py)
 
-#### Planning note
-
-shipped
-
 #### Verified in upstream
 
 - `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/filter/fields.py::DjangoFilterConnectionField.resolve_queryset` instantiates the type's `Meta.filterset_class` with the GraphQL args as `data`, calls `filterset.is_valid()`, and returns `filterset.qs` (raising `ValidationError` from `filterset.form.errors` otherwise) — this is the same filterset-driven, validation-gated queryset narrowing this card ships, so the graphene_django parity is required.
@@ -2875,7 +2811,7 @@ shipped
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: M
 - Labels: `example-app`, `graphql-api`, `scalars`, `tests`
 - Spec: [spec-026-scalar_conversion_fakeshop-0_0_7.md](docs/SPECS/spec-026-scalar_conversion_fakeshop-0_0_7.md)
@@ -2887,10 +2823,6 @@ shipped
 | [`BigInt` scalar](docs/GLOSSARY.md#bigint-scalar) | shipped (`0.0.6`) |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
 | [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-
-#### Planning note
-
-shipped
 
 #### Verified in upstream
 
@@ -2918,7 +2850,7 @@ shipped
 ### [DONE-025-0.0.7 - Warning-free scalar registration via `StrawberryConfig.scalar_map`](KANBAN.html#warning_free_scalar_registration_via_strawberryconfigscalar_map)
 
 - Priority: Medium
-- Status: Shipped
+- Status: Done
 - Relative size: S
 - Labels: `config`, `internal`, `public-api`, `scalar-map`, `scalars`
 - Spec: [spec-025-scalar_map_helper-0_0_7.md](docs/SPECS/spec-025-scalar_map_helper-0_0_7.md)
@@ -2950,10 +2882,6 @@ shipped
 - [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
 - [`django_strawberry_framework/scalars.py`](django_strawberry_framework/scalars.py)
 
-#### Planning note
-
-shipped
-
 #### Other
 
 - package-specific scalar-registration plumbing (`StrawberryConfig.scalar_map` via `strawberry_config()`); not an upstream-parity primitive.
@@ -2963,7 +2891,7 @@ shipped
 ### [DONE-024-0.0.7 - Django Trac #37064 hardening + `safe_wrap_connection_method`](KANBAN.html#django_trac_37064_hardening_safe_wrap_connection_method)
 
 - Priority: Low
-- Status: Shipped
+- Status: Done
 - Relative size: S
 - Labels: `django-integration`, `hardening`, `internal`
 - Spec: [spec-024-django_trac_37064_hardening-0_0_7.md](docs/SPECS/spec-024-django_trac_37064_hardening-0_0_7.md)
@@ -2982,10 +2910,6 @@ shipped
 - `django_strawberry_framework/test/__init__.py` (historical)
 - `django_strawberry_framework/test/_wrap.py` (historical)
 
-#### Planning note
-
-shipped
-
 #### Other
 
 - defensive hardening unique to this package; neither upstream ships a Django Trac #37064 patch.
@@ -2996,7 +2920,7 @@ shipped
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Parity-adjacent)
-- Status: Shipped
+- Status: Done
 - Relative size: S
 - Labels: `multi-db`, `optimizer`, `tests`
 - Spec: [spec-023-multi_db-0_0_7.md](docs/SPECS/spec-023-multi_db-0_0_7.md)
@@ -3024,10 +2948,6 @@ shipped
 | [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
 | [`Meta.optimizer_hints`](docs/GLOSSARY.md#metaoptimizer_hints) | shipped (`0.0.3`) |
 
-#### Planning note
-
-shipped
-
 #### Verified in upstream
 
 - `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/optimizer.py` builds N+1-avoidance plans out of `django.db.models.Prefetch` objects (imported at line 18; `prefetch_related: list[PrefetchType]`) but specifies no multi-database cooperation contract (a grep of the module for `.using(`, `_db`, `router`, `db_for_read` returns nothing). This card pins that exact seam for the framework's `Prefetch`-based optimizer — `OptimizerHint.prefetch(Prefetch(queryset=...using('shard_b')))` round-tripping with `_db` intact through plan construction (`tests/optimizer/test_multi_db.py`) — so it is adjacent: it underpins/extends the same prefetch-plan subsystem strawberry-graphql-django owns, adding a multi-DB guarantee the upstream leaves unspecified.
@@ -3043,7 +2963,7 @@ shipped
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: S
 - Labels: `management-command`, `public-api`, `schema`
 - Spec: [spec-022-export_schema-0_0_7.md](docs/SPECS/spec-022-export_schema-0_0_7.md)
@@ -3073,10 +2993,6 @@ shipped
 - [`django_strawberry_framework/management/commands/export_schema.py`](django_strawberry_framework/management/commands/export_schema.py)
 - [`django_strawberry_framework/scalars.py`](django_strawberry_framework/scalars.py)
 
-#### Planning note
-
-shipped
-
 #### Verified in upstream
 
 - `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/management/commands/export_schema.py::Command` is the `manage.py export_schema` command: positional `schema` arg, optional `--path`, `import_module_symbol` resolution, `isinstance(..., strawberry.Schema)` guard, SDL via `print_schema`, and `CommandError` paths. This card ships the same-named command with the identical positional `schema` / `--path` / `print_schema` / `CommandError` contract, a direct feature match justifying the strawberry_django required claim.
@@ -3092,7 +3008,7 @@ shipped
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: XS
 - Labels: `django-app`, `packaging`
 - Spec: [spec-021-apps-0_0_7.md](docs/SPECS/spec-021-apps-0_0_7.md)
@@ -3118,10 +3034,6 @@ shipped
 
 - [`django_strawberry_framework/apps.py`](django_strawberry_framework/apps.py)
 
-#### Planning note
-
-shipped
-
 #### Verified in upstream
 
 - `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/apps.py::StrawberryDjangoConfig` is a minimal `AppConfig` (just `name` and `verbose_name`) enabling `INSTALLED_APPS`-driven discovery; this card ships the equivalent `DjangoStrawberryFrameworkConfig` `AppConfig`, a direct feature match that justifies the strawberry_django required claim.
@@ -3136,7 +3048,7 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: M
 - Labels: `graphql-api`, `list-field`, `optimizer`, `public-api`
 - Spec: [spec-020-list_field-0_0_7.md](docs/SPECS/spec-020-list_field-0_0_7.md)
@@ -3176,10 +3088,6 @@ shipped
 - [`django_strawberry_framework/apps.py`](django_strawberry_framework/apps.py)
 - [`django_strawberry_framework/list_field.py`](django_strawberry_framework/list_field.py)
 
-#### Planning note
-
-shipped
-
 #### Verified in upstream
 
 - `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/fields.py::DjangoListField` is graphene-django's non-Relay list primitive: it wraps the underlying type in `List(NonNull(...))`, exposes `get_manager()`/`get_queryset` cooperation, and coerces `Manager`/`QuerySet` results in `list_resolver`. This card ships the same-named `DjangoListField` factory (`Manager → QuerySet` coercion, sync/async `get_queryset`, outer-list nullability) for the Strawberry stack; required because it is a direct feature match against a primitive strawberry-graphql-django does not provide.
@@ -3195,7 +3103,7 @@ shipped
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: L
 - Labels: `public-api`, `relay`, `scalars`, `types`
 - Spec: [spec-019-consumer_overrides_scalar-0_0_6.md](docs/SPECS/spec-019-consumer_overrides_scalar-0_0_6.md)
@@ -3225,10 +3133,6 @@ shipped
 - [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
 - [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
 
-#### Planning note
-
-shipped
-
 #### Verified in upstream
 
 - `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` only injects `strawberry.auto` for model fields lacking a consumer annotation (`for f in model_fields: if existing_annotations.get(f.name): continue`), so a consumer-authored scalar annotation is authoritative and is never overwritten by the synthesized field — exactly this card's consumer-annotation-overrides-synthesized contract — making the claim `required`; the adjacent `MAP_AUTO_ID_AS_GLOBAL_ID` guard that drops `id` from `model_fields` to avoid clobbering the relay `GlobalID` also mirrors this card's `relay.Node` `id`-collision handling.
@@ -3255,7 +3159,7 @@ shipped
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Parity-adjacent)
-- Status: Shipped
+- Status: Done
 - Relative size: L
 - Labels: `optimizer`, `public-api`, `registry`, `types`
 - Spec: [spec-018-meta_primary-0_0_6.md](docs/SPECS/spec-018-meta_primary-0_0_6.md)
@@ -3289,10 +3193,6 @@ shipped
 - [`django_strawberry_framework/types/definition.py`](django_strawberry_framework/types/definition.py)
 - [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
 
-#### Planning note
-
-shipped
-
 #### Verified in upstream
 
 - `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/type.py::_process_type` gives every Django type its own `is_type_of` closure returning `isinstance(obj, (cls, model))` (with a `get_strawberry_type_cast` short-circuit) and keeps no model-to-type registry at all, so multiple types can back the same model and disambiguation rides on `is_type_of`/`strawberry.cast` rather than an explicit primary flag; this card's registry storing many types per model with an explicit `Meta.primary` selection plus a finalize-time ambiguity audit extends and formalizes that implicit upstream behavior, making the link `adjacent`. graphene_django has no equivalent — `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/registry.py::Registry.register` stores exactly one type per model (`self._registry[cls._meta.model] = cls`), so no claim is made there.
@@ -3323,7 +3223,7 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: M
 - Labels: `converters`, `public-api`, `scalars`
 - Spec: [spec-017-deferred_scalars-0_0_6.md](docs/SPECS/spec-017-deferred_scalars-0_0_6.md)
@@ -3354,10 +3254,6 @@ shipped
 - [`django_strawberry_framework/__init__.py`](django_strawberry_framework/__init__.py)
 - [`django_strawberry_framework/scalars.py`](django_strawberry_framework/scalars.py)
 - [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
-
-#### Planning note
-
-shipped
 
 #### Verified in upstream
 
@@ -3392,7 +3288,7 @@ shipped
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Parity-adjacent)
-- Status: Shipped
+- Status: Done
 - Relative size: M
 - Labels: `cleanup`, `field-meta`, `metadata`, `optimizer`, `types`
 - Spec: [spec-016-fieldmeta_consolidation-0_0_6.md](docs/SPECS/spec-016-fieldmeta_consolidation-0_0_6.md)
@@ -3412,10 +3308,6 @@ shipped
 - [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
 - [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
 - [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
-
-#### Planning note
-
-shipped
 
 #### Scope
 
@@ -3460,7 +3352,7 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: L
 - Labels: `public-api`, `relay`, `types`
 - Spec: [spec-015-relay_interfaces-0_0_5.md](docs/SPECS/spec-015-relay_interfaces-0_0_5.md)
@@ -3511,10 +3403,6 @@ shipped
 - [`django_strawberry_framework/utils/relations.py`](django_strawberry_framework/utils/relations.py)
 - [`django_strawberry_framework/utils/typing.py`](django_strawberry_framework/utils/typing.py)
 
-#### Planning note
-
-shipped
-
 #### Scope
 
 - `Meta.interfaces` accepted end-to-end for any Strawberry interface.
@@ -3559,7 +3447,7 @@ shipped
 ### [DONE-014-0.0.4 - Move test fixture out of example settings](KANBAN.html#move_test_fixture_out_of_example_settings)
 
 - Priority: Low
-- Status: Shipped
+- Status: Done
 - Relative size: S
 - Labels: `cleanup`, `example-app`, `internal`, `tests`
 - Spec: [spec-014-testing_shift-0_0_4.md](docs/SPECS/spec-014-testing_shift-0_0_4.md)
@@ -3575,10 +3463,6 @@ shipped
 | [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
 | [`OptimizerHint`](docs/GLOSSARY.md#optimizerhint) | shipped (`0.0.3`) |
 | [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
-
-#### Planning note
-
-shipped
 
 #### Scope
 
@@ -3600,7 +3484,7 @@ shipped
 ### [DONE-013-0.0.4 - Real M2M coverage](KANBAN.html#real_m2m_coverage)
 
 - Priority: Medium
-- Status: Shipped
+- Status: Done
 - Relative size: S
 - Labels: `example-app`, `internal`, `m2m`, `tests`
 - Spec: [spec-013-real_m2m_coverage-0_0_4.md](docs/SPECS/spec-013-real_m2m_coverage-0_0_4.md)
@@ -3616,10 +3500,6 @@ shipped
 - [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
 - [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
 - [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
-
-#### Planning note
-
-shipped
 
 #### Scope
 
@@ -3639,7 +3519,7 @@ shipped
 ### [DONE-012-0.0.4 - 0.0.4 version and release alignment](KANBAN.html#004_version_and_release_alignment)
 
 - Priority: Low
-- Status: Shipped
+- Status: Done
 - Relative size: XS
 - Labels: `internal`, `release`, `versioning`
 - Spec: [spec-012-version_release_alignment-0_0_4.md](docs/SPECS/spec-012-version_release_alignment-0_0_4.md)
@@ -3649,10 +3529,6 @@ shipped
 | Term | Status |
 | --- | --- |
 | [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
-
-#### Planning note
-
-shipped
 
 #### Scope
 
@@ -3673,7 +3549,7 @@ shipped
 ### [DONE-011-0.0.4 - Stale placeholder cleanup](KANBAN.html#stale_placeholder_cleanup)
 
 - Priority: Low
-- Status: Shipped
+- Status: Done
 - Relative size: XS
 - Labels: `cleanup`, `docs`, `internal`, `tests`
 - Spec: [spec-011-stale_placeholder_cleanup-0_0_4.md](docs/SPECS/spec-011-stale_placeholder_cleanup-0_0_4.md)
@@ -3684,10 +3560,6 @@ shipped
 | --- | --- |
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
 | [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
-
-#### Planning note
-
-shipped
 
 #### Scope
 
@@ -3712,7 +3584,7 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
-- Status: Shipped
+- Status: Done
 - Relative size: L
 - Labels: `finalizer`, `registry`, `relations`, `types`
 - Spec: [spec-010-foundation-0_0_4.md](docs/SPECS/spec-010-foundation-0_0_4.md)
@@ -3748,10 +3620,6 @@ shipped
 - [`django_strawberry_framework/types/finalizer.py`](django_strawberry_framework/types/finalizer.py)
 - [`django_strawberry_framework/types/relations.py`](django_strawberry_framework/types/relations.py)
 - [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
-
-#### Planning note
-
-shipped
 
 #### Scope
 
@@ -3802,7 +3670,7 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
-- Status: Shipped
+- Status: Done
 - Relative size: L
 - Labels: `layer-3`, `public-api`, `relations`, `types`
 - Spec: [spec-009-rich_schema_architecture-0_0_4.md](docs/SPECS/spec-009-rich_schema_architecture-0_0_4.md)
@@ -3835,10 +3703,6 @@ shipped
 | [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 | [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
 
-#### Planning note
-
-shipped
-
 #### Scope
 
 - Lay out the long-term architecture for filters, orders, aggregates, connections, permissions, and fieldsets.
@@ -3859,7 +3723,7 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
-- Status: Shipped
+- Status: Done
 - Relative size: M
 - Labels: `finalizer`, `registry`, `relations`, `types`
 - Spec: [spec-008-definition_order_independence-0_0_4.md](docs/SPECS/spec-008-definition_order_independence-0_0_4.md)
@@ -3878,10 +3742,6 @@ shipped
 | [`Meta.primary`](docs/GLOSSARY.md#metaprimary) | shipped (`0.0.6`) |
 | [Relay Node integration](docs/GLOSSARY.md#relay-node-integration) | shipped (`0.0.5`) |
 | [Schema audit](docs/GLOSSARY.md#schema-audit) | shipped (`0.0.3`) |
-
-#### Planning note
-
-shipped
 
 #### Scope
 
@@ -3902,7 +3762,7 @@ shipped
 ### [DONE-007-0.0.4 - 0.0.4 onboarding docs and spec consolidation](KANBAN.html#004_onboarding_docs_and_spec_consolidation)
 
 - Priority: Medium
-- Status: Shipped
+- Status: Done
 - Relative size: S
 - Labels: `docs`, `internal`, `release`
 - Spec: [spec-007-onboarding_docs_spec_consolidation-0_0_4.md](docs/SPECS/spec-007-onboarding_docs_spec_consolidation-0_0_4.md)
@@ -3912,10 +3772,6 @@ shipped
 | Term | Status |
 | --- | --- |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
-
-#### Planning note
-
-shipped
 
 #### Scope
 
@@ -3941,7 +3797,7 @@ shipped
 ### [DONE-006-0.0.3 - Documentation/status positioning for shipped Layer 2](KANBAN.html#documentationstatus_positioning_for_shipped_layer_2)
 
 - Priority: Medium
-- Status: Shipped
+- Status: Done
 - Relative size: S
 - Labels: `docs`, `internal`
 - Spec: [spec-006-public_surface-0_0_3.md](docs/SPECS/spec-006-public_surface-0_0_3.md)
@@ -3969,10 +3825,6 @@ shipped
 - [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
 - [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
 
-#### Planning note
-
-shipped
-
 #### Scope
 
 - `docs/README.md` gives a quickstart, package positioning, optimizer value, and status.
@@ -3993,7 +3845,7 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Parity-adjacent)
-- Status: Shipped
+- Status: Done
 - Relative size: M
 - Labels: `docs`, `public-api`, `registry`, `types`
 - Spec: [spec-005-django_type_contract-0_0_3.md](docs/SPECS/spec-005-django_type_contract-0_0_3.md)
@@ -4015,10 +3867,6 @@ shipped
 - [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
 - [`django_strawberry_framework/types/converters.py`](django_strawberry_framework/types/converters.py)
 
-#### Planning note
-
-shipped
-
 #### Scope
 
 - Document the alpha one-model-one-type registry constraint.
@@ -4038,7 +3886,7 @@ shipped
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: L
 - Labels: `optimizer`, `performance`, `query-planning`, `schema-audit`
 - Spec: [spec-004-optimizer_beyond-0_0_3.md](docs/SPECS/spec-004-optimizer_beyond-0_0_3.md)
@@ -4069,10 +3917,6 @@ shipped
 - [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
 - [`django_strawberry_framework/types/base.py`](django_strawberry_framework/types/base.py)
 - [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
-
-#### Planning note
-
-shipped
 
 #### Scope
 
@@ -4113,7 +3957,7 @@ shipped
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: M
 - Labels: `optimizer`, `performance`, `query-planning`, `relations`
 - Spec: [spec-003-optimizer_nested_prefetch_chains-0_0_2.md](docs/SPECS/spec-003-optimizer_nested_prefetch_chains-0_0_2.md)
@@ -4140,10 +3984,6 @@ shipped
 - [`django_strawberry_framework/optimizer/walker.py`](django_strawberry_framework/optimizer/walker.py)
 - [`django_strawberry_framework/types/resolvers.py`](django_strawberry_framework/types/resolvers.py)
 
-#### Planning note
-
-shipped
-
 #### Scope
 
 - Plan depth > 1 relation selections from the root optimizer pass.
@@ -4163,7 +4003,7 @@ shipped
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: L
 - Labels: `optimizer`, `performance`, `query-planning`, `relations`
 - Spec: [spec-002-optimizer-0_0_2.md](docs/SPECS/spec-002-optimizer-0_0_2.md)
@@ -4190,10 +4030,6 @@ shipped
 - [`django_strawberry_framework/utils/__init__.py`](django_strawberry_framework/utils/__init__.py)
 - [`django_strawberry_framework/utils/strings.py`](django_strawberry_framework/utils/strings.py)
 - [`django_strawberry_framework/utils/typing.py`](django_strawberry_framework/utils/typing.py)
-
-#### Planning note
-
-shipped
 
 #### Scope
 
@@ -4226,7 +4062,7 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Status: Shipped
+- Status: Done
 - Relative size: L
 - Labels: `public-api`, `registry`, `relations`, `scalars`, `types`
 - Spec: [spec-001-django_types-0_0_1.md](docs/SPECS/spec-001-django_types-0_0_1.md)
@@ -4266,10 +4102,6 @@ shipped
 - `django_strawberry_framework/optimizer.py` (historical)
 - [`django_strawberry_framework/registry.py`](django_strawberry_framework/registry.py)
 - `django_strawberry_framework/types.py` (historical)
-
-#### Planning note
-
-shipped
 
 #### Scope
 

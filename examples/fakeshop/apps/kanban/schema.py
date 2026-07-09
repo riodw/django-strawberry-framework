@@ -117,23 +117,6 @@ class RelativeSizeType(DjangoType):
         orderset_class = orders.RelativeSizeOrder
 
 
-class PlanningStateType(DjangoType):
-    class Meta:
-        model = models.PlanningState
-        fields = (
-            "id",
-            "key",
-            "label",
-            "order",
-            "created_date",
-            "updated_date",
-            "uuid",
-            "cards",
-        )
-        filterset_class = filters.PlanningStateFilter
-        orderset_class = orders.PlanningStateOrder
-
-
 class UpstreamType(DjangoType):
     class Meta:
         model = models.Upstream
@@ -295,7 +278,6 @@ class CardType(DjangoType):
             "status",
             "priority",
             "relative_size",
-            "planning_state",
             "milestone",
             "target_version",
             "spec",
@@ -541,20 +523,6 @@ class Query:
             queryset = filters.MilestoneFilter.apply_sync(filter, queryset, info)
         if order_by is not None:
             queryset = orders.MilestoneOrder.apply_sync(order_by, queryset, info)
-        return queryset
-
-    @strawberry.field
-    def all_kanban_planning_states(
-        self,
-        info: Info,
-        filter: filter_input_type(filters.PlanningStateFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.PlanningStateOrder)] | None = None,
-    ) -> list[PlanningStateType]:
-        queryset = models.PlanningState.objects.order_by("order")
-        if filter is not None:
-            queryset = filters.PlanningStateFilter.apply_sync(filter, queryset, info)
-        if order_by is not None:
-            queryset = orders.PlanningStateOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field

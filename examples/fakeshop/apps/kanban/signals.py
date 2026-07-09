@@ -40,7 +40,6 @@ UUID_LINKED_MODELS = (
     models.Status,
     models.Priority,
     models.RelativeSize,
-    models.PlanningState,
     models.Upstream,
     models.ParityLevel,
     models.Section,

@@ -51,12 +51,12 @@ Before selecting the next card, archive every existing live spec at the top leve
 - Do run the reference-definition rewrite, all moved-spec `SpecDoc.url` repoints, and the `KANBAN.md` / `KANBAN.html` regeneration.
 - If no root-level `docs/spec-*.md` exists, this pre-write archive pass is a clean no-op.
 
-Then normalize the kanban queue in the database, not by editing `KANBAN.md`. The queue has two distinct axes:
+Then normalize the kanban queue in the database, not by editing `KANBAN.md`. The queue has a single axis, `Card.status`:
 
-- `Card.planning_state.key == "in_progress"` controls the `## In progress` board column.
 - `Card.status.key == "wip"` controls the `WIP-...` card ID and the WIP row in the `## WIP / DONE spec map`.
+- The `## In progress` board column is **derived** from that WIP card's target version: every non-Done card sharing the WIP card's `target_version` renders in the column (see `scripts/build_kanban_md.py::active_version`). No per-card planning flag is stored.
 
-The flow must leave **exactly one non-Done card with `status.key == "wip"`**. Multiple cards may share `planning_state == "in_progress"` when they belong to the same active version, but only the lowest-numbered one is the WIP spec target.
+The flow must leave **exactly one non-Done card with `status.key == "wip"`**. The other non-Done cards at the WIP card's version render alongside it in `## In progress` by derivation; only the lowest-numbered one is the WIP spec target.
 
 Use the example project's shell to make the card-state edit:
 
@@ -68,19 +68,16 @@ uv run python scripts/build_kanban_html.py
 
 The ORM edit follows this deterministic algorithm:
 
-1. Treat every existing non-Done `WIP` card as in-progress by setting its `planning_state` to `in_progress` before target selection. This repairs stale split-axis states.
-2. Build the current in-progress pool from all non-Done cards whose `planning_state.key == "in_progress"` or whose `status.key == "wip"`, sorted by `Card.number`.
-3. If the pool is non-empty, select the lowest-numbered card in that pool as the target. Set that target to `status = wip` and `planning_state = in_progress`. Set every other non-Done `wip` card back to `status = todo`; leave its planning state alone if it is part of the in-progress pool.
-4. If the pool is empty, find the **next version** by taking the lowest semantic `TargetVersion.number` among non-Done `todo` cards. Move **all** non-Done `todo` cards for that version to `planning_state = in_progress`, select the lowest-numbered card among them as the target, set that target to `status = wip`, and leave the other same-version cards at `status = todo`.
-5. If there is no non-Done `todo` card, stop and report that the board has no schedulable next card.
-6. Re-render `KANBAN.md` and `KANBAN.html`, then verify the rendered board has exactly one `WIP-...` card and that the target card is the lowest-numbered card in the in-progress pool.
+1. Determine the **active version**: if a non-Done `wip` card exists, it is that card's `target_version`; otherwise it is the lowest semantic `TargetVersion.number` among non-Done `todo` cards.
+2. Build the active pool from every non-Done card whose `target_version` equals the active version, sorted by `Card.number`. This pool is exactly what renders in the `## In progress` column.
+3. If there is no non-Done `todo`/`wip` card at all, stop and report that the board has no schedulable next card.
+4. Select the lowest-numbered card in the pool as the target. Set it to `status = wip`; set every other non-Done `wip` card back to `status = todo`.
+5. Re-render `KANBAN.md` and `KANBAN.html`, then verify the rendered board has exactly one `WIP-...` card and that the target is the lowest-numbered card in the `## In progress` column.
 
 Worked ORM edit for the queue normalization (copy-paste as the `<ORM edit>` above):
 
 ```
-from django.db.models import Q
-
-from apps.kanban.models import Card, PlanningState, Status
+from apps.kanban.models import Card, Status
 
 
 def version_key(version):
@@ -89,46 +86,36 @@ def version_key(version):
 
 todo = Status.objects.get(key="todo")
 wip = Status.objects.get(key="wip")
-in_progress = PlanningState.objects.get(key="in_progress")
 
-scheduled = Card.objects.filter(status__key__in=("wip", "todo")).select_related(
+nondone = Card.objects.exclude(status__key="done").select_related(
     "status",
-    "planning_state",
     "target_version",
 )
 
-# Repair stale split-axis rows first: any WIP row is active work.
-for card in scheduled.filter(status=wip).exclude(planning_state=in_progress):
-    card.planning_state = in_progress
-    card.save(update_fields=["planning_state"])
+wip_versions = [card.target_version.number for card in nondone if card.status.key == "wip"]
+if wip_versions:
+    active_version = min(wip_versions, key=version_key)
+else:
+    todo_versions = {card.target_version.number for card in nondone if card.status.key == "todo"}
+    if not todo_versions:
+        raise SystemExit("No non-Done TODO card is available for the next spec.")
+    active_version = min(todo_versions, key=version_key)
 
 pool = sorted(
-    scheduled.filter(Q(planning_state=in_progress) | Q(status=wip)),
+    [card for card in nondone if card.target_version.number == active_version],
     key=lambda card: card.number,
 )
-
-if not pool:
-    todo_cards = list(scheduled.filter(status=todo))
-    if not todo_cards:
-        raise SystemExit("No non-Done TODO card is available for the next spec.")
-    next_version = min(
-        {card.target_version.number for card in todo_cards},
-        key=version_key,
-    )
-    pool = sorted(
-        [card for card in todo_cards if card.target_version.number == next_version],
-        key=lambda card: card.number,
-    )
-    Card.objects.filter(pk__in=[card.pk for card in pool]).update(
-        planning_state=in_progress,
-    )
-
 target = pool[0]
-scheduled.filter(status=wip).exclude(pk=target.pk).update(status=todo)
 
-target.status = wip
-target.planning_state = in_progress
-target.save(update_fields=["status", "planning_state"])
+# Exactly one WIP card: demote any other WIP back to TODO, promote the target.
+for card in nondone:
+    if card.status.key == "wip" and card.pk != target.pk:
+        card.status = todo
+        card.save(update_fields=["status"])
+
+if target.status_id != wip.pk:
+    target.status = wip
+    target.save(update_fields=["status"])
 
 print(f"Selected {target.card_id} - {target.title}")
 ```
@@ -372,7 +359,7 @@ The flow is complete when Step 8 finishes: only the active spec and its CSV live
 
 - Do **not** modify `CHANGELOG.md` under any circumstance during this flow — even path-update edits triggered by Step 8 must be surfaced as a maintainer-report rather than silently applied.
 - Do **not** modify `TODAY.md` except as a Step 8 path-update (rewriting a moved spec's path); content edits to `TODAY.md` outside that narrow purpose are out of scope.
-- `KANBAN.md` / `KANBAN.html` card data IS in scope for this flow — Step 3 may update `Card.status` and `Card.planning_state` to select the single WIP target, and Step 8 may repoint moved-spec links and add/fix the active WIP card's spec reference — but both files are **generated exports**, so those changes are made in the `apps.kanban` DB (`examples/fakeshop/db.sqlite3`) and re-rendered with `scripts/build_kanban_md.py` / `scripts/build_kanban_html.py`, NOT by hand-editing the generated files. The only DB edits in scope are Step 3 queue normalization (`Card.status`, `Card.planning_state`) and Step 8 spec-reference repoints/creates (`SpecDoc` rows); no other DB changes (no `CardItem.text` / card-body prose edits beyond what `SpecDoc` drives).
+- `KANBAN.md` / `KANBAN.html` card data IS in scope for this flow — Step 3 may update `Card.status` to select the single WIP target, and Step 8 may repoint moved-spec links and add/fix the active WIP card's spec reference — but both files are **generated exports**, so those changes are made in the `apps.kanban` DB (`examples/fakeshop/db.sqlite3`) and re-rendered with `scripts/build_kanban_md.py` / `scripts/build_kanban_html.py`, NOT by hand-editing the generated files. The only DB edits in scope are Step 3 queue normalization (`Card.status`) and Step 8 spec-reference repoints/creates (`SpecDoc` rows); no other DB changes (no `CardItem.text` / card-body prose edits beyond what `SpecDoc` drives).
 - Do **not** modify any file other than the new spec file, its companion `*-terms.csv`, the spec files being archived under Step 8, the cross-reference updates Step 8 prescribes in `docs/`, `README.md`, `GOAL.md`, `TODAY.md`, and `AGENTS.md`, and — for kanban — the regenerated `KANBAN.md` / `KANBAN.html` plus `examples/fakeshop/db.sqlite3` carrying the `apps.kanban` rows they are rendered from.
 - Do **not** commit.
 - Do **not** run pytest, ruff, or any other tooling unless Step 7 or Step 8 prescribes it (the `scripts/check_spec_glossary.py` run including its `--auto-link` rewrite, the `git mv` / `rg` invocations Step 8 names, and — for kanban DB edits — the `examples/fakeshop/manage.py shell` ORM edit plus the `scripts/build_kanban_md.py` / `scripts/build_kanban_html.py` re-renders are all part of the flow) or you need to settle a question inside the spec.

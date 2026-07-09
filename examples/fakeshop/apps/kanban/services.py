@@ -17,7 +17,6 @@ from apps.kanban.constants import (
     TRACKED_PATH_SET,
 )
 
-DEFAULT_PLANNING_STATE_KEY = "planned"
 DEFAULT_STATUS_KEY = "todo"
 DEPENDENCY_NOTE_SECTION_KEY = "dependencies_note"
 DEPENDENCY_REFERENCE_KIND_KEY = "dependency"
@@ -426,11 +425,6 @@ def create_card_from_spec(spec: dict[str, Any], *, using: str | None = None) -> 
             if spec.get("priority")
             else None,
             relative_size=_lookup(models.RelativeSize, spec["relative_size"], using),
-            planning_state=_lookup(
-                models.PlanningState,
-                spec.get("planning_state", DEFAULT_PLANNING_STATE_KEY),
-                using,
-            ),
             planning_note=spec.get("planning_note", ""),
         )
         _create_labels(card, spec.get("labels", []), using)

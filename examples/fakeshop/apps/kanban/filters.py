@@ -59,12 +59,6 @@ class RelativeSizeFilter(FilterSet):
         }
 
 
-class PlanningStateFilter(FilterSet):
-    class Meta:
-        model = models.PlanningState
-        fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
-
-
 class UpstreamFilter(FilterSet):
     class Meta:
         model = models.Upstream
@@ -214,7 +208,6 @@ __all__ = (
     "LabelFilter",
     "MilestoneFilter",
     "ParityLevelFilter",
-    "PlanningStateFilter",
     "PriorityFilter",
     "RelativeSizeFilter",
     "SectionFilter",

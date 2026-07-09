@@ -21,7 +21,6 @@ PLANNED_TEST_FILE = "tests/planned_only/test_planned_only.py"
 @pytest.fixture(autouse=True)
 def _service_lookups(db):
     kf.make_status("todo")
-    kf.make_planning_state("planned")
     kf.make_priority("medium")
     kf.make_section("scope")
     kf.make_section("definition_of_done")

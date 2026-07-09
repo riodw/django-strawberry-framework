@@ -26,7 +26,6 @@ def _make_card(
     number: int,
     title: str,
     status: str = "todo",
-    state: str = "planned",
     version: str = "alpha",
     milestone: models.Milestone | None = None,
 ) -> models.Card:
@@ -39,7 +38,6 @@ def _make_card(
         "number": number,
         "title": title,
         "target_version": target_version,
-        "planning_state": kf.make_planning_state(state),
         "milestone": milestone or target_version.milestone,
     }
     if status == "done":

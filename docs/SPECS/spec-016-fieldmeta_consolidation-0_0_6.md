@@ -12,8 +12,6 @@ This file is intentionally lightweight. It preserves the card scope from the Kan
 - Status: `done` / Done
 - Milestone: `alpha` / Alpha (pre-0.1.0)
 - Priority: Medium
-- Severity: Medium
-- Planning state: Shipped
 - Relative size: M
 - Labels: `cleanup`, `field-meta`, `metadata`, `optimizer`, `types`
 

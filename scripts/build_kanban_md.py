@@ -100,16 +100,48 @@ def tracked_path_link(tracked_path: dict[str, Any], *, planned: bool) -> str:
     return f"`{path}` ({marker})"
 
 
-def card_column_key(card: dict[str, Any]) -> str:
-    """Return the board column key that owns ``card``."""
+def active_version(cards: list[dict[str, Any]]) -> str:
+    """Return the version currently in progress.
+
+    Derived from ``status`` alone: the single ``wip`` card names the active
+    version, so the ``## In progress`` column no longer needs a per-card flag.
+    Falls back to the latest shipped version when the board has no ``wip`` card.
+    """
+    wip_versions = sorted(
+        {
+            card["targetVersion"]["number"]
+            for card in cards
+            if card["status"]["key"] == "wip" and card.get("targetVersion")
+        },
+        key=_version_key,
+    )
+    if wip_versions:
+        return wip_versions[0]
+    done_versions = sorted(
+        {
+            card["targetVersion"]["number"]
+            for card in cards
+            if card["status"]["key"] == "done" and card.get("targetVersion")
+        },
+        key=_version_key,
+    )
+    return done_versions[-1] if done_versions else ""
+
+
+def card_column_key(card: dict[str, Any], active: str) -> str:
+    """Return the board column key that owns ``card``.
+
+    ``active`` is the board's in-progress version (see :func:`active_version`):
+    a non-Done card sharing it belongs to the ``## In progress`` column.
+    """
     status = card["status"]["key"]
-    planning_state = card["planningState"]["key"] if card.get("planningState") else ""
     milestone = card["milestone"]["key"] if card.get("milestone") else ""
+    version = card["targetVersion"]["number"] if card.get("targetVersion") else ""
     if status == "done":
         return "done"
     if status == "backlog":
         return "backlog"
-    if planning_state == "in_progress":
+    if active and version == active:
         return "in-progress"
     if status == "todo" and milestone == "alpha":
         return "to-do-alpha-010"
@@ -213,41 +245,15 @@ def compute_tokens(dashboard_data: dict[str, Any]) -> dict[str, str]:
     """
     cards = dashboard_data["cards"]
 
-    def versions_for_status(status_key: str) -> list[str]:
-        return sorted(
-            {
-                card["targetVersion"]["number"]
-                for card in cards
-                if card["status"]["key"] == status_key and card.get("targetVersion")
-            },
-            key=_version_key,
-        )
-
-    in_progress_versions = sorted(
-        {
-            card["targetVersion"]["number"]
-            for card in cards
-            if (card.get("planningState") or {}).get("key") == "in_progress"
-            and card.get("targetVersion")
-        },
-        key=_version_key,
-    )
-    done_versions = versions_for_status("done")
-    active_version = (
-        in_progress_versions[0]
-        if in_progress_versions
-        else (done_versions[-1] if done_versions else "")
-    )
-    has_in_progress = any(
-        (card.get("planningState") or {}).get("key") == "in_progress" for card in cards
-    )
+    active = active_version(cards)
+    has_in_progress = any(card_column_key(card, active) == "in-progress" for card in cards)
     dates = [card.get("updatedDate") for card in cards]
     dates += [doc.get("updatedDate") for doc in dashboard_data["boardDocs"]]
     dates = [date for date in dates if date]
     last_refreshed = max(dates)[:10] if dates else ""
 
     return {
-        "active_version": active_version,
+        "active_version": active,
         "last_refreshed": last_refreshed,
         "in_progress_intro": "" if has_in_progress else "No cards in progress.",
         "relative_size_scale": render_relative_size_scale(dashboard_data),
@@ -369,8 +375,8 @@ def render_card(card: dict[str, Any]) -> list[str]:
             for claim in parity_claims
         )
         lines.append(f"- Parity: {parity}")
-    if card.get("planningState"):
-        lines.append(f"- Status: {card['planningState']['label']}")
+    if card.get("status"):
+        lines.append(f"- Status: {card['status']['label']}")
     size = size_label(card)
     if size:
         lines.append(f"- Relative size: {size}")
@@ -464,8 +470,9 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
     docs = [doc for doc in docs if doc["key"] != LINK_DEFINITIONS_KEY]
 
     cards_by_column = defaultdict(list)
+    active = active_version(dashboard_data["cards"])
     for card in dashboard_data["cards"]:
-        cards_by_column[card_column_key(card)].append(card)
+        cards_by_column[card_column_key(card, active)].append(card)
 
     computed = compute_tokens(dashboard_data)
     rendered = []
@@ -494,8 +501,9 @@ def main() -> None:
     dashboard_data = fetch_dashboard_data()
     markdown = render_markdown(dashboard_data)
     args.md.write_text(markdown, encoding="utf-8")
+    active = active_version(dashboard_data["cards"])
     exported_card_count = sum(
-        1 for card in dashboard_data["cards"] if card_column_key(card) != "backlog"
+        1 for card in dashboard_data["cards"] if card_column_key(card, active) != "backlog"
     )
     excluded_card_count = len(dashboard_data["cards"]) - exported_card_count
     print(

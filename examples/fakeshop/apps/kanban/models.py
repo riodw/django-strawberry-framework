@@ -115,14 +115,6 @@ class RelativeSize(LookupBase):
         verbose_name_plural = "relative sizes"
 
 
-class PlanningState(LookupBase):
-    """The planning keyword: ``planned`` / ``needs_spec`` / ``in_progress`` / ``shipped``."""
-
-    class Meta(LookupBase.Meta):
-        verbose_name = "planning state"
-        verbose_name_plural = "planning states"
-
-
 class Upstream(LookupBase):
     """A parity target: ``graphene_django`` (⚛️) / ``strawberry_django`` (🍓)."""
 
@@ -296,11 +288,6 @@ class Card(TimeStampedModel):
     )
     relative_size = models.ForeignKey(
         RelativeSize,
-        related_name="cards",
-        on_delete=models.PROTECT,
-    )
-    planning_state = models.ForeignKey(
-        PlanningState,
         related_name="cards",
         on_delete=models.PROTECT,
     )
@@ -693,7 +680,6 @@ _UUID_LINK_NAMES = (
     "status",
     "priority",
     "relativesize",
-    "planningstate",
     "upstream",
     "paritylevel",
     "section",
@@ -763,13 +749,6 @@ class UUIDModel(TimeStampedModel):
     )
     relativesize = models.OneToOneField(
         "RelativeSize",
-        null=True,
-        blank=True,
-        on_delete=models.CASCADE,
-        related_name="uuid",
-    )
-    planningstate = models.OneToOneField(
-        "PlanningState",
         null=True,
         blank=True,
         on_delete=models.CASCADE,

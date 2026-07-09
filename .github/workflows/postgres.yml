@@ -48,6 +48,30 @@ jobs:
           uv pip install "Django" --upgrade
           uv run django-admin --version
       - name: Run Tests (Postgres)
+        # Two overrides vs the pytest.ini defaults, both carried by a single
+        # `-o addopts=...`, which REPLACES the ini `addopts` wholesale -- so we
+        # re-list the flags we keep. Every other ini key (testpaths,
+        # filterwarnings=error, asyncio_mode, markers) is a separate option and
+        # stays in force.
+        #
+        # 1. `-n 12` instead of `-n auto` (= 4 on a standard ubuntu-latest):
+        #    this tier is I/O-bound -- every test round-trips to a real Postgres
+        #    server over TCP, so workers spend most of their time WAITING on the
+        #    DB, not the CPU. Over-subscribing past the core count lets one
+        #    worker's query run while another blocks on I/O. 12 is a starting
+        #    point (3x cores; well under Postgres' default max_connections=100)
+        #    -- dial it against measured runs; too high and per-worker test-DB
+        #    creation + migration replay starts to dominate.
+        #
+        # 2. `--cov`/`--cov-report` dropped: coverage is redundant on this tier.
+        #    The sqlite tier (django.yml) already enforces fail_under=100 on
+        #    every push/PR, and the code is structured so no line is
+        #    Postgres-only-reachable -- coverage is vendor-identical, so
+        #    re-tracing it here only adds per-line + per-worker-combine overhead.
+        #    This job's contract is "does the suite PASS on Postgres", not
+        #    "re-measure coverage". (We strip `--cov` via addopts rather than
+        #    passing `--no-cov`, which would emit a warning that
+        #    filterwarnings=error turns into a failure.)
         env:
           FAKESHOP_PG_DSN: postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop
-        run: uv run pytest
+        run: uv run pytest -o addopts="-v -n 12 --dist loadscope"

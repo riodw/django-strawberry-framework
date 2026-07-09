@@ -300,6 +300,36 @@ Revision history (kept inline so the spec is self-contained):
   every shipped spec (e.g. spec-040) leaves its checklist unticked by convention
   — the `Status:` line is the completion source of truth — so only the
   contradictory opener was corrected.
+- **Revision 9** — post-ship maintainer change (2026-07-09), recorded here per
+  the spec's supersession convention (this note is authoritative over the
+  ship-time text it names). The example project's debug-toolbar opt-in that
+  [Decision 2](#decision-2--card-scope-boundary-the-server-side-toolbar-integration-ships-the-in-response-surface-fakeshop-settings-opt-in-and-async-verification-stay-out)
+  scoped OUT (deferred to the fakeshop-activation card
+  [`TODO-BETA-053-0.1.5`][kanban]) was brought forward: **fakeshop's shipped
+  settings now wire the toolbar** — `"debug_toolbar"` in `INSTALLED_APPS`, the
+  package `DebugToolbarMiddleware` near the front of `MIDDLEWARE` (replacing no
+  stock entry — fakeshop never carried one), `INTERNAL_IPS = ["127.0.0.1"]`, and
+  `debug_toolbar_urls()` in `config.urls`. That flips
+  [Decision 9](#decision-9--test-strategy-package-tests-driving-real-in-process-fakeshop-requests-under-settings-overrides-eviction-simulated-absence)'s
+  premise (it placed the tests package-internal *because* fakeshop shipped no
+  toolbar), so the toolbar-PRESENT tests moved to the live tier at
+  `examples/fakeshop/test_query/test_debug_toolbar_api.py` per the
+  [live-first mandate][glossary-live-first-coverage-mandate] — driving fakeshop's
+  real `/graphql/` request path with only a `DEBUG=True` override (pytest-django
+  forces the suite to `DEBUG=False`, under which both `show_toolbar` and the
+  DEBUG-gated `debug_toolbar_urls()` short-circuit) and reloading `config.urls`
+  inside that override so the `djdt` routes populate. `tests/middleware/debug_toolbar_urls.py`
+  (the test URLconf composing fakeshop's `urlpatterns` + `debug_toolbar_urls()` +
+  the JSON probe) was **deleted**: fakeshop's real `config.urls` now supplies the
+  `djdt` routes, and the JSON-leak negative (Test 8) was recast as a
+  `RequestFactory` unit staying in `tests/middleware/test_debug_toolbar.py`
+  alongside the soft-dependency absence matrix and the coverage-only branch units
+  — the paths no live request can reach. The package coverage gate
+  (`fail_under = 100`) holds: 3014 tests pass, `middleware/debug_toolbar.py` at
+  100%. So wherever the text below says fakeshop carries no toolbar (Decision 2,
+  Current state, Decision 9's fixture prose) or names the test URLconf as a
+  shipped file (Test plan, the file table), read it as the ship-time record this
+  revision supersedes.
 
 ## Key glossary references
 

@@ -440,8 +440,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_imports.py           # Tests for the shared ``import_or_command_error`` management-command helper.
 │   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
 ├── middleware/    # Tests for package Django middleware integrations.
-│   ├── debug_toolbar_urls.py     # Test-only URLconf for the spec-042 debug-toolbar middleware tests.
-│   └── test_debug_toolbar.py     # The spec-042 ``DebugToolbarMiddleware`` suite - both dependency states, real requests.
+│   └── test_debug_toolbar.py     # The spec-042 ``DebugToolbarMiddleware`` suite - the paths no live request reaches.
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
 │   ├── test_fields.py            # ``DjangoMutationField`` factory tests (spec-036 Slice 3).
 │   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.
@@ -554,6 +553,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── README.md                     # Live GraphQL-API tests for the fakeshop example project.
 ├── conftest.py                   # Shared fixtures for the fakeshop acceptance (live ``/graphql/``) suites.
 ├── test_auth_api.py              # Live ``/graphql/`` auth API acceptance tests (spec-040).
+├── test_debug_toolbar_api.py     # Live GraphQL HTTP tests for the spec-042 ``DebugToolbarMiddleware``.
 ├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
 ├── test_kanban_api.py            # Live GraphQL HTTP tests for the kanban board docs-as-data API.
 ├── test_library_api.py           # Live GraphQL HTTP tests for library relations, optimizer behavior, and Relay fields.
@@ -617,8 +617,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_imports.py           # Tests for the shared ``import_or_command_error`` management-command helper.
 │   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
 ├── middleware/    # Tests for package Django middleware integrations.
-│   ├── debug_toolbar_urls.py     # Test-only URLconf for the spec-042 debug-toolbar middleware tests.
-│   └── test_debug_toolbar.py     # The spec-042 ``DebugToolbarMiddleware`` suite - both dependency states, real requests.
+│   └── test_debug_toolbar.py     # The spec-042 ``DebugToolbarMiddleware`` suite - the paths no live request reaches.
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
 │   ├── test_fields.py            # ``DjangoMutationField`` factory tests (spec-036 Slice 3).
 │   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.

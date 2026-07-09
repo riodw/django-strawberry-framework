@@ -38,6 +38,12 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     # Third-party
+    # spec-042 opt-in: django-debug-toolbar's SQL-panel window into ``/graphql/``
+    # requests, wired via ``django_strawberry_framework.middleware.debug_toolbar``
+    # (the MIDDLEWARE + INTERNAL_IPS entries below and ``debug_toolbar_urls()`` in
+    # config/urls.py). Needs ``django.contrib.staticfiles`` (above); the framework
+    # app (below) supplies the GraphiQL bridge template via the app-dirs loader.
+    "debug_toolbar",
     "django_strawberry_framework",
     # NOTE(spec-039 Slice 3): `"rest_framework"` is intentionally NOT installed. The
     # products `ItemSerializer` is a flat `ModelSerializer` whose validation +
@@ -57,6 +63,11 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # spec-042: our subclass of debug-toolbar's middleware, listed as early as
+    # possible (after SecurityMiddleware, before any body-encoding middleware).
+    # It REPLACES the stock ``debug_toolbar.middleware.DebugToolbarMiddleware`` --
+    # listing both would run the toolbar twice.
+    "django_strawberry_framework.middleware.debug_toolbar.DebugToolbarMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -64,6 +75,11 @@ MIDDLEWARE = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
+
+# spec-042: django-debug-toolbar's default ``SHOW_TOOLBAR_CALLBACK`` renders the
+# toolbar only when ``DEBUG`` is true (it is, above) AND the request IP is in
+# ``INTERNAL_IPS`` -- so the panels appear for local ``/graphql/`` traffic only.
+INTERNAL_IPS = ["127.0.0.1"]
 
 
 # ---------------------------------------------------------------------------

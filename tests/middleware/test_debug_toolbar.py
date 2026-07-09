@@ -1,19 +1,19 @@
-"""The spec-042 ``DebugToolbarMiddleware`` suite - both dependency states, real requests.
+"""The spec-042 ``DebugToolbarMiddleware`` suite - the paths no live request reaches.
 
 Placement (spec-042 Decision 9, honoring the ``test_query/README.md`` coverage
-rule): the live-first mandate sends a test to ``examples/fakeshop/test_query/``
-when a package line is reachable by a real GraphQL query **through the
-example's shipped configuration** - and no ``middleware/debug_toolbar.py`` line
-is: fakeshop's shipped settings deliberately carry no ``debug_toolbar`` app, no
-toolbar middleware, and no show-toolbar override, so the middleware exists in
-the request path only under this file's per-test settings overrides (package
-machinery, not the example's consumer surface). The tests are NOT structural
-for it - the toolbar-present group drives fakeshop's REAL ``/graphql/`` URL
-(the real GraphiQL HTML render through the real ``ensure_csrf_cookie``
-decorator, and a real SQL-emitting products operation through the real
-optimizer) via ``django.test.Client``, with the acceptance suites' schema
-reload discipline (``schema_reload.reload_all_project_schemas()`` on fixture
-setup, before any URLconf step).
+rule): since ``0.0.14`` fakeshop's shipped settings wire the toolbar (the
+``debug_toolbar`` app, the package middleware, ``INTERNAL_IPS`` and
+``debug_toolbar_urls()``), so the toolbar-PRESENT tests that drive a real
+``/graphql/`` request now live in the live tier at
+``examples/fakeshop/test_query/test_debug_toolbar_api.py`` - the live-first
+mandate's home once a package line is reachable through the example's shipped
+configuration. THIS file keeps only what no live ``/graphql/`` request can reach:
+the soft-dependency absence matrix (a missing dependency is never a live path) and
+the coverage-only ``_postprocess`` / ``_get_payload`` branch units (streaming
+early-out, the non-object-JSON bail, the non-class ``view_class`` guard, the
+header-present ``Content-Length`` refreshes, and the untagged-JSON passthrough leak
+guard) that the real toolbar lifecycle does not naturally expose - driven directly
+against fake toolbar / middleware objects.
 
 The toolbar-absent path simulates absence with the importlib-compatible
 ``sys.modules["debug_toolbar"] = None`` sentinel, NOT the router/DRF
@@ -41,23 +41,16 @@ import sys
 from pathlib import Path
 
 import pytest
-import schema_reload
-from apps.products.services import seed_data
 from django.apps import apps
-from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.http import HttpResponse, StreamingHttpResponse
-from django.test import Client, RequestFactory, modify_settings, override_settings
-from django.urls import reverse
+from django.test import RequestFactory, modify_settings
 
 import django_strawberry_framework
 from tests._soft_dependency import evicted_modules, simulated_absence
 
 _LEAF = "django_strawberry_framework.middleware.debug_toolbar"
 _PARENT = "django_strawberry_framework.middleware"
-_PACKAGE_MIDDLEWARE = f"{_LEAF}.DebugToolbarMiddleware"
-_STOCK_MIDDLEWARE = "debug_toolbar.middleware.DebugToolbarMiddleware"
-_TEST_URLCONF = "tests.middleware.debug_toolbar_urls"
 
 # The verified debug-toolbar floor; the install hint must name it. RE-TYPED
 # literal (the ``_HINT_SUBSTRING`` drift-catch discipline - place 3 of the
@@ -69,130 +62,14 @@ _HINT_SUBSTRING = "django-debug-toolbar>=7.0.0"
 # when the middleware's HTML branch fired, never in stock toolbar markup.
 _TEMPLATE_MARKER = "Response.prototype.json"
 
-# ``render_panel``'s miss fallback (debug-toolbar 7.0.0): a 200 JSON response
-# with NON-empty content, so Test 6 must pin its absence, not just shape.
-_PANEL_FALLBACK = "isn't available anymore"
-
-# A NAMED operation: a non-null ``operationName`` in the JSON envelope requires
-# a named operation document (an anonymous ``{ ... }`` document plus a non-null
-# ``operationName`` fails GraphQL validation before proving anything).
-_TOOLBAR_ITEMS_QUERY = """
-query ToolbarItems {
-  allItems(first: 1) {
-    edges { node { name category { name } } }
-  }
-}
-"""
-
-_INTROSPECTION_QUERY = "query IntrospectionQuery { __schema { queryType { name } } }"
-
-
-def _post_graphql(client, query, operation_name=None):
-    """POST a GraphQL JSON envelope to fakeshop's real ``/graphql/`` URL."""
-    payload = {"query": query}
-    if operation_name is not None:
-        payload["operationName"] = operation_name
-    return client.post("/graphql/", data=json.dumps(payload), content_type="application/json")
-
-
-def _content_type(response):
-    """The response's media type without parameters - the middleware's own sniff.
-
-    Mirrors the production first-segment split
-    (``middleware/debug_toolbar.py::_postprocess``) so the tests key on the
-    media type the branch actually inspects, not the raw header.
-    """
-    return response["Content-Type"].split(";")[0]
-
 
 # ---------------------------------------------------------------------------
-# The Decision 9 toolbar-present fixture (file-local by design - P3.1: do not
-# promote to a shared helper until a second card needs the same machinery).
+# Fixtures shared by the absence tests and the targeted units. The leaf's first
+# import in a process defines the ``HistoryEntry`` model, so it must happen with
+# ``"debug_toolbar"`` in ``INSTALLED_APPS`` (fakeshop ships the app, but this
+# file's tests do not assume that suite state) - the ``toolbar_leaf`` fixture
+# owns it, keeping these order-independent under pytest-xdist.
 # ---------------------------------------------------------------------------
-
-
-def _show_toolbar_always(request):
-    """The always-true show-toolbar callback: independent of REMOTE_ADDR / INTERNAL_IPS."""
-    return True
-
-
-def _middleware_with_debug_toolbar():
-    """Build MIDDLEWARE from the REAL fakeshop stack with the package path in front.
-
-    Preserves the rest of fakeshop's stack (sessions, CSRF, auth, messages) so
-    the test path stays the real request path - never an abbreviated
-    replacement list. The list must never contain BOTH the stock toolbar entry
-    and the package middleware (the subclass replaces the stock entry).
-    """
-    middleware = [m for m in settings.MIDDLEWARE if m != _STOCK_MIDDLEWARE]
-    assert _PACKAGE_MIDDLEWARE not in middleware
-    return [_PACKAGE_MIDDLEWARE, *middleware]
-
-
-def _evict_test_urlconf():
-    """Drop the test URLconf so its ``urlpatterns`` recompute under the active DEBUG."""
-    sys.modules.pop(_TEST_URLCONF, None)
-
-
-@contextlib.contextmanager
-def _debug_toolbar_cache_state():
-    """Save / clear / restore the toolbar's process-level caches (Decision 9 hygiene).
-
-    ``show_toolbar_func_or_path`` is ``@cache``-memoized and ``DebugToolbar``
-    caches ``_panel_classes`` / ``_urlpatterns`` on the class - none reset with
-    a settings override, and under ``--dist loadscope`` a leaked always-true
-    callback would let this module pass while a later same-worker test inherits
-    it. Restore puts back the SAVED values (not ``None``), so a neighboring
-    test gets back exactly the state it had.
-    """
-    from debug_toolbar import middleware as dt_middleware
-    from debug_toolbar.toolbar import DebugToolbar
-
-    dt_middleware.show_toolbar_func_or_path.cache_clear()
-    saved_panel_classes = DebugToolbar._panel_classes
-    saved_urlpatterns = DebugToolbar._urlpatterns
-    DebugToolbar._panel_classes = None
-    DebugToolbar._urlpatterns = None
-    try:
-        yield
-    finally:
-        dt_middleware.show_toolbar_func_or_path.cache_clear()
-        DebugToolbar._panel_classes = saved_panel_classes
-        DebugToolbar._urlpatterns = saved_urlpatterns
-
-
-@pytest.fixture
-def toolbar_client():
-    """Real fakeshop requests with the toolbar's three pieces layered per-test.
-
-    Setup order is load-bearing (Decision 9): the full-project schema reload
-    runs FIRST (order-independence-by-reconstruction after any package-test
-    ``registry.clear()``), the test URLconf is evicted so its ``urlpatterns``
-    compute under the ``DEBUG=True`` override (pytest-django forces the suite
-    to ``DEBUG=False``; ``debug_toolbar_urls()`` returns ``[]`` under it), and
-    the URLconf is referenced by dotted path only.
-    """
-    schema_reload.reload_all_project_schemas()
-    _evict_test_urlconf()
-    try:
-        with override_settings(DEBUG=True):
-            with modify_settings(INSTALLED_APPS={"append": "debug_toolbar"}):
-                with _debug_toolbar_cache_state():
-                    with override_settings(
-                        MIDDLEWARE=_middleware_with_debug_toolbar(),
-                        ROOT_URLCONF=_TEST_URLCONF,
-                        DEBUG_TOOLBAR_CONFIG={"SHOW_TOOLBAR_CALLBACK": _show_toolbar_always},
-                    ):
-                        yield Client()
-    finally:
-        _evict_test_urlconf()
-
-
-@pytest.fixture
-def stock_client():
-    """A schema-reloaded client under fakeshop's SHIPPED settings (no toolbar)."""
-    schema_reload.reload_all_project_schemas()
-    return Client()
 
 
 @pytest.fixture
@@ -202,8 +79,8 @@ def toolbar_leaf():
     The first ``debug_toolbar.middleware`` import in a process defines the
     ``HistoryEntry`` model, which requires the app in ``INSTALLED_APPS`` - this
     fixture makes the targeted units and absence tests order-independent under
-    pytest-xdist instead of relying on a toolbar-present test having imported
-    the leaf earlier on the same worker.
+    pytest-xdist instead of relying on another test having imported the leaf
+    earlier on the same worker.
     """
     with modify_settings(INSTALLED_APPS={"append": "debug_toolbar"}):
         yield importlib.import_module(_LEAF)
@@ -213,157 +90,11 @@ def toolbar_leaf():
 def middleware(toolbar_leaf):
     """The package middleware instance the targeted units drive directly.
 
-    Depends on ``toolbar_leaf`` so ``debug_toolbar`` stays in
-    ``INSTALLED_APPS`` for the unit's lifetime; ``lambda request: None`` is the
-    sync ``get_response`` the stock ``__init__`` inspects (sync -> not async
-    mode). Replaces the identical hand-built instance the units repeated.
+    Depends on ``toolbar_leaf`` so ``debug_toolbar`` stays in ``INSTALLED_APPS``
+    for the unit's lifetime; ``lambda request: None`` is the sync ``get_response``
+    the stock ``__init__`` inspects (sync -> not async mode).
     """
     return toolbar_leaf.DebugToolbarMiddleware(lambda request: None)
-
-
-# ---------------------------------------------------------------------------
-# Toolbar-present: real in-process fakeshop requests (Tests 1-8).
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-class TestToolbarPresent:
-    """The toolbar-present group: real ``/graphql/`` traffic under the Decision 9 fixture."""
-
-    def test_graphiql_page_carries_stock_handle_and_bridge_script(self, toolbar_client):
-        """Test 1: the GraphiQL HTML page gets BOTH injections."""
-        response = toolbar_client.get("/graphql/", HTTP_ACCEPT="text/html")
-        assert response.status_code == 200
-        assert _content_type(response) == "text/html"
-        body = response.content.decode()
-        # The stock toolbar handle: proves super()._postprocess ran and the
-        # stock pipeline is intact.
-        assert 'id="djDebug"' in body
-        # The package's appended template script: proves the HTML branch fired.
-        assert _TEMPLATE_MARKER in body
-        if "Content-Length" in response:
-            assert int(response["Content-Length"]) == len(response.content)
-
-    def test_no_toolbar_baseline_under_shipped_settings(self, stock_client):
-        """Test 2: stock fakeshop settings stay toolbar-free (stable behavior, not bytes).
-
-        No "package middleware module not imported" assertion: under
-        ``--dist loadscope`` an earlier toolbar-present test on the same worker
-        legitimately leaves the leaf in ``sys.modules`` while this response is
-        perfectly clean; import-surface guarantees belong to the absence tests.
-        """
-        response = stock_client.get("/graphql/", HTTP_ACCEPT="text/html")
-        assert response.status_code == 200
-        assert _content_type(response) == "text/html"
-        body = response.content.decode()
-        assert "graphiql" in body.lower()
-        assert _TEMPLATE_MARKER not in body
-        assert 'id="djDebug"' not in body
-
-    def test_named_json_operation_gets_panel_payload(self, toolbar_client):
-        """Test 3: a real SQL-emitting named operation carries the injected payload."""
-        seed_data(1)
-        response = _post_graphql(toolbar_client, _TOOLBAR_ITEMS_QUERY, "ToolbarItems")
-        assert response.status_code == 200
-        assert _content_type(response) == "application/json"
-        payload = json.loads(response.content)
-        # The operation's own result is intact beside the injected key.
-        assert payload["data"]["allItems"]["edges"]
-        toolbar_payload = payload["debugToolbar"]
-        assert toolbar_payload["requestId"]
-        panels = toolbar_payload["panels"]
-        assert panels
-        # The SQL the operation actually emitted (the query count subtitle).
-        assert panels["SQLPanel"]["subtitle"] is not None
-        # The TemplatesPanel skip.
-        assert "TemplatesPanel" not in panels
-        # Behavior check only - the header-present refresh BRANCHES are owned
-        # by the targeted units below.
-        if "Content-Length" in response:
-            assert int(response["Content-Length"]) == len(response.content)
-
-    def test_introspection_query_is_skipped(self, toolbar_client):
-        """Test 4: no payload for ``operationName == "IntrospectionQuery"``."""
-        response = _post_graphql(toolbar_client, _INTROSPECTION_QUERY, "IntrospectionQuery")
-        assert response.status_code == 200
-        payload = json.loads(response.content)
-        assert payload["data"]["__schema"]["queryType"]["name"] == "Query"
-        assert "debugToolbar" not in payload
-
-    def test_get_with_json_accept_hits_the_operation_name_except_branch(self, toolbar_client):
-        """Test 5: a JSON-``Accept`` GET (empty body) degrades to inject.
-
-        ``HTTP_ACCEPT="application/json"`` keeps this deterministic on the JSON
-        branch (a GET without it renders the GraphiQL HTML page instead); the
-        empty GET body makes ``json.loads(request.body)`` raise, so
-        ``operationName`` degrades to ``None`` and the payload is injected.
-        """
-        response = toolbar_client.get(
-            "/graphql/",
-            {"query": "{ __typename }"},
-            HTTP_ACCEPT="application/json",
-        )
-        # Assert the content type BEFORE inspecting the body.
-        assert _content_type(response) == "application/json"
-        assert response.status_code == 200
-        payload = json.loads(response.content)
-        assert payload["data"]["__typename"] == "Query"
-        assert payload["debugToolbar"]["requestId"]
-
-    def test_injected_request_id_round_trips_to_stored_sql_panel_content(self, toolbar_client):
-        """Test 6: the injected ``requestId`` is USABLE through the real panel route.
-
-        ``render_panel`` returns 200 JSON with non-empty ``content`` even on a
-        miss (the "isn't available anymore" fallback), so the success direction
-        is pinned on both sides: fallback absent AND a seeded-operation SQL
-        marker present.
-        """
-        seed_data(1)
-        response = _post_graphql(toolbar_client, _TOOLBAR_ITEMS_QUERY, "ToolbarItems")
-        request_id = json.loads(response.content)["debugToolbar"]["requestId"]
-
-        # Resolve through the route, staying correct under a custom prefix.
-        panel_url = reverse("djdt:render_panel")
-        panel_response = toolbar_client.get(
-            panel_url,
-            {"request_id": request_id, "panel_id": "SQLPanel"},
-        )
-        assert panel_response.status_code == 200
-        panel_payload = json.loads(panel_response.content)
-        assert set(panel_payload) >= {"content", "scripts"}
-        assert _PANEL_FALLBACK not in panel_payload["content"]
-        # The stored SQL-panel content for THIS id: the seeded operation's
-        # SELECT against the products table.
-        assert "SELECT" in panel_payload["content"]
-        assert "products_item" in panel_payload["content"]
-
-    @pytest.mark.parametrize("url", ["/", "/login/"])
-    def test_non_strawberry_html_views_pass_through(self, toolbar_client, url):
-        """Test 7: HTML detection negatives for function-based AND class-based views.
-
-        Package-scoped, not toolbar-scoped: under the fixture's always-true
-        callback the STOCK toolbar handle may legitimately appear in this
-        ordinary HTML (the subclass preserves stock behavior), so only the
-        package's own injections are asserted absent.
-        """
-        response = toolbar_client.get(url)
-        assert response.status_code == 200
-        body = response.content.decode()
-        assert _TEMPLATE_MARKER not in body
-        assert "debugToolbar" not in body
-
-    def test_unrelated_json_body_is_never_mutated(self, toolbar_client):
-        """Test 8: the JSON payload leak guard - the probe body round-trips exactly.
-
-        The HTML negatives cannot prove this: an implementation injecting into
-        EVERY JSON response would still pass Tests 1-7. Stock toolbar headers
-        are acceptable; the contract is "unrelated JSON bodies are never
-        mutated".
-        """
-        response = toolbar_client.get("/__debug_probe__.json")
-        assert response.status_code == 200
-        assert _content_type(response) == "application/json"
-        assert json.loads(response.content) == {"probe": "ok"}
 
 
 # ---------------------------------------------------------------------------
@@ -468,17 +199,18 @@ def test_leaf_import_requires_debug_toolbar_in_installed_apps():
     The distinct-from-11a misconfiguration (spec-042 Error shapes): the package
     imports, but the leaf's ``debug_toolbar.middleware`` import defines the
     ``HistoryEntry`` model, which Django refuses (a cryptic app-label
-    ``RuntimeError``) unless the app is registered. The leaf's second wiring
-    gate raises one actionable ``ImproperlyConfigured`` instead. fakeshop's
-    shipped settings omit the app, so no override is needed - only the leaf is
-    evicted so its body re-runs the gate, which fires BEFORE the middleware
-    import (debug_toolbar's own submodules need no eviction).
+    ``RuntimeError``) unless the app is registered. The leaf's second wiring gate
+    raises one actionable ``ImproperlyConfigured`` instead. This test removes the
+    app so its body re-runs the gate; ``modify_settings(remove=...)`` is a no-op if
+    fakeshop's shipped settings did not carry it, so the gate fires either way, and
+    only the leaf is evicted so its body re-runs BEFORE the middleware import.
     """
-    assert not apps.is_installed("debug_toolbar")
-    middleware_pkg = importlib.import_module(_PARENT)
-    with evicted_modules(_LEAF, parent=middleware_pkg, attr="debug_toolbar"):
-        with pytest.raises(ImproperlyConfigured, match="INSTALLED_APPS"):
-            importlib.import_module(_LEAF)
+    with modify_settings(INSTALLED_APPS={"remove": "debug_toolbar"}):
+        assert not apps.is_installed("debug_toolbar")
+        middleware_pkg = importlib.import_module(_PARENT)
+        with evicted_modules(_LEAF, parent=middleware_pkg, attr="debug_toolbar"):
+            with pytest.raises(ImproperlyConfigured, match="INSTALLED_APPS"):
+                importlib.import_module(_LEAF)
 
 
 def test_require_debug_toolbar_guard_unit(toolbar_leaf):
@@ -491,7 +223,7 @@ def test_require_debug_toolbar_guard_unit(toolbar_leaf):
 
 
 # ---------------------------------------------------------------------------
-# Coverage-only targeted units (Tests 13-15, 14a): branches the real toolbar
+# Coverage-only targeted units (Tests 8, 13-15, 14a): branches the real toolbar
 # lifecycle does not naturally expose. Unmarked, no database.
 # ---------------------------------------------------------------------------
 
@@ -535,8 +267,8 @@ def test_streaming_response_gets_no_package_mutation(middleware):
     Not "returns untouched" in the absolute sense: the stock postprocess runs
     first and may legitimately generate stats and headers before
     ``response.streaming`` sends the package branch home. No real-request test
-    returns a streaming response, so this branch is unreachable through
-    Tests 1-8.
+    returns a streaming response, so this branch is unreachable through the live
+    suite.
     """
     request = RequestFactory().post("/graphql/")
     request._is_graphiql = True
@@ -545,6 +277,27 @@ def test_streaming_response_gets_no_package_mutation(middleware):
     assert result is response
     # The streaming content is unchanged: no appended script, no injected payload.
     assert b"".join(result.streaming_content) == b'{"data": 1}'
+
+
+def test_unrelated_json_view_body_is_never_mutated(middleware):
+    """Test 8 (unit): an untagged JSON response passes through unmutated - the leak guard.
+
+    The live counterpart in
+    ``examples/fakeshop/test_query/test_debug_toolbar_api.py`` drives fakeshop's
+    real Strawberry ``/graphql/`` traffic, but fakeshop ships no NON-Strawberry
+    JSON endpoint to prove the guard against - and an implementation injecting into
+    EVERY JSON response would still pass the live HTML negatives (Test 7). Driving
+    ``_postprocess`` with an untagged response (``_is_graphiql`` False, the state
+    ``process_view`` sets for any non-``BaseView``) pins the ``not is_graphiql``
+    early return on the JSON branch: the body round-trips exactly, no
+    ``debugToolbar`` key added.
+    """
+    request = RequestFactory().get("/unrelated.json")
+    request._is_graphiql = False
+    response = HttpResponse(b'{"probe": "ok"}', content_type="application/json")
+    result = middleware._postprocess(request, response, _FakeToolbar(request_id="riid"))
+    assert json.loads(result.content) == {"probe": "ok"}
+    assert b"debugToolbar" not in result.content
 
 
 def test_get_payload_bails_without_request_id(toolbar_leaf):
@@ -594,7 +347,7 @@ def test_get_payload_bails_on_non_object_json_body(toolbar_leaf):
 def test_process_view_tolerates_non_class_view_class(middleware):
     """Test 14a: a non-class ``view_class`` -> ``False``, no ``TypeError`` (the P2.1 guard).
 
-    Tests 7-8 only drive real class/function views; this guard matters
+    The live Test 7 only drives real class/function views; this guard matters
     precisely because the middleware runs for ALL global traffic.
     """
     request = RequestFactory().get("/")

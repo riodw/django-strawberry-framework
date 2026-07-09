@@ -1,5 +1,6 @@
 """URL routing for fakeshop's index, admin, auth, and GraphQL endpoints."""
 
+from debug_toolbar.toolbar import debug_toolbar_urls
 from django.contrib import admin
 from django.contrib.auth import views as auth_views
 from django.http import HttpResponse
@@ -72,3 +73,9 @@ urlpatterns = [
     path("login/", auth_views.LoginView.as_view(template_name="admin/login.html"), name="login"),
     path("logout/", auth_views.LogoutView.as_view(next_page="/login/"), name="logout"),
 ]
+
+# spec-042: django-debug-toolbar's panel-content routes (the ``djdt:`` namespace).
+# REQUIRED whenever the toolbar middleware is active -- the stock postprocess
+# reverses these routes on every processed response, so omitting them raises
+# ``NoReverseMatch`` rather than a quiet panel-click 404.
+urlpatterns += debug_toolbar_urls()

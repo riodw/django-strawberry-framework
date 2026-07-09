@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-07-06
+Last refreshed: 2026-07-08
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -81,15 +81,15 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**68.3% complete** toward `1.0.0` - 41 of 60 cards done (70.6% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**70.0% complete** toward `1.0.0` - 42 of 60 cards done (72.2% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 41/44 (93.2%) | 93.4% |
+| Alpha (pre-0.1.0) | 42/44 (95.5%) | 95.6% |
 | Beta (pre-1.0.0) | 0/15 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
-To complete the Alpha (pre-0.1.0) milestone: **93.2%**.
+To complete the Alpha (pre-0.1.0) milestone: **95.5%**.
 
 ## Board columns
 
@@ -97,7 +97,8 @@ To complete the Alpha (pre-0.1.0) milestone: **93.2%**.
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-042-0.0.14` - Debug-toolbar middleware | [spec-042-debug_toolbar-0_0_14.md](docs/spec-042-debug_toolbar-0_0_14.md) |
+| `WIP-ALPHA-043-0.0.14` - Test client helper | [spec-043-test_client-0_0_14.md](docs/spec-043-test_client-0_0_14.md) |
+| `DONE-042-0.0.14` - Debug-toolbar middleware | [spec-042-debug_toolbar-0_0_14.md](docs/SPECS/spec-042-debug_toolbar-0_0_14.md) |
 | `DONE-041-0.0.14` - Channels ASGI router (migration aid) | [spec-041-channels_router-0_0_14.md](docs/SPECS/spec-041-channels_router-0_0_14.md) |
 | `DONE-040-0.0.13` - Auth mutations (login / logout / register) | [spec-040-auth_mutations-0_0_13.md](docs/SPECS/spec-040-auth_mutations-0_0_13.md) |
 | `DONE-039-0.0.13` - DRF serializer mutations (`SerializerMutation`) | [spec-039-serializer_mutations-0_0_13.md](docs/SPECS/spec-039-serializer_mutations-0_0_13.md) |
@@ -144,60 +145,8 @@ To complete the Alpha (pre-0.1.0) milestone: **93.2%**.
 
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
 
-<a id="debug_toolbar_middleware"></a>
-### [WIP-ALPHA-042-0.0.14 - Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
-
-- Priority: Low
-- Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Low
-- Status: In progress
-- Relative size: M
-- Labels: `debugging`, `django-integration`, `middleware`
-- Spec: [spec-042-debug_toolbar-0_0_14.md](docs/spec-042-debug_toolbar-0_0_14.md)
-
-#### Predicted files
-
-- `django_strawberry_framework/middleware/debug_toolbar.py` (planned)
-
-#### Planning note
-
-planned
-
-#### Definition of done
-
-- [ ] Implement `django_strawberry_framework/middleware/debug_toolbar.py` exposing a `DebugToolbarMiddleware` that **subclasses** `debug_toolbar.middleware.DebugToolbarMiddleware` and overrides `process_view` + `_postprocess` for the two injection paths above.
-- [ ] Ship the matching template asset at `django_strawberry_framework/templates/django_strawberry_framework/debug_toolbar.html`; the middleware renders it via `render_to_string(...)` into HTML responses for the GraphiQL view.
-- [ ] Introspection-query skip behavior preserved (no payload injection when `operationName == "IntrospectionQuery"`).
-- [ ] `debug_toolbar` is a soft dependency: top-level package import must succeed without `django-debug-toolbar` installed; the middleware module raises `ImportError` with an install hint when actually imported.
-- [ ] In-process test against a fakeshop request that emits SQL, covering both the GraphiQL HTML path and the JSON operation path.
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/middlewares/debug_toolbar.py` — `DebugToolbarMiddleware` (subclasses upstream `debug_toolbar.middleware.DebugToolbarMiddleware`); module-level `_get_payload` helper; `_HTML_TYPES` constant for content-type sniffing.
-- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/templates/strawberry_django/debug_toolbar.html` — HTML snippet rendered into the GraphiQL response; ships as a template asset alongside the Python module.
-
-#### Architectural posture
-
-- **Not a from-scratch middleware**: strawberry-django **subclasses** `debug_toolbar.middleware.DebugToolbarMiddleware` and overrides `process_view` (to tag GraphiQL requests) and `_postprocess` (to inject the toolbar payload into the response). Our equivalent follows the same subclass-and-override shape; we do not re-implement the panel-rendering logic that `django-debug-toolbar` already owns.
-- **GraphiQL-view detection**: strawberry-django tags `request._is_graphiql = bool(view and issubclass(view, BaseView))` where `BaseView` is `strawberry.django.views.BaseView`. Our equivalent uses the same `issubclass` check against whichever view class the package settles on (working name `DjangoGraphQLView`; pinned during implementation).
-- **Two output paths, not one**:
-- **HTML response** (the GraphiQL page itself): the middleware appends a rendered toolbar template to the response body and refreshes `Content-Length`.
-- **JSON response** (a `/graphql/` operation result): the middleware parses the body, injects a `debugToolbar` key carrying per-panel `title` / `subtitle` metadata plus the toolbar's `requestId`, and re-encodes via `DjangoJSONEncoder`.
-- **Introspection-query skip**: payload injection is suppressed when `operationName == "IntrospectionQuery"` so IDEs (Apollo Sandbox, etc.) that poll introspection on every keystroke don't flood their request history. Carry this behavior over.
-
-#### Why it matters
-
-- `strawberry-graphql-django` ships a `middlewares/debug_toolbar.py` so `django-debug-toolbar`'s SQL panel captures queries triggered by GraphQL resolvers. Without it, developers can't see the SQL hit by their queries during a `/graphql/` request.
-- `graphene-django` ships **no** equivalent; this card is strawberry-graphql-django parity only.
-
-#### Other
-
-- developer experience.
-- strawberry-graphql-django ships a debug-toolbar middleware; graphene-django ships none.
-- subclass django-debug-toolbar's middleware with two injection paths (GraphiQL HTML + `/graphql/` JSON), a template asset, introspection-skip behavior, and a soft dependency. Single module + tests.
-
 <a id="test_client_helper"></a>
-### [TODO-ALPHA-043-0.0.14 - Test client helper](KANBAN.html#test_client_helper)
+### [WIP-ALPHA-043-0.0.14 - Test client helper](KANBAN.html#test_client_helper)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
@@ -205,6 +154,7 @@ planned
 - Status: In progress
 - Relative size: M
 - Labels: `graphql-api`, `test-client`, `tests`, `uploads`
+- Spec: [spec-043-test_client-0_0_14.md](docs/spec-043-test_client-0_0_14.md)
 
 #### Predicted files
 
@@ -290,7 +240,7 @@ planned
 - [ ] Output shape mirrors graphene's `DjangoDebugSQL` / `DjangoDebugException` field names where the chosen fidelity supports them; document any shape narrowing (e.g., omitted Postgres-specific fields) explicitly.
 - [ ] Off by default; opt-in via the extensions list passed to `strawberry.Schema(...)`.
 - [ ] Tests under `tests/extensions/test_debug.py` against a fakeshop request that emits SQL.
-- [ ] Documented as the response-side counterpart to `WIP-ALPHA-042-0.0.14`.
+- [ ] Documented as the response-side counterpart to `DONE-042-0.0.14`.
 
 #### Files likely touched
 
@@ -321,23 +271,23 @@ planned
 
 #### Why it matters
 
-- `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `WIP-ALPHA-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive.
+- `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `DONE-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive.
 - A Strawberry-native equivalent is a small `SchemaExtension` that captures SQL (through `django.db.connection.queries` or via a port of graphene's cursor-wrap mechanism — see Architectural posture) and exceptions and attaches the result to the response's `extensions` map.
-- `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `WIP-ALPHA-042-0.0.14`); this card is graphene-django parity only.
+- `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `DONE-042-0.0.14`); this card is graphene-django parity only.
 
 #### Other
 
 - developer experience.
 - graphene-django ships an in-response `DjangoDebug` SQL/exception subsystem; strawberry-graphql-django ships none.
-- distinct from `WIP-ALPHA-042-0.0.14` (Django debug toolbar).
+- distinct from `DONE-042-0.0.14` (Django debug toolbar).
 - a Strawberry `SchemaExtension` that captures SQL + exceptions into `extensions['debug']`; one design choice between porting graphene's cursor-wrap and reading `connection.queries`. Single extension module + tests.
 
 #### Card references
 
-- Related: Documented as the response-side counterpart to `WIP-ALPHA-042-0.0.14`. -> `WIP-ALPHA-042-0.0.14` - Debug-toolbar middleware
-- Related: `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `WIP-ALPHA-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive. -> `WIP-ALPHA-042-0.0.14` - Debug-toolbar middleware
-- Related: `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `WIP-ALPHA-042-0.0.14`); this card is graphene-django parity only. -> `WIP-ALPHA-042-0.0.14` - Debug-toolbar middleware
-- Related: distinct from `WIP-ALPHA-042-0.0.14` (Django debug toolbar). -> `WIP-ALPHA-042-0.0.14` - Debug-toolbar middleware
+- Related: Documented as the response-side counterpart to `DONE-042-0.0.14`. -> `DONE-042-0.0.14` - Debug-toolbar middleware
+- Related: `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `DONE-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive. -> `DONE-042-0.0.14` - Debug-toolbar middleware
+- Related: `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `DONE-042-0.0.14`); this card is graphene-django parity only. -> `DONE-042-0.0.14` - Debug-toolbar middleware
+- Related: distinct from `DONE-042-0.0.14` (Django debug toolbar). -> `DONE-042-0.0.14` - Debug-toolbar middleware
 
 ## To Do - Alpha (0.1.0)
 
@@ -1214,6 +1164,87 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
+<a id="debug_toolbar_middleware"></a>
+### [DONE-042-0.0.14 - Debug-toolbar middleware](KANBAN.html#debug_toolbar_middleware)
+
+- Priority: Low
+- Parity: 🍓 strawberry-graphql-django (Required)
+- Severity: Low
+- Status: Shipped
+- Relative size: M
+- Labels: `debugging`, `django-integration`, `middleware`
+- Spec: [spec-042-debug_toolbar-0_0_14.md](docs/SPECS/spec-042-debug_toolbar-0_0_14.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.14` |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.14` |
+| [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
+| [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
+| [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
+| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | planned for `0.0.14` |
+| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
+| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
+| [Schema reload discipline](docs/GLOSSARY.md#schema-reload-discipline) | shipped |
+| [`seed_data`](docs/GLOSSARY.md#seed_data) | shipped |
+| [Single-upstream parity](docs/GLOSSARY.md#single-upstream-parity) | shipped |
+| [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
+| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [FK-id elision](docs/GLOSSARY.md#fk-id-elision) | shipped (`0.0.3`) |
+| [`request_from_info`](docs/GLOSSARY.md#request_from_info) | shipped (`0.0.8`) |
+| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
+| [Django Trac #37064 hardening](docs/GLOSSARY.md#django-trac-37064-hardening) | shipped (`0.0.7`) |
+
+#### Package files
+
+- `django_strawberry_framework/middleware/debug_toolbar.py` (historical)
+
+#### Planning note
+
+planned
+
+#### Definition of done
+
+- [x] Implement `django_strawberry_framework/middleware/debug_toolbar.py` exposing a `DebugToolbarMiddleware` that **subclasses** `debug_toolbar.middleware.DebugToolbarMiddleware` and overrides `process_view` + `_postprocess` for the two injection paths above.
+- [x] Ship the matching template asset at `django_strawberry_framework/templates/django_strawberry_framework/debug_toolbar.html`; the middleware renders it via `render_to_string(...)` into HTML responses for the GraphiQL view.
+- [x] Introspection-query skip behavior preserved (no payload injection when `operationName == "IntrospectionQuery"`).
+- [x] `debug_toolbar` is a soft dependency: top-level package import must succeed without `django-debug-toolbar` installed; the middleware module raises `ImportError` with an install hint when actually imported.
+- [x] In-process test against a fakeshop request that emits SQL, covering both the GraphiQL HTML path and the JSON operation path.
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/middlewares/debug_toolbar.py` — `DebugToolbarMiddleware` (subclasses upstream `debug_toolbar.middleware.DebugToolbarMiddleware`); module-level `_get_payload` helper; `_HTML_TYPES` constant for content-type sniffing.
+- `/Users/riordenweber/projects/strawberry-django-main/strawberry_django/templates/strawberry_django/debug_toolbar.html` — HTML snippet rendered into the GraphiQL response; ships as a template asset alongside the Python module.
+
+#### Architectural posture
+
+- **Not a from-scratch middleware**: strawberry-django **subclasses** `debug_toolbar.middleware.DebugToolbarMiddleware` and overrides `process_view` (to tag GraphiQL requests) and `_postprocess` (to inject the toolbar payload into the response). Our equivalent follows the same subclass-and-override shape; we do not re-implement the panel-rendering logic that `django-debug-toolbar` already owns.
+- **GraphiQL-view detection**: strawberry-django tags `request._is_graphiql = bool(view and issubclass(view, BaseView))` where `BaseView` is `strawberry.django.views.BaseView`. Our equivalent uses the same `issubclass` check against whichever view class the package settles on (working name `DjangoGraphQLView`; pinned during implementation).
+- **Two output paths, not one**:
+- **HTML response** (the GraphiQL page itself): the middleware appends a rendered toolbar template to the response body and refreshes `Content-Length`.
+- **JSON response** (a `/graphql/` operation result): the middleware parses the body, injects a `debugToolbar` key carrying per-panel `title` / `subtitle` metadata plus the toolbar's `requestId`, and re-encodes via `DjangoJSONEncoder`.
+- **Introspection-query skip**: payload injection is suppressed when `operationName == "IntrospectionQuery"` so IDEs (Apollo Sandbox, etc.) that poll introspection on every keystroke don't flood their request history. Carry this behavior over.
+
+#### Why it matters
+
+- `strawberry-graphql-django` ships a `middlewares/debug_toolbar.py` so `django-debug-toolbar`'s SQL panel captures queries triggered by GraphQL resolvers. Without it, developers can't see the SQL hit by their queries during a `/graphql/` request.
+- `graphene-django` ships **no** equivalent; this card is strawberry-graphql-django parity only.
+
+#### Other
+
+- developer experience.
+- strawberry-graphql-django ships a debug-toolbar middleware; graphene-django ships none.
+- subclass django-debug-toolbar's middleware with two injection paths (GraphiQL HTML + `/graphql/` JSON), a template asset, introspection-skip behavior, and a soft dependency. Single module + tests.
+
 <a id="channels_asgi_router_migration_aid"></a>
 ### [DONE-041-0.0.14 - Channels ASGI router (migration aid)](KANBAN.html#channels_asgi_router_migration_aid)
 
@@ -1230,7 +1261,6 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | Term | Status |
 | --- | --- |
 | [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
-| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
 | [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
 | [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
 | [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
@@ -1240,11 +1270,26 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
 | [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
 | [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
+| [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
+| [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
+| [`DjangoModelPermission`](docs/GLOSSARY.md#djangomodelpermission) | shipped (`0.0.11`) |
+| [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 | [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
 | [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
 | [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.14` |
 | [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.14` |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
+| [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
+| [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
+| [`DjangoType`](docs/GLOSSARY.md#djangotype) | shipped (`0.0.5`) |
+| [`DjangoConnectionField`](docs/GLOSSARY.md#djangoconnectionfield) | shipped (`0.0.9`) |
+| [`DjangoMutationField`](docs/GLOSSARY.md#djangomutationfield) | shipped (`0.0.11`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
 
 #### Package files
 

@@ -224,6 +224,8 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │       ├── _imports.py           # Shared importer-to-``CommandError`` helper for the framework's management commands.
 │       ├── export_schema.py      # manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol.
 │       └── inspect_django_type.py  # manage.py inspect_django_type - print a DjangoType's per-field GraphQL resolution table.
+├── middleware/    # Django HTTP middleware integrations for django-strawberry-framework.
+│   └── debug_toolbar.py          # Debug-toolbar middleware: the django-debug-toolbar SQL-panel window into ``/graphql/`` requests.
 ├── mutations/    # Mutations subsystem - the write side (spec-036).
 │   ├── fields.py                 # ``DjangoMutationField`` - the write-side field factory (spec-036 Slice 3).
 │   ├── inputs.py                 # Generated mutation-input namespace, the public ``FieldError`` envelope, and the payload wrapper.
@@ -235,6 +237,9 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
 │   ├── field_meta.py             # ``FieldMeta`` - precomputed Django field metadata for the optimizer walker.
 │   ├── hints.py                  # ``OptimizerHint`` - typed wrapper for ``Meta.optimizer_hints`` values.
+│   ├── join_taxonomy.py          # Parent/child join-condition taxonomy for nested-connection fetch planning.
+│   ├── lateral_fetch.py          # Postgres ``CROSS JOIN LATERAL`` fetch strategy for nested connections.
+│   ├── nested_fetch.py           # Pluggable nested-connection fetch strategies (the Prisma-style seam).
 │   ├── plans.py                  # ``OptimizationPlan`` - the shape the walker emits and the extension consumes.
 │   ├── selections.py             # Selection-tree traversal substrate - the AST and converted-selection adapters.
 │   └── walker.py                 # Selection-tree walker that converts GraphQL selections into an ``OptimizationPlan``.
@@ -248,6 +253,9 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── resolvers.py              # The sync + async serializer-mutation resolver pipeline (spec-039 Slice 3).
 │   ├── serializer_converter.py   # DRF serializer-field -> Strawberry input conversion + the per-input-field reverse map (spec-039).
 │   └── sets.py                   # The ``SerializerMutation`` base + ``Meta`` validation + the phase-2.5 bind (spec-039 Slice 2).
+├── templates/
+│   └── django_strawberry_framework/
+│       └── debug_toolbar.html
 ├── testing/    # Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
 │   ├── _wrap.py                  # Cooperative connection-method wrapping for consumer test instrumentation.
 │   └── relay.py                  # Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
@@ -319,8 +327,8 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │       ├── _imports.py           # Shared importer-to-``CommandError`` helper for the framework's management commands.
 │       ├── export_schema.py      # manage.py export_schema - print or write the GraphQL SDL for a Strawberry schema symbol.
 │       └── inspect_django_type.py  # manage.py inspect_django_type - print a DjangoType's per-field GraphQL resolution table.
-├── middleware/    # planned by TODO-ALPHA-042-0.0.14 - Debug-toolbar middleware
-│   └── debug_toolbar.py          # planned by TODO-ALPHA-042-0.0.14 - Debug-toolbar middleware
+├── middleware/    # Django HTTP middleware integrations for django-strawberry-framework.
+│   └── debug_toolbar.py          # Debug-toolbar middleware: the django-debug-toolbar SQL-panel window into ``/graphql/`` requests.
 ├── mutations/    # Mutations subsystem - the write side (spec-036).
 │   ├── fields.py                 # ``DjangoMutationField`` - the write-side field factory (spec-036 Slice 3).
 │   ├── inputs.py                 # Generated mutation-input namespace, the public ``FieldError`` envelope, and the payload wrapper.
@@ -332,6 +340,9 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── extension.py              # ``DjangoOptimizerExtension`` - Strawberry schema extension solving N+1 via queryset plans.
 │   ├── field_meta.py             # ``FieldMeta`` - precomputed Django field metadata for the optimizer walker.
 │   ├── hints.py                  # ``OptimizerHint`` - typed wrapper for ``Meta.optimizer_hints`` values.
+│   ├── join_taxonomy.py          # Parent/child join-condition taxonomy for nested-connection fetch planning.
+│   ├── lateral_fetch.py          # Postgres ``CROSS JOIN LATERAL`` fetch strategy for nested connections.
+│   ├── nested_fetch.py           # Pluggable nested-connection fetch strategies (the Prisma-style seam).
 │   ├── plans.py                  # ``OptimizationPlan`` - the shape the walker emits and the extension consumes.
 │   ├── selections.py             # Selection-tree traversal substrate - the AST and converted-selection adapters.
 │   └── walker.py                 # Selection-tree walker that converts GraphQL selections into an ``OptimizationPlan``.
@@ -346,9 +357,12 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── resolvers.py              # The sync + async serializer-mutation resolver pipeline (spec-039 Slice 3).
 │   ├── serializer_converter.py   # DRF serializer-field -> Strawberry input conversion + the per-input-field reverse map (spec-039).
 │   └── sets.py                   # The ``SerializerMutation`` base + ``Meta`` validation + the phase-2.5 bind (spec-039 Slice 2).
+├── templates/
+│   └── django_strawberry_framework/
+│       └── debug_toolbar.html
 ├── testing/    # Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
 │   ├── _wrap.py                  # Cooperative connection-method wrapping for consumer test instrumentation.
-│   ├── client.py                 # planned by TODO-ALPHA-043-0.0.14 - Test client helper
+│   ├── client.py                 # planned by WIP-ALPHA-043-0.0.14 - Test client helper
 │   └── relay.py                  # Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
 ├── types/    # Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
 │   ├── base.py                   # ``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
@@ -386,12 +400,14 @@ Source: `tests/`
 
 ```text
 tests/    # Package-internal tests for django_strawberry_framework.
+├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and Django patch application.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection and DjangoConnectionField tests for Relay pagination behavior.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
+├── test_lateral_pg_parity.py     # Live Postgres byte-parity tests for the lateral fetch strategy (the pg tier).
 ├── test_list_field.py            # DjangoListField tests for root list fields, queryset visibility, and sidecars.
 ├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
 ├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
@@ -423,6 +439,9 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_export_schema.py     # Management command tests for export_schema SDL output and failure modes.
 │   ├── test_imports.py           # Tests for the shared ``import_or_command_error`` management-command helper.
 │   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
+├── middleware/    # Tests for package Django middleware integrations.
+│   ├── debug_toolbar_urls.py     # Test-only URLconf for the spec-042 debug-toolbar middleware tests.
+│   └── test_debug_toolbar.py     # The spec-042 ``DebugToolbarMiddleware`` suite - both dependency states, real requests.
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
 │   ├── test_fields.py            # ``DjangoMutationField`` factory tests (spec-036 Slice 3).
 │   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.
@@ -430,11 +449,15 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_resolvers.py         # Write-pipeline resolver tests (spec-036 Slice 3).
 │   └── test_sets.py              # ``DjangoMutation`` base, ``Meta`` validation, registration, and the phase-2.5 bind.
 ├── optimizer/    # Package tests for optimizer planning and DjangoOptimizerExtension.
+│   ├── _builders.py              # Shared builders for the optimizer test package.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
 │   ├── test_extension.py         # DjangoOptimizerExtension tests for root-gated planning and queryset optimization.
 │   ├── test_field_meta.py        # FieldMeta tests for precomputed relation metadata used by optimizer planning.
 │   ├── test_hints.py             # OptimizerHint tests for Meta.optimizer_hints normalization and validation.
+│   ├── test_join_taxonomy.py     # Tests for the join-condition taxonomy (``optimizer/join_taxonomy.py``).
+│   ├── test_lateral_fetch.py     # Tests for the Postgres lateral fetch strategy (``optimizer/lateral_fetch.py``).
 │   ├── test_multi_db.py          # Optimizer-plan tests for multi-database cooperation and DB-alias preservation.
+│   ├── test_nested_fetch.py      # Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
 │   ├── test_plans.py             # OptimizationPlan tests for plan structure, keys, paths, and select/prefetch state.
 │   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).
@@ -471,7 +494,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 └── utils/    # Package tests for shared utility helpers.
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
     ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039 P1.4).
-    ├── test_imports.py           # Tests for the shared optional-import raising guard (``utils/imports.py``, spec-041 Slice 1).
+    ├── test_imports.py           # Tests for the shared optional-import helpers (``utils/imports.py``, spec-041 Slice 1).
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
     ├── test_permissions.py       # Tests for the shared active-input permission substrate (``utils/permissions.py``).
@@ -551,12 +574,14 @@ Source: `tests/ (+ planned card paths)`
 
 ```text
 tests/    # Package-internal tests for django_strawberry_framework.
+├── _soft_dependency.py           # Shared soft-dependency absence simulation for the optional-import guards.
 ├── conftest.py                   # Shared pytest fixtures and test-suite instrumentation.
 ├── test_apps.py                  # AppConfig tests for package registration and Django patch application.
 ├── test_clean_up.py              # Script tests for clean_up generated-artifact deletion boundaries.
 ├── test_connection.py            # DjangoConnection and DjangoConnectionField tests for Relay pagination behavior.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
+├── test_lateral_pg_parity.py     # Live Postgres byte-parity tests for the lateral fetch strategy (the pg tier).
 ├── test_list_field.py            # DjangoListField tests for root list fields, queryset visibility, and sidecars.
 ├── test_permissions.py           # Cascade-permission tests - ``apply_cascade_permissions`` / ``aapply_cascade_permissions``.
 ├── test_registry.py              # TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
@@ -591,6 +616,9 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_export_schema.py     # Management command tests for export_schema SDL output and failure modes.
 │   ├── test_imports.py           # Tests for the shared ``import_or_command_error`` management-command helper.
 │   └── test_inspect_django_type.py  # Management command tests for inspect_django_type field-resolution tables.
+├── middleware/    # Tests for package Django middleware integrations.
+│   ├── debug_toolbar_urls.py     # Test-only URLconf for the spec-042 debug-toolbar middleware tests.
+│   └── test_debug_toolbar.py     # The spec-042 ``DebugToolbarMiddleware`` suite - both dependency states, real requests.
 ├── mutations/    # Package tests for the mutations subsystem (DjangoMutation + generated inputs).
 │   ├── test_fields.py            # ``DjangoMutationField`` factory tests (spec-036 Slice 3).
 │   ├── test_inputs.py            # Mutation input tests for generated Input/PartialInput, FieldError, and the payload wrapper.
@@ -598,11 +626,15 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_resolvers.py         # Write-pipeline resolver tests (spec-036 Slice 3).
 │   └── test_sets.py              # ``DjangoMutation`` base, ``Meta`` validation, registration, and the phase-2.5 bind.
 ├── optimizer/    # Package tests for optimizer planning and DjangoOptimizerExtension.
+│   ├── _builders.py              # Shared builders for the optimizer test package.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
 │   ├── test_extension.py         # DjangoOptimizerExtension tests for root-gated planning and queryset optimization.
 │   ├── test_field_meta.py        # FieldMeta tests for precomputed relation metadata used by optimizer planning.
 │   ├── test_hints.py             # OptimizerHint tests for Meta.optimizer_hints normalization and validation.
+│   ├── test_join_taxonomy.py     # Tests for the join-condition taxonomy (``optimizer/join_taxonomy.py``).
+│   ├── test_lateral_fetch.py     # Tests for the Postgres lateral fetch strategy (``optimizer/lateral_fetch.py``).
 │   ├── test_multi_db.py          # Optimizer-plan tests for multi-database cooperation and DB-alias preservation.
+│   ├── test_nested_fetch.py      # Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
 │   ├── test_plans.py             # OptimizationPlan tests for plan structure, keys, paths, and select/prefetch state.
 │   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).
@@ -639,7 +671,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 └── utils/    # Package tests for shared utility helpers.
     ├── test_connections.py       # Unit tests for the shared connection planner/resolver contracts.
     ├── test_converters.py        # Tests for the shared fail-loud converter-dispatch skeleton (``utils/converters.py``, spec-039 P1.4).
-    ├── test_imports.py           # Tests for the shared optional-import raising guard (``utils/imports.py``, spec-041 Slice 1).
+    ├── test_imports.py           # Tests for the shared optional-import helpers (``utils/imports.py``, spec-041 Slice 1).
     ├── test_input_values.py      # Tests for the neutral set-input traversal substrate (``utils/input_values.py``).
     ├── test_inputs.py            # Tests for the shared generated-input substrate (``utils/inputs.py``).
     ├── test_permissions.py       # Tests for the shared active-input permission substrate (``utils/permissions.py``).

@@ -125,6 +125,7 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/tests/test_inspect_django_type.py",
     "examples/fakeshop/tests/test_urls.py",
     "tests/__init__.py",
+    "tests/_soft_dependency.py",
     "tests/auth/__init__.py",
     "tests/auth/test_mutations.py",
     "tests/auth/test_queries.py",

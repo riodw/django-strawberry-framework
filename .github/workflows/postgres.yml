@@ -1,39 +1,49 @@
 name: Postgres CI
 
-# Manual-only tier. The Postgres suite spins up a real Postgres service and
-# runs the FULL test suite against it, which is resource-heavy, so it is gated
-# behind workflow_dispatch (the "Run workflow" button) rather than firing on
-# every push / pull_request like Django CI does.
+# Manual-only tier. The Postgres suite spins up a real Postgres server and
+# re-runs the DB-touching tests against it, which is resource-heavy, so it is
+# gated behind workflow_dispatch (the "Run workflow" button) rather than firing
+# on every push / pull_request like Django CI does.
 on:
   workflow_dispatch:
 
 jobs:
   test-postgres:
-    # The Postgres tier: the FULL suite against a real Postgres server via the
-    # FAKESHOP_PG_DSN settings branch. This is where @pytest.mark.pg tests
-    # (vendor-specific SQL, e.g. the LATERAL nested-fetch strategy) actually
-    # execute, and where the whole suite proves vendor portability. Same
-    # fail_under=100 gate: the code is structured so no line is
-    # Postgres-only-reachable (pure SQL builders + stubbed-connection tests
-    # cover strategy internals on sqlite), so coverage holds on both tiers.
+    # The Postgres tier: the DB-touching tests (@pytest.mark.django_db and
+    # @pytest.mark.pg) re-run against a real Postgres server via the
+    # FAKESHOP_PG_DSN settings branch, to prove vendor portability of the ORM /
+    # SQL paths -- including @pytest.mark.pg tests such as the LATERAL
+    # nested-fetch strategy that only make sense on Postgres. Pure-unit tests
+    # never open a connection, so they are vendor-agnostic and are NOT re-run
+    # here (see the `-m` filter on the test step). The sqlite tier (django.yml)
+    # runs the whole suite and owns the fail_under=100 coverage gate on every
+    # push/PR.
     name: Postgres - Python 3.14 - Django latest
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: fakeshop
-          POSTGRES_PASSWORD: fakeshop
-          POSTGRES_DB: fakeshop
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U fakeshop"
-          --health-interval 2s
-          --health-timeout 3s
-          --health-retries 15
     steps:
       - uses: actions/checkout@v6
+      # Launch Postgres FIRST, detached, so its image pull + boot overlap the
+      # uv / dependency / Django-install steps below -- by the time the tests
+      # need it, it is already healthy (the "Wait" step usually returns on the
+      # first poll). Tuned throwaway server: fsync / synchronous_commit /
+      # full_page_writes off + a tmpfs data dir -- durability we don't need,
+      # traded for a faster write-heavy setup phase (12 workers each createdb +
+      # replay migrations, then factories insert fixtures). GitHub's `services:`
+      # syntax can't pass these server args, which is why it runs as a step.
+      - name: Start tuned throwaway Postgres
+        run: |
+          docker run -d --name postgres \
+            -e POSTGRES_USER=fakeshop \
+            -e POSTGRES_PASSWORD=fakeshop \
+            -e POSTGRES_DB=fakeshop \
+            -p 5432:5432 \
+            --tmpfs /var/lib/postgresql/data \
+            --health-cmd "pg_isready -U fakeshop" \
+            --health-interval 2s \
+            --health-timeout 3s \
+            --health-retries 15 \
+            postgres:16 \
+            -c fsync=off -c synchronous_commit=off -c full_page_writes=off
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
@@ -47,6 +57,19 @@ jobs:
         run: |
           uv pip install "Django" --upgrade
           uv run django-admin --version
+      - name: Wait for Postgres to be healthy
+        # Postgres has been booting since right after checkout (while the deps
+        # installed), so this usually passes on the first poll.
+        run: |
+          for _ in $(seq 1 30); do
+            health=$(docker inspect -f '{{.State.Health.Status}}' postgres 2>/dev/null || true)
+            echo "  health: ${health:-<none>}"
+            [ "$health" = "healthy" ] && exit 0
+            sleep 2
+          done
+          echo "::error::Postgres did not become healthy in time"
+          docker logs postgres || true
+          exit 1
       - name: Run Tests (Postgres)
         # Two overrides vs the pytest.ini defaults, both carried by a single
         # `-o addopts=...`, which REPLACES the ini `addopts` wholesale -- so we
@@ -72,6 +95,14 @@ jobs:
         #    "re-measure coverage". (We strip `--cov` via addopts rather than
         #    passing `--no-cov`, which would emit a warning that
         #    filterwarnings=error turns into a failure.)
+        #
+        # 3. `-m "django_db or pg"`: only the DB-touching tests re-run here.
+        #    Pure-unit tests never open a connection, so running them against
+        #    Postgres proves nothing about vendor portability -- they are fully
+        #    covered on the sqlite tier. Audited: every DB test carries the
+        #    django_db or pg marker (including tests that also take DB access
+        #    from a fixture), so nothing DB-touching is dropped. Cuts the tier
+        #    from ~3000 tests to ~900.
         env:
           FAKESHOP_PG_DSN: postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop
-        run: uv run pytest -o addopts="-v -n 12 --dist loadscope"
+        run: uv run pytest -o addopts="-v -n 12 --dist loadscope" -m "django_db or pg"

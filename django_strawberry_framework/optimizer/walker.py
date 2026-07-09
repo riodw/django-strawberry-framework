@@ -42,7 +42,8 @@ from .plans import (
     runtime_path_from_info,
 )
 from .selections import (
-    connection_count_required,
+    connection_has_next_page_selected,
+    connection_total_count_selected,
     included_field_selections,
     is_fragment,
     named_children,
@@ -1599,19 +1600,38 @@ def _plan_connection_relation(
             enable_only=enable_only,
         )
 
-    # Conditional total count (workstream B): annotate the per-partition
-    # ``Count(1) OVER`` only when the selection can observe it (``totalCount``
-    # or ``pageInfo.hasNextPage``, via the shared
-    # ``selections.py::connection_count_required``) or the window SHAPE needs
-    # it (``window_range_plan.requires_total_count``: the ambiguous-empty
-    # marker shapes serve their counts from it, workstream C, and an unbounded
-    # limit keeps the count conservatively). The common ``first: N`` page
-    # selecting only edges/cursors/``hasPreviousPage`` drops the annotation.
-    with_total_count = window_range_plan(
-        offset=offset,
-        limit=limit,
-        reverse=reverse,
-    ).requires_total_count or connection_count_required(sel)
+    # Conditional total count (workstream B) + count-free ``hasNextPage``
+    # (the n+1 overfetch probe): annotate the per-partition ``Count(1) OVER``
+    # only when something needs it. The two selection observers come from the
+    # shared per-selection walks (``selections.py``), computed ONCE here and
+    # reused for both the count decision and the probe decision (their OR is
+    # what ``connection_count_required`` returns; splitting them avoids
+    # re-walking the selection). ``totalCount`` selected or the window SHAPE
+    # needing the count (``requires_total_count``: the ambiguous-empty marker
+    # shapes serve counts from it, workstream C; an unbounded limit keeps it
+    # conservatively) forces the annotation. A plain ``first: N`` page
+    # selecting ``pageInfo.hasNextPage`` but NOT ``totalCount`` takes the probe
+    # instead: overfetch one sentinel row (``fetch_*`` bounds) so the row's
+    # presence answers ``hasNextPage`` without a partition scan. The probe
+    # decision is ``WindowRangePlan.wants_next_page_probe``, made HERE only:
+    # ``sel`` is the merged (union) selection when same-argument aliases share
+    # this window, so the resolver must not re-derive the probe per response
+    # key - it reads the decision back off the window's physical shape (count
+    # annotation absent on a plain first page), which stays truthful only
+    # while ``next_page_probe`` and ``with_total_count`` below remain mutually
+    # exclusive (``_resolve_from_window`` documents that invariant).
+    range_plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
+    total_selected = connection_total_count_selected(sel)
+    has_next_selected = connection_has_next_page_selected(sel)
+    next_page_probe = range_plan.wants_next_page_probe(
+        has_next_selected=has_next_selected,
+        total_selected=total_selected,
+    )
+    with_total_count = (
+        range_plan.requires_total_count
+        or total_selected
+        or (has_next_selected and not next_page_probe)
+    )
     # (g) Hand the fully-resolved fetch request to the active strategy (the
     # nested_fetch.py seam): the windowed prefetch is the default backend; a
     # strategy returning ``False`` leaves the selection unplanned, keeping the
@@ -1627,6 +1647,7 @@ def _plan_connection_relation(
         limit=limit,
         reverse=reverse,
         with_total_count=with_total_count,
+        next_page_probe=next_page_probe,
         to_attr=_relation_connection_to_attr(relation_field_name),
         lookup=f"{prefix}{instance_accessor(django_field)}",
     )

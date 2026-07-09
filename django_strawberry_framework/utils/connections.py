@@ -126,6 +126,23 @@ class WindowRangePlan:
     unambiguous ``first: N`` shape a renderer may express as plain
     ``ORDER BY``/``LIMIT``; ``requires_total_count`` marks windows whose
     resolution needs the partition count regardless of the selected fields.
+
+    ``next_page_probe`` marks the count-free ``hasNextPage`` overfetch (the
+    n+1 probe): a ``plain_first_page`` window that fetches ONE sentinel row
+    past the page so ``hasNextPage`` is answered by the sentinel's presence
+    instead of a ``COUNT(1) OVER (PARTITION BY ...)`` that scans the whole
+    partition. It is honored only on the ``plain_first_page`` shape (every
+    other shape already needs the count for an independent reason), so it and
+    ``add_marker_rows`` are mutually exclusive by construction. The ``+1`` lives
+    in exactly one place - the ``fetch_upper_bound`` / ``fetch_limit`` derived
+    bounds the renderers read UNCONDITIONALLY; ``upper_bound`` / ``limit`` keep
+    their PAGE semantics (the resolver's split and the marker predicate depend
+    on that). The plan-time decision is ``wants_next_page_probe``, the pure
+    predicate the walker calls; the resolver does NOT re-derive it from the
+    selection (same-argument aliases share one window whose shape was fixed
+    from the MERGED selection, so a per-alias re-derivation would drift) - it
+    reads the probe off the window's physical shape instead
+    (``connection.py::_resolve_from_window``).
     """
 
     offset: int
@@ -136,9 +153,67 @@ class WindowRangePlan:
     add_marker_rows: bool
     plain_first_page: bool
     requires_total_count: bool
+    next_page_probe: bool = False
+
+    @property
+    def fetch_upper_bound(self) -> int | None:
+        """The inclusive row-number ceiling to FETCH (page bound plus the probe sentinel).
+
+        Equals ``upper_bound`` whenever the probe is off, so every existing
+        renderer call site and test is untouched by construction; adds the one
+        sentinel row for the probe shape. The ``+1`` exists here and in
+        ``fetch_limit`` only - the renderers never re-derive it.
+        """
+        if self.next_page_probe and self.upper_bound is not None:
+            return self.upper_bound + 1
+        return self.upper_bound
+
+    @property
+    def fetch_limit(self) -> int | None:
+        """The plain-first-page in-branch ``LIMIT`` to FETCH (page size plus the probe sentinel).
+
+        The lateral fast branch reads this instead of ``limit``; equal to
+        ``limit`` when the probe is off.
+        """
+        if self.next_page_probe and self.limit is not None:
+            return self.limit + 1
+        return self.limit
+
+    def wants_next_page_probe(self, *, has_next_selected: bool, total_selected: bool) -> bool:
+        """Whether this window should serve ``hasNextPage`` from an overfetch probe.
+
+        True only for the ``plain_first_page`` shape (``first: N`` from the
+        start) when ``pageInfo.hasNextPage`` is selected and ``totalCount`` is
+        NOT: the sentinel row answers ``hasNextPage`` without the per-partition
+        count. Every other shape already forces the count (ambiguous /
+        unbounded / reversed windows via ``requires_total_count``, or a
+        genuinely-observable ``totalCount``), so the internal
+        ``plain_first_page`` re-check makes this self-normalizing and safe to
+        call on any plan.
+
+        The single implementation of the PLAN-time probe decision, called by
+        ``walker.py::_plan_connection_relation`` (feeding ``has_next_selected``
+        / ``total_selected`` from the ``optimizer/selections.py`` walks over
+        the merged selection). The resolver deliberately does NOT call this:
+        same-argument aliases share one window planned from the MERGED
+        selection, so re-deriving per alias from each response key's ``info``
+        would drift from the shared shape.
+        ``connection.py::_resolve_from_window`` instead reads the probe off the
+        window's physical shape (a ``plain_first_page`` window carrying no
+        ``_dst_total_count`` annotation), which IS this decision materialized -
+        sound because the walker keeps ``next_page_probe`` and
+        ``with_total_count`` mutually exclusive.
+        """
+        return self.plain_first_page and has_next_selected and not total_selected
 
 
-def window_range_plan(*, offset: int, limit: int | None, reverse: bool) -> WindowRangePlan:
+def window_range_plan(
+    *,
+    offset: int,
+    limit: int | None,
+    reverse: bool,
+    next_page_probe: bool = False,
+) -> WindowRangePlan:
     """Resolve one slice window into its shared ``WindowRangePlan``.
 
     Pure and renderer-agnostic. Owns the two sentinel rules spelled once for
@@ -151,6 +226,12 @@ def window_range_plan(*, offset: int, limit: int | None, reverse: bool) -> Windo
       (unreachable through ``SliceMetadata`` - it raises on negative
       ``first`` / ``last`` - but direct callers get one deliberate rule
       instead of per-renderer drift).
+
+    ``next_page_probe`` (the count-free ``hasNextPage`` overfetch) is honored
+    only on the ``plain_first_page`` shape and ignored everywhere else, so a
+    caller may pass the raw decision through without re-checking the shape and
+    the ``add_marker_rows`` / ``next_page_probe`` fields stay mutually
+    exclusive by construction.
     """
     if limit == sys.maxsize:
         limit = None
@@ -158,6 +239,7 @@ def window_range_plan(*, offset: int, limit: int | None, reverse: bool) -> Windo
     bounded = limit is not None and limit >= 0
     upper_bound = (limit if reverse else offset + limit) if bounded else None
     ambiguous = is_ambiguous_empty_window(offset, limit, reverse=reverse)
+    plain_first_page = not reverse and offset == 0 and bounded and limit > 0
     return WindowRangePlan(
         offset=offset,
         limit=limit,
@@ -165,9 +247,52 @@ def window_range_plan(*, offset: int, limit: int | None, reverse: bool) -> Windo
         lower_bound=lower_bound,
         upper_bound=upper_bound,
         add_marker_rows=ambiguous and (lower_bound is not None or upper_bound is not None),
-        plain_first_page=not reverse and offset == 0 and bounded and limit > 0,
+        plain_first_page=plain_first_page,
         requires_total_count=ambiguous or limit is None,
+        next_page_probe=next_page_probe and plain_first_page,
     )
+
+
+def split_window_rows(
+    rows: list[Any],
+    range_plan: WindowRangePlan,
+    *,
+    row_number: str,
+) -> tuple[list[Any], bool]:
+    """Split annotated window ``rows`` into page rows and dropped sentinel rows.
+
+    Returns ``(page_rows, probe_row_seen)``. The one home for sentinel-row
+    exclusion, owning BOTH sentinel shapes the window may carry - and they are
+    mutually exclusive (a window is ``add_marker_rows`` XOR ``next_page_probe``
+    XOR neither):
+
+    - ``add_marker_rows`` (the ambiguous ``after:`` / ``first: 0`` shapes,
+      workstream C): each partition's row 1 is kept as a marker so an empty
+      page and a childless parent stay distinguishable. The page proper is the
+      rows past the offset (``limit == 0`` has no page at all); ``probe_row_seen``
+      is ``False`` (markers do not signal a next page).
+    - ``next_page_probe`` (the count-free ``hasNextPage`` overfetch): the window
+      fetched one row past the page (``rn == upper_bound + 1``). The page is the
+      rows up to ``upper_bound``; ``probe_row_seen`` reports whether the sentinel
+      was present, which IS ``hasNextPage`` - no ``_dst_total_count`` needed.
+
+    Render-agnostic: works identically for the ORM window and the lateral SQL
+    because both keep FORWARD row numbers and the lateral fast branch computes
+    ``rn`` BEFORE its ``LIMIT`` applies, so the sentinel is always the
+    ``rn == upper_bound + 1`` row regardless of which renderer produced it.
+    This helper plus the ``hasNextPage`` derivation in
+    ``connection.py::_resolve_from_window`` are the resolve-side surface a
+    future keyset-cursor backend (which makes ``rn`` page-relative) has to
+    touch - everything else consumes ``(page_rows, probe_row_seen)`` unchanged.
+    """
+    if range_plan.add_marker_rows:
+        if range_plan.limit == 0:
+            return [], False
+        return [row for row in rows if getattr(row, row_number) > range_plan.offset], False
+    if range_plan.next_page_probe and range_plan.upper_bound is not None:
+        page_rows = [row for row in rows if getattr(row, row_number) <= range_plan.upper_bound]
+        return page_rows, len(page_rows) < len(rows)
+    return list(rows), False
 
 
 @dataclass(frozen=True)

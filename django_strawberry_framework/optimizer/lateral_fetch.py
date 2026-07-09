@@ -121,6 +121,7 @@ class LateralWindowSpec:
     limit: int | None
     reverse: bool
     with_total_count: bool
+    next_page_probe: bool = False
 
 
 def build_lateral_sql(
@@ -200,13 +201,22 @@ def build_lateral_sql(
     # rendered as raw SQL - only the rendering is lateral-specific.
     range_parts: list[str] = []
     params: list = [list(parent_ids)]
-    range_plan = window_range_plan(offset=spec.offset, limit=spec.limit, reverse=spec.reverse)
+    range_plan = window_range_plan(
+        offset=spec.offset,
+        limit=spec.limit,
+        reverse=spec.reverse,
+        next_page_probe=spec.next_page_probe,
+    )
     if range_plan.plain_first_page:
         # ``first: N``: in-branch ORDER BY + LIMIT (see the docstring). The
         # row numbers are computed BEFORE the limit applies, so the returned
-        # rows carry rn 1..N exactly as the filtered shape would.
+        # rows carry rn 1..N exactly as the filtered shape would. ``fetch_limit``
+        # is the page size plus the one ``next_page_probe`` sentinel row (equal
+        # to ``limit`` when the probe is off), so the count-free ``hasNextPage``
+        # overfetch is a single-token change here and the resolver drops the
+        # sentinel.
         lateral_sql += f" ORDER BY {order_sql(descending_flip=False)} LIMIT %s"
-        params.append(range_plan.limit)
+        params.append(range_plan.fetch_limit)
         where_sql = ""
     else:
         if range_plan.lower_bound is not None:
@@ -516,6 +526,7 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
         limit=request.limit,
         reverse=request.reverse,
         with_total_count=request.with_total_count,
+        next_page_probe=request.next_page_probe,
     )
 
 

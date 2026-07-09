@@ -747,6 +747,36 @@ class TestApplyWindowPagination:
         assert ">" in sql
         assert "<=" in sql
 
+    def test_next_page_probe_overfetches_one_row_without_the_count(self):
+        """``next_page_probe=True`` bounds to ``limit + 1`` and drops the count.
+
+        The count-free ``hasNextPage`` render: the plain first page fetches ONE
+        sentinel row past the page (``<= 4`` for ``first: 3``, not ``<= 3``) and
+        omits ``_dst_total_count`` entirely - the resolver derives ``hasNextPage``
+        from the sentinel's presence. The renderer reads ``fetch_upper_bound``
+        and never mentions the probe itself.
+        """
+        qs = self._windowed(offset=0, limit=3, with_total_count=False, next_page_probe=True)
+        annotations = qs.query.annotations
+        assert WINDOW_ROW_NUMBER in annotations
+        assert WINDOW_TOTAL_COUNT not in annotations
+        sql = str(qs.query).upper()
+        assert "<= 4" in sql  # the n+1 sentinel bound
+        assert "<= 3" not in sql  # NOT the plain page bound
+        assert " OR " not in sql  # a probe is not a marker shape
+
+    def test_next_page_probe_ignored_off_the_plain_first_page_shape(self):
+        """The probe flag is inert on non-plain shapes (bound stays the page bound).
+
+        ``window_range_plan`` normalizes ``next_page_probe`` to the
+        ``plain_first_page`` shape, so an ``after``-offset window passed the flag
+        keeps its plain ``<= offset + limit`` bound - no accidental overfetch.
+        """
+        qs = self._windowed(offset=2, limit=3, next_page_probe=True)
+        sql = str(qs.query).upper()
+        assert "<= 5" in sql  # offset 2 + limit 3, no +1
+        assert "<= 6" not in sql
+
     def test_with_total_count_false_reverse_branch_still_bounds(self):
         """The reverse (last-only) branch honors ``with_total_count=False`` too."""
         qs = self._windowed(offset=0, limit=2, reverse=True, with_total_count=False)

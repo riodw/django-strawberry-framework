@@ -240,6 +240,30 @@ def test_sql_count_free_page_omits_the_count_window():
     assert params == [[1], 2]
 
 
+def test_sql_next_page_probe_overfetches_one_row_in_branch():
+    """The count-free ``hasNextPage`` probe: in-branch ``LIMIT limit + 1``, no count.
+
+    The lateral half of the win. ``fetch_limit`` (``2 + 1``) is a single-token
+    change to the plain-first-page ``LIMIT`` and the count window is gone, so a
+    ``first: 2`` page reads ~3 rows per partition instead of scanning it to
+    ``COUNT``. The resolver drops the sentinel and derives ``hasNextPage`` from
+    its presence.
+    """
+    spec = _build_lateral_spec(
+        _shelf_books_request(with_total_count=False, next_page_probe=True),
+    )
+    sql, params = build_lateral_sql(spec, [7], quote_name=_quote)
+    assert "_dst_total_count" not in sql
+    assert "COUNT(1)" not in sql
+    assert sql.endswith(
+        ' ORDER BY "library_book"."title" ASC, "library_book"."id" ASC LIMIT %s)'
+        ' "__dst_window"'
+        ' ORDER BY "__dst_parents"."__dst_parent_id", "__dst_window"."_dst_row_number"',
+    )
+    assert '"__dst_window" WHERE' not in sql  # bounded in-branch, no outer filter.
+    assert params == [[7], 3]  # limit 2 + 1 sentinel row.
+
+
 def test_sql_offset_shape_keeps_the_marker_row():
     """Overshot ``after:``: the ambiguous-shape ``OR rn = 1`` marker survives."""
     spec = _build_lateral_spec(_shelf_books_request(offset=3, limit=2))

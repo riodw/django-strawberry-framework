@@ -2199,7 +2199,13 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
         is None
     )
 
-    # ``pageInfo { hasNextPage }`` requested: the resolve-time predicate walk fires.
+    # ``pageInfo { hasNextPage }`` requested on a NON-probe shape: the
+    # resolve-time predicate walk fires and the drift guard still returns None.
+    # A reversed ``last:`` window is not the count-free probe shape
+    # (``plain_first_page`` is forward/offset-0 only), so the walker always
+    # plans its count - a count-less one here IS drift. The forward plain
+    # ``first: N`` shape is instead SERVED by the n+1 probe (covered live), so
+    # it is deliberately not the shape exercised here.
     has_next_info = SimpleNamespace(
         selected_fields=[
             SimpleNamespace(
@@ -2214,6 +2220,7 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
             info=has_next_info,
             offset=0,
             limit=2,
+            reverse=True,
             want_count=False,
         )
         is None

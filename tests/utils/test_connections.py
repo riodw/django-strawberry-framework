@@ -6,6 +6,8 @@ optimizer walker (plan time) and the Relay resolver (resolve time) must spell
 identically.
 """
 
+from types import SimpleNamespace
+
 import pytest
 from strawberry.relay.types import to_base64
 from strawberry.relay.utils import SliceMetadata
@@ -20,6 +22,8 @@ from django_strawberry_framework.utils.connections import (
     derive_connection_window_bounds,
     has_connection_sidecar_input,
     has_connection_sidecar_kwargs,
+    split_window_rows,
+    window_range_plan,
 )
 
 # ``max_results`` is always passed explicitly below, so ``from_arguments`` never
@@ -164,3 +168,146 @@ def test_has_connection_sidecar_kwargs_combines_extraction_and_predicate():
     assert has_connection_sidecar_kwargs({"order_by": "O"}) is True
     assert has_connection_sidecar_kwargs({"filter": None, "order_by": None}) is False
     assert has_connection_sidecar_kwargs({}) is False
+
+
+# ---------------------------------------------------------------------------
+# Count-free ``hasNextPage`` overfetch probe (the n+1 probe).
+# ---------------------------------------------------------------------------
+
+
+def test_next_page_probe_only_on_plain_first_page_with_has_next_not_total():
+    """``wants_next_page_probe`` is the shape+selection gate for the probe.
+
+    True only for the plain ``first: N`` shape when ``hasNextPage`` is selected
+    and ``totalCount`` is NOT; the internal ``plain_first_page`` re-check makes
+    it self-normalizing and safe to call on any plan.
+    """
+    plain = window_range_plan(offset=0, limit=3, reverse=False)
+    assert plain.plain_first_page is True
+    assert plain.wants_next_page_probe(has_next_selected=True, total_selected=False) is True
+    # totalCount observable -> the count is genuinely needed, no probe.
+    assert plain.wants_next_page_probe(has_next_selected=True, total_selected=True) is False
+    # hasNextPage not selected -> nothing to serve from the sentinel.
+    assert plain.wants_next_page_probe(has_next_selected=False, total_selected=False) is False
+    # Non-plain shapes never probe, regardless of the selection.
+    for offset, limit, reverse in [
+        (5, 3, False),
+        (0, 0, False),
+        (0, 3, True),
+        (0, None, False),
+    ]:
+        plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
+        assert plan.wants_next_page_probe(has_next_selected=True, total_selected=False) is False
+
+
+def test_next_page_probe_field_normalized_to_plain_first_page():
+    """The ``next_page_probe`` kwarg is honored only on the ``plain_first_page`` shape."""
+    assert window_range_plan(
+        offset=0,
+        limit=3,
+        reverse=False,
+        next_page_probe=True,
+    ).next_page_probe
+    # Inert everywhere else even when the caller passes it through.
+    for offset, limit, reverse in [
+        (5, 3, False),
+        (0, 0, False),
+        (0, 3, True),
+        (0, None, False),
+    ]:
+        plan = window_range_plan(
+            offset=offset,
+            limit=limit,
+            reverse=reverse,
+            next_page_probe=True,
+        )
+        assert plan.next_page_probe is False
+
+
+def test_fetch_bounds_add_one_only_when_probe_active():
+    """``fetch_upper_bound`` / ``fetch_limit`` add the single sentinel row iff probing.
+
+    Equal to the PAGE bounds (``upper_bound`` / ``limit``) whenever the probe is
+    off, so every existing renderer call site is untouched by construction.
+    """
+    off = window_range_plan(offset=0, limit=3, reverse=False)
+    assert off.fetch_upper_bound == off.upper_bound == 3
+    assert off.fetch_limit == off.limit == 3
+    on = window_range_plan(offset=0, limit=3, reverse=False, next_page_probe=True)
+    assert on.upper_bound == 3  # page bound unchanged
+    assert on.limit == 3
+    assert on.fetch_upper_bound == 4  # +1 sentinel
+    assert on.fetch_limit == 4
+
+
+def test_probe_and_marker_shapes_are_mutually_exclusive():
+    """``next_page_probe`` and ``add_marker_rows`` are never both true.
+
+    The property the whole design rests on (the probe is a sibling sentinel to
+    the marker row, never a co-resident): enforced across the window-shape input
+    space, not merely asserted. ``wants_next_page_probe`` likewise never fires
+    on a marker shape.
+    """
+    for offset in (0, 1, 5):
+        for limit in (
+            0,
+            1,
+            3,
+            None,
+        ):
+            for reverse in (False, True):
+                plan = window_range_plan(
+                    offset=offset,
+                    limit=limit,
+                    reverse=reverse,
+                    next_page_probe=True,
+                )
+                assert not (plan.add_marker_rows and plan.next_page_probe)
+                if plan.wants_next_page_probe(has_next_selected=True, total_selected=False):
+                    assert plan.add_marker_rows is False
+                    assert plan.plain_first_page is True
+
+
+def _rows(*row_numbers):
+    return [SimpleNamespace(rn=n) for n in row_numbers]
+
+
+def test_split_window_rows_marker_offset_shape_drops_the_marker():
+    """Ambiguous ``after:`` shape: rows at or below the offset are dropped markers."""
+    plan = window_range_plan(offset=5, limit=2, reverse=False)
+    assert plan.add_marker_rows is True
+    page_rows, probe_seen = split_window_rows(_rows(1, 6, 7), plan, row_number="rn")
+    assert [r.rn for r in page_rows] == [6, 7]
+    assert probe_seen is False
+
+
+def test_split_window_rows_first_zero_shape_has_no_page():
+    """``first: 0`` marker shape: the marker is kept in SQL but the page is empty."""
+    plan = window_range_plan(offset=0, limit=0, reverse=False)
+    assert plan.add_marker_rows is True
+    page_rows, probe_seen = split_window_rows(_rows(1), plan, row_number="rn")
+    assert page_rows == []
+    assert probe_seen is False
+
+
+def test_split_window_rows_probe_shape_reports_and_drops_the_sentinel():
+    """Probe shape: rows past ``upper_bound`` are the dropped sentinel = ``hasNextPage``."""
+    plan = window_range_plan(offset=0, limit=3, reverse=False, next_page_probe=True)
+    # A full page plus the overfetched sentinel row (rn 4).
+    page_rows, probe_seen = split_window_rows(_rows(1, 2, 3, 4), plan, row_number="rn")
+    assert [r.rn for r in page_rows] == [1, 2, 3]
+    assert probe_seen is True
+    # A short page (no sentinel) -> no next page.
+    page_rows, probe_seen = split_window_rows(_rows(1, 2), plan, row_number="rn")
+    assert [r.rn for r in page_rows] == [1, 2]
+    assert probe_seen is False
+
+
+def test_split_window_rows_plain_shape_passes_rows_through():
+    """A non-marker, non-probe window returns every row and no sentinel."""
+    plan = window_range_plan(offset=0, limit=3, reverse=False)
+    assert plan.add_marker_rows is False
+    assert plan.next_page_probe is False
+    page_rows, probe_seen = split_window_rows(_rows(1, 2, 3), plan, row_number="rn")
+    assert [r.rn for r in page_rows] == [1, 2, 3]
+    assert probe_seen is False

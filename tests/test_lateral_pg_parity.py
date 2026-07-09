@@ -164,6 +164,8 @@ _FULL_PAGE = (
     "edges { cursor node { title } } totalCount "
     "pageInfo { hasPreviousPage hasNextPage startCursor endCursor }"
 )
+# ``hasNextPage`` selected but NOT ``totalCount`` - the count-free n+1 probe shape.
+_NEXT_PAGE_PROBE = "edges { cursor node { title } } pageInfo { hasNextPage }"
 # ``arrayconnection`` positional cursors: index 0 -> offset 1 (a mid-page
 # ``after``), index 49 -> offset 50 (overshoots every partition).
 _MID_CURSOR = to_base64("arrayconnection", "0")
@@ -199,6 +201,23 @@ def test_reverse_fk_parity_across_pagination_shapes(arguments, page, count_free)
         f"{{ shelves {{ id booksConnection{arguments} {{ {page} }} }} }}",
         count_free=count_free,
     )
+    assert len(data["shelves"]) == 3  # including the childless shelf C.
+
+
+def test_next_page_probe_parity_is_count_free():
+    """``first: N`` + ``hasNextPage`` (no ``totalCount``): the count-free n+1 probe.
+
+    Both strategies serve identical data - ``hasNextPage`` included - with NO
+    ``_dst_total_count`` / ``COUNT`` window in the executed SQL: the plain first
+    page overfetches one sentinel row instead of scanning the partition to
+    count. The exact ``LIMIT page + 1`` builder shape is pinned on SQLite
+    (``test_sql_next_page_probe_overfetches_one_row_in_branch``); here the bar is
+    that a live Postgres server pages byte-identically without a count.
+    """
+    _seed_library()
+    query = f"{{ shelves {{ id booksConnection(first: 2) {{ {_NEXT_PAGE_PROBE} }} }} }}"
+    data, captured = _assert_parity(query, count_free=True)
+    assert "COUNT(" not in captured[1]["sql"].upper()
     assert len(data["shelves"]) == 3  # including the childless shelf C.
 
 

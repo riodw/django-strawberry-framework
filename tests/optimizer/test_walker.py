@@ -2454,17 +2454,19 @@ def test_nested_connection_planned_as_windowed_prefetch():
     [
         pytest.param(None, False, id="edges-only"),
         pytest.param("totalCount", True, id="total-count"),
-        pytest.param("hasNextPage", True, id="page-info-has-next"),
+        pytest.param("hasNextPage", False, id="page-info-has-next"),
         pytest.param("hasPreviousPage", False, id="page-info-has-previous-only"),
     ],
 )
 def test_nested_connection_total_count_planned_only_when_observable(count_observer, expected):
-    """The count window follows ``connection_count_required`` (workstream B).
+    """The count window follows workstream B + the count-free ``hasNextPage`` probe.
 
-    ``totalCount`` and ``pageInfo { hasNextPage }`` are the two selections the
-    fast path derives from ``_dst_total_count``; ``hasPreviousPage`` (row-number
-    only) and plain edges do NOT keep the annotation. ``first: N`` with no
-    ``after`` keeps ``offset == 0`` so the shape itself never forces the count.
+    Only ``totalCount`` keeps the ``_dst_total_count`` annotation on this plain
+    ``first: N`` shape. ``pageInfo { hasNextPage }`` is served count-free by the
+    n+1 overfetch probe (its own pin below), so it does NOT keep the count;
+    ``hasPreviousPage`` (row-number only) and plain edges never did. ``first: N``
+    with no ``after`` keeps ``offset == 0`` so the shape itself never forces the
+    count.
     """
     from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
 
@@ -2491,6 +2493,79 @@ def test_nested_connection_total_count_planned_only_when_observable(count_observ
         )
         prefetch = _prefetch_entry(plan)
         assert (WINDOW_TOTAL_COUNT in prefetch.queryset.query.annotations) is expected
+    finally:
+        registry.clear()
+
+
+def test_nested_connection_first_page_has_next_uses_probe_not_count():
+    """``first: N`` + ``hasNextPage`` (no ``totalCount``) takes the n+1 probe.
+
+    The count-free ``hasNextPage`` win: instead of the per-partition
+    ``_dst_total_count`` scan, the plain first page overfetches ONE sentinel row
+    (bound ``limit + 1``) so the resolver derives ``hasNextPage`` from the
+    sentinel's presence. The two SQL-shape facts that prove it: NO
+    ``_dst_total_count`` annotation, and the forward row-number bound is
+    ``limit + 1`` (``<= 4`` for ``first: 3``), not the page's ``<= 3``.
+    """
+    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
+
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        connection = _conn_sel(
+            "booksConnection",
+            node_selections=[_sel("title")],
+            arguments={"first": 3},
+        )
+        connection.selections.append(_sel("pageInfo", selections=[_sel("hasNextPage")]))
+        plan = plan_optimizations(
+            [connection],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert WINDOW_TOTAL_COUNT not in prefetch.queryset.query.annotations
+        sql = str(prefetch.queryset.query).upper()
+        assert "<= 4" in sql  # the n+1 overfetch sentinel bound.
+        assert "<= 3" not in sql  # NOT the plain page bound.
+    finally:
+        registry.clear()
+
+
+def test_nested_connection_first_page_total_count_keeps_count_and_skips_probe():
+    """``totalCount`` selected keeps the count window and does NOT overfetch.
+
+    The probe is only for the count-free ``hasNextPage`` shape: once
+    ``totalCount`` is observable the count is genuinely needed, so it stays and
+    the page bound is the plain ``limit`` (``<= 3`` for ``first: 3``), never the
+    ``limit + 1`` sentinel bound - even with ``hasNextPage`` also selected.
+    """
+    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
+
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        connection = _conn_sel(
+            "booksConnection",
+            node_selections=[_sel("title")],
+            arguments={"first": 3},
+        )
+        connection.selections.append(_sel("totalCount"))
+        connection.selections.append(_sel("pageInfo", selections=[_sel("hasNextPage")]))
+        plan = plan_optimizations(
+            [connection],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert WINDOW_TOTAL_COUNT in prefetch.queryset.query.annotations
+        sql = str(prefetch.queryset.query).upper()
+        assert "<= 3" in sql  # the plain page bound - no overfetch sentinel.
+        assert "<= 4" not in sql
     finally:
         registry.clear()
 
@@ -3035,6 +3110,53 @@ def test_identical_alias_args_merge_and_plan():
         assert prefetch.to_attr == "_dst_books_connection"
         # Both response keys recorded as planned (one resolver identity per key).
         assert len(plan.planned_resolver_keys) == 2
+    finally:
+        registry.clear()
+
+
+def test_alias_merge_totalCount_observer_keeps_count_and_skips_probe():
+    """A ``totalCount``-observing alias keeps the count for the shared window.
+
+    Same-argument aliases merge into ONE window carrying the UNION of every
+    alias's children (spec-033 Decision 6). So ``a`` selecting only
+    ``pageInfo { hasNextPage }`` (which alone would take the count-free probe)
+    plus ``b`` selecting ``totalCount`` must keep ``_dst_total_count`` for the
+    shared window and skip the probe: the ``not total_selected`` clause reads
+    the merged selection, so one alias observing the count is conservative for
+    all. Proven by the count annotation surviving on the single planned window.
+    """
+    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
+
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        has_next = _conn_sel(
+            "booksConnection",
+            node_selections=[_sel("title")],
+            arguments={"first": 2},
+            alias="a",
+        )
+        has_next.selections.append(_sel("pageInfo", selections=[_sel("hasNextPage")]))
+        total = _conn_sel(
+            "booksConnection",
+            node_selections=[_sel("title")],
+            arguments={"first": 2},
+            alias="b",
+        )
+        total.selections.append(_sel("totalCount"))
+        plan = plan_optimizations(
+            [has_next, total],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        # One merged window; the count survives (probe skipped).
+        assert WINDOW_TOTAL_COUNT in prefetch.queryset.query.annotations
+        sql = str(prefetch.queryset.query).upper()
+        assert "<= 2" in sql  # plain page bound - no overfetch sentinel.
+        assert "<= 3" not in sql
     finally:
         registry.clear()
 

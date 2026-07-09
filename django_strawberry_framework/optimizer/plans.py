@@ -782,6 +782,7 @@ def apply_window_pagination(
     limit: int | None = None,
     reverse: bool = False,
     with_total_count: bool = True,
+    next_page_probe: bool = False,
 ) -> Any:
     """Annotate row-number / total-count windows and filter to the requested slice.
 
@@ -830,11 +831,20 @@ def apply_window_pagination(
     - the offset filter still applies.
 
     The range/marker DECISIONS (bounds, sentinel handling, the ambiguous-shape
-    marker) come from the shared ``window_range_plan`` - the same plan
-    ``build_lateral_sql`` renders as raw SQL - so the two window dialects
-    cannot drift; this function owns only the ``Q``-object rendering.
+    marker, and the count-free ``next_page_probe`` overfetch) come from the
+    shared ``window_range_plan`` - the same plan ``build_lateral_sql`` renders
+    as raw SQL - so the two window dialects cannot drift; this function owns
+    only the ``Q``-object rendering. It renders to the ``fetch_upper_bound``
+    (page bound plus the one probe sentinel when ``next_page_probe`` is set);
+    the resolver drops the sentinel and derives ``hasNextPage`` from its
+    presence (``connection.py::_resolve_from_window``).
     """
-    range_plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
+    range_plan = window_range_plan(
+        offset=offset,
+        limit=limit,
+        reverse=reverse,
+        next_page_probe=next_page_probe,
+    )
     queryset = queryset.order_by(*order_by)
     annotations = {
         WINDOW_ROW_NUMBER: Window(
@@ -867,7 +877,7 @@ def apply_window_pagination(
     if range_plan.lower_bound is not None:
         range_q = Q(**{f"{WINDOW_ROW_NUMBER}__gt": range_plan.lower_bound})
     if range_plan.upper_bound is not None:
-        upper = Q(**{f"{WINDOW_ROW_NUMBER}__lte": range_plan.upper_bound})
+        upper = Q(**{f"{WINDOW_ROW_NUMBER}__lte": range_plan.fetch_upper_bound})
         range_q = upper if range_q is None else (range_q & upper)
     if range_q is not None:
         if range_plan.add_marker_rows:

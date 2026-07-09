@@ -3196,6 +3196,212 @@ def test_genre_books_connection_behavior():
 
 
 @pytest.mark.django_db
+def test_genre_books_connection_has_next_page_served_count_free_via_probe():
+    """``first: N`` + ``hasNextPage`` (no ``totalCount``) is served by the n+1 probe.
+
+    The count-free ``hasNextPage`` win over the live HTTP stack: the plain first
+    page overfetches ONE sentinel row instead of a per-partition
+    ``COUNT(1) OVER`` scan. Three facts are pinned - the SQL-negative that proves
+    the probe fired (``_dst_row_number`` present, NO count window), the fixed
+    2-query cost (root genres + one window prefetch, never 2 + N), and byte
+    parity with the per-parent (optimizer-off) pipeline: the SAME page served
+    through the per-parent fallback - reached by supplying an ``orderBy``
+    sidecar whose order matches the window's deterministic pk order - reports
+    identical edges, cursors, and ``hasNextPage``. No ``orderBy`` is supplied on
+    the probe query itself (a sidecar would route it, too, to the fallback);
+    the window's deterministic pk order matches the seed order.
+    """
+    genre = models.Genre.objects.create(name="Speculative")
+    shelf = _seed_shelf()
+    for title in ("Aurora", "Binti", "Circe"):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genre)
+
+    probe_query = """
+        query {
+          allLibraryGenres {
+            booksConnection(first: 2) {
+              edges { cursor node { title } }
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+        """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(probe_query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    conn = payload["data"]["allLibraryGenres"][0]["booksConnection"]
+
+    # A full page over a 3-book set -> a next page exists, derived from the
+    # overfetched sentinel row (not a count).
+    assert [edge["node"]["title"] for edge in conn["edges"]] == ["Aurora", "Binti"]
+    assert conn["pageInfo"]["hasNextPage"] is True
+
+    # 2 queries, not 2 + N: the nested connection is windowed in one prefetch.
+    assert len(captured) == 2
+    window_sql = captured[1]["sql"]
+    assert "_dst_row_number" in window_sql
+    assert "_dst_total_count" not in window_sql
+    assert "COUNT(" not in window_sql.upper()  # no per-partition count window.
+
+    # Byte parity with the per-parent (optimizer-off) pipeline: the ``orderBy``
+    # sidecar routes this to the shipped per-parent fallback, whose title order
+    # equals the window's pk order for the seed. Same edges, cursors, and flag.
+    fallback_query = """
+        query {
+          allLibraryGenres {
+            booksConnection(orderBy: [{ title: ASC }], first: 2) {
+              edges { cursor node { title } }
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+        """
+    fallback_response = _post_graphql(fallback_query)
+    assert fallback_response.status_code == 200
+    fallback_payload = fallback_response.json()
+    assert "errors" not in fallback_payload, fallback_payload
+    fallback_conn = fallback_payload["data"]["allLibraryGenres"][0]["booksConnection"]
+    assert fallback_conn["edges"] == conn["edges"]
+    assert fallback_conn["pageInfo"]["hasNextPage"] == conn["pageInfo"]["hasNextPage"]
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_probe_short_page_reports_no_next_page():
+    """A page as large as the set: the probe finds no sentinel -> ``hasNextPage`` False.
+
+    The other half of the byte-parity bar - a short/last page. ``first: 5`` over
+    a 3-book set fetches all three and no overfetch sentinel, so ``hasNextPage``
+    is False (matching the count path), still with no count window and 2 queries.
+    """
+    genre = models.Genre.objects.create(name="Speculative")
+    shelf = _seed_shelf()
+    for title in ("Aurora", "Binti", "Circe"):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genre)
+
+    query = """
+        query {
+          allLibraryGenres {
+            booksConnection(first: 5) {
+              edges { node { title } }
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+        """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    conn = response.json()["data"]["allLibraryGenres"][0]["booksConnection"]
+    assert [edge["node"]["title"] for edge in conn["edges"]] == ["Aurora", "Binti", "Circe"]
+    assert conn["pageInfo"]["hasNextPage"] is False
+    assert len(captured) == 2
+    window_sql = captured[1]["sql"]
+    assert "_dst_total_count" not in window_sql
+    assert "COUNT(" not in window_sql.upper()
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_alias_merge_probe_plus_edges_drops_the_sentinel():
+    """Same-arg aliases share ONE overfetched window; the sentinel never leaks.
+
+    The alias-merge regression for the probe: ``a`` selects
+    ``pageInfo { hasNextPage }`` (which alone takes the count-free n+1 probe) and
+    ``b`` selects only ``edges`` under the SAME ``first: 2`` arguments, so
+    spec-033 Decision 6 merges them into one shared window. The window is
+    overfetched to ``LIMIT 3`` from the MERGED selection, so the resolver must
+    drop the sentinel row for EVERY alias - not just the one that selected
+    ``hasNextPage`` - or ``b`` would render 3 edges instead of 2. The probe is
+    read off the window's physical shape (no ``_dst_total_count`` annotation),
+    not each alias's ``info``, so both aliases resolve identically: ``a`` reports
+    the next page, ``b`` returns exactly its page of 2. Byte-parity with the
+    per-parent pipeline (the ``orderBy`` sidecar reference) is pinned for both.
+    """
+    genre = models.Genre.objects.create(name="Speculative")
+    shelf = _seed_shelf()
+    for title in ("Aurora", "Binti", "Circe"):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genre)
+
+    merged_query = """
+        query {
+          allLibraryGenres {
+            a: booksConnection(first: 2) { pageInfo { hasNextPage } }
+            b: booksConnection(first: 2) { edges { cursor node { title } } }
+          }
+        }
+        """
+    response = _post_graphql(merged_query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    node = payload["data"]["allLibraryGenres"][0]
+    # ``b`` (edges-only) must NOT leak the overfetched sentinel: exactly its page.
+    assert [edge["node"]["title"] for edge in node["b"]["edges"]] == ["Aurora", "Binti"]
+    # ``a`` (hasNextPage-only) still reports the next page from the same window.
+    assert node["a"]["pageInfo"]["hasNextPage"] is True
+
+    # Byte parity: the per-parent fallback (via the ``orderBy`` sidecar) serves
+    # the identical edges for the edges-only alias.
+    fallback_query = """
+        query {
+          allLibraryGenres {
+            b: booksConnection(orderBy: [{ title: ASC }], first: 2) {
+              edges { cursor node { title } }
+            }
+          }
+        }
+        """
+    fallback = _post_graphql(fallback_query).json()["data"]["allLibraryGenres"][0]["b"]
+    assert fallback["edges"] == node["b"]["edges"]
+
+
+@pytest.mark.django_db
+def test_genres_connection_alias_merge_total_count_sibling_keeps_has_next():
+    """A ``totalCount`` sibling keeps the count; the probe alias reads the true flag.
+
+    The other alias-merge direction. ``a`` selects only
+    ``pageInfo { hasNextPage }`` and ``b`` selects ``totalCount`` under the SAME
+    ``first: 2`` args, so the merged window keeps ``_dst_total_count`` (a
+    ``totalCount`` observer forces it) and is NOT overfetched. If the resolver
+    re-derived the probe from ``a``'s own selection it would expect an overfetch
+    that never happened and report ``hasNextPage: false`` off the un-probed
+    window - a silently wrong flag even though the count (3) sits on the rows.
+    Reading the physical shape, ``a`` falls back to ``row_number < total``
+    (2 < 3) and correctly reports the next page. Uses ``genresConnection``
+    because ``GenreType`` exposes ``totalCount`` (``BookType`` does not).
+    """
+    shelf = _seed_shelf()
+    book = models.Book.objects.create(title="Anthology", shelf=shelf)
+    for name in ("Sci-Fi", "Fantasy", "Horror"):
+        book.genres.add(models.Genre.objects.create(name=name))
+
+    query = """
+        query {
+          allLibraryBooks {
+            a: genresConnection(first: 2) { pageInfo { hasNextPage } }
+            b: genresConnection(first: 2) { totalCount edges { node { name } } }
+          }
+        }
+        """
+    response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    target = next(
+        bk
+        for bk in payload["data"]["allLibraryBooks"]
+        if bk["a"] is not None and bk["b"]["totalCount"] == 3
+    )
+    # 3 genres, page of 2 -> a next page exists, read from the retained count.
+    assert target["a"]["pageInfo"]["hasNextPage"] is True
+    assert len(target["b"]["edges"]) == 2
+
+
+@pytest.mark.django_db
 def test_genre_books_connection_after_last_page_info_matches_per_parent():
     """``booksConnection(after: c, last: N)`` reports the per-parent ``hasPreviousPage``.
 

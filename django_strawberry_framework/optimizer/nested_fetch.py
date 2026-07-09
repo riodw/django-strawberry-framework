@@ -104,9 +104,13 @@ class NestedConnectionRequest:
     the relation's ``classify_relation_join`` descriptor (``windowable`` is
     ``True`` by construction here), ``order_by`` is the deterministic total
     order shared with resolve time, and ``(offset, limit, reverse,
-    with_total_count)`` is the slice window. ``to_attr`` / ``lookup`` are the
-    attach contract: the strategy's rows must land under ``to_attr`` on each
-    parent reached via ``lookup``.
+    with_total_count)`` is the slice window. ``next_page_probe`` is the
+    count-free ``hasNextPage`` overfetch flag (the n+1 probe): when set, the
+    renderer fetches one sentinel row past the page (via the shared
+    ``WindowRangePlan.fetch_*`` bounds) instead of the partition count; it is
+    only ever ``True`` alongside ``with_total_count=False``. ``to_attr`` /
+    ``lookup`` are the attach contract: the strategy's rows must land under
+    ``to_attr`` on each parent reached via ``lookup``.
     """
 
     django_field: Any
@@ -121,6 +125,7 @@ class NestedConnectionRequest:
     with_total_count: bool
     to_attr: str
     lookup: str
+    next_page_probe: bool = False
 
 
 class NestedConnectionStrategy(Protocol):
@@ -168,6 +173,7 @@ def attach_windowed_prefetch(
         limit=request.limit,
         reverse=request.reverse,
         with_total_count=request.with_total_count,
+        next_page_probe=request.next_page_probe,
     )
     if wrap is not None:
         windowed_queryset = wrap(windowed_queryset)

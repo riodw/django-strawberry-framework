@@ -77,7 +77,8 @@ from .utils.connections import (
     connection_sidecar_inputs_from_kwargs,
     derive_connection_window_bounds,
     has_connection_sidecar_input,
-    is_ambiguous_empty_window,
+    split_window_rows,
+    window_range_plan,
 )
 from .utils.querysets import (
     apply_type_visibility_async,
@@ -248,6 +249,24 @@ def _resolve_from_window(
     ``has_next_page = total > offset``, the "would the overfetch have yielded
     a row" predicate) - byte parity with the per-parent pipeline is the bar.
 
+    The common ``first: N`` page selecting ``pageInfo.hasNextPage`` but NOT
+    ``totalCount`` is served count-free by the n+1 probe (``next_page_probe``):
+    the walker overfetched ONE sentinel row past the page instead of a
+    per-partition ``COUNT(1) OVER`` scan, so ``hasNextPage`` is the sentinel's
+    presence (``probe_row_seen`` from ``split_window_rows``) rather than
+    ``row_number < total``. This resolver reads the probe off the window's
+    PHYSICAL shape - a ``plain_first_page`` window carrying no
+    ``_dst_total_count`` annotation was overfetched (or needs no count) - NOT
+    off this response key's ``info``: same-argument aliases merge into one
+    shared window whose shape was fixed at plan time from the merged selection,
+    so a per-alias re-derivation would drift (an edges-only alias would keep the
+    sentinel). The output is byte-identical (same edges, cursors, ``hasNextPage``;
+    ``totalCount`` not selected); only the SQL cost changes. ``split_window_rows``
+    + the ``hasNextPage`` derivation here are the resolve-side surface a future
+    keyset-cursor backend inherits: it makes ``_dst_row_number`` page-relative
+    (so ``row_number < total`` no longer holds) and derives ``hasNextPage`` from
+    this same overfetch, and ``hasPreviousPage`` from "a cursor was supplied".
+
     Returns ``None`` to tell the caller the window cannot be served and must
     fall back to the per-parent pipeline: a reversed ``last: 0`` window
     (upstream's ``edges[-0:]`` quirk serves ALL edges - only the pipeline
@@ -271,16 +290,56 @@ def _resolve_from_window(
     integer offset.
     """
     rows = window.rows
+    # Derive the count-free ``hasNextPage`` probe from the window's PHYSICAL
+    # shape, NOT this response key's selection. Same-argument aliases merge into
+    # ONE shared window (spec-033 Decision 6) whose overfetch/count shape is
+    # fixed at PLAN time from the MERGED (union) selection - so re-deriving the
+    # probe per alias from ``info`` would drift from that shared shape: an
+    # edges-only alias would keep the overfetched sentinel row, and a
+    # ``hasNextPage``-only alias beside a ``totalCount`` alias would read a stale
+    # flag off an un-overfetched, counted window. The ``_dst_total_count``
+    # annotation's presence on the rows IS the materialized plan decision. On the
+    # ``plain_first_page`` shape (the only one a probe applies to) its ABSENCE
+    # means the window was overfetched by the probe - or needs no count at all -
+    # so ``hasNextPage`` is the sentinel's presence; a counted window keeps
+    # ``row_number < total``. Reading ground truth, every alias sharing the
+    # window resolves identically. ``window_range_plan`` is a pure construction;
+    # the empty-``rows`` early return below never consults the probe flag, so
+    # requiring ``rows`` here just avoids an inert rebuild.
+    #
+    # LOAD-BEARING plan-time invariant: this "count-absent -> overfetched"
+    # inference is sound only because the walker keeps ``next_page_probe`` and
+    # ``with_total_count`` mutually exclusive - a count-free ``plain_first_page``
+    # window whose ``hasNextPage`` is OBSERVABLE is ALWAYS overfetched
+    # (``wants_next_page_probe`` forces ``with_total_count=False``, walker.py's
+    # ``_plan_connection_relation``). So count-absent here can only mean
+    # overfetched OR no observer at all, never observable-but-not-overfetched. A
+    # future optimization that produced a count-free non-overfetched first page
+    # while ``hasNextPage`` is selected would under-report it - keep that
+    # invariant if the count/overfetch decision ever changes.
+    range_plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
+    if (
+        range_plan.plain_first_page
+        and rows
+        and getattr(rows[-1], WINDOW_TOTAL_COUNT, None) is None
+    ):
+        range_plan = window_range_plan(
+            offset=offset,
+            limit=limit,
+            reverse=reverse,
+            next_page_probe=True,
+        )
     if not rows:
         if reverse and limit == 0:
             # ``last: 0``: upstream ``ListConnection`` slices ``edges[-0:]``,
             # which is the WHOLE list - only the per-parent pipeline reproduces
             # that quirk, so the (always-empty) reversed window falls back.
             return None
-        # With marker rows planned for the ambiguous shapes (workstream C), an
-        # empty forward window now PROVES the parent has no related rows for
-        # EVERY shape - a parent with children would have kept its row 1.
-        # ``has_next_page`` False: no row survived the overfetch probe.
+        # With marker rows planned for the ambiguous shapes (workstream C) and
+        # the n+1 sentinel for the count-free probe, an empty forward window now
+        # PROVES the parent has no related rows for EVERY shape - a parent with
+        # children would have kept its row 1 or its probe sentinel.
+        # ``has_next_page`` False: no row survived the overfetch.
         return _empty_page_connection(
             cls,
             offset=offset,
@@ -289,28 +348,26 @@ def _resolve_from_window(
             total=0,
         )
 
-    # Marker exclusion (workstream C): for the ambiguous shapes the window
-    # keeps each partition's row 1 as a marker alongside the page rows. The
-    # page proper is the rows past the offset (``limit == 0`` has no page at
-    # all); a marker that IS a page row is impossible (page rows have
-    # ``row_number > offset >= 1``). Reversed windows never plan markers. The
-    # predicate is the shared plan-time/resolve-time contract
-    # (``utils/connections.py::is_ambiguous_empty_window``), so what the
-    # window PLANNED as ambiguous and what this consume path CLASSIFIES as
-    # ambiguous cannot drift.
-    ambiguous = is_ambiguous_empty_window(offset, limit, reverse=reverse)
-    if ambiguous:
-        page_rows = (
-            [] if limit == 0 else [row for row in rows if getattr(row, WINDOW_ROW_NUMBER) > offset]
-        )
-    else:
-        page_rows = rows
+    # Sentinel exclusion via the shared ``split_window_rows``: the window may
+    # carry marker rows (ambiguous ``after:`` / ``first: 0`` shapes, workstream
+    # C) OR one probe sentinel (the count-free ``hasNextPage`` overfetch) - both
+    # dropped from the page here, mutually exclusive by shape, so cursors are
+    # untouched. ``probe_row_seen`` IS ``hasNextPage`` on the probe shape (a row
+    # existed past the page); it is ``False`` for every other shape. The
+    # splitter reads the range plan, so what the window PLANNED and what this
+    # path CLASSIFIES cannot drift.
+    page_rows, probe_row_seen = split_window_rows(
+        rows,
+        range_plan,
+        row_number=WINDOW_ROW_NUMBER,
+    )
     if not page_rows:
         # Marker-only window: children exist (the marker is one) but the page
         # is empty. Serve the true count and the pipeline's flag arithmetic:
         # ``has_next_page = total > offset`` (the overfetch probe - for
         # ``first: 0`` a row exists past the offset; for an overshot ``after:``
-        # ``total <= offset`` by construction, so it is False).
+        # ``total <= offset`` by construction, so it is False). Unreachable on
+        # the probe shape (its page always keeps row 1).
         total = getattr(rows[-1], WINDOW_TOTAL_COUNT, None)
         if total is None:
             return None  # workstream-B drift guard: never infer a count.
@@ -321,19 +378,22 @@ def _resolve_from_window(
             want_count=want_count,
             total=total,
         )
-    # The count is annotated CONDITIONALLY (workstream B): the walker plans it
-    # only when the selection can observe it (``totalCount`` /
-    # ``pageInfo.hasNextPage``) or the window shape needs it. A count-less row
-    # with either observer requested means the plan-time predicate and this
-    # resolve-time read have DRIFTED (they share the selection walk in
-    # ``optimizer/selections.py``, so by construction this is unreachable
-    # until they diverge) - fall back per-parent rather than serve a wrong
-    # flag/count, checked BEFORE any edge is built so the fallback discards no
-    # work. Without an observer, the missing count is inert: the
-    # ``has_next_page=False`` below is a placeholder that is never serialized.
+    # The count is annotated CONDITIONALLY (workstream B) - and NOT AT ALL for
+    # the count-free ``hasNextPage`` probe. A count-less row with a count
+    # observer requested that the probe does NOT serve means the plan-time
+    # predicate and this resolve-time read have DRIFTED (they share the
+    # selection walk in ``optimizer/selections.py``, so by construction this is
+    # unreachable until they diverge) - fall back per-parent rather than serve a
+    # wrong flag/count, checked BEFORE any edge is built so the fallback
+    # discards no work. On the probe path the missing count is EXPECTED
+    # (``hasNextPage`` comes from ``probe_row_seen``, ``totalCount`` is not
+    # selected); without any observer the missing count is inert (the
+    # ``has_next_page`` below is never serialized).
     last_row = page_rows[-1]
     total = getattr(last_row, WINDOW_TOTAL_COUNT, None)
-    if total is None and (want_count or _has_next_page_requested(info)):
+    if total is None and (
+        want_count or (_has_next_page_requested(info) and not range_plan.next_page_probe)
+    ):
         return None
     edge_class = _window_edge_class(cls)
     edges = [
@@ -347,9 +407,10 @@ def _resolve_from_window(
     # flags are the upstream forward-window comparisons against the partition's
     # total count (``resolve_optimized_connection_by_prefetch``): a previous page
     # exists when the first row is past row 1; a next page exists when the last
-    # row is short of the total. These hold for the reversed ``last``-only window
-    # too because its row numbers stay forward (``last: 2`` of 5 -> rows 4, 5 ->
-    # hasPrevious True, hasNext False - matching the pipeline).
+    # row is short of the total, OR - on the count-free probe path - when the
+    # overfetch sentinel was present. These hold for the reversed ``last``-only
+    # window too because its row numbers stay forward (``last: 2`` of 5 -> rows
+    # 4, 5 -> hasPrevious True, hasNext False - matching the pipeline).
     first_rn = getattr(page_rows[0], WINDOW_ROW_NUMBER)
     conn = cls(
         edges=edges,
@@ -358,7 +419,9 @@ def _resolve_from_window(
             end_cursor=edges[-1].cursor,
             has_previous_page=first_rn > 1,
             has_next_page=(
-                False if total is None else getattr(last_row, WINDOW_ROW_NUMBER) < total
+                probe_row_seen
+                if range_plan.next_page_probe
+                else (False if total is None else getattr(last_row, WINDOW_ROW_NUMBER) < total)
             ),
         ),
     )

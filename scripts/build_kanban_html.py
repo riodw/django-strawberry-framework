@@ -649,19 +649,6 @@ def render_progress_markdown(metrics: dict[str, Any]) -> str:
         cards = f"{bucket['done']}/{bucket['total']} ({_pct(bucket['done'], bucket['total'])}%)"
         weighted = f"{_pct(bucket['rank_done'], bucket['rank_total'])}%"
         lines.append(f"| {bucket['label']} | {cards} | {weighted} |")
-
-    # The first (lowest-order) milestone completing is the parity / alpha-complete
-    # gate; name it and its ceiling version from the live record rather than a
-    # hardcoded string.
-    if ordered:
-        parity = ordered[0]
-        lines.extend(
-            [
-                "",
-                f"To complete the {parity['label']} milestone: "
-                f"**{_pct(parity['done'], parity['total'])}%**.",
-            ],
-        )
     return "\n".join(lines)
 
 

@@ -19,7 +19,7 @@ DjangoModelPermission,djangomodelpermission,"Decision 11 blast radius: has_permi
 Per-field permission hooks,per-field-permission-hooks,"disambiguation in Decision 11: the planned info-shaped FieldSet READ gates - distinct from the (self, request)-shaped filter/order INPUT gates this spec's check_<field>_permission mentions refer to"
 TestClient,testclient,sibling 0.0.14 card (TODO-ALPHA-043) owning HTTP-level test ergonomics and the auth-over-Channels verification hand-off
 GraphQLTestCase,graphqltestcase,sibling 0.0.14 card surface named beside TestClient
-Debug-toolbar middleware,debug-toolbar-middleware,sibling 0.0.14 card (TODO-ALPHA-042) sharing the joint cut
+Debug-toolbar middleware,debug-toolbar-middleware,sibling 0.0.14 card (DONE-042-0.0.14) sharing the joint cut
 Response-extensions debug middleware,response-extensions-debug-middleware,sibling 0.0.14 card (TODO-ALPHA-044) sharing the joint cut
 DjangoOptimizerExtension,djangooptimizerextension,"extensions-ride-along claim: a schema built with the optimizer keeps it under Channels; kept OUT of the Test-10 execution path (recording extension instead, finding P2.7)"
 strawberry_config,strawberry_config,D-N1 non-reuse: the router must not reshape the consumer's schema config; test 10 uses it

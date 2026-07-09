@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-07-08
+Last refreshed: 2026-07-09
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -88,8 +88,6 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 | Alpha (pre-0.1.0) | 42/44 (95.5%) | 95.6% |
 | Beta (pre-1.0.0) | 0/15 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
-
-To complete the Alpha (pre-0.1.0) milestone: **95.5%**.
 
 ## Board columns
 
@@ -446,7 +444,7 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 
 #### Planning note
 
-Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Planned; gated on `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (`DjangoConnectionField`).
+Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Both dependencies have shipped (`DONE-027-0.0.8` Filtering and `DONE-030-0.0.9` `DjangoConnectionField`); the card is planned but unblocked.
 
 #### Dependencies
 
@@ -493,10 +491,10 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 
 #### Card references
 
-- Dependency: planned; gated on `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) -> `DONE-027-0.0.8` - Filtering subsystem
+- Dependency: both dependencies have shipped: `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) landed before this card. -> `DONE-027-0.0.8` - Filtering subsystem
 - Dependency: `DONE-027-0.0.8` (Filtering subsystem) — the argument factory is shared. -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-050-0.1.3`). -> `TODO-BETA-050-0.1.3` - Layer 3 Meta key promotion
-- Dependency: planned; gated on `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) -> `DONE-030-0.0.9` - `DjangoConnectionField`
+- Dependency: both dependencies have shipped: `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) landed before this card. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 - Dependency: `DONE-030-0.0.9` (`DjangoConnectionField`) — the `search: String` argument surfaces on connection fields. -> `DONE-030-0.0.9` - `DjangoConnectionField`
 - Related: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-053-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap. -> `TODO-BETA-053-0.1.5` - Fakeshop GraphQL schema activation
 - Related: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-027-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-027-0.0.8` - Filtering subsystem
@@ -786,7 +784,7 @@ planned
 
 #### Planning note
 
-blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-050-0.1.3` (Layer 3 Meta key promotion).
+Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-050-0.1.3` (Layer 3 Meta key promotion).
 
 #### Dependencies
 
@@ -809,8 +807,8 @@ blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-050-0.1.3` (Layer 3
 
 #### Card references
 
-- Blocked by: blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-050-0.1.3` (Layer 3 Meta key promotion). -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
-- Blocked by: blocked on `DONE-032-0.0.9` (Relay decisions) and `TODO-BETA-050-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-050-0.1.3` - Layer 3 Meta key promotion
+- Dependency: Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-050-0.1.3` (Layer 3 Meta key promotion). -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
+- Blocked by: Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-050-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-050-0.1.3` - Layer 3 Meta key promotion
 
 <a id="product_catalog_layer_3_http_graphql_tests"></a>
 ### [TODO-BETA-054-0.1.5 - Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)

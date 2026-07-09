@@ -37,8 +37,8 @@ consumer actually reaches for the router symbol — the generalization of the
 
 **Version boundary** (see
 [Decision 10](#decision-10--version-bumps-are-owned-by-the-joint-0014-cut)): this
-card **shares the `0.0.14` patch line** with three open siblings —
-[`TODO-ALPHA-042-0.0.14`][kanban] ([Debug-toolbar
+card **shares the `0.0.14` patch line** with three sibling cards —
+[`DONE-042-0.0.14`][kanban] ([Debug-toolbar
 middleware][glossary-debug-toolbar-middleware]), [`TODO-ALPHA-043-0.0.14`][kanban]
 ([`TestClient`][glossary-testclient] / [`GraphQLTestCase`][glossary-graphqltestcase]),
 and [`TODO-ALPHA-044-0.0.14`][kanban] ([Response-extensions debug
@@ -705,7 +705,7 @@ A true description of the repo as this spec is authored:
   [Decision 2](#decision-2--card-scope-boundary-the-transport-router-ships-websocket-auth-semantics-and-fakeshop-asgi-stay-out)
   and carried in [Risks](#risks-and-open-questions).
 - **The version line reads `0.0.13`, and three siblings share `0.0.14`.**
-  `TODO-ALPHA-042` / `043` / `044` are all non-Done at this card's patch version, so
+  Cards `042` / `043` / `044` were all non-Done at this card's patch version, so
   the joint-cut rule applies
   ([Decision 10](#decision-10--version-bumps-are-owned-by-the-joint-0014-cut)).
 
@@ -1368,7 +1368,7 @@ Alternatives considered (and rejected):
 No slice in this card edits the package-version state: `[project].version` in
 [`pyproject.toml`][pyproject], `__version__` in [`__init__.py`][init], or
 [`tests/base/test_init.py::test_version`][test-base-init]. This card **shares the
-`0.0.14` patch line** with three open siblings — [`TODO-ALPHA-042-0.0.14`][kanban],
+`0.0.14` patch line** with three sibling cards — [`DONE-042-0.0.14`][kanban],
 [`TODO-ALPHA-043-0.0.14`][kanban], and [`TODO-ALPHA-044-0.0.14`][kanban] — so the
 bump from `0.0.13` to `0.0.14` is owned by the **joint `0.0.14` cut** (the last
 `0.0.14` card to land), the same posture [`spec-039`][spec-039] Decision 14 took
@@ -1989,7 +1989,7 @@ implemented-on-main docs update here; release-status wording defers to the joint
 - **`TestClient` / `GraphQLTestCase` helpers** — [`TODO-ALPHA-043-0.0.14`][kanban]
   ([`TestClient`][glossary-testclient] / [`GraphQLTestCase`][glossary-graphqltestcase]);
   this card's tests use Channels' own communicators, not those helpers.
-- **Debug-toolbar middleware** — [`TODO-ALPHA-042-0.0.14`][kanban]
+- **Debug-toolbar middleware** — [`DONE-042-0.0.14`][kanban]
   ([Debug-toolbar middleware][glossary-debug-toolbar-middleware]).
 - **Response-extensions debug middleware** — [`TODO-ALPHA-044-0.0.14`][kanban]
   ([Response-extensions debug middleware][glossary-response-extensions-debug-middleware]).

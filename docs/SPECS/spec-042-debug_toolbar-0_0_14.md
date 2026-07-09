@@ -84,7 +84,7 @@ single-upstream-parity posture precedent). [`docs/GLOSSARY.md`][glossary] carrie
 
 Revision history (kept inline so the spec is self-contained):
 
-- **Revision 1** — initial draft authored from the [`WIP-ALPHA-042-0.0.14`][kanban]
+- **Revision 1** — initial draft authored from the [`DONE-042-0.0.14`][kanban]
   card body via the [`docs/SPECS/NEXT.md`][next] flow (2026-07-06). Pinned: the
   canonical structured filename
   ([Decision 1](#decision-1--spec-filename-and-canonical-naming)); the card-scope
@@ -292,8 +292,8 @@ Revision history (kept inline so the spec is self-contained):
   module docstring** said "No other behavior differs" after enumerating the two
   Python divergences, eliding the documented template-side third; reworded to
   scope "two narrow divergences" to the Python middleware and name the template's
-  defensive-DOM guards as the third. **The spec opener** still read "Planned for
-  `0.0.14` (card `WIP-ALPHA-042-0.0.14`)", contradicting the
+  defensive-DOM guards as the third. **The spec opener** still read as "Planned for
+  `0.0.14`" and carried its authoring-time status id, contradicting the
   `COMPLETE (DONE-042-0.0.14)` status; realigned to the shipped-spec convention
   (past tense + `DONE-` id), matching spec-040. The review's separate claim that
   the *unchecked implementation checklist* is itself a defect was **not adopted**:
@@ -540,11 +540,11 @@ in-process fakeshop request tests.
         ([Decision 10](#decision-10--version-bumps-are-owned-by-the-joint-0014-cut)).
   - [ ] [`docs/TREE.md`][tree] regenerated via
         [`scripts/build_tree_md.py`][build-tree-md] (never hand-edited): the
-        `middleware/debug_toolbar.py` rows move from `planned by
-        TODO-ALPHA-042-0.0.14` to the real docstring-derived rows, and
+        `middleware/debug_toolbar.py` rows move from the `DONE-042-0.0.14`
+        reservation placeholder to the real docstring-derived rows, and
         `tests/middleware/test_debug_toolbar.py` appears in the test tree.
-  - [ ] [`KANBAN.md`][kanban] card wrap: `WIP-ALPHA-042-0.0.14` → Done with the
-        next `DONE-042-0.0.14` id and its `SpecDoc` pointing at this spec (kanban
+  - [ ] [`KANBAN.md`][kanban] card wrap to Done with the
+        `DONE-042-0.0.14` id and its `SpecDoc` pointing at this spec (kanban
         DB edit + [`scripts/build_kanban_md.py`][build-kanban-md] /
         `build_kanban_html.py` re-render, never a hand-edit).
   - [ ] **Deferred to the joint `0.0.14` cut** (not this slice): the version
@@ -613,8 +613,8 @@ uninstalling anything.
 A true description of the repo as this spec is authored:
 
 - **No `middleware/` subpackage exists; [`docs/TREE.md`][tree] reserves it.** The
-  target package layout carries `middleware/ # planned by TODO-ALPHA-042-0.0.14 -
-  Debug-toolbar middleware` with `debug_toolbar.py` beneath it — this card's
+  target package layout reserves `middleware/` for `DONE-042-0.0.14` (Debug-toolbar
+  middleware) with `debug_toolbar.py` beneath it — this card's
   rows. The target test tree carries no `tests/middleware/` row yet (only the
   sibling card's `tests/extensions/`); the regenerated tree adds it in Slice 2.
 - **The package ships no template directory.** `django_strawberry_framework/`

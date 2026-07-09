@@ -148,7 +148,6 @@ Cards actively being implemented — WIP is kept small (typically one or two) so
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Low
 - Status: In progress
 - Relative size: M
 - Labels: `graphql-api`, `test-client`, `tests`, `uploads`
@@ -217,7 +216,6 @@ planned
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
-- Severity: Low
 - Status: In progress
 - Relative size: M
 - Labels: `debugging`, `graphql-api`, `middleware`
@@ -299,7 +297,6 @@ Cards that complete the django-graphene-filters Layer-3 richness on top of parit
 ### [TODO-BETA-045-0.1.0 - Beta release (cleanup, verification, alpha → beta)](KANBAN.html#beta_release_cleanup_verification_alpha_beta)
 
 - Priority: High
-- Severity: Major
 - Status: Planned
 - Relative size: M
 - Labels: `cleanup`, `release`, `tests`
@@ -356,7 +353,6 @@ planned
 ### [TODO-BETA-046-0.1.1 - `FieldSet`](KANBAN.html#fieldset)
 
 - Priority: High
-- Severity: Medium
 - Status: Needs spec
 - Relative size: M
 - Labels: `fieldsets`, `layer-3`, `public-api`
@@ -431,7 +427,6 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 ### [TODO-BETA-047-0.1.2 - `Meta.search_fields` support](KANBAN.html#metasearch_fields_support)
 
 - Priority: High
-- Severity: Medium
 - Status: Planned
 - Relative size: M
 - Labels: `connections`, `filters`, `public-api`, `search`
@@ -503,7 +498,6 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 ### [TODO-BETA-048-0.1.2 - Postgres full-text search filter primitives](KANBAN.html#postgres_full_text_search_filter_primitives)
 
 - Priority: Medium
-- Severity: Medium
 - Status: Planned
 - Relative size: M
 - Labels: `filters`, `public-api`, `search`
@@ -578,7 +572,6 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 ### [TODO-BETA-049-0.1.3 - Aggregation subsystem](KANBAN.html#aggregation_subsystem)
 
 - Priority: Medium-high
-- Severity: Major
 - Status: Planned
 - Relative size: L
 - Labels: `aggregations`, `filters`, `layer-3`, `public-api`
@@ -647,7 +640,6 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 ### [TODO-BETA-050-0.1.3 - Layer 3 Meta key promotion](KANBAN.html#layer_3_meta_key_promotion)
 
 - Priority: Low
-- Severity: Low
 - Status: Planned
 - Relative size: XS
 - Labels: `cleanup`, `layer-3`, `public-api`
@@ -668,7 +660,6 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required)
-- Severity: Medium
 - Status: Needs spec
 - Relative size: L
 - Labels: `layer-3`, `permissions`, `public-api`, `security`
@@ -733,7 +724,6 @@ Strawberry port of graphene-django's node-level sentinel redaction — the third
 ### [TODO-BETA-052-0.1.4 - Stable choice enum naming override](KANBAN.html#stable_choice_enum_naming_override)
 
 - Priority: Low-medium
-- Severity: Medium
 - Status: Planned
 - Relative size: S
 - Labels: `choice-enums`, `public-api`, `schema`, `stable-api`
@@ -777,7 +767,6 @@ planned
 ### [TODO-BETA-053-0.1.5 - Fakeshop GraphQL schema activation](KANBAN.html#fakeshop_graphql_schema_activation)
 
 - Priority: Medium
-- Severity: Medium
 - Status: Planned
 - Relative size: S
 - Labels: `example-app`, `graphql-api`, `relay`, `schema`
@@ -814,7 +803,6 @@ Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-
 ### [TODO-BETA-054-0.1.5 - Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
 
 - Priority: Medium
-- Severity: Medium
 - Status: Planned
 - Relative size: S
 - Labels: `example-app`, `graphql-api`, `layer-3`, `tests`
@@ -832,7 +820,6 @@ Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-
 ### [TODO-BETA-055-0.1.6 - Mutation transactions and idempotency](KANBAN.html#mutation_transactions_and_idempotency)
 
 - Priority: High
-- Severity: Major
 - Status: Needs spec
 - Relative size: S
 - Labels: `mutations`, `performance`, `security`
@@ -900,7 +887,6 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 ### [TODO-BETA-056-0.1.6 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
 
 - Priority: Medium
-- Severity: Medium
 - Status: Planned
 - Relative size: M
 - Labels: `docs`, `guides`, `public-api`
@@ -935,7 +921,6 @@ planned
 ### [TODO-BETA-057-0.1.7 - Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
 
 - Priority: Medium-high
-- Severity: Medium
 - Status: Planned
 - Relative size: M
 - Labels: `adversarial-testing`, `hardening`, `tests`
@@ -983,7 +968,6 @@ planned
 ### [TODO-BETA-058-0.1.7 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
 
 - Priority: High
-- Severity: Medium
 - Status: Needs spec
 - Relative size: S
 - Labels: `debugging`, `developer-tools`, `graphql-api`, `optimizer`, `performance`, `query-planning`
@@ -1042,7 +1026,6 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
-- Severity: Low
 - Status: Needs spec
 - Relative size: M
 - Labels: `config`, `filters`, `public-api`
@@ -1106,7 +1089,6 @@ Recreate django-graphene-filters' configurable filter-tree key namespace — `DJ
 ### [TODO-STABLE-060-1.0.0 - Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
 
 - Priority: Critical
-- Severity: Major
 - Status: Planned
 - Relative size: L
 - Labels: `cleanup`, `release`, `stable-api`, `tests`
@@ -1167,7 +1149,6 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Low
 - Status: Shipped
 - Relative size: M
 - Labels: `debugging`, `django-integration`, `middleware`
@@ -1248,7 +1229,6 @@ planned
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `asgi`, `channels`, `django-integration`
@@ -1340,7 +1320,6 @@ planned
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
 - Status: Shipped
 - Relative size: M
 - Labels: `auth`, `mutations`, `public-api`
@@ -1414,7 +1393,6 @@ planned
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
-- Severity: Major
 - Status: In progress
 - Relative size: L
 - Labels: `mutations`, `public-api`, `serializers`
@@ -1523,7 +1501,6 @@ needs spec
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
-- Severity: Major
 - Status: In progress
 - Relative size: L
 - Labels: `forms`, `mutations`, `public-api`
@@ -1625,7 +1602,6 @@ needs spec
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
 - Status: Shipped
 - Relative size: M
 - Labels: `converters`, `mutations`, `scalars`, `uploads`
@@ -1703,7 +1679,6 @@ planned
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Major
 - Status: Shipped
 - Relative size: XL
 - Labels: `graphql-api`, `mutations`, `permissions`, `public-api`
@@ -1818,7 +1793,6 @@ needs spec
 
 - Priority: Medium-high
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
 - Status: Shipped
 - Relative size: M
 - Labels: `hardening`, `optimizer`, `performance`, `query-planning`
@@ -1937,7 +1911,6 @@ Source: 2026-06-11 comparative audit of `django_strawberry_framework/optimizer/`
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
-- Severity: Major
 - Status: Shipped
 - Relative size: L
 - Labels: `optimizer`, `permissions`, `public-api`, `security`
@@ -2073,7 +2046,6 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
 - Status: Planned
 - Relative size: M
 - Labels: `connections`, `optimizer`, `query-planning`, `relay`
@@ -2177,7 +2149,6 @@ planned
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Major
 - Status: Planned
 - Relative size: XL
 - Labels: `connections`, `graphql-api`, `permissions`, `public-api`, `relay`
@@ -2344,7 +2315,6 @@ blocked on `DONE-030-0.0.9` (`DjangoConnectionField`). When the connection field
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
-- Severity: Major
 - Status: Needs spec
 - Relative size: M
 - Labels: `config`, `public-api`, `registry`, `relay`, `stable-api`, `types`, `versioning`
@@ -2460,7 +2430,6 @@ Promoted from BACKLOG.md item 40 and slotted after `DjangoConnectionField` but b
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Major
 - Status: Planned
 - Relative size: L
 - Labels: `connections`, `filters`, `optimizer`, `ordering`, `public-api`, `relay`
@@ -2607,7 +2576,6 @@ Strawberry analogue of graphene-django's `AdvancedDjangoFilterConnectionField`. 
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
 - Status: Planned
 - Relative size: M
 - Labels: `cleanup`, `developer-tools`, `public-api`, `types`
@@ -2708,7 +2676,6 @@ planned; three independent slices that ship in any order. Card body counts as co
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Major
 - Status: Shipped
 - Relative size: L
 - Labels: `filters`, `graphql-api`, `layer-3`, `ordering`, `public-api`
@@ -2809,7 +2776,6 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Major
 - Status: Shipped
 - Relative size: XL
 - Labels: `example-app`, `filters`, `graphql-api`, `public-api`
@@ -2909,7 +2875,6 @@ shipped
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Low
 - Status: Shipped
 - Relative size: M
 - Labels: `example-app`, `graphql-api`, `scalars`, `tests`
@@ -2953,7 +2918,6 @@ shipped
 ### [DONE-025-0.0.7 - Warning-free scalar registration via `StrawberryConfig.scalar_map`](KANBAN.html#warning_free_scalar_registration_via_strawberryconfigscalar_map)
 
 - Priority: Medium
-- Severity: Medium
 - Status: Shipped
 - Relative size: S
 - Labels: `config`, `internal`, `public-api`, `scalar-map`, `scalars`
@@ -2999,7 +2963,6 @@ shipped
 ### [DONE-024-0.0.7 - Django Trac #37064 hardening + `safe_wrap_connection_method`](KANBAN.html#django_trac_37064_hardening_safe_wrap_connection_method)
 
 - Priority: Low
-- Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `django-integration`, `hardening`, `internal`
@@ -3033,7 +2996,6 @@ shipped
 
 - Priority: Low
 - Parity: 🍓 strawberry-graphql-django (Parity-adjacent)
-- Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `multi-db`, `optimizer`, `tests`
@@ -3081,7 +3043,6 @@ shipped
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `management-command`, `public-api`, `schema`
@@ -3131,7 +3092,6 @@ shipped
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Low
 - Status: Shipped
 - Relative size: XS
 - Labels: `django-app`, `packaging`
@@ -3176,7 +3136,6 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required)
-- Severity: Medium
 - Status: Shipped
 - Relative size: M
 - Labels: `graphql-api`, `list-field`, `optimizer`, `public-api`
@@ -3236,7 +3195,6 @@ shipped
 
 - Priority: Medium
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
 - Status: Shipped
 - Relative size: L
 - Labels: `public-api`, `relay`, `scalars`, `types`
@@ -3297,7 +3255,6 @@ shipped
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Parity-adjacent)
-- Severity: Medium
 - Status: Shipped
 - Relative size: L
 - Labels: `optimizer`, `public-api`, `registry`, `types`
@@ -3366,7 +3323,6 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Medium
 - Status: Shipped
 - Relative size: M
 - Labels: `converters`, `public-api`, `scalars`
@@ -3436,7 +3392,6 @@ shipped
 
 - Priority: Medium
 - Parity: 🍓 strawberry-graphql-django (Parity-adjacent)
-- Severity: Medium
 - Status: Shipped
 - Relative size: M
 - Labels: `cleanup`, `field-meta`, `metadata`, `optimizer`, `types`
@@ -3505,7 +3460,6 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Major
 - Status: Shipped
 - Relative size: L
 - Labels: `public-api`, `relay`, `types`
@@ -3605,7 +3559,6 @@ shipped
 ### [DONE-014-0.0.4 - Move test fixture out of example settings](KANBAN.html#move_test_fixture_out_of_example_settings)
 
 - Priority: Low
-- Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `cleanup`, `example-app`, `internal`, `tests`
@@ -3647,7 +3600,6 @@ shipped
 ### [DONE-013-0.0.4 - Real M2M coverage](KANBAN.html#real_m2m_coverage)
 
 - Priority: Medium
-- Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `example-app`, `internal`, `m2m`, `tests`
@@ -3687,7 +3639,6 @@ shipped
 ### [DONE-012-0.0.4 - 0.0.4 version and release alignment](KANBAN.html#004_version_and_release_alignment)
 
 - Priority: Low
-- Severity: Low
 - Status: Shipped
 - Relative size: XS
 - Labels: `internal`, `release`, `versioning`
@@ -3722,7 +3673,6 @@ shipped
 ### [DONE-011-0.0.4 - Stale placeholder cleanup](KANBAN.html#stale_placeholder_cleanup)
 
 - Priority: Low
-- Severity: Low
 - Status: Shipped
 - Relative size: XS
 - Labels: `cleanup`, `docs`, `internal`, `tests`
@@ -3762,7 +3712,6 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
-- Severity: Major
 - Status: Shipped
 - Relative size: L
 - Labels: `finalizer`, `registry`, `relations`, `types`
@@ -3853,7 +3802,6 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
-- Severity: Major
 - Status: Shipped
 - Relative size: L
 - Labels: `layer-3`, `public-api`, `relations`, `types`
@@ -3911,7 +3859,6 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Parity-adjacent), 🍓 strawberry-graphql-django (Parity-adjacent)
-- Severity: Major
 - Status: Shipped
 - Relative size: M
 - Labels: `finalizer`, `registry`, `relations`, `types`
@@ -3955,7 +3902,6 @@ shipped
 ### [DONE-007-0.0.4 - 0.0.4 onboarding docs and spec consolidation](KANBAN.html#004_onboarding_docs_and_spec_consolidation)
 
 - Priority: Medium
-- Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `docs`, `internal`, `release`
@@ -3995,7 +3941,6 @@ shipped
 ### [DONE-006-0.0.3 - Documentation/status positioning for shipped Layer 2](KANBAN.html#documentationstatus_positioning_for_shipped_layer_2)
 
 - Priority: Medium
-- Severity: Low
 - Status: Shipped
 - Relative size: S
 - Labels: `docs`, `internal`
@@ -4048,7 +3993,6 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Parity-adjacent)
-- Severity: Major
 - Status: Shipped
 - Relative size: M
 - Labels: `docs`, `public-api`, `registry`, `types`
@@ -4094,7 +4038,6 @@ shipped
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Major
 - Status: Shipped
 - Relative size: L
 - Labels: `optimizer`, `performance`, `query-planning`, `schema-audit`
@@ -4170,7 +4113,6 @@ shipped
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Major
 - Status: Shipped
 - Relative size: M
 - Labels: `optimizer`, `performance`, `query-planning`, `relations`
@@ -4221,7 +4163,6 @@ shipped
 
 - Priority: High
 - Parity: 🍓 strawberry-graphql-django (Required)
-- Severity: Major
 - Status: Shipped
 - Relative size: L
 - Labels: `optimizer`, `performance`, `query-planning`, `relations`
@@ -4285,7 +4226,6 @@ shipped
 
 - Priority: High
 - Parity: ⚛️ graphene-django (Required), 🍓 strawberry-graphql-django (Required)
-- Severity: Major
 - Status: Shipped
 - Relative size: L
 - Labels: `public-api`, `registry`, `relations`, `scalars`, `types`

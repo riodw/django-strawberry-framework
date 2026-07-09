@@ -48,12 +48,6 @@ class PriorityFilter(FilterSet):
         fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
 
 
-class SeverityFilter(FilterSet):
-    class Meta:
-        model = models.Severity
-        fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
-
-
 class RelativeSizeFilter(FilterSet):
     class Meta:
         model = models.RelativeSize
@@ -187,7 +181,6 @@ class BoardDocFilter(FilterSet):
 class CardFilter(FilterSet):
     status = RelatedFilter(StatusFilter, field_name="status")
     priority = RelatedFilter(PriorityFilter, field_name="priority")
-    severity = RelatedFilter(SeverityFilter, field_name="severity")
     relative_size = RelatedFilter(RelativeSizeFilter, field_name="relative_size")
     milestone = RelatedFilter(MilestoneFilter, field_name="milestone")
     target_version = RelatedFilter(TargetVersionFilter, field_name="target_version")
@@ -225,7 +218,6 @@ __all__ = (
     "PriorityFilter",
     "RelativeSizeFilter",
     "SectionFilter",
-    "SeverityFilter",
     "StatusFilter",
     "TargetVersionFilter",
     "TrackedPathFilter",

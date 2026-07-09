@@ -23,7 +23,6 @@ def _service_lookups(db):
     kf.make_status("todo")
     kf.make_planning_state("planned")
     kf.make_priority("medium")
-    kf.make_severity("medium")
     kf.make_section("scope")
     kf.make_section("definition_of_done")
     kf.make_section("dependencies_note")
@@ -53,7 +52,6 @@ def test_create_card_from_spec_builds_card_and_children(beta_version):
             "target_version": beta_version.number,
             "relative_size": "s",
             "priority": "medium",
-            "severity": "medium",
             "labels": ["filters", "search"],
             "parity": [{"upstream": "graphene_django", "level": "required"}],
             "dependencies": [{"card": dependency.title, "note": "shared machinery"}],

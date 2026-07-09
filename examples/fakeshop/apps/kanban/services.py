@@ -425,9 +425,6 @@ def create_card_from_spec(spec: dict[str, Any], *, using: str | None = None) -> 
             priority=_lookup(models.Priority, spec["priority"], using)
             if spec.get("priority")
             else None,
-            severity=_lookup(models.Severity, spec["severity"], using)
-            if spec.get("severity")
-            else None,
             relative_size=_lookup(models.RelativeSize, spec["relative_size"], using),
             planning_state=_lookup(
                 models.PlanningState,

@@ -19,7 +19,6 @@ for _model in (
     models.Milestone,
     models.Status,
     models.Priority,
-    models.Severity,
     models.RelativeSize,
     models.PlanningState,
     models.Upstream,
@@ -103,7 +102,6 @@ class CardAdmin(admin.ModelAdmin):
         "milestone",
         "target_version",
         "priority",
-        "severity",
     )
     filter_horizontal = ("dependencies", "labels", "changed_files")
     inlines = [

@@ -369,8 +369,6 @@ def render_card(card: dict[str, Any]) -> list[str]:
             for claim in parity_claims
         )
         lines.append(f"- Parity: {parity}")
-    if card.get("severity"):
-        lines.append(f"- Severity: {card['severity']['label']}")
     if card.get("planningState"):
         lines.append(f"- Status: {card['planningState']['label']}")
     size = size_label(card)

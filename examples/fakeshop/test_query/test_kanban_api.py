@@ -51,7 +51,6 @@ def _seed_board():
     xl = models.RelativeSize.objects.create(key="xl", label="XL", order=4, rank=4)
     size_m = models.RelativeSize.objects.create(key="m", label="M", order=2, rank=2)
     high = models.Priority.objects.create(key="high", label="High", order=0)
-    major = models.Severity.objects.create(key="major", label="Major", order=0)
     shipped = models.PlanningState.objects.create(key="shipped", label="Shipped", order=4)
     planned = models.PlanningState.objects.create(key="planned", label="Planned", order=0)
     graphene = models.Upstream.objects.create(
@@ -111,7 +110,6 @@ def _seed_board():
         milestone=None,
         target_version=version,
         priority=high,
-        severity=major,
         relative_size=xl,
         planning_state=shipped,
     )
@@ -154,7 +152,6 @@ def _seed_board():
         milestone=alpha,
         target_version=version,
         priority=high,
-        severity=major,
         relative_size=size_m,
         planning_state=planned,
     )
@@ -599,7 +596,6 @@ def test_select_board_docs_and_lookup_roots_for_static_dashboard():
             }
           }
           allKanbanPriorities { key }
-          allKanbanSeverities { key }
           allKanbanPlanningStates { key }
           allKanbanParityLevels { key }
           allKanbanSections { key }
@@ -628,7 +624,6 @@ def test_select_board_docs_and_lookup_roots_for_static_dashboard():
                 },
             ],
             "allKanbanPriorities": [{"key": "high"}],
-            "allKanbanSeverities": [{"key": "major"}],
             "allKanbanPlanningStates": [{"key": "planned"}, {"key": "shipped"}],
             "allKanbanParityLevels": [{"key": "required"}, {"key": "adjacent"}],
             "allKanbanSections": [{"key": "scope"}],
@@ -1008,7 +1003,6 @@ def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields():
         "milestone",
         "targetVersion",
         "priority",
-        "severity",
         "relativeSize",
         "planningState",
     ):

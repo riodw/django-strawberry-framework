@@ -44,9 +44,6 @@ query StaticKanbanDashboard {
     priority {
       ...PriorityFields
     }
-    severity {
-      ...SeverityFields
-    }
     relativeSize {
       ...RelativeSizeFields
     }
@@ -166,9 +163,6 @@ query StaticKanbanDashboard {
   allKanbanPriorities {
     ...PriorityFields
   }
-  allKanbanSeverities {
-    ...SeverityFields
-  }
   allKanbanRelativeSizes {
     ...RelativeSizeFields
   }
@@ -238,18 +232,6 @@ fragment TargetVersionFields on TargetVersionType {
 }
 
 fragment PriorityFields on PriorityType {
-  id
-  uuid {
-    id
-  }
-  key
-  label
-  order
-  createdDate
-  updatedDate
-}
-
-fragment SeverityFields on SeverityType {
   id
   uuid {
     id
@@ -476,7 +458,6 @@ LOOKUP_FIELDS = {
     "allKanbanMilestones": "milestones",
     "allKanbanTargetVersions": "targetVersions",
     "allKanbanPriorities": "priorities",
-    "allKanbanSeverities": "severities",
     "allKanbanRelativeSizes": "relativeSizes",
     "allKanbanPlanningStates": "planningStates",
     "allKanbanUpstreams": "upstreams",

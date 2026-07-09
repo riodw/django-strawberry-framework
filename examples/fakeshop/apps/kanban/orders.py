@@ -36,12 +36,6 @@ class PriorityOrder(OrderSet):
         fields = "__all__"
 
 
-class SeverityOrder(OrderSet):
-    class Meta:
-        model = models.Severity
-        fields = "__all__"
-
-
 class RelativeSizeOrder(OrderSet):
     class Meta:
         model = models.RelativeSize
@@ -154,7 +148,6 @@ __all__ = (
     "PriorityOrder",
     "RelativeSizeOrder",
     "SectionOrder",
-    "SeverityOrder",
     "StatusOrder",
     "TargetVersionOrder",
     "TrackedPathOrder",

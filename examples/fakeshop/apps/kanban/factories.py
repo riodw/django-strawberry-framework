@@ -68,10 +68,6 @@ def make_priority(key: str = "medium", **defaults):
     return _lookup(models.Priority, key, **defaults)
 
 
-def make_severity(key: str = "medium", **defaults):
-    return _lookup(models.Severity, key, **defaults)
-
-
 def make_relative_size(key: str = "m", *, rank: int = 2, **defaults):
     return _lookup(models.RelativeSize, key, rank=rank, **defaults)
 

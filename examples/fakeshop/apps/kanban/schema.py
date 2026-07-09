@@ -98,23 +98,6 @@ class PriorityType(DjangoType):
         orderset_class = orders.PriorityOrder
 
 
-class SeverityType(DjangoType):
-    class Meta:
-        model = models.Severity
-        fields = (
-            "id",
-            "key",
-            "label",
-            "order",
-            "created_date",
-            "updated_date",
-            "uuid",
-            "cards",
-        )
-        filterset_class = filters.SeverityFilter
-        orderset_class = orders.SeverityOrder
-
-
 class RelativeSizeType(DjangoType):
     class Meta:
         model = models.RelativeSize
@@ -311,7 +294,6 @@ class CardType(DjangoType):
             "planning_note",
             "status",
             "priority",
-            "severity",
             "relative_size",
             "planning_state",
             "milestone",
@@ -545,20 +527,6 @@ class Query:
             queryset = filters.PriorityFilter.apply_sync(filter, queryset, info)
         if order_by is not None:
             queryset = orders.PriorityOrder.apply_sync(order_by, queryset, info)
-        return queryset
-
-    @strawberry.field
-    def all_kanban_severities(
-        self,
-        info: Info,
-        filter: filter_input_type(filters.SeverityFilter) | None = None,  # noqa: A002
-        order_by: list[order_input_type(orders.SeverityOrder)] | None = None,
-    ) -> list[SeverityType]:
-        queryset = models.Severity.objects.order_by("order")
-        if filter is not None:
-            queryset = filters.SeverityFilter.apply_sync(filter, queryset, info)
-        if order_by is not None:
-            queryset = orders.SeverityOrder.apply_sync(order_by, queryset, info)
         return queryset
 
     @strawberry.field

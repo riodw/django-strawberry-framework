@@ -101,14 +101,6 @@ class Priority(LookupBase):
         verbose_name_plural = "priorities"
 
 
-class Severity(LookupBase):
-    """``major`` / ``medium`` / ``low``."""
-
-    class Meta(LookupBase.Meta):
-        verbose_name = "severity"
-        verbose_name_plural = "severities"
-
-
 class RelativeSize(LookupBase):
     """T-shirt size: ``xs`` / ``s`` / ``m`` / ``l`` / ``xl``."""
 
@@ -297,13 +289,6 @@ class Card(TimeStampedModel):
     )
     priority = models.ForeignKey(
         Priority,
-        null=True,
-        blank=True,
-        related_name="cards",
-        on_delete=models.SET_NULL,
-    )
-    severity = models.ForeignKey(
-        Severity,
         null=True,
         blank=True,
         related_name="cards",
@@ -707,7 +692,6 @@ _UUID_LINK_NAMES = (
     "milestone",
     "status",
     "priority",
-    "severity",
     "relativesize",
     "planningstate",
     "upstream",
@@ -772,13 +756,6 @@ class UUIDModel(TimeStampedModel):
     )
     priority = models.OneToOneField(
         "Priority",
-        null=True,
-        blank=True,
-        on_delete=models.CASCADE,
-        related_name="uuid",
-    )
-    severity = models.OneToOneField(
-        "Severity",
         null=True,
         blank=True,
         on_delete=models.CASCADE,

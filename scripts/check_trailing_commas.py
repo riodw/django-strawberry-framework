@@ -10,7 +10,9 @@ Four checks. The first three carry both ``--check`` (gate, exit 1) and ``--fix``
    per-source category markers (``<!-- Root -->`` ... ``<!-- External -->``) in
    order, so the buckets are never silently dropped. The fixer rebuilds the
    footer, preserving every existing def line under its category and inserting
-   any missing markers.
+   any missing markers. Agent-instruction files (``EXEMPT_MD_SCAFFOLD_NAMES``:
+   AGENTS.md / CLAUDE.md) are prose directives, not link-carrying docs, and are
+   waived from this one check.
 3. **JSON / GraphQL brace explosion** (``.json`` / ``.graphql`` / ``.gql`` files
    and ```` ```json ```` / ```` ```graphql ```` fenced blocks in markdown) --
    content is normalized to its canonical pretty-printed form so every ``{``
@@ -131,6 +133,12 @@ EXCLUDE_SCRATCH_DIRS = frozenset(
 # Transient file-name substrings (case-insensitive): any file whose name contains
 # one of these is excluded anywhere in the tree, for every suffix.
 EXCLUDE_NAME_SUBSTRINGS = ("worker", "feedback")
+# Agent-instruction markdown files exempt from the LINK-DEFINITIONS scaffold: they
+# are prose directives, not standing docs with cross-file links, so they carry no
+# link-definition footer. (Before this list AGENTS.md passed only incidentally --
+# its prose quotes every scaffold marker in order -- which was fragile.) These files
+# are still scanned for the JSON/GraphQL fence rule; only the scaffold is waived.
+EXEMPT_MD_SCAFFOLD_NAMES = frozenset({"AGENTS.md", "CLAUDE.md"})
 _CLOSE_BYTES = (b")", b"]", b"}")
 _SKIP_TOK = frozenset(
     {
@@ -807,7 +815,7 @@ def main(argv: list[str] | None = None) -> int:
                     )
 
         elif path.suffix == ".md":
-            if not _scaffold_in_canonical_order(new):
+            if path.name not in EXEMPT_MD_SCAFFOLD_NAMES and not _scaffold_in_canonical_order(new):
                 found.append((new.count("\n") + 1, "md-scaffold"))
                 if do_fix:
                     new = fix_markdown_scaffold(new)

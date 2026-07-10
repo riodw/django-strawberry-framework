@@ -112,12 +112,10 @@ class GalaxyNode(DjangoType):
 
     @classmethod
     def get_queryset(cls, queryset, info):
-        """Staff or users with view_galaxy permission see everything; others see public only."""
+        """Staff see everything; everyone else sees public rows behind the cascade."""
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
-        if user and user.has_perm("astronomy.view_galaxy"):
-            return queryset.filter(is_private=False)
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 
@@ -134,12 +132,15 @@ class CelestialBodyNode(DjangoType):
 
     @classmethod
     def get_queryset(cls, queryset, info):
-        """Staff or users with view_celestialbody permission see everything; others see public only."""
+        """Staff see everything; everyone else sees public rows behind the cascade.
+
+        The cascade narrows through the non-null ``galaxy`` FK, so a visible
+        body can never point at a galaxy the viewer cannot see (and a nested
+        ``galaxy { ... }`` selection can never raise ``RelatedObjectDoesNotExist``).
+        """
         user = getattr(getattr(info.context, "request", None), "user", None)
         if user and user.is_staff:
             return queryset
-        if user and user.has_perm("astronomy.view_celestialbody"):
-            return queryset.filter(is_private=False)
         return apply_cascade_permissions(cls, queryset.filter(is_private=False), info)
 
 

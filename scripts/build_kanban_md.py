@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from build_kanban_html import configure_django, fetch_dashboard_data
+from build_kanban_html import configure_django, fetch_dashboard_data, version_tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "KANBAN.md"
 KANBAN_HTML_PATH = "KANBAN.html"
 GITHUB_BLOB_URL = "https://github.com/riodw/django-strawberry-framework/blob/main"
 CARD_REF_RE = re.compile(r"\{\{card_ref:(\d+)\}\}")
+UNRESOLVED_PLACEHOLDER_RE = re.compile(r"\{\{[^}]+\}\}")
 LINK_DEFINITIONS_KEY = "link-definitions"
 COLUMN_DOC_KEYS = {
     "in-progress",
@@ -35,12 +37,23 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_MD_PATH,
         help="Markdown file to write. Defaults to the repository-root KANBAN.md.",
     )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Exit with status 1 if KANBAN.md is not already up to date.",
+    )
     return parser.parse_args()
 
 
 def finalize_markdown(lines: list[str]) -> str:
-    """Normalize rendered markdown lines into one trailing-newline document."""
-    text = "\n".join(line.rstrip() for line in lines).strip()
+    """Normalize rendered markdown lines into one trailing-newline document.
+
+    Each element may itself be a multi-line block (a rendered card body, a link
+    block), so trailing whitespace is stripped per physical line after the join,
+    not per element - stripping per element would leave interior lines ragged.
+    """
+    joined = "\n".join(lines)
+    text = "\n".join(line.rstrip() for line in joined.split("\n")).strip()
     return f"{text}\n"
 
 
@@ -61,10 +74,18 @@ def card_url(card: dict[str, Any]) -> str:
 
 
 def spec_path_from_url(url: str) -> str:
-    """Return the repo path from a GitHub ``blob/main`` URL."""
+    """Return the repo path from a GitHub ``blob/main`` URL.
+
+    Raises on a URL that does not carry the expected ``blob/main`` prefix rather
+    than returning ``""`` - a silent empty string degrades a card that *has* a
+    spec into "No dedicated spec", so a repo rename or moved default branch would
+    quietly blank every spec link instead of failing the build loudly.
+    """
     prefix = f"{GITHUB_BLOB_URL}/"
     if not url.startswith(prefix):
-        return ""
+        raise ValueError(
+            f"Spec URL {url!r} does not start with the expected prefix {prefix!r}.",
+        )
     return url.removeprefix(prefix)
 
 
@@ -103,9 +124,13 @@ def tracked_path_link(tracked_path: dict[str, Any], *, planned: bool) -> str:
 def active_version(cards: list[dict[str, Any]]) -> str:
     """Return the version currently in progress.
 
-    Derived from ``status`` alone: the single ``wip`` card names the active
-    version, so the ``## In progress`` column no longer needs a per-card flag.
-    Falls back to the latest shipped version when the board has no ``wip`` card.
+    Derived from ``status`` alone: the lowest ``wip`` target version names the
+    active version, so the ``## In progress`` column no longer needs a per-card
+    flag. Falls back to the latest shipped version when the board has no ``wip``
+    card. This only steers which *todo* cards are pulled forward into the In
+    progress column - ``wip`` cards land there unconditionally (see
+    :func:`card_column_key`), so a second, higher in-flight version never hides
+    its own cards.
     """
     wip_versions = sorted(
         {
@@ -113,7 +138,7 @@ def active_version(cards: list[dict[str, Any]]) -> str:
             for card in cards
             if card["status"]["key"] == "wip" and card.get("targetVersion")
         },
-        key=_version_key,
+        key=version_tuple,
     )
     if wip_versions:
         return wip_versions[0]
@@ -123,7 +148,7 @@ def active_version(cards: list[dict[str, Any]]) -> str:
             for card in cards
             if card["status"]["key"] == "done" and card.get("targetVersion")
         },
-        key=_version_key,
+        key=version_tuple,
     )
     return done_versions[-1] if done_versions else ""
 
@@ -141,6 +166,12 @@ def card_column_key(card: dict[str, Any], active: str) -> str:
         return "done"
     if status == "backlog":
         return "backlog"
+    if status == "wip":
+        # Any in-flight card belongs in the In progress column, whether or not it
+        # targets the board's headline active version. Routing on ``version ==
+        # active`` alone dropped a second concurrent wip version straight through
+        # to the never-rendered ``backlog`` bucket.
+        return "in-progress"
     if active and version == active:
         return "in-progress"
     if status == "todo" and milestone == "alpha":
@@ -211,11 +242,6 @@ def bullet_lines(prefix: str, text: str) -> list[str]:
     rendered = [f"{prefix} {lines[0]}"]
     rendered.extend(f"  {line}" if line else "" for line in lines[1:])
     return rendered
-
-
-def _version_key(version: str) -> tuple[int, ...]:
-    """Sort key for a dotted ``X.Y.Z`` version (so ``0.0.10`` > ``0.0.9``)."""
-    return tuple(int(part) for part in version.split("."))
 
 
 def render_relative_size_scale(dashboard_data: dict[str, Any]) -> str:
@@ -455,7 +481,7 @@ def render_card(card: dict[str, Any]) -> list[str]:
                 card,
             )
             if text:
-                lines.extend(bullet_lines(f"- {kind}: {text} ->", target))
+                lines.extend(bullet_lines(f"- {kind}:", f"{text} -> {target}"))
             else:
                 lines.append(f"- {kind}: {target}")
         lines.append("")
@@ -466,7 +492,16 @@ def render_card(card: dict[str, Any]) -> list[str]:
 def render_markdown(dashboard_data: dict[str, Any]) -> str:
     """Render the complete kanban board markdown."""
     docs = sorted(dashboard_data["boardDocs"], key=lambda doc: doc["order"])
-    link_definitions = next((doc for doc in docs if doc["key"] == LINK_DEFINITIONS_KEY), None)
+    link_def_docs = [doc for doc in docs if doc["key"] == LINK_DEFINITIONS_KEY]
+    if len(link_def_docs) > 1:
+        # The payload is namespace-filtered to ``kanban`` upstream, so exactly one
+        # link-definitions doc reaches here today. Guard the invariant rather than
+        # let a loosened filter make the ``next()``-style pick silently order-dependent.
+        raise RuntimeError(
+            f"Expected at most one {LINK_DEFINITIONS_KEY!r} board doc, "
+            f"found {len(link_def_docs)}.",
+        )
+    link_definitions = link_def_docs[0] if link_def_docs else None
     docs = [doc for doc in docs if doc["key"] != LINK_DEFINITIONS_KEY]
 
     cards_by_column = defaultdict(list)
@@ -491,15 +526,52 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
     if link_definitions is not None:
         rendered.extend(render_doc(link_definitions, computed))
 
-    return finalize_markdown(rendered)
+    # Every non-backlog card must have actually been rendered. This catches a card
+    # routed to an unrendered column (e.g. the earlier wip-version misroute) and a
+    # COLUMN_DOC_KEYS entry whose backing board doc was renamed or deleted - both of
+    # which would otherwise drop cards from the export while ``main()`` still reports
+    # them as written.
+    expected_card_ids = {
+        card["id"]
+        for card in dashboard_data["cards"]
+        if card_column_key(card, active) != "backlog"
+    }
+    dropped = expected_card_ids - rendered_card_ids
+    if dropped:
+        raise RuntimeError(
+            f"{len(dropped)} non-backlog card(s) were not rendered "
+            f"(ids {sorted(dropped)}): a card routed to an unrendered column, or a "
+            "COLUMN_DOC_KEYS board doc is missing from the payload.",
+        )
+
+    text = finalize_markdown(rendered)
+
+    # No placeholder should survive resolution: a leftover ``{{card_ref:N}}`` points
+    # at a missing reference row, and a leftover ``{{token}}`` is a typo in board-doc
+    # prose with no matching computed value. Either would ship a raw brace into the doc.
+    leftovers = sorted(set(UNRESOLVED_PLACEHOLDER_RE.findall(text)))
+    if leftovers:
+        raise RuntimeError(
+            f"KANBAN.md still contains unresolved placeholders: {leftovers}.",
+        )
+    return text
 
 
-def main() -> None:
+def main() -> int:
     """Build the markdown board."""
     args = parse_args()
     configure_django()
     dashboard_data = fetch_dashboard_data()
     markdown = render_markdown(dashboard_data)
+
+    if args.check:
+        current = args.md.read_text(encoding="utf-8") if args.md.exists() else ""
+        if current != markdown:
+            print(f"{args.md} is not up to date; run scripts/build_kanban_md.py.", file=sys.stderr)
+            return 1
+        print(f"{args.md} is up to date.")
+        return 0
+
     args.md.write_text(markdown, encoding="utf-8")
     active = active_version(dashboard_data["cards"])
     exported_card_count = sum(
@@ -512,7 +584,8 @@ def main() -> None:
         f"(excluded {excluded_card_count} backlog cards) and "
         f"{len(dashboard_data['boardDocs'])} board docs to {args.md}",
     )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

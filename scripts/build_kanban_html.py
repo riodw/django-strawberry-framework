@@ -476,11 +476,13 @@ def _pct(part: float, whole: float) -> float:
     return round(100 * part / whole, 1) if whole else 0.0
 
 
-def _version_tuple(text: str | None) -> tuple[int, ...]:
+def version_tuple(text: str | None) -> tuple[int, ...]:
     """Parse a ``"X.Y.Z"`` version string to a comparable int tuple (digits only).
 
     Tolerant of empty / suffixed segments (``"1.0.0 (stable)"`` -> ``(1, 0, 0)``);
     a missing or empty version yields ``(0,)`` so an unbounded floor sorts low.
+    Shared with ``build_kanban_md.py`` so both exports order versions identically -
+    a suffixed version string must not render on one side and crash the other.
     """
     parts: list[int] = []
     for segment in (text or "").split("."):
@@ -530,7 +532,7 @@ def compute_progress_metrics(cards: list[dict[str, Any]]) -> dict[str, Any]:
         # (``<=``). A card with no target version is treated as pre-release work.
         target = card.get("targetVersion") or {}
         number = target.get("number")
-        return number is None or _version_tuple(number) <= _RELEASE_VERSION
+        return number is None or version_tuple(number) <= _RELEASE_VERSION
 
     universe = [card for card in cards if (card.get("status") or {}).get("key") != "backlog"]
 

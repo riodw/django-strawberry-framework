@@ -5,7 +5,8 @@ spec's slice checklist: Slice 1 (the Strawberry test-module gate +
 `TESTING_ENDPOINT` + `testing/client.py` + re-exports +
 `tests/testing/test_client.py` + the targeted Slice-1 live conversions),
 Slice 2 (remaining live-suite switchover), Slice 3 (docs + card wrap; no
-version bump - the joint `0.0.14` cut owns it). This build ran Slice 1 only.
+version bump - the joint `0.0.14` cut owns it). Slice 1 landed first; Slices 2
+and 3 landed in a follow-on pass, recorded below.
 
 ## Slice 1 - Strawberry test-module gate record
 
@@ -90,3 +91,58 @@ of one parametrized test (rung-specific assertions; coverage equivalent).
   by a concurrent session's worker files - re-run the gate on a quiet tree).
 - `ruff check` / `ruff format --check` / ASCII-only: clean on the touched
   files.
+
+## Slice 2 - remaining live-suite switchover
+
+- Root-cause reimplementation of the shared helper: `examples/fakeshop/graphql_client.py`
+  `post_graphql` now delegates to
+  `django_strawberry_framework.testing.TestClient` (`assert_no_errors=False`,
+  returning the raw `HttpResponse` off `Response.response`), so every live
+  suite's ordinary JSON post shares the package client's body / decode path;
+  `graphql_payload` / `assert_graphql_success` / `assert_graphql_data` chain
+  through it unchanged. `post_graphql_raw` stays a raw `client.post` - the
+  documented raw-envelope exemption.
+- Per-file wrappers converted / deleted onto `TestClient`: `test_kanban_api.py`
+  (local `_graphql_data` / `_assert_graphql_data` removed, now imported from
+  `graphql_client`), `test_mutation_atomicity.py` (`_post_update` /
+  `_post_update_description` / `_post_create` / `_post_delete`),
+  `test_debug_toolbar_api.py` (`_post_graphql`), and `test_library_api.py`
+  (`_post_graphql_as_staff` -> `TestClient().login()`; this file was also touched
+  by the concurrent optimizer session and its conversion landed in `3ca7b291`).
+- Every retained raw `client.post(...)` carries a one-line wire-shape exemption
+  comment: the two hand-built multipart uploads in `test_products_api.py` and the
+  malformed / raw-envelope cases whose subject is the wire shape itself
+  (spec Decision 11).
+- Query-count (`CaptureQueriesContext`) boundaries unchanged - the helper is
+  transport-only and adds no queries.
+
+## Slice 3 - docs + card wrap (no version bump)
+
+- GLOSSARY `TestClient` / `GraphQLTestCase` entry bodies updated to the
+  implemented contract; the `Auth mutations` Channels-deferral sentence resolved
+  to the follow-on; term statuses stay `planned for 0.0.14` until the joint cut.
+- `docs/TREE.md` regenerated via `scripts/build_tree_md.py`: the
+  `testing/client.py` row moved off `planned by WIP-ALPHA-043-0.0.14` to its real
+  docstring-derived row, and `tests/testing/test_client.py` +
+  `examples/fakeshop/test_query/test_client_api.py` appear in the test tree.
+- Kanban card `WIP-ALPHA-043-0.0.14` -> `DONE-043-0.0.14` via DB edit +
+  `scripts/build_kanban_md.py` / `build_kanban_html.py` re-render. The card's
+  `django_strawberry_framework/testing/client.py` `TrackedPath` is `is_current=True`
+  so the Done card renders it as a live package file, not `historical` (the
+  feedback2 P2 fix; the DB row had lingered non-current from the planned phase).
+- No version bump: `pyproject.toml` / `__version__` /
+  `tests/base/test_init.py::test_version` still read `0.0.13`; the joint `0.0.14`
+  cut owns the version quintet and the GLOSSARY status flips.
+
+## Migration-guide handoff rows (for `TODO-BETA-056-0.1.6`)
+
+- `strawberry_django.test.client.TestClient` / `AsyncTestClient` ->
+  `django_strawberry_framework.testing.TestClient` / `AsyncTestClient`
+  (constructor `path=` is now optional; the endpoint resolves from
+  `DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]`, default `/graphql/`).
+- `graphene_django.utils.testing.GraphQLTestCase` ->
+  `django_strawberry_framework.testing.GraphQLTestCase`, with three documented
+  deltas: `query()` returns the typed `Response` (not a raw `HttpResponse`),
+  graphene's `input_data=` convenience is not carried, and everything after
+  `query` is keyword-only (graphene's positional `operation_name` becomes
+  `operation_name=`).

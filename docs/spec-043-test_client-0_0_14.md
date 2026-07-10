@@ -1,6 +1,7 @@
 # Spec: Test client helper — `TestClient` / `AsyncTestClient` + the `GraphQLTestMixin` test-case family in `testing/client.py`, the package's live-HTTP test ergonomics
 
-Planned for `0.0.14` (card [`WIP-ALPHA-043-0.0.14`][kanban]). This card adds the
+Built for `0.0.14` (card [`DONE-043-0.0.14`][kanban]); the `0.0.14` version
+release rides the joint cut with 044 (see `Status:` below). This card adds the
 package's **consumer-facing GraphQL test client**: a new
 `django_strawberry_framework/testing/client.py` module exposing `TestClient` /
 `AsyncTestClient` (thin wrappers over Django's `django.test.Client` /
@@ -68,7 +69,7 @@ cut][glossary-joint-version-cut]. So the `pyproject.toml` / `__version__` /
 this card — the same shared-cut posture [`spec-042`][spec-042] Decision 10 and
 [`spec-041`][spec-041] Decision 10 took. No slice below bumps the version.
 
-Status: **PLANNED — no slice built yet.**
+Status: **COMPLETE (card `DONE-043-0.0.14`) — all three slices built and the card-wrap landed; the `0.0.14` version release rides the joint cut (044 pending).**
 Three slices (the card is an M with one module, one settings key, one unit-test
 file, and a mechanically-wide but semantically-shallow live-suite switchover):
 Slice 1 (**the `TESTING_ENDPOINT` settings key + `testing/client.py` + the
@@ -166,6 +167,37 @@ Revision history (kept inline so the spec is self-contained):
   this card ships none either, with the alias named as a cheap fallback if the
   maintainer wants the
   card's wording honored literally.
+- **Revision 2** — follow-up-review absorption (2026-07-09, `docs/feedback2.md`),
+  the spec-043 closeout-consistency pass. **P2 — the spec and build trail still
+  said "not built" while card `043` was Done.** The opener still read "Planned
+  for `0.0.14`" with the authoring-time `WIP-ALPHA-043-0.0.14` id and the
+  `Status:` line still said "PLANNED — no slice built yet," contradicting the
+  shipped `DONE-043-0.0.14` card — a release-evidence split, since
+  [`AGENTS.md`][agents] treats the spec/build trail as part of the work product.
+  Realigned to the shipped-spec convention (past-tense "Built for" + `DONE-` id,
+  `Status:` flipped to COMPLETE), matching spec-042 Revision 8 and spec-040, and
+  the build record `docs/builder/build-043-test_client-0_0_14.md` gained its
+  Slice 2 (live-suite switchover) and Slice 3 (docs + card wrap) sections. The
+  review's implicit expectation that the *unticked checklist* is itself the
+  defect was **not adopted**: every shipped spec leaves its Slice checklist and
+  Definition-of-done boxes unticked by convention — the `Status:` line is the
+  completion source of truth — so only the contradictory opener/status were
+  corrected, as spec-042 Revision 8 settled. The GLOSSARY term statuses stay
+  `planned for 0.0.14` until the joint cut
+  ([Decision 12](#decision-12--version-bumps-are-owned-by-the-joint-0014-cut)).
+  **P2 — the Done card marked `testing/client.py` as `historical`.** The kanban
+  `TrackedPath` row for the live package file still carried `is_current=False`
+  from the planned phase, so the DB-backed [`KANBAN.md`][kanban] / `KANBAN.html`
+  exports rendered it `historical` on the Done card while [`docs/TREE.md`][tree]
+  correctly showed it current; fixed at the DB source (`is_current=True`) and
+  both exports regenerated. **P3 — the class-based live tests reloaded the schema
+  before seeding.** The three `unittest`-family cases in
+  `examples/fakeshop/test_query/test_client_api.py` called
+  `reload_all_project_schemas()` inside each `setUp()` ahead of `seed_data(1)`,
+  duplicating the file's autouse `_reload_project_schema_for_acceptance_tests`
+  fixture; the manual reloads were removed so `seed_data(1)` is the first
+  domain-setup line after `super().setUp()`, per the [`AGENTS.md`][agents]
+  seed-helper rule.
 
 ## Key glossary references
 

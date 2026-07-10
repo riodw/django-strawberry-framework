@@ -30,7 +30,6 @@ from apps.products.services import create_users, seed_data
 from django.contrib.auth import get_user_model
 from django.test import override_settings
 from django.urls import include, path, resolve
-from schema_reload import reload_all_project_schemas
 from strawberry import relay
 
 from django_strawberry_framework.testing import (
@@ -201,7 +200,6 @@ class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
 
     def setUp(self):
         super().setUp()
-        reload_all_project_schemas()
         seed_data(1)
 
     def test_seeded_query_via_self_client_passes_no_errors(self):
@@ -239,7 +237,6 @@ class GraphQLTestCaseClassAttrEndpointTests(GraphQLTestCase):
 
     def setUp(self):
         super().setUp()
-        reload_all_project_schemas()
         seed_data(1)
 
     def test_class_attr_endpoint_hits_the_real_view(self):
@@ -253,7 +250,6 @@ class GraphQLTransactionTestCaseSmokeTests(GraphQLTransactionTestCase):
 
     def setUp(self):
         super().setUp()
-        reload_all_project_schemas()
         seed_data(1)
 
     def test_one_clean_seeded_query_round_trips(self):

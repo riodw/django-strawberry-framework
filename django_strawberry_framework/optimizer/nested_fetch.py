@@ -43,6 +43,7 @@ from django.db.models import Prefetch
 from django.db.models.query import ModelIterable
 
 from ..exceptions import ConfigurationError
+from ..utils.connections import assert_window_fetch_mode_for
 from .join_taxonomy import RelationJoinDescriptor
 from .plans import OptimizationPlan, append_prefetch_unique, apply_window_pagination
 
@@ -126,6 +127,22 @@ class NestedConnectionRequest:
     to_attr: str
     lookup: str
     next_page_probe: bool = False
+
+    def __post_init__(self) -> None:
+        """Enforce the probe/count mutual-exclusion at the strategy seam.
+
+        The request is the boundary EVERY strategy consumes, so validating the
+        fetch mode here (the shared ``assert_window_fetch_mode_for``) guards the
+        windowed and lateral backends alike against an engaged-probe window that
+        also carries the partition count.
+        """
+        assert_window_fetch_mode_for(
+            offset=self.offset,
+            limit=self.limit,
+            reverse=self.reverse,
+            with_total_count=self.with_total_count,
+            next_page_probe=self.next_page_probe,
+        )
 
 
 class NestedConnectionStrategy(Protocol):

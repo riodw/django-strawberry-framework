@@ -45,4 +45,9 @@ class OptimizerError(DjangoStrawberryFrameworkError):
           resolver and the nested-connection window-partition path (a
           single-valued forward relation or any kind without a windowable
           parent partition).
+        - Window fetch-mode contract: ``utils/connections.py::
+          assert_window_fetch_mode`` rejects a window that engages the
+          count-free ``hasNextPage`` probe while also annotating the partition
+          count (a planner/strategy bug that would otherwise pass the n+1
+          sentinel through as a real edge).
     """

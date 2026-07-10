@@ -61,7 +61,7 @@ from django.db.models import QuerySet
 from django.db.models.expressions import Window
 from django.db.models.query import ModelIterable
 
-from ..utils.connections import window_range_plan
+from ..utils.connections import assert_window_fetch_mode_for, window_range_plan
 from .join_taxonomy import LateralJoinShape
 from .nested_fetch import (
     WINDOWED_STRATEGY,
@@ -122,6 +122,21 @@ class LateralWindowSpec:
     reverse: bool
     with_total_count: bool
     next_page_probe: bool = False
+
+    def __post_init__(self) -> None:
+        """Enforce the probe/count mutual-exclusion on the lateral window spec.
+
+        The lateral twin of ``NestedConnectionRequest.__post_init__``: the same
+        shared ``assert_window_fetch_mode_for`` so the raw-SQL backend cannot
+        develop a different fetch-mode contract from the ORM window.
+        """
+        assert_window_fetch_mode_for(
+            offset=self.offset,
+            limit=self.limit,
+            reverse=self.reverse,
+            with_total_count=self.with_total_count,
+            next_page_probe=self.next_page_probe,
+        )
 
 
 def build_lateral_sql(

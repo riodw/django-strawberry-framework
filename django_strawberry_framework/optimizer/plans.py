@@ -41,7 +41,7 @@ from django.db.models import Count, Prefetch, Q, Window
 from django.db.models.functions import RowNumber
 
 from ..exceptions import OptimizerError
-from ..utils.connections import window_range_plan
+from ..utils.connections import assert_window_fetch_mode, window_range_plan
 from .join_taxonomy import classify_relation_join
 
 
@@ -803,11 +803,17 @@ def apply_window_pagination(
 
     ``with_total_count`` is the conditional-count contract (connection window
     rigor, workstream B; the MrThearMan-optimizer lesson): the per-partition
-    count costs on every row, so the walker passes ``False`` when nothing in
-    the selection can observe it
-    (``selections.py::connection_count_required``). The default ``True``
-    preserves every direct caller; the fast path treats a missing annotation
-    as "not planned" and degrades safely
+    count costs on every row, so the walker passes ``False`` when nothing in the
+    selection can observe the count - and, via the count-free ``hasNextPage``
+    probe, ALSO when a plain ``first: N`` page selects only ``hasNextPage`` (not
+    ``totalCount``), which overfetches an n+1 sentinel instead (``next_page_probe``
+    below). The walker computes the ``totalCount`` and ``hasNextPage`` observers
+    SEPARATELY and applies that probe exception rather than gating on the combined
+    ``selections.py::connection_count_required`` observability predicate; the two
+    fetch modes are mutually exclusive by construction (enforced by
+    ``utils/connections.py::assert_window_fetch_mode`` at the window entry). The
+    default ``True`` preserves every direct caller; the fast path treats a missing
+    annotation as "not planned" and degrades safely
     (``connection.py::_resolve_from_window`` #"defensive per-parent").
 
     The same ``order_by`` tuple is also applied to the queryset itself via
@@ -845,6 +851,7 @@ def apply_window_pagination(
         reverse=reverse,
         next_page_probe=next_page_probe,
     )
+    assert_window_fetch_mode(range_plan, with_total_count=with_total_count)
     queryset = queryset.order_by(*order_by)
     annotations = {
         WINDOW_ROW_NUMBER: Window(

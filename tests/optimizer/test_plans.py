@@ -777,6 +777,19 @@ class TestApplyWindowPagination:
         assert "<= 5" in sql  # offset 2 + limit 3, no +1
         assert "<= 6" not in sql
 
+    def test_engaged_probe_with_count_is_rejected(self):
+        """An engaged-probe window that also annotates the count fails loudly.
+
+        The probe/count mutual-exclusion contract at the ORM window entry point
+        (``utils/connections.py::assert_window_fetch_mode``): a ``plain_first_page``
+        window (offset 0, ``limit`` > 0) with ``next_page_probe=True`` engages the
+        overfetch, so ``with_total_count=True`` is a planner bug - the sentinel
+        would leak as a real edge. The off-shape case is inert and stays allowed
+        (``test_next_page_probe_ignored_off_the_plain_first_page_shape`` above).
+        """
+        with pytest.raises(OptimizerError, match="mutually exclusive"):
+            self._windowed(offset=0, limit=3, with_total_count=True, next_page_probe=True)
+
     def test_with_total_count_false_reverse_branch_still_bounds(self):
         """The reverse (last-only) branch honors ``with_total_count=False`` too."""
         qs = self._windowed(offset=0, limit=2, reverse=True, with_total_count=False)

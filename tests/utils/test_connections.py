@@ -12,12 +12,15 @@ import pytest
 from strawberry.relay.types import to_base64
 from strawberry.relay.utils import SliceMetadata
 
+from django_strawberry_framework.exceptions import OptimizerError
 from django_strawberry_framework.utils.connections import (
     CONNECTION_FILTER_KWARG,
     CONNECTION_ORDER_KWARG,
     CONNECTION_SIDECAR_KWARGS,
     ConnectionWindowBounds,
     UnwindowableConnection,
+    assert_window_fetch_mode,
+    assert_window_fetch_mode_for,
     connection_sidecar_inputs_from_kwargs,
     derive_connection_window_bounds,
     has_connection_sidecar_input,
@@ -228,16 +231,37 @@ def test_fetch_bounds_add_one_only_when_probe_active():
     """``fetch_upper_bound`` / ``fetch_limit`` add the single sentinel row iff probing.
 
     Equal to the PAGE bounds (``upper_bound`` / ``limit``) whenever the probe is
-    off, so every existing renderer call site is untouched by construction.
+    off, so every existing renderer call site is untouched by construction. Both
+    bounds add the SAME ``_probe_increment`` primitive (the single owner of the
+    n+1 arithmetic), so they cannot drift.
     """
     off = window_range_plan(offset=0, limit=3, reverse=False)
+    assert off._probe_increment == 0
     assert off.fetch_upper_bound == off.upper_bound == 3
     assert off.fetch_limit == off.limit == 3
     on = window_range_plan(offset=0, limit=3, reverse=False, next_page_probe=True)
+    assert on._probe_increment == 1
     assert on.upper_bound == 3  # page bound unchanged
     assert on.limit == 3
     assert on.fetch_upper_bound == 4  # +1 sentinel
     assert on.fetch_limit == 4
+    # Both derived bounds add the one shared increment - no independent ``+1``.
+    assert on.fetch_upper_bound - on.upper_bound == on._probe_increment
+    assert on.fetch_limit - on.limit == on._probe_increment
+
+
+def test_fetch_bounds_are_none_for_an_unbounded_window():
+    """An unbounded window (no ``first``) has no fetch ceiling - both bounds are None.
+
+    The probe never engages off the plain-first-page shape, so an unbounded
+    window carries no ``upper_bound`` / ``limit`` and both derived fetch bounds
+    stay ``None`` (nothing for the ``_probe_increment`` to add to).
+    """
+    unbounded = window_range_plan(offset=0, limit=None, reverse=False)
+    assert unbounded.upper_bound is None
+    assert unbounded.limit is None
+    assert unbounded.fetch_upper_bound is None
+    assert unbounded.fetch_limit is None
 
 
 def test_probe_and_marker_shapes_are_mutually_exclusive():
@@ -266,6 +290,56 @@ def test_probe_and_marker_shapes_are_mutually_exclusive():
                 if plan.wants_next_page_probe(has_next_selected=True, total_selected=False):
                     assert plan.add_marker_rows is False
                     assert plan.plain_first_page is True
+
+
+def test_assert_window_fetch_mode_rejects_engaged_probe_with_count():
+    """An engaged probe window carrying the count is a rejected planner bug.
+
+    The probe answers ``hasNextPage`` from an overfetched sentinel; a count
+    annotation makes the resolver treat that sentinel as a real edge. On the
+    ``plain_first_page`` shape (where the probe engages) the two fetch modes are
+    mutually exclusive and the contract raises loudly - never normalizes.
+    """
+    engaged = window_range_plan(offset=0, limit=3, reverse=False, next_page_probe=True)
+    assert engaged.next_page_probe is True
+    with pytest.raises(OptimizerError, match="mutually exclusive"):
+        assert_window_fetch_mode(engaged, with_total_count=True)
+    # The probe alone (no count) is the legitimate count-free shape.
+    assert_window_fetch_mode(engaged, with_total_count=False)
+
+
+def test_assert_window_fetch_mode_allows_count_without_probe():
+    """A counted window with no engaged probe is the ordinary shape - allowed."""
+    plain = window_range_plan(offset=0, limit=3, reverse=False)
+    assert plain.next_page_probe is False
+    assert_window_fetch_mode(plain, with_total_count=True)
+
+
+def test_assert_window_fetch_mode_for_allows_inert_off_shape_probe_with_count():
+    """The RAW-flag pair is fine off the plain-first-page shape (the probe is inert).
+
+    ``window_range_plan`` drops ``next_page_probe`` off the ``plain_first_page``
+    shape, so an ``after``-offset window passed both flags never overfetches and
+    must not be rejected - the contract keys on the EFFECTIVE probe, not the raw
+    request flags (guarding the off-shape unit path in
+    ``test_plans.py::test_next_page_probe_ignored_off_the_plain_first_page_shape``).
+    """
+    assert_window_fetch_mode_for(
+        offset=2,
+        limit=3,
+        reverse=False,
+        with_total_count=True,
+        next_page_probe=True,
+    )
+    # The same params on the plain-first-page shape DO engage the probe -> reject.
+    with pytest.raises(OptimizerError, match="mutually exclusive"):
+        assert_window_fetch_mode_for(
+            offset=0,
+            limit=3,
+            reverse=False,
+            with_total_count=True,
+            next_page_probe=True,
+        )
 
 
 def _rows(*row_numbers):

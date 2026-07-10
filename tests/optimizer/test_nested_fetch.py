@@ -15,7 +15,7 @@ from apps.library.models import Genre
 from django.db.models import Prefetch
 
 from django_strawberry_framework import DjangoOptimizerExtension
-from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
 from django_strawberry_framework.optimizer.nested_fetch import (
     WINDOWED_STRATEGY,
     WindowedPrefetchStrategy,
@@ -48,6 +48,20 @@ def test_windowed_strategy_attaches_windowed_prefetch():
     annotations = entry.queryset.query.annotations
     assert WINDOW_ROW_NUMBER in annotations
     assert WINDOW_TOTAL_COUNT in annotations
+
+
+def test_request_rejects_engaged_probe_with_count():
+    """The strategy seam rejects an engaged-probe request that also wants the count.
+
+    ``NestedConnectionRequest`` is the boundary every strategy consumes, so its
+    construction enforces the probe/count mutual-exclusion (the shared
+    ``assert_window_fetch_mode_for``): a plain-first-page request (offset 0,
+    ``limit`` > 0) with ``next_page_probe=True`` cannot also carry
+    ``with_total_count=True``. The walker never emits this pair; a future
+    strategy or direct caller that does fails loudly here.
+    """
+    with pytest.raises(OptimizerError, match="mutually exclusive"):
+        _books_request(with_total_count=True, next_page_probe=True)
 
 
 def test_windowed_strategy_honors_conditional_count():

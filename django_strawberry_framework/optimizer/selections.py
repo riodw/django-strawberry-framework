@@ -537,20 +537,29 @@ def connection_has_next_page_selected(selection: Any) -> bool:
 
 
 def connection_count_required(selection: Any) -> bool:
-    """Return whether a connection selection needs the partition total count.
+    """Return whether a connection selection can OBSERVE the partition total count.
 
-    The plan-time half of the conditional ``_dst_total_count`` contract
-    (connection window rigor, workstream B): the window annotates the
-    ``Count(1) OVER (PARTITION BY ...)`` only when something in the selection
-    can OBSERVE it - ``totalCount`` as a direct child of the connection, or
-    ``hasNextPage`` under a direct ``pageInfo`` child (the fast path derives
-    ``hasNextPage`` as ``row_number < total``; cursors and ``hasPreviousPage``
-    need only ``_dst_row_number``). Both walks live in the two per-selection
-    primitives above, which the resolve-time predicates
-    (``connection.py::_total_count_requested`` and its ``hasNextPage``
-    sibling) call too, so plan-time and resolve-time share ONE
-    implementation of each walk - and the resolve-time defensive fallback
-    covers even a drift in this module.
+    The count-OBSERVABILITY predicate (connection window rigor, workstream B):
+    ``True`` when the selection carries ``totalCount`` as a direct child of the
+    connection, or ``hasNextPage`` under a direct ``pageInfo`` child - the two
+    fields a per-partition ``Count(1) OVER (PARTITION BY ...)`` can serve
+    (cursors and ``hasPreviousPage`` need only ``_dst_row_number``). Both walks
+    live in the two per-selection primitives above, which the resolve-time
+    predicates (``connection.py::_total_count_requested`` and its ``hasNextPage``
+    sibling) call too, so plan-time and resolve-time share ONE implementation of
+    each walk - and the resolve-time defensive fallback covers even a drift here.
+
+    This is the generic observability gate, NOT the planner's final count
+    decision. The walker computes the ``totalCount`` and ``hasNextPage``
+    observers SEPARATELY (``walker.py::_plan_connection_relation``) and layers the
+    count-free probe exception on top: a plain ``first: N`` page that selects
+    ``hasNextPage`` but NOT ``totalCount`` is served by the n+1 overfetch probe
+    with NO ``_dst_total_count`` annotation
+    (``utils/connections.py::WindowRangePlan.wants_next_page_probe``), its
+    ``hasNextPage`` read from the sentinel's presence rather than
+    ``row_number < total``. Every other count-observable shape still annotates
+    the count. So ``True`` here means "the count is observable"; the planner then
+    chooses count vs probe.
 
     Alias-merged selections carry the UNION of every alias's children
     (``walker.py::_merge_aliased_selections``), so one alias selecting

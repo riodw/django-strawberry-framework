@@ -35,6 +35,8 @@ from typing import Any
 
 from strawberry.relay.utils import SliceMetadata
 
+from ..exceptions import OptimizerError
+
 # The Python kwarg names for the connection sidecar arguments. Strawberry
 # exposes ``order_by`` as the camelCase ``orderBy`` GraphQL argument; this is the
 # PYTHON kwarg name (the key in the resolver ``**kwargs`` and in the walker's
@@ -133,11 +135,13 @@ class WindowRangePlan:
     instead of a ``COUNT(1) OVER (PARTITION BY ...)`` that scans the whole
     partition. It is honored only on the ``plain_first_page`` shape (every
     other shape already needs the count for an independent reason), so it and
-    ``add_marker_rows`` are mutually exclusive by construction. The ``+1`` lives
-    in exactly one place - the ``fetch_upper_bound`` / ``fetch_limit`` derived
-    bounds the renderers read UNCONDITIONALLY; ``upper_bound`` / ``limit`` keep
-    their PAGE semantics (the resolver's split and the marker predicate depend
-    on that). The plan-time decision is ``wants_next_page_probe``, the pure
+    ``add_marker_rows`` are mutually exclusive by construction. The ``+1``
+    sentinel arithmetic lives in exactly one place - the ``_probe_increment``
+    primitive that both ``fetch_upper_bound`` and ``fetch_limit`` add to the
+    derived bounds the renderers read UNCONDITIONALLY; ``upper_bound`` /
+    ``limit`` keep their PAGE semantics (the resolver's split and the marker
+    predicate depend on that). The plan-time decision is
+    ``wants_next_page_probe``, the pure
     predicate the walker calls; the resolver does NOT re-derive it from the
     selection (same-argument aliases share one window whose shape was fixed
     from the MERGED selection, so a per-alias re-derivation would drift) - it
@@ -156,28 +160,40 @@ class WindowRangePlan:
     next_page_probe: bool = False
 
     @property
+    def _probe_increment(self) -> int:
+        """The sentinel-row count the probe adds to a fetch bound (1 iff probing).
+
+        The single owner of the n+1 arithmetic: ``fetch_upper_bound`` and
+        ``fetch_limit`` both add THIS instead of each spelling their own ``+1``,
+        so the sentinel policy has one place to change and the two bounds cannot
+        drift. Zero when the probe is off, so both bounds equal their page
+        semantics by construction.
+        """
+        return 1 if self.next_page_probe else 0
+
+    @property
     def fetch_upper_bound(self) -> int | None:
         """The inclusive row-number ceiling to FETCH (page bound plus the probe sentinel).
 
-        Equals ``upper_bound`` whenever the probe is off, so every existing
-        renderer call site and test is untouched by construction; adds the one
-        sentinel row for the probe shape. The ``+1`` exists here and in
-        ``fetch_limit`` only - the renderers never re-derive it.
+        Equals ``upper_bound`` whenever the probe is off (``_probe_increment`` is
+        zero), so every existing renderer call site and test is untouched by
+        construction; adds the one sentinel row for the probe shape.
         """
-        if self.next_page_probe and self.upper_bound is not None:
-            return self.upper_bound + 1
-        return self.upper_bound
+        if self.upper_bound is None:
+            return None
+        return self.upper_bound + self._probe_increment
 
     @property
     def fetch_limit(self) -> int | None:
         """The plain-first-page in-branch ``LIMIT`` to FETCH (page size plus the probe sentinel).
 
         The lateral fast branch reads this instead of ``limit``; equal to
-        ``limit`` when the probe is off.
+        ``limit`` when the probe is off (shares ``_probe_increment`` with
+        ``fetch_upper_bound``).
         """
-        if self.next_page_probe and self.limit is not None:
-            return self.limit + 1
-        return self.limit
+        if self.limit is None:
+            return None
+        return self.limit + self._probe_increment
 
     def wants_next_page_probe(self, *, has_next_selected: bool, total_selected: bool) -> bool:
         """Whether this window should serve ``hasNextPage`` from an overfetch probe.
@@ -250,6 +266,65 @@ def window_range_plan(
         plain_first_page=plain_first_page,
         requires_total_count=ambiguous or limit is None,
         next_page_probe=next_page_probe and plain_first_page,
+    )
+
+
+def assert_window_fetch_mode(range_plan: WindowRangePlan, *, with_total_count: bool) -> None:
+    """Enforce the probe/count mutual-exclusion contract on a RESOLVED window plan.
+
+    The count-free ``hasNextPage`` probe (``range_plan.next_page_probe``, already
+    normalized by ``window_range_plan`` to the ``plain_first_page`` shape) fetches
+    one sentinel row past the page and answers ``hasNextPage`` from its presence.
+    A window that engages the probe must NOT also annotate the partition count:
+    the resolver infers "no probe" from a present ``_dst_total_count`` and would
+    pass the n+1 sentinel through as a real edge
+    (``connection.py::_resolve_from_window``). The invariant is the EFFECTIVE
+    state, not the raw flags - a ``next_page_probe`` request off the plain-first-page
+    shape is inert (``window_range_plan`` drops it), so it may coexist with the
+    count harmlessly and is not rejected here.
+
+    The single owner of the boundary check every window entry point shares
+    (``plans.py::apply_window_pagination`` for the ORM window,
+    ``nested_fetch.py::NestedConnectionRequest`` and
+    ``lateral_fetch.py::LateralWindowSpec`` at construction). Raises the loud
+    ``OptimizerError`` - never silently normalizes one flag - so a planner or
+    strategy bug surfaces at its origin instead of corrupting a page. It is not a
+    ``ValueError`` / ``TypeError``, so the walker's leave-unplanned pagination
+    handler cannot swallow it.
+    """
+    if with_total_count and range_plan.next_page_probe:
+        raise OptimizerError(
+            "A count-free hasNextPage probe window (next_page_probe) cannot also "
+            "annotate the partition count (with_total_count): the resolver would "
+            "pass the overfetched sentinel row through as a real edge. These fetch "
+            "modes are mutually exclusive.",
+        )
+
+
+def assert_window_fetch_mode_for(
+    *,
+    offset: int,
+    limit: int | None,
+    reverse: bool,
+    with_total_count: bool,
+    next_page_probe: bool,
+) -> None:
+    """``assert_window_fetch_mode`` for callers holding RAW window arguments.
+
+    The request objects (``NestedConnectionRequest`` / ``LateralWindowSpec``)
+    carry ``(offset, limit, reverse, next_page_probe)`` rather than a resolved
+    ``WindowRangePlan``; this resolves the plan through the shared
+    ``window_range_plan`` and delegates, so the effective-state rule is spelled
+    exactly once.
+    """
+    assert_window_fetch_mode(
+        window_range_plan(
+            offset=offset,
+            limit=limit,
+            reverse=reverse,
+            next_page_probe=next_page_probe,
+        ),
+        with_total_count=with_total_count,
     )
 
 

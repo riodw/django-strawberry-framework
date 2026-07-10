@@ -212,13 +212,42 @@ def test_next_page_probe_parity_is_count_free():
     page overfetches one sentinel row instead of scanning the partition to
     count. The exact ``LIMIT page + 1`` builder shape is pinned on SQLite
     (``test_sql_next_page_probe_overfetches_one_row_in_branch``); here the bar is
-    that a live Postgres server pages byte-identically without a count.
+    that a live Postgres server pages byte-identically without a count - for a
+    populated parent AND the childless shelf C (the empty-window branch).
     """
     _seed_library()
-    query = f"{{ shelves {{ id booksConnection(first: 2) {{ {_NEXT_PAGE_PROBE} }} }} }}"
+    query = f"{{ shelves {{ id code booksConnection(first: 2) {{ {_NEXT_PAGE_PROBE} }} }} }}"
     data, captured = _assert_parity(query, count_free=True)
     assert "COUNT(" not in captured[1]["sql"].upper()
     assert len(data["shelves"]) == 3  # including the childless shelf C.
+    by_code = {shelf["code"]: shelf["booksConnection"] for shelf in data["shelves"]}
+    # Shelf C (no books) resolves as an EMPTY page - empty edges + no next page -
+    # not a missing sentinel; shelf A (5 books) reports a next page from the probe.
+    assert by_code["C"]["edges"] == []
+    assert by_code["C"]["pageInfo"]["hasNextPage"] is False
+    assert by_code["A"]["pageInfo"]["hasNextPage"] is True
+
+
+def test_next_page_probe_parity_childless_no_edges_shape():
+    """The count-free probe on the no-``edges`` shape, populated and childless parents.
+
+    The Relay invariant (``hasNextPage`` resolves without ``edges`` selected) on
+    the lateral probe path: a separate test (not a second ``_assert_parity`` call
+    in the sibling above) because each ``_assert_parity`` re-declares the shared
+    ``DjangoType`` graph, and the registry isolation is per-test. Both strategies
+    agree byte-for-byte and stay count-free; shelf C (no books) reports no next
+    page, shelf A (5 books) reports one - the empty window distinguished from a
+    short page with no ``edges`` in play.
+    """
+    _seed_library()
+    query = "{ shelves { code booksConnection(first: 2) { pageInfo { hasNextPage } } } }"
+    data, _ = _assert_parity(query, count_free=True)
+    flags = {
+        shelf["code"]: shelf["booksConnection"]["pageInfo"]["hasNextPage"]
+        for shelf in data["shelves"]
+    }
+    assert flags["C"] is False
+    assert flags["A"] is True
 
 
 def test_reverse_m2m_parity_joins_the_through_table_once():

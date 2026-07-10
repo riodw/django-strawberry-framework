@@ -6,12 +6,12 @@ import pytest
 from apps.library import models
 from django.contrib.auth import get_user_model
 from django.db import connection
-from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
 
+from django_strawberry_framework.testing import TestClient
 from django_strawberry_framework.testing.relay import global_id_for
 
 
@@ -771,16 +771,22 @@ def test_library_relay_node_global_id_round_trips():
 
 
 def _post_graphql_as_staff(query: str):
-    """Issue a GraphQL POST authenticated as a freshly-created staff user."""
+    """Issue a GraphQL POST authenticated as a freshly-created staff user, via ``TestClient``.
+
+    The authenticated flow through ``TestClient.login()`` (spec-043 Slice 2): the
+    force-login/logout bracket wraps the one post, and the raw ``HttpResponse``
+    the client kept on ``Response.response`` is returned so callers keep their
+    ``.status_code`` / ``.json()`` assertions.
+    """
     user_model = get_user_model()
     staff = user_model.objects.create_user(
         username="staff",
         password="pw",
         is_staff=True,
     )
-    client = Client()
-    client.force_login(staff)
-    return _post_graphql(query, client=client)
+    client = TestClient()
+    with client.login(staff):
+        return client.query(query, assert_no_errors=False).response
 
 
 @pytest.mark.django_db
@@ -3305,6 +3311,75 @@ def test_genre_books_connection_probe_short_page_reports_no_next_page():
 
 
 @pytest.mark.django_db
+def test_genre_books_connection_probe_childless_and_populated_parents():
+    """The probe serves a childless parent as an empty page, next to a populated one.
+
+    The empty-``to_attr`` branch of ``_resolve_from_window`` is load-bearing: an
+    empty window must render empty ``edges`` + ``hasNextPage`` False - never
+    confused with a missing sentinel or routed to a per-parent fallback. Pinned
+    LIVE over /graphql for a populated parent (full page -> next page) AND a
+    childless parent (empty page -> no next page) in ONE request, in both the
+    ``edges`` + ``pageInfo`` shape and the no-``edges`` (``pageInfo``-only) shape,
+    still count-free (the n+1 probe: no ``_dst_total_count`` / ``COUNT`` window)
+    and in the fixed two-query cost regardless of parent count.
+    """
+    shelf = _seed_shelf()
+    populated = models.Genre.objects.create(name="Populated")
+    for title in ("Aurora", "Binti", "Circe"):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(populated)
+    models.Genre.objects.create(name="Empty")  # childless parent, no books.
+
+    edges_query = """
+        query {
+          allLibraryGenres {
+            name
+            booksConnection(first: 2) {
+              edges { node { title } }
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+        """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(edges_query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    by_name = {row["name"]: row["booksConnection"] for row in payload["data"]["allLibraryGenres"]}
+    # Populated: a full first page over 3 books -> the sentinel signals a next page.
+    assert [edge["node"]["title"] for edge in by_name["Populated"]["edges"]] == ["Aurora", "Binti"]
+    assert by_name["Populated"]["pageInfo"]["hasNextPage"] is True
+    # Childless: empty edges + no next page (the empty-window branch, not a fallback).
+    assert by_name["Empty"]["edges"] == []
+    assert by_name["Empty"]["pageInfo"]["hasNextPage"] is False
+    # Still one root query + one windowed prefetch, count-free, for BOTH parents.
+    assert len(captured) == 2
+    window_sql = captured[1]["sql"]
+    assert "_dst_total_count" not in window_sql
+    assert "COUNT(" not in window_sql.upper()
+
+    # The no-``edges`` shape: ``hasNextPage`` still resolves for both parents.
+    no_edges_query = """
+        query {
+          allLibraryGenres {
+            name
+            booksConnection(first: 2) { pageInfo { hasNextPage } }
+          }
+        }
+        """
+    no_edges_response = _post_graphql(no_edges_query)
+    assert no_edges_response.status_code == 200
+    no_edges_payload = no_edges_response.json()
+    assert "errors" not in no_edges_payload, no_edges_payload
+    flags = {
+        row["name"]: row["booksConnection"]["pageInfo"]["hasNextPage"]
+        for row in no_edges_payload["data"]["allLibraryGenres"]
+    }
+    assert flags == {"Populated": True, "Empty": False}
+
+
+@pytest.mark.django_db
 def test_genre_books_connection_alias_merge_probe_plus_edges_drops_the_sentinel():
     """Same-arg aliases share ONE overfetched window; the sentinel never leaks.
 
@@ -3702,10 +3777,11 @@ def test_nested_books_connection_has_next_page_without_edges():
     windowed nested path spec-033 introduces - the root-field live twin
     (``test_has_next_page_correct_when_edges_unrequested``) and the package window
     pins cover the other paths. Each genre carries 3 books; ``first: 2`` with no
-    ``edges`` selected still reports ``hasNextPage`` True, served from the window's
-    ``_dst_total_count`` annotation in the same fixed two-query window (root
-    genres-connection + one ``booksConnection`` prefetch), independent of parent
-    count.
+    ``edges`` selected still reports ``hasNextPage`` True - this is the plain
+    first-page probe shape (``hasNextPage`` selected, ``totalCount`` not), so it
+    is served count-free by the n+1 overfetch sentinel, NOT a ``_dst_total_count``
+    annotation, in the same fixed two-query window (root genres-connection + one
+    ``booksConnection`` prefetch), independent of parent count.
     """
     query = """
     query {
@@ -3740,6 +3816,11 @@ def test_nested_books_connection_has_next_page_without_edges():
     # One root genres-connection query + one windowed prefetch; no per-parent COUNT
     # and no per-parent fallback despite ``edges`` being absent.
     assert len(captured) == 2
+    # The probe shape it now describes: the window is count-free (the sentinel
+    # answers ``hasNextPage``), so it carries no ``_dst_total_count`` / COUNT.
+    window_sql = captured[1]["sql"]
+    assert "_dst_total_count" not in window_sql
+    assert "COUNT(" not in window_sql.upper()
 
 
 @pytest.mark.django_db

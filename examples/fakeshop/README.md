@@ -1,20 +1,33 @@
 # Fakeshop Example Django Project
 
 A Django + Strawberry GraphQL example project that exercises
-`django-strawberry-framework` end-to-end. It ships several app surfaces:
+`django-strawberry-framework` end-to-end. It ships six app surfaces:
 
 - **`apps.library`** — acceptance app with a real `DjangoType` schema
   (FK, reverse FK, OneToOne, M2M, Relay `Node`, optimizer hints,
   consumer relation overrides) plus `FilterSet` / `OrderSet` sidecars on
-  every type. This is the primary acceptance slice.
+  every type, the root `node(id:)` / `nodes(ids:)` Relay refetch fields,
+  and a `totalCount`-enabled genre connection. This is the primary
+  acceptance slice.
 - **`apps.products`** — working `DjangoType` schema over `Category` /
-  `Item` / `Property` / `Entry`, with `FilterSet` and `OrderSet` sidecars
-  (`Meta.filterset_class` / `Meta.orderset_class`) wired on every type and
-  `filter:` / `orderBy:` arguments on the root list resolvers. Also ships
-  migrations, models, admin, services, and management commands so the
-  seed / delete / user flows work.
-- **`apps.scalars`** — converter-table substrate for scalar wire formats.
-- **`apps.kanban`** — relational source for the exported root `KANBAN.md`.
+  `Item` / `Property` / `Entry`. The four root fields
+  (`allCategories` / `allItems` / `allProperties` / `allEntries`) are
+  `DjangoConnectionField` Relay connections with synthesized `filter:` /
+  `orderBy:` arguments from the `FilterSet` / `OrderSet` sidecars
+  (`Meta.filterset_class` / `Meta.orderset_class`). Also carries the
+  package's full write surface — model-driven `DjangoMutation`,
+  form-backed (`0.0.12`), and DRF-serializer-backed (`0.0.13`) mutation
+  flavors on one `Mutation` type — plus migrations, models, admin,
+  services, and management commands so the seed / delete / user flows
+  work.
+- **`apps.scalars`** — converter-table substrate for scalar wire formats,
+  plus the `MediaSpecimen` file/image surface (structured
+  `DjangoFileType` / `DjangoImageType` read output and a live multipart
+  `Upload` mutation).
+- **`apps.accounts`** — schema-only session-auth surface: `login` /
+  `logout` / `register` mutations and the `me` query over `auth.User`.
+- **`apps.kanban`** — relational source for the exported root `KANBAN.md`
+  and the `KANBAN.html` dashboard's data block.
 - **`apps.glossary`** — relational source for the exported `docs/GLOSSARY.md`
   and the spec-term audit rows that link specs to glossary terms. Generic
   prose sections share `apps.kanban.BoardDoc` under `namespace="glossary"`.
@@ -24,17 +37,24 @@ The project root layout:
 ```
 examples/fakeshop/
 ├── apps/
+│   ├── accounts/     # schema-only session auth (login / logout / register / me)
 │   ├── glossary/     # glossary terms + spec-term audit rows + GraphQL schema
-│   ├── kanban/       # KANBAN.md source tables + GraphQL schema
+│   ├── kanban/       # KANBAN.md / KANBAN.html source tables + GraphQL schema
 │   ├── library/      # working DjangoType schema (acceptance)
-│   ├── products/     # working filter+order schema + seed/admin tooling
-│   └── scalars/      # scalar converter substrate
+│   ├── products/     # working connection+mutation schema + seed/admin tooling
+│   └── scalars/      # scalar converter substrate + file/image upload surface
+│                     # (each app carries its own tests/ package)
 ├── config/
-│   ├── schema.py     # composes per-app Query + DjangoOptimizerExtension
-│   ├── settings.py
-│   └── urls.py       # /, /graphql/, /admin/, /login/, /logout/
-├── tests/            # in-process schema/service/admin/url tests
+│   ├── schema.py     # composes per-app Query/Mutation + DjangoOptimizerExtension
+│   ├── settings.py   # single-DB default; FAKESHOP_SHARDED / FAKESHOP_PG_DSN tiers
+│   ├── urls.py       # /, /graphql/, /admin/, /login/, /logout/, debug-toolbar routes
+│   └── wsgi.py
+├── media/            # runserver upload target (tests use a temp MEDIA_ROOT)
+├── tests/            # project/config-level tests (schema export, URLs)
 ├── test_query/       # end-to-end /graphql/ HTTP tests
+├── graphql_client.py # shared live-/graphql/ HTTP helpers for the test suites
+├── schema_reload.py  # full config.schema reload helper for registry-clearing tests
+├── strategy_schemas.py # shared schema builders for pg-parity tests + benchmarks
 └── manage.py
 ```
 
@@ -71,6 +91,11 @@ Then open:
 - <http://127.0.0.1:8000/> — landing page with dev links
 - <http://127.0.0.1:8000/graphql/> — GraphiQL IDE
 - <http://127.0.0.1:8000/admin/> — Django admin
+
+Dev pages render django-debug-toolbar; the package's middleware subclass
+(`django_strawberry_framework.middleware.debug_toolbar`) gives the SQL
+panel visibility into `/graphql/` requests, so you can watch the
+optimizer's query plans from GraphiQL.
 
 # Sample Queries
 
@@ -156,9 +181,9 @@ rows, `orderBy:` arranges them):
 }
 ```
 
-The `products` app exposes a working catalog schema; every root list
-(`allCategories` / `allItems` / `allProperties` / `allEntries`) takes
-`filter:` and `orderBy:` arguments:
+The `products` app exposes a working catalog schema; every root field
+(`allCategories` / `allItems` / `allProperties` / `allEntries`) is a
+Relay connection taking the same `filter:` and `orderBy:` arguments:
 
 ```graphql
 {
@@ -169,10 +194,71 @@ The `products` app exposes a working catalog schema; every root list
       }
     ]
   ) {
-    name
-    category {
-      name
+    edges {
+      node {
+        name
+        category {
+          name
+        }
+      }
     }
+  }
+}
+```
+
+Products also carries the package's write surface — the model-driven,
+form-backed, and DRF-serializer-backed mutation flavors all share the
+same `errors` envelope:
+
+```graphql
+mutation {
+  createItem(
+    data: {
+      name: "Widget"
+      categoryId: "<GlobalID: base64 of products.category:<pk>>"
+    }
+  ) {
+    node {
+      name
+      category {
+        name
+      }
+    }
+    errors {
+      field
+      messages
+    }
+  }
+}
+```
+
+The `accounts` app exposes the session-auth surface. After
+`create_users` (see below), log in as a test user and read the session
+actor back:
+
+```graphql
+mutation {
+  login(
+    username: "staff_1"
+    password: "<printed by create_users>"
+  ) {
+    node {
+      username
+      email
+    }
+    errors {
+      field
+      messages
+    }
+  }
+}
+```
+
+```graphql
+{
+  me {
+    username
+    email
   }
 }
 ```
@@ -298,26 +384,53 @@ FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py seed_shards
 FAKESHOP_SHARDED=1 uv run python examples/fakeshop/manage.py runserver
 ```
 
-# Testing
+# Postgres Tier (Optional)
 
-Two test suites live alongside the example project:
+`FAKESHOP_PG_DSN` swaps the `default` alias to a real Postgres server —
+the vendor tier the optimizer's LATERAL-join fetch strategy (and any
+other `connection.vendor`-sensitive behavior) is verified on. Mutually
+exclusive with `FAKESHOP_SHARDED`. Requires the `pg` dependency group
+(`psycopg`); the default SQLite install carries no Postgres dependency:
 
 ```bash
-# In-process tests: schemas, services, models, admin, management
-# commands, URLs (no HTTP)
+# Install psycopg
+uv sync --group pg
+
+# Start a local Postgres
+docker compose -f docker-compose.postgres.yml up -d
+
+# Run the full suite against it
+FAKESHOP_PG_DSN=postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop uv run pytest
+```
+
+CI runs the same tier via the `test-postgres` job's GitHub Actions
+service container.
+
+# Testing
+
+Three test tiers live alongside the example project:
+
+```bash
+# Per-app in-process tests: models, admin, services, management
+# commands, in-process schema via schema.execute_sync (no HTTP)
+uv run pytest examples/fakeshop/apps
+
+# Project/config-level tests: schema export, type inspection, URLs
 uv run pytest examples/fakeshop/tests
 
 # Live API tests: real /graphql/ HTTP requests through the full
 # Django + Strawberry stack
 uv run pytest examples/fakeshop/test_query
 
-# Both
+# Everything
 uv run pytest examples/fakeshop
 
 # Sharded variant
 FAKESHOP_SHARDED=1 uv run pytest examples/fakeshop
 ```
 
+Each app carries its own `tests/` package (namespaced
+`apps.<app>.tests`), so deleting an app loses only that app's tests.
 See [`test_query/README.md`][readme] for the live-API
 test conventions and the schema-reload fixture pattern used to keep
 package-level and example-level registries isolated.

@@ -1,135 +1,49 @@
-"""Package-tier tests for ``testing/client.py`` - only what a live request cannot pin (spec-043).
+"""Package-tier tests for ``testing/client.py`` - DB-free mechanics only (spec-043).
 
-Placement per spec-043 Decision 11, honoring the ``test_query/README.md``
-coverage rule: the helper's sync request shapes (the JSON happy path and typed
-``Response``, the ``assert_no_errors=False`` errors outcome, ``operation_name``
-dispatch, ``login()`` scoping, and the nested multipart upload) are earned LIVE
-by the converted ``examples/fakeshop/test_query/`` suites
-(``test_uploads_api.py``, ``test_products_api.py``) and are deliberately NOT
-restated here. This file owns the rest:
+Placement per spec-043 Decision 11 and the feedback's live-first split: every
+case that drives a real ``/graphql/`` request (the sync raising direction on a
+live invalid selection, the ``AsyncTestClient`` paths, and the unittest family
+end to end) lives in ``examples/fakeshop/test_query/test_client_api.py`` so it is
+earned live per the ``test_query/README.md`` coverage rule. This file owns only
+what a live request cannot (or need not) pin:
 
-- the ``assert_no_errors=True`` raising direction and the
-  ``files=``-with-``variables=None`` guard (the helper's own behaviours - a
-  live suite asserts outcomes, not the helper's raising);
-- the endpoint-resolution precedence ladder (per-call > constructor > class
-  attr > settings key > default) - the live suites all use the default;
-- the owned builder's uniform path-keyed map rule for the shapes no fakeshop
-  mutation carries a live vehicle for (a top-level file, a list index);
-- the ``AsyncTestClient`` real-request paths (the live tier is sync-only);
-- the unittest family's mechanics (``self.client`` delegation, ``GRAPHQL_URL``,
-  both assertion helpers' failure directions, the transaction case);
+- the endpoint-resolution precedence ladder (per-call > constructor > class attr
+  > settings key > default), proven against recording transports;
+- the owned builder's uniform path-keyed map rule and its placeholder guards -
+  the empty-``variables`` guard and the per-path walker that fails a malformed
+  ``files=`` call at the source (the top-level, nested, list-index, and
+  not-a-placeholder shapes fakeshop carries no live vehicle for);
+- ``files={}`` staying a plain JSON post, and ``extensions`` surfacing decoded
+  or ``None``;
+- the assertion helpers' FAILURE directions against canned responses (their
+  PASSING directions ride the live unittest tests);
+- the mixin's ``self.client`` delegation and endpoint rungs against a recording
+  stand-in;
 - the ``__test__ = False`` collection guard and the export surface.
 
-Request-driving tests follow the acceptance suites' schema-reload discipline
-(the ``fresh_project_schema`` fixture delegates to the single-sited
-``schema_reload.reload_all_project_schemas``) and the ``seed_data`` rule. The
-async tests depend on ``transactional_db``: ``django.test.AsyncClient`` runs
-the (sync) GraphQL view on asgiref's executor thread, whose separate SQLite
-connection cannot see rows seeded inside a non-transactional test's
-uncommitted transaction. Mechanics tests (precedence, the builder map, the
-guards, the exports) are DB-free and unmarked.
+Every test here is DB-free: no schema reload, no ``seed_data``, no real request.
 """
 
 import json
+import unittest
 
 import pytest
-from apps.products.models import Category
-from apps.products.services import create_users, seed_data
-from django.contrib.auth import get_user_model
 from django.http import HttpResponse
 from django.test import override_settings
-from django.urls import include, path, resolve
-from schema_reload import reload_all_project_schemas
-from strawberry import relay
 
 import django_strawberry_framework
 from django_strawberry_framework import testing as testing_root
 from django_strawberry_framework.testing import (
     AsyncTestClient,
-    GraphQLTestCase,
     GraphQLTestMixin,
-    GraphQLTransactionTestCase,
     Response,
     TestClient,
 )
 
 # ---------------------------------------------------------------------------
-# Probe URLconf (Test 11): ``/alt/`` delegates to whatever the freshly reloaded
-# ``/graphql/`` view is, so the GRAPHQL_URL / per-call rungs are proven by a
-# POSITIVE hit on the real schema view, not an exception shape. Inert unless a
-# test overrides ``ROOT_URLCONF`` to this module.
-# ---------------------------------------------------------------------------
-
-
-def _alt_graphql_view(request, *args, **kwargs):
-    """Delegate ``/alt/`` to the view ``/graphql/`` currently resolves to.
-
-    Resolving at request time (not import time) keeps the probe pointed at the
-    schema view the reload fixture just rebuilt.
-    """
-    match = resolve("/graphql/")
-    return match.func(request, *args, **kwargs)
-
-
-urlpatterns = [path("", include("config.urls")), path("alt/", _alt_graphql_view)]
-
-
-# The write-auth-gated products mutation the async ``login()`` bracket drives
-# (the live sync twin is ``test_products_api.py``'s TestClient bracket test).
-_CREATE_ITEM = (
-    "mutation($d: ItemInput!) { createItem(data: $d) { node { name } errors { field messages } } }"
-)
-
-_ITEMS_QUERY = "query Items($first: Int) { allItems(first: $first) { edges { node { name } } } }"
-
-
-@pytest.fixture
-def fresh_project_schema():
-    """Rebuild the FULL project schema before a request-driving test.
-
-    The acceptance suites' schema-reload discipline (``test_query/README.md``):
-    delegates to the single-sited ``schema_reload.reload_all_project_schemas``
-    so a package-test ``registry.clear()`` on the same worker cannot leave the
-    aggregate ``config.schema`` build raising a ``LazyType`` ``KeyError``.
-    """
-    reload_all_project_schemas()
-
-
-@pytest.fixture
-def seeded_catalog(fresh_project_schema, transactional_db):
-    """``seed_data(1)`` after the reload; transactional so the async view's thread sees rows."""
-    seed_data(1)
-
-
-@pytest.fixture
-def permitted_writer(fresh_project_schema, transactional_db):
-    """A ``create_users`` user granted the explicit ``add_item`` perm + a category GlobalID.
-
-    Mirrors the live suite's ``_login_with_perm`` discipline: ``view_item_1`` is
-    NOT a superuser, so the ``DjangoModelPermission`` codename check runs rather
-    than the superuser short-circuit; the user is re-fetched after the grant to
-    drop the stale per-request permission cache.
-    """
-    from django.contrib.auth.models import Permission
-
-    create_users(1)
-    seed_data(1)
-    user_model = get_user_model()
-    user = user_model.objects.get(username="view_item_1")
-    user.user_permissions.add(
-        Permission.objects.get(codename="add_item", content_type__app_label="products"),
-    )
-    user = user_model.objects.get(pk=user.pk)  # drop the stale perm cache
-    category = Category.objects.order_by("pk").first()
-    category_gid = str(relay.GlobalID(type_name="products.category", node_id=str(category.pk)))
-    return user, category_gid
-
-
-# ---------------------------------------------------------------------------
-# Canned-transport doubles (Test 8's blessed shape): a recording ``request()``
-# override proves TARGET SELECTION directly, so the test cannot accidentally
-# pass on a ``/percall/`` 404 or non-JSON body. Mechanics only - every
-# request-driving test in this file hits the real fakeshop view.
+# Recording / canned transport doubles: a recording ``request()`` (or ``post``)
+# override proves TARGET SELECTION and body shape directly, so a mechanics test
+# never depends on a live view. Every test in this file is DB-free.
 # ---------------------------------------------------------------------------
 
 
@@ -238,27 +152,13 @@ def test_per_call_url_outranks_the_constructor_and_never_persists():
 
 
 # ---------------------------------------------------------------------------
-# The helper's own raising directions (the package-tier halves of scenarios
-# 2 and 5) and the owned builder's map rule.
+# The owned builder's raising directions (the empty-variables guard and the
+# per-path placeholder walker) and the uniform map rule.
 # ---------------------------------------------------------------------------
 
 
-def test_assert_no_errors_default_raises_with_the_errors_list(fresh_project_schema):
-    """Scenario 2's raising direction: the default gate raises, message carries the errors.
-
-    A real fakeshop request (an invalid selection is a validation error - no DB
-    is touched): under the default ``assert_no_errors=True`` the errors response
-    raises ``AssertionError`` (an explicit raise, so the gate also holds under
-    ``python -O``) instead of returning, and the errors list rides the message.
-    """
-    client = TestClient()
-    with pytest.raises(AssertionError) as excinfo:
-        client.query("{ nope }")
-    assert "nope" in str(excinfo.value)
-
-
 def test_files_without_variables_raises_the_placeholder_guard():
-    """Scenario 5's guard direction: ``files=`` without variables raises before any request.
+    """``files=`` without variables raises before any request, for ``None`` and ``{}`` alike.
 
     The owned ``_build_body``'s explicit ``AssertionError`` (not the engine
     base's bare ``assert``): the multipart ``map`` needs variable paths to point
@@ -271,6 +171,72 @@ def test_files_without_variables_raises_the_placeholder_guard():
         TestClient().query("mutation { x }", files={"file": object()})
     with pytest.raises(AssertionError, match="placeholder"):
         TestClient().query("mutation { x }", variables={}, files={"file": object()})
+
+
+def test_files_placeholder_missing_top_level_path_raises():
+    """A top-level ``files=`` path with no matching key in variables raises, naming the path.
+
+    The owned builder validates each ``files=`` path against ``variables`` before
+    emitting the multipart ``map`` (spec-043 Decision 9): a path whose key is
+    absent at the top level is a malformed call, failed at the source rather than
+    emitted as a spec-invalid envelope the server has to diagnose later.
+    """
+    with pytest.raises(AssertionError, match="no key"):
+        TestClient().query(
+            "mutation($file: Upload!) { up }",
+            variables={"other": None},
+            files={"file": object()},
+        )
+
+
+def test_files_placeholder_missing_nested_key_raises():
+    """A nested ``files=`` path whose leaf key is absent raises, naming the path."""
+    with pytest.raises(AssertionError, match="no key"):
+        TestClient().query(
+            "mutation($data: SpecInput!) { up }",
+            variables={"data": {}},
+            files={"data.image": object()},
+        )
+
+
+def test_files_placeholder_cannot_descend_into_a_scalar_raises():
+    """A ``files=`` path that descends through a non-container value raises."""
+    with pytest.raises(AssertionError, match="cannot descend"):
+        TestClient().query(
+            "mutation($data: SpecInput!) { up }",
+            variables={"data": None},
+            files={"data.image": object()},
+        )
+
+
+def test_files_placeholder_non_integer_list_index_raises():
+    """A list-path segment that is not a valid integer index raises."""
+    with pytest.raises(AssertionError, match="valid index"):
+        TestClient().query(
+            "mutation($tags: [Upload!]!) { up }",
+            variables={"tags": [None]},
+            files={"tags.x": object()},
+        )
+
+
+def test_files_placeholder_out_of_range_list_index_raises():
+    """A list-path index past the end of the list raises."""
+    with pytest.raises(AssertionError, match="valid index"):
+        TestClient().query(
+            "mutation($tags: [Upload!]!) { up }",
+            variables={"tags": [None]},
+            files={"tags.5": object()},
+        )
+
+
+def test_files_placeholder_present_but_not_none_raises():
+    """A ``files=`` path resolving to a non-``None`` value raises: it must be a placeholder."""
+    with pytest.raises(AssertionError, match="None placeholder"):
+        TestClient().query(
+            "mutation($file: Upload!) { up }",
+            variables={"file": "not-a-placeholder"},
+            files={"file": object()},
+        )
 
 
 def test_empty_files_dict_is_a_plain_json_post():
@@ -295,9 +261,10 @@ def test_build_body_map_rule_is_uniform_across_path_shapes():
 
     The nested input-object shape is earned live (``test_uploads_api.py``); no
     fakeshop mutation takes a TOP-LEVEL ``Upload`` variable or a list of them,
-    so the top-level and list-index paths (scenario 5's rounding shapes) are
-    pinned here against the builder directly, alongside ``operationName``
-    landing INSIDE the JSON-encoded ``operations`` field.
+    so the top-level and list-index paths are pinned here against the builder
+    directly, alongside ``operationName`` landing INSIDE the JSON-encoded
+    ``operations`` field. Each path also resolves to a ``None`` placeholder, so
+    this doubles as the walker's success path (dict, list, and top-level).
     """
     client = TestClient()
     f_top, f_nested, f_listed = object(), object(), object()
@@ -392,7 +359,7 @@ def test_export_surface_is_the_testing_root_not_the_package_root():
 
 # ---------------------------------------------------------------------------
 # Mixin mechanics (the ``self.client`` delegation and endpoint rungs 3-5,
-# proven against the recording stand-in; Test 11 proves the rungs end-to-end).
+# proven against the recording stand-in; the rungs are proven end-to-end live).
 # ---------------------------------------------------------------------------
 
 
@@ -437,124 +404,29 @@ def test_mixin_endpoint_rungs_class_attr_settings_and_per_call():
 
 
 # ---------------------------------------------------------------------------
-# The async client (Tests 9-10): real requests through Django's in-process
-# ``AsyncClientHandler`` against the reloaded fakeshop schema.
+# The assertion helpers' FAILURE directions, against canned Responses (their
+# PASSING directions are earned live in test_query/test_client_api.py).
 # ---------------------------------------------------------------------------
 
 
-async def test_async_query_happy_path_and_raise_direction(seeded_catalog):
-    """Test 9: the awaited transport, the async decode, and the package ``Response``.
+class AssertionHelperFailureDirectionTests(GraphQLTestMixin, unittest.TestCase):
+    """Both assertion helpers FAIL in the right direction, carrying the decoded content.
 
-    The same typed-shape assertions as the live sync happy path - ``errors`` /
-    ``data`` / the raw ride-along - plus the async color of the
-    ``assert_no_errors`` raising direction.
+    Canned Responses, no live request: the helpers are pure functions over a
+    typed :class:`Response`, so their FAILURE directions are pinned against
+    constructed responses here (spec-043 Decision 11 + the feedback's live-first
+    split). Composed over ``unittest.TestCase`` (not the DB-backed
+    ``GraphQLTestCase``) so this file stays DB-free.
     """
-    client = AsyncTestClient()
-    res = await client.query(_ITEMS_QUERY, variables={"first": 1})
 
-    assert res.errors is None
-    assert len(res.data["allItems"]["edges"]) == 1
-    assert res.response.status_code == 200
-    assert res.response["Content-Type"].startswith("application/json")
-
-    with pytest.raises(AssertionError) as excinfo:
-        await client.query("{ nope }")
-    assert "nope" in str(excinfo.value)
-
-
-async def test_async_login_brackets_the_write_authorized_mutation(permitted_writer):
-    """Test 10: the force-login/logout bracket through ``async with client.login(user)``.
-
-    The sync bracket's async twin (the live sync bracket lives in
-    ``test_products_api.py``): the write-auth-gated ``createItem`` is denied
-    anonymous (top-level error), succeeds inside the bracket, and is denied
-    again after it - the ``sync_to_async``-wrapped session round trip on one
-    client instance.
-    """
-    user, category_gid = permitted_writer
-    variables = {"d": {"name": "AsyncBracketWidget", "categoryId": category_gid}}
-    client = AsyncTestClient()
-
-    denied = await client.query(_CREATE_ITEM, variables=variables, assert_no_errors=False)
-    assert denied.data is None
-    assert "Not authorized" in denied.errors[0]["message"]
-
-    async with client.login(user):
-        granted = await client.query(_CREATE_ITEM, variables=variables)
-        assert granted.data["createItem"]["errors"] == []
-        assert granted.data["createItem"]["node"]["name"] == "AsyncBracketWidget"
-
-    denied_again = await client.query(_CREATE_ITEM, variables=variables, assert_no_errors=False)
-    assert denied_again.data is None
-    assert "Not authorized" in denied_again.errors[0]["message"]
-
-
-# ---------------------------------------------------------------------------
-# The unittest family (Tests 11-12): TestCase-shaped, in-file subclasses.
-# ---------------------------------------------------------------------------
-
-
-class GraphQLTestCaseEndToEndTests(GraphQLTestCase):
-    """Test 11: ``self.query(...)`` + both helpers + the per-call rung, end to end."""
-
-    def setUp(self):
-        super().setUp()
-        reload_all_project_schemas()
-        seed_data(1)
-
-    def test_seeded_query_via_self_client_passes_no_errors(self):
-        res = self.query(
-            "query Items { allItems(first: 1) { edges { node { name } } } }",
-            operation_name="Items",
-        )
-        self.assertResponseNoErrors(res)
-        self.assertEqual(len(res.data["allItems"]["edges"]), 1)
-
-    def test_invalid_query_returns_instead_of_raising_then_has_errors(self):
-        # The mixin's flipped ``assert_no_errors=False`` default (graphene
-        # parity): the errors response RETURNS for the helper to assert on.
-        res = self.query("{ nope }")
-        self.assertResponseHasErrors(res)
-        self.assertIsNone(res.data)
-
-    @override_settings(ROOT_URLCONF="tests.testing.test_client")
-    def test_per_call_url_routes_to_the_probe_endpoint(self):
-        # Rung 1 end-to-end: a positive hit on the real schema view mounted at
-        # the probe URLconf's ``/alt/``, not an exception shape.
-        res = self.query(
-            "query Items { allItems(first: 1) { edges { node { name } } } }",
-            url="/alt/",
-        )
-        self.assertResponseNoErrors(res)
-        self.assertTrue(res.data["allItems"]["edges"])
-
-
-@override_settings(ROOT_URLCONF="tests.testing.test_client")
-class GraphQLTestCaseClassAttrEndpointTests(GraphQLTestCase):
-    """Test 11's ``GRAPHQL_URL`` rung: the subclass pins its endpoint by assignment."""
-
-    GRAPHQL_URL = "/alt/"
-
-    def setUp(self):
-        super().setUp()
-        reload_all_project_schemas()
-        seed_data(1)
-
-    def test_class_attr_endpoint_hits_the_real_view(self):
-        res = self.query("query Items { allItems(first: 1) { edges { node { name } } } }")
-        self.assertResponseNoErrors(res)
-        self.assertTrue(res.data["allItems"]["edges"])
-
-
-class AssertionHelperFailureDirectionTests(GraphQLTestCase):
-    """Test 12: both helpers FAIL in the right direction, carrying the decoded content."""
-
-    def setUp(self):
-        super().setUp()
-        reload_all_project_schemas()
+    @staticmethod
+    def _canned(*, errors, data, status_code=200):
+        raw = _CannedJSONResponse({"data": data})
+        raw.status_code = status_code
+        return Response(errors=errors, data=data, extensions=None, response=raw)
 
     def test_assert_response_no_errors_fails_on_an_errors_response(self):
-        res = self.query("{ nope }")
+        res = self._canned(errors=[{"message": "nope"}], data=None)
         with self.assertRaises(AssertionError) as ctx:
             self.assertResponseNoErrors(res)
         self.assertIn("nope", str(ctx.exception))  # the decoded errors ride the message
@@ -563,28 +435,12 @@ class AssertionHelperFailureDirectionTests(GraphQLTestCase):
         # A transport failure whose JSON body has no ``errors`` key: the status
         # check fails and the message still carries the decoded content (both
         # fields), never a bare ``None``.
-        raw = _CannedJSONResponse({"data": {"detail": "boom"}})
-        raw.status_code = 500
-        res = Response(errors=None, data={"detail": "boom"}, extensions=None, response=raw)
+        res = self._canned(errors=None, data={"detail": "boom"}, status_code=500)
         with self.assertRaises(AssertionError) as ctx:
             self.assertResponseNoErrors(res)
         self.assertIn("boom", str(ctx.exception))
 
     def test_assert_response_has_errors_fails_on_a_clean_response(self):
-        res = self.query("{ __typename }")
+        res = self._canned(errors=None, data={"__typename": "Query"})
         with self.assertRaises(AssertionError):
             self.assertResponseHasErrors(res)
-
-
-class GraphQLTransactionTestCaseSmokeTests(GraphQLTransactionTestCase):
-    """Test 12's second half: the ``(Mixin, TransactionTestCase)`` combination is wired."""
-
-    def setUp(self):
-        super().setUp()
-        reload_all_project_schemas()
-        seed_data(1)
-
-    def test_one_clean_seeded_query_round_trips(self):
-        res = self.query("query Items { allItems(first: 1) { edges { node { name } } } }")
-        self.assertResponseNoErrors(res)
-        self.assertTrue(res.data["allItems"]["edges"])

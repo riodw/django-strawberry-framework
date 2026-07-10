@@ -32,6 +32,8 @@ from apps.products.services import seed_data
 from django.test import Client, override_settings
 from django.urls import reverse
 
+from django_strawberry_framework.testing import TestClient
+
 # A distinctive substring of the package's appended bridge asset: present only
 # when the middleware's HTML branch fired, never in stock toolbar markup.
 _TEMPLATE_MARKER = "Response.prototype.json"
@@ -55,11 +57,19 @@ _INTROSPECTION_QUERY = "query IntrospectionQuery { __schema { queryType { name }
 
 
 def _post_graphql(client, query, operation_name=None):
-    """POST a GraphQL JSON envelope to fakeshop's real ``/graphql/`` URL."""
-    payload = {"query": query}
-    if operation_name is not None:
-        payload["operationName"] = operation_name
-    return client.post("/graphql/", data=json.dumps(payload), content_type="application/json")
+    """POST a GraphQL JSON envelope to fakeshop's real ``/graphql/`` URL via ``TestClient``.
+
+    Routes through the package client so the toolbar sees the same request path;
+    ``assert_no_errors`` is off (introspection / degraded-body tests inspect the
+    response themselves) and the raw ``HttpResponse`` is returned for the
+    content-type / header / injected-payload assertions.
+    """
+    res = TestClient(client=client).query(
+        query,
+        operation_name=operation_name,
+        assert_no_errors=False,
+    )
+    return res.response
 
 
 def _content_type(response):

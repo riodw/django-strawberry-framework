@@ -256,8 +256,9 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── templates/
 │   └── django_strawberry_framework/
 │       └── debug_toolbar.html
-├── testing/    # Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
+├── testing/    # Consumer-facing test utilities - the GraphQL test-client family + connection-method wrapping.
 │   ├── _wrap.py                  # Cooperative connection-method wrapping for consumer test instrumentation.
+│   ├── client.py                 # Consumer-facing GraphQL test client family - live HTTP test ergonomics (spec-043).
 │   └── relay.py                  # Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
 ├── types/    # Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
 │   ├── base.py                   # ``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
@@ -360,9 +361,9 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── templates/
 │   └── django_strawberry_framework/
 │       └── debug_toolbar.html
-├── testing/    # Consumer-facing test utilities - cooperative Django connection-method wrapping (Trac #37064 defense).
+├── testing/    # Consumer-facing test utilities - the GraphQL test-client family + connection-method wrapping.
 │   ├── _wrap.py                  # Cooperative connection-method wrapping for consumer test instrumentation.
-│   ├── client.py                 # planned by WIP-ALPHA-043-0.0.14 - Test client helper
+│   ├── client.py                 # Consumer-facing GraphQL test client family - live HTTP test ergonomics (spec-043).
 │   └── relay.py                  # Public Relay test helpers - ``global_id_for`` / ``decode_global_id``.
 ├── types/    # Type-system subsystem - ``DjangoType``, field/relation conversion, Relay integration, and finalization.
 │   ├── base.py                   # ``DjangoType`` - Meta-class-driven Django-model-to-Strawberry-type adapter.
@@ -475,6 +476,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_sets.py              # ``SerializerMutation`` base, ``Meta`` validation, and the phase-2.5 bind (spec-039 Slice 2).
 │   └── test_soft_dependency.py   # The DRF soft-dependency import guard (spec-039 Decision 12, Slice 2).
 ├── testing/    # Package tests for public consumer testing utilities.
+│   ├── test_client.py            # Package-tier tests for ``testing/client.py`` - DB-free mechanics only (spec-043).
 │   ├── test_relay.py             # Public Relay helper tests for global_id_for and decode_global_id.
 │   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.
 ├── types/    # Package tests for the DjangoType subsystem.
@@ -553,6 +555,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── README.md                     # Live GraphQL-API tests for the fakeshop example project.
 ├── conftest.py                   # Shared fixtures for the fakeshop acceptance (live ``/graphql/``) suites.
 ├── test_auth_api.py              # Live ``/graphql/`` auth API acceptance tests (spec-040).
+├── test_client_api.py            # Live GraphQL HTTP acceptance tests for the spec-043 test-client family.
 ├── test_debug_toolbar_api.py     # Live GraphQL HTTP tests for the spec-042 ``DebugToolbarMiddleware``.
 ├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
 ├── test_kanban_api.py            # Live GraphQL HTTP tests for the kanban board docs-as-data API.
@@ -652,6 +655,7 @@ tests/    # Package-internal tests for django_strawberry_framework.
 │   ├── test_sets.py              # ``SerializerMutation`` base, ``Meta`` validation, and the phase-2.5 bind (spec-039 Slice 2).
 │   └── test_soft_dependency.py   # The DRF soft-dependency import guard (spec-039 Decision 12, Slice 2).
 ├── testing/    # Package tests for public consumer testing utilities.
+│   ├── test_client.py            # Package-tier tests for ``testing/client.py`` - DB-free mechanics only (spec-043).
 │   ├── test_relay.py             # Public Relay helper tests for global_id_for and decode_global_id.
 │   └── test_wrap.py              # Connection-method wrapping tests for cooperative consumer instrumentation.
 ├── types/    # Package tests for the DjangoType subsystem.

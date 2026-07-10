@@ -522,10 +522,10 @@ def test_create_item_login_bracket_via_test_client():
     ``add_item`` codename (NOT a superuser), so the ``DjangoModelPermission``
     codename path runs, exactly as in the raw-client denial tests above.
     """
-    from django.contrib.auth.models import Permission
-
     create_users(1)
     seed_data(1)
+    from django.contrib.auth.models import Permission
+
     category = models.Category.objects.first()
     variables = {
         "d": {"name": "BracketWidget", "categoryId": _global_id("products.category", category.pk)},
@@ -2707,6 +2707,11 @@ def test_create_item_with_file_via_form_multipart_upload_over_http(tmp_path):
     file_map = {"0": ["variables.d.attachment"]}
 
     with override_settings(MEDIA_ROOT=str(tmp_path)):
+        # Raw-multipart exemption (spec-043 Slice 2): the subject is the
+        # hand-built GraphQL-multipart {operations, map, "0"} envelope with an
+        # arbitrary file label - the wire shape TestClient's path-keyed files=
+        # builder never emits. The files= upload path is covered live in
+        # test_uploads_api.py; keeping this raw pins the arbitrary-label envelope.
         client = Client()
         client.force_login(user)
         response = client.post(
@@ -3347,6 +3352,11 @@ def test_create_item_via_serializer_multipart_upload_to_attachment(tmp_path):
     file_map = {"0": ["variables.d.attachment"]}
 
     with override_settings(MEDIA_ROOT=str(tmp_path)):
+        # Raw-multipart exemption (spec-043 Slice 2): the subject is the
+        # hand-built GraphQL-multipart {operations, map, "0"} envelope with an
+        # arbitrary file label - the wire shape TestClient's path-keyed files=
+        # builder never emits. The files= upload path is covered live in
+        # test_uploads_api.py; keeping this raw pins the arbitrary-label envelope.
         client = Client()
         client.force_login(user)
         response = client.post(

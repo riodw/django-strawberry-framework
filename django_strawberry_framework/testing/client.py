@@ -263,8 +263,57 @@ class TestClient(BaseGraphQLTestClient):
                 "for files={'data.image': f}).",
             )
 
+        self._assert_file_placeholders(variables, files)
+
         file_map = {key: [f"variables.{key}"] for key in files}
         return {"operations": json.dumps(body), "map": json.dumps(file_map), **files}
+
+    @staticmethod
+    def _assert_file_placeholders(variables: dict[str, Any], files: dict[str, object]) -> None:
+        """Verify each ``files=`` path resolves to a ``None`` placeholder in ``variables``.
+
+        The path-keyed ``files=`` contract (spec-043 Decision 9) makes the
+        client - not the server - the owner of the multipart ``map``: each key
+        is a dotted variable path (dict keys and list indexes) and ``variables``
+        must carry a ``None`` placeholder at exactly that path. Walking the path
+        here fails a typo or a malformed call at the source, naming the bad path,
+        rather than emitting a spec-invalid envelope the server has to diagnose
+        later. Explicit ``AssertionError`` (not a bare ``assert``) so the guard
+        holds under ``python -O``, matching the empty-``variables`` guard above.
+        """
+        for key in files:
+            current: Any = variables
+            for segment in key.split("."):
+                if isinstance(current, list):
+                    if not segment.isdigit() or int(segment) >= len(current):
+                        raise AssertionError(
+                            f"files= path {key!r} has no matching placeholder in "
+                            f"variables: {segment!r} is not a valid index into a "
+                            f"{len(current)}-item list.",
+                        )
+                    current = current[int(segment)]
+                elif isinstance(current, dict):
+                    if segment not in current:
+                        raise AssertionError(
+                            f"files= path {key!r} has no matching placeholder in "
+                            f"variables: no key {segment!r} at that level.",
+                        )
+                    current = current[segment]
+                else:
+                    # AssertionError (not the TRY004-suggested TypeError) on
+                    # purpose: every placeholder failure here is one malformed
+                    # test call, raised as the same type as the sibling guards so
+                    # ``pytest.raises(AssertionError)`` catches every bad shape.
+                    raise AssertionError(  # noqa: TRY004 - uniform guard type, not a runtime TypeError
+                        f"files= path {key!r} has no matching placeholder in "
+                        f"variables: cannot descend into {segment!r} (the value "
+                        f"there is not a dict or list).",
+                    )
+            if current is not None:
+                raise AssertionError(
+                    f"files= path {key!r} must point at a None placeholder in "
+                    f"variables, but the value there is {current!r}.",
+                )
 
     @contextlib.contextmanager
     def login(self, user: AbstractBaseUser) -> Iterator[None]:

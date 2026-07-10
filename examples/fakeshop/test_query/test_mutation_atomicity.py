@@ -39,6 +39,8 @@ from django.db import connection
 from django.test import Client
 from strawberry import relay
 
+from django_strawberry_framework.testing import TestClient
+
 _UPDATE_ITEM = """
 mutation($id: ID!, $d: ItemPartialInput!) {
   updateItem(id: $id, data: $d) {
@@ -114,55 +116,50 @@ def _execute_raw(sql: str, params: tuple = ()) -> int:
 
 
 def _post_update(client: Client, item_pk: int):
-    return client.post(
-        "/graphql/",
-        data={
-            "query": _UPDATE_ITEM,
-            "variables": {
-                "id": _global_id("products.item", item_pk),
-                "d": {"name": "post-corruption-update"},
-            },
+    res = TestClient(client=client).query(
+        _UPDATE_ITEM,
+        variables={
+            "id": _global_id("products.item", item_pk),
+            "d": {"name": "post-corruption-update"},
         },
-        content_type="application/json",
+        assert_no_errors=False,
     )
+    return res.response
 
 
 def _post_update_description(client: Client, item_pk: int):
-    return client.post(
-        "/graphql/",
-        data={
-            "query": _UPDATE_ITEM_DESCRIPTION,
-            "variables": {
-                "id": _global_id("products.item", item_pk),
-                "d": {"name": "post-blob-corruption-update"},
-            },
+    res = TestClient(client=client).query(
+        _UPDATE_ITEM_DESCRIPTION,
+        variables={
+            "id": _global_id("products.item", item_pk),
+            "d": {"name": "post-blob-corruption-update"},
         },
-        content_type="application/json",
+        assert_no_errors=False,
     )
+    return res.response
 
 
 def _post_create(client: Client, category_pk: int):
-    return client.post(
-        "/graphql/",
-        data={
-            "query": _CREATE_ITEM,
-            "variables": {
-                "d": {
-                    "name": "create-post-corruption",
-                    "categoryId": _global_id("products.category", category_pk),
-                },
+    res = TestClient(client=client).query(
+        _CREATE_ITEM,
+        variables={
+            "d": {
+                "name": "create-post-corruption",
+                "categoryId": _global_id("products.category", category_pk),
             },
         },
-        content_type="application/json",
+        assert_no_errors=False,
     )
+    return res.response
 
 
 def _post_delete(client: Client, item_pk: int):
-    return client.post(
-        "/graphql/",
-        data={"query": _DELETE_ITEM, "variables": {"id": _global_id("products.item", item_pk)}},
-        content_type="application/json",
+    res = TestClient(client=client).query(
+        _DELETE_ITEM,
+        variables={"id": _global_id("products.item", item_pk)},
+        assert_no_errors=False,
     )
+    return res.response
 
 
 def _insert_bad_category(name: str) -> int:

@@ -20,8 +20,8 @@ directly (not via the importer, so assertions stay independent of how the real
 import pytest
 from apps.glossary import models as glossary_models
 from apps.kanban import models
-from django.test import Client
-from graphql_client import post_graphql as _post_graphql
+from graphql_client import assert_graphql_data as _assert_graphql_data
+from graphql_client import assert_graphql_success as _graphql_data
 from strawberry import relay
 
 
@@ -203,18 +203,6 @@ def _seed_board():
         "current_tracked_path": current_tracked_path,
         "historical_tracked_path": historical_tracked_path,
     }
-
-
-def _graphql_data(query: str, *, client: Client | None = None):
-    response = _post_graphql(query, client=client)
-    assert response.status_code == 200
-    payload = response.json()
-    assert "errors" not in payload, payload
-    return payload["data"]
-
-
-def _assert_graphql_data(query: str, expected: dict, *, client: Client | None = None):
-    assert _graphql_data(query, client=client) == expected
 
 
 @pytest.mark.django_db

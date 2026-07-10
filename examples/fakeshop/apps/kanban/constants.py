@@ -113,6 +113,7 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/test_query/README.md",
     "examples/fakeshop/test_query/conftest.py",
     "examples/fakeshop/test_query/test_auth_api.py",
+    "examples/fakeshop/test_query/test_client_api.py",
     "examples/fakeshop/test_query/test_debug_toolbar_api.py",
     "examples/fakeshop/test_query/test_glossary_api.py",
     "examples/fakeshop/test_query/test_kanban_api.py",

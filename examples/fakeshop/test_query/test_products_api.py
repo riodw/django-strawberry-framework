@@ -46,9 +46,9 @@ from strawberry import relay
 from django_strawberry_framework.testing import TestClient
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Rebuild the FULL project schema around package-test registry clears.
+    """Rebuild the full project schema once per worker around package-test registry clears.
 
     Delegates to the shared ``conftest`` reload (via the
     ``reload_all_project_app_schemas`` fixture) so the WHOLE project schema is
@@ -58,11 +58,9 @@ def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
     build raised a ``LazyType`` ``KeyError`` under collection orders that did not
     pre-materialize them. Django model classes are never reloaded so they stay stable.
 
-    A test that must re-finalize under an ``override_settings`` (e.g. the
-    ``type``-strategy opt-out) requests the ``reload_all_project_app_schemas`` fixture
-    itself and calls it inside the override, so the override is active before the
-    schema finalizes - no module-level reload helper, so there is no brittle
-    ``import conftest`` boundary.
+    A test that must re-finalize under an ``override_settings`` requests the
+    function-scoped ``project_schema_override`` fixture so the default schema is
+    restored afterward.
     """
     reload_all_project_app_schemas()
 
@@ -1158,7 +1156,7 @@ def test_globalid_filter_round_trip():
 
 
 @pytest.mark.django_db
-def test_type_strategy_opt_out_reproduces_type_name(reload_all_project_app_schemas):
+def test_type_strategy_opt_out_reproduces_type_name(project_schema_override):
     """``RELAY_GLOBALID_STRATEGY = "type"`` opts back into the GraphQL-type-name payload.
 
     Ordering matters here: the override is applied *before*
@@ -1167,7 +1165,7 @@ def test_type_strategy_opt_out_reproduces_type_name(reload_all_project_app_schem
     reload or the test silently exercises the default schema). Under the ``type``
     strategy ``ItemType``'s ``id`` reproduces the GraphQL type name ``ItemType``
     (== ``ItemType.__name__``, no ``Meta.name``), NOT the model label. The
-    per-test autouse fixture re-reloads the default-strategy schema for siblings.
+    function-scoped override fixture re-reloads the default-strategy schema for siblings.
 
     Runs as ``staff_1`` so the first item is visible regardless of its
     (``seed_data``-randomized) privacy under the activated cascade hooks
@@ -1179,7 +1177,7 @@ def test_type_strategy_opt_out_reproduces_type_name(reload_all_project_app_schem
     with override_settings(
         DJANGO_STRAWBERRY_FRAMEWORK={"RELAY_GLOBALID_STRATEGY": "type"},
     ):
-        reload_all_project_app_schemas()
+        project_schema_override()
         response = _post_graphql(
             "query { allItems { edges { node { id name } } } }",
             client=client,

@@ -11,7 +11,9 @@ failure directions against canned responses, and the export / collection guards
 
 Covered live here: the ``assert_no_errors=True`` raising direction on a real
 invalid selection; the ``AsyncTestClient`` happy path (awaited transport, async
-decode) and its ``login()`` bracket; and the unittest family end to end
+decode), its ``login()`` bracket, and its nested two-file multipart upload (the
+async color of ``test_uploads_api.py``'s sync upload, so the DoD's "multipart
+... on both clients" is earned live on both); and the unittest family end to end
 (``self.query(...)``, both assertion helpers' PASSING directions, the per-call
 and ``GRAPHQL_URL`` endpoint rungs against a real view, and the
 ``TransactionTestCase`` combination). The sync ``login()`` bracket and
@@ -24,10 +26,13 @@ transaction; seeding happens in a sync fixture (not the async body) so the ORM
 work never runs in the event loop and raises ``SynchronousOnlyOperation``.
 """
 
+import io
+
 import pytest
 from apps.products.models import Category
 from apps.products.services import create_users, seed_data
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from django.urls import include, path, resolve
 from strawberry import relay
@@ -81,6 +86,36 @@ _CREATE_ITEM = (
 )
 
 _ITEMS_QUERY = "query Items($first: Int) { allItems(first: $first) { edges { node { name } } } }"
+
+# The nested two-file upload mutation the async multipart test drives (the sync
+# twin lives in ``test_uploads_api.py``); ``attachment`` / ``image`` are both
+# required ``Upload!`` fields on the generated ``MediaSpecimenInput``.
+_CREATE_MEDIA = """
+mutation Create($data: MediaSpecimenInput!) {
+  createMediaSpecimen(data: $data) {
+    result {
+      label
+      attachment { name size url }
+      image { name width height }
+    }
+    errors { field messages }
+  }
+}
+"""
+
+# A 5x9 PNG so the live width / height assertions read distinct, deterministic
+# values (a square could pass by coincidence) - the same shape as the sync
+# upload suite's fixture.
+_IMAGE_WIDTH = 5
+_IMAGE_HEIGHT = 9
+
+
+def _png_bytes() -> bytes:
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (_IMAGE_WIDTH, _IMAGE_HEIGHT)).save(buffer, format="PNG")
+    return buffer.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +222,72 @@ async def test_async_login_brackets_the_write_authorized_mutation(permitted_writ
     denied_again = await client.query(_CREATE_ITEM, variables=variables, assert_no_errors=False)
     assert denied_again.data is None
     assert "Not authorized" in denied_again.errors[0]["message"]
+
+
+@pytest.fixture
+def upload_superuser(transactional_db):
+    """A superuser for the async multipart upload, created in a sync fixture.
+
+    ``createMediaSpecimen`` is gated by the default ``add_mediaspecimen``
+    ``DjangoModelPermission``; a superuser short-circuits it (write-auth itself
+    is exercised on its own in the async ``login()`` bracket above). Created here
+    rather than in the async body so the ORM work never runs in the event loop,
+    and ``transactional_db`` so the async view's executor-thread SQLite
+    connection sees the committed row. The sync twin is a plain
+    ``client.login(superuser)`` in
+    ``test_uploads_api.py::test_multipart_create_uploads_real_files_over_http``.
+    """
+    return get_user_model().objects.create_superuser(
+        "async_uploader",
+        "async_uploader@example.com",
+        "pw",
+    )
+
+
+async def test_async_multipart_upload_creates_media_specimen(upload_superuser, tmp_path):
+    """The nested two-file multipart upload through ``AsyncTestClient`` (the DoD's "both clients").
+
+    The async color of
+    ``test_uploads_api.py::test_multipart_create_uploads_real_files_over_http``:
+    the path-keyed ``files=`` contract (``data.attachment`` / ``data.image``,
+    each a ``None`` placeholder in ``variables``) combined with
+    ``operation_name=``, driven end to end through Django's in-process
+    ``AsyncClientHandler`` (ASGI-scope multipart parse -> the sync GraphQL view
+    on the executor thread -> JSON response). Before this the "multipart ... on
+    both clients" DoD claim was proven live only on the sync client. Assertions
+    read the returned ``result`` payload (the saved files read back through the
+    resolver) rather than the ORM, so no sync query runs in the event loop.
+    """
+    variables = {"data": {"label": "async-uploaded", "attachment": None, "image": None}}
+    files = {
+        "data.attachment": SimpleUploadedFile(
+            "async.txt",
+            b"async multipart bytes",
+            content_type="text/plain",
+        ),
+        "data.image": SimpleUploadedFile("async.png", _png_bytes(), content_type="image/png"),
+    }
+    client = AsyncTestClient()
+
+    with override_settings(MEDIA_ROOT=str(tmp_path)):
+        async with client.login(upload_superuser):
+            res = await client.query(
+                _CREATE_MEDIA,
+                variables=variables,
+                files=files,
+                operation_name="Create",
+            )
+
+    assert res.response.status_code == 200
+    payload = res.data["createMediaSpecimen"]
+    assert payload["errors"] == []
+    result = payload["result"]
+    assert result["label"] == "async-uploaded"
+    assert result["attachment"]["name"].endswith("async.txt")
+    assert result["attachment"]["size"] == len(b"async multipart bytes")
+    assert result["image"]["name"].endswith("async.png")
+    assert result["image"]["width"] == _IMAGE_WIDTH
+    assert result["image"]["height"] == _IMAGE_HEIGHT
 
 
 # ---------------------------------------------------------------------------

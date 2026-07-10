@@ -18,8 +18,30 @@ jobs:
     # here (see the `-m` filter on the test step). The sqlite tier (django.yml)
     # runs the whole suite and owns the fail_under=100 coverage gate on every
     # push/PR.
-    name: Postgres - Python 3.14 - Django latest
+    name: Postgres - Python 3.14 - Django latest - ${{ matrix.shard }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: library-api
+            distribution: load --maxschedchunk=1
+            pytest_targets: examples/fakeshop/test_query/test_library_api.py
+          - shard: products-api
+            distribution: load --maxschedchunk=1
+            pytest_targets: examples/fakeshop/test_query/test_products_api.py
+          - shard: other-live-api
+            distribution: load
+            pytest_targets: >-
+              examples/fakeshop/test_query
+              --ignore=examples/fakeshop/test_query/test_library_api.py
+              --ignore=examples/fakeshop/test_query/test_products_api.py
+          - shard: package-core
+            distribution: loadscope
+            pytest_targets: tests
+          - shard: example-non-live
+            distribution: loadscope
+            pytest_targets: examples/fakeshop/apps examples/fakeshop/tests
     steps:
       - uses: actions/checkout@v6
       # Launch Postgres FIRST, detached, so its image pull + boot overlap the
@@ -51,12 +73,10 @@ jobs:
           cache-suffix: test-postgres
       - name: Set up Python 3.14
         run: uv python install 3.14
-      - name: Install dependencies (with the pg group)
-        run: uv sync --python 3.14 --group pg
-      - name: Install latest Django
+      - name: Install dependencies with latest Django
         run: |
-          uv pip install "Django" --upgrade
-          uv run django-admin --version
+          uv sync --python 3.14 --group pg --upgrade-package Django
+          uv run --no-sync django-admin --version
       - name: Wait for Postgres to be healthy
         # Postgres has been booting since right after checkout (while the deps
         # installed), so this usually passes on the first poll.
@@ -77,7 +97,12 @@ jobs:
         # filterwarnings=error, asyncio_mode, markers) is a separate option and
         # stays in force.
         #
-        # 1. `-n 12` instead of `-n auto` (= 4 on a standard ubuntu-latest):
+        # 1. Five path-disjoint matrix shards run on independent runners and
+        #    Postgres servers. The two largest live-API modules use `load` so
+        #    individual tests can fill all workers; package shards retain
+        #    `loadscope` because their global-registry fixtures require it.
+        #
+        # 2. `-n 12` instead of `-n auto` (= 4 on a standard ubuntu-latest):
         #    this tier is I/O-bound -- every test round-trips to a real Postgres
         #    server over TCP, so workers spend most of their time WAITING on the
         #    DB, not the CPU. Over-subscribing past the core count lets one
@@ -86,7 +111,7 @@ jobs:
         #    -- dial it against measured runs; too high and per-worker test-DB
         #    creation + migration replay starts to dominate.
         #
-        # 2. `--cov`/`--cov-report` dropped: coverage is redundant on this tier.
+        # 3. `--cov`/`--cov-report` dropped: coverage is redundant on this tier.
         #    The sqlite tier (django.yml) already enforces fail_under=100 on
         #    every push/PR, and the code is structured so no line is
         #    Postgres-only-reachable -- coverage is vendor-identical, so
@@ -96,7 +121,7 @@ jobs:
         #    passing `--no-cov`, which would emit a warning that
         #    filterwarnings=error turns into a failure.)
         #
-        # 3. `-m "django_db or pg"`: only the DB-touching tests re-run here.
+        # 4. `-m "django_db or pg"`: only the DB-touching tests re-run here.
         #    Pure-unit tests never open a connection, so running them against
         #    Postgres proves nothing about vendor portability -- they are fully
         #    covered on the sqlite tier. Audited: every DB test carries the
@@ -105,4 +130,8 @@ jobs:
         #    from ~3000 tests to ~900.
         env:
           FAKESHOP_PG_DSN: postgres://fakeshop:fakeshop@127.0.0.1:5432/fakeshop
-        run: uv run pytest -o addopts="-v -n 12 --dist loadscope" -m "django_db or pg"
+        run: |
+          uv run --no-sync pytest \
+            -o addopts="-v -n 12 --dist ${{ matrix.distribution }} --durations=25" \
+            -m "django_db or pg" \
+            ${{ matrix.pytest_targets }}

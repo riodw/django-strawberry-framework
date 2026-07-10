@@ -137,10 +137,13 @@ class TestClient(BaseGraphQLTestClient):
         ``strawberry_django``'s client; the two keyword-only extensions are
         package-owned (spec-043 Decision 6):
 
-        - ``operation_name=`` - sent as ``operationName`` in the body, and
-          only when provided (an absent key, never an explicit ``null`` - a
-          ``null`` ``operationName`` against a multi-operation document is a
-          GraphQL validation error).
+        - ``operation_name=`` - sent as ``operationName`` whenever it is not
+          ``None`` (the default ``None`` omits the key entirely - never an
+          explicit ``operationName: null``, which is a GraphQL validation
+          error against a multi-operation document). An explicit ``""`` is a
+          *provided* value and IS sent, for the server to reject as the
+          malformed name it is, rather than silently reinterpreted as "no
+          operation name" (the module's fail-at-the-source posture).
         - ``url=`` - a per-call endpoint override, honored for this one
           request only and never persisted on the client.
 
@@ -242,7 +245,13 @@ class TestClient(BaseGraphQLTestClient):
         """
         body: dict[str, object] = {"query": query}
 
-        if operation_name:
+        # ``is not None`` (not truthiness): an explicit ``operation_name=""`` is
+        # a provided-but-malformed value, sent for the server to reject with a
+        # real GraphQL error rather than silently reinterpreted as "no operation
+        # name" - the module's fail-at-the-source posture. ``None`` (the default)
+        # omits the key entirely, never sending ``operationName: null`` (a
+        # validation error against a multi-operation document).
+        if operation_name is not None:
             body["operationName"] = operation_name
 
         if variables:
@@ -261,6 +270,20 @@ class TestClient(BaseGraphQLTestClient):
                 "query(..., files=...) requires variables= carrying a None placeholder "
                 "at each file's variable path (e.g. variables={'data': {'image': None}} "
                 "for files={'data.image': f}).",
+            )
+
+        # Reserved-field guard: each ``files`` key becomes a multipart field
+        # name alongside the envelope's own ``operations`` / ``map`` fields, and
+        # ``**files`` spreads last - a key named ``operations`` or ``map`` would
+        # silently clobber the envelope and post a corrupt body the server has to
+        # diagnose. Reject it at the source. Explicit raise (not a bare assert)
+        # so the guard holds under ``python -O``, matching the sibling guards.
+        reserved = {"operations", "map"} & set(files)
+        if reserved:
+            raise AssertionError(
+                f"files= keys may not use the reserved multipart envelope field "
+                f"name(s) {sorted(reserved)!r}; the 'operations' / 'map' fields "
+                f"are built by this client - rename the variable path.",
             )
 
         self._assert_file_placeholders(variables, files)

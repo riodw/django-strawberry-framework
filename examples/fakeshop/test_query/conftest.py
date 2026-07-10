@@ -23,7 +23,14 @@ import pytest
 from schema_reload import reload_all_project_schemas
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def reload_all_project_app_schemas():
     """Return the :func:`schema_reload.reload_all_project_schemas` callable for an autouse fixture."""
     return reload_all_project_schemas
+
+
+@pytest.fixture
+def project_schema_override(reload_all_project_app_schemas):
+    """Restore the default project schema after a test rebuilds it under temporary settings."""
+    yield reload_all_project_app_schemas
+    reload_all_project_app_schemas()

@@ -1,250 +1,215 @@
-# Spec-042 Implementation Review (adversarial pass)
+# Spec-043 Implementation Review (test-client family) — adversarial pass
 
-## Scope
+Scope: the shipped spec-043 implementation across `c0b10ba4` (Slice 1),
+`4490a069` (review fixes + Slice 2/3 wrap), and `5c71995d` (feedback2 fixes) —
+`django_strawberry_framework/testing/client.py`, `testing/__init__.py`,
+`conf.py::testing_endpoint_setting`, `tests/testing/test_client.py`,
+`examples/fakeshop/test_query/test_client_api.py`, the
+`examples/fakeshop/graphql_client.py` re-seat, and the Slice-2 suite
+conversions + Slice-3 doc wrap. Every claim below was verified against source
+(the installed `strawberry/test/client.py`, Django's `test/client.py`, the
+spec, the build artifact) — not taken from docstrings.
 
-Reviewed the current on-disk Spec-042 implementation against
-[`docs/SPECS/spec-042-debug_toolbar-0_0_14.md`][spec-042]: the production middleware, the GraphiQL
-bridge template, the shared soft-dependency helper, the tests, and the Slice-2 doc wrap. Load-bearing
-claims were verified against the installed `django-debug-toolbar` 7.0.0 and fakeshop settings, not
-just by inspection.
+The uncommitted working-tree changes (`optimizer/walker.py`,
+`connection.py`, `types/resolvers.py`, `test_library_api.py`, etc.) are the
+concurrent session's WIP and are **out of this review's scope** per the
+AGENTS.md unexpected-modifications rule; the committed `test_library_api.py`
+conversion (in `3ca7b291`) was reviewed.
 
-The Python middleware is a faithful, well-documented port of the upstream borrow with three
-deliberate, spec-tracked divergences (the two middleware robustness guards + the template hardening).
-Its structure is sound and I found no reason to unwind `process_view`, `_postprocess`, or
-`_get_payload`. The real issues are one correctness bug in the injected JavaScript and one
-completion-state contradiction in the spec, plus smaller items.
+Checks run for this review: `ruff format --check` and `ruff check` (clean),
+`scripts/check_trailing_commas.py --check` (clean), ASCII-only scan on every
+new/changed `.py` (clean), forbidden-footer scan on the five unpushed commits
+(clean). pytest was **not** run (the AGENTS.md "Do not run pytest" rule); the
+build artifact records the maintainer-side runs (124 passed targeted;
+3038-passed full sweep; `testing/client.py` 87/87 statements).
 
-## Bottom line
+**Verdict: ship-quality.** The core module is correct, the guard philosophy
+is applied consistently (explicit `raise AssertionError`, never a bare
+`assert`, at all five guard sites — survives `python -O`, verified against
+the base's stripped-assert hazard), and the test placement is the strongest
+live-first reading in the repo so far. Four findings, none blocking: one
+missing test direction against a stated DoD claim (F1), one spec-realignment
+sweep (F2), and two small hardening nits (F3, F4).
 
-No P1. Two things to fix before treating the card as wrapped:
+---
 
-- **P2.1** — the bridge's null-DOM fallback skips the payload scrub, leaking the server-only
-  `debugToolbar` key back into GraphiQL. This is the exact case the Revision-7 hardening was added to
-  cover, so the guard is present but mis-ordered.
-- **P2.2** — the spec simultaneously says `COMPLETE` and `Planned … WIP-ALPHA-042`, with every
-  checklist box unchecked. The canonical design record contradicts itself.
+## F1 — DoD claims multipart "on both clients"; the async `files=` direction has no test anywhere (medium)
 
-Everything else is P3.
+The spec's DoD row states: *"Multipart file upload works through
+`query(..., files=...)` on **both clients**"*
+(`docs/spec-043-test_client-0_0_14.md` #"Multipart file upload works
+through"). Shipped coverage: the sync multipart path is proven live twice
+(`test_uploads_api.py`, nested two-file input object + `operation_name`) and
+the builder's shapes are pinned package-tier — but **no test anywhere drives
+`AsyncTestClient.query(..., files=...)`**. The async tests in
+`test_client_api.py` are JSON-only.
 
-## P2 — fix before wrap
+Mechanically it should work — `AsyncRequestFactory` overrides only
+`_base_scope` / `request` / `generic` and inherits `post()`'s
+`MULTIPART_CONTENT` encoding from `RequestFactory`, and the builder/decode
+are shared with the sync client — but "should work" is exactly what the
+repo's claim-verification standard exists to replace. The async multipart
+round trip (ASGI-scope multipart parse through `AsyncClientHandler` into the
+strawberry view) is genuinely unexercised, and it IS achievable live:
+fakeshop's `createMediaSpecimen` + `AsyncTestClient` + the existing
+`transactional_db` sync-seeding fixture pattern + `MEDIA_ROOT=tmp_path`.
 
-### P2.1 — the bridge leaks `debugToolbar` when the toolbar handle is absent
+**Fix (the root-cause one, per the highest-standard rule):** add one live
+async multipart test to
+`examples/fakeshop/test_query/test_client_api.py` — the async color of
+`test_uploads_api.py::test_multipart_create_uploads_real_files_over_http`
+(superuser created in a sync `transactional_db` fixture, awaited
+`query(..., files={"data.attachment": ..., "data.image": ...},
+operation_name=...)`, assert both files persisted). Do **not** resolve this
+by narrowing the DoD wording — the claim is the right claim; it just needs
+its test.
 
-References:
+## F2 — The spec's test-placement text was not realigned to the shipped (better) placement (medium, doc-only)
 
-- [debug_toolbar.html][template] line 12 `#"if (djDebug === null) return data;"`
-- [debug_toolbar.html][template] line 38 `#"delete data.debugToolbar;"`
-- [middleware/debug_toolbar.py][mw] lines 243-247 (`_postprocess` HTML append)
+The implementation moved the live-reachable coverage live — correctly: the
+AGENTS.md live-first mandate says any package line earnable via a real
+`/graphql/` request MUST be earned in `test_query/`. The shipped split is
+`test_client_api.py` (sync raising direction, both async tests, the whole
+unittest family end-to-end, the endpoint rungs against a real probe view)
+vs. `tests/testing/test_client.py` (DB-free mechanics only). Both file
+docstrings state this split accurately.
 
-`update(data)` returns early on `djDebug === null` **before** it reaches `delete
-data.debugToolbar`, so in that path the payload is handed back to the caller with the server-only
-`debugToolbar` key still attached. Because `update` is installed as a global monkeypatch over
-`JSON.parse` and `Response.prototype.json`, that leak applies to every JSON parse on the page while
-GraphiQL is open — the blast radius is the whole IDE, not one panel.
+The spec still says otherwise at several load-bearing spots:
 
-This is reachable, and it is precisely the case the hardening claims to handle. `djDebug` is captured
-once at script execution. It is non-null on a normally-rendered page (the stock handle is inserted
-before `</body>`, ahead of the appended bridge). It is **null** when the stock handle was not
-inserted — `is_processable_html_response` returned false (a `Content-Encoding` set upstream, or the
-configured `INSERT_BEFORE` marker missing from a customized GraphiQL page) — yet the override still
-appended the bridge, because its HTML branch is gated only on `is_html and is_graphiql and
-status_code == 200` ([mw][mw]:243), never on whether the stock insert actually happened. In that
-state the scrubber silently stops scrubbing.
+- `docs/spec-043-test_client-0_0_14.md::Decision 11` — *"The
+  `AsyncTestClient` — … the async client's real-request tests live **here**"*
+  and *"The unittest family's mechanics …"* both describe
+  `tests/testing/test_client.py` as the owner; they shipped live.
+- Test plan intro #"Only the assertions a live request cannot pin — the
+  `assert_no_errors=True` raising direction" — the raising direction shipped
+  **live**
+  (`test_client_api.py::test_assert_no_errors_default_raises_with_the_errors_list`),
+  which also disproves the premise that a live request "cannot pin" it.
+- Scenario 2 #"pinned package-tier in `tests/testing/test_client.py`" — same.
+- Scenario 3 #"fails GraphQL-side (errors present)" — live reality differs:
+  Strawberry's HTTP layer defaults an absent `operationName` to the
+  document's **first operation** (no error). The shipped test
+  (`test_products_api.py::test_operation_name_dispatch_via_test_client`)
+  pins the real behaviour and documents the divergence; the spec still
+  states the wrong expectation.
+- Slice-1 checklist #"the `AsyncTestClient` real-request paths (the live
+  tier is sync-only)" — the premise ("the live tier is sync-only") is now
+  false; the live tier runs the async tests fine.
+- The DoD row for `tests/testing/test_client.py` #"async tests through
+  `AsyncClient`" — describes async request-driving tests in the package
+  tier.
 
-Scrub first, then treat the DOM update as best-effort:
+The build artifact records the endpoint-ladder letter-deviation (four named
+tests vs. one parametrized) but **not** this placement deviation, so today
+neither standing document tells the truth about where the request-driving
+tests live. **Fix:** one realignment sweep over the spec's Decision 11 /
+Test plan / Slice-1 checklist / DoD wording to match the shipped split (the
+spec is the standing doc — realign it rather than growing the build-doc
+deviation list), including scenario 3's first-operation reality.
 
-```javascript
-const toolbar = data.debugToolbar;
-delete data.debugToolbar;      // mandatory: the response contract
-if (djDebug === null) return data;
+## F3 — `operation_name=""` is silently dropped instead of failing loudly (low)
 
-// read toolbar.panels / toolbar.requestId below this point (DOM work is best-effort)
-```
+`django_strawberry_framework/testing/client.py::TestClient._build_body`
+#"if operation_name:" gates on truthiness, so an explicit empty string is
+silently treated as absent and the server executes the document's first
+operation — a silent reinterpretation of a malformed call, which cuts
+against the module's own fail-at-the-source philosophy (the placeholder
+walker exists precisely to reject malformed calls before the wire). The
+docstring contract is "sent … only when provided"; `""` *is* provided.
+**Fix:** `if operation_name is not None:` — the server then rejects the
+invalid name with a real GraphQL error naming the problem. One package-tier
+builder assertion covers it.
 
-Spec-042's Revision 7 already frames the template as "the third documented divergence — tolerate a
-missing handle while still acting as the scrubber." The fix makes the code match that stated intent.
+## F4 — `files=` keys can silently clobber the reserved multipart fields (low)
 
-### P2.2 — the spec says COMPLETE but still reads as an unstarted plan
+`TestClient._build_body` #"return {\"operations\": json.dumps(body)" spreads
+`**files` last, so a pathological `files={"operations": f}` or
+`files={"map": f}` (with matching `None` placeholders in `variables`, which
+the walker would happily verify) silently overwrites the envelope's
+`operations`/`map` fields and posts a corrupt multipart body the server has
+to diagnose. The engine base shares the flaw, but the package owns this
+builder precisely because the base's was insufficient — a ~2-line guard
+(`raise AssertionError` on a `files` key in `{"operations", "map"}`) matches
+the sibling guards' shape and message style. Low likelihood, but the fix is
+cheaper than the caveat.
 
-References:
+---
 
-- [spec-042][spec-042] line 3 `#"Planned for \`0.0.14\` (card \`WIP-ALPHA-042-0.0.14\`)"`
-- [spec-042][spec-042] line 54 `#"Status: **COMPLETE (card \`DONE-042-0.0.14\`)"`
-- [spec-042][spec-042] lines 381, 497 (Slice 1 / Slice 2 headers)
+## Minor notes (no action required)
 
-The card is `DONE-042-0.0.14` in [KANBAN.md][kanban] and the spec Status line reads `COMPLETE`, but
-the opening paragraph still says `Planned for 0.0.14 (card WIP-ALPHA-042-0.0.14)` and **all 35**
-checklist items — the two slice blocks and the `D1`/`D2`/… decision-conformance boxes — remain
-`- [ ]` (zero checked). That is internally contradictory in the document that is supposed to be the
-satisfied design record, and it makes an audit read as "only partially implemented."
+- **`permitted_writer` duplication.** The create-users → seed → `add_item`
+  grant → stale-cache refetch → category-GlobalID block now exists twice
+  (`test_client_api.py::permitted_writer` and
+  `test_products_api.py::test_create_item_login_bracket_via_test_client`).
+  ~15 lines, two sites, both correct (seed-helper-first per the AGENTS.md
+  seeding rule). A shared `test_query/conftest.py` fixture is a candidate if
+  a third site appears; not worth churn at two.
+- **`post_graphql` `variables={}` delta.** The old helper sent
+  `"variables": {}` when passed an empty dict; `TestClient._build_body`'s
+  truthiness drops the key. Semantically identical server-side; no caller
+  passes `{}`. Noting for completeness.
+- **Double decode in the `graphql_client.py` chain.** `query()` decodes via
+  `_decode` → `response.json()`, then `graphql_payload` calls
+  `response.json()` again — Django's test client caches (`response._json`),
+  so this is free. Keeping the raw-`HttpResponse` return contract instead of
+  retrofitting the typed `Response` into ~8 suites was the right
+  blast-radius call, and it is documented in the module docstring.
 
-Reconcile it: update the opening line to the final card id/status and either tick the boxes that the
-implementation and this review confirm, or mark the checklist explicitly as the historical plan of
-record. (I would not silently delete it — the DoD tracking lives in KANBAN, but the spec's boxes are
-useful provenance.)
+## Verified strengths (claims checked against source)
 
-## P3 — cleanups
+- **The bare-assert hazard is actually closed.** The engine base's `query()`
+  gates on `assert response.errors is None` (verified in
+  `strawberry/test/client.py`) — stripped under `python -O`. The package
+  owns both `query()` overrides and raises explicitly; all five guard sites
+  (`query` ×2, `_build_body`, `_assert_file_placeholders` ×2 shapes) use
+  explicit `raise AssertionError(...)`. The `noqa: TRY004` on the
+  scalar-descend branch is correct and correctly justified (uniform guard
+  type for `pytest.raises(AssertionError)`).
+- **The base-builder insufficiency claim is true.** Traced
+  `_build_multipart_file_map` against the nested input-object shape: the
+  folder heuristic takes the FIRST key (`label`), builds
+  `map["data"] = ["variables.data.label"]`, then filters on `k in files` →
+  empty map. The owned path-keyed builder is load-bearing, and the live
+  nested two-file + `operation_name` test is exactly the envelope the base
+  cannot produce.
+- **The Slice-1 review round's fixes hold.** `files={}` is falsy on all
+  three switches (pinned); `variables={}` hits the placeholder guard
+  (pinned); the base `url` attribute is forwarded and pinned in sync with
+  `path`; `assertResponseNoErrors` failures carry both fields.
+- **Slice 2 is a root-cause conversion, and it is complete.** The shared
+  `graphql_client.post_graphql` re-seats onto `TestClient`, converting all
+  eight helper-riding suites transitively; the four per-file wrappers were
+  converted/deleted; every retained raw `client.post(...)` carries the
+  wire-shape exemption comment (both `test_products_api.py` raw-multipart
+  sites verified); the remaining raw usages in `test_debug_toolbar_api.py`
+  are GETs (content negotiation — legitimately outside a POST-JSON client);
+  no orphan imports (ruff clean).
+- **The endpoint ladder is fully pinned.** All five rungs, the per-call
+  non-persistence guarantee, the settings-receiver restore, and the two
+  mixin rungs proven END-TO-END against a real view via the request-time
+  `resolve("/graphql/")` probe URLconf — a positive hit, not an exception
+  shape.
+- **Live-first placement is exemplary.** Async request tests use sync
+  `transactional_db` seeding fixtures (the executor-thread SQLite visibility
+  constraint, correctly explained in the module docstring); the unittest
+  family is exercised end-to-end live including the `TransactionTestCase`
+  combination; only genuinely non-live-reachable mechanics stay
+  package-tier, each with a named owner.
 
-### P3.1 — `simulated_absence` can strand a `None` sentinel (latent, shared helper)
+## AGENTS.md compliance
 
-References:
-
-- [tests/_soft_dependency.py][helper] `simulated_absence` `#"sys.modules[sentinel_name] = None"`
-- [tests/_soft_dependency.py][helper] `evicted_modules` `#"for name in list(sys.modules):"`
-
-`simulated_absence` installs `sys.modules[sentinel_name] = None` but never tears it down itself. The
-`None` entry is cleaned up only because `evicted_modules`' `finally` deletes keys matching
-`prefixes`, and every current caller happens to also list `sentinel_name` inside `prefixes`
-(`"debug_toolbar"`, `"rest_framework"`, `"channels"` appear in both positions). That coupling is
-undocumented and invisible at the call site.
-
-A future caller that passes a sentinel outside its prefixes — reasonable, since the sentinel is the
-third-party top-level while the prefixes are the framework-owned modules to evict — would strand a
-`None` entry in that worker's `sys.modules`, poisoning every later import of that name under
-`--dist loadscope`. No live bug today, but this is now shared infrastructure whose whole point is to
-be the one robust home for the dance. Make it own its teardown:
-
-```python
-with evicted_modules(*prefixes, parent=parent, attr=attr) as saved:
-    sys.modules[sentinel_name] = None
-    try:
-        yield saved
-    finally:
-        if sys.modules.get(sentinel_name) is None:
-            del sys.modules[sentinel_name]
-```
-
-### P3.2 — the per-panel DOM lookups are unguarded (upstream-parity, but inconsistent with the new posture)
-
-Reference:
-
-- [debug_toolbar.html][template] `#"const content = djDebug.querySelector"`
-
-Inside the panel loop, `content = djDebug.querySelector('#' + id)` then `content.querySelector(...)`,
-and the nav branch does `document.getElementById('djdt-' + id).querySelector(...)`. If a panel is in
-the payload but its content/nav node is missing from the rendered DOM, these throw *inside* the
-patched `JSON.parse` / `Response.json`, breaking the response path rather than skipping one panel.
-This is verbatim upstream behavior and a payload/DOM mismatch is unlikely (both derive from the same
-server-side `enabled_panels`), so it is lower severity than P2.1 — but once you have diverged to add
-the null-handle guard, being defensive the rest of the way is consistent: `forEach` instead of `map`,
-skip when `content === null`, update the nav subtitle only when the node exists. Do this only *after*
-P2.1's scrub-first fix, so a skipped panel can never re-expose the payload.
-
-### P3.3 — the middleware docstring's divergence count omits the template
-
-Reference:
-
-- [middleware/debug_toolbar.py][mw] `#"Two narrow, deliberate robustness divergences"` … `#"No other behavior differs."`
-
-The module docstring enumerates "two … divergences … No other behavior differs," but Spec-042
-Revision 7 and [Test 16][test] treat the template hardening as a third documented divergence. The
-Python behavior claim is technically scoped to this module, but the middleware module is where a
-reader looks for the divergence inventory, so note the template-side one too (e.g. "two Python-side
-divergences; the injected template adds a third, defensive, template-side").
-
-### P3.4 — `_get_payload`'s `json.loads` is unguarded, asymmetric with the P2.3 non-object bail
-
-Reference:
-
-- [middleware/debug_toolbar.py][mw] `_get_payload` `#"payload = json.loads(content"`
-
-The P2.3 divergence guards a non-object decoded body (`if not isinstance(payload, dict): return
-None`), but the `json.loads` above it is not itself wrapped — a non-JSON body would raise
-`JSONDecodeError` out of `_postprocess`. Unreachable in practice (only tagged `application/json`
-Strawberry responses reach here, and those are always valid JSON) and it matches upstream, so this is
-a nit: if the intent of P2.3 was "never 500 on an odd body," malformed JSON is the same class of risk
-and could fold into the same bail.
-
-### P3.5 — the `fail_under = 100` gate is line coverage only
-
-Reference:
-
-- [pyproject.toml][pyproject] `#"[tool.coverage.run]"`
-
-`branch` is not enabled, so "100%" is line coverage. In this unusually branch-dense module several
-negative directions execute but are never asserted — the `"Content-Length" in response` false path on
-both refresh blocks, the `status_code == 200` false path (a tagged non-200 HTML response), and the
-`content_type != "application/json"` disjunct for a tagged non-HTML/non-JSON response. Not a defect;
-flag only so the "100%" claim is read for what it guarantees. If branch coverage is ever enabled,
-expect these first.
-
-## Adversarial checks that held (verified non-findings)
-
-- **The `INSTALLED_APPS` gate fires correctly.** With `"debug_toolbar"` importable but absent from
-  `INSTALLED_APPS`, importing the leaf raises `ImproperlyConfigured` (message contains
-  `INSTALLED_APPS`) at [mw][mw]:111, before the `debug_toolbar.middleware` import — so Test 11b holds
-  in both worker states, keying on `apps.is_installed` rather than model-registration order.
-  `debug_toolbar` 7.0.0 does define `HistoryEntry(models.Model)`, so the gate genuinely replaces the
-  cryptic app-label `RuntimeError`.
-- **Test 11a (broken install).** A `sys.modules["debug_toolbar.middleware"] = None` sentinel makes
-  the statement-import raise a `ModuleNotFoundError` whose message contains `debug_toolbar.middleware`,
-  carries no install hint, and has `__cause__ is None` — all three assertions hold.
-- **Test 13 (streaming) cannot crash the stock pass.** `is_processable_html_response` checks
-  `not getattr(response, "streaming", False)` first, so `super()._postprocess` never touches
-  `.content` on a `StreamingHttpResponse`.
-- **`_FakeToolbar` protocol is sufficient.** Every unit entering `_postprocess` (13, 15) uses the
-  default `enabled_panels=()`, so the stock stats/headers loop is empty and never calls a method
-  `_FakePanel` lacks; populated panels only ever reach `_get_payload` directly. Correct, but fragile —
-  a future test handing populated panels to `_postprocess` would need `_FakePanel` to grow the stock
-  methods.
-- **Content-Length stays consistent** on both the HTML append and the JSON re-encode (guarded by
-  `"Content-Length" in response`, recomputed from `len(response.content)`).
-
-## Resolved since the previous review
-
-Auditable delta — each was a prior finding, each is now addressed:
-
-- Template `JSON.parse`/`hasOwnProperty` unsafety → fixed (arg-forwarding wrapper + null/prototype-safe
-  membership test); [Test 16][test] pins it. (The ordering leak in **P2.1** is a *new*, narrower issue
-  introduced by the null-handle guard, not the old one.)
-- `evicted_modules` `__getattr__` footgun → fixed with a `missing` sentinel via `vars()`.
-- Stale `require_drf()` "statement import" docstring → fixed; all three guards now document
-  `require_optional_module`.
-- `tests/_soft_dependency.py` untracked → now staged (`git status` shows `A`).
-- Docs "planned / no slice built" → wrapped: [KANBAN.md][kanban] `DONE-042-0.0.14`, README/TREE/
-  [GLOSSARY.md][glossary] bodies carry the implemented contract. The GLOSSARY status-table cell
-  `planned for 0.0.14` is **not** stale — it is the joint-version-cut convention (the already-landed
-  `DONE-041` entries show the identical cell), since the `0.0.14` release has not cut. (This is
-  separate from **P2.2**, which is the spec *body's* self-contradiction.)
-- `examples/fakeshop/db.sqlite3` dirty → **not** a Spec-042 side effect; do not revert as part of this
-  card. The toolbar tests run under `@pytest.mark.django_db` against a separate in-memory database and
-  never touch the tracked file; that diff is concurrent kanban work.
-
-## Verification performed
-
-- Read the current middleware, template, test module, shared helper, `require_optional_module`, the
-  DRF/router refactors, `pyproject.toml`, and the wrapped docs. This review is against the on-disk tree
-  (an earlier context snapshot was stale).
-- `ruff check` on the changed package + test files — clean.
-- Inspected installed `debug_toolbar` 7.0.0 (`middleware._postprocess`, `models.HistoryEntry`,
-  `utils.is_processable_html_response`) for the stock contract the subclass and units rely on.
-- Probed the leaf import under fakeshop settings with `"debug_toolbar"` absent from `INSTALLED_APPS`,
-  confirming the `ImproperlyConfigured(...INSTALLED_APPS...)` raise at import time.
-- Did **not** run pytest, per repo instruction. The behavioral tests (1–8) drive real `/graphql/`
-  traffic and read plausible but are unverified here; run `pytest tests/middleware/test_debug_toolbar.py`
-  for a second gate before the joint cut.
-
-<!-- LINK DEFINITIONS -->
-
-<!-- Root -->
-[kanban]: ../KANBAN.md
-[pyproject]: ../pyproject.toml
-
-<!-- docs/ -->
-[glossary]: GLOSSARY.md
-[tree]: TREE.md
-
-<!-- docs/SPECS/ -->
-[spec-042]: SPECS/spec-042-debug_toolbar-0_0_14.md
-
-<!-- django_strawberry_framework/ -->
-[mw]: ../django_strawberry_framework/middleware/debug_toolbar.py
-[template]: ../django_strawberry_framework/templates/django_strawberry_framework/debug_toolbar.html
-[imports]: ../django_strawberry_framework/utils/imports.py
-
-<!-- tests/ -->
-[test]: ../tests/middleware/test_debug_toolbar.py
-[helper]: ../tests/_soft_dependency.py
-
-<!-- examples/ -->
-[db]: ../examples/fakeshop/db.sqlite3
+| Rule | Status |
+| --- | --- |
+| Highest standard / root-cause fix | ✓ — the Slice-2 shared-helper re-seat and the owned builder are root-cause moves; the Slice-1 review round fixed causes, not symptoms |
+| Test placement (tests/ vs test_query/) | ✓ — split verified file-by-file; see F2 for the spec text lagging it |
+| Live-first mandate + fail_under=100 | ✓ — 87/87 recorded; every package-tier test justifies why it cannot be live. F1 is the one unproven claimed direction |
+| seed_data/create_users first line | ✓ — all new catalog/auth tests lead with the helpers |
+| Tests in the same change; orphan-import sweep | ✓ |
+| No pytest unless asked | ✓ — not run for this review; maintainer-side runs recorded in the build artifact |
+| ruff format + check --fix; trailing commas; ASCII-only .py | ✓ — re-verified clean in this review |
+| Settings key lands with its feature | ✓ — `TESTING_ENDPOINT` follows the key-constant + thin-accessor precedent |
+| CHANGELOG untouched; version bump deferred | ✓ — still `0.0.13` everywhere; joint-cut items correctly listed as deferred |
+| Symbol-qualified refs; no `path:NN` in standing docs/code | ✓ in all new code and doc edits |
+| TODO anchors removed with the shipping slice | ✓ — no `TODO(spec-043)` residue in the package |
+| KANBAN/GLOSSARY/TREE via DB + re-render | ✓ — Done card with the `is_current` fix; GLOSSARY statuses correctly stay `planned for 0.0.14`; TREE rows regenerated |
+| Commit hygiene (no footers, current branch) | ✓ — five unpushed commits scanned, clean, all on `main` |

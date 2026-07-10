@@ -198,6 +198,46 @@ Revision history (kept inline so the spec is self-contained):
   fixture; the manual reloads were removed so `seed_data(1)` is the first
   domain-setup line after `super().setUp()`, per the [`AGENTS.md`][agents]
   seed-helper rule.
+- **Revision 3** — adversarial-review absorption (2026-07-10, `docs/feedback.md`),
+  the spec-043 post-ship review. Four findings, all addressed at the source.
+  **F1 (medium) — the DoD claimed multipart "on both clients" but no test drove
+  `AsyncTestClient.query(..., files=...)`.** The sync multipart path was proven
+  live twice and the builder's shapes pinned package-tier, but nothing exercised
+  the async multipart round trip (ASGI-scope multipart parse through
+  `AsyncClientHandler`). Added the async color of the sync nested two-file upload
+  live in
+  [`examples/fakeshop/test_query/test_client_api.py`][test-client-api]
+  (`createMediaSpecimen` through `AsyncTestClient` under `transactional_db` sync
+  seeding + `MEDIA_ROOT=tmp_path`), so the "both clients" claim is now earned
+  live on both. **F2 (medium, doc-only) — the spec's test-placement text lagged
+  the shipped (better) split.** The implementation moved the `AsyncTestClient`
+  real-request paths, the unittest family end to end, and the
+  `assert_no_errors=True` raising direction **live** (they proved live-reachable
+  per the [live-first mandate][glossary-live-first-coverage-mandate]), leaving
+  `tests/testing/test_client.py` entirely DB-free — but
+  [Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest),
+  the [Test plan](#test-plan) (scenarios 2 and 9–12), the Slice-1 checklist, and
+  the [Definition of done](#definition-of-done) still described those as
+  package-tier request-driving tests. Realigned all four to the shipped split,
+  and corrected Scenario 3's premise: an absent `operationName` does **not**
+  error — Strawberry's HTTP layer defaults it to the document's first operation,
+  the behaviour the shipped
+  [`test_products_api.py`][test-products-api] `::test_operation_name_dispatch_via_test_client`
+  pins. **F3 (low) — `operation_name=""` was silently dropped.** `_build_body`
+  gated on truthiness, so an explicit empty string was reinterpreted as "no
+  operation name"; it now gates on `is not None` and sends `operationName: ""`
+  for the server to reject with a real GraphQL error (the module's
+  fail-at-the-source posture), covered by a package-tier builder assertion.
+  **F4 (low) — `files=` keys could clobber the reserved multipart envelope
+  fields.** A pathological `files={"operations": f}` / `files={"map": f}` (with a
+  matching `None` placeholder) would overwrite the envelope via the trailing
+  `**files` spread; `_build_body` now rejects a `files` key named `operations` or
+  `map` at the source, matching the sibling guards' shape, covered by a
+  package-tier assertion. Per the shipped-spec convention (spec-042 Revision 8)
+  the Slice and Definition-of-done checkboxes stay unticked — the `Status:` line
+  is the completion source of truth — and the GLOSSARY term statuses stay
+  `planned for 0.0.14` until the joint cut
+  ([Decision 12](#decision-12--version-bumps-are-owned-by-the-joint-0014-cut)).
 
 ## Key glossary references
 
@@ -360,16 +400,19 @@ the decision hygiene around the two upstream flavors.
         [live-first mandate][glossary-live-first-coverage-mandate]
         ([Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)).
   - [ ] `tests/testing/test_client.py` (new) — the package-tier tests per the
-        [Test plan](#test-plan) for **only what a live request cannot pin**:
-        endpoint-resolution precedence (DB-free), the `assert_no_errors=True`
-        raising direction and both mixin assertion-helper failure modes, the
-        `files=`-with-`variables=None` guard, the `AsyncTestClient` real-request
-        paths (the live tier is sync-only), the unittest family's mechanics
-        (`GRAPHQL_URL`, `self.client` delegation, the transaction case), and the
-        `__test__ = False` collection guard + export surface — the async and
-        unittest request-driving tests run under the
+        [Test plan](#test-plan) for **only what a live request cannot pin**,
+        and (Revision 3) **entirely DB-free**: endpoint-resolution precedence,
+        both mixin assertion-helper FAILURE directions against canned responses,
+        the owned builder's map rule and its guards (`files=`-with-`variables=None`,
+        the per-path placeholder walker, the reserved-envelope-key guard, and the
+        `operation_name=""`-is-sent contract), and the `__test__ = False`
+        collection guard + export surface. The `AsyncTestClient` real-request
+        paths, the unittest family end to end, and the `assert_no_errors=True`
+        raising direction proved live-reachable and are earned **live** in
+        [`test_client_api.py`][test-client-api] instead (under the
         [schema-reload][glossary-schema-reload-discipline] +
-        [`seed_data`][glossary-seed-data] disciplines
+        [`seed_data`][glossary-seed-data] disciplines), so no package-tier test
+        here drives a request
         ([Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)).
   - [ ] Every new symbol carries its docstring (the [`docs/TREE.md`][tree]
         render fails on missing module docstrings) and any
@@ -1551,35 +1594,42 @@ remainder in Slice 2 — after which every `test_query/` run exercises
 multipart uploads) against real fakeshop `/graphql/` requests — the strongest
 possible form of "the covering test lives in the live tier", since the
 covering tests are the package's actual acceptance suites. `tests/testing/test_client.py`
-(the card's DoD row) then owns only what the switched suites cannot pin:
+(the card's DoD row) then owns only what a live request cannot (or need not)
+pin. **The shipped split moved more live than this list first anticipated**
+(Revision 3, `docs/feedback.md` F2): the `AsyncTestClient` real-request paths,
+the unittest family end to end, and the `assert_no_errors=True` raising
+direction all proved live-reachable and shipped in
+[`test_client_api.py`][test-client-api], leaving the package tier **entirely
+DB-free**. What stays package-tier:
 
-- **Endpoint-resolution precedence** (constructor > class attr > settings key
-  > default) — the live suites all use the default, so the override ladder
-  needs targeted tests (settings via the `pytest-django` `settings` fixture;
-  no live suite should ever need a non-default endpoint).
-- **Both `assert_no_errors` directions and both mixin assertion helpers'
-  failure modes** — a live suite asserts *outcomes*, not the helper's own
-  raising behavior.
-- **The `AsyncTestClient`** — the live tier is sync (`django.test.Client`
-  through WSGI); the async client's real-request tests live here, driving the
-  same fakeshop schema through `AsyncClient` / `AsyncClientHandler` (`pytest-asyncio`,
-  `asyncio_mode = auto`, `django_db` marking — and the suite's known
-  order-dependence hazards around async DB work mean these tests follow the
-  [`tests/conftest.py`][tests-conftest] connection-hygiene patterns already
-  in place).
-- **The unittest family's mechanics** (`GRAPHQL_URL` override, the delegate
-  using `self.client`, `GraphQLTransactionTestCase` smoke) — the live suites
-  are pytest-function-shaped, not TestCase-shaped.
+- **Endpoint-resolution precedence** (per-call > constructor > class attr >
+  settings key > default) — the live suites all use the default, so the
+  override ladder needs targeted tests, proven against recording transports (a
+  mis-resolved target cannot pass on a 404 body); the live tier proves the
+  rungs end-to-end against a probe URLconf besides.
+- **Both mixin assertion helpers' FAILURE directions** — a live suite asserts
+  *outcomes*, so the helpers' own raising behaviour is pinned here against
+  canned `Response` objects (their PASSING directions ride the live unittest
+  tests).
+- **The owned builder's map rule and its guards** — the uniform path-keyed map
+  rule (the top-level and list-index shapes fakeshop carries no live vehicle
+  for), the empty-`variables` guard, the per-path placeholder walker, the
+  reserved-envelope-key guard, and the `operation_name=""`-is-sent contract, all
+  pinned against the builder directly (raising before any request, or asserting
+  the built body).
 - **The `__test__ = False` collection guard and the export surface.**
 
-Because these package-tier tests execute real GraphQL through the aggregate
-fakeshop schema, the request-driving ones inherit the
-[schema-reload][glossary-schema-reload-discipline] obligation (setup-time
-`reload_all_project_schemas()`, the [`spec-042`][spec-042] Decision 9
-precedent for package tests driving fakeshop requests) and the
-[`seed_data`][glossary-seed-data] rule (every product-query test's first
-executable line). Pure-mechanics tests (precedence resolution, the collection
-guard) stay DB-free and unmarked.
+The `AsyncTestClient`, the unittest family, and the raising direction ship
+**live** instead: `django.test.AsyncClient` drives Django's in-process
+`AsyncClientHandler` against the real fakeshop schema (the async request tests
+seed through sync `transactional_db` fixtures — the executor-thread SQLite
+visibility constraint — so no ORM work runs in the event loop), and the
+`GraphQLTestCase` / `GraphQLTransactionTestCase` family runs end-to-end against
+real `/graphql/` requests. Every test in `tests/testing/test_client.py` is
+therefore DB-free — no schema reload, no `seed_data`, no real request — while
+the request-driving coverage lives live per the
+[live-first mandate][glossary-live-first-coverage-mandate], the strongest form
+of "the covering test lives in the live tier".
 
 **The switchover's own discipline** (Slices 1–2): each file converts
 mechanically — helper deleted, calls rewritten, assertions unchanged — and
@@ -1656,7 +1706,7 @@ specified in the decisions cited; **no slice bumps the version** — the joint
 | [`django_strawberry_framework/conf.py`][conf] | `TESTING_ENDPOINT_KEY` constant + `testing_endpoint_setting()` accessor, default `"/graphql/"` ([Decision 7](#decision-7--endpoint-resolution-the-settings-key-is-testing_endpoint-default-graphql--resolving-the-cards-graphql_testing_endpoint-working-name)) | 1 |
 | `django_strawberry_framework/testing/client.py` (new) | `Response` (typed + raw response); `TestClient(BaseGraphQLTestClient)` with `__test__ = False`, endpoint resolution, owned `_build_body` + path-keyed file-map builder, `request(..., *, url=None)` (JSON / multipart), owned `query()` (`operation_name=`, per-call `url=` via `request(url=)`, package `Response`), `login()`; `AsyncTestClient(TestClient)`; `GraphQLTestMixin` + `GraphQLTestCase` + `GraphQLTransactionTestCase` ([Decisions 3](#decision-3--the-symbols-are-upstreams-own-names--testclient--asynctestclient--graphqltestmixin--graphqltestcase--graphqltransactiontestcase-distinctly-ours-import-path)–[10](#decision-10--mixin-first-graphqltestmixin-composes-over-testclient-the-graphene-assertion-helpers-keep-their-names-typed-response-shaped)) | 1 |
 | [`django_strawberry_framework/testing/__init__.py`][testing-init] | Re-export the six public names; extend `__all__`; docstring's "Future exports" block resolved to current exports ([Decision 4](#decision-4--module-export-and-test-locations-testingclientpy-re-exported-from-the-testing-root-teststestingtest_clientpy)) | 1 |
-| `tests/testing/test_client.py` (new) | The package-tier scenarios per the [Test plan](#test-plan) — the `assert_no_errors=True` raising direction + mixin failure modes, the `files=`/`variables=None` guard, endpoint precedence, the async client, the unittest family, and the surface guards (request-shape scenarios 1–5 are earned live, not here) | 1 |
+| `tests/testing/test_client.py` (new) | The DB-free package-tier scenarios per the [Test plan](#test-plan) — the owned builder's guards (`files=`/`variables=None`, the placeholder walker, the reserved-envelope-key guard, the `operation_name=""`-is-sent contract), endpoint precedence, both mixin assertion-helper FAILURE directions, and the surface guards (scenarios 1–5, the raising direction, the async client, and the unittest family are earned live in [`test_client_api.py`][test-client-api], not here — Revision 3 F2) | 1 |
 | `examples/fakeshop/test_query/*.py` (targeted subset) | Slice-1 live coverage: convert the cases that earn the sync request-shape lines (JSON, errors outcome, `operation_name`, `login`, multipart) onto `TestClient`; assertions unchanged, query-counts re-verified | 1 |
 | `examples/fakeshop/test_query/*.py` (remainder) | Slice-2 switchover: remaining per-file post helpers deleted, calls moved to `TestClient` / the mixin; wire-shape exemptions commented; query-count assertions re-verified ([Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)) | 2 |
 | [`docs/GLOSSARY.md`][glossary] | [`TestClient`][glossary-testclient] + [`GraphQLTestCase`][glossary-graphqltestcase] entry bodies to implemented contract; [Auth mutations][glossary-auth-mutations] Channels sentence resolved to the follow-on; status flips deferred | 3 |
@@ -1791,17 +1841,23 @@ calls, so — per the [live-first mandate][glossary-live-first-coverage-mandate]
 they are earned **live**, by converting the matching
 [`examples/fakeshop/test_query/`][test-query-readme] cases onto `TestClient` in
 Slice 1 (the Slice-2 switchover then converts the rest); they are **not**
-restated as package-tier tests. Only the assertions a live request cannot pin —
-the `assert_no_errors=True` raising direction and the `files=`/`variables=None`
-guard that scenarios 2 and 5 also carry — live in
-`tests/testing/test_client.py`, alongside everything in scenarios 6–14
-(endpoint precedence, the async client, the unittest family, the surface
-guards). Request-driving tests (the live conversions, and the package-tier
-async / unittest cases) call
-[`schema_reload.reload_all_project_schemas()`][schema-reload] on setup (fixture,
-before any request) and mark `django_db`; product-query tests start with
-[`seed_data(1)`][glossary-seed-data]. Mechanics tests (endpoint precedence,
-collection guard, exports) are DB-free and unmarked.
+restated as package-tier tests. **As shipped (Revision 3), more rode live than
+this plan first split:** the `assert_no_errors=True` raising direction
+(scenario 2), the async client (scenarios 9–10), and the unittest family
+(scenarios 11–12's PASSING legs, plus the `GraphQLTransactionTestCase` smoke)
+all proved live-reachable and are earned **live** in
+[`test_client_api.py`][test-client-api]. What stays in
+`tests/testing/test_client.py` is the guard directions the owned builder raises
+(the `files=`/`variables=None` guard, the placeholder walker, the
+reserved-envelope-key guard, and the `operation_name=""`-is-sent contract that
+scenarios 2 and 5 also carry), the endpoint-precedence ladder (scenarios 6–8),
+both assertion helpers' FAILURE directions (scenario 12), and the surface guards
+(scenarios 13–14) — **all DB-free**. Because the request-driving tests now all
+live in the live tier, they call
+[`schema_reload.reload_all_project_schemas()`][schema-reload] on setup (the
+acceptance suites' autouse fixture) and seed with
+[`seed_data(1)`][glossary-seed-data]; every test in `tests/testing/test_client.py`
+is DB-free and unmarked (no schema reload, no `seed_data`, no real request).
 
 **Sync request shapes (scenarios 1–5) — earned live in Slice 1 (converted
 `test_query/` cases), not package-tier tests:**
@@ -1814,15 +1870,25 @@ collection guard, exports) are DB-free and unmarked.
    shape and the raw ride-along in one assertion set.
 2. **Errors, both directions.** An invalid selection with
    `assert_no_errors=False` returns `res.errors` non-empty with `res.data`
-   `None` — earned live. The raising direction (the same call under the default
+   `None`. The raising direction (the same call under the default
    `assert_no_errors=True` raises `AssertionError`, via `pytest.raises`, its
-   message carrying the errors list) is the helper's own behaviour, pinned
-   package-tier in `tests/testing/test_client.py`.
+   message carrying the errors list) proved live-reachable — an invalid
+   selection is a validation error that touches no DB — and is **earned live**
+   too (Revision 3), in
+   [`test_client_api.py`][test-client-api]
+   `::test_assert_no_errors_default_raises_with_the_errors_list`, not restated
+   package-tier.
 3. **`operation_name` dispatch.** A two-operation document
    (`query A { ... } query B { ... }`) with `operation_name="B"` executes B
-   (assert on a B-only field); the same document with no `operation_name`
-   fails GraphQL-side (errors present) — proving the key is sent when given
-   and *absent* when not (never `null`).
+   (assert on a B-only field). The same document with **no** `operation_name`
+   does **not** error (Revision 3 corrected the earlier "fails GraphQL-side"
+   premise): Strawberry's HTTP layer defaults an absent `operationName` to the
+   document's *first* operation, so it executes A — the real behaviour the
+   shipped [`test_products_api.py`][test-products-api]
+   `::test_operation_name_dispatch_via_test_client` pins. This proves the key is
+   sent when given and *absent* when not (never `operationName: null`, which
+   against a multi-operation document is the actual validation error the
+   omission avoids). Earned live.
 4. **`login()` scoping.** `seed_data(1)`, a write-auth-gated products
    mutation: denied anonymous (top-level error), succeeds inside
    `with client.login(user_with_perm):`, denied again after the block —
@@ -1869,7 +1935,8 @@ collection guard, exports) are DB-free and unmarked.
    the mixin's class-attribute and per-call rungs are Test 11's (proven
    end-to-end against a probe URLconf).
 
-**The async client (real requests through `AsyncClientHandler`; `django_db` +
+**The async client (earned live in [`test_client_api.py`][test-client-api] —
+real requests through `AsyncClientHandler`, sync `transactional_db` seeding,
 `pytest-asyncio` auto mode):**
 
 9. **Async happy path.** `seed_data(1)` (sync fixture), then
@@ -1879,8 +1946,16 @@ collection guard, exports) are DB-free and unmarked.
 10. **Async `login()`.** The Test-4 bracket through
     `async with client.login(user):` — `sync_to_async`-wrapped session
     round trip.
+10b. **Async multipart upload** (Revision 3, `docs/feedback.md` F1). The
+    scenario-5 nested two-file `createMediaSpecimen` upload driven through
+    `AsyncTestClient` (superuser seeded in a sync `transactional_db` fixture,
+    `MEDIA_ROOT=tmp_path`, assertions on the returned `result` payload so no ORM
+    work runs in the event loop), so the DoD's "multipart ... on both clients"
+    is earned live on **both** — the async request round trip (ASGI-scope
+    multipart parse through `AsyncClientHandler`) the sync path cannot exercise.
 
-**The unittest family (TestCase-shaped, in-file subclasses):**
+**The unittest family (earned live in [`test_client_api.py`][test-client-api] —
+TestCase-shaped, in-file subclasses driving real `/graphql/` requests):**
 
 11. **`GraphQLTestCase` end-to-end.** An in-file subclass runs a seeded query
     via `self.query(...)`, `assertResponseNoErrors` passes; an invalid query
@@ -1893,11 +1968,14 @@ collection guard, exports) are DB-free and unmarked.
     If a *miss* is asserted anywhere in the endpoint tests instead, it is
     Django's `ValueError` from `response.json()` on the non-JSON 404 body — not
     `json.JSONDecodeError` ([Error shapes](#error-shapes)).
-12. **Assertion-helper failure directions.** `assertResponseNoErrors` fails
-    (with the decoded content in the message) on an errors response;
-    `assertResponseHasErrors` fails on a clean one; plus a
-    `GraphQLTransactionTestCase` smoke (one clean query) proving the second
-    concrete combination is wired.
+12. **Assertion-helper failure directions (package-tier) + the transaction
+    smoke (live).** `assertResponseNoErrors` fails (with the decoded content in
+    the message) on an errors response and `assertResponseHasErrors` fails on a
+    clean one — pure functions over a canned `Response`, so pinned **DB-free** in
+    `tests/testing/test_client.py` (the helpers' PASSING directions ride
+    scenario 11 live). The `GraphQLTransactionTestCase` smoke (one clean seeded
+    query) proving the second concrete combination is wired is **earned live**
+    with the rest of the unittest family.
 
 **Surface guards (DB-free):**
 
@@ -1925,13 +2003,19 @@ slice — the [`AGENTS.md`][agents] #"Do not run pytest" workflow rule; this
 spec describes the verification but does not override it.
 
 Coverage: the package gate is `fail_under = 100` and `testing/client.py` is
-package code — every branch has a named owner. Reached by the request-driving
-tests (1–5, 9–12): the JSON and multipart `request()` branches, both `query()`
-overrides, `login()` both colors, the mixin delegate and both assertion
-helpers. Reached by the mechanics tests (6–8, 13–14): the endpoint ladder and
-the export/guard surface. If implementation finds a branch unreachable
-through these (e.g. a defensive re-raise), it gets its own targeted unit the
-same way — named owner, never a blanket claim.
+package code — every branch has a named owner. Reached by the **live**
+request-driving tests (scenarios 1–5, 9–11, the async multipart 10b, and
+scenario 12's transaction smoke — all in [`test_client_api.py`][test-client-api]
+/ the converted suites): the JSON and multipart `request()` branches, both
+`query()` overrides, `login()` both colors, the mixin delegate, and the
+assertion helpers' passing directions. Reached by the **DB-free** package tests
+(`tests/testing/test_client.py`): the owned builder's map rule and its guards
+(empty-`variables`, the placeholder walker, the reserved-envelope-key guard, and
+the `operation_name=""`-is-sent contract), both assertion helpers' failure
+directions, the endpoint ladder (6–8), and the export/guard surface (13–14). If
+implementation finds a branch unreachable through these (e.g. a defensive
+re-raise), it gets its own targeted unit the same way — named owner, never a
+blanket claim.
 
 ## Doc updates
 
@@ -2094,9 +2178,12 @@ to the joint `0.0.14` cut
       (`GRAPHQL_URL`), and per-call (`url=`, the card's named per-call override)
       rungs and the full precedence ladder tested.
 - [ ] Multipart file upload works through `query(..., files=...)` on both
-      clients — a live `Upload`-scalar mutation drives through the helper
-      (the card's `DONE-037-0.0.11` coupling), and the `variables`-placeholder
-      contract is documented.
+      clients — a live `Upload`-scalar mutation drives through the helper on the
+      **sync** client ([`test_uploads_api.py`][test-uploads-api]) and the
+      **async** client ([`test_client_api.py`][test-client-api], Revision 3 F1),
+      the card's `DONE-037-0.0.11` coupling; the `variables`-placeholder contract
+      is documented, and a `files=` key may not shadow the reserved
+      `operations` / `map` envelope fields (Revision 3 F4).
 - [ ] `from django_strawberry_framework.testing import TestClient,
       AsyncTestClient, Response, GraphQLTestMixin, GraphQLTestCase,
       GraphQLTransactionTestCase` all resolve; nothing is added to the
@@ -2110,13 +2197,16 @@ to the joint `0.0.14` cut
       bumped instead; the command and outcome are recorded in the build
       artifact.
 - [ ] `tests/testing/test_client.py` covers the package-tier scenarios per the
-      [Test plan](#test-plan) (the raising/guard directions, precedence, the
-      async client, the unittest family, the surface guards — scenarios 1–5 are
-      earned live, not here) — async tests through `AsyncClient`, the async /
-      unittest request-driving tests under the schema-reload + `seed_data`
-      disciplines and `django_db` marking, mechanics tests DB-free — and the
-      package coverage gate (`fail_under = 100`) holds with `testing/client.py`
-      included, each branch mapped to a named owner.
+      [Test plan](#test-plan), **entirely DB-free** (Revision 3 F2): the owned
+      builder's guard directions (empty-`variables`, the placeholder walker, the
+      reserved-envelope-key guard, the `operation_name=""`-is-sent contract), the
+      endpoint precedence ladder, both assertion helpers' FAILURE directions, and
+      the surface guards. Scenarios 1–5, the `assert_no_errors=True` raising
+      direction, the async client, and the unittest family are earned **live**
+      in [`test_client_api.py`][test-client-api] / the converted suites (under
+      the schema-reload + `seed_data` disciplines), not here — no package-tier
+      test drives a request. The package coverage gate (`fail_under = 100`) holds
+      with `testing/client.py` included, each branch mapped to a named owner.
 - [ ] The Slice-1 targeted live conversions landed: the
       `examples/fakeshop/test_query/` cases that earn the sync request-shape
       lines (JSON, errors outcome, `operation_name`, `login`, multipart) run
@@ -2204,6 +2294,7 @@ to the joint `0.0.14` cut
 [config-urls]: ../examples/fakeshop/config/urls.py
 [schema-reload]: ../examples/fakeshop/schema_reload.py
 [test-auth-api]: ../examples/fakeshop/test_query/test_auth_api.py
+[test-client-api]: ../examples/fakeshop/test_query/test_client_api.py
 [test-kanban-api]: ../examples/fakeshop/test_query/test_kanban_api.py
 [test-library-api]: ../examples/fakeshop/test_query/test_library_api.py
 [test-multi-db]: ../examples/fakeshop/test_query/test_multi_db.py

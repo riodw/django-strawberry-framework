@@ -239,6 +239,25 @@ def test_files_placeholder_present_but_not_none_raises():
         )
 
 
+def test_files_key_shadowing_a_reserved_envelope_field_raises():
+    """A ``files=`` key named ``operations`` or ``map`` raises instead of clobbering the envelope.
+
+    Each ``files`` key becomes a multipart field name and ``**files`` spreads
+    last, so a key colliding with the reserved ``operations`` / ``map`` envelope
+    fields would overwrite them and post a corrupt body the server has to
+    diagnose. The owned ``_build_body`` rejects it at the source. A valid ``None``
+    placeholder is present at that path, so it is the reserved-field guard firing,
+    not the placeholder walker - and the raise beats any request being posted.
+    """
+    for reserved in ("operations", "map"):
+        with pytest.raises(AssertionError, match="reserved multipart envelope"):
+            TestClient().query(
+                "mutation($x: Upload!) { up }",
+                variables={reserved: None},
+                files={reserved: object()},
+            )
+
+
 def test_empty_files_dict_is_a_plain_json_post():
     """``files={}`` is falsy on every switch: JSON body, JSON content type, JSON decode.
 
@@ -288,6 +307,27 @@ def test_build_body_map_rule_is_uniform_across_path_shapes():
     assert body["file"] is f_top
     assert body["data.image"] is f_nested
     assert body["tags.0"] is f_listed
+
+
+def test_build_body_sends_empty_operation_name_instead_of_dropping_it():
+    """An explicit ``operation_name=""`` rides the body; the default ``None`` omits the key.
+
+    The owned ``_build_body`` gates ``operationName`` on ``is not None``, not
+    truthiness: a provided empty string is a malformed value sent for the server
+    to reject with a real GraphQL error, not silently reinterpreted as "no
+    operation name" (the module's fail-at-the-source posture). ``None`` (the
+    default) omits the key entirely - never an ``operationName: null`` the server
+    would reject as a validation error against a multi-operation document. No
+    fakeshop live vehicle can pin the *absence* of the key, so it is pinned
+    against the builder directly here.
+    """
+    client = TestClient()
+
+    with_empty = client._build_body("{ x }", None, None, "")
+    assert with_empty["operationName"] == ""
+
+    absent = client._build_body("{ x }", None, None, None)
+    assert "operationName" not in absent
 
 
 def test_response_extensions_surface_decoded_or_none():

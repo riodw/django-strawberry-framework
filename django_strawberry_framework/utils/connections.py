@@ -37,12 +37,20 @@ from strawberry.relay.utils import SliceMetadata
 
 from ..exceptions import OptimizerError
 
-# The Python kwarg names for the connection sidecar arguments. Strawberry
-# exposes ``order_by`` as the camelCase ``orderBy`` GraphQL argument; this is the
-# PYTHON kwarg name (the key in the resolver ``**kwargs`` and in the walker's
-# converted ``sel.arguments``), kept distinct from the display string on purpose.
+# The connection sidecar argument names, in BOTH vocabularies the shared
+# readers below see. ``CONNECTION_ORDER_KWARG`` is the PYTHON kwarg name (the
+# key in the resolver ``**kwargs``); Strawberry's default ``auto_camel_case``
+# renders it as the ``orderBy`` GraphQL argument, and the walker's converted
+# ``sel.arguments`` carry the RAW GraphQL name (``convert_arguments`` keeps
+# ``node.name.value`` verbatim) - so the plan-time sidecar predicate must
+# recognize the camel spelling too, or an ``orderBy:``-bearing nested
+# connection window-plans a DEAD window (the resolver's own sidecar gate
+# refuses it and runs per-parent) and its recorded identity hides the
+# fallback from strictness. ``filter`` is spelled identically in both
+# vocabularies, which is why only the order kwarg needs the twin.
 CONNECTION_FILTER_KWARG = "filter"
 CONNECTION_ORDER_KWARG = "order_by"
+CONNECTION_ORDER_KWARG_GRAPHQL = "orderBy"
 CONNECTION_SIDECAR_KWARGS = (CONNECTION_FILTER_KWARG, CONNECTION_ORDER_KWARG)
 
 
@@ -72,12 +80,21 @@ class UnwindowableConnection(Exception):  # noqa: N818 - control-flow signal, no
 
 
 def connection_sidecar_inputs_from_kwargs(kwargs: dict[str, Any]) -> tuple[Any, Any]:
-    """Extract ``(filter_input, order_by_input)`` from a resolver ``**kwargs`` dict.
+    """Extract ``(filter_input, order_by_input)`` from a kwargs/arguments dict.
 
-    The single reader of the sidecar kwarg keys so the resolver bodies never
-    re-spell ``kwargs.get("filter")`` / ``kwargs.get("order_by")``.
+    The single reader of the sidecar kwarg keys so no caller re-spells
+    ``kwargs.get("filter")`` / ``kwargs.get("order_by")``. Reads BOTH order
+    spellings because its two callers speak different vocabularies: the
+    resolver passes Python ``**kwargs`` (``order_by``), the walker passes the
+    converted selection's RAW GraphQL argument names (``orderBy`` under the
+    default ``auto_camel_case``; ``order_by`` when camelization is disabled).
+    No collision is possible - the resolver's kwargs never carry the camel
+    key, and on the walker side either spelling IS the sidecar argument.
     """
-    return kwargs.get(CONNECTION_FILTER_KWARG), kwargs.get(CONNECTION_ORDER_KWARG)
+    order_by_input = kwargs.get(CONNECTION_ORDER_KWARG)
+    if order_by_input is None:
+        order_by_input = kwargs.get(CONNECTION_ORDER_KWARG_GRAPHQL)
+    return kwargs.get(CONNECTION_FILTER_KWARG), order_by_input
 
 
 def has_connection_sidecar_input(*, filter_input: Any, order_by_input: Any) -> bool:

@@ -2981,7 +2981,21 @@ def test_malformed_slice_arguments_emit_no_window_but_record_resolver_key():
         registry.clear()
 
 
-def test_fallback_not_planned_sidecar_input():
+@pytest.mark.parametrize(
+    "sidecar",
+    [
+        {"filter": object()},
+        # The walker sees RAW GraphQL argument names (``convert_arguments``
+        # keeps ``node.name.value``), so the order sidecar arrives camelCased
+        # under the default ``auto_camel_case`` - missing it here planned a
+        # DEAD window (the resolver's own sidecar gate refuses it, one wasted
+        # query per request) and the recorded identity hid the per-parent
+        # fallback from strictness.
+        {"orderBy": object()},
+        {"order_by": object()},  # camelization disabled
+    ],
+)
+def test_fallback_not_planned_sidecar_input(sidecar):
     """A nested connection carrying ``filter:`` / ``orderBy:`` is left unplanned."""
     registry.clear()
     try:
@@ -2992,7 +3006,7 @@ def test_fallback_not_planned_sidecar_input():
                 _conn_sel(
                     "booksConnection",
                     node_selections=[_sel("title")],
-                    arguments={"first": 3, "filter": object()},
+                    arguments={"first": 3, **sidecar},
                 ),
             ],
             genre_model,
@@ -3005,8 +3019,26 @@ def test_fallback_not_planned_sidecar_input():
         registry.clear()
 
 
-def test_fallback_not_planned_divergent_aliases():
-    """Divergent aliased pagination args fall back: NO window prefetch, NO resolver key."""
+def _prefetch_by_to_attr(plan):
+    """Map ``to_attr -> Prefetch`` for every generated window prefetch."""
+    return {
+        pf.to_attr: pf
+        for pf in plan.prefetch_related
+        if isinstance(pf, Prefetch) and pf.to_attr is not None
+    }
+
+
+def test_divergent_aliases_plan_one_window_per_response_key():
+    """Divergent aliased pagination args plan ONE window PER RESPONSE KEY.
+
+    The idea-#2 inversion of the historical Decision-6 fallback: Django
+    accepts multiple ``Prefetch`` objects on one relation with distinct
+    ``to_attr``s, so ``a: books(first:2)`` + ``b: books(first:5)`` become two
+    batched window queries (O(aliases)) instead of O(parents x aliases)
+    per-parent fallbacks - each window carrying ITS key's page bound, both
+    response keys recorded as planned, and the legacy shared ``to_attr``
+    absent (nothing would read it).
+    """
     registry.clear()
     try:
         types = _connection_relay_types()
@@ -3030,10 +3062,474 @@ def test_fallback_not_planned_divergent_aliases():
             info=_fake_info(),
             source_type=genre_type,
         )
-        # Divergent aliases -> the wrong Prefetch / resolver-key entry is ABSENT.
-        assert not any(
-            getattr(pf, "to_attr", None) == "_dst_books_connection" for pf in plan.prefetch_related
+        by_attr = _prefetch_by_to_attr(plan)
+        assert set(by_attr) == {"_dst_books$a_connection", "_dst_books$b_connection"}
+        # Each per-key window carries ITS alias's page bound.
+        assert "<= 2" in str(by_attr["_dst_books$a_connection"].queryset.query)
+        assert "<= 5" in str(by_attr["_dst_books$b_connection"].queryset.query)
+        # Both keys planned -> both resolver identities recorded (strictness-silent).
+        assert len(plan.planned_resolver_keys) == 2
+        assert any(key.endswith("@a") for key in plan.planned_resolver_keys)
+        assert any(key.endswith("@b") for key in plan.planned_resolver_keys)
+    finally:
+        registry.clear()
+
+
+def test_divergent_duplicate_payloads_still_plan_per_key():
+    """Inside a divergent set, keys with EQUAL payloads each keep their own window.
+
+    One window per KEY, not per distinct payload-group: the resolver derives
+    the window attr as a pure function of ``info.path.key`` (pagination args
+    are consumed by the connection extension before the resolver runs), so a
+    key-to-payload-group map would have nowhere to live at resolve time.
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 2},
+                    alias="a",
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 2},
+                    alias="b",
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 5},
+                    alias="c",
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
         )
+        by_attr = _prefetch_by_to_attr(plan)
+        assert set(by_attr) == {
+            "_dst_books$a_connection",
+            "_dst_books$b_connection",
+            "_dst_books$c_connection",
+        }
+        assert len(plan.planned_resolver_keys) == 3
+    finally:
+        registry.clear()
+
+
+def test_divergent_mixed_sidecar_plans_only_the_plain_key():
+    """A sidecar-carrying alias falls back alone; its divergent sibling still plans.
+
+    ``a`` carries ``filter:`` (per-parent, strictness-VISIBLE - no resolver
+    identity), ``b`` is a plain page (planned under its per-key attr). The
+    per-key scheme must not let one alias's fallback shape drag its siblings
+    per-parent.
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 2, "filter": object()},
+                    alias="a",
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 5},
+                    alias="b",
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        by_attr = _prefetch_by_to_attr(plan)
+        assert set(by_attr) == {"_dst_books$b_connection"}
+        # Only ``b`` accounted-for; the sidecar key stays strictness-visible.
+        assert len(plan.planned_resolver_keys) == 1
+        assert plan.planned_resolver_keys[0].endswith("@b")
+    finally:
+        registry.clear()
+
+
+def test_divergent_malformed_key_records_only_its_identity():
+    """A malformed alias keeps per-key error locality; its sibling still plans.
+
+    ``a`` carries an invalid cursor - it resolves per-parent and raises ITS
+    OWN validation error, so its identity is recorded (strictness must not
+    preempt the error under ``"raise"``) but NO window is planned for it;
+    ``b`` plans normally under its per-key attr.
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 2, "after": "not-a-valid-cursor"},
+                    alias="a",
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 5},
+                    alias="b",
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        by_attr = _prefetch_by_to_attr(plan)
+        assert set(by_attr) == {"_dst_books$b_connection"}
+        # BOTH identities recorded: ``b`` as planned, ``a`` as accounted-for
+        # (error locality - the pipeline owns the cursor error).
+        assert len(plan.planned_resolver_keys) == 2
+    finally:
+        registry.clear()
+
+
+def test_divergent_unwindowable_key_falls_back_alone():
+    """An ``after`` + ``last`` alias stays per-parent while its sibling plans.
+
+    The offset-bearing backward window is a VALID query the per-parent
+    pipeline resolves correctly, so that key stays fully unplanned (no
+    identity - strictness-visible) without dragging the plain sibling down.
+    """
+    import base64
+
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        after = base64.b64encode(b"arrayconnection:1").decode()
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"last": 2, "after": after},
+                    alias="a",
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 5},
+                    alias="b",
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        by_attr = _prefetch_by_to_attr(plan)
+        assert set(by_attr) == {"_dst_books$b_connection"}
+        assert len(plan.planned_resolver_keys) == 1
+        assert plan.planned_resolver_keys[0].endswith("@b")
+    finally:
+        registry.clear()
+
+
+def test_divergent_union_observer_keeps_count_on_every_window():
+    """A ``totalCount``-observing alias keeps the count on EVERY per-key window.
+
+    The count/probe observers are read off the merged UNION selection (one
+    shared decision input), so ``b`` selecting ``totalCount`` disables the
+    count-free probe for ``a``'s window too - conservative and correct: each
+    window keeps ``_dst_total_count``, neither overfetches a sentinel, and the
+    probe/count mutual-exclusion holds per window (enforced by the
+    ``NestedConnectionRequest`` seam).
+    """
+    from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
+
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        has_next = _conn_sel(
+            "booksConnection",
+            node_selections=[_sel("title")],
+            arguments={"first": 2},
+            alias="a",
+        )
+        has_next.selections.append(_sel("pageInfo", selections=[_sel("hasNextPage")]))
+        total = _conn_sel(
+            "booksConnection",
+            node_selections=[_sel("title")],
+            arguments={"first": 5},
+            alias="b",
+        )
+        total.selections.append(_sel("totalCount"))
+        plan = plan_optimizations(
+            [has_next, total],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        by_attr = _prefetch_by_to_attr(plan)
+        assert set(by_attr) == {"_dst_books$a_connection", "_dst_books$b_connection"}
+        for to_attr, page_bound, sentinel_bound in (
+            ("_dst_books$a_connection", "<= 2", "<= 3"),
+            ("_dst_books$b_connection", "<= 5", "<= 6"),
+        ):
+            queryset = by_attr[to_attr].queryset
+            assert WINDOW_TOTAL_COUNT in queryset.query.annotations
+            sql = str(queryset.query)
+            assert page_bound in sql  # plain page bound - no overfetch sentinel.
+            assert sentinel_bound not in sql
+    finally:
+        registry.clear()
+
+
+def test_divergent_last_zero_key_falls_back_alone():
+    """A reversed ``last: 0`` alias stays per-parent while its sibling plans.
+
+    Only the per-parent pipeline reproduces upstream's ``edges[-0:]``
+    whole-list quirk, so that key plans no dead window (feedback2 P0-3
+    follow-through, per key) and records no identity; the plain sibling is
+    unaffected.
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"last": 0},
+                    alias="a",
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 5},
+                    alias="b",
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        by_attr = _prefetch_by_to_attr(plan)
+        assert set(by_attr) == {"_dst_books$b_connection"}
+        assert len(plan.planned_resolver_keys) == 1
+        assert plan.planned_resolver_keys[0].endswith("@b")
+    finally:
+        registry.clear()
+
+
+def test_merge_flags_same_key_conflicting_arguments():
+    """One response key with two different payloads sets the conflict flag.
+
+    Reachable only through the parent-alias union merge (same-named children
+    of two alias subtrees land in one merged selection); graphql-core rules
+    the shape out within a single selection set. Equal payloads - including
+    the literal-vs-variable vocabulary split (``"2"`` vs ``2``) - must NOT
+    conflict.
+    """
+    from django_strawberry_framework.optimizer.walker import (
+        _merge_aliased_selections,
+        _response_key_arguments_conflict,
+    )
+
+    conflicted = _merge_aliased_selections(
+        [
+            _sel("loansConnection", arguments={"first": 1}),
+            _sel("loansConnection", arguments={"first": 2}),
+        ],
+    )[0]
+    assert _response_key_arguments_conflict(conflicted) is True
+
+    vocab_split = _merge_aliased_selections(
+        [
+            _sel("loansConnection", arguments={"first": "2"}),  # inline literal
+            _sel("loansConnection", arguments={"first": 2}),  # resolved variable
+        ],
+    )[0]
+    assert _response_key_arguments_conflict(vocab_split) is False
+
+    plain = _sel("loansConnection", arguments={"first": 2})
+    assert _response_key_arguments_conflict(plain) is False
+
+
+def test_conflicting_same_key_connection_stays_fully_unplanned():
+    """A response-key argument conflict is a fully-unplanned fallback.
+
+    The idea-#2 review P0 gate, pinned at the planner: a merged connection
+    selection carrying the conflict flag plans NO window and records NO
+    resolver identities - the per-parent pipeline is the only resolver that
+    applies each alias subtree's own arguments to one shared response key.
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 2},
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 5},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        assert plan.prefetch_related == ()
+        assert plan.planned_resolver_keys == ()
+    finally:
+        registry.clear()
+
+
+def test_nested_same_key_conflict_leaves_only_the_nested_level_unplanned():
+    """A nested same-key conflict falls back alone; the outer per-key windows stay.
+
+    The idea-#2 review P0 shape: divergent OUTER aliases whose subtrees both
+    select the SAME nested connection key with DIFFERENT arguments. The union
+    merge flags the nested ``genresConnection``; its window is not planned
+    (each alias's nested page resolves per-parent with its own arguments),
+    while the outer relation keeps one window per response key.
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[
+                        _sel("title"),
+                        _conn_sel(
+                            "genresConnection",
+                            node_selections=[_sel("name")],
+                            arguments={"first": 1},
+                        ),
+                    ],
+                    arguments={"first": 1},
+                    alias="a",
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[
+                        _sel("title"),
+                        _conn_sel(
+                            "genresConnection",
+                            node_selections=[_sel("name")],
+                            arguments={"first": 2},
+                        ),
+                    ],
+                    arguments={"first": 3},
+                    alias="b",
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        by_attr = _prefetch_by_to_attr(plan)
+        assert set(by_attr) == {"_dst_books$a_connection", "_dst_books$b_connection"}
+        # The conflicted nested connection planned NO window on either child
+        # queryset (a first-payload-wins window would serve ``b`` a wrong page).
+        for prefetch in by_attr.values():
+            nested_attrs = [
+                getattr(nested, "to_attr", None)
+                for nested in prefetch.queryset._prefetch_related_lookups
+            ]
+            assert not any("_dst_genres" in str(attr) for attr in nested_attrs)
+        # Outer keys planned; the conflicted nested relation recorded nothing
+        # (strictness-visible per-parent access).
+        assert len(plan.planned_resolver_keys) == 2
+    finally:
+        registry.clear()
+
+
+def test_divergence_ignores_pagination_vocabulary():
+    """A literal ``first: 3`` and a variable-resolved ``3`` share ONE window.
+
+    Payload comparison is pagination-normalized: the inline literal arrives
+    as the raw token string while an engine-coerced variable arrives as
+    ``int`` - the same window either way, so classifying them divergent would
+    pay a second identical window query for nothing.
+    """
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": "3"},  # inline literal token
+                    alias="a",
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},  # resolved variable
+                    alias="b",
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        prefetch = _prefetch_entry(plan)
+        assert prefetch.to_attr == "_dst_books_connection"  # single shared window
+        assert len(plan.planned_resolver_keys) == 2
+    finally:
+        registry.clear()
+
+
+def test_divergent_all_keys_fallback_stays_unplanned():
+    """When EVERY divergent alias is a fallback shape, the relation stays unplanned."""
+    registry.clear()
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 2, "filter": object()},
+                    alias="a",
+                ),
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 5, "filter": object()},
+                    alias="b",
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        assert plan.prefetch_related == ()
         assert plan.planned_resolver_keys == ()
     finally:
         registry.clear()

@@ -5,9 +5,10 @@ optimizer's identity (the lesson from Prisma's ``JoinSelectBuilder`` trait:
 one stable plan interface, swappable SQL shapes behind it). The walker
 (``optimizer/walker.py::_plan_connection_relation``) owns everything
 strategy-independent - recognition, the Decision-6 fallback shapes (sidecar,
-divergent aliases, ``OptimizerHint.SKIP``, DISTINCT, malformed slice,
-unwindowable partition), child-queryset construction, the deterministic
-order, and the slice window - then hands one ``NestedConnectionRequest`` to
+``OptimizerHint.SKIP``, DISTINCT, malformed slice, unwindowable partition),
+the divergent-alias per-response-key scheme (one request per key under a
+per-key ``to_attr``), child-queryset construction, the deterministic
+order, and the slice window - then hands each ``NestedConnectionRequest`` to
 the active strategy, which attaches its fetch directives to the plan.
 
 The default (and today only) strategy is ``WindowedPrefetchStrategy`` - the

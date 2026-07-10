@@ -158,6 +158,22 @@ def test_connection_sidecar_inputs_from_kwargs_extracts_both():
     assert connection_sidecar_inputs_from_kwargs({}) == (None, None)
 
 
+def test_connection_sidecar_inputs_reads_the_graphql_order_spelling():
+    """The reader accepts BOTH order vocabularies (resolver kwargs vs walker args).
+
+    The walker passes the converted selection's RAW GraphQL argument names, so
+    the order sidecar arrives as ``orderBy`` under the default
+    ``auto_camel_case``; the resolver passes Python ``**kwargs`` (``order_by``).
+    Missing the camel spelling at plan time meant an ``orderBy:``-bearing
+    nested connection window-planned a DEAD window and its recorded identity
+    hid the per-parent fallback from strictness. The snake spelling wins when
+    both are present (impossible in practice; pinned for determinism).
+    """
+    assert connection_sidecar_inputs_from_kwargs({"orderBy": "O"}) == (None, "O")
+    assert connection_sidecar_inputs_from_kwargs({"order_by": "S", "orderBy": "C"}) == (None, "S")
+    assert has_connection_sidecar_kwargs({"orderBy": "O"}) is True
+
+
 def test_has_connection_sidecar_input_presence_predicate():
     """The presence predicate is True when EITHER input is non-``None``."""
     assert has_connection_sidecar_input(filter_input="F", order_by_input=None) is True

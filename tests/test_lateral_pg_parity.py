@@ -240,7 +240,10 @@ def test_next_page_probe_parity_childless_no_edges_shape():
     short page with no ``edges`` in play.
     """
     _seed_library()
-    query = "{ shelves { code booksConnection(first: 2) { pageInfo { hasNextPage } } } }"
+    # ``id`` rides along for ``_assert_parity``'s ``_canonical`` root sort,
+    # not the shape under test (the no-``edges`` invariant is on the nested
+    # connection's selection, which stays ``pageInfo``-only).
+    query = "{ shelves { id code booksConnection(first: 2) { pageInfo { hasNextPage } } } }"
     data, _ = _assert_parity(query, count_free=True)
     flags = {
         shelf["code"]: shelf["booksConnection"]["pageInfo"]["hasNextPage"]
@@ -291,6 +294,66 @@ def test_depth_two_forward_m2m_parity():
         "} } } } }"
     )
     _assert_parity(query, queries=3)
+
+
+def test_divergent_alias_parity_one_lateral_per_response_key():
+    """Divergent aliases ride the lateral backend too: one lateral query per key.
+
+    The idea-#2 per-response-key scheme is strategy-independent - the walker
+    hands one ``NestedConnectionRequest`` per key, so the lateral strategy
+    plans one ``CROSS JOIN LATERAL`` query per alias (3 queries total: roots +
+    2 laterals) with byte parity against the windowed strategy. Neither alias
+    observes ``totalCount``, so BOTH per-key windows engage the count-free n+1
+    probe (idea-#1 interplay) - the executed SQL carries no count aggregate.
+    """
+    _seed_library()
+    query = (
+        "{ shelves { id code "
+        f"a: booksConnection(first: 2) {{ {_NEXT_PAGE_PROBE} }} "
+        f"b: booksConnection(first: 9) {{ {_NEXT_PAGE_PROBE} }} "
+        "} }"
+    )
+    data, captured = _assert_parity(query, queries=3, count_free=True)
+    executed_sql = " ".join(entry["sql"] for entry in captured)
+    assert "COUNT(" not in executed_sql.upper()
+    by_code = {shelf["code"]: shelf for shelf in data["shelves"]}
+    # Shelf A (5 books): each alias serves ITS OWN page bound and probe flag.
+    assert len(by_code["A"]["a"]["edges"]) == 2
+    assert by_code["A"]["a"]["pageInfo"]["hasNextPage"] is True
+    assert len(by_code["A"]["b"]["edges"]) == 5
+    assert by_code["A"]["b"]["pageInfo"]["hasNextPage"] is False
+    # Childless shelf C: an empty page for BOTH per-key windows.
+    assert by_code["C"]["a"]["edges"] == []
+    assert by_code["C"]["b"]["pageInfo"]["hasNextPage"] is False
+
+
+def test_divergent_alias_total_count_sibling_keeps_count_on_both_laterals():
+    """A ``totalCount`` alias keeps the count on EVERY divergent lateral window.
+
+    The union-conservative observer rule under the lateral backend: ``b``
+    observing ``totalCount`` retains the count on ``a``'s window too (no probe
+    on either), and each alias still pages by its own bound with full parity.
+    """
+    _seed_library()
+    query = (
+        "{ shelves { id code "
+        f"a: booksConnection(first: 2) {{ {_NEXT_PAGE_PROBE} }} "
+        f"b: booksConnection(first: 9) {{ {_FULL_PAGE} }} "
+        "} }"
+    )
+    data, captured = _assert_parity(query, queries=3)
+    # EACH lateral window query carries the count annotation (union rule, per
+    # window) - asserted per captured query, not on the concatenated SQL,
+    # because one counted lateral alone emits the token twice (inner alias +
+    # outer select) and would satisfy a global count even if the sibling
+    # window regressed to the probe.
+    window_sqls = [entry["sql"] for entry in captured if "CROSS JOIN LATERAL" in entry["sql"]]
+    assert len(window_sqls) == 2
+    for window_sql in window_sqls:
+        assert "_dst_total_count" in window_sql
+    by_code = {shelf["code"]: shelf for shelf in data["shelves"]}
+    assert by_code["A"]["a"]["pageInfo"]["hasNextPage"] is True
+    assert by_code["A"]["b"]["totalCount"] == 5
 
 
 def test_last_zero_quirk_stays_parity_via_the_shared_fallback():

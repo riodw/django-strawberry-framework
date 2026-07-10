@@ -6,6 +6,7 @@ import pytest
 from apps.library import models
 from django.contrib.auth import get_user_model
 from django.db import connection
+from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import post_graphql as _post_graphql
@@ -15,9 +16,9 @@ from django_strawberry_framework.testing import TestClient
 from django_strawberry_framework.testing.relay import global_id_for
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Rebuild the FULL project schema around package-test registry clears.
+    """Rebuild the full project schema once per worker around package-test registry clears.
 
     Delegates to the shared ``conftest`` reload (via the
     ``reload_all_project_app_schemas`` fixture) so the WHOLE project schema is
@@ -29,10 +30,8 @@ def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
     classes are never reloaded so they stay stable; tests must not module-level
     import classes from ``apps.library.schema`` or they hold stale class objects.
 
-    A test that must re-finalize under a changed setting requests the
-    ``reload_all_project_app_schemas`` fixture itself and calls it after applying the
-    setting (see ``test_*hide_flat_filters*``) - no module-level reload helper, so
-    there is no brittle ``import conftest`` boundary.
+    A test that must re-finalize under changed settings requests the function-scoped
+    ``project_schema_override`` fixture so the default schema is restored afterward.
     """
     reload_all_project_app_schemas()
 
@@ -808,21 +807,20 @@ def test_library_branches_filter_by_name_icontains():
 
 
 def test_hide_flat_filters_changes_library_filter_input_shape_over_http(
-    settings,
-    reload_all_project_app_schemas,
+    project_schema_override,
 ):
     """``HIDE_FLAT_FILTERS`` changes the real GraphQL input shape exposed at ``/graphql/``."""
-    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": False}
-    reload_all_project_app_schemas()
-    shown = _input_field_names("BranchFilterInputType")
-    assert "shelves" in shown
-    assert "shelvesCode" in shown
+    with override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"HIDE_FLAT_FILTERS": False}):
+        project_schema_override()
+        shown = _input_field_names("BranchFilterInputType")
+        assert "shelves" in shown
+        assert "shelvesCode" in shown
 
-    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"HIDE_FLAT_FILTERS": True}
-    reload_all_project_app_schemas()
-    hidden = _input_field_names("BranchFilterInputType")
-    assert "shelves" in hidden
-    assert "shelvesCode" not in hidden
+    with override_settings(DJANGO_STRAWBERRY_FRAMEWORK={"HIDE_FLAT_FILTERS": True}):
+        project_schema_override()
+        hidden = _input_field_names("BranchFilterInputType")
+        assert "shelves" in hidden
+        assert "shelvesCode" not in hidden
 
 
 @pytest.mark.django_db
@@ -3474,6 +3472,319 @@ def test_genres_connection_alias_merge_total_count_sibling_keeps_has_next():
     # 3 genres, page of 2 -> a next page exists, read from the retained count.
     assert target["a"]["pageInfo"]["hasNextPage"] is True
     assert len(target["b"]["edges"]) == 2
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_divergent_aliases_batched_per_key():
+    """Divergent aliases are batched: one window query PER ALIAS, never per-parent.
+
+    The idea-#2 win over the live HTTP stack (the graph-node model: one batched
+    children query per response key). ``a: booksConnection(first: 2)`` +
+    ``b: booksConnection(first: 9)`` was the historical whole-relation
+    per-parent fallback; now each response key gets its own windowed prefetch
+    (``_dst_books$a_connection`` / ``_dst_books$b_connection``) and the
+    resolver routes by ``info.path.key``. Pinned: the fixed 3-query cost (root
+    genres + one window per alias - independent of parent count), each alias's
+    OWN page bound and ``hasNextPage`` (both served count-free by the n+1
+    probe - no alias observes ``totalCount``), and byte parity for both
+    aliases with the per-parent pipeline (the ``orderBy`` sidecar reference,
+    whose title order equals the window's pk order for this seed).
+    """
+    shelf = _seed_shelf()
+    for name in ("Speculative", "Poetry"):
+        genre = models.Genre.objects.create(name=name)
+        for title in (
+            "Aurora",
+            "Binti",
+            "Circe",
+            "Dune",
+        ):
+            book = models.Book.objects.get_or_create(title=title, shelf=shelf)[0]
+            book.genres.add(genre)
+
+    divergent_query = """
+        query {
+          allLibraryGenres {
+            a: booksConnection(first: 2) {
+              edges { cursor node { title } }
+              pageInfo { hasNextPage }
+            }
+            b: booksConnection(first: 9) {
+              edges { cursor node { title } }
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+        """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(divergent_query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    rows = payload["data"]["allLibraryGenres"]
+    assert len(rows) == 2  # the fixed cost below holds ACROSS parents.
+    for row in rows:
+        # ``a``: its own 2-bound window; the sentinel signals a next page.
+        assert [edge["node"]["title"] for edge in row["a"]["edges"]] == ["Aurora", "Binti"]
+        assert row["a"]["pageInfo"]["hasNextPage"] is True
+        # ``b``: its own 9-bound window; all four books, no next page.
+        assert [edge["node"]["title"] for edge in row["b"]["edges"]] == [
+            "Aurora",
+            "Binti",
+            "Circe",
+            "Dune",
+        ]
+        assert row["b"]["pageInfo"]["hasNextPage"] is False
+
+    # 3 queries: root genres + ONE batched window per alias (never 1 + parents x aliases).
+    assert len(captured) == 3
+    window_sqls = [entry["sql"] for entry in captured[1:]]
+    for window_sql in window_sqls:
+        assert "_dst_row_number" in window_sql
+        # Both windows serve ``hasNextPage`` count-free via the probe.
+        assert "_dst_total_count" not in window_sql
+        assert "COUNT(" not in window_sql.upper()
+
+    # Byte parity: the per-parent fallback (via the ``orderBy`` sidecar) serves
+    # identical edges, cursors, and flags for BOTH aliases.
+    fallback_query = """
+        query {
+          allLibraryGenres {
+            a: booksConnection(orderBy: [{ title: ASC }], first: 2) {
+              edges { cursor node { title } }
+              pageInfo { hasNextPage }
+            }
+            b: booksConnection(orderBy: [{ title: ASC }], first: 9) {
+              edges { cursor node { title } }
+              pageInfo { hasNextPage }
+            }
+          }
+        }
+        """
+    fallback_payload = _post_graphql(fallback_query).json()
+    assert "errors" not in fallback_payload, fallback_payload
+    assert fallback_payload["data"] == payload["data"]
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_divergent_sidecar_alias_isolated():
+    """A sidecar alias resolves per-parent WITHOUT dragging its divergent sibling.
+
+    Mixed shape (idea #2 per-key gates): ``a`` carries an ``orderBy`` sidecar
+    (per-parent by design - Decision 6), ``b`` is a plain page served from its
+    own per-key window. Each alias's rows must be correct for ITS arguments,
+    and exactly ONE batched window query runs (``b``'s; ``a`` never plans one).
+    """
+    genre = models.Genre.objects.create(name="Speculative")
+    shelf = _seed_shelf()
+    for title in ("Aurora", "Binti", "Circe"):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genre)
+
+    query = """
+        query {
+          allLibraryGenres {
+            a: booksConnection(orderBy: [{ title: DESC }], first: 2) {
+              edges { node { title } }
+            }
+            b: booksConnection(first: 2) {
+              edges { node { title } }
+            }
+          }
+        }
+        """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    node = payload["data"]["allLibraryGenres"][0]
+    # ``a`` honors its sidecar order (per-parent pipeline).
+    assert [edge["node"]["title"] for edge in node["a"]["edges"]] == ["Circe", "Binti"]
+    # ``b`` serves its plain pk-order page (per-key window).
+    assert [edge["node"]["title"] for edge in node["b"]["edges"]] == ["Aurora", "Binti"]
+    # Exactly one batched window ran - ``b``'s; the sidecar alias planned none.
+    window_sqls = [entry["sql"] for entry in captured if "_dst_row_number" in entry["sql"]]
+    assert len(window_sqls) == 1
+
+
+@pytest.mark.django_db
+def test_genres_connection_divergent_total_count_sibling_keeps_count_on_both():
+    """A ``totalCount`` alias keeps the count on EVERY divergent window (union rule).
+
+    The divergent twin of the alias-merge count-sibling pin: the count/probe
+    observers are read off the merged UNION selection, so ``b`` observing
+    ``totalCount`` retains ``_dst_total_count`` on ``a``'s window too -
+    conservative and correct. ``a`` (page of 1 over 3 genres) reads its true
+    ``hasNextPage`` from the retained count; ``b`` reports its own page of 2
+    and the full count of 3 - two different windows, one shared decision.
+    """
+    shelf = _seed_shelf()
+    book = models.Book.objects.create(title="Anthology", shelf=shelf)
+    for name in ("Sci-Fi", "Fantasy", "Horror"):
+        book.genres.add(models.Genre.objects.create(name=name))
+
+    query = """
+        query {
+          allLibraryBooks {
+            a: genresConnection(first: 1) { pageInfo { hasNextPage } }
+            b: genresConnection(first: 2) { totalCount edges { node { name } } }
+          }
+        }
+        """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    target = next(
+        bk
+        for bk in payload["data"]["allLibraryBooks"]
+        if bk["a"] is not None and bk["b"]["totalCount"] == 3
+    )
+    assert target["a"]["pageInfo"]["hasNextPage"] is True
+    assert len(target["b"]["edges"]) == 2
+    # BOTH per-key windows carry the count; NEITHER overfetches a probe sentinel.
+    window_sqls = [entry["sql"] for entry in captured if "_dst_row_number" in entry["sql"]]
+    assert len(window_sqls) == 2
+    for window_sql in window_sqls:
+        assert "_dst_total_count" in window_sql
+
+
+def _seed_two_genres_three_shared_books():
+    """Two genres; three books, each carrying BOTH genres (nested-page fodder)."""
+    shelf = _seed_shelf()
+    alpha = models.Genre.objects.create(name="G-Alpha")
+    beta = models.Genre.objects.create(name="G-Beta")
+    for title in ("Aurora", "Binti", "Circe"):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(alpha, beta)
+
+
+@pytest.mark.django_db
+def test_divergent_aliases_nested_same_key_conflict_serves_each_subtree_args():
+    """A same-key nested conflict under divergent aliases serves each subtree's args.
+
+    The idea-#2 review P0: both alias subtrees select ``genresConnection``
+    (ONE response key) with DIFFERENT ``first`` values. The union merge must
+    flag the conflict and leave the NESTED level per-parent - a silent
+    first-payload-wins window served ``b``'s books one genre instead of two.
+    The OUTER relation still gets its per-key windows, and the whole payload
+    is byte-identical to the per-parent reference (the ``orderBy`` sidecar on
+    the outer aliases, whose title order equals pk order for this seed).
+    """
+    _seed_two_genres_three_shared_books()
+
+    def _nested_query(outer_extra: str) -> str:
+        return f"""
+        query {{
+          allLibraryGenres {{
+            name
+            a: booksConnection({outer_extra}first: 1) {{
+              edges {{ node {{ title
+                genresConnection(first: 1) {{ edges {{ node {{ name }} }} }}
+              }} }}
+            }}
+            b: booksConnection({outer_extra}first: 9) {{
+              edges {{ node {{ title
+                genresConnection(first: 2) {{ edges {{ node {{ name }} }} }}
+              }} }}
+            }}
+          }}
+        }}
+        """
+
+    response = _post_graphql(_nested_query(""))
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    for genre_row in payload["data"]["allLibraryGenres"]:
+        # ``a``'s subtree asked for 1 nested genre per book...
+        for edge in genre_row["a"]["edges"]:
+            assert len(edge["node"]["genresConnection"]["edges"]) == 1
+        # ...and ``b``'s asked for 2 - the P0 served it 1 (first-payload-wins).
+        assert len(genre_row["b"]["edges"]) == 3
+        for edge in genre_row["b"]["edges"]:
+            nested = [e["node"]["name"] for e in edge["node"]["genresConnection"]["edges"]]
+            assert nested == ["G-Alpha", "G-Beta"]
+
+    # Byte parity with the fully per-parent reference (outer sidecar fallback).
+    reference = _post_graphql(_nested_query("orderBy: [{ title: ASC }], ")).json()
+    assert "errors" not in reference, reference
+    assert reference["data"] == payload["data"]
+
+
+@pytest.mark.django_db
+def test_identical_aliases_nested_same_key_conflict_serves_each_subtree_args():
+    """The nested same-key conflict under IDENTICAL-args aliases (pre-existing bug).
+
+    Same-argument outer aliases share ONE merged window (spec-033 Decision 6),
+    so their union-merged children hit the same conflict: ``a``'s subtree
+    selects ``genresConnection(first: 1)`` and ``b``'s ``(first: 2)`` under
+    one response key. This shape returned wrong data even BEFORE idea #2
+    (first-payload-wins at HEAD); the conflict gate now routes the nested
+    level per-parent while the outer keeps its shared window.
+    """
+    _seed_two_genres_three_shared_books()
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenres {
+            a: booksConnection(first: 2) {
+              edges { node { title
+                genresConnection(first: 1) { edges { node { name } } }
+              } }
+            }
+            b: booksConnection(first: 2) {
+              edges { node { title
+                genresConnection(first: 2) { edges { node { name } } }
+              } }
+            }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    for genre_row in payload["data"]["allLibraryGenres"]:
+        for edge in genre_row["a"]["edges"]:
+            assert len(edge["node"]["genresConnection"]["edges"]) == 1
+        for edge in genre_row["b"]["edges"]:
+            assert len(edge["node"]["genresConnection"]["edges"]) == 2
+
+
+@pytest.mark.django_db
+def test_plain_list_aliases_nested_same_key_conflict_serves_each_subtree_args():
+    """The nested same-key conflict under merged plain LIST aliases (pre-existing bug).
+
+    ``a: books`` + ``b: books`` (no arguments) merge into one prefetched list;
+    their subtrees carry ``genresConnection`` with different ``first`` values
+    under one response key. Third shape of the same collapse - the conflict
+    gate leaves the nested connection per-parent so each alias subtree's own
+    page size is honored.
+    """
+    _seed_two_genres_three_shared_books()
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenres {
+            a: books { title genresConnection(first: 1) { edges { node { name } } } }
+            b: books { title genresConnection(first: 2) { edges { node { name } } } }
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    for genre_row in payload["data"]["allLibraryGenres"]:
+        assert len(genre_row["a"]) == 3
+        for book in genre_row["a"]:
+            assert len(book["genresConnection"]["edges"]) == 1
+        for book in genre_row["b"]:
+            nested = [e["node"]["name"] for e in book["genresConnection"]["edges"]]
+            assert nested == ["G-Alpha", "G-Beta"]
 
 
 @pytest.mark.django_db

@@ -1208,14 +1208,15 @@ def _merge_aliased_selections(selections: list[Any]) -> list[Any]:
             # Preserve per-response-key argument payloads so a synthesized
             # connection sibling's pagination/sidecar arguments stay
             # comparable AFTER the merge (spec-033 Decision 6): identical
-            # arguments across aliases are window-planned together, while
-            # divergent aliases (``a: books(first:2)`` + ``b: books(first:5)``,
-            # or differing filter/orderBy) must fall back per-parent because one
-            # ``to_attr`` cannot serve two windows. The first occurrence's
+            # arguments across aliases are window-planned together (one shared
+            # ``to_attr``), while divergent aliases (``a: books(first:2)`` +
+            # ``b: books(first:5)``, or differing filter/orderBy) plan ONE
+            # WINDOW PER RESPONSE KEY under per-key ``to_attr``s (idea #2 -
+            # O(aliases) batched queries). The first occurrence's
             # ``arguments`` stays the merged selection's primary value (the
             # pre-033 first-args-win contract for non-connection fields); the
             # per-response-key map is the side-channel ``_plan_connection_relation``
-            # reads to detect divergence.
+            # reads to select the scheme and derive each key's window.
             _record_response_key_arguments(merged, sel)
         else:
             merged = SimpleNamespace(
@@ -1244,10 +1245,62 @@ def _record_response_key_arguments(merged: Any, selection: Any) -> None:
     from response key to that occurrence's resolved argument payload. Kept off
     the inline merge branch so ``_merge_aliased_selections`` (a control-flow
     hotspot) does not grow another branch (spec-033 Decision 6).
+
+    ONE response key arriving twice with DIFFERENT payloads is flagged as a
+    conflict (``_optimizer_response_key_argument_conflict``). graphql-core's
+    field-merging validation forbids that within one selection set, but the
+    walker also merges the same-named CHILDREN of different parent-alias
+    subtrees (``a: books(first: 1) { loans(first: 1) }`` + ``b: books(first:
+    3) { loans(first: 2) }`` union their node children), where two payloads
+    under one key are legal - and unservable by any single child plan, since
+    the resolve side routes by response key alone (a silent overwrite here
+    planned ONE nested window from the first payload and served the other
+    alias a wrong page). ``_plan_connection_relation`` treats the flag as a
+    fully-unplanned fallback. Payloads compare pagination-NORMALIZED
+    (``_normalized_alias_payload``) so an inline literal and an equal
+    resolved variable do not conflict.
     """
-    merged._optimizer_response_key_arguments[_response_key(selection)] = (
-        getattr(selection, "arguments", None) or {}
-    )
+    response_key = _response_key(selection)
+    payload = getattr(selection, "arguments", None) or {}
+    per_key = merged._optimizer_response_key_arguments
+    if response_key in per_key and _normalized_alias_payload(
+        per_key[response_key],
+    ) != _normalized_alias_payload(payload):
+        merged._optimizer_response_key_argument_conflict = True
+    per_key[response_key] = payload
+
+
+def _normalized_alias_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return ``payload`` with pagination bounds coerced for equality checks.
+
+    Alias-payload comparison (the divergence selector and the same-key
+    conflict detector) must not be fooled by the argument VOCABULARY: an
+    inline Int literal arrives as the raw token string (``{"first": "2"}``)
+    while a resolved variable arrives engine-coerced (``{"first": 2}``) - the
+    same window either way (``_connection_window_slice_from_arguments``
+    applies the identical coercion). Without this, ``a: books(first: 2)`` +
+    ``b: books(first: $n)`` with ``n = 2`` would spuriously classify as
+    divergent and pay a second identical window query. Only ``first`` /
+    ``last`` are coerced; every other argument compares verbatim.
+    """
+    if "first" not in payload and "last" not in payload:
+        return payload
+    normalized = dict(payload)
+    for bound in ("first", "last"):
+        if bound in normalized:
+            normalized[bound] = _coerce_pagination_int(normalized[bound])
+    return normalized
+
+
+def _response_key_arguments_conflict(selection: Any) -> bool:
+    """Return whether one response key carries two DIFFERENT argument payloads.
+
+    Set by ``_record_response_key_arguments`` when parent-alias subtrees were
+    union-merged (the only reachable source - graphql-core validation rules
+    the shape out within one selection set). Selections built outside
+    ``_merge_aliased_selections`` never carry the flag.
+    """
+    return getattr(selection, "_optimizer_response_key_argument_conflict", False)
 
 
 def _aliased_arguments_diverge(selection: Any) -> bool:
@@ -1255,15 +1308,19 @@ def _aliased_arguments_diverge(selection: Any) -> bool:
 
     ``True`` when two response keys of the same field were selected with
     different argument payloads (e.g. ``a: books(first: 2)`` +
-    ``b: books(first: 5)``). A synthesized connection with divergent aliases is
-    left unplanned (one ``to_attr`` cannot serve two windows; spec-033
-    Decision 6). Selections built outside ``_merge_aliased_selections`` (direct
-    test/helper callers) carry no per-response-key map and never diverge.
+    ``b: books(first: 5)``). The scheme selector for
+    ``_plan_connection_relation``: divergent aliases plan one window PER
+    RESPONSE KEY (each under its own ``to_attr``; idea #2), while agreeing
+    aliases share the single legacy window. Payloads compare
+    pagination-normalized (``_normalized_alias_payload``) so the literal
+    ``first: 2`` and a variable resolving to ``2`` agree. Selections built
+    outside ``_merge_aliased_selections`` (direct test/helper callers) carry
+    no per-response-key map and never diverge.
     """
     per_key = getattr(selection, "_optimizer_response_key_arguments", None)
     if not per_key:
         return False
-    payloads = list(per_key.values())
+    payloads = [_normalized_alias_payload(payload) for payload in per_key.values()]
     first = payloads[0]
     return any(payload != first for payload in payloads[1:])
 
@@ -1314,6 +1371,35 @@ def _relation_connection_to_attr(relation_field_name: str) -> str:
     duplicated as a scattered f-string (Decision 4 / Decision 5).
     """
     return f"_dst_{relation_field_name}_connection"
+
+
+def _relation_connection_to_attr_for_key(relation_field_name: str, response_key: str) -> str:
+    """Return the per-RESPONSE-KEY ``to_attr`` for a divergent-alias window.
+
+    ``_dst_<field>$<key>_connection`` - the namespaced twin of
+    ``_relation_connection_to_attr`` used when aliases of one relation carry
+    DIVERGENT argument payloads and each response key gets its own windowed
+    prefetch (one ``Prefetch`` per key on the same lookup; Django's
+    ``prefetch_to`` is ``to_attr``-aware, so they coexist).
+
+    The ``$`` delimiter (graph-node's ``g$parent_id`` move) is load-bearing
+    twice over. Collision-safety: ``$`` is illegal in BOTH vocabularies
+    (Django field names must be Python identifiers; GraphQL response keys
+    match ``[_A-Za-z][_0-9A-Za-z]*``), so the first ``$`` unambiguously ends
+    the field name - no ``(field, key)`` pair can alias another or the shared
+    attr - and graphql-core's field-merging validation forbids one response
+    key carrying two different argument payloads. Django-safety: a ``to_attr``
+    must not contain ``__`` anywhere (``prefetch_to`` is split on
+    ``LOOKUP_SEP`` to traverse prefetch levels; an embedded ``__`` silently
+    breaks the descent), and a response key MAY contain ``__``/trailing
+    ``_``, so every ``_`` in the key is escaped to ``$`` - injective, since
+    ``$`` cannot occur in a raw key. ``setattr``/``getattr`` accept the
+    non-identifier attr just fine (the ``_dst_`` namespace is
+    package-reserved either way). The single source for the per-key namespace
+    string shared with the resolve-side probe
+    (``connection.py::_build_relation_connection_resolver``).
+    """
+    return f"_dst_{relation_field_name}${response_key.replace('_', '$')}_connection"
 
 
 def _connection_node_selections(sel: Any, runtime_paths: tuple[tuple[str, ...], ...]) -> list[Any]:
@@ -1408,11 +1494,29 @@ def _connection_window_slice(sel: Any, info: Any) -> tuple[int, int | None, bool
     ``last``) is deliberately NOT caught here: it is a VALID query that resolves
     correctly per-parent, so ``_plan_connection_relation`` must treat it as a
     fully-unplanned Decision-6 fallback (no ``planned_resolver_keys`` entry, like
-    the sidecar / divergent-alias / distinct shapes) rather than the
-    malformed-pagination ``None`` path that records the field as accounted-for
-    (spec-033 Decision 5).
+    the sidecar / distinct shapes) rather than the malformed-pagination ``None``
+    path that records the field as accounted-for (spec-033 Decision 5).
     """
-    arguments = getattr(sel, "arguments", None) or {}
+    return _connection_window_slice_from_arguments(
+        getattr(sel, "arguments", None) or {},
+        info,
+    )
+
+
+def _connection_window_slice_from_arguments(
+    arguments: dict[str, Any],
+    info: Any,
+) -> tuple[int, int | None, bool] | None:
+    """``_connection_window_slice`` over one raw argument payload.
+
+    The per-payload entry point the divergent-alias scheme iterates: each
+    response key's recorded argument payload
+    (``_optimizer_response_key_arguments``) resolves its OWN window through
+    the same shared-contract adapter, so per-key windows can never drift from
+    the merged-selection window the single-window scheme derives. Same
+    coercion, same error contract (``None`` on malformed pagination;
+    ``UnwindowableConnection`` propagates).
+    """
     # ``first`` / ``last`` from an inline GraphQL Int LITERAL arrive as the raw
     # token STRING (``convert_value`` returns ``node.value`` and graphql-core
     # stores an ``IntValueNode.value`` as ``"2"``); a variable
@@ -1438,6 +1542,74 @@ def _connection_window_slice(sel: Any, info: Any) -> tuple[int, int | None, bool
     except (ValueError, TypeError):
         return None
     return bounds.offset, bounds.limit, bounds.reverse
+
+
+def _divergent_key_windows(
+    sel: Any,
+    info: Any,
+) -> tuple[list[tuple[str, tuple[int, int | None, bool]]], list[str]]:
+    """Resolve one window per response key for a divergent-alias connection.
+
+    The divergent scheme's pure window pass: iterate the merged selection's
+    per-response-key argument payloads (``_optimizer_response_key_arguments``)
+    and run the ARGUMENTS-DERIVED fallback gates per key - each alias is its
+    own windowed fetch (the graph-node model: one batched children query per
+    response key), so one alias's fallback shape must not drag its siblings
+    per-parent:
+
+    - sidecar input (``filter:`` / ``orderBy:``) -> that key stays UNPLANNED
+      (per-parent, strictness-visible), siblings unaffected;
+    - ``UnwindowableConnection`` (``after`` + ``last``) and the reversed
+      ``last: 0`` quirk -> likewise that key alone falls back per-parent;
+    - malformed pagination -> that key is returned in ``malformed`` so the
+      caller records ONLY its identities (per-key error locality: the
+      per-parent pipeline raises that alias's own validation error);
+    - otherwise the key's ``(offset, limit, reverse)`` window joins
+      ``planned``.
+
+    Returns ``(planned, malformed)``; relation-level gates (hint SKIP, join
+    windowability, child-queryset safety) stay whole-relation in
+    ``_plan_connection_relation``.
+    """
+    planned: list[tuple[str, tuple[int, int | None, bool]]] = []
+    malformed: list[str] = []
+    for resp_key, key_arguments in sel._optimizer_response_key_arguments.items():
+        if has_connection_sidecar_kwargs(key_arguments):
+            continue
+        try:
+            window = _connection_window_slice_from_arguments(key_arguments, info)
+        except UnwindowableConnection:
+            continue
+        if window is None:
+            malformed.append(resp_key)
+            continue
+        _offset, limit, reverse = window
+        if reverse and limit == 0:
+            continue
+        planned.append((resp_key, window))
+    return planned, malformed
+
+
+def _identities_for_response_keys(
+    runtime_paths: tuple[tuple[str, ...], ...],
+    resolver_identities: tuple[str, ...],
+    response_keys: list[str | None],
+) -> tuple[str, ...]:
+    """Filter parallel ``(runtime_paths, resolver_identities)`` to given keys.
+
+    ``_resolver_identities_for`` already builds identities per response key
+    (the cartesian ``runtime_prefixes x _response_keys(sel)``; each runtime
+    path ENDS in its response key), so per-key selection is a filter over the
+    parallel tuples, never a re-derivation. Used by the divergent-alias scheme
+    to record identities only for the keys actually planned (or, for
+    malformed keys, accounted-for).
+    """
+    wanted = set(response_keys)
+    return tuple(
+        identity
+        for runtime_path, identity in zip(runtime_paths, resolver_identities, strict=True)
+        if runtime_path[-1] in wanted
+    )
 
 
 def _plan_connection_relation(
@@ -1468,11 +1640,27 @@ def _plan_connection_relation(
     if django_field is None:
         return
     # (b) Fallback shapes detectable before any queryset is built -> UNPLANNED.
+    if _response_key_arguments_conflict(sel):
+        # ONE response key carries two different argument payloads - reachable
+        # only when different parent-alias subtrees were union-merged (their
+        # same-named children land in one merged selection). Neither scheme
+        # can serve it: the shared window has one payload slot, and the
+        # per-key scheme routes by response key, which is the very thing that
+        # collides. Stay FULLY unplanned (no window, no resolver identities)
+        # so each alias subtree's per-parent resolution applies its OWN
+        # arguments and the access stays strictness-visible, like the sidecar
+        # shapes. A silent first-payload-wins window here served the sibling
+        # alias a wrong page (idea-#2 review P0).
+        return
+    # Divergent aliased arguments select the PER-KEY scheme (one window per
+    # response key, idea #2); its arguments-derived gates - the sidecar check
+    # included - run per key inside ``_divergent_key_windows``, so the merged
+    # primary-payload sidecar gate below applies only to the single-window
+    # scheme (where every alias shares one payload by definition).
     arguments = getattr(sel, "arguments", None) or {}
-    if has_connection_sidecar_kwargs(arguments):
+    divergent = _aliased_arguments_diverge(sel)
+    if not divergent and has_connection_sidecar_kwargs(arguments):
         return  # sidecar input (filter:/orderBy:) - per-parent fallback.
-    if _aliased_arguments_diverge(sel):
-        return  # divergent aliased pagination/sidecar args - one to_attr cannot serve two.
     hints_map = _resolve_optimizer_hints(definition)
     if hint_is_skip(hints_map.get(relation_field_name)):
         return  # OptimizerHint.SKIP extends to the connection sibling.
@@ -1490,45 +1678,72 @@ def _plan_connection_relation(
     if django_field.related_model is None:
         return
 
-    # (e/f) Slice window from the selection's resolved pagination arguments. Pure
-    # (mutates nothing), so resolve it BEFORE the child build - a malformed slice
-    # must not leave child resolver keys / cacheable flips on the parent plan.
-    try:
-        window = _connection_window_slice(sel, info)
-    except UnwindowableConnection:
-        # (b) Offset-bearing backward window (after + last): the reversed window's
-        # whole-partition row numbering cannot honor the after offset, so it falls
-        # back per-parent like the other Decision-6 fallback shapes (sidecar,
-        # divergent alias, distinct). Stay FULLY unplanned - record NO resolver
-        # identities - so the per-parent access stays visible to the Slice-4
-        # strictness contract (spec-033 Decision 5; unlike the malformed-pagination
-        # `window is None` path below, this query resolves correctly per-parent
-        # and never raises its own error, so it is a real per-parent access).
-        return
-    if window is None:
-        # Malformed pagination (Decision 4 step f): emit NO window prefetch so the
-        # connection pipeline runs per-parent and raises its OWN cursor/pagination
-        # validation error at the field. But RECORD the resolver identities so the
-        # Slice-4 strictness contract treats the field as accounted-for and does
-        # NOT preempt that error with a spurious "Unplanned N+1" OptimizerError
-        # under `"raise"` (spec-033 Decision 8 - error locality wins here). The
-        # other Decision-6 fallback shapes (sidecar, divergent alias, hint SKIP,
-        # distinct, unwindowable partition) stay fully unplanned on purpose so
-        # strictness CAN see them as real per-parent accesses.
-        append_unique_many(plan.planned_resolver_keys, resolver_identities)
-        return
-    offset, limit, reverse = window
-    if reverse and limit == 0:
-        # (b) ``last: 0``: upstream ``ListConnection`` slices ``edges[-0:]``,
-        # which is the WHOLE list - only the per-parent pipeline reproduces
-        # that quirk, so a planned reversed window would always come back
-        # empty and be discarded by ``_resolve_from_window``'s fallback
-        # return. Plan nothing (feedback2 P0-3 follow-through): no dead
-        # window query riding every request, and no resolver keys - the
-        # per-parent fallback stays strictness-visible like the other
-        # Decision-6 fallback shapes. ``_resolve_from_window`` keeps its own
-        # ``last: 0`` guard as the defensive tail for direct callers.
-        return
+    # (e/f) Slice window(s) from the selection's resolved pagination arguments.
+    # Pure (mutates nothing), so resolve BEFORE the child build - a malformed
+    # slice must not leave child resolver keys / cacheable flips on the parent
+    # plan. ``keyed_windows`` is the scheme-agnostic hand-off: the divergent
+    # scheme yields one ``(response_key, window)`` per plannable alias (each
+    # gets its own per-key ``to_attr``); the single-window scheme yields one
+    # ``(None, window)`` entry (the legacy shared ``to_attr``, byte-identical
+    # to the pre-idea-#2 path by construction).
+    keyed_windows: list[tuple[str | None, tuple[int, int | None, bool]]]
+    if divergent:
+        planned_windows, malformed_keys = _divergent_key_windows(sel, info)
+        keyed_windows = list(planned_windows)
+        if malformed_keys:
+            # Malformed pagination, per key (Decision 4 step f): that alias
+            # resolves per-parent and raises its OWN cursor/pagination
+            # validation error, so record ONLY its identities as accounted-for
+            # (strictness must not preempt the error under ``"raise"``;
+            # spec-033 Decision 8). Sibling keys plan independently below.
+            append_unique_many(
+                plan.planned_resolver_keys,
+                _identities_for_response_keys(
+                    runtime_paths,
+                    resolver_identities,
+                    malformed_keys,
+                ),
+            )
+        if not keyed_windows:
+            return
+    else:
+        try:
+            window = _connection_window_slice(sel, info)
+        except UnwindowableConnection:
+            # (b) Offset-bearing backward window (after + last): the reversed window's
+            # whole-partition row numbering cannot honor the after offset, so it falls
+            # back per-parent like the other Decision-6 fallback shapes (sidecar,
+            # distinct). Stay FULLY unplanned - record NO resolver
+            # identities - so the per-parent access stays visible to the Slice-4
+            # strictness contract (spec-033 Decision 5; unlike the malformed-pagination
+            # `window is None` path below, this query resolves correctly per-parent
+            # and never raises its own error, so it is a real per-parent access).
+            return
+        if window is None:
+            # Malformed pagination (Decision 4 step f): emit NO window prefetch so the
+            # connection pipeline runs per-parent and raises its OWN cursor/pagination
+            # validation error at the field. But RECORD the resolver identities so the
+            # Slice-4 strictness contract treats the field as accounted-for and does
+            # NOT preempt that error with a spurious "Unplanned N+1" OptimizerError
+            # under `"raise"` (spec-033 Decision 8 - error locality wins here). The
+            # other Decision-6 fallback shapes (sidecar, hint SKIP,
+            # distinct, unwindowable partition) stay fully unplanned on purpose so
+            # strictness CAN see them as real per-parent accesses.
+            append_unique_many(plan.planned_resolver_keys, resolver_identities)
+            return
+        offset, limit, reverse = window
+        if reverse and limit == 0:
+            # (b) ``last: 0``: upstream ``ListConnection`` slices ``edges[-0:]``,
+            # which is the WHOLE list - only the per-parent pipeline reproduces
+            # that quirk, so a planned reversed window would always come back
+            # empty and be discarded by ``_resolve_from_window``'s fallback
+            # return. Plan nothing (feedback2 P0-3 follow-through): no dead
+            # window query riding every request, and no resolver keys - the
+            # per-parent fallback stays strictness-visible like the other
+            # Decision-6 fallback shapes. ``_resolve_from_window`` keeps its own
+            # ``last: 0`` guard as the defensive tail for direct callers.
+            return
+        keyed_windows = [(None, window)]
 
     # (g, partition) also pure; classify the join before the child build so an
     # unsupported relation kind (single-valued forward, or a shape with no
@@ -1542,6 +1757,12 @@ def _plan_connection_relation(
         return
 
     # (a) Unwrap edges { node }; scalar-only selections plan with [] node children.
+    # ``runtime_paths`` spans ALL response keys (per-key child selections are
+    # not preserved by the merge), so under the divergent scheme the child
+    # plan records nested identities under an UNPLANNED sibling key's paths
+    # too. Deliberate conservatism: that sibling's per-parent pipeline plans
+    # its own subtree, so those nested accesses never lazy-load - the
+    # imprecision can only mask a strictness flag, never serve wrong data.
     node_selections = _connection_node_selections(sel, runtime_paths)
     scalar_only = not node_selections
     node_sel = SimpleNamespace(selections=node_selections)
@@ -1614,52 +1835,80 @@ def _plan_connection_relation(
     # instead: overfetch one sentinel row (``fetch_*`` bounds) so the row's
     # presence answers ``hasNextPage`` without a partition scan. The probe
     # decision is ``WindowRangePlan.wants_next_page_probe``, made HERE only:
-    # ``sel`` is the merged (union) selection when same-argument aliases share
-    # this window, so the resolver must not re-derive the probe per response
+    # ``sel`` is the merged (union) selection when aliases share this relation,
+    # so the resolver must not re-derive the probe per response
     # key - it reads the decision back off the window's physical shape (count
     # annotation absent on a plain first page), which stays truthful only
     # while ``next_page_probe`` and ``with_total_count`` below remain mutually
-    # exclusive (``_resolve_from_window`` documents that invariant).
-    range_plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
+    # exclusive (``_resolve_from_window`` documents that invariant; the
+    # ``NestedConnectionRequest`` seam enforces it per window). Under the
+    # divergent scheme the observers stay UNION-conservative on purpose: a
+    # sibling alias selecting ``totalCount`` keeps every per-key window on the
+    # count (no probe) - correct for each window, one shared decision input.
     total_selected = connection_total_count_selected(sel)
     has_next_selected = connection_has_next_page_selected(sel)
-    next_page_probe = range_plan.wants_next_page_probe(
-        has_next_selected=has_next_selected,
-        total_selected=total_selected,
-    )
-    with_total_count = (
-        range_plan.requires_total_count
-        or total_selected
-        or (has_next_selected and not next_page_probe)
-    )
-    # (g) Hand the fully-resolved fetch request to the active strategy (the
-    # nested_fetch.py seam): the windowed prefetch is the default backend; a
-    # strategy returning ``False`` leaves the selection unplanned, keeping the
-    # Decision-6 strictness contract (no resolver identities recorded).
-    request = NestedConnectionRequest(
-        django_field=raw_relation_field,
-        relation_field_name=relation_field_name,
-        prefix=prefix,
-        child_queryset=child_queryset,
-        join=join,
-        order_by=tuple(order_by),
-        offset=offset,
-        limit=limit,
-        reverse=reverse,
-        with_total_count=with_total_count,
-        next_page_probe=next_page_probe,
-        to_attr=_relation_connection_to_attr(relation_field_name),
-        lookup=f"{prefix}{instance_accessor(django_field)}",
-    )
-    if not active_strategy().plan(request, plan):
+    # (g) Hand one fully-resolved fetch request PER WINDOW to the active
+    # strategy (the nested_fetch.py seam): the single-window scheme sends the
+    # legacy shared-``to_attr`` request; the divergent scheme sends one
+    # request per response key under that key's namespaced ``to_attr`` (the
+    # graph-node model - O(aliases) batched queries instead of
+    # O(parents x aliases) per-parent fallbacks). A strategy returning
+    # ``False`` leaves that window unplanned, keeping the Decision-6
+    # strictness contract (no resolver identities recorded for it).
+    planned_keys: list[str | None] = []
+    for resp_key, (offset, limit, reverse) in keyed_windows:
+        range_plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
+        next_page_probe = range_plan.wants_next_page_probe(
+            has_next_selected=has_next_selected,
+            total_selected=total_selected,
+        )
+        with_total_count = (
+            range_plan.requires_total_count
+            or total_selected
+            or (has_next_selected and not next_page_probe)
+        )
+        request = NestedConnectionRequest(
+            django_field=raw_relation_field,
+            relation_field_name=relation_field_name,
+            prefix=prefix,
+            child_queryset=child_queryset,
+            join=join,
+            order_by=tuple(order_by),
+            offset=offset,
+            limit=limit,
+            reverse=reverse,
+            with_total_count=with_total_count,
+            next_page_probe=next_page_probe,
+            to_attr=(
+                _relation_connection_to_attr(relation_field_name)
+                if resp_key is None
+                else _relation_connection_to_attr_for_key(relation_field_name, resp_key)
+            ),
+            lookup=f"{prefix}{instance_accessor(django_field)}",
+        )
+        if active_strategy().plan(request, plan):
+            planned_keys.append(resp_key)
+    if not planned_keys:
         return
     # Success path: absorb the child metadata the sub-plan collected into the
-    # parent only now - a strategy that refused (like every earlier fallback
-    # shape) must leak no child resolver keys / fk-id elisions / cacheable
-    # flip into the parent plan (the Decision-6 no-leakage contract).
+    # parent only now - a strategy that refused every window (like each earlier
+    # fallback shape) must leak no child resolver keys / fk-id elisions /
+    # cacheable flip into the parent plan (the Decision-6 no-leakage contract).
+    # The child queryset / node selections / order were built ONCE from the
+    # merged UNION children and are shared by every per-key window, so one
+    # absorb covers all planned keys.
     _absorb_child_plan(plan, sub_plan)
-    # (h) Record resolver identities so strictness (Slice 4) sees the field as planned.
-    append_unique_many(plan.planned_resolver_keys, resolver_identities)
+    # (h) Record resolver identities so strictness (Slice 4) sees the field as
+    # planned - all identities for the shared window; only the planned keys'
+    # identities under the divergent scheme (an unplanned sibling alias stays
+    # strictness-visible as a real per-parent access).
+    if divergent:
+        append_unique_many(
+            plan.planned_resolver_keys,
+            _identities_for_response_keys(runtime_paths, resolver_identities, planned_keys),
+        )
+    else:
+        append_unique_many(plan.planned_resolver_keys, resolver_identities)
 
 
 def _raw_relation_field(model: type[models.Model], relation_field_name: str) -> Any:

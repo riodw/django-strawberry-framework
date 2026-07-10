@@ -43,8 +43,9 @@ Plan-time shapes the lateral SQL cannot express (a pre-filtered child
 queryset, ``select_related``, child annotations, expression ordering, a
 composite primary key) downgrade INSIDE the strategy to the windowed plan -
 the selection is still planned, so Decision-6 strictness visibility is
-unaffected. The walker-owned fallback shapes (sidecar, divergent aliases,
-SKIP, DISTINCT, malformed slice, unwindowable join) never reach any strategy.
+unaffected. The walker-owned fallback shapes (sidecar, SKIP, DISTINCT,
+malformed slice, unwindowable join) never reach any strategy; divergent
+aliases arrive as one request per response key, each self-contained.
 
 SQL-injection surface: every identifier in ``build_lateral_sql`` passes
 through ``connection.ops.quote_name`` and every VALUE (parent ids, offsets,

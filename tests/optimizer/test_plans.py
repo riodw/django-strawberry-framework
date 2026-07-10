@@ -255,6 +255,29 @@ class TestPlanHelperRelocations:
         append_prefetch_unique(values, second)
         assert values == [first]
 
+    def test_append_prefetch_unique_keeps_distinct_to_attrs_on_one_lookup(self):
+        """Two windows on ONE relation coexist when their ``to_attr``s differ.
+
+        The divergent-alias per-key scheme (idea #2) attaches one ``Prefetch``
+        per response key to the SAME lookup; Django's ``prefetch_to`` replaces
+        the last path segment with ``to_attr``, so the ``_lookup_path`` dedupe
+        keys them apart - both survive (and a true duplicate still dedupes).
+        """
+        from django_strawberry_framework.optimizer.plans import append_prefetch_unique
+
+        first = Prefetch("items", queryset=Item.objects.all(), to_attr="_dst_items$a_connection")
+        second = Prefetch("items", queryset=Item.objects.all(), to_attr="_dst_items$b_connection")
+        duplicate = Prefetch(
+            "items",
+            queryset=Item.objects.filter(pk__gt=0),
+            to_attr="_dst_items$a_connection",
+        )
+        values: list = []
+        append_prefetch_unique(values, first)
+        append_prefetch_unique(values, second)
+        append_prefetch_unique(values, duplicate)
+        assert values == [first, second]
+
     def test_plan_default_lists_use_indexed_append_unique(self):
         from django_strawberry_framework.optimizer.plans import _IndexedList, append_unique
 

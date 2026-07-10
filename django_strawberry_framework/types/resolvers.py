@@ -192,10 +192,13 @@ def _check_n1(
 
     Connection contract (spec-033 Decision 8): the synthesized
     relation-connection resolver calls this with ``kind="connection_to_attr"``
-    and the windowed-prefetch ``to_attr`` (``_dst_<field>_connection``).
-    The access truly queries iff that ``to_attr`` is ABSENT on ``root`` -
-    when present, Slice 1's window already served the page, so no lazy load
-    happens and the check is silent. ``reason`` (the per-parent-fallback
+    and the windowed-prefetch ``to_attr`` it actually probed - the shared
+    ``_dst_<field>_connection``, or the per-response-key
+    ``_dst_<field>$<key>_connection`` when a divergent-alias window held
+    rows (idea #2; the caller threads whichever attr its fast-path probe
+    found). The access truly queries iff that ``to_attr`` is ABSENT on
+    ``root`` - when present, Slice 1's window already served the page, so no
+    lazy load happens and the check is silent. ``reason`` (the per-parent-fallback
     cause, supplied by the connection call site) is appended to the
     ``"raise"`` / ``"warn"`` message when present so a flagged fallback
     reads as actionable rather than as an optimizer defect; the

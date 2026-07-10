@@ -69,7 +69,10 @@ from .optimizer.selections import (
     connection_total_count_selected,
     prime_selected_fields,
 )
-from .optimizer.walker import _relation_connection_to_attr
+from .optimizer.walker import (
+    _relation_connection_to_attr,
+    _relation_connection_to_attr_for_key,
+)
 from .types.resolvers import _check_n1
 from .utils.connections import (
     CONNECTION_FILTER_KWARG,
@@ -1304,13 +1307,19 @@ def _build_relation_connection_resolver(
     ``_dst_<field>_connection`` (keyed on ``relation_field_name``, NOT the
     accessor - the two DIVERGE for a reverse relation without ``related_name``,
     ``book`` vs ``book_set``, so probing the accessor would silently never fire
-    the fast path). The resolver probes that ``to_attr`` and, when the rows
-    carry the window annotations AND the resolver's own ``filter`` / ``order_by``
-    kwargs are absent, returns a ``_WindowedConnectionRows`` marker handing the
-    rows to the generated connection class (which builds the Relay object - the
-    resolver never constructs a connection, since Strawberry feeds the resolver
-    return back through ``resolve_connection`` as the node iterable). A sidecar
-    kwarg present means the window is ignored and the pipeline runs, so a future
+    the fast path). Divergent aliases (idea #2) land one window PER RESPONSE
+    KEY under ``_dst_<field>$<key>_connection`` instead, so the resolver
+    probes the per-key attr FIRST - derived from ``info.path.key``, the same
+    response-key vocabulary the walker planned under (the resolver cannot see
+    the pagination arguments to re-derive the window;
+    ``ConnectionExtension`` consumes them) - then falls back to the shared
+    legacy attr. When the found rows carry the window annotations AND the
+    resolver's own ``filter`` / ``order_by`` kwargs are absent, it returns a
+    ``_WindowedConnectionRows`` marker handing the rows to the generated
+    connection class (which builds the Relay object - the resolver never
+    constructs a connection, since Strawberry feeds the resolver return back
+    through ``resolve_connection`` as the node iterable). A sidecar kwarg
+    present means the window is ignored and the pipeline runs, so a future
     planner/argument desync can never serve unfiltered wrong data. The marker
     also carries a fallback factory re-running this pipeline, which
     ``resolve_connection`` invokes for an ambiguous-empty window (``first: 0`` /
@@ -1346,7 +1355,18 @@ def _build_relation_connection_resolver(
 
     def _resolve(root: Any, info: Info, **kwargs: Any) -> Any:
         source = getattr(root, accessor_name).all()
-        window_rows = getattr(root, to_attr, None)
+        # Per-response-key window first (divergent aliases, idea #2): the attr
+        # is a pure function of ``info.path.key`` - the resolve-time twin of
+        # the response key the walker planned under. ``probe_attr`` tracks
+        # which attr actually held rows so the strictness probe below reads
+        # the same location the fast path did; with neither attr present it
+        # stays the shared attr, whose absence IS the unplanned signal.
+        per_key_attr = _relation_connection_to_attr_for_key(relation_field_name, info.path.key)
+        probe_attr = per_key_attr
+        window_rows = getattr(root, per_key_attr, None)
+        if window_rows is None:
+            probe_attr = to_attr
+            window_rows = getattr(root, to_attr, None)
         filter_input, order_by_input = connection_sidecar_inputs_from_kwargs(kwargs)
         no_sidecar = not has_connection_sidecar_input(
             filter_input=filter_input,
@@ -1383,7 +1403,7 @@ def _build_relation_connection_resolver(
             relation_field_name,
             declaring_type,
             kind="connection_to_attr",
-            to_attr=to_attr,
+            to_attr=probe_attr,
             reason=reason,
         )
         return _pipeline_sync(

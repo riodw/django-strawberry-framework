@@ -972,6 +972,201 @@ def test_fast_path_through_schema_connection_extension(django_assert_num_queries
 
 
 @pytest.mark.django_db
+def test_divergent_aliases_one_window_query_per_alias(django_assert_num_queries):
+    """Divergent aliases cost parents + ONE window query per alias (idea #2).
+
+    ``a: booksConnection(first: 2)`` + ``b: booksConnection(first: 5)`` was the
+    historical whole-relation fallback (O(parents x aliases) per-parent
+    queries); the per-response-key scheme plans one window per key and the
+    resolver routes each alias to its ``_dst_books$<key>_connection`` attr via
+    ``info.path.key`` - so the count is FIXED (1 parent + 2 windows)
+    independent of parent count, and each alias serves ITS OWN page bound.
+    """
+    branch = Branch.objects.create(name="central")
+    shelf = Shelf.objects.create(code="A1", branch=branch)
+    for gi in range(4):
+        genre = Genre.objects.create(name=f"g{gi}")
+        for title in ("a", "b", "c"):
+            book = Book.objects.create(title=f"g{gi}-{title}", shelf=shelf)
+            book.genres.add(genre)
+
+    schema = _genres_list_schema(optimizer=True)
+    with django_assert_num_queries(3):
+        result = _exec(
+            schema,
+            "{ objs { "
+            "a: booksConnection(first: 2) { edges { node { title } } } "
+            "b: booksConnection(first: 5) { edges { node { title } } } "
+            "} }",
+        )
+    assert len(result.data["objs"]) == 4
+    for obj in result.data["objs"]:
+        assert len(obj["a"]["edges"]) == 2  # a's window bound
+        assert len(obj["b"]["edges"]) == 3  # b's window bound (3 of 5 available)
+
+
+@pytest.mark.django_db
+def test_divergent_aliases_wire_parity():
+    """Divergent aliases: per-key windows and the pipeline are byte-identical.
+
+    Full page, short page, cursors, and page flags - the optimizer-on wire
+    payload for both aliases must equal the optimizer-less per-parent
+    pipeline's, exactly like the shared-window parity pins.
+    """
+    _seed_library_books(
+        [
+            "a",
+            "b",
+            "c",
+            "d",
+        ],
+    )
+    selection = (
+        "a: booksConnection(first: 2) { edges { cursor node { title } } "
+        "pageInfo { hasNextPage hasPreviousPage startCursor endCursor } } "
+        "b: booksConnection(first: 9) { edges { cursor node { title } } "
+        "pageInfo { hasNextPage hasPreviousPage startCursor endCursor } }"
+    )
+    query = f"{{ objs {{ {selection} }} }}"
+
+    fast = _exec(_genres_list_schema(optimizer=True), query)
+    registry.clear()
+    _connection_type_cache.clear()
+    slow = _exec(_genres_list_schema(optimizer=False), query)
+    assert fast.data == slow.data
+    # And the fast payload is substantively right, not vacuously equal.
+    fast_obj = fast.data["objs"][0]
+    assert [e["node"]["title"] for e in fast_obj["a"]["edges"]] == ["a", "b"]
+    assert fast_obj["a"]["pageInfo"]["hasNextPage"] is True
+    assert [e["node"]["title"] for e in fast_obj["b"]["edges"]] == [
+        "a",
+        "b",
+        "c",
+        "d",
+    ]
+    assert fast_obj["b"]["pageInfo"]["hasNextPage"] is False
+
+
+@pytest.mark.django_db
+def test_divergent_alias_per_key_window_preferred_over_shared():
+    """Rows under the per-key attr serve the alias even when the shared attr exists.
+
+    The resolver probes ``_dst_books$<key>_connection`` FIRST and only falls
+    back to the legacy shared ``_dst_books_connection``; planting DIFFERENT
+    annotated rows under each proves the routing order (a desync here would
+    silently serve another alias's window).
+    """
+    from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER
+
+    _seed_library_books(["a", "b", "c"])
+    _make_type("BookType", Book, ("id", "title"))
+    genre_type = _make_type("GenreType", Genre, ("id", "name", "books"))
+    finalize_django_types()
+    model = genre_type.__django_strawberry_definition__.model
+
+    def _resolver() -> list[genre_type]:
+        objs = list(model._default_manager.all().order_by("pk"))
+        for obj in objs:
+            books = list(obj.books.all().order_by("pk"))
+            per_key = [books[1]]  # "b"
+            shared = [books[0], books[2]]  # "a", "c"
+            for number, row in enumerate(per_key, start=1):
+                setattr(row, WINDOW_ROW_NUMBER, number)
+            for number, row in enumerate(shared, start=1):
+                setattr(row, WINDOW_ROW_NUMBER, number)
+            # ``$``-delimited attrs are not identifier syntax - set via
+            # ``setattr``, exactly as Django's prefetch machinery lands them.
+            setattr(obj, "_dst_books$x_connection", per_key)
+            obj._dst_books_connection = shared
+        return objs
+
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"objs": list[genre_type]},
+                "objs": strawberry.field(resolver=_resolver),
+            },
+        ),
+    )
+    schema = strawberry.Schema(query=query_cls, config=strawberry_config())
+    result = schema.execute_sync(
+        "{ objs { x: booksConnection(first: 2) { edges { node { title } } } } }",
+    )
+    assert result.errors is None, result.errors
+    titles = [e["node"]["title"] for e in result.data["objs"][0]["x"]["edges"]]
+    assert titles == ["b"]  # the per-key window, not the shared ["a", "c"]
+
+
+@pytest.mark.django_db
+def test_divergent_mixed_sidecar_serves_each_alias_correctly():
+    """A sidecar alias resolves per-parent while its divergent sibling is windowed.
+
+    ``a`` (filtered) takes the per-parent pipeline and narrows correctly; ``b``
+    (plain page) is served from its per-key window - one alias's fallback shape
+    must not corrupt the other's rows.
+    """
+    _seed_library_books(["apple", "banana", "avocado"])
+    schema = _genres_filterable_book_schema(strictness="off")
+    result = schema.execute_sync(
+        "{ objs { "
+        'a: booksConnection(filter: { title: { exact: "banana" } }) '
+        "{ edges { node { title } } } "
+        "b: booksConnection(first: 5) { edges { node { title } } } "
+        "} }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is None, result.errors
+    obj = result.data["objs"][0]
+    assert [e["node"]["title"] for e in obj["a"]["edges"]] == ["banana"]
+    assert [e["node"]["title"] for e in obj["b"]["edges"]] == ["apple", "banana", "avocado"]
+
+
+@pytest.mark.django_db
+def test_divergent_aliases_strictness_raise_planned_keys_silent():
+    """Plain divergent aliases are PLANNED - strictness ``"raise"`` stays silent."""
+    _seed_library_books(["a", "b", "c"])
+    schema = _genres_list_schema(optimizer=True, strictness="raise")
+    result = schema.execute_sync(
+        "{ objs { "
+        "a: booksConnection(first: 2) { edges { node { title } } } "
+        "b: booksConnection(first: 5) { edges { node { title } } } "
+        "} }",
+    )
+    assert result.errors is None, result.errors
+    obj = result.data["objs"][0]
+    assert len(obj["a"]["edges"]) == 2
+    assert len(obj["b"]["edges"]) == 3
+
+
+@pytest.mark.django_db
+def test_divergent_mixed_sidecar_strictness_flags_only_the_sidecar_key():
+    """Under ``"raise"``, only the sidecar alias flags - its planned sibling is silent.
+
+    Per-key strictness visibility (idea #2): the sidecar key stays a real,
+    flagged per-parent access with the actionable filter/orderBy reason; the
+    planned sibling's identity was recorded, so it never flags.
+    """
+    _seed_library_books(["apple", "banana", "avocado"])
+    schema = _genres_filterable_book_schema(strictness="raise")
+    result = schema.execute_sync(
+        "{ objs { "
+        'a: booksConnection(filter: { title: { exact: "banana" } }) '
+        "{ edges { node { title } } } "
+        "b: booksConnection(first: 5) { edges { node { title } } } "
+        "} }",
+        context_value=HttpRequest(),
+    )
+    # The sidecar alias raises with the actionable reason...
+    assert result.errors is not None
+    messages = [str(e.original_error or e) for e in result.errors]
+    assert any("selection carries filter/orderBy" in m for m in messages), messages
+    # ...and it is the ONLY flag: the planned sibling never fires the checker.
+    assert len([m for m in messages if "Unplanned N+1" in m]) == 1
+
+
+@pytest.mark.django_db
 def test_distinct_target_fallback_reports_correct_total_count():
     """A ``.distinct()`` target falls back per-parent AND reports the right ``totalCount``.
 

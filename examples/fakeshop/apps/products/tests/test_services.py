@@ -12,6 +12,14 @@ from apps.products.models import Category, Entry, Item, Property
 User = get_user_model()
 
 
+@pytest.fixture(autouse=True)
+def _clear_seed_provider_cache():
+    """Keep seed-provider cache tests independent while preserving within-test reuse."""
+    services._seed_provider_methods.cache_clear()
+    yield
+    services._seed_provider_methods.cache_clear()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -133,14 +141,20 @@ def test_seed_data_creates_expected_counts():
 def test_seed_data_idempotent_on_categories_and_properties(monkeypatch):
     """A second seed at the same X creates 0 new categories/properties (and only fills item shortfall).
 
-    ``discover_providers`` is non-deterministic across calls because some Faker probe methods
-    have random branches; pin the providers dict so both seed_data calls see the same shape.
+    Pin a minimal provider shape and prove repeated seed calls discover it only once.
     """
-    fixed = services.discover_providers(Faker())
-    monkeypatch.setattr(services, "discover_providers", lambda _fake: fixed)
+    discovery_calls = 0
+
+    def discover_once(_fake):
+        nonlocal discovery_calls
+        discovery_calls += 1
+        return {"person": ["name"]}
+
+    monkeypatch.setattr(services, "discover_providers", discover_once)
 
     services.seed_data(1)
     second = services.seed_data(1)
+    assert discovery_calls == 1
     assert second["categories"] == 0
     assert second["properties"] == 0
     assert second["items"] == 0
@@ -151,10 +165,9 @@ def test_seed_data_idempotent_on_categories_and_properties(monkeypatch):
 def test_seed_data_creates_only_shortfall_when_x_grows(monkeypatch):
     """Bumping X from 1 to 2 should create exactly one extra item per provider.
 
-    Pin ``discover_providers`` across both seed_data calls so the property/method shape is identical.
+    Pin a minimal provider shape so this test isolates shortfall behavior.
     """
-    fixed = services.discover_providers(Faker())
-    monkeypatch.setattr(services, "discover_providers", lambda _fake: fixed)
+    monkeypatch.setattr(services, "discover_providers", lambda _fake: {"person": ["name"]})
 
     services.seed_data(1)
     cat_count = Category.objects.count()

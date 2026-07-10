@@ -18,7 +18,7 @@ from apps.products import models as products_models
 from apps.products.services import seed_data
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def project_schema(reload_all_project_app_schemas):
     """Recompose ``config.schema.schema`` against a fully re-registered registry.
 

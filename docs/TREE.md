@@ -696,6 +696,7 @@ examples/fakeshop/    # A Django + Strawberry GraphQL example project that exerc
 ├── manage.py                     # Django command-line entry point for the fakeshop example project.
 ├── config/    # Project orchestration package for fakeshop settings, URLs, WSGI, and schema composition.
 │   ├── settings.py               # Django settings for fakeshop and its single-database or sharded test modes.
+│   ├── test_settings.py          # Pytest-only settings layered over the shipped fakeshop configuration.
 │   ├── schema.py                 # Project-level GraphQL schema that composes every fakeshop app query.
 │   ├── urls.py                   # URL routing for fakeshop's index, admin, auth, and GraphQL endpoints.
 │   └── wsgi.py                   # WSGI application entry point for the fakeshop example project.

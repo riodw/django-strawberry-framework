@@ -6,19 +6,6 @@ from apps.kanban import models as kanban_models
 from graphql_client import assert_graphql_success as _graphql_data
 
 
-@pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Recreate imported DjangoType classes if package tests cleared the registry.
-
-    Rebuilds the FULL project schema (every contributing app + config), not just
-    ``apps.glossary.schema``: ``config.schema`` aggregates all five apps, so a
-    glossary-only reload left products/library/scalars unregistered after a package
-    ``registry.clear()`` and the combined build raised a ``LazyType`` ``KeyError``
-    (e.g. ``CategoryFilterInputType``). See the ``conftest.py`` helper.
-    """
-    reload_all_project_app_schemas()
-
-
 def _seed_glossary():
     shipped = models.GlossaryStatus.objects.create(key="shipped", label="Shipped", order=0)
     planned = models.GlossaryStatus.objects.create(key="planned", label="Planned", order=1)

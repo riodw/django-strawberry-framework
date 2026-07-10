@@ -44,20 +44,6 @@ from django_strawberry_framework.testing import (
     TestClient,
 )
 
-
-@pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Rebuild the FULL project schema around package-test registry clears.
-
-    Delegates to the shared ``conftest`` reload so the WHOLE project schema is
-    rebuilt (every contributing app + config), not just one app: ``config.schema``
-    aggregates all apps, so a partial reload leaves the others unregistered after a
-    package ``registry.clear()`` and the combined build raises a ``LazyType``
-    ``KeyError``. See ``conftest.py`` and ``schema_reload.py``.
-    """
-    reload_all_project_app_schemas()
-
-
 # ---------------------------------------------------------------------------
 # Probe URLconf: ``/alt/`` delegates to whatever the freshly reloaded
 # ``/graphql/`` view is, so the GRAPHQL_URL / per-call rungs are proven by a

@@ -40,6 +40,7 @@ import pkgutil
 import random
 from collections.abc import Callable
 from decimal import Decimal
+from functools import cache
 from typing import TYPE_CHECKING
 
 from apps.products.models import Category, Entry, Item, Property
@@ -148,11 +149,27 @@ def _fake_value(fake: Faker, method_name: str) -> str:
     return str(result)
 
 
+@cache
+def _seed_provider_methods() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Discover the process-stable provider shape used by repeated seed calls."""
+    from faker import Faker
+
+    probe = Faker()
+    probe.seed_instance(0)
+    return tuple(
+        (provider_name, tuple(method_names))
+        for provider_name, method_names in sorted(discover_providers(probe).items())
+    )
+
+
 def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
     """Seed the database with Faker-driven data for every discovered provider.
 
     Ensures at least ``count`` ``Item`` instances exist per provider.
     Only creates the difference if some already exist.
+    Provider discovery is deterministic and cached per process; installed Faker
+    provider modules do not change between calls, while generated row values remain
+    fresh on every invocation.
 
     For each provider (e.g. "bank", "person", "address"):
       - Creates one ``Category`` (or reuses existing)
@@ -178,14 +195,13 @@ def seed_data(count: int, db_alias: str = "default") -> dict[str, int]:
     from faker import Faker
 
     fake = Faker()
-    providers = discover_providers(fake)
 
     total_categories = 0
     total_properties = 0
     total_items = 0
     total_entries = 0
 
-    for cat_index, (provider_name, method_names) in enumerate(sorted(providers.items())):
+    for cat_index, (provider_name, method_names) in enumerate(_seed_provider_methods()):
         # --- Category (alternating: even=public, odd=private) ---
         category, created = Category.objects.using(db_alias).get_or_create(
             name=provider_name,

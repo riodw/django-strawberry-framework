@@ -27,7 +27,6 @@ import contextlib
 import json
 
 import pytest
-import schema_reload
 from apps.products.services import seed_data
 from django.test import Client, override_settings
 from django.urls import reverse
@@ -114,14 +113,8 @@ def _debug_toolbar_cache_state():
         DebugToolbar._urlpatterns = saved_urlpatterns
 
 
-@pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Rebuild the FULL project schema if a package test cleared the registry (see conftest.py)."""
-    reload_all_project_app_schemas()
-
-
 @pytest.fixture
-def toolbar_client():
+def toolbar_client(project_schema_override):
     """Real fakeshop ``/graphql/`` client with the toolbar active under ``DEBUG=True``.
 
     Fakeshop's shipped settings already carry the ``debug_toolbar`` app, the
@@ -130,16 +123,16 @@ def toolbar_client():
     ``DEBUG=True`` (which pytest-django forces off). ``config.urls`` is reloaded
     INSIDE the override so its ``debug_toolbar_urls()`` recomputes the ``djdt``
     routes (empty under ``DEBUG=False``); the always-true callback keeps the
-    show-toolbar gate independent of ``REMOTE_ADDR``. No teardown reload is needed:
-    every acceptance test reloads ``config.urls`` under the ambient ``DEBUG=False``
-    in its autouse fixture, so the ``djdt`` routes never leak past this fixture.
+    show-toolbar gate independent of ``REMOTE_ADDR``. The schema-override fixture
+    restores ``config.schema`` and ``config.urls`` under ambient ``DEBUG=False``
+    after the settings context exits, so the ``djdt`` routes cannot leak.
     """
     with override_settings(
         DEBUG=True,
         DEBUG_TOOLBAR_CONFIG={"SHOW_TOOLBAR_CALLBACK": _show_toolbar_always},
     ):
         with _debug_toolbar_cache_state():
-            schema_reload.reload_all_project_schemas()
+            project_schema_override()
             yield Client()
 
 

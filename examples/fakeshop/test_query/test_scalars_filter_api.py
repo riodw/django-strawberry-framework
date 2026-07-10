@@ -24,19 +24,6 @@ _TIME = datetime.time(9, 30)
 _UUID = uuid.UUID("12345678-1234-5678-1234-567812345678")
 
 
-@pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Recreate imported DjangoType classes if package tests cleared the registry.
-
-    Rebuilds the FULL project schema (every contributing app + config), not just
-    ``apps.scalars.schema``: ``config.schema`` aggregates all five apps, so a
-    scalars-only reload left the other apps unregistered after a package
-    ``registry.clear()`` and the combined build raised a ``LazyType`` ``KeyError``
-    under collection orders that did not pre-materialize them. See ``conftest.py``.
-    """
-    reload_all_project_app_schemas()
-
-
 def _seed_specimen(label: str, **overrides):
     defaults = {
         "label": label,

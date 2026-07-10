@@ -16,26 +16,6 @@ from django_strawberry_framework.testing import TestClient
 from django_strawberry_framework.testing.relay import global_id_for
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Rebuild the full project schema once per worker around package-test registry clears.
-
-    Delegates to the shared ``conftest`` reload (via the
-    ``reload_all_project_app_schemas`` fixture) so the WHOLE project schema is
-    rebuilt - every contributing app + config, not just ``apps.library.schema``:
-    ``config.schema`` aggregates all five apps, so a library-only reload left the
-    other apps unregistered after a package ``registry.clear()`` and the combined
-    build raised a ``LazyType`` ``KeyError`` (e.g. ``CategoryFilterInputType`` from
-    products) under collection orders that did not pre-materialize them. Django model
-    classes are never reloaded so they stay stable; tests must not module-level
-    import classes from ``apps.library.schema`` or they hold stale class objects.
-
-    A test that must re-finalize under changed settings requests the function-scoped
-    ``project_schema_override`` fixture so the default schema is restored afterward.
-    """
-    reload_all_project_app_schemas()
-
-
 def _seed_library_graph():
     branch = models.Branch.objects.create(name="Central", city="Boston")
     shelf = models.Shelf.objects.create(code="A-1", topic="Speculative fiction", branch=branch)

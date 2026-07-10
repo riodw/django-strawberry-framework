@@ -46,25 +46,6 @@ from strawberry import relay
 from django_strawberry_framework.testing import TestClient
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Rebuild the full project schema once per worker around package-test registry clears.
-
-    Delegates to the shared ``conftest`` reload (via the
-    ``reload_all_project_app_schemas`` fixture) so the WHOLE project schema is
-    rebuilt - every contributing app + config, not just ``apps.products.schema``:
-    ``config.schema`` aggregates all five apps, so a products-only reload left the
-    other apps unregistered after a package ``registry.clear()`` and the combined
-    build raised a ``LazyType`` ``KeyError`` under collection orders that did not
-    pre-materialize them. Django model classes are never reloaded so they stay stable.
-
-    A test that must re-finalize under an ``override_settings`` requests the
-    function-scoped ``project_schema_override`` fixture so the default schema is
-    restored afterward.
-    """
-    reload_all_project_app_schemas()
-
-
 def _staff_client() -> Client:
     """Log in the seeded ``staff_1`` user (``is_staff=True``) created by ``create_users``."""
     create_users(1)

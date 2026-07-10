@@ -35,21 +35,6 @@ from django.test import override_settings
 
 from django_strawberry_framework.testing import TestClient
 
-
-@pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Recreate imported DjangoType classes if package tests cleared the registry.
-
-    Rebuilds the FULL project schema (every contributing app + config + the
-    multipart-enabled GraphQLView via config.urls), not just ``apps.scalars.schema``:
-    ``config.schema`` aggregates all five apps, so a scalars-only reload left the
-    other apps unregistered after a package ``registry.clear()`` and the combined
-    build raised a ``LazyType`` ``KeyError`` under collection orders that did not
-    pre-materialize them. See ``conftest.py``. Django model classes stay stable.
-    """
-    reload_all_project_app_schemas()
-
-
 # A 5x9 PNG so the live ``width`` / ``height`` assertions read distinct,
 # deterministic values rather than a square that could pass by coincidence.
 _IMAGE_WIDTH = 5

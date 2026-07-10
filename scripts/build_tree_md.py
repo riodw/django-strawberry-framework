@@ -44,6 +44,7 @@ FAKESHOP_APP_NAMES = (
 )
 FAKESHOP_CONFIG_FILES = (
     "settings.py",
+    "test_settings.py",
     "schema.py",
     "urls.py",
     "wsgi.py",

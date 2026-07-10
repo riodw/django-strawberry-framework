@@ -63,11 +63,11 @@ jobs:
             {"django": "6.0.*", "python": "3.13", "database": "multi DB", "fakeshop_sharded": "1"},
             {"django": "6.0.*", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0"},
             {"django": "6.0.*", "python": "3.14", "database": "multi DB", "fakeshop_sharded": "1"},
-            {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0", "coverage": "1"},
             {"django": "latest", "python": "3.14", "database": "multi DB", "fakeshop_sharded": "1"}
           ]') || fromJSON('[
             {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0"},
-            {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0"}
+            {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0", "coverage": "1"}
           ]') }}
 
     steps:
@@ -94,24 +94,32 @@ jobs:
           else
             uv pip install "Django==${{ matrix.django }}"
           fi
-          uv run django-admin --version
+          uv run --no-sync django-admin --version
 
       - name: Run Tests (${{ matrix.database }})
-        # pytest.ini wires `--cov`, and pyproject.toml enforces fail_under=100,
-        # so this step both tests and gates coverage.
+        # The latest single-DB node owns the fail_under=100 coverage gate and
+        # Coveralls upload. Compatibility nodes run the identical test selection
+        # without tracing it again: Coverage.py 7.14 uses its fast sys.monitoring
+        # core on Python 3.14, while Python <=3.13 must use the much slower
+        # sys.settrace core. `-o addopts` replaces pytest.ini's addopts wholesale,
+        # so the compatibility branch drops --cov without --no-cov's warning.
         env:
           FAKESHOP_SHARDED: ${{ matrix.fakeshop_sharded }}
-        run: uv run pytest
+        run: |
+          if [ "${{ matrix.coverage }}" = "1" ]; then
+            addopts="-v -n auto --dist loadscope --cov --cov-report=term-missing --durations=25"
+          else
+            addopts="-v -n auto --dist loadscope --durations=25"
+          fi
+          uv run --no-sync pytest -o addopts="$addopts"
 
       - name: Upload Coverage to Coveralls
         # Only upload from the primary matrix node to avoid duplicate builds.
         if: >-
           github.ref == 'refs/heads/main' &&
-          matrix.python == '3.14' &&
-          matrix.django == 'latest' &&
-          matrix.database == 'single DB'
+          matrix.coverage == '1'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           uv pip install coveralls
-          uv run coveralls
+          uv run --no-sync coveralls

@@ -64,6 +64,15 @@ def _reload_or_import(module_name: str) -> None:
         importlib.reload(module)
 
 
+def reload_project_schema_shell() -> None:
+    """Rebuild the aggregate schema and URLconf around registered app types."""
+    from django.urls import clear_url_caches
+
+    _reload_or_import("config.schema")
+    _reload_or_import("config.urls")
+    clear_url_caches()
+
+
 def reload_all_project_schemas() -> None:
     """Clear the registry and rebuild the FULL project schema (every app + config).
 
@@ -76,15 +85,9 @@ def reload_all_project_schemas() -> None:
     it directly into the test bodies, so there is no ``import conftest`` boundary
     in the test modules.
     """
-    from django.urls import clear_url_caches
-
     from django_strawberry_framework.registry import registry
 
     registry.clear()
     for module_name in _PROJECT_APP_SCHEMA_MODULES:
         _reload_or_import(module_name)
-    _reload_or_import("config.schema")
-    urls = sys.modules.get("config.urls")
-    if urls is not None:
-        importlib.reload(urls)
-        clear_url_caches()
+    reload_project_schema_shell()

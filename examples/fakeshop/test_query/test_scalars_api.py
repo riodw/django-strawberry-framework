@@ -19,22 +19,6 @@ from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from graphql_client import post_graphql as _post_graphql
 
-
-@pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Recreate imported DjangoType classes if package tests cleared the registry.
-
-    Rebuilds the FULL project schema (every contributing app + config), not just
-    ``apps.scalars.schema``: ``config.schema`` aggregates all five apps, so a
-    scalars-only reload left the other apps unregistered after a package
-    ``registry.clear()`` and the combined build raised a ``LazyType`` ``KeyError``
-    (e.g. ``CategoryFilterInputType`` from products) under collection orders that
-    did not pre-materialize them. See the ``conftest.py`` helper. Django model
-    classes are never reloaded, so they stay stable.
-    """
-    reload_all_project_app_schemas()
-
-
 # Sentinel values chosen so each wire format is unambiguous in the response.
 # BigInt boundary values intentionally exceed ``2**53 - 1`` so the
 # decimal-string serialization is the only way the value can survive a

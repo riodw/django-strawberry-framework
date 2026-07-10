@@ -25,23 +25,6 @@ from graphql_client import assert_graphql_success as _graphql_data
 from strawberry import relay
 
 
-@pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Recreate imported DjangoType classes if package tests cleared the registry.
-
-    Rebuilds the FULL project schema (every contributing app + config), not just
-    glossary + kanban: ``config.schema`` aggregates all five apps, so reloading only
-    this app's chain left products/library/scalars unregistered after a package
-    ``registry.clear()`` and the combined build raised a ``LazyType`` ``KeyError``
-    (e.g. ``CategoryFilterInputType`` from products). The shared ``conftest.py``
-    helper reloads glossary before kanban (the ``CardGlossaryTermType.term`` FK to
-    ``glossary.GlossaryTerm``) and re-registers the remaining apps so the rebuild is
-    complete and order-independent. ``apps.kanban.models`` is never reloaded, so the
-    Django model classes -- and the connected ``post_save`` UUID signal -- stay stable.
-    """
-    reload_all_project_app_schemas()
-
-
 def _seed_board():
     """A tiny deterministic board: two cards + docs + lookups + edges."""
     done = models.Status.objects.create(key="done", label="Done", order=3)

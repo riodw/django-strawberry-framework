@@ -37,21 +37,6 @@ _REGISTER = (
 _ME = "{ me{ username } }"
 
 
-@pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Rebuild the FULL project schema around package-test registry clears.
-
-    Delegates to the shared complete-reload helper so the whole project schema -
-    every contributing app (now including ``apps.accounts.schema``, the spec-040
-    ``_PROJECT_APP_SCHEMA_MODULES`` row) plus config - is rebuilt after any
-    package-test ``registry.clear()``. Because ``registry.clear()`` also drains
-    the auth declaration ledger, each reload re-declares the four auth fields
-    from the re-executed accounts module - every test in this file therefore
-    exercises the spec-040 reload-preservation contract.
-    """
-    reload_all_project_app_schemas()
-
-
 def _login(client: Client, username: str, password: str) -> dict:
     return _graphql_data(_LOGIN, client=client, variables={"u": username, "p": password})["login"]
 

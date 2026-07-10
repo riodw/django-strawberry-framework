@@ -19,16 +19,14 @@ Critical contract pins (do not violate without an explicit spec revision):
   per rev2 H9 (``Book.shelf`` and ``Shelf.branch`` are non-null FKs).
 - Live ``/graphql/`` HTTP exclusively via ``django.test.Client.post(...)``
   per rev2 H7 - NO in-process ``execute_sync(...)`` alternative.
-- Schema built INSIDE a per-test fixture that runs AFTER the autouse
-  reload (rev3 R4) - the holder pattern below defers schema construction
-  past the registry clear so the test sees freshly-reloaded ``BookType``.
+- Schema built inside a per-test fixture that depends on the shared module
+  reload - the holder pattern below defers schema construction until after
+  the registry clear so the test sees freshly-reloaded ``BookType``.
 - ``override_settings(ROOT_URLCONF=__name__)`` per rev3 R5 with
   ``clear_url_caches()`` on enter AND in teardown.
 """
 
-# Top-block imports support the autouse reload fixture per Decision 7 +
-# rev4 V6 - sys.modules.get(...), importlib.reload(...) /
-# importlib.import_module(...). os is the env-var gate.
+# ``os`` owns the import-time environment gate below.
 
 import os
 
@@ -54,29 +52,6 @@ from strawberry.django.views import GraphQLView
 from strawberry.types import Info
 
 from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config
-
-# ---------------------------------------------------------------------------
-# Autouse reload fixture (copied verbatim from
-# ``examples/fakeshop/test_query/test_library_api.py::_reload_project_schema_for_acceptance_tests``)
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(autouse=True)
-def _reload_project_schema_for_acceptance_tests(reload_all_project_app_schemas):
-    """Recreate imported DjangoType classes if package tests cleared the registry.
-
-    Rebuilds the FULL project schema (every contributing app + config), not just
-    ``apps.library.schema``: ``config.schema`` aggregates all five apps, so a
-    library-only reload left the other apps unregistered after a package
-    ``registry.clear()`` and the combined build raised a ``LazyType`` ``KeyError``
-    under collection orders that did not pre-materialize them. See ``conftest.py``.
-    Reload is mandatory for order-independent suite isolation; Django model classes
-    are never reloaded so they stay stable. Hidden invariant: tests must not
-    module-level import classes from ``apps.library.schema`` or they hold stale
-    class objects after reload.
-    """
-    reload_all_project_app_schemas()
-
 
 # ---------------------------------------------------------------------------
 # Holder-pattern URLConf (per Decision 6 + rev3 R4 + rev3 R5)
@@ -111,10 +86,8 @@ def _build_test_schema(_reload_project_schema_for_acceptance_tests):
     # IMPORTANT: import ``BookType`` HERE (inside the fixture body), not at
     # module top - module-level imports of ``apps.library.schema.BookType``
     # would hold stale class objects after each autouse reload cycle
-    # (per the ``examples/fakeshop/test_query/test_library_api.py::_reload_project_schema_for_acceptance_tests #"tests must not module-level import classes"``
-    # invariant). The fixture's
-    # dependency on _reload_project_schema_for_acceptance_tests ensures
-    # the import runs AFTER reload.
+    # (per the shared ``test_query/conftest.py::_reload_project_schema_for_acceptance_tests``
+    # invariant). The dependency ensures the import runs after that reload.
     from apps.library.schema import BookType  # freshly-reloaded class
 
     @strawberry.type

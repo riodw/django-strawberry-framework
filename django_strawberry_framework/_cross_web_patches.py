@@ -50,8 +50,8 @@ No upstream issue or PR tracks it (the repo is ``usecross/cross-web``;
 ``strawberry-graphql`` only depends on it). This patch can be retired
 once upstream stops eagerly decoding the sync body - the minimal fix
 mirrors the async adapter in the same file, which already returns the
-raw bytes. The graceful no-op in :func:`apply` means a future fixed
-``cross-web`` needs no action here.
+raw bytes. A future upstream shape change fails loudly at application so the
+patch can be re-audited or retired deliberately.
 
 Re-checking whether upstream fixed this
 ---------------------------------------
@@ -100,18 +100,16 @@ package's regression tests can call it explicitly without going through
 the AppConfig.
 """
 
+import inspect
 from typing import Any
 
-from . import logger
 from .conf import upstream_patches_enabled
 
 try:
     from cross_web import DjangoHTTPRequestAdapter
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
-    # cross_web renamed, relocated, or removed the sync Django adapter.
-    # The patch only makes sense when it exists, so ``apply()`` no-ops
-    # instead of crashing the app loader. See ``apply()`` for the
-    # runtime branch and ``test_apply_no_ops_when_symbol_missing``.
+    # Preserve module import long enough for ``apply()`` to report the precise
+    # unsupported upstream shape and the explicit opt-out.
     DjangoHTTPRequestAdapter = None  # type: ignore[assignment,misc]
 
 
@@ -131,9 +129,34 @@ if DjangoHTTPRequestAdapter is not None:
         _original_body_fget = _descriptor.fget
 
 
-# Module-level sentinel: see the matching note in
-# :mod:`django_strawberry_framework._strawberry_patches`.
-_missing_symbol_logged = False
+def _validate_upstream_shape() -> None:
+    """Fail loudly when cross_web no longer exposes the property shape we wrap."""
+    if DjangoHTTPRequestAdapter is None:
+        raise RuntimeError(
+            "Cannot apply django-strawberry-framework's cross_web patch: expected "
+            "cross_web.DjangoHTTPRequestAdapter. Disable APPLY_UPSTREAM_PATCHES or use a "
+            "supported cross_web version.",
+        )
+    descriptor = DjangoHTTPRequestAdapter.__dict__.get("body")
+    if _patch_is_installed():
+        function = _original_body_fget
+    elif isinstance(descriptor, property):
+        function = descriptor.fget
+    else:
+        function = None
+    if function is None:
+        raise RuntimeError(
+            "Cannot apply django-strawberry-framework's cross_web patch: "
+            "DjangoHTTPRequestAdapter.body is no longer a readable property. "
+            "Disable APPLY_UPSTREAM_PATCHES or use a supported cross_web version.",
+        )
+    parameters = tuple(inspect.signature(function).parameters.values())
+    if len(parameters) != 1 or parameters[0].kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD:
+        raise RuntimeError(
+            "Cannot apply django-strawberry-framework's cross_web patch: "
+            "DjangoHTTPRequestAdapter.body no longer has the expected (self) getter signature. "
+            "Disable APPLY_UPSTREAM_PATCHES or use a supported cross_web version.",
+        )
 
 
 def _patched_body(self: Any) -> "str | bytes":
@@ -163,22 +186,14 @@ def _patch_is_installed() -> bool:
 def apply() -> None:
     """Apply the ``cross_web`` defensive patch shipped by the package.
 
-    Idempotent and self-healing, gated by ``APPLY_UPSTREAM_PATCHES``,
-    and a graceful no-op when the upstream symbol moved - the same
-    contract as :func:`django_strawberry_framework._strawberry_patches.apply`.
+    Idempotent and self-healing, gated by ``APPLY_UPSTREAM_PATCHES``. Before
+    installation it validates the adapter, property descriptor, and ``(self)``
+    getter signature; dependency drift raises instead of silently disabling the
+    request hardening.
     """
-    global _missing_symbol_logged
     if not upstream_patches_enabled():
         return
-    if DjangoHTTPRequestAdapter is None:
-        if not _missing_symbol_logged:
-            logger.info(
-                "django-strawberry-framework: skipping cross_web body patch - "
-                "cross_web.DjangoHTTPRequestAdapter is unavailable at this cross_web "
-                "version. Non-UTF-8 request bodies may surface as 500s on the sync view.",
-            )
-            _missing_symbol_logged = True
-        return
+    _validate_upstream_shape()
     if _patch_is_installed():
         return
     DjangoHTTPRequestAdapter.body = property(_patched_body)

@@ -253,10 +253,7 @@ def clear_serializer_choice_enums() -> None:
     _SERIALIZER_CHOICE_ENUMS.clear()
 
 
-register_subsystem_clear(
-    "django_strawberry_framework.rest_framework.serializer_converter",
-    "clear_serializer_choice_enums",
-)
+register_subsystem_clear(clear_serializer_choice_enums, owner="rest_framework.choice_enums")
 
 
 def is_nested_serializer_field(field: serializers.Field) -> bool:

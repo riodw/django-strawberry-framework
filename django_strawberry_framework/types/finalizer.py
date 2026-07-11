@@ -784,23 +784,15 @@ def finalize_django_types() -> None:
     # error. Parked module globals are overwritten in place by the next ``setattr``
     # (the parked-globals lifecycle), so a ledger-only clear is safe. ``registry``
     # is NOT cleared here - this resets only the emit ledgers, not declarations.
-    # The pre-bind input-namespace reset is wired through the ``register_subsystem_clear``
-    # seam (spec-039 P1.6 / M4): iterate the canonical clear list ``registry.py``
-    # owns and run each static ``(module_path, attr)`` row via ``_clear_if_importable``,
-    # so the mutation + form + serializer input ledgers all reset here through ONE
-    # mechanism rather than three hand-written direct calls. ``_clear_if_importable``
-    # tolerates an absent module (``ImportError`` -> skip), so a DRF-absent build
-    # silently no-ops the serializer row - a correct no-op (DRF absent => no
-    # ``SerializerMutation`` declared => the serializer ledger is empty), and the
-    # finalizer never imports ``rest_framework.inputs`` (which would raise for a
-    # DRF-absent consumer and break schema construction for everyone). Each
-    # owning ``inputs`` module registered its row at import time, so the rows
-    # present here are exactly the subsystems the consumer actually imported.
+    # The pre-bind input-namespace reset uses owner-registered callables. The
+    # phase filter selects only emitted namespaces, never declaration registries
+    # or full-clear-only caches. Optional subsystems remain absent unless their
+    # owner was imported, so this does not pull DRF or auth into other schemas.
     from ..mutations.sets import bind_mutations
-    from ..registry import _clear_if_importable, iter_subsystem_clears
+    from ..registry import iter_subsystem_clears
 
-    for module_path, attr in iter_subsystem_clears():
-        _clear_if_importable(module_path, attr, lambda clear: clear())
+    for clear in iter_subsystem_clears(before_bind=True):
+        clear()
     # Bind auth declarations in the pinned phase-2.5 slot (spec-040 Decision 9):
     # AFTER the pre-bind emit-ledger reset above (the auth DECLARATION ledger is
     # not a pre-bind row, so the reset never touches it) and BEFORE

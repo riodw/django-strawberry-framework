@@ -164,11 +164,14 @@ def clear_form_input_namespace() -> None:
 
 # Register the form input-namespace clear as a canonical PRE-BIND clear (spec-039
 # P1.6): the ``finalize_django_types`` pre-bind reset AND ``TypeRegistry.clear()``
-# both iterate ``registry.iter_subsystem_clears()`` and run each row via
-# ``_clear_if_importable``, so this clear is single-sited as a static string row
-# rather than hand-mirrored in both call sites. Registered at import time of this
-# module (the module that owns the clear); idempotent by value under a reload.
-register_subsystem_clear(INPUTS_MODULE_PATH, "clear_form_input_namespace")
+# both iterate ``registry.iter_subsystem_clears()``. This owner registers the
+# executable callback once; the stable owner key makes reload replace it without
+# a central attribute lookup that can drift.
+register_subsystem_clear(
+    clear_form_input_namespace,
+    owner="forms.input_namespace",
+    before_bind=True,
+)
 
 
 def get_form_fields(form_class: type[forms.BaseForm]) -> dict[str, forms.Field]:

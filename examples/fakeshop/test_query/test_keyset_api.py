@@ -146,13 +146,24 @@ def test_root_keyset_backward_pagination():
 
 
 @pytest.mark.django_db
-def test_root_keyset_last_zero_preserves_shipped_connection_semantics():
-    """The keyset opt-in changes cursor vocabulary, not Strawberry's ``last: 0`` quirk."""
-    _seed_periodicals()
+def test_root_keyset_last_zero_preserves_bounded_shipped_connection_semantics():
+    """``last: 0`` keeps Strawberry's quirk without bypassing the Relay result cap."""
+    astronomy, _botany, _empty = _seed_periodicals()
+    models.Issue.objects.bulk_create(
+        [
+            models.Issue(
+                periodical=astronomy,
+                number=number,
+                title=f"Cap probe #{number}",
+            )
+            for number in range(100, 193)
+        ],
+    )
     page = _root_page(last=0)
-    assert len(page["edges"]) == 8
+    assert page["totalCount"] == 101
+    assert len(page["edges"]) == 100
     assert page["pageInfo"]["hasPreviousPage"] is False
-    assert page["pageInfo"]["hasNextPage"] is False
+    assert page["pageInfo"]["hasNextPage"] is True
 
 
 @pytest.mark.django_db

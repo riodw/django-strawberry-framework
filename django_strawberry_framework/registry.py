@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 from django.db import models
 
 from .exceptions import ConfigurationError
-from .utils.imports import import_attr_if_importable, loaded_attr
+from .utils.imports import import_attr_if_importable
 
 if TYPE_CHECKING:  # pragma: no cover
     from .types.definition import DjangoTypeDefinition
@@ -49,68 +49,46 @@ def _clear_if_importable(module_path: str, attr_name: str, action: Callable[[Any
     action(target)
 
 
-def _clear_if_loaded(module_path: str, attr_name: str, action: Callable[[Any], None]) -> None:
-    """Like ``_clear_if_importable``, but only when ``module_path`` is ALREADY loaded.
+_subsystem_clears: dict[str, tuple[Callable[[], None], bool]] = {}
 
-    The opt-in-preserving variant for co-clear rows whose target module is always
-    importable but must never be imported on behalf of a consumer who skipped it
-    (the auth subsystem's structural opt-in, spec-040 Decision 3: an auth-free
-    consumer never pays the ``django.contrib.auth`` machinery import - not at
-    finalize, and not at ``registry.clear()``). A module absent from
-    ``sys.modules`` has, by the F10 invariant, no clearable state, so skipping is
-    a correct no-op rather than a missed reset. Delegates the loaded-module
-    lookup to its single owner ``utils/imports.py::loaded_attr``.
+
+def register_subsystem_clear(
+    clear: Callable[[], None],
+    *,
+    owner: str,
+    before_bind: bool = False,
+) -> None:
+    """Register state teardown from the module that owns it.
+
+    A callable registration cannot silently drift when an attribute is renamed or
+    moved: importing the owner must resolve the function before registration can
+    succeed. ``before_bind`` marks emit-namespace resets that the finalizer also
+    runs before rebuilding generated types; every callback runs for the test-only
+    full ``TypeRegistry.clear()`` lifecycle.
+
+    ``owner`` is a stable logical identity, not an import path. It lets factory-
+    generated callbacks register without colliding and lets ``importlib.reload``
+    replace the old function object instead of accumulating duplicates. Optional
+    subsystems remain lazy because only an imported owner can register.
     """
-    target = loaded_attr(module_path, attr_name)
-    if target is None:
-        return
-    action(target)
+    if not callable(clear):
+        raise TypeError("register_subsystem_clear() requires a zero-argument callable")
+    if not owner:
+        raise ValueError("register_subsystem_clear() requires a non-empty owner")
+    _subsystem_clears[owner] = (clear, before_bind)
 
 
-# The canonical pre-bind input-namespace clear list (spec-039 P1.6 / M4 - the
-# subsystem-clear seam). ONE ordered collection of static ``(module_path, attr)``
-# STRING rows the finalizer pre-bind reset AND ``TypeRegistry.clear()`` both
-# iterate via ``_clear_if_importable``. Storing STRINGS, not imported callables,
-# means a row is recorded WITHOUT importing the target module (F10) - so the
-# DRF-backed serializer input clear (``rest_framework.inputs``) is registered
-# safely before DRF is installed, and a DRF-absent build skips it as a correct
-# no-op (DRF absent => no ``SerializerMutation`` declared => the serializer ledger
-# is empty). Membership is exactly the PRE-BIND input-namespace clears the
-# finalizer resets once before the bind sequence (mutation input, form input,
-# serializer input - spec-039 D5); the declaration-registry resets and the
-# per-pass shape-cache resets are NOT pre-bind input clears, so they stay
-# ``TypeRegistry.clear()``-only (the rows below the iteration in ``clear()``).
-# Each owning ``inputs`` module registers its own row at import time, so a
-# subsystem with clearable state has by definition been imported + registered
-# (the F10 backstop invariant).
-_subsystem_clears: list[tuple[str, str]] = []
+def iter_subsystem_clears(*, before_bind: bool = False) -> tuple[Callable[[], None], ...]:
+    """Return an immutable snapshot of registered teardown callbacks.
 
-
-def register_subsystem_clear(module_path: str, attr: str) -> None:
-    """Record a static ``(module_path, attr)`` pre-bind input-namespace clear (spec-039 P1.6).
-
-    Appends the row to the canonical ``_subsystem_clears`` list. Imports NOTHING
-    (the row is a pair of strings), so a DRF-backed serializer-clear row is
-    recorded without importing DRF - the F10 soft-dep invariant. Each owning
-    ``inputs`` module calls this once at import time (so importing
-    ``rest_framework.inputs``, which only happens with DRF present, records the
-    serializer row). Idempotent by value: a re-imported module under a reload does
-    not double-register the same row.
+    ``before_bind=True`` selects only generated emit-namespace resets. The
+    default returns every registered callback for ``TypeRegistry.clear()``.
     """
-    row = (module_path, attr)
-    if row not in _subsystem_clears:
-        _subsystem_clears.append(row)
-
-
-def iter_subsystem_clears() -> tuple[tuple[str, str], ...]:
-    """Return an immutable snapshot of the registered pre-bind clear rows (spec-039 P1.6).
-
-    Iterated by BOTH the ``finalize_django_types`` pre-bind reset block (via
-    ``_clear_if_importable``, so a DRF-absent build no-ops the serializer row) and
-    ``TypeRegistry.clear()``. The snapshot is a tuple so a caller cannot mutate the
-    backing list while iterating.
-    """
-    return tuple(_subsystem_clears)
+    return tuple(
+        clear
+        for clear, runs_before_bind in _subsystem_clears.values()
+        if not before_bind or runs_before_bind
+    )
 
 
 class TypeRegistry:
@@ -545,114 +523,11 @@ class TypeRegistry:
         self._pending.clear()
         self._finalized = False
 
-        # Subsystem co-clears (cycle-safe, best-effort via ``_clear_if_importable``
-        # -- see that helper for the partial-load contract). Each entry is
-        # independent: an unreachable subsystem is skipped so it never prevents a
-        # later co-clear from running. The order is immaterial (the registry's
-        # own maps are already cleared above); a future sidecar family (e.g.
-        # aggregates) appends one row here.
-        #   * filter / order input namespaces (spec-021 / spec-028 Decision 9)
-        #     and their ``filter_input_type`` / ``order_input_type`` helper
-        #     ledgers;
-        #   * the connection-class cache (one ``<TypeName>Connection`` per node
-        #     type, ``docs/feedback.md`` P3b);
-        #   * the root node-field ledger backing the finalize-time no-Node-types
-        #     check (spec-032 Decision 8).
-        _clear_if_importable(
-            "django_strawberry_framework.filters.inputs",
-            "clear_filter_input_namespace",
-            lambda clear: clear(),
-        )
-        _clear_if_importable(
-            "django_strawberry_framework.filters",
-            "_helper_referenced_filtersets",
-            lambda ledger: ledger.clear(),
-        )
-        _clear_if_importable(
-            "django_strawberry_framework.orders.inputs",
-            "clear_order_input_namespace",
-            lambda clear: clear(),
-        )
-        _clear_if_importable(
-            "django_strawberry_framework.orders",
-            "_helper_referenced_ordersets",
-            lambda ledger: ledger.clear(),
-        )
-        # The mutation / form / serializer INPUT-namespace clears (spec-036 /
-        # spec-038 / spec-039) are no longer hand-written here: they are the
-        # canonical PRE-BIND clear rows the ``finalize_django_types`` pre-bind reset
-        # also iterates, so a full ``registry.clear()`` wipes the SAME input ledgers
-        # the pre-bind reset wipes - through the SINGLE ``register_subsystem_clear``
-        # seam (spec-039 P1.6 / M4), not two hand-mirrored lists. Each row is a
-        # static ``(module_path, attr)`` string resolved lazily via
-        # ``_clear_if_importable``, so a DRF-absent build no-ops the serializer row
-        # as a correct no-op. The DECLARATION-registry resets + the per-pass
-        # shape-cache resets below are NOT pre-bind input clears (a fresh finalize
-        # re-emits from an empty declaration ledger; a per-pass build cache is reset
-        # by each bind itself), so they stay ``registry.clear()``-only.
-        for module_path, attr in iter_subsystem_clears():
-            _clear_if_importable(module_path, attr, lambda clear: clear())
-        # The ``DjangoMutation`` declaration registry (``clear_mutation_registry``)
-        # so a fresh finalize re-emits cleanly and ``iter_mutations()`` is empty
-        # (spec-036 Slice 2).
-        _clear_if_importable(
-            "django_strawberry_framework.mutations.sets",
-            "clear_mutation_registry",
-            lambda clear: clear(),
-        )
-        # The auth declaration ledger (``clear_auth_mutation_registry`` - spec-040
-        # Decision 9): a DECLARATION-registry reset, deliberately NOT a
-        # ``register_subsystem_clear`` row - auth declarations must survive the
-        # finalizer's pre-bind input-namespace reset so ``bind_auth_mutations()``
-        # can read them before ``bind_mutations()``. The ledger is also the auth
-        # holders' / register rider's same-args cache and conflict state, so this
-        # clear resets a prior conflicting-``permission_classes`` raise too.
-        # ``_clear_if_loaded`` (never ``_clear_if_importable``): ``auth.mutations``
-        # is always importable, so the importable variant would silently import the
-        # whole auth subsystem into every auth-free consumer that calls
-        # ``registry.clear()``, breaking the structural opt-in the finalizer's
-        # ``sys.modules`` bind guard preserves.
-        _clear_if_loaded(
-            "django_strawberry_framework.auth.mutations",
-            "clear_auth_mutation_registry",
-            lambda clear: clear(),
-        )
-        # The disjoint plain-form ``DjangoFormMutation`` declaration registry
-        # (``clear_form_mutation_registry``) so ``iter_form_mutations()`` is empty,
-        # plus the per-pass form-input build cache (``clear_form_shape_build_cache``
-        # - spec-038 Slice 2). Both are ``registry.clear()``-only resets, NOT
-        # pre-bind input-namespace clears.
-        _clear_if_importable(
-            "django_strawberry_framework.forms.sets",
-            "clear_form_mutation_registry",
-            lambda clear: clear(),
-        )
-        _clear_if_importable(
-            "django_strawberry_framework.forms.sets",
-            "clear_form_shape_build_cache",
-            lambda clear: clear(),
-        )
-        # The per-pass serializer-input build cache (``clear_serializer_shape_build_cache``
-        # - spec-039 Slice 2), the serializer twin of the form shape-cache reset
-        # above. ``registry.clear()``-only (NOT a pre-bind input clear), behind the
-        # DRF soft-import guard via ``_clear_if_importable`` so a DRF-absent build
-        # skips it as a correct no-op. The serializer INPUT-namespace clear is
-        # already handled by the ``iter_subsystem_clears()`` loop above.
-        _clear_if_importable(
-            "django_strawberry_framework.rest_framework.inputs",
-            "clear_serializer_shape_build_cache",
-            lambda clear: clear(),
-        )
-        _clear_if_importable(
-            "django_strawberry_framework.connection",
-            "clear_connection_type_cache",
-            lambda clear: clear(),
-        )
-        _clear_if_importable(
-            "django_strawberry_framework.relay",
-            "_node_fields_declared",
-            lambda ledger: ledger.clear(),
-        )
+        # Every loaded subsystem announces its own teardown callback. This
+        # preserves soft-dependency laziness and makes renames fail at the owner
+        # import instead of silently leaving stale state behind here.
+        for clear in iter_subsystem_clears():
+            clear()
 
 
 registry = TypeRegistry()

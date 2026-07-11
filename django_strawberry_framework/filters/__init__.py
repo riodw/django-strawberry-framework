@@ -16,6 +16,7 @@ need to distinguish the two.
 
 from __future__ import annotations
 
+from ..registry import register_subsystem_clear
 from ..utils.inputs import build_lazy_input_annotation
 from .base import (
     ArrayFilter,
@@ -42,6 +43,13 @@ from .sets import FilterSet, FilterSetMetaclass
 # set of `Meta.filterset_class`-wired filtersets and raises
 # `ConfigurationError` for orphans.
 _helper_referenced_filtersets: set[type[FilterSet]] = set()
+
+
+def _clear_helper_referenced_filtersets() -> None:
+    _helper_referenced_filtersets.clear()
+
+
+register_subsystem_clear(_clear_helper_referenced_filtersets, owner="filters.helper_references")
 
 
 def filter_input_type(filterset_class: type[FilterSet]) -> object:

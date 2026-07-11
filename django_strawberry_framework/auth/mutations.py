@@ -15,10 +15,9 @@ surface-keyed phase-2.5 bind ``types/finalizer.py`` runs BEFORE
 ``bind_mutations()`` (spec-040 Decision 9).
 
 Lifecycle (Decision 9): the auth **declaration** ledger below is a
-``make_declaration_registry`` instance cleared by ``TypeRegistry.clear()`` ONLY
-(a hand row beside ``clear_mutation_registry`` / ``clear_form_mutation_registry``
-- never ``register_subsystem_clear``, whose rows the finalizer's pre-bind reset
-drains before this module's bind could read them). The **emit** artifacts ride
+``make_declaration_registry`` instance cleared by ``TypeRegistry.clear()`` only
+(an owner-registered callback without the ``before_bind`` phase flag, so the
+finalizer cannot drain declarations before this module's bind reads them). The **emit** artifacts ride
 the pre-bind seam: ``LoginPayload`` / ``LogoutPayload`` ride the existing
 ``mutations.inputs`` row (imported transitively here), and the ``current_user``
 alias namespace rides ``auth/queries.py``'s own row. The ledger is ALSO the
@@ -64,7 +63,7 @@ from ..mutations.sets import (
 from ..mutations.sets import (
     register_mutation as record_mutation_declaration,
 )
-from ..registry import registry
+from ..registry import register_subsystem_clear, registry
 from ..utils.permissions import request_from_info
 
 # The one family label every auth surface resolves its request under (the
@@ -113,6 +112,7 @@ register_auth_mutation = _auth_declaration_registry.register
 clear_auth_mutation_registry = _auth_declaration_registry.clear
 iter_auth_mutations = _auth_declaration_registry.iter_
 _auth_declarations = _auth_declaration_registry.store
+register_subsystem_clear(clear_auth_mutation_registry, owner="auth.declarations")
 
 
 class _AuthMutationMetaSnapshot:

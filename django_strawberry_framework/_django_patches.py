@@ -105,30 +105,44 @@ regression tests can call it explicitly without going through the
 AppConfig.
 """
 
+import inspect
+
 from django.db import connections
 from django.test.testcases import SimpleTestCase
 
-from . import logger
 from .conf import upstream_patches_enabled
 
 try:
     from django.test.testcases import _DatabaseFailure
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
-    # Django renamed, relocated, or removed the private ``_DatabaseFailure``
-    # symbol. The package's defensive patch only makes sense when that
-    # symbol exists, so ``apply()`` will no-op instead of crashing the
-    # whole app loader. See ``apply()`` for the runtime branch and the
-    # accompanying test ``test_apply_no_ops_when_database_failure_symbol_missing``.
+    # Preserve module import long enough for ``apply()`` to report the precise
+    # unsupported upstream shape and the explicit opt-out.
     _DatabaseFailure = None  # type: ignore[assignment,misc]
 
 
-# Module-level sentinel: ``apply()`` may run more than once because
-# ``AppConfig.ready()`` can fire repeatedly under some Django test
-# runners. The missing-``_DatabaseFailure`` notice should log only on
-# the first such call per process so the framework logger isn't spammed
-# during repeated app initialization. Patched to ``False`` in the
-# regression tests for hermetic per-test state.
-_missing_symbol_logged = False
+_original_remove_databases_failures = SimpleTestCase.__dict__.get(
+    "_remove_databases_failures",
+)
+
+
+def _validate_upstream_shape() -> None:
+    """Fail loudly when Django no longer matches the private shape this patch wraps."""
+    descriptor = _original_remove_databases_failures
+    function = getattr(descriptor, "__func__", None)
+    if _DatabaseFailure is None or not isinstance(descriptor, classmethod) or function is None:
+        raise RuntimeError(
+            "Cannot apply django-strawberry-framework's Django patch: expected "
+            "django.test.testcases._DatabaseFailure and "
+            "SimpleTestCase._remove_databases_failures as a classmethod. "
+            "Disable APPLY_UPSTREAM_PATCHES or use a supported Django version.",
+        )
+    parameters = tuple(inspect.signature(function).parameters.values())
+    if len(parameters) != 1 or parameters[0].kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD:
+        raise RuntimeError(
+            "Cannot apply django-strawberry-framework's Django patch: "
+            "SimpleTestCase._remove_databases_failures no longer has the expected (cls) signature. "
+            "Disable APPLY_UPSTREAM_PATCHES or use a supported Django version.",
+        )
 
 
 def _is_database_failure(method: object) -> bool:
@@ -212,27 +226,15 @@ def apply() -> None:
     exposed at the module level so the regression tests can drive the
     apply-and-revert cycle without spinning up a second AppConfig.
 
-    When Django renamed, relocated, or removed the private
-    ``_DatabaseFailure`` symbol the patch depends on (``ImportError``
-    at module load time), this function logs a single ``INFO``-level
-    notice (once per process, gated by the ``_missing_symbol_logged``
-    module sentinel so repeat ``ready()`` invocations don't spam the
-    logger) and returns without touching ``SimpleTestCase``. That keeps
-    the rest of the package loadable on future Django versions that
-    break the private symbol.
+    Before installation, validates the private symbol, classmethod descriptor,
+    and ``(cls)`` signature the replacement assumes. Dependency drift raises a
+    targeted ``RuntimeError`` instead of silently dropping the protection;
+    consumers can explicitly disable every upstream patch through
+    ``APPLY_UPSTREAM_PATCHES`` while upgrading dependencies.
     """
-    global _missing_symbol_logged
     if not upstream_patches_enabled():
         return
-    if _DatabaseFailure is None:
-        if not _missing_symbol_logged:
-            logger.info(
-                "django-strawberry-framework: skipping _remove_databases_failures patch - "
-                "Django's private _DatabaseFailure symbol is unavailable at this Django "
-                "version. The Trac #37064 backstop will not be installed.",
-            )
-            _missing_symbol_logged = True
-        return
+    _validate_upstream_shape()
     if _patch_is_installed():
         return
     SimpleTestCase._remove_databases_failures = classmethod(

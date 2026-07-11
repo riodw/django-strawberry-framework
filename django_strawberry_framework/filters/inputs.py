@@ -33,6 +33,7 @@ from strawberry import UNSET, relay
 
 from ..conf import settings
 from ..exceptions import ConfigurationError
+from ..registry import register_subsystem_clear
 from ..utils.input_values import is_inactive_value
 from ..utils.inputs import (
     GeneratedInputFieldSpec,
@@ -881,3 +882,10 @@ def clear_filter_input_namespace() -> None:
         set_module="django_strawberry_framework.filters.sets",
         set_class_name="FilterSet",
     )
+
+
+register_subsystem_clear(
+    clear_filter_input_namespace,
+    owner="filters.input_namespace",
+    before_bind=True,
+)

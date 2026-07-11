@@ -24,6 +24,7 @@ surface.
 
 from __future__ import annotations
 
+from ..registry import register_subsystem_clear
 from ..utils.inputs import build_lazy_input_annotation
 from .base import RelatedOrder
 from .inputs import INPUTS_MODULE_PATH, Ordering, _input_type_name_for
@@ -38,6 +39,13 @@ from .sets import OrderSet, OrderSetMetaclass
 # ``clear_order_input_namespace()`` so the two-block layout matches
 # the filter side.
 _helper_referenced_ordersets: set[type[OrderSet]] = set()
+
+
+def _clear_helper_referenced_ordersets() -> None:
+    _helper_referenced_ordersets.clear()
+
+
+register_subsystem_clear(_clear_helper_referenced_ordersets, owner="orders.helper_references")
 
 
 def order_input_type(orderset_class: type[OrderSet]) -> object:

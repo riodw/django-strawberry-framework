@@ -28,6 +28,7 @@ import strawberry
 from django.db.models import F
 from django.db.models.expressions import OrderBy
 
+from ..registry import register_subsystem_clear
 from ..utils.input_values import RELATED, SetInputTraversal, iter_active_fields
 from ..utils.inputs import (
     GeneratedInputFieldSpec,
@@ -381,3 +382,10 @@ def clear_order_input_namespace() -> None:
         set_module="django_strawberry_framework.orders.sets",
         set_class_name="OrderSet",
     )
+
+
+register_subsystem_clear(
+    clear_order_input_namespace,
+    owner="orders.input_namespace",
+    before_bind=True,
+)

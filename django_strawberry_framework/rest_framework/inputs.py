@@ -151,14 +151,14 @@ def clear_serializer_input_namespace() -> None:
 
 # Register the serializer input-namespace clear as a canonical PRE-BIND clear
 # (spec-039 P1.6 / M4 - the seam centerpiece). The row is a static STRING pair, so
-# registration imports no DRF (F10); importing THIS module only ever happens with
-# DRF present (it ``import``s ``rest_framework`` at module top), so the row is
-# recorded exactly when the serializer subsystem has clearable state. The
-# ``finalize_django_types`` pre-bind reset + ``TypeRegistry.clear()`` iterate the
-# canonical list via ``_clear_if_importable``, so a DRF-ABSENT build (which never
-# imports this module, never registers the row) skips the serializer clear as a
-# correct no-op - the soft-dep asymmetry the seam removes.
-register_subsystem_clear(SERIALIZER_INPUTS_MODULE_PATH, "clear_serializer_input_namespace")
+# Importing this owner only happens with DRF present, so the callback exists
+# exactly when serializer state can exist. A DRF-absent build imports neither
+# state nor callback, preserving the soft-dependency boundary.
+register_subsystem_clear(
+    clear_serializer_input_namespace,
+    owner="rest_framework.input_namespace",
+    before_bind=True,
+)
 
 
 # The maximum serializer nesting DEPTH the opt-in nested build will descend (spec-039 rev6
@@ -1480,3 +1480,7 @@ def build_serializer_inputs(
 # registration are Slice 2 (``rest_framework/sets.py``). Exposed so the Slice-2
 # bind imports the ready-made ``(cache, clear)`` pair rather than re-rolling it.
 _serializer_shape_build_cache, clear_serializer_shape_build_cache = make_shape_build_cache()
+register_subsystem_clear(
+    clear_serializer_shape_build_cache,
+    owner="rest_framework.shape_cache",
+)

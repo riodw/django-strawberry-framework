@@ -84,8 +84,8 @@ malformed-but-valid-UTF-8 JSON - i.e. the ``JSONDecodeError`` case that
 is *already* caught - not the non-UTF-8 subclass case this patch fixes:
 <https://github.com/strawberry-graphql/strawberry/issues/1214>. This
 patch can be retired once upstream broadens the catch to also cover
-``UnicodeDecodeError`` (or ``ValueError``); the graceful no-op in
-:func:`apply` means a future fixed Strawberry needs no action here.
+``UnicodeDecodeError`` (or ``ValueError``); a future upstream shape change
+fails loudly so that retirement is deliberate.
 
 The second gap (non-object body) is likewise unfixed in 0.317.2 and
 ``main`` (checked 2026-06-19). ``parse_http_body`` still handles only the
@@ -158,20 +158,17 @@ package's regression tests can call it explicitly without going through
 the AppConfig.
 """
 
+import inspect
 from typing import Any
 
-from . import logger
 from .conf import upstream_patches_enabled
 
 try:
     from cross_web import HTTPException
     from strawberry.http.base import BaseView
 except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
-    # Strawberry / cross_web renamed, relocated, or removed the symbols
-    # this patch depends on. The patch only makes sense when they exist,
-    # so ``apply()`` no-ops instead of crashing the app loader. See
-    # ``apply()`` for the runtime branch and the accompanying test
-    # ``test_apply_no_ops_when_symbols_missing``.
+    # Preserve module import long enough for ``apply()`` to report the precise
+    # unsupported upstream shape and the explicit opt-out.
     BaseView = None  # type: ignore[assignment,misc]
     HTTPException = None  # type: ignore[assignment,misc]
 
@@ -182,12 +179,23 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
 _original_parse_json = None if BaseView is None else BaseView.__dict__.get("parse_json")
 
 
-# Module-level sentinel: ``apply()`` may run more than once because
-# ``AppConfig.ready()`` can fire repeatedly under some Django test
-# runners. The missing-symbol notice should log only on the first such
-# call per process so the framework logger isn't spammed. Patched to
-# ``False`` in the regression tests for hermetic per-test state.
-_missing_symbol_logged = False
+def _validate_upstream_shape() -> None:
+    """Fail loudly when Strawberry no longer exposes the method shape we wrap."""
+    if BaseView is None or HTTPException is None or not callable(_original_parse_json):
+        raise RuntimeError(
+            "Cannot apply django-strawberry-framework's Strawberry patch: expected "
+            "strawberry.http.base.BaseView.parse_json and cross_web.HTTPException. "
+            "Disable APPLY_UPSTREAM_PATCHES or use supported dependency versions.",
+        )
+    parameters = tuple(inspect.signature(_original_parse_json).parameters.values())
+    if len(parameters) != 2 or any(
+        parameter.kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters
+    ):
+        raise RuntimeError(
+            "Cannot apply django-strawberry-framework's Strawberry patch: "
+            "BaseView.parse_json no longer has the expected (self, data) signature. "
+            "Disable APPLY_UPSTREAM_PATCHES or use a supported Strawberry version.",
+        )
 
 
 def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
@@ -242,29 +250,19 @@ def apply() -> None:
     :meth:`django_strawberry_framework.apps.DjangoStrawberryFrameworkConfig.ready`
     at Django startup.
 
-    No-ops in three cases:
+    No-ops in two cases:
 
     - The ``APPLY_UPSTREAM_PATCHES`` setting is ``False`` (consumer
       opted out). Returns before logging or touching anything.
-    - Strawberry / cross_web moved the symbols this patch depends on
-      (``ImportError`` at module load). Logs a single ``INFO`` notice
-      (once per process, gated by ``_missing_symbol_logged``) and
-      returns, keeping the rest of the package loadable on future
-      Strawberry versions that break the symbols.
     - The patch is already installed (re-entrant call).
+
+    Before installation, validates the imported symbols and the original
+    ``(self, data)`` signature. Dependency drift raises a targeted
+    ``RuntimeError`` instead of silently dropping the request hardening.
     """
-    global _missing_symbol_logged
     if not upstream_patches_enabled():
         return
-    if BaseView is None or HTTPException is None:
-        if not _missing_symbol_logged:
-            logger.info(
-                "django-strawberry-framework: skipping strawberry parse_json patch - "
-                "strawberry.http.base.BaseView / cross_web.HTTPException is unavailable at "
-                "this Strawberry version. Non-UTF-8 request bodies may surface as 500s.",
-            )
-            _missing_symbol_logged = True
-        return
+    _validate_upstream_shape()
     if _patch_is_installed():
         return
     BaseView.parse_json = _patched_parse_json

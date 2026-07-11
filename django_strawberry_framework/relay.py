@@ -62,6 +62,7 @@ from strawberry.utils.inspect import in_async_context
 
 from .exceptions import ConfigurationError
 from .list_field import _validate_relay_djangotype_target
+from .registry import register_subsystem_clear
 from .types.relay import _NODE_TYPE_HINT_ATTR, decode_global_id
 from .utils.querysets import model_for
 
@@ -73,6 +74,13 @@ __all__ = ("DjangoNodeField", "DjangoNodesField")
 # ``registry.clear()`` co-clears it). Appended by BOTH factories on every
 # call; only emptiness is load-bearing, the factory-name entries aid debugging.
 _node_fields_declared: list[str] = []
+
+
+def _clear_node_fields_declared() -> None:
+    _node_fields_declared.clear()
+
+
+register_subsystem_clear(_clear_node_fields_declared, owner="relay.node_fields")
 
 
 def _decode_or_graphql_error(gid: str) -> tuple[type, str]:

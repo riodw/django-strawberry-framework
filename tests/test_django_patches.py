@@ -292,68 +292,26 @@ def test_unpatched_remove_databases_failures_crashes_on_non_wrapper():
         SimpleTestCase._remove_databases_failures = patched
 
 
-def test_apply_no_ops_when_database_failure_symbol_missing(caplog):
-    """When Django renamed/removed ``_DatabaseFailure``, ``apply()``
-    must log a single ``INFO`` notice and return without touching
-    ``SimpleTestCase``.
+def test_apply_fails_loudly_when_database_failure_symbol_missing():
+    """A private-Django shape change cannot silently disable the teardown patch."""
+    with mock.patch.object(_django_patches, "_DatabaseFailure", None):
+        with pytest.raises(RuntimeError, match="_DatabaseFailure"):
+            _django_patches.apply()
 
-    Pins the defensive-import branch: the package must remain loadable
-    even if a future Django release drops the private symbol the patch
-    depends on. The patch itself silently retires; the rest of the
-    package is unaffected.
-    """
-    # The classmethod descriptor that ``apply()`` would normally
-    # install on. Capture via ``__dict__`` so identity comparison after
-    # ``apply()`` returns is stable (``Class.method`` rebuilds the
-    # bound-method object on each access).
-    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
 
-    with (
-        mock.patch.object(_django_patches, "_DatabaseFailure", None),
-        mock.patch.object(_django_patches, "_missing_symbol_logged", False),
+def test_apply_fails_loudly_when_upstream_method_signature_changes():
+    """The patch pins the classmethod arity its replacement assumes."""
+
+    def changed(cls, extra):
+        pass
+
+    with mock.patch.object(
+        _django_patches,
+        "_original_remove_databases_failures",
+        classmethod(changed),
     ):
-        with caplog.at_level("INFO", logger="django_strawberry_framework"):
+        with pytest.raises(RuntimeError, match=r"expected \(cls\) signature"):
             _django_patches.apply()
-
-        # ``apply()`` returned without touching ``SimpleTestCase``.
-        assert SimpleTestCase.__dict__["_remove_databases_failures"] is saved
-        # ...and logged a single notice about the skip.
-        skip_records = [
-            r
-            for r in caplog.records
-            if r.name == "django_strawberry_framework" and "_DatabaseFailure" in r.message
-        ]
-        assert len(skip_records) == 1
-        assert skip_records[0].levelname == "INFO"
-
-
-def test_apply_logs_missing_symbol_notice_only_once(caplog):
-    """Pin the once-per-process sentinel.
-
-    ``apply()`` is invoked from ``AppConfig.ready()``, which can fire
-    more than once under some Django test runners. The missing-symbol
-    INFO notice must log only on the first such call per process so
-    the framework logger is not spammed during repeated app
-    initialization. The ``_missing_symbol_logged`` module sentinel
-    gates the log; this test pins the sentinel's behavior by calling
-    ``apply()`` three times with ``_DatabaseFailure`` patched to
-    ``None`` and asserting exactly one INFO record was emitted.
-    """
-    with (
-        mock.patch.object(_django_patches, "_DatabaseFailure", None),
-        mock.patch.object(_django_patches, "_missing_symbol_logged", False),
-    ):
-        with caplog.at_level("INFO", logger="django_strawberry_framework"):
-            _django_patches.apply()
-            _django_patches.apply()
-            _django_patches.apply()
-
-        skip_records = [
-            r
-            for r in caplog.records
-            if r.name == "django_strawberry_framework" and "_DatabaseFailure" in r.message
-        ]
-        assert len(skip_records) == 1
 
 
 def test_apply_no_ops_when_toggle_disabled(settings):

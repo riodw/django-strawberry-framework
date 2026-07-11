@@ -716,7 +716,14 @@ _optimizer = DjangoOptimizerExtension()
 schema = strawberry.Schema(query=Query, extensions=[lambda: _optimizer])
 ```
 
-Calling it a second time is a no-op. Declaring a new concrete `DjangoType` after finalization raises [`ConfigurationError`](#configurationerror); tests that need a new registry lifecycle should use `registry.clear()` and fresh type classes.
+Calling it a second time is a no-op. The collected type registry and finalized flag are
+process-global, and finalization mutates the collected Python classes in place. A process therefore
+has one schema-build lifecycle: multiple `strawberry.Schema` objects may reuse that same finalized
+type set, but disjoint independently finalized type sets in one interpreter are unsupported.
+Declaring a new concrete `DjangoType` after finalization raises
+[`ConfigurationError`](#configurationerror); tests that need a new registry lifecycle should use
+`registry.clear()` and fresh type classes, because clearing the registry cannot undo mutations on
+classes from the prior lifecycle.
 
 **See also:** [Definition-order independence](#definition-order-independence) · [`DjangoType`](#djangotype) · [`ConfigurationError`](#configurationerror).
 

@@ -19,7 +19,13 @@ from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
-from django_strawberry_framework.registry import TypeRegistry, registry
+from django_strawberry_framework.registry import (
+    TypeRegistry,
+    _subsystem_clears,
+    iter_subsystem_clears,
+    register_subsystem_clear,
+    registry,
+)
 from django_strawberry_framework.types import finalizer as finalizer_module
 from django_strawberry_framework.types.relations import PendingRelation, PendingRelationAnnotation
 from django_strawberry_framework.utils.relations import relation_kind
@@ -260,6 +266,58 @@ def test_clear_drops_all_state(fresh_registry):
     assert fresh_registry.get(Category) is None
     assert fresh_registry.model_for_type(CategoryType) is None
     assert fresh_registry.get_enum(Category, "status") is None
+
+
+def test_clear_runs_owner_registered_subsystem_callback(fresh_registry):
+    """Subsystem teardown is resolved at registration, not by a drifting string lookup."""
+    callbacks = dict(_subsystem_clears)
+    _subsystem_clears.clear()
+    calls = []
+
+    def clear_probe():
+        calls.append("cleared")
+
+    try:
+        register_subsystem_clear(clear_probe, owner="test.probe")
+        fresh_registry.clear()
+        assert calls == ["cleared"]
+    finally:
+        _subsystem_clears.clear()
+        _subsystem_clears.update(callbacks)
+
+
+def test_before_bind_iteration_excludes_full_clear_only_callbacks():
+    """The finalizer cannot erase declaration registries before binding them."""
+    callbacks = dict(_subsystem_clears)
+    _subsystem_clears.clear()
+
+    def clear_emit_namespace():
+        pass
+
+    def clear_declarations():
+        pass
+
+    try:
+        register_subsystem_clear(
+            clear_emit_namespace,
+            owner="test.emit_namespace",
+            before_bind=True,
+        )
+        register_subsystem_clear(clear_declarations, owner="test.declarations")
+        assert iter_subsystem_clears(before_bind=True) == (clear_emit_namespace,)
+        assert iter_subsystem_clears() == (clear_emit_namespace, clear_declarations)
+    finally:
+        _subsystem_clears.clear()
+        _subsystem_clears.update(callbacks)
+
+
+def test_register_subsystem_clear_rejects_string_references():
+    """A renamed teardown function cannot degrade into a silent import miss."""
+    with pytest.raises(TypeError, match="zero-argument callable"):
+        register_subsystem_clear(
+            "package.module.clear",  # type: ignore[arg-type]
+            owner="test.invalid",
+        )
 
 
 def test_iter_types_yields_registered_pairs(fresh_registry):

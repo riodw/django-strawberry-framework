@@ -14,6 +14,7 @@ upstream.
 
 from unittest import mock
 
+import pytest
 from cross_web import DjangoHTTPRequestAdapter
 
 from django_strawberry_framework import _cross_web_patches as patches
@@ -74,41 +75,18 @@ def test_patch_is_installed_false_when_symbol_missing():
         assert patches._patch_is_installed() is False
 
 
-def test_apply_no_ops_when_symbol_missing(caplog):
-    """When cross_web moved the adapter, ``apply()`` logs once and returns."""
-    with (
-        mock.patch.object(patches, "DjangoHTTPRequestAdapter", None),
-        mock.patch.object(patches, "_missing_symbol_logged", False),
-    ):
-        with caplog.at_level("INFO", logger="django_strawberry_framework"):
+def test_apply_fails_loudly_when_symbol_missing():
+    """A dependency-shape change cannot silently disable request hardening."""
+    with mock.patch.object(patches, "DjangoHTTPRequestAdapter", None):
+        with pytest.raises(RuntimeError, match="DjangoHTTPRequestAdapter"):
             patches.apply()
 
-        skip_records = [
-            r
-            for r in caplog.records
-            if r.name == "django_strawberry_framework" and "body patch" in r.message
-        ]
-        assert len(skip_records) == 1
-        assert skip_records[0].levelname == "INFO"
 
-
-def test_apply_logs_missing_symbol_notice_only_once(caplog):
-    """The missing-symbol INFO notice logs only once per process."""
-    with (
-        mock.patch.object(patches, "DjangoHTTPRequestAdapter", None),
-        mock.patch.object(patches, "_missing_symbol_logged", False),
-    ):
-        with caplog.at_level("INFO", logger="django_strawberry_framework"):
+def test_apply_fails_loudly_when_body_getter_signature_changes():
+    """The patch pins the getter arity it delegates to."""
+    with mock.patch.object(patches, "_original_body_fget", lambda self, extra: None):
+        with pytest.raises(RuntimeError, match=r"expected \(self\) getter signature"):
             patches.apply()
-            patches.apply()
-            patches.apply()
-
-        skip_records = [
-            r
-            for r in caplog.records
-            if r.name == "django_strawberry_framework" and "body patch" in r.message
-        ]
-        assert len(skip_records) == 1
 
 
 def test_apply_no_ops_when_toggle_disabled(settings):

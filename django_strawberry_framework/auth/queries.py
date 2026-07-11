@@ -53,10 +53,13 @@ CURRENT_USER_ALIAS_NAME = "CurrentUserAlias"
 # The alias namespace is a genuine EMIT ledger, so its clear is a canonical
 # PRE-BIND row (spec-040 Decision 9): the finalizer's pre-bind reset (and
 # ``TypeRegistry.clear()``) drain it before ``bind_auth_mutations()`` re-pins the
-# alias. The auth DECLARATION ledger, by contrast, clears only through the
-# ``TypeRegistry.clear()`` hand row. Self-registered at import time of this
-# module (the module that owns the clear), the F10 owning-module invariant.
-register_subsystem_clear(AUTH_QUERIES_MODULE_PATH, "clear_current_user_alias_namespace")
+# alias. The auth declaration ledger, by contrast, registers a full-clear-only
+# callback. This optional owner registers only when the auth subsystem is loaded.
+register_subsystem_clear(
+    clear_current_user_alias_namespace,
+    owner="auth.current_user_alias",
+    before_bind=True,
+)
 
 
 def _current_user_resolve_body(holder_cls: type, info: Any) -> Any:

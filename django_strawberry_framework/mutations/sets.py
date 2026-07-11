@@ -49,7 +49,7 @@ from strawberry import relay
 from strawberry.types.base import StrawberryList
 
 from ..exceptions import ConfigurationError
-from ..registry import registry
+from ..registry import register_subsystem_clear, registry
 from ..utils.imports import import_attr
 from ..utils.inputs import normalize_field_name_sequence
 from ..utils.typing import unwrap_return_type
@@ -470,6 +470,7 @@ register_mutation = _mutation_declaration_registry.register
 clear_mutation_registry = _mutation_declaration_registry.clear
 iter_mutations = _mutation_declaration_registry.iter_
 _mutation_registry = _mutation_declaration_registry.store
+register_subsystem_clear(clear_mutation_registry, owner="mutations.declarations")
 
 
 def _validate_input_class(

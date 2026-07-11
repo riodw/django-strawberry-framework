@@ -86,6 +86,7 @@ from .optimizer.walker import (
     _relation_connection_to_attr,
     _relation_connection_to_attr_for_key,
 )
+from .registry import register_subsystem_clear
 from .types.resolvers import _check_n1
 from .utils.connections import (
     CONNECTION_FILTER_KWARG,
@@ -957,13 +958,17 @@ def _resolve_keyset_connection(
         isinstance(last, int) and last == 0 and not isinstance(first, int) and before is None
     )
     backward = isinstance(last, int) and not isinstance(first, int) and not last_zero_quirk
+    # Strawberry's ``edges[-0:]`` quirk means ``last: 0`` serves the rows it
+    # materialized. Preserve that compatibility, but never let the quirk bypass
+    # the connection's existing Relay cap: fetch at most ``cap + 1`` so the
+    # returned page stays bounded and ``hasNextPage`` remains data-driven.
     page_size = (
-        None
+        cap
         if last_zero_quirk
         else (last if backward else (first if isinstance(first, int) else cap))
     )
     fetch_queryset = queryset.reverse() if backward else queryset
-    fetch_limit = None if page_size is None else page_size + 1
+    fetch_limit = page_size + 1
 
     if not should_resolve_list_connection_edges(info):
         # ``ListConnection`` parity: nothing under ``edges`` / ``pageInfo``
@@ -992,7 +997,7 @@ def _resolve_keyset_connection(
         return _set_total_count(conn, want_count=want_count, value=count_source.count)
 
     def _build(page: _KeysetPage, total: Any) -> Any:
-        rows = page.rows[:page_size] if page.overfetched and page_size is not None else page.rows
+        rows = page.rows[:page_size] if page.overfetched else page.rows
         if page.backward:
             rows = list(reversed(rows))
         edge_class = _window_edge_class(cls)
@@ -1017,7 +1022,7 @@ def _resolve_keyset_connection(
     def _page(rows: list[Any]) -> _KeysetPage:
         return _KeysetPage(
             rows=rows,
-            overfetched=fetch_limit is not None and len(rows) == fetch_limit,
+            overfetched=len(rows) == fetch_limit,
             backward=backward,
             after_supplied=after is not None,
             before_supplied=before is not None,
@@ -1026,7 +1031,7 @@ def _resolve_keyset_connection(
     if isinstance(nodes, (AsyncIterator, AsyncIterable)) and in_async_context():
 
         async def _resolve_async() -> Any:
-            source = fetch_queryset if fetch_limit is None else fetch_queryset[:fetch_limit]
+            source = fetch_queryset[:fetch_limit]
             rows = [row async for row in source]
             total = await count_source.acount() if want_count else None
             return _build(_page(rows), total)
@@ -1034,7 +1039,7 @@ def _resolve_keyset_connection(
         return _resolve_async()
 
     return _build(
-        _page(list(fetch_queryset if fetch_limit is None else fetch_queryset[:fetch_limit])),
+        _page(list(fetch_queryset[:fetch_limit])),
         count_source.count() if want_count else None,
     )
 
@@ -1262,6 +1267,9 @@ def clear_connection_type_cache() -> None:
     so a stale entry is never *wrong* - this clear is hygiene, not correctness.
     """
     _connection_type_cache.clear()
+
+
+register_subsystem_clear(clear_connection_type_cache, owner="connection.type_cache")
 
 
 def _generate_connection_class(

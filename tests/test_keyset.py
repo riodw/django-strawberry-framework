@@ -188,6 +188,16 @@ def test_cursor_crypto_is_cached_per_secret():
     assert _cursor_aessiv.cache_info().hits == 1
 
 
+def test_cursor_crypto_cache_retains_every_rotation_key():
+    """More than four configured secrets do not thrash the AES-SIV derivation cache."""
+    secrets = tuple(f"rotation-secret-{index}" for index in range(6))
+    _cursor_aessiv.cache_clear()
+    first_pass = tuple(_cursor_aessiv(secret) for secret in secrets)
+    second_pass = tuple(_cursor_aessiv(secret) for secret in secrets)
+    assert second_pass == first_pass
+    assert _cursor_aessiv.cache_info().hits == len(secrets)
+
+
 def test_cursor_crypto_is_a_soft_dependency():
     with simulated_absence("cryptography", parent=framework, attr="keyset"):
         _cursor_aessiv.cache_clear()

@@ -70,7 +70,7 @@ from __future__ import annotations
 import base64
 import binascii
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import cache, lru_cache
 from types import SimpleNamespace
 from typing import Any
 
@@ -312,9 +312,14 @@ def _cursor_crypto_types() -> tuple[Any, type[Exception]]:
     return aead.AESSIV, exceptions.InvalidTag
 
 
-@lru_cache(maxsize=4)
+@cache
 def _cursor_aessiv(secret_key: str | bytes) -> Any:
-    """Build and cache the authenticated-encryption primitive for one project secret."""
+    """Build and cache the authenticated-encryption primitive for one configured secret.
+
+    The private caller supplies only ``SECRET_KEY`` and ``SECRET_KEY_FALLBACKS``.
+    Keeping every configured rotation key avoids an eviction/re-derivation loop
+    when a deployment temporarily carries more than three fallbacks.
+    """
     aessiv, _invalid_tag = _cursor_crypto_types()
     digest = salted_hmac(
         _CURSOR_ENCRYPTION_SALT,

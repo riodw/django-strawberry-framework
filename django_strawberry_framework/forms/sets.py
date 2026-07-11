@@ -70,6 +70,7 @@ from ..mutations.sets import (
     resolve_meta_model,
     resolver_seams,
 )
+from ..registry import register_subsystem_clear
 from ..utils.inputs import make_shape_build_cache
 from .inputs import (
     FORM,
@@ -122,6 +123,7 @@ register_form_mutation = _form_mutation_declaration_registry.register
 clear_form_mutation_registry = _form_mutation_declaration_registry.clear
 iter_form_mutations = _form_mutation_declaration_registry.iter_
 _form_mutation_registry = _form_mutation_declaration_registry.store
+register_subsystem_clear(clear_form_mutation_registry, owner="forms.declarations")
 
 
 # Per-finalize-pass form-input build cache keyed by the form shape identity
@@ -148,6 +150,7 @@ _form_mutation_registry = _form_mutation_declaration_registry.store
 # is co-cleared from ``registry.clear()`` (a ``registry.clear()``-only reset, NOT a
 # pre-bind input clear - it is a per-pass build cache).
 _form_shape_build_cache, clear_form_shape_build_cache = make_shape_build_cache()
+register_subsystem_clear(clear_form_shape_build_cache, owner="forms.shape_cache")
 
 
 def _cached_build_form_input(

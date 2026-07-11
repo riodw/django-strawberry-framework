@@ -346,8 +346,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help=(
             "Rewrite the spec in place: for each term in the missing-link list, "
-            "wrap the first non-code, non-link occurrence as "
-            "[term](GLOSSARY.md#anchor). Idempotent."
+            "wrap the first non-code, non-link occurrence as the reference-style "
+            "[term][glossary-anchor] and insert the matching "
+            "[glossary-anchor]: GLOSSARY.md#anchor definition. Idempotent."
         ),
     )
     return parser.parse_args(argv)

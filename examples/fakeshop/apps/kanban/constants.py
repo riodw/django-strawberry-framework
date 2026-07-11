@@ -195,6 +195,7 @@ TRACKED_FILE_PATHS = (
     "tests/test_connection.py",
     "tests/test_cross_web_patches.py",
     "tests/test_django_patches.py",
+    "tests/test_export_dry_review.py",
     "tests/test_keyset.py",
     "tests/test_keyset_connection.py",
     "tests/test_lateral_pg_parity.py",

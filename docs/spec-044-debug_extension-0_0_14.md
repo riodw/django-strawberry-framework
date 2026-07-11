@@ -184,6 +184,60 @@ Revision history (kept inline so the spec is self-contained):
   deliberate wire migration (`_debug` selection → `response.extensions.debug`)
   required to remain Strawberry-native and avoid a Graphene compatibility
   runtime.
+- **Revision 4** — DRY-review fold-in (2026-07-11). Applied the maintainer's
+  review of the planned module against all thirteen
+  `django_strawberry_framework/utils` modules: the
+  [DRY section](#helper-reuse-obligations-dry) gains D4–D6 (module-level
+  wire serializers with one `_SLOW_QUERY_SECONDS` constant; the
+  single-sited collector / two-seam coordinator / log-slice /
+  payload-builder inventory; idiom conformance — no `__init__`, the
+  optimizer's generator-hook shape, the bounded-walk posture for the
+  `original_error` peel, the eager-subpackage export shape, and the
+  "database connection" docstring vocabulary) and D-N5–D-N7 (the
+  `utils/connections.py` Relay-vocabulary disambiguation with the
+  coordinator-placement constraint; the no-utils-import posture with its
+  named near-misses; no `exceptions.py` addition), and D-N1 gains the
+  sharper ground (at the `0.316.0` floor a ContextVar stash has no shared
+  instance left to coordinate). Downstream: Decision 8 records the
+  casing-helper rejection and the wire keys as serializer-and-test
+  literals; Decision 9 records the bounded-walk conformance; Decisions 5
+  and 7 record the export-shape and no-`__init__` / two-seam notes; the
+  [Test plan](#test-plan) pins the anti-DRY literal rule and the
+  seam-targeting rule; [Non-goals](#non-goals) records the `conf.py`
+  non-surface reason. One review citation was corrected during
+  verification: `middleware/__init__.py` deliberately re-exports nothing
+  (spec-042's soft-dependency boundary), so the eager-export precedent
+  cited is `utils/__init__.py` / `testing/__init__.py`.
+- **Revision 5** — second-review reconciliation (2026-07-11). A parallel
+  DRY review, written at the same time against the same Revision-3 text,
+  was squared with Revision 4's fold-in; its suggested checklist items map
+  onto this spec's D3–D6 / D-N5–D-N8 numbering. Genuinely new pins carried
+  in: the direct-`CaptureQueriesContext` rejection gains two stronger
+  grounds (the process-global `request_started → reset_queries` signal
+  toggle — verified at `django/test/utils.py`
+  `#"reset_queries_disconnected"` — and the refcount-free single-context
+  restore); the coordinator map is keyed by connection object identity,
+  never by alias; teardown iterates immutable per-alias snapshot records
+  (connection + starting length) and never re-calls `connections.all()` to
+  match by position; the collector also guards `errors is None`, preserves
+  result-error order, and never speculatively dedups; `get_results` never
+  writes `execution_context` or an existing `ExecutionResult.extensions`,
+  and the stash's absent sentinel is `None`; D-N6's import list gains
+  `graphql`; the new D-N8 rejects the premature abstractions (package base
+  extension class, merged row dispatcher, dataclass/Strawberry wire rows,
+  per-key constants); D3 gains the named acceptance-reload fixture,
+  `create_users`, the one-holder probe-module shape with its
+  copy-not-promote ground (`FAKESHOP_SHARDED` gating), and the
+  never-sort-the-`extensions=`-list rule; and the Test plan gains the
+  real-objects and parametrization rules, the happy-path-only debug
+  accessor, the bracket-boundary-only fake (scenario 8), and the
+  floor run selected by node id (scenario 13). Where the two reviews
+  differed, the reconciliation is recorded in place: the coordinator may
+  surface its two seams as methods or as one per-connection context
+  manager (the pin is single ownership, not the callable shape), and the
+  no-`__init__` rule keeps the first review's default with the second's
+  constrained escape (`execution_context` passthrough only, no `**kwargs`
+  sink).
 
 ## Key glossary references
 
@@ -454,6 +508,11 @@ doc breadth.
         returning `{"debug": <stash>}` when the stash exists and `{}`
         otherwise
         ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)).
+        Module shape per [DRY D4–D6](#helper-reuse-obligations-dry): the
+        `_SLOW_QUERY_SECONDS` constant, the two module-level wire
+        serializers, one `None`-guarded exception collector, one two-seam
+        bracket coordinator (lock + active-capture map), one log-slice
+        helper, one payload builder — and no `__init__`.
         Module + symbol docstrings state the off-by-default posture, the
         class-form opt-in, the dev-only security caveat, the
         masking-extension ordering (list the debug class after `MaskErrors`),
@@ -753,7 +812,11 @@ A true description of the repo as this spec is authored:
 - **Production gating knobs.** No `is_slow` threshold argument, no
   redaction hooks, no per-request enable predicate, no settings key — the
   v1 constructor is the bare engine signature, and the dev-only posture is
-  documentation ([Edge cases](#edge-cases-and-constraints)). Knobs are
+  documentation ([Edge cases](#edge-cases-and-constraints)). The absent
+  settings key is a decision, not a gap: `conf.py` keys exist only where a
+  knob must vary per deployment without code changes
+  (`NESTED_CONNECTION_STRATEGY`, `TESTING_ENDPOINT`); a debug tool toggled
+  at schema construction adds no such case. Knobs are
   follow-on material once a real consumer asks
   ([Risks](#risks-and-open-questions)).
 - **Subscriptions.** The package ships no subscription surface; the
@@ -1211,13 +1274,23 @@ Alternatives considered (and rejected):
 - **Read bare `connection.queries` without the bracket.** Rejected: the
   `DEBUG=False` silent-empty trap above — a correctness bug dressed as
   simplicity.
-- **Wrap with `CaptureQueriesContext` instances directly.** Rejected on a
-  technicality worth recording: `CaptureQueriesContext.__enter__` calls
+- **Wrap with `CaptureQueriesContext` instances directly.** Rejected on
+  three grounds worth recording: (a) `CaptureQueriesContext.__enter__` calls
   `connection.ensure_connection()` eagerly, which would open a database
   connection on every alias for every operation — including aliases the
-  operation never touches (fakeshop's sharded mode has two). The extension
-  applies the same flag-and-slice logic without forcing connections; an
-  untouched alias contributes zero rows and zero connections.
+  operation never touches (fakeshop's sharded mode has two); (b) `__enter__`
+  also disconnects the process-global `request_started → reset_queries`
+  signal and `__exit__` reconnects it
+  ([`django/test/utils.py`][venv-django-test-utils]
+  `#"reset_queries_disconnected"`) — per-operation toggling of global signal
+  state, with overlapping operations racing the reconnect; (c) its
+  save/restore is a single-context shape with no overlap reference counting,
+  so two overlapping operation contexts on one connection would restore out
+  of order — the exact failure the coordinator exists to prevent. The
+  extension reuses the class's *semantic contract* — save the flag, enable
+  logging, snapshot the log length, restore the saved value — without its
+  test-oriented connection and signal side effects; an untouched alias
+  contributes zero rows and zero connections.
 
 ### Decision 5 — Symbol and home: `DjangoDebugExtension` in `extensions/debug.py`, exported from the `extensions` subpackage — never the package root
 
@@ -1252,7 +1325,13 @@ Grounds:
    `strawberry` (both hard dependencies), so there is no
    [soft-dependency][glossary-soft-dependency] boundary to defend and a
    [PEP 562 lazy export][glossary-pep-562-lazy-export] would be ceremony
-   without a payer.
+   without a payer. The file mirrors the package's eager-subpackage export
+   shape — docstring + explicit re-export + `__all__`, as
+   `utils/__init__.py` and `testing/__init__.py` do; no wildcard, no
+   `__getattr__`. (`middleware/__init__.py`'s deliberate *no*-re-export
+   marker is the soft-dependency contrast, not the precedent here — its
+   emptiness exists to keep an optional import boundary this subpackage
+   does not have.)
 
 Alternatives considered (and rejected):
 
@@ -1325,7 +1404,11 @@ Alternatives considered (and rejected):
 
 ### Decision 7 — Hook shape: one sync `on_operation` generator, assembly at teardown, `get_results` returns the stash
 
-`DjangoDebugExtension` implements exactly two engine seams:
+`DjangoDebugExtension` implements exactly two engine seams — and no
+`__init__`: the class carries no instance configuration, so Strawberry's
+inherited base constructor (which already binds the engine-owned
+`execution_context` kwarg) is the whole constructor story
+([DRY D6](#helper-reuse-obligations-dry)):
 
 - **`on_operation`** — a **sync** generator: pre-yield it uses
   `contextlib.ExitStack` to acquire a reference-counted bracket token and
@@ -1338,10 +1421,13 @@ Alternatives considered (and rejected):
   the instance, and releases every token. The last overlapping token for a
   connection restores its saved `force_debug_cursor`.
 - **`get_results`** — returns `{"debug": <stash>}` when the stash was
-  assembled and `{}` otherwise — **idempotent** (a pure read of the stash,
-  never a mutate-or-pop): the engine's coerced-exception recovery paths
-  invoke it twice for one operation
-  ([Error shapes](#error-shapes)).
+  assembled and `{}` otherwise — **idempotent** (a pure read of the stash:
+  never a mutate-or-pop, never a write to `execution_context` or to an
+  existing `ExecutionResult.extensions`): the engine's coerced-exception
+  recovery paths invoke it twice for one operation
+  ([Error shapes](#error-shapes)). The stash is one instance attribute
+  whose absent sentinel is `None` — unambiguous because a completed payload
+  is always a dict, even when both lists are empty.
 
 Grounds:
 
@@ -1370,7 +1456,14 @@ Grounds:
    restore (not `False`) also keeps the bracket nestable inside a consumer's
    own `CaptureQueriesContext`; reference
    counting prevents overlapping async operation contexts from restoring the
-   same loop-thread connection out of order.
+   same loop-thread connection out of order. The coordinator behind the
+   tokens is module-private with exactly two seams (`acquire` / `release` —
+   [DRY D5](#helper-reuse-obligations-dry)), `ExitStack.callback(...)` wires
+   each release declaratively, and the hook reads as the package's one
+   established generator-hook idiom — the optimizer's `on_execute`
+   acquire-pre-yield / `finally`-guarded reverse-order release — conformance
+   a reviewer can see across both hooks, not shared code
+   ([DRY D6](#helper-reuse-obligations-dry)).
 
 Alternatives considered (and rejected):
 
@@ -1440,6 +1533,14 @@ Alternatives considered (and rejected):
 - **A `time` string field mirroring Django's raw log entry.** Rejected:
   duplicates `duration` in a worse type; anyone needing Django's exact
   string can reformat.
+- **Deriving the camelCase keys through `utils/strings.graphql_camel_name`.**
+  Rejected: the six keys are a **wire contract** — a graphene migrant's
+  existing DevTools formatter parses these exact bytes — so they must not be
+  a function of a casing helper's future acronym/underscore behavior. They
+  are spelled as literals inside the one row serializer
+  ([DRY D4](#helper-reuse-obligations-dry)), and the mechanics tests
+  re-spell them as independent literals for the same reason
+  ([Test plan](#test-plan)).
 
 ### Decision 9 — Exception capture: the result's `original_error` chain, serialized like graphene's `wrap_exception` — no resolver wrapping
 
@@ -1453,7 +1554,14 @@ runs during the early return's unwind before any result exists,
 Strawberry/graphql-core's marker distinguishing an execution exception from a
 pure GraphQL validation error. Starting from that first original, a private helper
 walks nested `GraphQLError.original_error` links to the terminal exception,
-with an identity set preventing malformed cycles. A terminal
+with an identity set preventing malformed cycles. The walk follows the
+bounded-walk posture `utils/typing.py` pins for attribute-chain peels (never
+a bare unbounded `while` loop; the identity set is the bound) with a
+deliberately different failure policy — stop on cycle and keep the terminal,
+so a malformed consumer exception chain degrades to best-effort capture
+instead of failing the response — the policy difference that keeps it a
+local helper rather than a shared extraction
+([DRY D6](#helper-reuse-obligations-dry)). A terminal
 `GraphQLError` is retained: graphql-core uses that exact two-link shape when
 a resolver explicitly raises `GraphQLError`, and graphene's resolver
 middleware records it. Each match serializes via the
@@ -1638,7 +1746,7 @@ specified in the decisions cited; the version moves **only** in Slice 3,
 | File | Change | Slice |
 | --- | --- | --- |
 | `django_strawberry_framework/extensions/__init__.py` (new) | Subpackage docstring + `DjangoDebugExtension` re-export in `__all__` ([Decision 5](#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root)) | 1 |
-| `django_strawberry_framework/extensions/debug.py` (new) | `DjangoDebugExtension(SchemaExtension)`: sync `on_operation` generator (per-alias reference-counted `force_debug_cursor` bracket + snapshot pre-yield; `finally`-guarded materialize / slice / serialize / stash / release at teardown), `get_results()` returning the stash under `"debug"`, SQL/exception serializers, and the lock-protected active-bracket coordinator ([Decisions 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)–[10](#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each)) | 1 |
+| `django_strawberry_framework/extensions/debug.py` (new) | `DjangoDebugExtension(SchemaExtension)`: sync `on_operation` generator (per-alias reference-counted `force_debug_cursor` bracket + snapshot pre-yield; `finally`-guarded materialize / slice / serialize / stash / release at teardown), `get_results()` returning the stash under `"debug"`, SQL/exception serializers, and the lock-protected active-bracket coordinator ([Decisions 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)–[10](#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each); module shape per [DRY D4–D6](#helper-reuse-obligations-dry)) | 1 |
 | `examples/fakeshop/test_query/test_debug_extension_api.py` (new) | The [Test plan](#test-plan) request-driving scenarios: real probe-URLconf HTTP via [`TestClient`][glossary-testclient], under schema-reload + `seed_data` disciplines ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)) | 1 |
 | `tests/extensions/test_debug.py` (new) | Request-impossible serializer, lifecycle, masking, async-shape, bounded-log, and concurrent-isolation mechanics ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)) | 1 |
 | [`pyproject.toml`][pyproject] / `uv.lock` | Raise the existing Strawberry floor to `>=0.316.0` and re-resolve for per-request extension isolation ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)); the package's own version still moves only in Slice 3 | 1 |
@@ -1655,7 +1763,18 @@ specified in the decisions cited; the version moves **only** in Slice 3,
 
 Reuse is named per item, and deliberate *non*-reuse carries its reason (the
 [`spec-041`][spec-041] / [`spec-042`][spec-042] / [`spec-043`][spec-043]
-discipline).
+discipline). Two independent, simultaneously-written reviews of the planned
+module against all thirteen `django_strawberry_framework/utils` modules
+(2026-07-11) reached the same headline this section now records in full:
+**almost nothing in `utils/` is directly callable from `debug.py`, and that
+is the correct outcome, not a gap** — the utils charter is the
+query/write/input pipeline (visibility, inputs, windows, write decode); the
+debug extension is an engine-lifecycle instrument over
+`django.db.connections` and the execution result, and forcing reuse would
+invert DRY into coupling. The real DRY work is (a) single-siting inside
+`debug.py` itself (D4–D5), (b) conformance with the package's established
+idioms (D6), and (c) writing the non-reuse reasons down (D-N1–D-N8) so the
+discipline survives review.
 
 - [ ] **D1** — the operation lifecycle and the response-extensions merge
   ride Strawberry's `SchemaExtension` seams (`on_operation`, `get_results`)
@@ -1674,15 +1793,119 @@ discipline).
   [`test_multi_db.py`][test-multi-db] probe-URLconf plumbing — never private
   reload logic, hand-built catalog rows, or hand-rolled POST-decode blocks
   ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
+  Sharpened by the DRY review: the live module's schema fixture depends on
+  the acceptance suite's `_reload_project_schema_for_acceptance_tests` and
+  imports the freshly-reloaded app types *inside* the fixture body — no
+  local `registry.clear()`, no second module-reload list, no import-time
+  app-type imports; domain rows come from `seed_data(N)` /
+  `create_users(N)` with only the permission a scenario needs (mutation
+  auth through `with client.login(user):`, expected-error posts through
+  `assert_no_errors=False`); the module keeps **one** schema holder, one
+  view, one `urlpatterns` — a fixture swaps the held schema per scenario
+  (debug-only, optimizer + debug, no-debug, raising field) rather than
+  duplicating the holder — and the schema-construction seam never sorts,
+  normalizes, or deduplicates the `extensions=` list, because order is part
+  of the contract
+  ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping)).
+  The [`test_multi_db.py`][test-multi-db] holder is the behavioral
+  precedent but is deliberately **copied, not promoted** into a shared
+  helper: that module is import-gated by `FAKESHOP_SHARDED` while this one
+  is always collected, and URLconf modules must expose real module-level
+  `urlpatterns` — promote a narrowly named test helper only when a third
+  always-collected module needs the exact same mutable-schema URLconf.
+- [ ] **D4** — the two wire serializers are **module-level functions**, not
+  closures or methods: one exception serializer owns the triple — including
+  the load-bearing explicit arguments
+  `traceback.format_exception(type(exc), exc, exc.__traceback__)`
+  ([Decision 8](#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports)) —
+  and one SQL-row serializer owns the `float(entry["time"])` cast, the slow
+  predicate against a single module constant (`_SLOW_QUERY_SECONDS = 10`,
+  graphene's threshold, never an inline `> 10` at two sites), the
+  `select`-prefix sniff, and the six wire keys spelled as **literals**;
+  `isSlow` / `isSelect` derive *inside* the serializer, never at a call
+  site. Module level so the [Risks](#risks-and-open-questions)
+  `_debug`-facade fallback (or any future card) imports them without
+  instantiating the extension.
+- [ ] **D5** — every remaining debug rule is **single-sited inside
+  `extensions/debug.py`**: one `None`-guarded exception collector owns the
+  `result is None` / `errors is None` guards, the
+  `original_error is not None` filter, and the chain-walk + serialize
+  compose — preserving result-error order and emitting one row per
+  qualifying outer error with **no speculative deduplication**; teardown and
+  `get_results` never each re-spell the guards
+  ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping)).
+  One module-private, lock-protected bracket coordinator exposes exactly
+  **two seams** — `acquire(connection) → token` / `release(token)`, whether
+  surfaced as methods or as one per-connection context manager (the pin is
+  the single ownership, not the callable shape) — and is
+  the only code that touches the active-capture map, the saved flag values,
+  and `connection.force_debug_cursor`; the map is keyed by **connection
+  object identity, never by alias** (aliases name settings entries, while
+  the mutable flag lives on a concrete per-thread connection wrapper — one
+  alias names different objects on different threads), and
+  `ExitStack.callback(...)` keeps the per-alias unwind declarative in
+  `on_operation`
+  ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)).
+  One immutable per-alias snapshot record retains exactly what teardown
+  needs — the acquired connection object and the starting log length
+  (named for the query log, never "window": the D-N5 vocabulary rule);
+  alias and vendor are read from that same retained connection at
+  serialization, and teardown iterates the retained snapshots — never a
+  second `connections.all()` call matched by position, since configured
+  aliases or thread-local wrappers could differ by then. One log-slice
+  helper owns the `list(connection.queries_log)`
+  materialization and the `min(snapshot, len(entries))` clamp, so the
+  best-effort rollover caveat is documented on that one function
+  ([Edge cases](#edge-cases-and-constraints)); and one payload builder owns
+  the `{"sql": [...], "exceptions": [...]}` spelling — `get_results` reads
+  the stash and never constructs shape, and each operation gets fresh
+  containers (never class-level or module-level empty lists). The mechanics
+  tests target those seams, not the hook body
+  ([Test plan](#test-plan)).
+- [ ] **D6** — pattern conformance with the package's established idioms
+  (conformance, not code sharing): **no `__init__`** — the class has no
+  instance config, so it inherits Strawberry's base constructor (which
+  already binds `execution_context`); DRY-by-omission, where
+  [`optimizer/extension.py`][optimizer-extension] defines a constructor only
+  because it carries strictness/strategy/cache config (if typing or stash
+  initialization ever forces an explicit constructor, it accepts and passes
+  through only the engine-owned `execution_context` keyword — never a
+  generic `**kwargs` sink). The generator hook
+  reads as the same idiom as the package's one existing extension generator
+  hook (`DjangoOptimizerExtension.on_execute` — acquire pre-yield,
+  `finally`-guarded reverse-order release). The `original_error` walk
+  follows the bounded-walk posture `utils/typing.py` pins with
+  `_MAX_TYPE_WRAPPER_DEPTH` — never a bare unbounded
+  `while error.original_error:` peel; the identity set is the bound — while
+  its *failure policy* deliberately differs (stop-on-cycle and retain the
+  terminal, versus the type unwrappers' loud terminal raise), which is why
+  it stays a local helper: extraction of a shared `peel_attr_chain` into
+  `utils/typing.py` is deferred until a **fourth** chain-peel appears
+  (rule of three — recorded so a future worker finds the decision instead
+  of re-litigating it). The new `extensions/__init__.py` mirrors the
+  eager-subpackage export shape — docstring + explicit re-export +
+  `__all__`, as `utils/__init__.py` and `testing/__init__.py` do
+  ([Decision 5](#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root)).
+  And every helper docstring says "database connection", never bare
+  "connection" — the D-N5 disambiguation made structural, so a grep across
+  `utils/` and `extensions/` stays partitionable by noun.
 - [ ] **D-N1** (non-reuse) — the optimizer's `_context` ContextVar /
   context-stash machinery is **not** reused: that machinery exists because
-  the optimizer instance is shared across requests; a per-operation
+  the optimizer instance is shared across requests and must publish
+  per-execution state out-of-band; a per-operation
   instance ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160))
-  makes plain attributes the simpler correct shape.
+  makes plain attributes the simpler correct shape — and the ground is
+  sharper than "unnecessary": at the `0.316.0` floor there is no shared
+  instance left for a ContextVar to coordinate, so carrying the stash
+  machinery forward would be complexity with no coordinating role, plus
+  reset-token hygiene that can only add failure modes.
 - [ ] **D-N2** (non-reuse) — no `utils/imports.py` guard
   ([`require_optional_module`][glossary-require-optional-module] /
   `require_*`): both imports are hard dependencies; a guard would be
-  ceremony with no absent-dependency case to serve.
+  ceremony with no absent-dependency case to serve — and falsely advertise a
+  soft dependency. No `import_attr` deferred-import seam either: `debug.py`
+  sits at the leaf of the import graph; nothing imports back into it. Plain
+  top-of-module imports.
 - [ ] **D-N3** (non-reuse) — graphene's [`sql/tracking.py`][upstream-sql-tracking]
   is **not** ported ([Decision 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)
   alternatives); the borrow is the *field vocabulary and its semantics*
@@ -1691,9 +1914,75 @@ discipline).
 - [ ] **D-N4** (non-reuse) — nothing is shared with
   [`middleware/debug_toolbar.py`][middleware-debug-toolbar]: the toolbar
   subclasses a third-party Django middleware over the HTTP response; this is
-  an engine extension over the execution result. The only relationship is
-  documentation ("distinct from", both directions,
+  an engine extension over the execution result. Verified down to the atoms:
+  the toolbar's `_HTML_TYPES` / payload-injection helpers share nothing with
+  the extensions-map merge — there is not even a constant to lift. The only
+  relationship is documentation ("distinct from", both directions,
   [Doc updates](#doc-updates)).
+- [ ] **D-N5** (non-reuse) — **nothing is shared with
+  `utils/connections.py`**, despite the name: that module's entire surface
+  (window bounds, sidecar kwargs, range plans, probe arithmetic,
+  `UnwindowableConnection`) serves **Relay pagination windows**; the debug
+  extension's subject is `django.db.connections` — a different noun that
+  happens to share the module name. The constraint runs both directions: no
+  debug helper may be added to `utils/connections.py` (the "connections
+  helpers live in `utils/connections`" instinct would put DB instrumentation
+  state inside the Relay-window contract module), and the bracket
+  coordinator stays module-private in `extensions/debug.py` — one consumer,
+  the same rule-of-three reasoning D-N3 applies to graphene's tracking port.
+  Promote it only when another production feature needs the same overlap
+  semantics, not merely another `try`/`finally`.
+- [ ] **D-N6** (non-reuse) — `debug.py` imports **nothing from
+  `django_strawberry_framework.utils` at all**: its imports are stdlib
+  (`contextlib`, `threading`, `traceback`, plus `dataclasses` / `typing`
+  where the private records want them), `django.db`, `graphql` (the
+  `GraphQLError` the chain walk types against), and
+  `strawberry.extensions` — all hard dependencies, imported directly with
+  no wrapper functions around them. The full thirteen-module utils inventory was
+  reviewed; the modules serve the query/write/input pipeline the extension
+  never touches (queryset visibility, generated inputs, input traversal,
+  permissions, write decode, relation classification, converter dispatch).
+  Three tempting near-misses, each rejected: `strings.graphql_camel_name`
+  must not manufacture `isSlow` / `isSelect` (the keys are a wire contract —
+  [Decision 8](#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports)'s
+  rejected alternative); `errors.field_error` must not shape the exception
+  row (the write-envelope `FieldError` is a different wire contract with
+  field keys, paths, and codes — the only shared atom is `str()` coercion,
+  beneath extraction); and `typing.is_async_callable` /
+  `querysets.reject_async_in_sync_context` have no seam here (the extension
+  ships one sync generator hook whose color dispatch the engine owns, and it
+  calls no consumer-overridable hook).
+- [ ] **D-N7** (non-reuse) — **no addition to `exceptions.py` and no
+  module-local exception class**: the extension raises nothing of its own —
+  capture is best-effort, and the coordinator's acquire/release seams are
+  private and bracketed, so their contract violations cannot occur. If a
+  later revision needs a raise, it goes through `exceptions.py` (the
+  bottom-of-import-graph single home), never a module-local class; the
+  `UnwindowableConnection` precedent in `utils/connections.py` is the one
+  sanctioned exception to that rule (a control-flow sentinel that must not
+  be catchable as a package error), and debug has no such sentinel need.
+- [ ] **D-N8** (non-reuse / premature abstraction) — the module introduces
+  **no abstraction the one feature does not need**: no package
+  `BaseDjangoSchemaExtension` (Strawberry's `SchemaExtension` +
+  `get_results` already *is* that abstraction; a package base storing a
+  key/payload would save a few lines while hiding the
+  absent-before-teardown rule, the double-call idempotence, the masking
+  order, and the security posture — those are the feature, not
+  boilerplate); no merged `serialize_debug_row(kind, value)` dispatcher
+  (the SQL and exception serializers share a return type and nothing else —
+  different inputs, keys, normalization, ordering, and security
+  properties); no runtime dataclasses or Strawberry types for the **wire
+  rows** (plain dicts built once already match the response protocol; a
+  dataclass row would need a second conversion pass before JSON, and a
+  Strawberry type would re-create the schema surface
+  [Decision 3](#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field)
+  rejects — private `TypedDict`s and the small internal state records are
+  fine where they aid static readability); and no per-key module constants
+  beyond `_SLOW_QUERY_SECONDS` (the serializer's fixed dict is the single
+  source of the wire spelling, [D4](#helper-reuse-obligations-dry);
+  constantizing every key would scatter the shape across declarations and
+  uses — the top-level `"debug"` key earns a name only if it is otherwise
+  repeated across both production methods).
 
 ## Edge cases and constraints
 
@@ -1801,7 +2090,28 @@ URLconf (a debug-enabled schema over freshly-reloaded fakeshop types; the
 [schema-reload][glossary-schema-reload-discipline] +
 [`seed_data`][glossary-seed-data] disciplines; posts through
 [`TestClient`][glossary-testclient] with `assert_no_errors=False` where a
-scenario expects errors). The **mechanics group (8–13)** needs no request.
+scenario expects errors). A tiny local accessor may validate-and-return
+`(res.extensions or {})["debug"]` for the happy executed-operation
+scenarios, but never for the absence scenarios (5, 7) — those assert the
+missing key explicitly. The **mechanics group (8–13)** needs no request; it
+drives **real objects** wherever practical — real `GraphQLError` wrappers
+for the chain cases, real `MaskErrors` (scenario 12), real Strawberry
+execution for lifecycle and idempotence, real connection wrappers and a
+real bounded `deque` for the restore/rollover cases — and parametrizes
+genuinely identical bodies (prior-flag `False`/`True`, both masking orders,
+the serializer's select / non-select / `executemany` cases, repeated
+`get_results` calls) while distinct-setup scenarios stay distinct tests.
+Two of the mechanics group's rules are deliberate
+([DRY D4–D5](#helper-reuse-obligations-dry)): assertions re-spell the wire
+keys and the 10-second threshold as **independent literals** — never
+importing `_SLOW_QUERY_SECONDS` or building expected rows through the
+production serializer, because a self-referential assertion would let a key
+rename pass green (the same reason the mutation-envelope tests pin
+`"__all__"` as a literal rather than importing the sentinel) — and the
+concurrency/lifecycle scenarios (8, 9, 13) exercise the coordinator's two
+seams and the log-slice clamp rather than `on_operation`'s body, so a future
+hook refactor (e.g. the [Risks](#risks-and-open-questions) facade fallback)
+does not churn the overlap-safety suite.
 Per the repo rule the implementation worker records the exact pytest
 commands (`uv run pytest examples/fakeshop/test_query/test_debug_extension_api.py`
 and `uv run pytest tests/extensions/test_debug.py`) for the maintainer
@@ -1874,7 +2184,9 @@ describes the verification but does not override it.
    pins the documented best-effort rollover behavior without claiming exact
    capture. A simulated failure while acquiring a later database alias proves
    the `ExitStack` restores every earlier alias and empties the active-bracket
-   map before propagating the error ([Edge cases](#edge-cases-and-constraints)).
+   map before propagating the error — the one behavior a real request cannot
+   produce safely, so the fake sits at the private bracket boundary, never a
+   mock of Strawberry's runner ([Edge cases](#edge-cases-and-constraints)).
 9. **Async color and overlap-safe restore.** An `async def` test overlaps two
    `schema.execute(...)` calls with raising async resolvers. Each response
    populates its own exception row and carries the `debug` key; after both
@@ -1912,11 +2224,14 @@ describes the verification but does not override it.
     ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping)).
 13. **Concurrent sync isolation at the floor.** One schema with the class
     opt-in executes two distinguishable blocking resolvers concurrently in a
-    `ThreadPoolExecutor`, synchronized so both operations overlap. Each
+    `ThreadPoolExecutor`, synchronized by one small barrier/event helper;
+    the two resolver variants are one parameterized body distinguished by
+    marker/message values, not two copied bodies. Each
     response must contain only its own exception message and query-derived
     marker, and both connections must restore their prior debug flags. Run
     this scenario in the isolated `strawberry-graphql==0.316.0` floor
-    environment as well as the normal suite. This is the regression that
+    environment as well as the normal suite — selected by **node id**, the
+    same test both times, never a copied script. This is the regression that
     fails under the old cached `_sync_extensions` lifecycle and proves the
     dependency bump's stated reason.
 
@@ -2012,7 +2327,11 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   `extensions=` assembly in the consumer's schema module), where always-on
   is the point. **Fallback:** a constructor predicate
   (`DjangoDebugExtension.when(callable)`) or a request-header gate as a
-  follow-on knob once a real consumer asks — additive, no shape change.
+  follow-on knob once a real consumer asks — additive, no shape change
+  (any such gate reads the request through
+  `utils/permissions.request_from_info`, the package's one sanctioned
+  request-access entry point — the v1 extension itself never touches the
+  context).
 - **The cookbook debug migration is not import-only.** [`GOAL.md`][goal]
   criterion 7 promises the `Meta` mental model carries over with "only the
   import line" changing, but the real cookbook's debug integration is not a
@@ -2031,7 +2350,9 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   documented recipe ([Doc updates](#doc-updates)). **Fallback / follow-on:**
   add a schema-field facade only if real migrations demonstrate that
   preserving `_debug` wire compatibility outweighs the permanent schema
-  surface and duplicate exposure matrix.
+  surface and duplicate exposure matrix (the facade imports the
+  module-level serializers [DRY D4](#helper-reuse-obligations-dry) pins —
+  nothing re-spelled).
 - **Async SQL fidelity.** Statements executed on `sync_to_async` executor
   threads escape the event-loop thread's bracket — under async execution
   the `sql` list is typically empty. Concurrent async operations share the

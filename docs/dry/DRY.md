@@ -66,10 +66,115 @@ The script:
 
 - **infers the target release** by scanning `--source-dir` for a `*-X_X_X.md` file. Exits with an error if zero or multiple distinct versions are present; in the multi-version case Worker 0 must pass `--target-release <X.X.X>` explicitly.
 - scans every `*.md` file in `--source-dir`,
-- finds each file's `DRY analysis` heading (any ATX level) and extracts the content beneath it up to the next heading at the same or higher level,
-- is **code-fence-aware** — headings inside fenced code blocks are ignored,
-- prefixes every top-level bullet in the extracted content with `- [ ]` so Worker 0 can tick it,
+- finds each file's normalized `DRY analysis` heading (any ATX level, optional closing hashes) and extracts the content beneath it up to the next heading at the same or higher level,
+- is **CommonMark fence-aware** — headings inside variable-length backtick or tilde fences are ignored,
+- converts every unchecked top-level `-`, `+`, or `*` bullet in the extracted content to `- [ ]` while preserving existing checkboxes,
+- refuses an empty finding set unless Worker 0 explicitly passes `--allow-empty`,
+- writes atomically and refuses to overwrite an existing plan unless Worker 0 explicitly passes `--force`,
 - writes `docs/dry/dry-<release-underscored>.md` with a plan header + a `## Findings` section.
+
+Use the explicit `plan` subcommand when clarity is useful; it is equivalent to the historical command:
+
+```shell
+uv run python docs/dry/export_dry_review.py plan \
+  --source-dir <docs/builder|docs/review>
+```
+
+Additional plan controls:
+
+- `--recursive` includes nested Markdown artifacts. Immediate children remain the default.
+- `--target-release X.Y.Z` bypasses release inference and is validated.
+- `--output <path>` overrides the standard plan path.
+- `--generated-date YYYY-MM-DD` makes regeneration byte-stable.
+- `--force` explicitly replaces an existing output using an atomic write.
+
+## Deep-review audit toolkit
+
+The same script is the one-stop preparation and completion gate for an ad hoc deep DRY review. This mode is separate from the Worker-0 plan lifecycle above: `audit` gathers static evidence before a review is written, and `check` mechanically verifies the finished review's declared scope.
+
+The toolkit never imports or executes inspected Python. It reads configured files as UTF-8 text and parses Python with `ast`.
+
+### 1. Declare scope and forbidden paths
+
+Choose the code whose every definition must be reviewed with repeatable `--target` arguments. Choose the wider code searched for existing implementations, callers, imports, and duplicates with repeatable `--scan-root` arguments. If no scan roots are supplied, existing package, test, example, and script roots are used.
+
+Declare every path that must not be read with a root-relative `--exclude` glob. Exclusions are applied before files are opened and excluded directories are pruned during discovery. The defaults already omit VCS data, virtual environments, caches, build outputs, and `docs/shadow/`; caller exclusions are added to those defaults. An explicitly targeted, contextual, or finished-review file that matches an exclusion is rejected rather than silently read or omitted.
+
+Use repeatable `--context` arguments for specs or other non-Python inputs needed by concept searches. Context files are searched only; they are not parsed as Python and do not expand target coverage.
+
+### 2. Generate the evidence dossier
+
+```shell
+uv run python docs/dry/export_dry_review.py audit \
+  --target django_strawberry_framework/utils \
+  --scan-root django_strawberry_framework \
+  --scan-root tests \
+  --context docs/spec-<NNN>-<name>-<X_X_X>.md \
+  --exclude docs/<forbidden-review>.md \
+  --search-term '<domain concept>' \
+  --search-term '<framework hook>' \
+  --output docs/dry/dry-audit.md
+```
+
+Pass exactly one of `--output <path>` or `--stdout`. File output is atomic and requires `--force` to replace an existing dossier. Use `--generated-date YYYY-MM-DD` for byte-stable regenerated output.
+
+The dossier contains:
+
+- exact target files, context files, exclusion patterns, and observed excluded paths;
+- every target class, function, async function, method, property-shaped method, signature, docstring summary, and source location;
+- each target module's import inventory and direct reverse importers;
+- exact imports plus unambiguous AST name/attribute candidates for every target definition;
+- exact nontrivial duplicate function/method bodies across the scan scope;
+- repeated non-docstring string literals above the configured length;
+- every match for each explicit concept search;
+- per-file parse/read failures without aborting on an unrelated invalid scan file;
+- a handoff checklist for the human/agent review.
+
+Candidate references are deliberately evidence, not automated reuse conclusions. Common method names shared by multiple target definitions are marked ambiguous and leaf-only matches are suppressed; the reviewer must still trace semantic behavior and callers. Exact duplicate bodies ignore docstrings but preserve identifier and literal differences, avoiding speculative near-duplicate claims.
+
+Useful audit controls:
+
+- `--include-nested` adds local nested functions to the required inventory.
+- `--include-constants` adds module-level uppercase assignments.
+- `--duplicate-min-nodes <N>` suppresses trivial duplicate bodies.
+- `--literal-min-length <N>` controls repeated-literal evidence.
+- `--max-evidence <N>` bounds occurrences rendered per report item without changing recorded totals.
+- `--case-sensitive` makes concept searches case-sensitive.
+- `--no-default-excludes` disables only the built-in exclusions; explicit `--exclude` values still apply.
+
+A target syntax/read failure marks the dossier's target inventory incomplete and makes the CLI exit nonzero after writing/printing the evidence. A syntax failure elsewhere in a scan root is recorded in the dossier but does not abort the audit. Resolve every target failure before reviewing; classify unrelated failures explicitly rather than assuming they were searched.
+
+### 3. Perform the human/agent review
+
+The dossier does not replace reading the target source in full. For every target definition, record:
+
+1. existing production/helper behavior that should be reused;
+2. test fixtures, parameterizations, or assertions that should be reused;
+3. similar-looking behavior that must remain separate and why;
+4. the narrowest appropriate ownership boundary for any new helper;
+5. every duplicate/reference candidate's disposition;
+6. domain concepts discovered during reading that need an additional audit search.
+
+Regenerate the dossier with new `--search-term` values when the review discovers load-bearing vocabulary not present in the initial scope.
+
+### 4. Gate the completed review
+
+```shell
+uv run python docs/dry/export_dry_review.py check \
+  --target django_strawberry_framework/utils \
+  --review docs/<completed-review>.md \
+  --require-topic '<load-bearing topic>' \
+  --require-topic '<required framework boundary>'
+```
+
+`check` reparses the targets and exits nonzero with an exact missing list unless:
+
+- every top-level class/function is named;
+- every method is named by qualified form such as `ClassName.method_name`;
+- definitions that share the same qualified name across files are named by the dossier's full `path::QualifiedName` locator;
+- every `--require-topic` literal appears (case-insensitive by default).
+
+Pass the same `--include-nested`, `--include-constants`, `--exclude`, and `--no-default-excludes` scope controls used for the audit. Use `--case-sensitive-topics` only when topic casing is semantically meaningful. The checker is a completeness gate, not a quality score: a mention can satisfy it even when the review's reasoning is weak, so final review still requires technical judgment.
 
 ## Plan structure
 

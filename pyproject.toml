@@ -30,11 +30,12 @@ classifiers = [
 ]
 dependencies = [
     "Django>=5.2",
-    # TODO(spec-044 Slice 1): Raise this existing hard dependency to
-    # strawberry-graphql>=0.316.0 and re-resolve uv.lock. That is the first
-    # release where classes/factories are instantiated per operation on both
-    # execution colors instead of sync execution caching extension instances.
-    "strawberry-graphql>=0.262.0",
+    # 0.316.0 is the per-operation extension-isolation floor (spec-044
+    # Decision 6): earlier releases cache class-created sync extensions on
+    # ``Schema._sync_extensions``, so concurrent requests share one instance's
+    # engine-owned ``execution_context``. 0.316.0 materializes classes and
+    # factories per operation on both execution colors.
+    "strawberry-graphql>=0.316.0",
     "django-filter>=25.2",
     "wrapt>=2.0.1",
 ]

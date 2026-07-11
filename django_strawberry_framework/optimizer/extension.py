@@ -796,12 +796,14 @@ class DjangoOptimizerExtension(SchemaExtension):
         execution_context: Any = None,
         nested_connection_strategy: Any = None,
     ) -> None:
-        # Explicitly accept ``execution_context`` because Strawberry
-        # instantiates extension classes with that keyword when an
-        # extension *class* (not an instance) is passed in
-        # ``extensions=[...]``. Unknown consumer kwargs still raise
-        # ``TypeError`` at construction so typos (``strict=True``) surface
-        # at the call site rather than being silently absorbed.
+        # ``execution_context`` stays accepted for direct-construction
+        # compatibility only: at the ``strawberry-graphql>=0.316.0`` floor the
+        # engine invokes class/factory entries in ``extensions=[...]`` with
+        # ZERO arguments and assigns ``extension.execution_context`` afterward,
+        # so Strawberry itself never passes this keyword (spec-044 Decision 6
+        # migration notes). Unknown consumer kwargs still raise ``TypeError``
+        # at construction so typos (``strict=True``) surface at the call site
+        # rather than being silently absorbed.
         super().__init__(execution_context=execution_context)
         if strictness not in ("off", "warn", "raise"):
             msg = f"strictness must be 'off', 'warn', or 'raise', got {strictness!r}"

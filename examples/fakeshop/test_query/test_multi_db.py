@@ -45,6 +45,7 @@ if os.environ.get("FAKESHOP_SHARDED") != "1":
 
 import strawberry
 from apps.library import models
+from django.db import connections
 from django.test import Client, override_settings
 from django.urls import clear_url_caches, path
 from graphql_client import assert_graphql_success as _graphql_data
@@ -52,6 +53,8 @@ from strawberry.django.views import GraphQLView
 from strawberry.types import Info
 
 from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config
+from django_strawberry_framework.extensions import DjangoDebugExtension
+from django_strawberry_framework.testing import TestClient
 
 # ---------------------------------------------------------------------------
 # Holder-pattern URLConf (per Decision 6 + rev3 R4 + rev3 R5)
@@ -103,6 +106,34 @@ def _build_test_schema(_reload_project_schema_for_acceptance_tests):
         query=_MultiDbTestQuery,
         config=strawberry_config(),
         extensions=[lambda: optimizer],
+    )
+    yield
+    _current["schema"] = None
+
+
+@pytest.fixture
+def _build_debug_test_schema(_reload_project_schema_for_acceptance_tests):
+    """The debug-enabled sibling of ``_build_test_schema`` (spec-044 scenario 16).
+
+    Same freshly-reloaded ``BookType`` / ``.using("shard_b")`` resolver shape,
+    plus ``DjangoDebugExtension`` as the CLASS beside the optimizer's factory -
+    the canonical consumer wiring under test.
+    """
+    from apps.library.schema import BookType  # freshly-reloaded class
+
+    @strawberry.type
+    class _MultiDbDebugTestQuery:
+        @strawberry.field
+        def books_on_shard_b(self, info: Info) -> list[BookType]:
+            return models.Book.objects.using("shard_b").select_related(
+                "shelf__branch",
+            )
+
+    optimizer = DjangoOptimizerExtension()
+    _current["schema"] = strawberry.Schema(
+        query=_MultiDbDebugTestQuery,
+        config=strawberry_config(),
+        extensions=[lambda: optimizer, DjangoDebugExtension],
     )
     yield
     _current["schema"] = None
@@ -201,3 +232,47 @@ def test_cross_shard_isolation_default_rows_not_visible_via_shard_b_resolver(_bu
     titles = {b["title"] for b in data["booksOnShardB"]}
     assert titles == {"shard-b-only"}
     assert "default-only" not in titles  # explicit negative pin
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"])
+def test_debug_extension_captures_shard_b_alias_rows(_build_debug_test_schema):
+    """The real multi-database capture proof (spec-044 Test plan scenario 16).
+
+    A live query routed to ``shard_b`` through a debug-enabled probe schema
+    reports a captured row with ``alias == "shard_b"`` and the correct vendor,
+    and BOTH configured aliases restore their prior ``force_debug_cursor``
+    values - the per-alias contract must not rest solely on
+    ``alias == "default"`` assertions plus fakes.
+    """
+    _seed_book_chain("shard_b", title="DebugShard")
+    prior_flags = {
+        database_connection.alias: database_connection.force_debug_cursor
+        for database_connection in connections.all()
+    }
+
+    query = """
+      query {
+        booksOnShardB {
+          title
+          shelf { code branch { name } }
+        }
+      }
+    """
+
+    client = TestClient()
+    with override_settings(ROOT_URLCONF=__name__):
+        clear_url_caches()
+        try:
+            res = client.query(query)
+        finally:
+            clear_url_caches()
+
+    assert [book["title"] for book in res.data["booksOnShardB"]] == ["DebugShard"]
+    payload = (res.extensions or {})["debug"]
+    shard_rows = [row for row in payload["sql"] if row["alias"] == "shard_b"]
+    assert shard_rows, payload["sql"]
+    assert shard_rows[0]["vendor"] == connections["shard_b"].vendor
+    assert shard_rows[0]["isSelect"] is True
+    assert payload["exceptions"] == []
+    for database_connection in connections.all():
+        assert database_connection.force_debug_cursor is prior_flags[database_connection.alias]

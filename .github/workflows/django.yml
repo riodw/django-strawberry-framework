@@ -47,10 +47,14 @@ jobs:
         # contract is gated only at the dispatch tier so push/PR feedback stays
         # fast. Push/PR runs only the minimum-support combo and the latest combo,
         # single-DB only (covers both ends without doubling CI wall-clock).
+        # The minimum-support nodes (Django 5.2.0 / Python 3.10) also force-install
+        # exactly strawberry-graphql==0.316.0 so the advertised per-operation
+        # extension-isolation floor (spec-044 Decision 6) is durably exercised on
+        # every push/PR, coverage-free (the latest node keeps the coverage gate).
         include: >-
           ${{ github.event_name == 'workflow_dispatch' && fromJSON('[
-            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0"},
-            {"django": "5.2.0", "python": "3.10", "database": "multi DB", "fakeshop_sharded": "1"},
+            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0"},
+            {"django": "5.2.0", "python": "3.10", "database": "multi DB", "fakeshop_sharded": "1", "strawberry": "0.316.0"},
             {"django": "5.2.*", "python": "3.11", "database": "single DB", "fakeshop_sharded": "0"},
             {"django": "5.2.*", "python": "3.11", "database": "multi DB", "fakeshop_sharded": "1"},
             {"django": "5.2.*", "python": "3.12", "database": "single DB", "fakeshop_sharded": "0"},
@@ -66,7 +70,7 @@ jobs:
             {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0", "coverage": "1"},
             {"django": "latest", "python": "3.14", "database": "multi DB", "fakeshop_sharded": "1"}
           ]') || fromJSON('[
-            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0"},
+            {"django": "5.2.0", "python": "3.10", "database": "single DB", "fakeshop_sharded": "0", "strawberry": "0.316.0"},
             {"django": "latest", "python": "3.14", "database": "single DB", "fakeshop_sharded": "0", "coverage": "1"}
           ]') }}
 
@@ -95,6 +99,15 @@ jobs:
             uv pip install "Django==${{ matrix.django }}"
           fi
           uv run --no-sync django-admin --version
+
+      - name: Install Strawberry ${{ matrix.strawberry }} (minimum supported floor)
+        # Only the minimum-support nodes pin the exact floor; the other nodes run
+        # the uv.lock-resolved (latest compatible) strawberry-graphql. Recording
+        # the resolved version makes the exercised floor auditable in the log.
+        if: matrix.strawberry
+        run: |
+          uv pip install "strawberry-graphql==${{ matrix.strawberry }}"
+          uv run --no-sync python -c "import strawberry; print('strawberry-graphql', strawberry.__version__)"
 
       - name: Run Tests (${{ matrix.database }})
         # The latest single-DB node owns the fail_under=100 coverage gate and

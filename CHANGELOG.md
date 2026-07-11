@@ -15,6 +15,12 @@ This project follows a milestone-style cadence during pre-`1.0.0`:
 - **Stable (`1.x.y`)** — strict [Semantic Versioning](https://semver.org/spec/v2.0.0.html) applies from this point forward: breaking changes require a MAJOR bump, additive changes require a MINOR bump, and bug-fix-only releases get a PATCH bump.
 
 See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of each patch.
+<!-- TODO(spec-044 Slice 3): Add the 0.0.14 release section only after all
+four cards' implementation and docs are complete. Cover the Channels router,
+debug-toolbar middleware, test-client family, and response-extensions debug
+extension; record the Strawberry >=0.316.0 floor and the version change.
+This anchor is the spec's explicit CHANGELOG edit grant, not permission to
+write the release early. -->
 
 ## [0.0.13] - 2026-07-06
 

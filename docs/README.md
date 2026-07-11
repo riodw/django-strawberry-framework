@@ -93,6 +93,11 @@ As of `0.0.9` the default Relay `GlobalID` payload is the Django model label (`a
 For the current capability snapshot — what the package can actually do in the example project right now — see [`../TODAY.md`][today]. For the per-feature glossary covering every shipped / planned / deferred capability (deep-linkable by anchor — `GLOSSARY.md#filterset`, `GLOSSARY.md#fk-id-elision`, …), see [`GLOSSARY.md`][glossary]. For the long-term destination and the migration-shape diffs against `graphene-django` and `strawberry-graphql-django`, see [`../GOAL.md`][goal].
 
 A quick summary:
+<!-- TODO(spec-044 Slice 3): After the joint 0.0.14 cut and final card wrap,
+change this to shipped 0.0.14. Add the test-client and
+DjangoDebugExtension capability bullets, retain the already landed router and
+toolbar bullets, and remove the remaining-alpha list only after every release
+artifact is aligned. -->
 
 **Shipped today** (`0.0.13`, plus `0.0.14` work already landed on `main`):
 - `DjangoType` — model-backed Strawberry types via `class Meta`

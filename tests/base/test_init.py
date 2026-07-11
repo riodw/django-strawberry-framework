@@ -16,6 +16,9 @@ from django_strawberry_framework.types import converters
 
 
 def test_version():
+    # TODO(spec-044 Slice 3): Expect 0.0.14 only when the joint version
+    # quintet and final card wrap land. This version-only change must not widen
+    # the package-root __all__; DjangoDebugExtension is a subpackage export.
     assert __version__ == "0.0.13"
 
 

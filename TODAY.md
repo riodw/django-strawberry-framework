@@ -370,6 +370,10 @@ Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (
 - `Meta.aggregate_class` — aggregation (`0.1.3`)
 
 ## Shipped package capabilities not exercised by products
+<!-- TODO(spec-044 Slice 3): With the joint 0.0.14 cut, add shipped-tense
+entries here for the debug-toolbar middleware, TestClient/GraphQLTestCase
+family, and DjangoDebugExtension. Keep the existing Channels router entry;
+products deliberately exercises none of these project/test/debug surfaces. -->
 
 These ship today but products' model shapes don't reach them — most are demonstrated instead by the sibling apps: `library` covers `Meta.primary`, `Meta.exclude`, `Meta.name`, `Meta.description`, `Meta.connection` (`totalCount`), `DjangoListField`, `DjangoNodeField`, and `DjangoNodesField`; `scalars` covers `BigInt`, the JSON / UUID / Decimal / date / time conversions, the file/image read output, and the `Upload` scalar. The rest are covered by the package test suite (see [`docs/GLOSSARY.md`][glossary]):
 

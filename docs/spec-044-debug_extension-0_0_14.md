@@ -1,4 +1,4 @@
-# Spec: Response-extensions debug middleware — `DjangoDebugExtension` in `extensions/debug.py`, executed SQL and raised exceptions in the GraphQL response's `extensions["debug"]` map
+# Spec: Response-extensions debug middleware — `DjangoDebugExtension` in `extensions/debug.py`, Django-recorded query-log SQL and raised exceptions in the GraphQL response's `extensions["debug"]` map
 
 Planned for `0.0.14` (card [`WIP-ALPHA-044-0.0.14`][kanban]); **this card
 completes the joint `0.0.14` cut and owns the version bump**
@@ -6,7 +6,7 @@ completes the joint `0.0.14` cut and owns the version bump**
 This card adds the package's **in-response debug surface**: a new
 `django_strawberry_framework/extensions/debug.py` module exposing
 `DjangoDebugExtension`, a Strawberry `SchemaExtension` that captures the
-executed SQL queries and execution exceptions for the in-flight GraphQL
+Django-recorded query-log SQL and execution exceptions for the in-flight GraphQL
 operation and attaches them to the response's `extensions` map under the
 `debug` key — so frontend clients, Apollo DevTools, and programmatic consumers
 can read them **inside the GraphQL response itself**, without the server-side
@@ -76,11 +76,13 @@ Three slices (the card is an M with one module, two test files, and the joint
 cut's mechanically-wide doc alignment): Slice 1 (**the `extensions/`
 subpackage + `extensions/debug.py` + split live/mechanics coverage** — the
 whole public surface and its coverage land in one commit, green under the
-`fail_under = 100` gate), Slice 2 (**docs + card wrap** — the
+`fail_under = 100` gate), Slice 2 (**implemented-contract docs; no card wrap
+and no version bump** — the
 implemented-contract [`docs/GLOSSARY.md`][glossary] entry-body update, the
 regenerated [`docs/TREE.md`][tree], the stale
-[`config/schema.py`][config-schema] docstring sentence, and the kanban card
-flip), and Slice 3 (**the joint `0.0.14` cut** — the version quintet, the
+[`config/schema.py`][config-schema] docstring sentence, and the
+[`GOAL.md`][goal] clarification), and Slice 3 (**the joint `0.0.14` cut +
+final card wrap** — the version quintet, the
 GLOSSARY status flips for `041` / `042` / `043` / `044`, the
 [`README.md`][readme] / [`docs/README.md`][docs-readme] / [`TODAY.md`][today]
 release-status moves, and the `CHANGELOG.md` `0.0.14` section, whose edit
@@ -258,6 +260,17 @@ Revision history (kept inline so the spec is self-contained):
   — one immutable class-level `_payload = None` default, read directly by
   `get_results` and overridden on the instance only at successful
   teardown.
+- **Revision 7** — source-verification correction pass (2026-07-11).
+  Corrected seven contracts against Strawberry 0.316.0, Django 6.0.5, and
+  asgiref internals: Strawberry constructs extensions with zero arguments and
+  assigns `execution_context` afterward; response-extension merging includes
+  async context-result precedence and replacement of any pre-existing result
+  map; repeated `get_results()` calls are tied to the early-result plus
+  teardown-failure recovery path rather than generic recovery; final card wrap
+  moves behind the mandatory Slice-3 cut; SQL scope is narrowed to Django's
+  `queries_log` and explicitly excludes `callproc()`; async overlap coverage
+  pre-materializes and proves shared wrapper identity; and nested same-thread
+  sync execution is documented as restoration-safe but cross-attributed.
 
 ## Key glossary references
 
@@ -265,7 +278,8 @@ Skim these [`docs/GLOSSARY.md`][glossary] entries first — they anchor the
 vocabulary used throughout the spec:
 
 - [Response-extensions debug middleware][glossary-response-extensions-debug-middleware]
-  — the subject. The glossary already pins the planned contract: executed SQL
+  — the subject. The glossary already pins the planned contract: Django
+  query-log SQL
   and raised exceptions surfaced through the GraphQL response's `extensions`
   envelope so frontend clients can read them without the toolbar. Slice 2
   updates the entry body to the implemented contract; Slice 3 flips the
@@ -280,13 +294,15 @@ vocabulary used throughout the spec:
   [Response-extension merge semantics][glossary-response-extension-merge-semantics]
   — the four engine boundaries a new implementer must keep together:
   `on_operation` teardown, one instance per operation, the pre-execution
-  no-key rule, and list-order merging into `ExecutionResult.extensions`.
+  no-key rule, and extension-list merging, async context-result precedence,
+  and replacement of an existing `ExecutionResult.extensions` map.
 - [Django debug-cursor capture][glossary-django-debug-cursor-capture] /
   [Reference-counted cursor coordinator][glossary-reference-counted-cursor-coordinator] /
   [Bounded query-log rollover][glossary-bounded-query-log-rollover] /
   [Async SQL-capture boundary][glossary-async-sql-capture-boundary] — the SQL
-  capture mechanism and its three correctness limits: overlap-safe restore,
-  best-effort bounded-log slicing, and thread-local async fidelity.
+  capture mechanism and its correctness limits: concrete-wrapper-identity
+  overlap-safe restore, best-effort bounded-log slicing, no `callproc()`
+  capture, nested-sync cross-attribution, and thread-local async fidelity.
 - [Debug SQL row][glossary-debug-sql-row] /
   [Debug exception row][glossary-debug-exception-row] — the two concrete
   wire-row contracts under `extensions.debug`, including the deliberate SQL
@@ -483,8 +499,9 @@ hypothetical migration.
 ## Slice checklist
 
 Each top-level item maps to one commit / PR. **Three slices: the extension +
-tests (Slice 1), docs + card wrap (Slice 2), and the joint `0.0.14` cut
-(Slice 3).** The card is an M — the module is one `SchemaExtension` subclass
+tests (Slice 1), implemented-contract docs while the card remains WIP
+(Slice 2), and the joint `0.0.14` cut + final card wrap (Slice 3).** The card
+is an M — the module is one `SchemaExtension` subclass
 plus a serializer helper riding two engine seams, and the weight is in the
 decision hygiene around the two "pick one" choices and in the joint cut's
 doc breadth.
@@ -536,7 +553,8 @@ doc breadth.
         Module + symbol docstrings state the off-by-default posture, the
         class-form opt-in, the dev-only security caveat, the
         masking-extension ordering (list the debug class after `MaskErrors`),
-        and the async SQL caveat
+        `callproc()` omission, nested-sync attribution boundary, and the async
+        SQL caveat
         ([Edge cases](#edge-cases-and-constraints)).
   - [ ] `examples/fakeshop/test_query/test_debug_extension_api.py` (new) —
         request-visible scenarios from the [Test plan](#test-plan), posting
@@ -549,12 +567,16 @@ doc breadth.
         and bounded-log behavior, no-stash/idempotent results, masking order,
         async exception shape, and concurrent sync request isolation
         ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
+  - [ ] `tests/extensions/__init__.py` (new) — the package marker and
+        `TODO(spec-044 Slice 1)` placement anchor, matching every sibling test
+        package; it exports no test helpers.
   - [ ] Every new symbol carries its docstring and any
         staged-but-not-implemented seam carries a `TODO(spec-044 Slice N)`
         source anchor per [`AGENTS.md`][agents]; `uv run ruff format .` /
         `ruff check --fix .` after the edit, no pytest run unless the
         maintainer asks.
-- [ ] **Slice 2 — docs + card wrap (no version bump yet)**
+- [ ] **Slice 2 — implemented-contract docs (card remains WIP; no version
+  bump)**
   - [ ] [`docs/GLOSSARY.md`][glossary] — the
         [Response-extensions debug middleware][glossary-response-extensions-debug-middleware]
         entry body updated to the implemented contract (import path, the
@@ -586,12 +608,7 @@ doc breadth.
         configuration (a schema's `extensions=` list, the `GRAPHENE`
         settings block) migrates by documented recipe
         ([Goal and cookbook cross-reference](#goal-and-cookbook-cross-reference)).
-  - [ ] [`KANBAN.md`][kanban] card wrap: `044` → Done with the
-        `DONE-044-0.0.14` id and its `SpecDoc` pointing at this spec (kanban
-        DB edit + [`scripts/build_kanban_md.py`][build-kanban-md] /
-        `build_kanban_html.py` re-render, never a hand-edit), and the spec's
-        companion terms CSV imported via `manage.py import_spec_terms`.
-- [ ] **Slice 3 — the joint `0.0.14` cut**
+- [ ] **Slice 3 — the joint `0.0.14` cut + final card wrap**
   - [ ] The version quintet: `[project].version` in
         [`pyproject.toml`][pyproject] → `0.0.14`; `__version__` in
         [`__init__.py`][init]; [`tests/base/test_init.py::test_version`][test-base-init];
@@ -629,6 +646,12 @@ doc breadth.
         per the [`docs/SPECS/NEXT.md`][next] convention that the owning
         spec's release slice carries the grant; the maintainer's commit
         review remains the final gate.
+  - [ ] **Only after every preceding cut item succeeds**, wrap the card:
+        `044` → Done with the `DONE-044-0.0.14` id and its `SpecDoc` pointing
+        at this spec (kanban DB edit +
+        [`scripts/build_kanban_md.py`][build-kanban-md] /
+        `build_kanban_html.py` re-render, never a hand-edit), then import the
+        companion terms CSV via `manage.py import_spec_terms`.
 
 ## Problem statement
 
@@ -640,8 +663,8 @@ answer. The [Debug-toolbar middleware][glossary-debug-toolbar-middleware]
 `/graphql/` traffic, gated on `DEBUG` / `INTERNAL_IPS`, invisible to the
 JavaScript client that issued the request. `graphene-django` ships the
 complementary mechanism this card ports: its
-[`DjangoDebugMiddleware`][upstream-debug-middleware] accumulates every
-executed SQL statement and raised resolver exception into a
+[`DjangoDebugMiddleware`][upstream-debug-middleware] accumulates SQL recorded
+by its own instrumentation and raised resolver exceptions into a
 [`DjangoDebug`][upstream-debug-types] object **inside the GraphQL response
 itself**, so frontend clients and Apollo DevTools read the diagnosis from the
 payload they already have. A `graphene-django` migrant loses that surface at
@@ -694,9 +717,13 @@ A true description of the repo as this spec is authored:
   lifecycle generator hook and the `get_results()` seam;
   [`strawberry/extensions/runner.py`][venv-runner] merges every extension's
   `get_results()` dict into one map; and
-  [`strawberry/schema/schema.py`][venv-schema] attaches that map as the
-  `ExecutionResult.extensions` the HTTP layer serializes into the response
-  JSON. **Call-ordering fact this spec builds on** (verified in the 0.316.0
+  [`strawberry/schema/schema.py`][venv-schema] assigns that completed map as
+  the `ExecutionResult.extensions` the HTTP layer serializes into the
+  response JSON, replacing rather than merging any pre-existing result map.
+  Among extension outputs, later entries win same-key collisions; on async
+  execution only, `ExecutionContext.extensions_results` is then overlaid and
+  has final precedence. **Call-ordering fact this spec builds on** (verified
+  in the 0.316.0
   source, both colors): on the happy path the final
   `get_extensions_results_sync()` / `await get_extensions_results(...)` runs
   **after** the `operation()` context exits — i.e. after `on_operation`'s
@@ -718,6 +745,10 @@ A true description of the repo as this spec is authored:
   `execution_context` across sync requests; that upstream race is why this
   card must raise the floor rather than merely verify hook names
   ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)).
+  Strawberry calls each class/factory with no execution-context argument and
+  then assigns `extension.execution_context` before runner construction;
+  `SchemaExtension.__init__` does not perform that binding
+  ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)).
 - **Django's own debug cursor is the fidelity source, and it is not
   `DEBUG`-bound.** [`django/db/backends/base/base.py`][venv-django-base]
   `#"queries_logged"` enables query logging when `force_debug_cursor` is set
@@ -727,7 +758,9 @@ A true description of the repo as this spec is authored:
   logs, per `execute()`, the **interpolated** statement
   (`use_last_executed_query=True` → `self.db.ops.last_executed_query(...)`)
   and a `"%.3f"`-formatted duration; `executemany()` logs the raw
-  parameterized SQL prefixed `"<N> times: "`. 
+  parameterized SQL prefixed `"<N> times: "`. `CursorDebugWrapper` does not
+  instrument `callproc()`, so stored-procedure calls produce no log row and
+  are outside this extension's SQL contract.
   [`django/test/utils.py`][venv-django-test-utils]
   `::CaptureQueriesContext` is the canonical bracket: save
   `force_debug_cursor`, set it `True`, snapshot the log index, and restore on
@@ -765,7 +798,10 @@ A true description of the repo as this spec is authored:
 
 1. **The response carries its own diagnosis.** With the extension enabled, a
    consumer (or Apollo DevTools) reads `extensions.debug.sql` — one row per
-   executed statement, with vendor / alias / interpolated SQL / duration —
+   new `queries_log` entry produced by Django's instrumented
+   `execute()` / `executemany()` and transaction logging, with vendor / alias /
+   logged SQL / duration; `CursorDebugWrapper` does not instrument
+   `callproc()`, so stored-procedure calls are outside this contract —
    and `extensions.debug.exceptions` — one row per execution exception
    represented by graphql-core's `original_error` chain,
    with type / message / stack — from the same JSON payload that carried
@@ -773,15 +809,19 @@ A true description of the repo as this spec is authored:
    ([Decision 3](#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field),
    [Decision 8](#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports),
    [Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping)).
-2. **Capture is deterministic, not `DEBUG`-dependent.** The
-   `force_debug_cursor` bracket makes the same operation produce the same
-   capture under `DEBUG=True` dev servers, `DEBUG=False` test runs, and
-   production-shaped settings — enabling the extension is the only switch
+2. **Ordinary non-overlapping sync capture is deterministic, not
+   `DEBUG`-dependent.** The `force_debug_cursor` bracket makes the same
+   ordinary sync operation produce the same capture under `DEBUG=True` dev
+   servers, `DEBUG=False` test runs, and production-shaped settings —
+   enabling the extension is the only switch; nested same-thread operations
+   share one log and therefore cross-attribute rows
    ([Decision 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)).
 3. **Off by default, one-line opt-in, zero new dependencies.** Absent from
    the `extensions=` list, the package's behavior is byte-identical to
-   `0.0.13`; present (as the class), every operation on that schema carries
-   the payload. No package is added and no dev-group or settings key changes;
+   `0.0.13`; present (as the class), every executed operation on that schema
+   carries the payload, while parse and validation failures follow the
+   documented no-key rule. No package is added and no dev-group or settings
+   key changes;
    the existing Strawberry requirement is raised to `>=0.316.0` for
    per-request isolation
    ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160),
@@ -831,7 +871,7 @@ A true description of the repo as this spec is authored:
   ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
 - **Production gating knobs.** No `is_slow` threshold argument, no
   redaction hooks, no per-request enable predicate, no settings key — the
-  v1 constructor is the bare engine signature, and the dev-only posture is
+  v1 class needs no constructor or configuration, and the dev-only posture is
   documentation ([Edge cases](#edge-cases-and-constraints)). The absent
   settings key is a decision, not a gap: `conf.py` keys exist only where a
   knob must vary per deployment without code changes
@@ -844,8 +884,9 @@ A true description of the repo as this spec is authored:
   Strawberry's subscription lifecycle does with `get_results` is untested
   and undocumented here.
 - **Async SQL-capture fidelity.** Exception capture is
-  execution-color-agnostic; SQL capture is guaranteed on the sync execution
-  path and documented as **typically empty** under async execution, where
+  execution-color-agnostic; SQL capture is guaranteed on the ordinary
+  non-reentrant sync execution path and documented as **typically empty**
+  under async execution, where
   Django's per-thread connections mean the `sync_to_async` executor
   threads' queries escape a bracket set from the event-loop thread — the
   same thread-local constraint graphene's own wrap carries. The
@@ -872,7 +913,7 @@ source directly, not memory.
 - **The SQL row.** [`sql/types.py`][upstream-sql-types] pins the field
   vocabulary. Borrowed where Django's own log can honestly populate them:
   `vendor` (connection vendor string), `alias` (the Django database alias),
-  `sql` (the executed statement — graphene also logs
+  `sql` (the recorded query-log statement — graphene also logs
   `ops.last_executed_query`, so the semantics match, not just the name),
   `duration` (seconds, float), `isSlow` (graphene's `duration > 10`
   constant, kept verbatim), `isSelect` (graphene's
@@ -1042,11 +1083,14 @@ Consumer-visible behavior:
   (one narrow exception — the engine's coerced-exception recovery path —
   is recorded in [Error shapes](#error-shapes))
   ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)).
-- **`sql` rows are Django's own log entries, per alias.** Each row reports
+- **`sql` rows are Django's own `queries_log` entries, per alias.** Each row reports
   the connection's `vendor` and `alias`, the interpolated statement Django's
   debug cursor logged, and Django's measured duration (3-decimal precision —
   the log stores `"%.3f"`). Rows appear in per-connection log order,
-  concatenated across aliases in `connections.all()` order.
+  concatenated across aliases in `connections.all()` order. Instrumented
+  `execute()` / `executemany()` and transaction statements are in scope;
+  stored-procedure calls through `callproc()` are absent because Django's
+  `CursorDebugWrapper` does not log them.
 - **`exceptions` rows are execution exceptions**, not GraphQL validation
   errors: an entry appears when a `result.errors` member carries an
   `original_error`. This includes resolver-thrown Python exceptions,
@@ -1096,9 +1140,13 @@ Consumer-visible behavior:
   `GraphQLError`, so a non-`GraphQLError` parse crash lands here too) is
   coerced to a GraphQL error **after** teardown ran, so that error response
   *does* carry the `debug` key, reflecting whatever executed before the
-  abort. On this path the engine also invokes `get_results` **twice** (the
-  abandoned early return plus the recovery return) — the method is
-  therefore pinned idempotent: return the stash, never mutate or pop it
+  abort. Generic recovery alone does not imply two `get_results()` calls.
+  Two calls occur only when an early parse/validation return has already
+  evaluated `_handle_execution_result` (and therefore `get_results()`), then
+  an `on_operation` teardown raises while that return unwinds: the outer
+  recovery handler abandons the first return and builds a replacement,
+  invoking `get_results()` again. The method is therefore pinned idempotent:
+  return the stash, never mutate or pop it
   ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash),
   Test plan scenario 11).
 - **An exception inside the extension's own teardown** — designed against
@@ -1111,12 +1159,16 @@ Consumer-visible behavior:
   Independently, the restore of every connection's `force_debug_cursor`
   rides a `finally` so an unexpected serializer failure cannot leave a
   connection permanently instrumented.
-- **A consumer extension also publishing a `debug` extensions key** — the
-  runner merges `get_results()` dicts in extensions-list order
-  ([`runner.py`][venv-runner] `#"data.update"`), so the later-listed
-  extension wins the key. Documented, not guarded: the key is the card's
-  pinned contract and namespacing it away from a hypothetical collision
-  would break the graphene-shaped expectation.
+- **A consumer extension also publishing a `debug` extensions key** — among
+  extension outputs, the runner merges `get_results()` dicts in
+  extensions-list order ([`runner.py`][venv-runner] `#"data.update"`), so
+  the later-listed extension wins. On async execution,
+  `ExecutionContext.extensions_results` is overlaid afterward and has final
+  precedence; the sync runner has no equivalent overlay. Schema result
+  handling assigns the completed map rather than merging a pre-existing
+  `ExecutionResult.extensions` map. Documented, not guarded: the key is the
+  card's pinned contract and namespacing it away from a hypothetical
+  collision would break the graphene-shaped expectation.
 
 ## Architectural decisions
 
@@ -1425,9 +1477,11 @@ Alternatives considered (and rejected):
 ### Decision 7 — Hook shape: one sync `on_operation` generator, assembly at teardown, `get_results` returns the stash
 
 `DjangoDebugExtension` implements exactly two engine seams — and no
-`__init__`: the class carries no instance configuration, so Strawberry's
-inherited base constructor (which already binds the engine-owned
-`execution_context` kwarg) is the whole constructor story
+`__init__`. Strawberry constructs class/factory entries with no
+execution-context argument, then `Schema.execute()` / `Schema.execute_sync()`
+assigns `extension.execution_context` before creating the runner. No
+constructor is needed because this class has no instance configuration, not
+because the base constructor binds context
 ([DRY D6](#helper-reuse-obligations-dry)):
 
 - **`on_operation`** — a **sync** generator: pre-yield it uses
@@ -1443,8 +1497,8 @@ inherited base constructor (which already binds the engine-owned
 - **`get_results`** — returns `{"debug": <stash>}` when the stash was
   assembled and `{}` otherwise — **idempotent** (a pure read of the stash:
   never a mutate-or-pop, never a write to `execution_context` or to an
-  existing `ExecutionResult.extensions`): the engine's coerced-exception
-  recovery paths invoke it twice for one operation
+  existing `ExecutionResult.extensions`): the early-result plus
+  teardown-failure recovery path can invoke it twice for one operation
   ([Error shapes](#error-shapes)). The stash is one instance attribute
   whose absent sentinel is `None` — unambiguous because a completed payload
   is always a dict, even when both lists are empty. The sentinel's home is
@@ -1514,8 +1568,8 @@ Alternatives considered (and rejected):
 
 ### Decision 8 — The SQL row shape: graphene's wire names, narrowed to what Django's log supports
 
-Each captured statement serializes to a plain dict with exactly six keys, in
-graphene's wire casing:
+Each captured `queries_log` entry serializes to a plain dict with exactly six
+keys, in graphene's wire casing:
 
 | Key | Value | graphene source |
 | --- | --- | --- |
@@ -1537,6 +1591,9 @@ explicitly", discharged here and mirrored in the GLOSSARY entry body:
   absolute `time()` stamps come from its own wrapper.
 - The Postgres quartet `transId` / `transStatus` / `isoLevel` / `encoding` —
   cursor-wrap-only introspection of the psycopg connection.
+- Stored-procedure calls through `callproc()` — Django's
+  `CursorDebugWrapper` deliberately does not instrument `callproc()`, so the
+  chosen `queries_log` source has no row to serialize.
 
 The exception row carries graphene's triple, byte-compatible in form:
 `excType` (`str(type(exc))`, the `"<class 'ValueError'>"` shape), `message`
@@ -1778,16 +1835,18 @@ specified in the decisions cited; the version moves **only** in Slice 3,
 | `django_strawberry_framework/extensions/__init__.py` (new) | Subpackage docstring + `DjangoDebugExtension` re-export in `__all__` ([Decision 5](#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root)) | 1 |
 | `django_strawberry_framework/extensions/debug.py` (new) | `DjangoDebugExtension(SchemaExtension)`: sync `on_operation` generator (per-alias reference-counted `force_debug_cursor` bracket + snapshot pre-yield; `finally`-guarded materialize / slice / serialize / stash / release at teardown), `get_results()` returning the stash under `"debug"`, SQL/exception serializers, and the lock-protected active-bracket coordinator ([Decisions 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)–[10](#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each); module shape per [DRY D4–D6](#helper-reuse-obligations-dry)) | 1 |
 | `examples/fakeshop/test_query/test_debug_extension_api.py` (new) | The [Test plan](#test-plan) request-driving scenarios: real probe-URLconf HTTP via [`TestClient`][glossary-testclient], under schema-reload + `seed_data` disciplines ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)) | 1 |
+| `tests/extensions/__init__.py` (new) | Test-package marker and placement anchor; no shared helper exports | 1 |
 | `tests/extensions/test_debug.py` (new) | Request-impossible serializer, lifecycle, masking, async-shape, bounded-log, and concurrent-isolation mechanics ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)) | 1 |
 | [`pyproject.toml`][pyproject] / `uv.lock` | Raise the existing Strawberry floor to `>=0.316.0` and re-resolve for per-request extension isolation ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)); the package's own version still moves only in Slice 3 | 1 |
 | [`docs/GLOSSARY.md`][glossary] | [Response-extensions debug middleware][glossary-response-extensions-debug-middleware] entry body → implemented contract (glossary DB + re-render); status flip deferred to Slice 3 | 2 |
-| [`docs/TREE.md`][tree] | Regenerated (script-rendered) after the card flips Done; `extensions/` + `tests/extensions/` planned rows resolve and the live test row appears | 2 |
+| [`docs/TREE.md`][tree] | Regenerated (script-rendered) after the `TrackedPath.is_current` updates while the card remains WIP; `extensions/` + `tests/extensions/` planned rows resolve and the live test row appears | 2 |
 | [`config/schema.py`][config-schema] | Docstring's "no direct Strawberry analogue" sentence rewritten to name the shipped extension and fakeshop's deliberate opt-out | 2 |
-| [`KANBAN.md`][kanban] / `KANBAN.html` | Card wrap via DB edit + re-render; `import_spec_terms` for the companion CSV | 2 |
+| [`GOAL.md`][goal] | Scope success criterion 7's import-only promise to `Meta`-driven declarations; engine configuration migrates by documented recipe | 2 |
 | [`pyproject.toml`][pyproject] / [`__init__.py`][init] / [`tests/base/test_init.py`][test-base-init] / `uv.lock` / GLOSSARY version line | The version quintet → `0.0.14` ([Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)) | 3 |
 | [`docs/GLOSSARY.md`][glossary] | `shipped (0.0.14)` status flips for all four `0.0.14` surfaces + companions + the [Joint version cut][glossary-joint-version-cut] wording (glossary DB + re-render) | 3 |
 | [`README.md`][readme] / [`docs/README.md`][docs-readme] / [`TODAY.md`][today] | "Coming next / already landed ahead of the release" → shipped-`0.0.14` status wording | 3 |
 | `CHANGELOG.md` | The `0.0.14` release section (all four cards) — under this spec's explicit Slice-3 grant | 3 |
+| [`KANBAN.md`][kanban] / `KANBAN.html` | Final card wrap via DB edit + re-render after every cut item succeeds; then `import_spec_terms` for the companion CSV | 3 |
 
 ## Helper-reuse obligations (DRY)
 
@@ -1903,13 +1962,14 @@ discipline survives review.
   ([Test plan](#test-plan)).
 - [ ] **D6** — pattern conformance with the package's established idioms
   (conformance, not code sharing): **no `__init__`** — the class has no
-  instance config, so it inherits Strawberry's base constructor (which
-  already binds `execution_context`); DRY-by-omission, where
+  instance config, and Strawberry assigns `execution_context` after
+  zero-argument construction; DRY-by-omission, where
   [`optimizer/extension.py`][optimizer-extension] defines a constructor only
-  because it carries strictness/strategy/cache config (if typing or stash
-  initialization ever forces an explicit constructor, it accepts and passes
-  through only the engine-owned `execution_context` keyword — never a
-  generic `**kwargs` sink). The generator hook
+  because it carries strictness/strategy/cache config. If future
+  configuration requires an explicit constructor, initialize only that
+  configuration and do not claim that
+  `super().__init__(execution_context=...)` performs the binding;
+  `execution_context` remains engine-assigned. The generator hook
   reads as the same idiom as the package's one existing extension generator
   hook (`DjangoOptimizerExtension.on_execute` — acquire pre-yield,
   `finally`-guarded reverse-order release). The `original_error` walk
@@ -2005,7 +2065,7 @@ discipline survives review.
   `BaseDjangoSchemaExtension` (Strawberry's `SchemaExtension` +
   `get_results` already *is* that abstraction; a package base storing a
   key/payload would save a few lines while hiding the
-  absent-before-teardown rule, the double-call idempotence, the masking
+  absent-before-teardown rule, conditional double-call idempotence, the masking
   order, and the security posture — those are the feature, not
   boilerplate); no merged `serialize_debug_row(kind, value)` dispatcher
   (the SQL and exception serializers share a return type and nothing else —
@@ -2057,15 +2117,26 @@ discipline survives review.
   connection objects the bracket never touched — so expect an **empty**
   `sql` list under async execution, not a partial one. Exception capture
   reads the execution result and is color-agnostic. Two sharper corners,
-  both documented: **concurrent** async operations on one loop share the
-  loop-thread connection objects, so the reference-counted bracket prevents
-  flag leakage but cannot attribute rows per operation; under
+  both documented: concurrent async tasks can share connection-wrapper
+  objects inherited from a parent context, but tasks that materialize an
+  alias independently may receive distinct wrappers. Coordinator overlap is
+  guaranteed only when wrappers are materialized before task creation and
+  inherited by both tasks. For shared wrappers, the reference-counted
+  bracket prevents flag leakage but cannot attribute rows per operation; under
   `DJANGO_ALLOW_ASYNC_UNSAFE` (which lets the loop thread run ORM directly),
   concurrent operations can capture each other's statements. The docstring
   carries all of it; the follow-on is a [Risk](#risks-and-open-questions).
-  The sync path — Django's default
-  `/graphql/` view, `schema.execute_sync`, every fakeshop surface — captures
-  fully.
+  The ordinary non-reentrant sync path — Django's default `/graphql/` view,
+  `schema.execute_sync`, every fakeshop surface — captures Django's query-log
+  rows fully. Nested or reentrant sync GraphQL execution on the same thread
+  shares one wrapper and log: restoration remains correct, but overlapping
+  length snapshots are not operation-local, so the outer payload includes
+  SQL emitted by the nested operation.
+- **Nested sync attribution is intentionally best effort.** The coordinator
+  owns only `force_debug_cursor` restoration, not row attribution.
+  Same-thread nested operations share `queries_log`; the outer snapshot
+  includes the inner interval. Strict operation-local attribution would
+  require a different instrumentation source.
 - **Pre-execution failures carry no `debug` key.** Parse and validation
   errors return before execution; the engine calls `get_results` before the
   hook's teardown on those paths, the stash does not exist, and the
@@ -2091,6 +2162,10 @@ discipline survives review.
   Django's own accounting shows — and it is why the [Test plan](#test-plan)'s
   row assertions filter by `isSelect` / statement prefix rather than
   asserting positional indices or raw totals.
+- **Stored procedures are not recorded.** Calls through `callproc()` are
+  outside this SQL contract because Django's `CursorDebugWrapper` does not
+  instrument them; there is no `queries_log` entry for the extension to
+  serialize.
 - **Introspection is not special-cased.** An `IntrospectionQuery` on an
   enabled schema carries `{"sql": [], "exceptions": []}` — harmless, and a
   skip rule (the toolbar's `IntrospectionQuery` guard exists to protect its
@@ -2102,10 +2177,13 @@ discipline survives review.
   `errors`. The docstring's security posture covers it: development
   schemas only, never internet-facing production. (graphene's `DjangoDebug`
   has the same property and the same posture.)
-- **`extensions`-map cohabitation.** The runner merges every extension's
-  `get_results()` in list order; the `debug` key collides only if a
-  consumer extension publishes the same key, in which case the later-listed
-  wins ([Error shapes](#error-shapes)). The payload is
+- **`extensions`-map cohabitation.** Among extension outputs, the runner
+  merges `get_results()` in list order and the later-listed same-key value
+  wins. Async execution then overlays
+  `ExecutionContext.extensions_results`, which has final precedence; sync
+  has no equivalent overlay. The completed map replaces rather than merges
+  any pre-existing `ExecutionResult.extensions`
+  ([Error shapes](#error-shapes)). The payload is
   JSON-serializable by construction (str / float / bool / list / dict
   only), so no transport encoder can choke on it.
 - **Zero cost when disabled, bounded cost when enabled.** Disabled, no code
@@ -2121,7 +2199,7 @@ discipline survives review.
 ## Test plan
 
 Scenarios 1–7 live in
-`examples/fakeshop/test_query/test_debug_extension_api.py`; scenarios 8–13
+`examples/fakeshop/test_query/test_debug_extension_api.py`; scenarios 8–15
 live in `tests/extensions/test_debug.py`
 ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
 The **request-driving group (1–7)** posts real HTTP through the probe
@@ -2132,7 +2210,7 @@ URLconf (a debug-enabled schema over freshly-reloaded fakeshop types; the
 scenario expects errors). A tiny local accessor may validate-and-return
 `(res.extensions or {})["debug"]` for the happy executed-operation
 scenarios, but never for the absence scenarios (5, 7) — those assert the
-missing key explicitly. The **mechanics group (8–13)** needs no request; it
+missing key explicitly. The **mechanics group (8–15)** needs no request; it
 drives **real objects** wherever practical — real `GraphQLError` wrappers
 for the chain cases, real `MaskErrors` (scenario 12), real Strawberry
 execution for lifecycle and idempotence, real connection wrappers and a
@@ -2147,8 +2225,10 @@ importing `_SLOW_QUERY_SECONDS` or building expected rows through the
 production serializer, because a self-referential assertion would let a key
 rename pass green (the same reason the mutation-envelope tests pin
 `"__all__"` as a literal rather than importing the sentinel) — and the
-concurrency/lifecycle scenarios (8, 9, 13) exercise the coordinator's two
-seams and the log-slice clamp rather than `on_operation`'s body, so a future
+concurrency/lifecycle scenarios 8 and 9 exercise the coordinator's two seams
+and the log-slice clamp rather than `on_operation`'s body; scenario 13
+exercises per-operation extension isolation on distinct thread-local wrappers,
+not same-wrapper reference counting. A future
 hook refactor (e.g. the [Risks](#risks-and-open-questions) facade fallback)
 does not churn the overlap-safety suite.
 Per the repo rule the implementation worker records the exact pytest
@@ -2236,11 +2316,17 @@ describes the verification but does not override it.
    produce safely, so the fake sits at the private bracket boundary, never a
    mock of Strawberry's runner ([Edge cases](#edge-cases-and-constraints)).
 9. **Async color and overlap-safe restore.** An `async def` test overlaps two
-   `schema.execute(...)` calls with raising async resolvers. Each response
+   `schema.execute(...)` calls with raising async resolvers. Before creating
+   either task, materialize every tested alias through `connections[...]` in
+   the parent async context and record the wrapper identities. Create both
+   tasks so they inherit those wrappers; assert each operation observes the
+   same concrete wrapper objects, and block both resolvers until the
+   coordinator depth reaches two. Release them in both completion orders.
+   Each response
    populates its own exception row and carries the `debug` key; after both
    complete, every involved connection has its original
-   `force_debug_cursor` value and the private active-bracket map is empty,
-   regardless of completion order. SQL content is deliberately **not**
+   `force_debug_cursor` value, depth returns to zero, and the private
+   active-bracket map is empty. SQL content is deliberately **not**
    asserted beyond type (the documented thread-locality caveat — this test
    pins the contract that holds, not fidelity the design cannot provide);
    marked `django_db` only if it touches the ORM, per the suite's
@@ -2263,9 +2349,12 @@ describes the verification but does not override it.
     ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)) —
     and after a
     completed operation returns the stash under exactly the `"debug"` key
-    — **twice in a row, identically** (the engine's coerced-exception
-    recovery paths call it twice, [Error shapes](#error-shapes)); the
-    payload round-trips `json.dumps` (the JSON-serializability guard).
+    — **twice in a row, identically** (direct proof that the read is pure);
+    the payload round-trips `json.dumps` (the JSON-serializability guard).
+    Separately, an instrumented validation-failure operation whose
+    `on_operation` teardown raises proves the real engine path calls
+    `get_results()` once for the abandoned early result and once for the
+    recovery result ([Error shapes](#error-shapes)).
 12. **Masking-extension ordering.** Two direct `schema.execute_sync(...)`
     runs over a raising resolver: with
     `extensions=[MaskErrors, DjangoDebugExtension]` the response's
@@ -2285,16 +2374,33 @@ describes the verification but does not override it.
     environment as well as the normal suite — selected by **node id**, the
     same test both times, never a copied script. This is the regression that
     fails under the old cached `_sync_extensions` lifecycle and proves the
-    dependency bump's stated reason.
+    dependency bump's stated reason. Because each executor thread owns
+    distinct thread-local database wrappers, this scenario does not prove
+    same-wrapper coordinator refcounting; scenario 9 owns that assertion.
+
+14. **Merge precedence and result-map replacement.** Small same-key probe
+    extensions prove later extension-list entries win in both sync and async
+    execution. The async case also seeds
+    `ExecutionContext.extensions_results` and proves that overlay has final
+    precedence. A pre-populated `ExecutionResult.extensions` map is replaced,
+    not merged, by schema result handling.
+
+15. **Nested sync attribution boundary.** A same-thread outer operation
+    invokes a nested sync operation while sharing one concrete database
+    wrapper and query log. Both flags restore correctly, the inner payload
+    contains its interval, and the outer payload intentionally also contains
+    the inner SQL rows.
 
 Coverage: the package gate is `fail_under = 100` and `extensions/debug.py`
 is package code — every branch has a named owner above: the bracket loop and
 both restore directions (1, 8), the bounded-log fallback (8), both
 serializers, the chain walk/cycle guard, and its `result is None` guard (4,
 10), the empty and populated
-`get_results` directions plus idempotence (6, 7, 11), the masking-order
-dependency (12), per-request sync isolation (13), the async hook color (9),
-and the mutation/query independence (3). If
+`get_results` directions plus direct and real-engine idempotence (6, 7, 11),
+the masking-order dependency (12), per-request sync isolation (13),
+merge/replacement semantics (14), nested sync attribution (15), the async
+hook color and shared-wrapper overlap (9), and the mutation/query independence
+(3). If
 implementation finds a branch unreachable through these (e.g. a defensive
 guard), it gets its own targeted unit the same way — named owner, never a
 blanket claim.
@@ -2317,7 +2423,9 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   widening), the reference-counted `force_debug_cursor` bracket and its
   `DEBUG`-independence, the best-effort bounded-log behavior, the
   `strawberry-graphql>=0.316.0` isolation floor, the per-alias multi-DB
-  behavior, the
+  behavior, the `callproc()` omission, the nested-sync attribution boundary,
+  extension-list merge precedence, async context-results precedence, result-map
+  replacement, the
   pre-execution-error no-key rule, the dev-only security caveat, and the
   async SQL caveat; the real cookbook migration from the aggregate `_debug`
   field + `GRAPHENE["MIDDLEWARE"]` pair to the one extension class; and the
@@ -2325,7 +2433,8 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   from the [Debug-toolbar middleware][glossary-debug-toolbar-middleware]" paragraph
   updated to shipped tense in both entries' cross-references.
 - [`docs/TREE.md`][tree] (Slice 2) — regenerated via
-  [`scripts/build_tree_md.py`][build-tree-md] after the card flips Done:
+  [`scripts/build_tree_md.py`][build-tree-md] after the
+  `TrackedPath.is_current` updates while the card remains WIP:
   the package tree's planned `extensions/` rows resolve to real
   docstring-derived rows; the test tree gains `tests/extensions/test_debug.py`
   and `examples/fakeshop/test_query/test_debug_extension_api.py`.
@@ -2338,10 +2447,6 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   debug migration becomes a documented application of the criterion rather
   than an unresolved exception to it
   ([Goal and cookbook cross-reference](#goal-and-cookbook-cross-reference)).
-- [`KANBAN.md`][kanban] / `KANBAN.html` (Slice 2) — card wrap via the DB +
-  re-render; the companion `*-terms.csv` imported via
-  `manage.py import_spec_terms` so the Done card's glossary-terms table
-  renders.
 - **Slice 3 (the cut):** the GLOSSARY status flips (`shipped (0.0.14)`) for
   all four `0.0.14` surfaces and their companion entries
   ([Channels request adapter][glossary-channels-request-adapter],
@@ -2356,7 +2461,10 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   last under this spec's explicit Slice-3 grant (per [`AGENTS.md`][agents]
   the file is otherwise off-limits; the [`docs/SPECS/NEXT.md`][next]
   convention places the grant in the owning spec's release slice, and the
-  maintainer's commit review remains the final gate).
+  maintainer's commit review remains the final gate). Only after those cut
+  items succeed, [`KANBAN.md`][kanban] / `KANBAN.html` receive the final card
+  wrap through the DB + re-render, followed by the companion
+  `*-terms.csv` import.
 
 ## Risks and open questions
 
@@ -2405,15 +2513,19 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   surface and duplicate exposure matrix (the facade imports the
   module-level serializers [DRY D4](#helper-reuse-obligations-dry) pins —
   nothing re-spelled).
-- **Async SQL fidelity.** Statements executed on `sync_to_async` executor
+- **Cross-operation SQL attribution.** Statements executed on `sync_to_async` executor
   threads escape the event-loop thread's bracket — under async execution
-  the `sql` list is typically empty. Concurrent async operations share the
-  loop-thread connection wrappers; the reference-counted coordinator makes
-  flag restoration safe, but cannot attribute rows if async-unsafe ORM work
-  runs on that thread ([Edge cases](#edge-cases-and-constraints)).
+  the `sql` list is typically empty. Concurrent async tasks overlap the same
+  coordinator entry only when they inherit pre-materialized wrapper objects;
+  independently materialized aliases may be distinct. For shared wrappers,
+  restoration is safe but rows are not operation-local if async-unsafe ORM
+  work runs on the loop thread. Likewise, nested same-thread sync operations
+  restore safely but the outer length snapshot includes the inner interval
+  ([Edge cases](#edge-cases-and-constraints)).
   **Preferred answer:** guarantee clean restoration and document the fidelity
-  caveat (the sync path — every fakeshop surface and Django's default view —
-  captures fully; exceptions capture is color-agnostic); this matches the
+  and best-effort attribution caveats (ordinary non-reentrant sync paths —
+  every fakeshop surface and Django's default view — capture fully;
+  exceptions capture is color-agnostic); this matches the
   single upstream's own thread-local scope. **Fallback / follow-on:** a
   per-operation-isolated instrumentation design — worth its own card if
   async consumers report gaps. (An earlier draft's idea — route the
@@ -2491,8 +2603,9 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
 - [ ] The payload lands under `extensions["debug"]` with `sql` rows carrying
       `vendor` / `alias` / `sql` / `duration` / `isSlow` / `isSelect` and
       `exceptions` rows carrying `excType` / `message` / `stack` — graphene's
-      wire names where the fidelity supports them, every narrowing named in
-      the GLOSSARY entry and the module docstring (the card's DoD row 3)
+      wire names where the fidelity supports them, every narrowing — including
+      the `callproc()` omission and nested-sync attribution boundary — named
+      in the GLOSSARY entry and the module docstring (the card's DoD row 3)
       ([Decision 8](#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports)).
 - [ ] Off by default; the opt-in is the class in `strawberry.Schema(...)`'s
       `extensions=` list (the card's DoD row 4); with the extension absent,
@@ -2519,7 +2632,8 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
 - [ ] The Slice 2 doc updates land per [Doc updates](#doc-updates): the
       GLOSSARY entry body (via the DB + re-render), the regenerated
       [`docs/TREE.md`][tree], the [`config/schema.py`][config-schema]
-      docstring correction, the kanban card wrap, and the "documented as the
+      docstring correction, the [`GOAL.md`][goal] clarification, and the
+      "documented as the
       response-side counterpart to `DONE-042-0.0.14`" cross-references in
       both entries. The GLOSSARY entry includes the concrete cookbook
       migration from `_debug` + `DjangoDebugMiddleware` to the aggregate
@@ -2534,7 +2648,8 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
       `shipped (0.0.14)`; the [`README.md`][readme] /
       [`docs/README.md`][docs-readme] / [`TODAY.md`][today] release wording
       moved; the `CHANGELOG.md` `0.0.14` section written under this spec's
-      Slice-3 grant.
+      Slice-3 grant; and only then the card reads `DONE-044-0.0.14` after the
+      DB-backed final wrap and terms import.
 - [ ] `uv run ruff format .` / `ruff check --fix .` clean after every slice;
       pre-commit hooks run before any commit the maintainer requests; no
       `pytest` unless the maintainer asks (the [`START.md`][start] workflow

@@ -9,6 +9,10 @@ This mirrors the ``cookbook/schema.py`` layout from the
 graphene-only ``DjangoDebug`` field has no direct Strawberry analogue
 and is left out for now.
 """
+# TODO(spec-044 Slice 2): Once DjangoDebugExtension is implemented, rewrite
+# the stale "no direct Strawberry analogue" sentence above. Name the
+# response-extensions opt-in and state that fakeshop deliberately leaves it
+# disabled in the shipped aggregate schema; live coverage uses a probe URLconf.
 
 import strawberry
 from apps.accounts.schema import Mutation as AccountsMutation

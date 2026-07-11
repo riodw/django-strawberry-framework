@@ -1,6 +1,9 @@
 # https://packaging.python.org/en/latest/guides/writing-pyproject-toml/
 [project]
 name = "django-strawberry-framework"
+# TODO(spec-044 Slice 3): Move the package version to 0.0.14 only with the
+# joint-cut quintet: package __version__, tests/base/test_init.py, the
+# glossary package-version row, and the root package entry in uv.lock.
 version = "0.0.13"
 description = "A DRF-inspired Django integration framework for Strawberry GraphQL — filtering, ordering, aggregation, and permissions"
 readme = "README.md"
@@ -27,6 +30,10 @@ classifiers = [
 ]
 dependencies = [
     "Django>=5.2",
+    # TODO(spec-044 Slice 1): Raise this existing hard dependency to
+    # strawberry-graphql>=0.316.0 and re-resolve uv.lock. That is the first
+    # release where classes/factories are instantiated per operation on both
+    # execution colors instead of sync execution caching extension instances.
     "strawberry-graphql>=0.262.0",
     "django-filter>=25.2",
     "wrapt>=2.0.1",

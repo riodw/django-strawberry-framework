@@ -2236,83 +2236,83 @@ to the joint `0.0.14` cut
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-[agents]: ../AGENTS.md
-[goal]: ../GOAL.md
-[kanban]: ../KANBAN.md
-[pyproject]: ../pyproject.toml
-[pytest-ini]: ../pytest.ini
-[readme]: ../README.md
-[start]: ../START.md
-[today]: ../TODAY.md
+[agents]: ../../AGENTS.md
+[goal]: ../../GOAL.md
+[kanban]: ../../KANBAN.md
+[pyproject]: ../../pyproject.toml
+[pytest-ini]: ../../pytest.ini
+[readme]: ../../README.md
+[start]: ../../START.md
+[today]: ../../TODAY.md
 
 <!-- docs/ -->
-[docs-readme]: README.md
-[glossary]: GLOSSARY.md
-[glossary-auth-mutations]: GLOSSARY.md#auth-mutations
-[glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-debug-toolbar-middleware]: GLOSSARY.md#debug-toolbar-middleware
-[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
-[glossary-djangographqlprotocolrouter]: GLOSSARY.md#djangographqlprotocolrouter
-[glossary-djangolistfield]: GLOSSARY.md#djangolistfield
-[glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-eviction-simulated-absence]: GLOSSARY.md#eviction-simulated-absence
-[glossary-fielderror-envelope]: GLOSSARY.md#fielderror-envelope
-[glossary-graphqltestcase]: GLOSSARY.md#graphqltestcase
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
-[glossary-pep-562-lazy-export]: GLOSSARY.md#pep-562-lazy-export
-[glossary-request-from-info]: GLOSSARY.md#request_from_info
-[glossary-response-extensions-debug-middleware]: GLOSSARY.md#response-extensions-debug-middleware
-[glossary-safe-wrap-connection-method]: GLOSSARY.md#safe_wrap_connection_method
-[glossary-schema-reload-discipline]: GLOSSARY.md#schema-reload-discipline
-[glossary-seed-data]: GLOSSARY.md#seed_data
-[glossary-soft-dependency]: GLOSSARY.md#soft-dependency
-[glossary-testclient]: GLOSSARY.md#testclient
-[glossary-upload-scalar]: GLOSSARY.md#upload-scalar
-[tree]: TREE.md
+[docs-readme]: ../README.md
+[glossary]: ../GLOSSARY.md
+[glossary-auth-mutations]: ../GLOSSARY.md#auth-mutations
+[glossary-configurationerror]: ../GLOSSARY.md#configurationerror
+[glossary-debug-toolbar-middleware]: ../GLOSSARY.md#debug-toolbar-middleware
+[glossary-djangoconnectionfield]: ../GLOSSARY.md#djangoconnectionfield
+[glossary-djangographqlprotocolrouter]: ../GLOSSARY.md#djangographqlprotocolrouter
+[glossary-djangolistfield]: ../GLOSSARY.md#djangolistfield
+[glossary-djangooptimizerextension]: ../GLOSSARY.md#djangooptimizerextension
+[glossary-djangotype]: ../GLOSSARY.md#djangotype
+[glossary-eviction-simulated-absence]: ../GLOSSARY.md#eviction-simulated-absence
+[glossary-fielderror-envelope]: ../GLOSSARY.md#fielderror-envelope
+[glossary-graphqltestcase]: ../GLOSSARY.md#graphqltestcase
+[glossary-joint-version-cut]: ../GLOSSARY.md#joint-version-cut
+[glossary-live-first-coverage-mandate]: ../GLOSSARY.md#live-first-coverage-mandate
+[glossary-pep-562-lazy-export]: ../GLOSSARY.md#pep-562-lazy-export
+[glossary-request-from-info]: ../GLOSSARY.md#request_from_info
+[glossary-response-extensions-debug-middleware]: ../GLOSSARY.md#response-extensions-debug-middleware
+[glossary-safe-wrap-connection-method]: ../GLOSSARY.md#safe_wrap_connection_method
+[glossary-schema-reload-discipline]: ../GLOSSARY.md#schema-reload-discipline
+[glossary-seed-data]: ../GLOSSARY.md#seed_data
+[glossary-soft-dependency]: ../GLOSSARY.md#soft-dependency
+[glossary-testclient]: ../GLOSSARY.md#testclient
+[glossary-upload-scalar]: ../GLOSSARY.md#upload-scalar
+[tree]: ../TREE.md
 
 <!-- docs/SPECS/ -->
-[next]: SPECS/NEXT.md
-[spec-037]: SPECS/spec-037-upload_file_image_mapping-0_0_11.md
-[spec-041]: SPECS/spec-041-channels_router-0_0_14.md
-[spec-042]: SPECS/spec-042-debug_toolbar-0_0_14.md
+[next]: NEXT.md
+[spec-037]: spec-037-upload_file_image_mapping-0_0_11.md
+[spec-041]: spec-041-channels_router-0_0_14.md
+[spec-042]: spec-042-debug_toolbar-0_0_14.md
 
 <!-- docs/builder/ -->
 
 <!-- django_strawberry_framework/ -->
-[conf]: ../django_strawberry_framework/conf.py
-[init]: ../django_strawberry_framework/__init__.py
-[testing-init]: ../django_strawberry_framework/testing/__init__.py
+[conf]: ../../django_strawberry_framework/conf.py
+[init]: ../../django_strawberry_framework/__init__.py
+[testing-init]: ../../django_strawberry_framework/testing/__init__.py
 
 <!-- tests/ -->
-[test-base-init]: ../tests/base/test_init.py
-[test-routers]: ../tests/test_routers.py
-[tests-conftest]: ../tests/conftest.py
+[test-base-init]: ../../tests/base/test_init.py
+[test-routers]: ../../tests/test_routers.py
+[tests-conftest]: ../../tests/conftest.py
 
 <!-- examples/ -->
-[config-urls]: ../examples/fakeshop/config/urls.py
-[schema-reload]: ../examples/fakeshop/schema_reload.py
-[test-auth-api]: ../examples/fakeshop/test_query/test_auth_api.py
-[test-client-api]: ../examples/fakeshop/test_query/test_client_api.py
-[test-kanban-api]: ../examples/fakeshop/test_query/test_kanban_api.py
-[test-library-api]: ../examples/fakeshop/test_query/test_library_api.py
-[test-multi-db]: ../examples/fakeshop/test_query/test_multi_db.py
-[test-mutation-atomicity]: ../examples/fakeshop/test_query/test_mutation_atomicity.py
-[test-products-api]: ../examples/fakeshop/test_query/test_products_api.py
-[test-query-conftest]: ../examples/fakeshop/test_query/conftest.py
-[test-query-readme]: ../examples/fakeshop/test_query/README.md
-[test-uploads-api]: ../examples/fakeshop/test_query/test_uploads_api.py
+[config-urls]: ../../examples/fakeshop/config/urls.py
+[schema-reload]: ../../examples/fakeshop/schema_reload.py
+[test-auth-api]: ../../examples/fakeshop/test_query/test_auth_api.py
+[test-client-api]: ../../examples/fakeshop/test_query/test_client_api.py
+[test-kanban-api]: ../../examples/fakeshop/test_query/test_kanban_api.py
+[test-library-api]: ../../examples/fakeshop/test_query/test_library_api.py
+[test-multi-db]: ../../examples/fakeshop/test_query/test_multi_db.py
+[test-mutation-atomicity]: ../../examples/fakeshop/test_query/test_mutation_atomicity.py
+[test-products-api]: ../../examples/fakeshop/test_query/test_products_api.py
+[test-query-conftest]: ../../examples/fakeshop/test_query/conftest.py
+[test-query-readme]: ../../examples/fakeshop/test_query/README.md
+[test-uploads-api]: ../../examples/fakeshop/test_query/test_uploads_api.py
 
 <!-- scripts/ -->
-[build-kanban-md]: ../scripts/build_kanban_md.py
-[build-tree-md]: ../scripts/build_tree_md.py
+[build-kanban-md]: ../../scripts/build_kanban_md.py
+[build-tree-md]: ../../scripts/build_tree_md.py
 
 <!-- .venv/ -->
-[django-client]: ../.venv/lib/python3.14/site-packages/django/test/client.py
-[venv-strawberry-test-client]: ../.venv/lib/python3.14/site-packages/strawberry/test/client.py
+[django-client]: ../../.venv/lib/python3.14/site-packages/django/test/client.py
+[venv-strawberry-test-client]: ../../.venv/lib/python3.14/site-packages/strawberry/test/client.py
 
 <!-- External -->
-[upstream-client]: ../../strawberry-django-main/strawberry_django/test/client.py
-[upstream-settings]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/settings.py
-[upstream-testing]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/utils/testing.py
+[upstream-client]: ../../../strawberry-django-main/strawberry_django/test/client.py
+[upstream-settings]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/settings.py
+[upstream-testing]: ../../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/utils/testing.py

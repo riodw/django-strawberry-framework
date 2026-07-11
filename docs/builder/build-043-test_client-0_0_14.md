@@ -1,6 +1,6 @@
 # Build plan: spec-043 GraphQL test-client family (`0.0.14`)
 
-Input contract: `docs/spec-043-test_client-0_0_14.md`. Three slices per the
+Input contract: `docs/SPECS/spec-043-test_client-0_0_14.md`. Three slices per the
 spec's slice checklist: Slice 1 (the Strawberry test-module gate +
 `TESTING_ENDPOINT` + `testing/client.py` + re-exports +
 `tests/testing/test_client.py` + the targeted Slice-1 live conversions),

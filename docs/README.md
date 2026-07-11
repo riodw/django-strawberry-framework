@@ -182,6 +182,30 @@ CSRF enforcement also belongs to the HTTP transport: it depends on the Strawberr
 
 `register_mutation()` derives its input from the user model's `USERNAME_FIELD`, distinct `REQUIRED_FIELDS`, and `password`. It refuses to auto-expose Django's account-control fields (`is_active`, `is_staff`, `is_superuser`, `groups`, and `user_permissions`); custom registration flows must initialize privileges and activation state in server-owned logic.
 
+## Development debug responses
+
+`DjangoDebugExtension` is an opt-in development diagnostic imported from `django_strawberry_framework.extensions`. Pass the **class**, not a constructed instance, in Strawberry's `extensions=` list:
+
+```python
+from django_strawberry_framework.extensions import DjangoDebugExtension
+
+_optimizer = DjangoOptimizerExtension()
+schema = strawberry.Schema(
+    query=Query,
+    config=strawberry_config(),
+    extensions=[
+        lambda: _optimizer,
+        DjangoDebugExtension,
+    ],
+)
+```
+
+Strawberry constructs the class with zero arguments for every operation, keeping its capture state operation-local. A pre-constructed instance is deprecated engine usage and would share the engine-assigned execution context and completed payload across operations; the optimizer intentionally uses the different singleton-in-a-factory shape to retain its plan cache.
+
+Executed operations add `extensions["debug"]` with `sql` and `exceptions` lists. The extension brackets every configured Django database connection separately and aggregates rows from every alias used during the operation into that one `sql` list; each row's `alias` and `vendor` identify its source. Rows retain per-connection log order and the per-connection groups follow Django's `connections.all()` order, so the combined list is not a cross-database execution timeline. An alias the operation never uses contributes no rows and is not forced open.
+
+Never enable this extension on an internet-facing production schema: it returns interpolated SQL values and unmasked exception messages and tracebacks. See the [`DjangoDebugExtension` glossary entry][glossary-djangodebugextension] for the complete payload and lifecycle contract.
+
 ## Running the example project
 
 The repository ships with a fakeshop example project that exercises the shipped surface against a real Django app.
@@ -290,6 +314,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-auth-mutations]: GLOSSARY.md#auth-mutations
 [glossary-debug-toolbar-middleware]: GLOSSARY.md#debug-toolbar-middleware
 [glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
+[glossary-djangodebugextension]: GLOSSARY.md#djangodebugextension
 [glossary-djangoformmutation]: GLOSSARY.md#djangoformmutation
 [glossary-djangographqlprotocolrouter]: GLOSSARY.md#djangographqlprotocolrouter
 [glossary-djangolistfield]: GLOSSARY.md#djangolistfield

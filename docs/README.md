@@ -174,6 +174,14 @@ finalize_django_types()
 
 The second form constructs the Strawberry schema before relation targets are finalized, so exposed relations whose target type was still pending cannot be resolved into concrete `DjangoType`s.
 
+## Session-auth deployment boundary
+
+The opt-in `login_mutation()` authenticates and establishes a Django session, but the framework does **not** provide brute-force throttling, lockout, or rate limiting. Attach a consumer-owned `permission_classes` gate or middleware before exposing login publicly. The login permission gate receives the attempted username for account-scoped controls but never receives the password.
+
+CSRF enforcement also belongs to the HTTP transport: it depends on the Strawberry view and Django middleware around the GraphQL endpoint, not the auth field resolver. Keep Django's CSRF protection enabled for cookie-backed session authentication, follow [Django's CSRF guidance][django-csrf], and exercise the deployed GraphQL view with `Client(enforce_csrf_checks=True)` as described by [Django's test-client CSRF checks][django-test-client-csrf].
+
+`register_mutation()` derives its input from the user model's `USERNAME_FIELD`, distinct `REQUIRED_FIELDS`, and `password`. It refuses to auto-expose Django's account-control fields (`is_active`, `is_staff`, `is_superuser`, `groups`, and `user_permissions`); custom registration flows must initialize privileges and activation state in server-owned logic.
+
 ## Running the example project
 
 The repository ships with a fakeshop example project that exercises the shipped surface against a real Django app.
@@ -316,3 +324,5 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 <!-- .venv/ -->
 
 <!-- External -->
+[django-csrf]: https://docs.djangoproject.com/en/5.2/howto/csrf/
+[django-test-client-csrf]: https://docs.djangoproject.com/en/5.2/topics/testing/tools/#the-test-client

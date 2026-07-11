@@ -683,6 +683,30 @@ def test_derive_register_fields_custom_username_and_required_fields():
     assert derive_register_fields(CustomLoginUser) == ("email", "nickname", "password")
 
 
+def test_derive_register_fields_rejects_privilege_fields():
+    """A custom model cannot turn ``is_staff`` into public registration input."""
+
+    class PrivilegeRequiredUser(djmodels.Model):
+        username = djmodels.CharField(max_length=150)
+        password = djmodels.CharField(max_length=128)
+        is_staff = djmodels.BooleanField(default=False)
+
+        USERNAME_FIELD = "username"
+        REQUIRED_FIELDS = ("is_staff",)
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    with pytest.raises(
+        ConfigurationError,
+        match=(
+            r"register_mutation\(\) cannot auto-expose protected user field\(s\) "
+            r"\['is_staff'\].*PrivilegeRequiredUser"
+        ),
+    ):
+        derive_register_fields(PrivilegeRequiredUser)
+
+
 def test_derive_register_fields_rejects_unknown_names_via_editable_input_fields():
     """Unknown / non-editable names delegate to the standard narrowing reject."""
 

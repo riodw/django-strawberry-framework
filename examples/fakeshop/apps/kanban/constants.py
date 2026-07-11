@@ -9,6 +9,7 @@ TRACKED_FILE_PATHS = (
     "django_strawberry_framework/auth/__init__.py",
     "django_strawberry_framework/auth/mutations.py",
     "django_strawberry_framework/auth/queries.py",
+    "django_strawberry_framework/auth/review.md",
     "django_strawberry_framework/conf.py",
     "django_strawberry_framework/connection.py",
     "django_strawberry_framework/exceptions.py",

@@ -91,6 +91,21 @@ _REGISTER_INPUT_NAME = "RegisterInput"
 # its AR-H2 provided-marker preserved.
 _REGISTER_EXCLUDED_INPUT_FIELDS = frozenset({"password"})
 
+# Account-control fields Django's stock auth mixins place on user models. A
+# custom user model may list ordinary identity/profile fields in
+# ``REQUIRED_FIELDS``, but making one of these fields client-selectable on the
+# package's public registration surface would turn a model declaration into a
+# privilege or activation-control input.
+_REGISTER_PROTECTED_FIELDS = frozenset(
+    {
+        "groups",
+        "is_active",
+        "is_staff",
+        "is_superuser",
+        "user_permissions",
+    },
+)
+
 # surface key -> the consumer-facing factory name the bind errors cite (spec-040
 # Decision 8: the three user-typed arms fail with the same actionable auth
 # message, each naming the factory the consumer actually wrote).
@@ -453,12 +468,22 @@ def derive_register_fields(user_model: type) -> tuple[str, ...]:
     non-editable / reverse names are rejected by DELEGATING to the standard
     ``editable_input_fields`` validation (which already raises a
     ``ConfigurationError`` naming field + model), never a re-implemented check.
-    The derived set structurally excludes every privilege column (``is_staff`` /
-    ``is_superuser`` / ``groups`` / ``user_permissions``), so privilege escalation
-    through the generated input is unreachable, not policy-checked.
+    Known account-control fields (``is_active`` / ``is_staff`` /
+    ``is_superuser`` / ``groups`` / ``user_permissions``) are rejected if a
+    custom model places them in ``USERNAME_FIELD`` or ``REQUIRED_FIELDS``. This
+    keeps privilege and activation state server-owned instead of silently
+    turning an unusual user-model declaration into public registration input.
     """
     names = [user_model.USERNAME_FIELD, *user_model.REQUIRED_FIELDS, "password"]
     deduped = tuple(dict.fromkeys(names))
+    protected = sorted(_REGISTER_PROTECTED_FIELDS.intersection(deduped))
+    if protected:
+        raise ConfigurationError(
+            f"register_mutation() cannot auto-expose protected user field(s) {protected!r} "
+            f"derived from {user_model.__name__}.USERNAME_FIELD / REQUIRED_FIELDS; remove "
+            "those fields from the automatic registration surface and initialize account "
+            "privileges and activation state in server-owned registration logic.",
+        )
     # Delegate unknown / non-editable / reverse-name rejection to the standard
     # narrowing validation (single-sited message naming field + model).
     editable_input_fields(user_model, fields=deduped)

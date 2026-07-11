@@ -145,10 +145,39 @@ class PatronOrder(OrderSet):
         fields = ["id", "name"]
 
 
+class PeriodicalOrder(OrderSet):
+    """Periodical orderset - the related target for ``IssueOrder.periodical``."""
+
+    class Meta:
+        model = models.Periodical
+        fields = ["id", "name"]
+
+
+class IssueOrder(OrderSet):
+    """Issue orderset bound to ``IssueType`` at finalize phase 2.5.
+
+    The keyset-cursor ``orderBy:`` substrate: ``title`` is a non-nullable
+    column, so a root ``orderBy: {title: ASC}`` page mints value cursors
+    fingerprinted to THAT order (replay under the default ``cursor_field``
+    order is rejected at decode - the live order-fingerprint pin). The
+    ``periodical`` related order reaches the keyset slicer's related-path
+    branch live: ``orderBy: {periodical: {name: ASC}}`` seeks and mints
+    through the ``periodical__name`` column via a row annotation.
+    """
+
+    periodical = RelatedOrder("PeriodicalOrder", field_name="periodical")
+
+    class Meta:
+        model = models.Issue
+        fields = ["id", "number", "title"]
+
+
 __all__ = (
     "BookOrder",
     "BranchOrder",
+    "IssueOrder",
     "LoanOrder",
     "PatronOrder",
+    "PeriodicalOrder",
     "ShelfOrder",
 )

@@ -1890,3 +1890,100 @@ def _make_file_override_model_type(model, *, namespace=None):
     """Build an ``OverrideType`` over ``model`` selecting only ``id`` + ``attachment``."""
     meta_cls = type("Meta", (), {"model": model, "fields": ("id", "attachment")})
     return type("OverrideType", (DjangoType,), {"Meta": meta_cls, **(namespace or {})})
+
+
+# =============================================================================
+# Meta.cursor_field validation (the keyset-cursor opt-in's class-creation stage)
+# =============================================================================
+
+
+def test_meta_cursor_field_in_allowed_meta_keys():
+    """``Meta.cursor_field`` is a net-new ALLOWED key (the ``stable_cursor_field`` card).
+
+    Net-new ALLOWED, NOT a DEFERRED_META_KEYS promotion - the feature ships in
+    the same change that adds the key (the ``Meta.connection`` precedent).
+    """
+    from django_strawberry_framework.types.base import ALLOWED_META_KEYS, DEFERRED_META_KEYS
+
+    assert "cursor_field" in ALLOWED_META_KEYS
+    assert "cursor_field" not in DEFERRED_META_KEYS
+
+
+def test_meta_cursor_field_valid_declaration_lands_on_definition():
+    """A valid ``cursor_field`` normalizes to a tuple on the definition."""
+    from strawberry import relay
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            interfaces = (relay.Node,)
+            cursor_field = ["-name", "id"]
+
+    assert CategoryType.__django_strawberry_definition__.cursor_field == ("-name", "id")
+
+
+def test_meta_cursor_field_rejects_non_sequence_shapes():
+    """A string / empty / non-string-entry ``cursor_field`` raises the shape error."""
+    from strawberry import relay
+
+    for bad_value in ("name", (), ("name", 3)):
+        with pytest.raises(ConfigurationError, match="non-empty non-string sequence"):
+
+            class CategoryType(DjangoType):
+                class Meta:
+                    model = Category
+                    fields = CATEGORY_SCALAR_FIELDS
+                    interfaces = (relay.Node,)
+                    cursor_field = bad_value
+
+        registry.clear()
+
+
+def test_meta_cursor_field_rejects_malformed_and_traversing_entries():
+    """A bare ``-``, a ``__`` traversal, and a duplicate column all raise."""
+    from strawberry import relay
+
+    for bad_value, match in (
+        (("-", "id"), "not a valid order string"),
+        (("parent__name", "id"), "traverses a relation"),
+        (("name", "-name"), "more than once"),
+    ):
+        with pytest.raises(ConfigurationError, match=match):
+
+            class CategoryType(DjangoType):
+                class Meta:
+                    model = Category
+                    fields = CATEGORY_SCALAR_FIELDS
+                    interfaces = (relay.Node,)
+                    cursor_field = bad_value
+
+        registry.clear()
+
+
+def test_meta_cursor_field_requires_relay_node_shape():
+    """``cursor_field`` on a non-Relay-Node type raises the shared gate error."""
+    with pytest.raises(ConfigurationError, match="requires a Relay-Node-shaped type"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                cursor_field = ("name", "id")
+
+
+def test_meta_cursor_field_finalization_validates_columns():
+    """Finalization rejects a shape-valid ``cursor_field`` whose terminal is not unique."""
+    from strawberry import relay
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = CATEGORY_SCALAR_FIELDS
+            interfaces = (relay.Node,)
+            # ``description`` is a plain non-unique column - shape-valid at
+            # class creation, rejected by the finalization column contract.
+            cursor_field = ("description",)
+
+    with pytest.raises(ConfigurationError, match="must end in a unique column"):
+        finalize_django_types()

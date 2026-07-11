@@ -41,15 +41,22 @@ windowed body: a performance downgrade, never a correctness cliff.
 
 Plan-time shapes the lateral SQL cannot express (a pre-filtered child
 queryset, ``select_related``, child annotations, expression ordering, a
-composite primary key) downgrade INSIDE the strategy to the windowed plan -
-the selection is still planned, so Decision-6 strictness visibility is
-unaffected. The walker-owned fallback shapes (sidecar, SKIP, DISTINCT,
-malformed slice, unwindowable join) never reach any strategy; divergent
-aliases arrive as one request per response key, each self-contained.
+composite primary key, or selected/ordered columns from a multi-table
+inheritance parent) downgrade INSIDE the strategy to the windowed plan - the
+selection is still planned, so Decision-6 strictness visibility is unaffected.
+The walker-owned fallback shapes (sidecar, SKIP, DISTINCT, malformed slice,
+unwindowable join) never reach any strategy; divergent aliases arrive as one
+request per response key, each self-contained.
 
 SQL-injection surface: every identifier in ``build_lateral_sql`` passes
 through ``connection.ops.quote_name`` and every VALUE (parent ids, offsets,
 limits) is a query parameter; nothing user-controlled is interpolated.
+
+Scalar parent keys use one typed Postgres array parameter, keeping SQL text and
+parameter count constant as the parent page grows. JSON, array, range, and
+other non-scalar/custom key types use individually prepared typed ``VALUES``
+rows instead: wrapping those values in a second array changes psycopg's
+adaptation semantics and was the source of incorrect parent-key fidelity.
 """
 
 from __future__ import annotations
@@ -78,11 +85,46 @@ from .plans import (
     order_entry_name_and_direction,
 )
 
-#: The ``unnest`` alias/column the lateral SQL binds parent ids to. The
-#: ``__dst`` prefix keeps them out of any model's column namespace.
+#: The typed parent-relation alias/column the lateral SQL binds parent ids to.
+#: The ``__dst`` prefix keeps them out of any model's column namespace.
 LATERAL_PARENT_ALIAS = "__dst_parents"
 LATERAL_PARENT_COLUMN = "__dst_parent_id"
 LATERAL_WINDOW_ALIAS = "__dst_window"
+LATERAL_CHILD_ALIAS = "__dst_child"
+LATERAL_THROUGH_ALIAS = "__dst_through"
+
+# Django scalar field identities that psycopg can safely adapt as one Postgres
+# array parameter after per-element ``get_db_prep_value``. Unknown/custom and
+# structured field types deliberately take the typed ``VALUES`` fallback.
+_ARRAY_BINDABLE_PARENT_FIELD_TYPES = frozenset(
+    {
+        "AutoField",
+        "BigAutoField",
+        "BigIntegerField",
+        "BinaryField",
+        "BooleanField",
+        "CharField",
+        "DateField",
+        "DateTimeField",
+        "DecimalField",
+        "DurationField",
+        "EmailField",
+        "FilePathField",
+        "FloatField",
+        "GenericIPAddressField",
+        "IntegerField",
+        "PositiveBigIntegerField",
+        "PositiveIntegerField",
+        "PositiveSmallIntegerField",
+        "SlugField",
+        "SmallAutoField",
+        "SmallIntegerField",
+        "TextField",
+        "TimeField",
+        "URLField",
+        "UUIDField",
+    },
+)
 
 #: Annotations the planned windowed body owns; any OTHER annotation on the
 #: queryset at fetch time means someone mutated it - fall back.
@@ -101,28 +143,42 @@ class LateralWindowSpec:
     ``(db column, descending)`` pairs; ``parent_link_field`` is the FK whose
     column matches each parent id (on the child table for ``DIRECT_FK``, on
     the through table for ``THROUGH_TABLE``) - its ``db_type`` provides the
-    ``unnest`` array cast at fetch time; ``prefetch_value_aliases`` are the
+    per-value parent cast at fetch time; ``prefetch_value_aliases`` are the
     ``_prefetch_related_val_<attname>`` attributes Django's M2M prefetch
     reads to attach rows to parents (their value IS the parent id the row's
-    lateral branch was joined on).
+    lateral branch was joined on). ``query_order_by`` freezes the planned
+    ordering, while ``select_fields`` carries the Django expressions whose
+    converter chains raw cursor rows must pass through.
     """
 
     model: type
     db_table: str
     select_columns: tuple[tuple[str, str], ...]
+    select_fields: tuple[Any, ...]
     order_columns: tuple[tuple[str, bool], ...]
+    query_order_by: tuple[Any, ...]
     parent_link_field: Any
     parent_link_table: str
     parent_link_column: str
     through_table: str | None
     through_child_column: str | None
-    child_pk_column: str
+    child_join_column: str
     prefetch_value_aliases: tuple[str, ...]
     offset: int
     limit: int | None
     reverse: bool
     with_total_count: bool
     next_page_probe: bool = False
+    # The count-free keyset value seek (``keyset.KeysetSeek``) riding this
+    # spec, or ``None``. Only the COUNT-FREE shape reaches the lateral SQL -
+    # the counted keyset shape downgrades to the windowed strategy inside
+    # ``LateralPrefetchStrategy.plan`` (its qualify-wrapped filtered-count
+    # window is already the whole-partition scan the count forces, so raw
+    # SQL would buy nothing and cost a second dialect of the marker/count
+    # arithmetic). The seek's columns are the window's ``order_columns`` in
+    # the same sequence (the ``cursor_field`` IS the order), which
+    # ``build_lateral_sql`` relies on when rendering the seek.
+    keyset_seek: Any | None = None
 
     def __post_init__(self) -> None:
         """Enforce the probe/count mutual-exclusion on the lateral window spec.
@@ -145,16 +201,25 @@ def build_lateral_sql(
     parent_ids: list,
     *,
     quote_name: Any,
-    array_cast: str | None = None,
+    parent_cast: str | None = None,
+    prepare_value: Any | None = None,
 ) -> tuple[str, list]:
     """Render the lateral page query for ``spec`` over ``parent_ids``.
 
     Pure: identifiers are quoted through the passed ``quote_name``
     (``connection.ops.quote_name`` in production, so the builder is fully
-    unit-testable on SQLite), and every value - the parent-id array, the
-    row-number bounds - is a parameter. ``array_cast`` (the parent link
-    column's ``db_type``, e.g. ``"bigint"``) makes the ``unnest`` element
-    type explicit; ``None`` leaves it to the driver's array typing.
+    unit-testable on SQLite), and every value - the parent ids and every
+    row-number bound - is a parameter. ``parent_cast`` (the parent link
+    column's ``db_type``, e.g. ``"bigint"``) types the parent relation.
+    Scalar target fields bind all ids as one typed array parameter through
+    ``unnest``; structured or unknown target fields use one typed ``VALUES``
+    parameter per id so field-specific adapters retain their value semantics.
+    ``None`` leaves parent values to the driver's parameter typing and thus
+    uses ``VALUES``.
+    ``prepare_value`` applies the parent-link and keyset-column fields'
+    database adapters to their values. Production passes
+    ``Field.get_db_prep_value``; pure builder tests may omit it for
+    already-adaptable scalar values.
 
     The row-number range predicate reproduces ``apply_window_pagination``
     branch for branch (forward bounds, workstream C's ``OR rn = 1`` marker
@@ -174,7 +239,8 @@ def build_lateral_sql(
     partition - the count is inherently O(partition) under either shape.
     """
     qn = quote_name
-    child = qn(spec.db_table)
+    child_table = qn(spec.db_table)
+    child = qn(LATERAL_CHILD_ALIAS)
     parents = qn(LATERAL_PARENT_ALIAS)
     pid = f"{parents}.{qn(LATERAL_PARENT_COLUMN)}"
     window = qn(LATERAL_WINDOW_ALIAS)
@@ -198,14 +264,15 @@ def build_lateral_sql(
     if spec.with_total_count:
         inner_select.append(f"COUNT(1) OVER () AS {qn(WINDOW_TOTAL_COUNT)}")
     if spec.through_table is not None:
-        through = qn(spec.through_table)
+        through_table = qn(spec.through_table)
+        through = qn(LATERAL_THROUGH_ALIAS)
         from_sql = (
-            f"{through} INNER JOIN {child}"
-            f" ON {child}.{qn(spec.child_pk_column)} = {through}.{qn(spec.through_child_column)}"
+            f"{through_table} AS {through} INNER JOIN {child_table} AS {child}"
+            f" ON {child}.{qn(spec.child_join_column)} = {through}.{qn(spec.through_child_column)}"
         )
         link_table = through
     else:
-        from_sql = child
+        from_sql = f"{child_table} AS {child}"
         link_table = child
     lateral_sql = (
         f"SELECT {', '.join(inner_select)} FROM {from_sql}"
@@ -216,7 +283,32 @@ def build_lateral_sql(
     # same plan ``apply_window_pagination`` renders as ``Q`` objects), here
     # rendered as raw SQL - only the rendering is lateral-specific.
     range_parts: list[str] = []
-    params: list = [list(parent_ids)]
+    prepared_parent_ids = [
+        prepare_value(spec.parent_link_field, value) if prepare_value is not None else value
+        for value in parent_ids
+    ]
+    target_field = spec.parent_link_field.target_field
+    use_parent_array = (
+        parent_cast is not None
+        and target_field.get_internal_type() in _ARRAY_BINDABLE_PARENT_FIELD_TYPES
+    )
+    params: list = [prepared_parent_ids] if use_parent_array else list(prepared_parent_ids)
+    if spec.keyset_seek is not None:
+        # The keyset value seek, INSIDE the lateral branch: paired with the
+        # in-branch ``ORDER BY ... LIMIT`` below this is the O(page) shape -
+        # Postgres seeks a ``(cursor columns..., pk)`` index to the cursor
+        # position and stops each branch after the page. Values are bound as
+        # query parameters prepared through each cursor column's Django field
+        # adapter (JSONField and custom fields cannot rely on the driver's
+        # native Python adaptation); nothing is interpolated.
+        seek_sql, seek_params = _keyset_seek_sql(
+            spec,
+            qn,
+            child,
+            prepare_value=prepare_value,
+        )
+        lateral_sql += f" AND ({seek_sql})"
+        params.extend(seek_params)
     range_plan = window_range_plan(
         offset=spec.offset,
         limit=spec.limit,
@@ -255,16 +347,77 @@ def build_lateral_sql(
     outer_select.append(rn)
     if spec.with_total_count:
         outer_select.append(f"{window}.{qn(WINDOW_TOTAL_COUNT)}")
-    array_param = "%s" if array_cast is None else f"%s::{array_cast}[]"
+    if use_parent_array:
+        parent_relation = f"unnest(%s::{parent_cast}[])"
+    else:
+        parent_param = "%s" if parent_cast is None else f"%s::{parent_cast}"
+        parent_values = ", ".join(f"({parent_param})" for _ in prepared_parent_ids)
+        parent_relation = f"(VALUES {parent_values})"
     sql = (
         f"SELECT {', '.join(outer_select)}"
-        f" FROM unnest({array_param}) AS {parents}({qn(LATERAL_PARENT_COLUMN)})"
+        f" FROM {parent_relation} AS {parents}({qn(LATERAL_PARENT_COLUMN)})"
         f" CROSS JOIN LATERAL ({lateral_sql}) {window}"
     )
     if where_sql:
         sql += f" WHERE {where_sql}"
     sql += f" ORDER BY {pid}, {rn}"
     return sql, params
+
+
+def _keyset_seek_greater(descending: bool, *, flip: bool) -> bool:
+    """Whether the seek comparison on a column points 'greater' in SQL terms.
+
+    The lateral twin of the direction rule in ``keyset.keyset_seek_q``: an
+    ascending column seeks greater values going forward; descending flips
+    it; a ``before:`` seek (``flip``) inverts again.
+    """
+    return descending if flip else not descending
+
+
+def _keyset_seek_sql(
+    spec: LateralWindowSpec,
+    qn: Any,
+    child: str,
+    *,
+    prepare_value: Any | None,
+) -> tuple[str, list]:
+    """Render the in-branch keyset seek for ``spec`` as ``(sql, params)``.
+
+    Uniform directions emit the native row-value comparison
+    ``(a, b) > (%s, %s)`` - the exact index-seek form Postgres optimizes
+    best; mixed ASC/DESC directions (which row-value SQL cannot express)
+    emit the same redundant-leading-bound OR-expansion the ORM Q-builder
+    renders, so the two dialects seek the identical row set. The seek
+    columns ARE ``spec.order_columns`` (the ``cursor_field`` is the window
+    order), aligned index-for-index with the decoded cursor values -
+    ``_build_lateral_spec`` guarantees the arity.
+    """
+    seek = spec.keyset_seek
+    values = [
+        prepare_value(column.field, value) if prepare_value is not None else value
+        for column, value in zip(seek.columns, seek.cursor.values, strict=True)
+    ]
+    columns = spec.order_columns
+    refs = [f"{child}.{qn(column)}" for column, _ in columns]
+    greater = [_keyset_seek_greater(descending, flip=seek.flip) for _, descending in columns]
+    if len(set(greater)) == 1:
+        op = ">" if greater[0] else "<"
+        if len(refs) == 1:
+            return f"{refs[0]} {op} %s", values
+        placeholders = ", ".join(["%s"] * len(refs))
+        return f"({', '.join(refs)}) {op} ({placeholders})", list(values)
+    params: list = [values[0]]
+    lead = f"{refs[0]} {'>=' if greater[0] else '<='} %s"
+    or_parts: list[str] = []
+    for index in range(len(columns)):
+        arm_sql: list[str] = []
+        for j in range(index):
+            arm_sql.append(f"{refs[j]} = %s")
+            params.append(values[j])
+        arm_sql.append(f"{refs[index]} {'>' if greater[index] else '<'} %s")
+        params.append(values[index])
+        or_parts.append(f"({' AND '.join(arm_sql)})" if len(arm_sql) > 1 else arm_sql[0])
+    return f"{lead} AND ({' OR '.join(or_parts)})", params
 
 
 class LateralQuerySet(QuerySet):
@@ -318,18 +471,63 @@ def _fetch_lateral_rows(queryset: LateralQuerySet) -> list | None:
     parent_ids = _extract_parent_ids(queryset, spec)
     if parent_ids is None:
         return None
+    # Repeated parent rows would execute duplicate lateral branches and inflate
+    # every attached child page, so de-duplicate them before binding.
+    parent_ids = _deduplicate_parent_ids(parent_ids)
     if not parent_ids:
         return []
     sql, params = build_lateral_sql(
         spec,
         parent_ids,
         quote_name=connection.ops.quote_name,
-        array_cast=spec.parent_link_field.db_type(connection),
+        parent_cast=spec.parent_link_field.db_type(connection),
+        prepare_value=lambda field, value: field.get_db_prep_value(
+            value,
+            connection,
+            prepared=False,
+        ),
     )
     with connection.cursor() as cursor:
         cursor.execute(sql, params)
-        fetched = cursor.fetchall()
+        fetched = _apply_lateral_converters(spec, cursor.fetchall(), connection)
     return [_instantiate_row(spec, row, queryset.db) for row in fetched]
+
+
+def _deduplicate_parent_ids(parent_ids: list) -> list:
+    """De-duplicate hashable parent ids; discard NULL ids that cannot match a branch."""
+    try:
+        unique = dict.fromkeys(parent_ids)
+        unique.pop(None, None)
+        return list(unique)
+    except TypeError:
+        # Unhashable values cannot be represented by the ordered dict, so
+        # retain their original order and only remove non-matching NULLs.
+        return [value for value in parent_ids if value is not None]
+
+
+def _apply_lateral_converters(spec: LateralWindowSpec, rows: list, connection: Any) -> list:
+    """Apply Django's backend + field converter chain to raw cursor rows."""
+    expressions = [
+        spec.parent_link_field.target_field.get_col(spec.parent_link_table),
+        *(field.get_col(spec.db_table) for field in spec.select_fields),
+    ]
+    converters = {}
+    for position, expression in enumerate(expressions):
+        chain = connection.ops.get_db_converters(expression) + expression.get_db_converters(
+            connection,
+        )
+        if chain:
+            converters[position] = (chain, expression)
+    converted = []
+    for raw_row in rows:
+        row = list(raw_row)
+        for position, (chain, expression) in converters.items():
+            value = row[position]
+            for converter in chain:
+                value = converter(value, expression, connection)
+            row[position] = value
+        converted.append(tuple(row))
+    return converted
 
 
 def _extract_parent_ids(queryset: LateralQuerySet, spec: LateralWindowSpec) -> list | None:
@@ -347,7 +545,19 @@ def _extract_parent_ids(queryset: LateralQuerySet, spec: LateralWindowSpec) -> l
     second IN, an expression rhs, a slice - returns ``None``.
     """
     query = queryset.query
-    if query.is_sliced or query.distinct or query.select_related:
+    if (
+        query.is_sliced
+        or query.distinct
+        or query.select_related
+        or query.select_for_update
+        or query.combinator
+        or query.extra_tables
+        or query.group_by is not None
+    ):
+        return None
+    if tuple(query.order_by) != spec.query_order_by or not query.standard_ordering:
+        return None
+    if _select_columns(queryset, queryset.model._meta) != spec.select_columns:
         return None
     if set(query.annotations) - _WINDOW_ANNOTATIONS:
         return None
@@ -357,13 +567,25 @@ def _extract_parent_ids(queryset: LateralQuerySet, spec: LateralWindowSpec) -> l
     if where.negated or where.connector != "AND":
         return None
     parent_ids: list | None = None
+    unrecognized: list[Any] = []
     for child in where.children:
         if _is_window_qual(child):
             continue
         if parent_ids is None:
-            parent_ids = _parent_in_values(child, spec)
-            if parent_ids is not None:
+            maybe_ids = _parent_in_values(child, spec)
+            if maybe_ids is not None:
+                parent_ids = maybe_ids
                 continue
+        unrecognized.append(child)
+    if spec.keyset_seek is not None:
+        # The planned count-free keyset body carries the seek in its base
+        # WHERE (the windowed-fallback correctness floor); the fetch-time
+        # tree must contain EXACTLY that seek - structurally verified
+        # against the spec - and nothing else. Any other residue means a
+        # consumer/Django mutation: fall back to the windowed body.
+        if not _keyset_seek_quals_match(unrecognized, spec):
+            return None
+    elif unrecognized:
         return None
     return parent_ids
 
@@ -379,6 +601,72 @@ def _is_window_qual(node: Any) -> bool:
     if children is not None:
         return not node.negated and all(_is_window_qual(sub) for sub in children)
     return isinstance(getattr(node, "lhs", None), Window)
+
+
+def _keyset_seek_quals_match(nodes: list[Any], spec: LateralWindowSpec) -> bool:
+    """Whether ``nodes`` are exactly the planned keyset seek's WHERE residue.
+
+    ``keyset.keyset_seek_q`` builds a deterministic tree - the redundant
+    leading bound plus the OR-expansion - which Django's same-connector
+    squash splices into the root AND as TWO children (one child for a
+    single-column cursor, where the "expansion" is a bare comparison).
+    This verifies that exact shape against the spec's columns, directions,
+    and decoded values, so the lateral SQL never silently drops a filter
+    that is NOT the seek (which would return wrong rows) and never
+    double-applies one that is.
+    """
+    seek = spec.keyset_seek
+    columns = spec.order_columns
+    values = list(seek.cursor.values)
+    if len(nodes) != 2 or len(columns) != len(values):
+        return False
+    greater = [_keyset_seek_greater(descending, flip=seek.flip) for _, descending in columns]
+
+    def is_lookup(node: Any, lookup_name: str, index: int) -> bool:
+        if getattr(node, "lookup_name", None) != lookup_name:
+            return False
+        target = getattr(getattr(node, "lhs", None), "target", None)
+        if target is None or getattr(target, "column", None) != columns[index][0]:
+            return False
+        if target.model._meta.db_table != spec.db_table:
+            return False
+        rhs = node.rhs
+        return not hasattr(rhs, "resolve_expression") and rhs == values[index]
+
+    def is_cmp(node: Any, index: int) -> bool:
+        return is_lookup(node, "gt" if greater[index] else "lt", index)
+
+    lead, expansion = nodes
+    if not is_lookup(lead, "gte" if greater[0] else "lte", 0):
+        return False
+    if len(columns) == 1:
+        return is_cmp(expansion, 0)
+    arms = getattr(expansion, "children", None)
+    if (
+        arms is None
+        or expansion.negated
+        or expansion.connector != "OR"
+        or len(arms) != len(columns)
+    ):
+        return False
+    for index, arm in enumerate(arms):
+        if index == 0:
+            if not is_cmp(arm, 0):
+                return False
+            continue
+        arm_children = getattr(arm, "children", None)
+        if (
+            arm_children is None
+            or arm.negated
+            or arm.connector != "AND"
+            or len(arm_children) != index + 1
+        ):
+            return False
+        if not all(is_lookup(arm_children[j], "exact", j) for j in range(index)):
+            return False
+        if not is_cmp(arm_children[index], index):
+            return False
+    return True
 
 
 def _parent_in_values(node: Any, spec: LateralWindowSpec) -> list | None:
@@ -486,36 +774,75 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
       annotations, or ``extra`` - the lateral subquery reproduces none of
       those;
     - an ordering that is not plain local concrete columns (expressions,
-      ``__`` traversals);
+      ``__`` traversals, or multi-table parent columns);
     - a ``defer()``-shaped projection (the ``.only()`` walker contract is
-      the supported shape) or a composite/columnless primary key.
+      the supported shape), selected multi-table parent columns, or a
+      composite/columnless primary key.
     """
+    if request.keyset_seek is not None and request.with_total_count:
+        # Counted keyset seek: the ORM's qualify-wrapped filtered-count window
+        # (``plans.py::_apply_keyset_counted_window``) is already the
+        # whole-partition scan the pre-seek count forces - a raw-SQL dialect
+        # of the same scan buys nothing, so downgrade to windowed rather than
+        # grow a second marker/count arithmetic.
+        return None
     child_queryset = request.child_queryset
     query = child_queryset.query
-    if query.where.children or query.select_related or query.annotations or query.extra:
+    if (
+        query.where.children
+        or query.select_related
+        or query.annotations
+        or query.extra
+        or query.extra_tables
+        or query.group_by is not None
+    ):
         return None
     child_meta = child_queryset.model._meta
     child_pk_column = getattr(child_meta.pk, "column", None)
     if child_pk_column is None:
-        return None  # composite primary key - no single unnest join column.
+        return None  # composite primary key - no single default child join column.
     if type(child_queryset) is not QuerySet:
         return None  # custom subclass - the lateral class rebind would erase it.
     order_columns = _order_columns(request.order_by, child_meta)
     if order_columns is None:
         return None
+    if request.keyset_seek is not None:
+        seek_signature = tuple(
+            (column.field.column, column.descending) for column in request.keyset_seek.columns
+        )
+        if seek_signature != order_columns or len(order_columns) != len(
+            request.keyset_seek.cursor.values,
+        ):
+            # The seek rides the order columns index-for-index (the cursor_field
+            # IS the window order); an arity/order mismatch means the deterministic
+            # order drifted from the cursor columns - downgrade rather than
+            # misalign values against raw SQL columns.
+            return None
     select_columns = _select_columns(child_queryset, child_meta)
     if select_columns is None:
         return None
+    fields_by_attname = {field.attname: field for field in child_meta.concrete_fields}
+    select_fields = tuple(fields_by_attname[attname] for attname, _column in select_columns)
     # Only the five link-shaped fields differ between the two join shapes;
     # the resolved link FIELD OBJECTS come from the request's join descriptor
     # (``join_taxonomy.classify_relation_join`` owns everything join-shaped a
     # relation field implies - this function only READS it).
     join = request.join
     parent_link_field = join.parent_link_field
+    if parent_link_field is None:
+        return None
+    child_join_column = child_pk_column
     if join.lateral_shape is LateralJoinShape.THROUGH_TABLE:
+        through_child_field = join.through_child_field
+        if through_child_field is None:
+            return None
+        child_target_field = through_child_field.target_field
+        if child_target_field.model._meta.db_table != child_meta.db_table:
+            return None
+        child_join_column = child_target_field.column
         through_table = parent_link_field.model._meta.db_table
         parent_link_table = through_table
-        through_child_column = join.through_child_field.column
+        through_child_column = through_child_field.column
         prefetch_value_aliases: tuple[str, ...] = (
             f"_prefetch_related_val_{parent_link_field.attname}",
         )
@@ -530,19 +857,22 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
         model=child_queryset.model,
         db_table=child_meta.db_table,
         select_columns=select_columns,
+        select_fields=select_fields,
         order_columns=order_columns,
+        query_order_by=tuple(request.order_by),
         parent_link_field=parent_link_field,
         parent_link_table=parent_link_table,
         parent_link_column=parent_link_field.column,
         through_table=through_table,
         through_child_column=through_child_column,
-        child_pk_column=child_pk_column,
+        child_join_column=child_join_column,
         prefetch_value_aliases=prefetch_value_aliases,
         offset=request.offset,
         limit=request.limit,
         reverse=request.reverse,
         with_total_count=request.with_total_count,
         next_page_probe=request.next_page_probe,
+        keyset_seek=request.keyset_seek,
     )
 
 
@@ -571,7 +901,7 @@ def _order_columns(order_by: tuple, child_meta: Any) -> tuple[tuple[str, bool], 
             (f for f in child_meta.concrete_fields if name in (f.name, f.attname)),
             None,
         )
-        if field is None:
+        if field is None or field.model._meta.db_table != child_meta.db_table:
             return None
         columns.append((field.column, descending))
     return tuple(columns)
@@ -595,9 +925,13 @@ def _select_columns(queryset: Any, child_meta: Any) -> tuple[tuple[str, str], ..
     if defer:
         if names:
             return None
-        return tuple((f.attname, f.column) for f in child_meta.concrete_fields)
-    return tuple(
-        (f.attname, f.column)
-        for f in child_meta.concrete_fields
-        if f.primary_key or f.name in names or f.attname in names
-    )
+        fields = tuple(child_meta.concrete_fields)
+    else:
+        fields = tuple(
+            field
+            for field in child_meta.concrete_fields
+            if field.primary_key or field.name in names or field.attname in names
+        )
+    if any(field.model._meta.db_table != child_meta.db_table for field in fields):
+        return None
+    return tuple((field.attname, field.column) for field in fields)

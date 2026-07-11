@@ -39,6 +39,10 @@ Issues = "https://github.com/riodw/django-strawberry-framework/issues"
 
 [dependency-groups]
 dev = [
+    # cryptography is a SOFT dependency of the package: only Meta.cursor_field
+    # needs AES-SIV. The dev group installs it so keyset tests exercise the
+    # present path while ordinary consumers avoid a compiled dependency.
+    "cryptography>=44.0.0",
     "djangorestframework>=3.17.0",
     "faker>=33.0.0",
     "pillow>=10.0.0",

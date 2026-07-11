@@ -160,6 +160,15 @@ class DjangoTypeDefinition:
     orderset_class: type | None = None
     fields_class: type | None = None
     connection: dict | None = None
+    # Keyset-cursor opt-in (the BACKLOG ``stable_cursor_field`` contract):
+    # the validated ``Meta.cursor_field`` order strings, or ``None`` for the
+    # shipped offset-cursor behavior. When set, every connection over this
+    # type is KEYSET-MODE: it orders by these columns, mints value-encoded
+    # signed cursors (``keyset.py``), and rejects offset cursors. Shape is
+    # validated at class creation (``types/base.py::_validate_cursor_field``);
+    # the column contract (local / concrete / non-nullable / unique terminal)
+    # at finalization (``keyset.validate_cursor_field_columns``).
+    cursor_field: tuple[str, ...] | None = None
     # Per-relation shape declaration; values pre-normalized to
     # {"list", "connection", "both"} (spec-032 Decision 7). See the
     # invariants docstring above.

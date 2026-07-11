@@ -641,6 +641,16 @@ def _optimizer_can_absorb(
 WINDOW_ROW_NUMBER = "_dst_row_number"
 WINDOW_TOTAL_COUNT = "_dst_total_count"
 WINDOW_ROW_NUMBER_REVERSED = "_dst_row_number_reversed"
+# Keyset-seek siblings (the ``cursor_field`` counted-seek window shape):
+# ``_dst_row_number_abs`` is the partition's ABSOLUTE forward row number,
+# annotated only to keep the abs-row-1 marker row (the counted keyset window's
+# ``_dst_row_number`` is page-relative, so ``rn == 1`` no longer identifies a
+# row every non-empty partition has); ``_dst_keyset_seek_count`` is the
+# per-partition count of post-seek rows, the counted shape's ``hasNextPage``
+# source (``last page rn < seek count``) - the page-relative row number can no
+# longer be compared against the PRE-seek ``_dst_total_count``.
+WINDOW_ROW_NUMBER_ABS = "_dst_row_number_abs"
+WINDOW_KEYSET_SEEK_COUNT = "_dst_keyset_seek_count"
 
 
 def order_entry_name_and_direction(entry: Any) -> tuple[str, bool] | None:
@@ -783,6 +793,7 @@ def apply_window_pagination(
     reverse: bool = False,
     with_total_count: bool = True,
     next_page_probe: bool = False,
+    keyset_seek: Any | None = None,
 ) -> Any:
     """Annotate row-number / total-count windows and filter to the requested slice.
 
@@ -844,15 +855,65 @@ def apply_window_pagination(
     (page bound plus the one probe sentinel when ``next_page_probe`` is set);
     the resolver drops the sentinel and derives ``hasNextPage`` from its
     presence (``connection.py::_resolve_from_window``).
+
+    ``keyset_seek`` (a ``keyset.KeysetSeek``, forward-only) switches the
+    window to the ``cursor_field`` VALUE-SEEK contract in one of two shapes,
+    chosen by ``with_total_count``:
+
+    - **Count-free seek** (``with_total_count=False``): the seek predicate
+      lands in the base ``WHERE`` - an index ACCESS predicate - and the row
+      number runs over the post-seek rows only, so ``_dst_row_number`` is
+      page-relative (1..N) natively and the ``next_page_probe`` sentinel
+      composes unchanged. This is the O(seek + page) shape.
+    - **Counted seek** (``with_total_count=True``): the seek must NOT
+      narrow the base query or ``_dst_total_count`` would silently become
+      "rows after the cursor". Instead ``_dst_row_number`` becomes a
+      FILTERED RUNNING COUNT (``COUNT(*) FILTER (WHERE seek) OVER
+      (PARTITION ... ORDER ...)``): the post-seek rows are an order-SUFFIX
+      of every partition, so they number 1..k and every pre-seek row
+      carries 0 - the shared range filter (``rn > 0`` via the plan's
+      keyset floor, ``rn <= upper``) is then a pure window-annotation
+      filter, which Django wraps qualify-style, keeping the seek OUT of
+      the inner ``WHERE`` (the pre-seek-count invariant, verified against
+      the compiled SQL). ``_dst_keyset_seek_count`` (the post-seek
+      partition count) rides along as the page-relative ``hasNextPage``
+      source, and the ambiguous-empty marker becomes the partition's
+      ABSOLUTE first row (``_dst_row_number_abs == 1``) since page-relative
+      ``rn == 1`` only exists when the page itself is non-empty.
+
+    Reversed keyset windows are not planned in v1 (the walker's fallback
+    discipline routes ``last`` / ``before:`` keyset shapes per-parent), so
+    ``keyset_seek`` + ``reverse`` raises the loud ``OptimizerError``.
     """
+    if keyset_seek is not None and reverse:
+        raise OptimizerError(
+            "A keyset seek window cannot be reversed: backward keyset pagination "
+            "resolves through the per-parent/root keyset slicer, never a "
+            "reversed window plan.",
+        )
+    keyset_counted = keyset_seek is not None and with_total_count
     range_plan = window_range_plan(
         offset=offset,
         limit=limit,
         reverse=reverse,
         next_page_probe=next_page_probe,
+        keyset_counted=keyset_counted,
     )
     assert_window_fetch_mode(range_plan, with_total_count=with_total_count)
     queryset = queryset.order_by(*order_by)
+    if keyset_counted:
+        return _apply_keyset_counted_window(
+            queryset,
+            partition_by=partition_by,
+            order_by=order_by,
+            seek_q=keyset_seek.q(),
+            range_plan=range_plan,
+        )
+    if keyset_seek is not None:
+        # Count-free seek: the predicate narrows the base WHERE (the index
+        # seek), and the plain row number below runs over post-seek rows
+        # only - page-relative 1..N by construction.
+        queryset = queryset.filter(keyset_seek.q())
     annotations = {
         WINDOW_ROW_NUMBER: Window(
             RowNumber(),
@@ -905,6 +966,53 @@ def apply_window_pagination(
             range_q = range_q | Q(**{WINDOW_ROW_NUMBER: 1})
         queryset = queryset.filter(range_q)
     return queryset
+
+
+def _apply_keyset_counted_window(
+    queryset: Any,
+    *,
+    partition_by: str,
+    order_by: Sequence[Any],
+    seek_q: Q,
+    range_plan: Any,
+) -> Any:
+    """Render the COUNTED keyset-seek window (see ``apply_window_pagination``).
+
+    All three (four with markers) annotations partition identically; only the
+    running-count row number carries the window order. The range filter
+    references window annotations EXCLUSIVELY, so Django's qualify wrapping
+    moves it (and only it) outside the subquery while every base-column
+    filter - including the parent-``IN`` Django's prefetch machinery adds
+    later - stays inside, which is precisely what keeps
+    ``_dst_total_count`` the PRE-seek partition count.
+    """
+    annotations = {
+        WINDOW_ROW_NUMBER: Window(
+            Count("pk", filter=seek_q),
+            partition_by=partition_by,
+            order_by=order_by,
+        ),
+        WINDOW_TOTAL_COUNT: Window(Count(1), partition_by=partition_by),
+        WINDOW_KEYSET_SEEK_COUNT: Window(Count("pk", filter=seek_q), partition_by=partition_by),
+    }
+    if range_plan.add_marker_rows:
+        annotations[WINDOW_ROW_NUMBER_ABS] = Window(
+            RowNumber(),
+            partition_by=partition_by,
+            order_by=order_by,
+        )
+    queryset = queryset.annotate(**annotations)
+    # ``lower_bound`` is the keyset floor 0 (drop the rn-0 pre-seek rows);
+    # the upper bound is the page bound (no probe composes with a count).
+    range_q = Q(**{f"{WINDOW_ROW_NUMBER}__gt": range_plan.lower_bound})
+    if range_plan.upper_bound is not None:
+        range_q &= Q(**{f"{WINDOW_ROW_NUMBER}__lte": range_plan.fetch_upper_bound})
+    if range_plan.add_marker_rows:
+        # The keyset marker: the partition's ABSOLUTE first row, kept so an
+        # empty page (all children before the cursor) and a childless parent
+        # stay distinguishable and the pre-seek count reaches the resolver.
+        range_q = range_q | Q(**{WINDOW_ROW_NUMBER_ABS: 1})
+    return queryset.filter(range_q)
 
 
 def _reverse_order_by(order_by: Sequence[Any]) -> list[Any]:

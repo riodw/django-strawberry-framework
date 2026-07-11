@@ -14,7 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 from apps.library.models import Book, Genre, Shelf
-from django.db import connections
+from django.db import connections, models
 from django.db.models import F, Prefetch, Value
 from django.db.models.fields.related_descriptors import _filter_prefetch_queryset
 
@@ -76,7 +76,7 @@ def test_spec_direct_fk_reverse_foreign_key():
     assert spec.parent_link_column == "shelf_id"
     assert spec.through_table is None
     assert spec.through_child_column is None
-    assert spec.child_pk_column == "id"
+    assert spec.child_join_column == "id"
     assert spec.prefetch_value_aliases == ()
     assert (
         spec.offset,
@@ -120,6 +120,7 @@ def test_spec_forward_m2m_through_table():
     assert spec.parent_link_column == "book_id"
     assert spec.through_table == "library_book_genres"
     assert spec.through_child_column == "genre_id"
+    assert spec.child_join_column == "id"
     assert spec.prefetch_value_aliases == ("_prefetch_related_val_book_id",)
 
 
@@ -131,6 +132,44 @@ def test_spec_reverse_m2m_swaps_the_through_sides():
     assert spec.parent_link_column == "genre_id"
     assert spec.through_child_column == "book_id"
     assert spec.prefetch_value_aliases == ("_prefetch_related_val_genre_id",)
+
+
+def test_spec_downgrades_for_unresolvable_through_link_fields():
+    """Incomplete or cross-table through metadata cannot be rendered safely."""
+    request = _request(Book, "genres")
+    assert (
+        _build_lateral_spec(
+            dataclasses.replace(
+                request,
+                join=dataclasses.replace(request.join, parent_link_field=None),
+            ),
+        )
+        is None
+    )
+    assert (
+        _build_lateral_spec(
+            dataclasses.replace(
+                request,
+                join=dataclasses.replace(request.join, through_child_field=None),
+            ),
+        )
+        is None
+    )
+    cross_table_field = SimpleNamespace(
+        target_field=SimpleNamespace(model=Shelf, column="id"),
+    )
+    assert (
+        _build_lateral_spec(
+            dataclasses.replace(
+                request,
+                join=dataclasses.replace(
+                    request.join,
+                    through_child_field=cross_table_field,
+                ),
+            ),
+        )
+        is None
+    )
 
 
 def test_spec_maps_pk_alias_and_descending_order():
@@ -192,17 +231,67 @@ def test_order_columns_reject_unresolvable_names():
 
 
 def test_spec_downgrades_on_columnless_primary_key():
-    """A composite (columnless) child pk has no single unnest join column."""
+    """A composite (columnless) child pk has no single default join column."""
     fake_queryset = SimpleNamespace(
         query=SimpleNamespace(
             where=SimpleNamespace(children=[]),
             select_related=False,
             annotations={},
             extra={},
+            extra_tables=(),
+            group_by=None,
         ),
         model=SimpleNamespace(_meta=SimpleNamespace(pk=SimpleNamespace(column=None))),
     )
     assert _build_lateral_spec(_request(Shelf, "books", child_queryset=fake_queryset)) is None
+
+
+def test_spec_downgrades_for_multi_table_inherited_order_column():
+    """Parent-table order columns cannot be rendered against the child table."""
+
+    class ParentOrderRecord(models.Model):
+        inherited_order = models.IntegerField()
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class ChildOrderRecord(ParentOrderRecord):
+        local_value = models.IntegerField()
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    request = _shelf_books_request(
+        child_queryset=ChildOrderRecord.objects.all(),
+        order_by=("inherited_order", "pk"),
+    )
+    assert _build_lateral_spec(request) is None
+
+
+def test_spec_downgrades_for_selected_multi_table_parent_column():
+    """A parent-table projection needs Django's join, so raw lateral SQL downgrades."""
+
+    class ParentProjectionRecord(models.Model):
+        inherited_value = models.IntegerField()
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class ChildProjectionRecord(ParentProjectionRecord):
+        local_order = models.IntegerField()
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    request = _shelf_books_request(
+        child_queryset=ChildProjectionRecord.objects.all(),
+        order_by=("local_order", "pk"),
+    )
+    assert _build_lateral_spec(request) is None
 
 
 def test_spec_downgrades_on_unreadable_deferred_loading():
@@ -227,22 +316,23 @@ def test_sql_forward_page_shape():
     full per-partition sort).
     """
     spec = _build_lateral_spec(_shelf_books_request())
-    sql, params = build_lateral_sql(spec, [1, 2, 3], quote_name=_quote, array_cast="bigint")
+    sql, params = build_lateral_sql(spec, [1, 2, 3], quote_name=_quote, parent_cast="bigint")
     assert sql.startswith(
         'SELECT "__dst_parents"."__dst_parent_id", "__dst_window"."id",'
         ' "__dst_window"."title", "__dst_window"."shelf_id",'
         ' "__dst_window"."_dst_row_number", "__dst_window"."_dst_total_count"'
-        ' FROM unnest(%s::bigint[]) AS "__dst_parents"("__dst_parent_id")'
+        " FROM unnest(%s::bigint[])"
+        ' AS "__dst_parents"("__dst_parent_id")'
         " CROSS JOIN LATERAL (",
     )
     assert (
-        'ROW_NUMBER() OVER (ORDER BY "library_book"."title" ASC, "library_book"."id" ASC)'
+        'ROW_NUMBER() OVER (ORDER BY "__dst_child"."title" ASC, "__dst_child"."id" ASC)'
         ' AS "_dst_row_number"' in sql
     )
     assert 'COUNT(1) OVER () AS "_dst_total_count"' in sql
-    assert 'WHERE "library_book"."shelf_id" = "__dst_parents"."__dst_parent_id"' in sql
+    assert 'WHERE "__dst_child"."shelf_id" = "__dst_parents"."__dst_parent_id"' in sql
     assert sql.endswith(
-        ' ORDER BY "library_book"."title" ASC, "library_book"."id" ASC LIMIT %s)'
+        ' ORDER BY "__dst_child"."title" ASC, "__dst_child"."id" ASC LIMIT %s)'
         ' "__dst_window"'
         ' ORDER BY "__dst_parents"."__dst_parent_id", "__dst_window"."_dst_row_number"',
     )
@@ -256,8 +346,8 @@ def test_sql_count_free_page_omits_the_count_window():
     sql, params = build_lateral_sql(spec, [1], quote_name=_quote)
     assert "_dst_total_count" not in sql
     assert "COUNT(1)" not in sql
-    assert "unnest(%s)" in sql  # no cast when the caller has none.
-    assert params == [[1], 2]
+    assert "FROM (VALUES (%s))" in sql  # no cast when the caller has none.
+    assert params == [1, 2]
 
 
 def test_sql_next_page_probe_overfetches_one_row_in_branch():
@@ -276,12 +366,12 @@ def test_sql_next_page_probe_overfetches_one_row_in_branch():
     assert "_dst_total_count" not in sql
     assert "COUNT(1)" not in sql
     assert sql.endswith(
-        ' ORDER BY "library_book"."title" ASC, "library_book"."id" ASC LIMIT %s)'
+        ' ORDER BY "__dst_child"."title" ASC, "__dst_child"."id" ASC LIMIT %s)'
         ' "__dst_window"'
         ' ORDER BY "__dst_parents"."__dst_parent_id", "__dst_window"."_dst_row_number"',
     )
     assert '"__dst_window" WHERE' not in sql  # bounded in-branch, no outer filter.
-    assert params == [[7], 3]  # limit 2 + 1 sentinel row.
+    assert params == [7, 3]  # limit 2 + 1 sentinel row.
 
 
 def test_sql_offset_shape_keeps_the_marker_row():
@@ -293,7 +383,7 @@ def test_sql_offset_shape_keeps_the_marker_row():
         ' AND "__dst_window"."_dst_row_number" <= %s)'
         ' OR "__dst_window"."_dst_row_number" = 1' in sql
     )
-    assert params == [[7], 3, 5]
+    assert params == [7, 3, 5]
 
 
 def test_sql_first_zero_shape_keeps_the_marker_row():
@@ -304,7 +394,7 @@ def test_sql_first_zero_shape_keeps_the_marker_row():
         'WHERE ("__dst_window"."_dst_row_number" <= %s)'
         ' OR "__dst_window"."_dst_row_number" = 1' in sql
     )
-    assert params == [[7], 0]
+    assert params == [7, 0]
 
 
 def test_sql_unbounded_shape_has_no_range_predicate():
@@ -312,7 +402,7 @@ def test_sql_unbounded_shape_has_no_range_predicate():
     spec = _build_lateral_spec(_shelf_books_request(limit=None))
     sql, params = build_lateral_sql(spec, [7], quote_name=_quote)
     assert ') "__dst_window" ORDER BY' in sql
-    assert params == [[7]]
+    assert params == [7]
 
 
 def test_sql_reverse_shape_filters_the_reversed_row_number():
@@ -320,7 +410,7 @@ def test_sql_reverse_shape_filters_the_reversed_row_number():
     spec = _build_lateral_spec(_shelf_books_request(reverse=True, limit=2))
     sql, params = build_lateral_sql(spec, [7], quote_name=_quote)
     assert (
-        'ROW_NUMBER() OVER (ORDER BY "library_book"."title" DESC, "library_book"."id" DESC)'
+        'ROW_NUMBER() OVER (ORDER BY "__dst_child"."title" DESC, "__dst_child"."id" DESC)'
         ' AS "_dst_row_number_reversed"' in sql
     )
     assert 'WHERE "__dst_window"."_dst_row_number_reversed" <= %s' in sql
@@ -328,7 +418,7 @@ def test_sql_reverse_shape_filters_the_reversed_row_number():
     assert sql.endswith(
         'ORDER BY "__dst_parents"."__dst_parent_id", "__dst_window"."_dst_row_number"',
     )
-    assert params == [[7], 2]
+    assert params == [7, 2]
 
 
 def test_sql_reverse_shape_applies_the_offset_filter_when_present():
@@ -339,19 +429,39 @@ def test_sql_reverse_shape_applies_the_offset_filter_when_present():
         'WHERE "__dst_window"."_dst_row_number" > %s'
         ' AND "__dst_window"."_dst_row_number_reversed" <= %s' in sql
     )
-    assert params == [[7], 1, 2]
+    assert params == [7, 1, 2]
 
 
 def test_sql_through_table_shape_joins_inside_the_lateral():
     """M2M: the through table drives the lateral branch and the parent match."""
     spec = _build_lateral_spec(_request(Genre, "books"))
-    sql, params = build_lateral_sql(spec, [5, 6], quote_name=_quote, array_cast="bigint")
+    sql, params = build_lateral_sql(spec, [5, 6], quote_name=_quote, parent_cast="bigint")
     assert (
-        'FROM "library_book_genres" INNER JOIN "library_book"'
-        ' ON "library_book"."id" = "library_book_genres"."book_id"' in sql
+        'FROM "library_book_genres" AS "__dst_through"'
+        ' INNER JOIN "library_book" AS "__dst_child"'
+        ' ON "__dst_child"."id" = "__dst_through"."book_id"' in sql
     )
-    assert 'WHERE "library_book_genres"."genre_id" = "__dst_parents"."__dst_parent_id"' in sql
+    assert 'WHERE "__dst_through"."genre_id" = "__dst_parents"."__dst_parent_id"' in sql
     assert params == [[5, 6], 2]
+
+
+def test_sql_non_scalar_parent_keys_keep_typed_values_rows():
+    """Structured parent keys avoid the value-changing array-of-values adapter."""
+    spec = _build_lateral_spec(_shelf_books_request())
+    spec = dataclasses.replace(
+        spec,
+        parent_link_field=SimpleNamespace(
+            target_field=models.JSONField(),
+        ),
+    )
+    sql, params = build_lateral_sql(
+        spec,
+        [{"tenant": 1}, {"tenant": 2}],
+        quote_name=_quote,
+        parent_cast="jsonb",
+    )
+    assert "FROM (VALUES (%s::jsonb), (%s::jsonb))" in sql
+    assert params == [{"tenant": 1}, {"tenant": 2}, 2]
 
 
 # ---------------------------------------------------------------------------
@@ -463,6 +573,11 @@ def test_extract_empty_parent_list_short_circuits_to_no_rows():
         ),
         (lambda qs: qs.annotate(marker=Value(1)), "a non-window annotation"),
         (lambda qs: qs.extra(select={"marker": "1"}), "an unpredicted extra select"),
+        (lambda qs: qs.order_by("-title", "id"), "fetch-time ordering drift"),
+        (lambda qs: qs.reverse(), "fetch-time ordering reversal"),
+        (lambda qs: qs.only("id", "shelf_id"), "fetch-time projection drift"),
+        (lambda qs: qs.extra(tables=["shadow_table"]), "an unexpected extra table"),
+        (lambda qs: qs.select_for_update(), "fetch-time row locking"),
         (lambda qs: qs[:5], "a sliced queryset"),
         (lambda qs: qs.distinct(), "a DISTINCT queryset"),
         (lambda qs: qs.select_related("shelf"), "a select_related graft"),
@@ -636,7 +751,7 @@ def test_lateral_execution_instantiates_window_rows(monkeypatch):
     rows = list(queryset)
     sql, params = facade.scripted_cursor.executed
     assert "CROSS JOIN LATERAL" in sql
-    assert "::bigint[]" in sql  # the FK db_type drives the unnest element cast.
+    assert "unnest(%s::bigint[])" in sql  # the FK db_type drives the parent array cast.
     assert params == [[1, 2], 2]
     assert [type(row) for row in rows] == [Book, Book, Book]
     assert [(row.pk, row.title, row.shelf_id) for row in rows] == [
@@ -674,6 +789,81 @@ def test_lateral_execution_sets_m2m_prefetch_values(monkeypatch):
     sql, params = facade.scripted_cursor.executed
     assert "_dst_total_count" not in sql
     assert params == [[5], 2]
+
+
+def test_lateral_execution_deduplicates_parent_ids(monkeypatch):
+    """Repeated parent ids execute one lateral branch instead of duplicating child rows."""
+    from django_strawberry_framework.optimizer import lateral_fetch
+
+    queryset = _prefetch_filtered(
+        _shelf_books_request(),
+        "shelf",
+        [Shelf(pk=1), Shelf(pk=1), Shelf(pk=2)],
+    )
+    facade = _PostgresFacade(rows=[])
+    monkeypatch.setattr(lateral_fetch, "connections", {"default": facade})
+    assert _fetch_lateral_rows(queryset) == []
+    _sql, params = facade.scripted_cursor.executed
+    assert params == [[1, 2], 2]
+
+
+def test_parent_id_deduplication_handles_hashable_and_unhashable_values():
+    """Hashable values de-duplicate; unhashable values retain their input order."""
+    from django_strawberry_framework.optimizer.lateral_fetch import _deduplicate_parent_ids
+
+    assert _deduplicate_parent_ids(
+        [
+            1,
+            None,
+            1,
+            2,
+        ],
+    ) == [1, 2]
+    assert _deduplicate_parent_ids(
+        [
+            [1],
+            None,
+            [1],
+            [2],
+        ],
+    ) == [[1], [1], [2]]
+
+
+def test_lateral_raw_rows_run_through_django_field_converters():
+    """Raw JSON text is converted exactly as ORM-compiled model rows are."""
+    from apps.scalars.models import ScalarSpecimen
+
+    from django_strawberry_framework.optimizer.lateral_fetch import _apply_lateral_converters
+
+    spec = _build_lateral_spec(_shelf_books_request())
+    payload_field = ScalarSpecimen._meta.get_field("payload")
+    spec = dataclasses.replace(
+        spec,
+        model=ScalarSpecimen,
+        db_table=ScalarSpecimen._meta.db_table,
+        select_columns=(("payload", "payload"),),
+        select_fields=(payload_field,),
+    )
+    converted = _apply_lateral_converters(
+        spec,
+        [
+            (
+                1,
+                '{"rank": 2}',
+                1,
+                1,
+            ),
+        ],
+        connections["default"],
+    )
+    assert converted == [
+        (
+            1,
+            {"rank": 2},
+            1,
+            1,
+        ),
+    ]
 
 
 def test_lateral_execution_serves_zero_parents_without_sql(monkeypatch):

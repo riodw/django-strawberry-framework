@@ -264,7 +264,10 @@ def test_reverse_m2m_parity_joins_the_through_table_once():
     # the through table exactly once (as FROM, joining the child) - a second
     # join would re-inflate the row numbers the way the historical M2M
     # prefetch duplication did.
-    assert 'FROM "library_book_genres" INNER JOIN "library_book"' in lateral_sql
+    assert (
+        'FROM "library_book_genres" AS "__dst_through"'
+        ' INNER JOIN "library_book" AS "__dst_child"' in lateral_sql
+    )
     assert lateral_sql.count("INNER JOIN") == 1
     assert lateral_sql.count('FROM "library_book_genres"') == 1
     # Overlap sanity: every genre relates to four books (5 two-genre shelf-A
@@ -401,3 +404,424 @@ def test_stray_executor_thread_connections_are_tracked_for_session_close():
     # The wrapper closed its handle already; the session drain re-closing it
     # must be a harmless no-op (idempotent close is the drain's contract).
     registry_list[-1].close()
+
+
+# =============================================================================
+# Keyset (Meta.cursor_field) parity + the lateral index-seek pin
+# =============================================================================
+
+
+def _keyset_schemas(cursor_field=("-number", "id")):
+    """Periodical -> issuesConnection graph with a KEYSET child type.
+
+    ``cursor_field`` parameterizes the seek arm: the mixed-direction default
+    exercises the redundant-bound OR-expansion; a uniform ``("number", "id")``
+    exercises the native row-value comparison.
+    """
+    from apps.library.models import Issue, Periodical
+
+    make_django_type(
+        "KeysetIssueType",
+        Issue,
+        ("id", "number", "title"),
+        meta_extra={"cursor_field": cursor_field, "connection": {"total_count": True}},
+    )
+    periodical_type = make_django_type(
+        "KeysetPeriodicalType",
+        Periodical,
+        ("id", "name", "issues"),
+        meta_extra={"relation_shapes": {"issues": "connection"}},
+    )
+
+    import strawberry
+
+    @strawberry.type
+    class Query:
+        periodicals: list[periodical_type] = DjangoListField(periodical_type)
+
+    finalize_django_types()
+    return (build_strategy_schema(Query, "windowed"), build_strategy_schema(Query, "lateral"))
+
+
+def _seed_periodicals():
+    from apps.library.models import Issue, Periodical
+
+    populated = Periodical.objects.create(name="populated")
+    sparse = Periodical.objects.create(name="sparse")
+    Periodical.objects.create(name="empty")
+    issues = [
+        Issue.objects.create(periodical=populated, number=number, title=f"p{number}")
+        for number in range(1, 6)
+    ]
+    for number in range(1, 4):
+        Issue.objects.create(periodical=sparse, number=number, title=f"s{number}")
+    return issues
+
+
+def _mint_issue_cursor(issue, cursor_field=("-number", "id")):
+    from apps.library.models import Issue
+
+    from django_strawberry_framework.keyset import (
+        cursor_columns_for,
+        encode_keyset_cursor,
+        order_fingerprint,
+    )
+
+    return encode_keyset_cursor(
+        cursor_columns_for(Issue, cursor_field),
+        issue,
+        fingerprint=order_fingerprint(cursor_field),
+    )
+
+
+def _assert_keyset_parity(query, *, cursor_field=("-number", "id"), expect_lateral=True):
+    """The keyset twin of ``_assert_parity`` (its own type graph per call)."""
+    windowed_schema, lateral_schema = _keyset_schemas(cursor_field)
+    windowed = windowed_schema.execute_sync(query)
+    assert windowed.errors is None, windowed.errors
+    with CaptureQueriesContext(db_connection) as captured:
+        lateral = lateral_schema.execute_sync(query)
+    assert lateral.errors is None, lateral.errors
+    assert _canonical(lateral.data) == _canonical(windowed.data)
+    assert len(captured) == 2
+    executed_sql = " ".join(entry["sql"] for entry in captured)
+    if expect_lateral:
+        assert "CROSS JOIN LATERAL" in executed_sql
+    else:
+        assert "CROSS JOIN LATERAL" not in executed_sql
+    return lateral.data, captured
+
+
+_KEYSET_PROBE_PAGE = "edges { cursor node { title } } pageInfo { hasNextPage hasPreviousPage }"
+_KEYSET_FULL_PAGE = (
+    "edges { cursor node { title } } totalCount pageInfo { hasNextPage hasPreviousPage endCursor }"
+)
+
+
+def test_keyset_count_free_seek_runs_in_branch_on_postgres():
+    """The O(page) headline: the seek + ORDER BY + LIMIT inside the lateral branch."""
+    issues = _seed_periodicals()
+    cursor = _mint_issue_cursor(issues[3])  # p4 under (-number, id)
+    data, captured = _assert_keyset_parity(
+        f'{{ periodicals {{ id issuesConnection(first: 2, after: "{cursor}") '
+        f"{{ {_KEYSET_PROBE_PAGE} }} }} }}",
+    )
+    lateral_sql = next(sql for sql in (e["sql"] for e in captured) if "LATERAL" in sql)
+    # The seek predicate landed INSIDE the branch (count-free shape), with the
+    # in-branch LIMIT - not an outer row-number filter.
+    assert "_dst_total_count" not in lateral_sql
+    assert "LIMIT" in lateral_sql
+    by_name = {parent["id"]: parent["issuesConnection"] for parent in data["periodicals"]}
+    pages = {
+        tuple(edge["node"]["title"] for edge in connection_data["edges"])
+        for connection_data in by_name.values()
+    }
+    # populated continues past p4; sparse re-positions by VALUE (numbers < 4).
+    assert ("p3", "p2") in pages
+    assert ("s3", "s2") in pages
+    assert () in pages  # the childless periodical
+
+
+def test_keyset_uniform_direction_uses_row_value_seek():
+    """Uniform directions emit the native row-value comparison on Postgres."""
+    issues = _seed_periodicals()
+    cursor = _mint_issue_cursor(issues[1], ("number", "id"))
+    _data, captured = _assert_keyset_parity(
+        f'{{ periodicals {{ id issuesConnection(first: 2, after: "{cursor}") '
+        f"{{ {_KEYSET_PROBE_PAGE} }} }} }}",
+        cursor_field=("number", "id"),
+    )
+    lateral_sql = next(sql for sql in (e["sql"] for e in captured) if "LATERAL" in sql)
+    assert ") > (" in lateral_sql  # the row-value tuple comparison
+
+
+def test_keyset_counted_seek_downgrades_to_windowed_with_pre_seek_totals():
+    """totalCount + after: the lateral strategy runs the qualify-wrapped window."""
+    issues = _seed_periodicals()
+    cursor = _mint_issue_cursor(issues[3])
+    data, captured = _assert_keyset_parity(
+        f'{{ periodicals {{ id issuesConnection(first: 2, after: "{cursor}") '
+        f"{{ {_KEYSET_FULL_PAGE} }} }} }}",
+        expect_lateral=False,
+    )
+    executed_sql = " ".join(entry["sql"] for entry in captured)
+    assert "FILTER (WHERE" in executed_sql  # the page-relative filtered count
+    totals = {parent["issuesConnection"]["totalCount"] for parent in data["periodicals"]}
+    assert totals == {5, 3, 0}  # PRE-seek partition counts
+
+
+def test_keyset_first_page_full_shape_parity():
+    """The cursor-less keyset first page stays on the shipped lateral shapes."""
+    _seed_periodicals()
+    data, _ = _assert_keyset_parity(
+        f"{{ periodicals {{ id issuesConnection(first: 2) {{ {_KEYSET_FULL_PAGE} }} }} }}",
+    )
+    for parent in data["periodicals"]:
+        connection_data = parent["issuesConnection"]
+        for edge in connection_data["edges"]:
+            # Keyset first pages mint VALUE cursors (the dstcursor prefix),
+            # never positional offsets.
+            import base64
+
+            decoded = base64.b64decode(edge["cursor"]).decode()
+            assert decoded.startswith("dstcursor:")
+
+
+@pytest.mark.parametrize(
+    (
+        "cursor_field",
+        "cursor_rank",
+        "expected_labels",
+        "sql_fragment",
+    ),
+    [
+        (
+            ("payload", "id"),
+            1,
+            ["child-2", "child-3"],
+            ") > (",
+        ),
+        (
+            ("-payload", "id"),
+            3,
+            ["child-2", "child-1"],
+            '"payload" <= ',
+        ),
+    ],
+)
+def test_keyset_json_seek_uses_field_adapter_on_postgres(
+    cursor_field,
+    cursor_rank,
+    expected_labels,
+    sql_fragment,
+):
+    """Internal JSONB seek values are field-prepared before raw lateral execution.
+
+    JSONField is deliberately rejected at the public cursor-field and runtime
+    orderBy validation gates because its ordering is not backend-portable.
+    This direct internal carrier still pins the raw SQL adapter boundary so a
+    future custom field with structured prepared values cannot bypass Django.
+    """
+    import datetime
+    import uuid
+
+    from apps.scalars.models import ScalarSpecimen
+    from django.db.models import Prefetch
+    from django.utils import timezone
+
+    from django_strawberry_framework.keyset import KeysetCursor, KeysetSeek, cursor_columns_for
+    from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
+    from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY
+    from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    def create_specimen(label, payload, *, parent=None):
+        return ScalarSpecimen.objects.create(
+            label=label,
+            occurred_on=datetime.date(2026, 1, 1),
+            occurred_at=timezone.now(),
+            occurred_time=datetime.time(12, 0),
+            payload=payload,
+            external_id=uuid.uuid4(),
+            parent=parent,
+        )
+
+    parent = create_specimen("parent", {"rank": 0})
+    children = {
+        rank: create_specimen(f"child-{rank}", {"rank": rank}, parent=parent)
+        for rank in range(1, 4)
+    }
+    columns = cursor_columns_for(ScalarSpecimen, cursor_field)
+    seek = KeysetSeek(
+        columns=columns,
+        cursor=KeysetCursor(
+            values=(children[cursor_rank].payload, children[cursor_rank].pk),
+        ),
+    )
+    field = ScalarSpecimen._meta.get_field("children")
+    request = NestedConnectionRequest(
+        django_field=field,
+        relation_field_name="children",
+        prefix="",
+        child_queryset=ScalarSpecimen.objects.all(),
+        join=classify_relation_join(field),
+        order_by=cursor_field,
+        offset=0,
+        limit=2,
+        reverse=False,
+        with_total_count=False,
+        next_page_probe=True,
+        keyset_seek=seek,
+        to_attr="_dst_children_connection",
+        lookup="children",
+    )
+    plan = OptimizationPlan()
+    assert LATERAL_STRATEGY.plan(request, plan)
+    (planned_prefetch,) = plan.prefetch_related
+    assert isinstance(planned_prefetch, Prefetch)
+    with CaptureQueriesContext(db_connection) as captured:
+        loaded = ScalarSpecimen.objects.prefetch_related(planned_prefetch).get(pk=parent.pk)
+    lateral_sql = next(entry["sql"] for entry in captured if "CROSS JOIN LATERAL" in entry["sql"])
+    assert sql_fragment in lateral_sql
+    assert [row.label for row in loaded._dst_children_connection] == expected_labels
+    assert all(isinstance(row.payload, dict) for row in loaded._dst_children_connection)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_lateral_custom_through_joins_the_foreign_key_target_column():
+    """A through FK targeting a unique non-PK child column must not join the child PK."""
+    from django.db import models
+
+    from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
+    from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY
+    from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    class NaturalChild(models.Model):
+        code = models.TextField(unique=True)
+        rank = models.IntegerField()
+
+        class Meta:
+            app_label = "library"
+            managed = False
+            db_table = "lateral_natural_child"
+
+    class NaturalParent(models.Model):
+        name = models.TextField()
+        children = models.ManyToManyField(
+            NaturalChild,
+            through="NaturalMembership",
+            related_name="natural_parents",
+        )
+
+        class Meta:
+            app_label = "library"
+            managed = False
+            db_table = "lateral_natural_parent"
+
+    class NaturalMembership(models.Model):
+        parent = models.ForeignKey(NaturalParent, on_delete=models.CASCADE)
+        child = models.ForeignKey(
+            NaturalChild,
+            db_column="child_code",
+            on_delete=models.CASCADE,
+            to_field="code",
+        )
+
+        class Meta:
+            app_label = "library"
+            managed = False
+            db_table = "lateral_natural_membership"
+
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(NaturalChild)
+        schema_editor.create_model(NaturalParent)
+        schema_editor.create_model(NaturalMembership)
+    try:
+        parent = NaturalParent.objects.create(name="parent")
+        children = [
+            NaturalChild.objects.create(code=f"code-{rank}", rank=rank) for rank in range(3)
+        ]
+        NaturalMembership.objects.bulk_create(
+            [NaturalMembership(parent=parent, child=child) for child in children],
+        )
+        field = NaturalParent._meta.get_field("children")
+        request = NestedConnectionRequest(
+            django_field=field,
+            relation_field_name="children",
+            prefix="",
+            child_queryset=NaturalChild.objects.all(),
+            join=classify_relation_join(field),
+            order_by=("rank", "id"),
+            offset=0,
+            limit=2,
+            reverse=False,
+            with_total_count=False,
+            next_page_probe=False,
+            keyset_seek=None,
+            to_attr="_dst_children_connection",
+            lookup="children",
+        )
+        plan = OptimizationPlan()
+        assert LATERAL_STRATEGY.plan(request, plan)
+        (planned_prefetch,) = plan.prefetch_related
+        with CaptureQueriesContext(db_connection) as captured:
+            loaded = NaturalParent.objects.prefetch_related(planned_prefetch).get(pk=parent.pk)
+        lateral_sql = next(
+            entry["sql"] for entry in captured if "CROSS JOIN LATERAL" in entry["sql"]
+        )
+        assert '"__dst_child"."code" = "__dst_through"."child_code"' in lateral_sql
+        assert [row.code for row in loaded._dst_children_connection] == ["code-0", "code-1"]
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(NaturalMembership)
+            schema_editor.delete_model(NaturalParent)
+            schema_editor.delete_model(NaturalChild)
+
+
+@pytest.mark.django_db(transaction=True)
+def test_keyset_lateral_seek_is_an_index_seek():
+    """EXPLAIN pin: with the composite ``(cursor columns..., pk)`` index present,
+    the count-free lateral branch seeks the index instead of scanning.
+
+    ``enable_seqscan`` is forced off for the EXPLAIN so the planner's
+    small-table seq-scan preference cannot mask index-usability; the pin is
+    "the seek CAN use the index", not a cost-model assertion.
+    """
+    from apps.library.models import Issue
+
+    from django_strawberry_framework.keyset import KeysetCursor, KeysetSeek, cursor_columns_for
+    from django_strawberry_framework.optimizer.join_taxonomy import classify_relation_join
+    from django_strawberry_framework.optimizer.lateral_fetch import build_lateral_sql
+    from django_strawberry_framework.optimizer.nested_fetch import NestedConnectionRequest
+    from django_strawberry_framework.optimizer.plans import OptimizationPlan
+
+    issues = _seed_periodicals()
+    seek = KeysetSeek(
+        columns=cursor_columns_for(Issue, ("number", "id")),
+        cursor=KeysetCursor(values=(2, issues[1].pk)),
+    )
+    from apps.library.models import Periodical
+
+    field = Periodical._meta.get_field("issues")
+    request = NestedConnectionRequest(
+        django_field=field,
+        relation_field_name="issues",
+        prefix="",
+        child_queryset=Issue.objects.all(),
+        join=classify_relation_join(field),
+        order_by=("number", "id"),
+        offset=0,
+        limit=2,
+        reverse=False,
+        with_total_count=False,
+        next_page_probe=True,
+        keyset_seek=seek,
+        to_attr="_dst_issues_connection",
+        lookup="issues",
+    )
+    plan = OptimizationPlan()
+    from django_strawberry_framework.optimizer.lateral_fetch import LATERAL_STRATEGY
+
+    assert LATERAL_STRATEGY.plan(request, plan)
+    spec = plan.prefetch_related[0].queryset._dst_lateral_spec
+    parent_ids = list(Periodical.objects.values_list("pk", flat=True))
+    sql, params = build_lateral_sql(
+        spec,
+        parent_ids,
+        quote_name=db_connection.ops.quote_name,
+        parent_cast=spec.parent_link_field.db_type(db_connection),
+    )
+    with db_connection.cursor() as cursor:
+        cursor.execute(
+            "CREATE INDEX keyset_seek_pin_idx ON library_issue (periodical_id, number, id)",
+        )
+        cursor.execute("SET enable_seqscan = off")
+        try:
+            cursor.execute(f"EXPLAIN {sql}", params)
+            explain_plan = " ".join(row[0] for row in cursor.fetchall())
+        finally:
+            cursor.execute("SET enable_seqscan = on")
+            cursor.execute("DROP INDEX keyset_seek_pin_idx")
+    assert "keyset_seek_pin_idx" in explain_plan
+    assert "Index" in explain_plan

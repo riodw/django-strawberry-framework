@@ -554,6 +554,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "channels", extra = ["daphne"] },
+    { name = "cryptography" },
     { name = "django-debug-toolbar" },
     { name = "djangorestframework" },
     { name = "faker" },
@@ -580,6 +581,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "channels", extras = ["daphne"], specifier = ">=4.3.2" },
+    { name = "cryptography", specifier = ">=44.0.0" },
     { name = "django-debug-toolbar", specifier = ">=7.0.0" },
     { name = "djangorestframework", specifier = ">=3.17.0" },
     { name = "faker", specifier = ">=33.0.0" },

@@ -166,6 +166,52 @@ class MembershipCard(models.Model):
         return self.barcode
 
 
+class Periodical(models.Model):
+    """A periodical whose issues paginate with keyset (value) cursors."""
+
+    name = models.TextField(unique=True)
+
+    def __str__(self):
+        return self.name
+
+
+class Issue(models.Model):
+    """One issue of a periodical - the ``Meta.cursor_field`` acceptance substrate.
+
+    ``number`` is the non-nullable ordering column ``IssueType.Meta.cursor_field``
+    anchors (``("-number", "id")`` - newest-first with the pk tiebreak, the
+    canonical keyset feed shape and the mixed-direction seek arm); numbers
+    repeat ACROSS periodicals so the uniform value-position semantics of a
+    nested ``after:`` cursor are observable. ``embargoed`` drives the
+    ``IssueType.get_queryset`` visibility hook (the permission-aware
+    cursor-decode coverage: a cursor minted under staff visibility replays
+    for anonymous viewers without leaking embargoed rows).
+    """
+
+    periodical = models.ForeignKey(
+        Periodical,
+        related_name="issues",
+        on_delete=models.CASCADE,
+    )
+    number = models.IntegerField()
+    title = models.TextField()
+    embargoed = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "periodical",
+                    "number",
+                ],
+                name="unique_issue_number_per_periodical",
+            ),
+        ]
+
+    def __str__(self):
+        return self.title
+
+
 class Loan(models.Model):
     """A checkout record connecting a patron to a book."""
 

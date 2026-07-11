@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import inspect
 import types
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from typing import Any, Generic, TypeVar
@@ -52,17 +52,30 @@ from django.db import models
 from graphql import GraphQLError
 from strawberry import relay
 from strawberry.relay.types import NodeIterableType
+from strawberry.relay.utils import should_resolve_list_connection_edges
 from strawberry.types import Info, get_object_definition
 from strawberry.types.base import StrawberryContainer
 from strawberry.utils.await_maybe import AwaitableOrValue
+from strawberry.utils.inspect import in_async_context
 
+from .keyset import (
+    CursorColumn,
+    KeysetSeek,
+    _is_supported_cursor_field,
+    cursor_columns_for,
+    decode_keyset_cursor,
+    encode_keyset_cursor,
+    order_fingerprint,
+)
 from .list_field import _validate_relay_djangotype_target
 from .optimizer.extension import apply_connection_optimization
 from .optimizer.plans import (
+    WINDOW_KEYSET_SEEK_COUNT,
     WINDOW_ROW_NUMBER,
     WINDOW_TOTAL_COUNT,
     deterministic_order,
     ends_in_unique_column,
+    order_entry_name_and_direction,
 )
 from .optimizer.selections import (
     connection_has_next_page_selected,
@@ -70,6 +83,7 @@ from .optimizer.selections import (
     prime_selected_fields,
 )
 from .optimizer.walker import (
+    _extend_only_projection,
     _relation_connection_to_attr,
     _relation_connection_to_attr_for_key,
 )
@@ -77,9 +91,12 @@ from .types.resolvers import _check_n1
 from .utils.connections import (
     CONNECTION_FILTER_KWARG,
     CONNECTION_ORDER_KWARG,
+    UnwindowableConnection,
     connection_sidecar_inputs_from_kwargs,
     derive_connection_window_bounds,
+    derive_keyset_window_bounds,
     has_connection_sidecar_input,
+    resolve_relay_max_results,
     split_window_rows,
     window_range_plan,
 )
@@ -114,6 +131,51 @@ _TOTAL_COUNT_ATTR = "_django_total_count"
 _NOT_A_WINDOW: Any = object()
 
 
+@dataclass(frozen=True)
+class _KeysetConnectionState:
+    """The keyset-mode context a generated connection class resolves once.
+
+    ``columns`` / ``fingerprint`` are the DECLARED ``Meta.cursor_field``
+    contract - the vocabulary every nested window and default-ordered root
+    page mints and decodes under. A root ``orderBy:`` page derives its own
+    per-order columns/fingerprint instead (``_keyset_order_state``); the
+    declared state still marks the connection as keyset-mode.
+    """
+
+    definition: Any
+    cursor_field: tuple[str, ...]
+    columns: tuple[CursorColumn, ...]
+    fingerprint: str
+
+
+def _keyset_connection_context(cls: type) -> _KeysetConnectionState | None:
+    """Resolve (and cache on the class) a connection's keyset-mode state.
+
+    The generated ``<TypeName>Connection`` carries its node type on
+    ``_dst_node_type`` (stashed by ``_generate_connection_class``); a
+    declared ``Meta.cursor_field`` on that type's definition makes every
+    connection over it KEYSET-MODE - value cursors minted/decoded through
+    the canonical codec, offset cursors rejected. ``None`` (the cached
+    ``False`` sentinel internally) keeps the shipped offset behavior.
+    """
+    cached = cls.__dict__.get("_dst_keyset_state")
+    if cached is not None:
+        return cached or None
+    target_type = getattr(cls, "_dst_node_type", None)
+    definition = getattr(target_type, "__django_strawberry_definition__", None)
+    cursor_field = getattr(definition, "cursor_field", None)
+    state: Any = False
+    if cursor_field is not None:
+        state = _KeysetConnectionState(
+            definition=definition,
+            cursor_field=cursor_field,
+            columns=cursor_columns_for(definition.model, cursor_field),
+            fingerprint=order_fingerprint(cursor_field),
+        )
+    cls._dst_keyset_state = state
+    return state or None
+
+
 def _set_total_count(conn: Any, *, want_count: bool, value: Any) -> Any:
     """Attach the captured ``totalCount`` to ``conn`` when it was requested.
 
@@ -136,6 +198,7 @@ def _empty_page_connection(
     has_next_page: bool,
     want_count: bool,
     total: int,
+    has_previous_page: bool | None = None,
 ) -> Any:
     """Build the edge-less connection the window fast path serves.
 
@@ -144,14 +207,16 @@ def _empty_page_connection(
     served ``total``): ``has_previous_page = offset > 0`` replicates
     ``ListConnection``'s ``start > 0`` arithmetic, computed before the data is
     consulted - a childless parent with ``after:`` still reports a previous
-    page, exactly like the per-parent pipeline.
+    page, exactly like the per-parent pipeline. A keyset window has no offset
+    domain, so its caller passes ``has_previous_page`` explicitly ("a cursor
+    was supplied" - the same rule ``start > 0`` encodes for offset cursors).
     """
     conn = cls(
         edges=[],
         page_info=relay.PageInfo(
             start_cursor=None,
             end_cursor=None,
-            has_previous_page=offset > 0,
+            has_previous_page=offset > 0 if has_previous_page is None else has_previous_page,
             has_next_page=has_next_page,
         ),
     )
@@ -231,6 +296,8 @@ def _resolve_from_window(
     limit: int | None,
     reverse: bool = False,
     want_count: bool,
+    keyset_state: _KeysetConnectionState | None = None,
+    keyset_after: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """Build the Relay connection straight from the windowed prefetch rows.
@@ -332,6 +399,21 @@ def _resolve_from_window(
             reverse=reverse,
             next_page_probe=True,
         )
+    # A COUNTED keyset-seek window (a ``cursor_field`` page resolving
+    # ``after:`` whose count is annotated) numbers rows PAGE-RELATIVELY (the
+    # filtered running count; pre-seek rows carry 0) and keeps the abs-first
+    # marker row - re-derive the plan with the keyset semantics so the split
+    # below drops the rn-0 rows and classifies markers. The count-FREE keyset
+    # seek needs nothing here: its seek lives in the base WHERE, its rows
+    # number 1..N natively, and the probe inference above already covers it.
+    keyset_seek_supplied = keyset_state is not None and keyset_after is not None
+    if keyset_seek_supplied and rows and getattr(rows[-1], WINDOW_TOTAL_COUNT, None) is not None:
+        range_plan = window_range_plan(
+            offset=offset,
+            limit=limit,
+            reverse=reverse,
+            keyset_counted=True,
+        )
     if not rows:
         if reverse and limit == 0:
             # ``last: 0``: upstream ``ListConnection`` slices ``edges[-0:]``,
@@ -342,13 +424,16 @@ def _resolve_from_window(
         # the n+1 sentinel for the count-free probe, an empty forward window now
         # PROVES the parent has no related rows for EVERY shape - a parent with
         # children would have kept its row 1 or its probe sentinel.
-        # ``has_next_page`` False: no row survived the overfetch.
+        # ``has_next_page`` False: no row survived the overfetch. A keyset seek
+        # page has no offset domain, so its "a cursor was supplied" previous-page
+        # rule is passed explicitly.
         return _empty_page_connection(
             cls,
             offset=offset,
             has_next_page=False,
             want_count=want_count,
             total=0,
+            has_previous_page=True if keyset_seek_supplied else None,
         )
 
     # Sentinel exclusion via the shared ``split_window_rows``: the window may
@@ -370,16 +455,25 @@ def _resolve_from_window(
         # ``has_next_page = total > offset`` (the overfetch probe - for
         # ``first: 0`` a row exists past the offset; for an overshot ``after:``
         # ``total <= offset`` by construction, so it is False). Unreachable on
-        # the probe shape (its page always keeps row 1).
+        # the probe shape (its page always keeps row 1). A keyset seek page's
+        # flags live in the value domain instead: ``has_next_page`` is "any
+        # post-seek row exists" (the annotated seek count - zero here by
+        # construction, since one such row would BE the page), and a supplied
+        # cursor is the previous-page signal.
         total = getattr(rows[-1], WINDOW_TOTAL_COUNT, None)
         if total is None:
             return None  # workstream-B drift guard: never infer a count.
+        if keyset_seek_supplied:
+            has_next_page = bool(getattr(rows[-1], WINDOW_KEYSET_SEEK_COUNT, 0))
+        else:
+            has_next_page = total > offset
         return _empty_page_connection(
             cls,
             offset=offset,
-            has_next_page=total > offset,
+            has_next_page=has_next_page,
             want_count=want_count,
             total=total,
+            has_previous_page=True if keyset_seek_supplied else None,
         )
     # The count is annotated CONDITIONALLY (workstream B) - and NOT AT ALL for
     # the count-free ``hasNextPage`` probe. A count-less row with a count
@@ -398,14 +492,42 @@ def _resolve_from_window(
         want_count or (_has_next_page_requested(info) and not range_plan.next_page_probe)
     ):
         return None
+    if (
+        keyset_seek_supplied
+        and total is not None
+        and getattr(last_row, WINDOW_KEYSET_SEEK_COUNT, None) is None
+        and _has_next_page_requested(info)
+    ):
+        # The counted keyset drift guard, mirroring the count guard above: a
+        # counted seek page whose ``hasNextPage`` is observable must carry the
+        # post-seek count its flag reads from - fall back per-parent rather
+        # than serve a page-relative-vs-pre-seek comparison.
+        return None
     edge_class = _window_edge_class(cls)
-    edges = [
-        edge_class.resolve_edge(
-            cls.resolve_node(node, info=info, **kwargs),
-            cursor=getattr(node, WINDOW_ROW_NUMBER) - 1,
-        )
-        for node in page_rows
-    ]
+    if keyset_state is not None:
+        # Keyset cursors are the rows' ordering-column VALUES, minted through
+        # the canonical codec (opaque, authenticated-encrypted) - never the
+        # row number. Edges are constructed directly (``resolve_edge`` would re-encode the
+        # cursor under the offset ``arrayconnection`` prefix).
+        edges = [
+            edge_class(
+                node=cls.resolve_node(node, info=info, **kwargs),
+                cursor=encode_keyset_cursor(
+                    keyset_state.columns,
+                    node,
+                    fingerprint=keyset_state.fingerprint,
+                ),
+            )
+            for node in page_rows
+        ]
+    else:
+        edges = [
+            edge_class.resolve_edge(
+                cls.resolve_node(node, info=info, **kwargs),
+                cursor=getattr(node, WINDOW_ROW_NUMBER) - 1,
+            )
+            for node in page_rows
+        ]
     # Row numbers are forward and the rows are forward-ordered, so the page
     # flags are the upstream forward-window comparisons against the partition's
     # total count (``resolve_optimized_connection_by_prefetch``): a previous page
@@ -414,18 +536,34 @@ def _resolve_from_window(
     # overfetch sentinel was present. These hold for the reversed ``last``-only
     # window too because its row numbers stay forward (``last: 2`` of 5 -> rows
     # 4, 5 -> hasPrevious True, hasNext False - matching the pipeline).
+    #
+    # Keyset seek pages fork BOTH flags into the value domain: the row numbers
+    # are page-relative (1..N), so ``first_rn > 1`` can never fire - a supplied
+    # cursor IS the previous-page signal - and ``rn < total`` compares
+    # page-relative to pre-seek, so the counted shape reads the annotated
+    # POST-SEEK count instead (missing annotation = plan drift: fall back
+    # rather than serve a wrong flag).
     first_rn = getattr(page_rows[0], WINDOW_ROW_NUMBER)
+    if range_plan.next_page_probe:
+        has_next_page = probe_row_seen
+    elif keyset_seek_supplied:
+        # Count-free with no probe means nothing observes the flag (the
+        # workstream-B drift guard above already sent an OBSERVED count-less
+        # page per-parent), so a missing seek count here is the inert
+        # placeholder case, never a served falsehood.
+        seek_total = getattr(last_row, WINDOW_KEYSET_SEEK_COUNT, None)
+        has_next_page = (
+            False if seek_total is None else getattr(last_row, WINDOW_ROW_NUMBER) < seek_total
+        )
+    else:
+        has_next_page = False if total is None else getattr(last_row, WINDOW_ROW_NUMBER) < total
     conn = cls(
         edges=edges,
         page_info=relay.PageInfo(
             start_cursor=edges[0].cursor,
             end_cursor=edges[-1].cursor,
-            has_previous_page=first_rn > 1,
-            has_next_page=(
-                probe_row_seen
-                if range_plan.next_page_probe
-                else (False if total is None else getattr(last_row, WINDOW_ROW_NUMBER) < total)
-            ),
+            has_previous_page=keyset_seek_supplied or first_rn > 1,
+            has_next_page=has_next_page,
         ),
     )
     return _set_total_count(conn, want_count=want_count, value=total)
@@ -461,30 +599,63 @@ def _consume_window(
     if not isinstance(nodes, _WindowedConnectionRows):
         return _NOT_A_WINDOW
     # Derive the window through the SHARED contract the walker planned with
-    # (``utils/connections.py::derive_connection_window_bounds``), so the
+    # (``utils/connections.py::derive_connection_window_bounds`` - or its
+    # keyset twin when the node type declares ``Meta.cursor_field``, since a
+    # value cursor cannot pass through the offset ``SliceMetadata`` engine:
+    # the bounds derivation FORKS AT THE CURSOR VOCABULARY), so the
     # resolve-time window matches the plan-time one by construction (the
     # cursor-parity invariant). Resolver arguments are already coerced by
     # Strawberry, so any malformed-pagination ``ValueError`` / ``TypeError``
     # propagates as the field's own error (the walker, by contrast, catches it to
     # leave the selection unplanned).
-    bounds = derive_connection_window_bounds(
-        info,
-        before=before,
-        after=after,
-        first=first,
-        last=last,
-        max_results=max_results,
-    )
-    built = _resolve_from_window(
-        cls,
-        nodes,
-        info=info,
-        offset=bounds.offset,
-        limit=bounds.limit,
-        reverse=bounds.reverse,
-        want_count=want_count,
-        **kwargs,
-    )
+    keyset_state = _keyset_connection_context(cls)
+    if keyset_state is not None:
+        try:
+            bounds = derive_keyset_window_bounds(
+                info,
+                before=before,
+                after=after,
+                first=first,
+                last=last,
+                max_results=max_results,
+            )
+        except UnwindowableConnection:
+            # A backward keyset shape over a windowed wrapper: the walker
+            # never plans one, so this is a defensive-only path - recover the
+            # per-parent queryset and let the keyset slicer resolve it.
+            built = None
+        else:
+            built = _resolve_from_window(
+                cls,
+                nodes,
+                info=info,
+                offset=bounds.offset,
+                limit=bounds.limit,
+                reverse=bounds.reverse,
+                want_count=want_count,
+                keyset_state=keyset_state,
+                keyset_after=after,
+                **kwargs,
+            )
+    else:
+        bounds = derive_connection_window_bounds(
+            info,
+            before=before,
+            after=after,
+            first=first,
+            last=last,
+            max_results=max_results,
+        )
+        built = _resolve_from_window(
+            cls,
+            nodes,
+            info=info,
+            offset=bounds.offset,
+            limit=bounds.limit,
+            reverse=bounds.reverse,
+            want_count=want_count,
+            **kwargs,
+        )
     if built is not None:
         return built
     # Unservable window (reversed ``last: 0`` quirk, or the workstream-B drift
@@ -518,11 +689,357 @@ def _consume_fallback(
     (which ``super()`` reaches) does the ``first`` + ``last`` guard and slicing;
     the ``totalCount`` variant additionally attaches the count. Reuses the
     inherited ``ListConnection`` slicing - no second slice implementation.
+
+    A KEYSET connection routes to the framework's keyset slicer instead:
+    ``ListConnection`` can neither decode a value cursor nor mint one, so
+    the codec-aware slicer is the fallback's slicing engine - the same
+    engine root keyset connections use, which is what keeps the fallback's
+    cursor bytes identical to every windowed path's (the cross-strategy
+    parity invariant).
     """
+    keyset_state = _keyset_connection_context(cls)
+    if keyset_state is not None:
+        return _resolve_keyset_connection(
+            cls,
+            nodes,
+            info=info,
+            want_count=want_count,
+            state=keyset_state,
+            **slice_kwargs,
+        )
     conn = super(DjangoConnection, cls).resolve_connection(nodes, info=info, **slice_kwargs)
     if inspect.isawaitable(conn):
         return _attach_count_async(conn, nodes, want_count=want_count)
     return _attach_count_sync(conn, nodes, want_count=want_count)
+
+
+def _keyset_order_ref(entry: Any) -> tuple[str, str, bool] | None:
+    """Parse one effective-order entry into ``(canonical ref, name, descending)``.
+
+    Accepts the string and plain-``OrderBy``/``F`` shapes
+    ``order_entry_name_and_direction`` parses; rejects (``None``) entries a
+    value cursor cannot anchor: unresolvable expressions (aggregates,
+    transforms) and explicit ``nulls_first`` / ``nulls_last`` positioning
+    (the nullable domain the v1 column contract excludes).
+    """
+    if not isinstance(entry, str) and (
+        getattr(entry, "nulls_first", None) or getattr(entry, "nulls_last", None)
+    ):
+        return None
+    parsed = order_entry_name_and_direction(entry)
+    if parsed is None:
+        return None
+    name, descending = parsed
+    return (f"-{name}" if descending else name), name, descending
+
+
+def _resolve_order_path_field(model: type, path: str) -> Any:
+    """Resolve a (possibly ``__``-traversing) order path to its terminal field.
+
+    Returns ``None`` when any segment fails to resolve, an intermediate
+    relation is nullable / reverse / multi-valued, or the terminal is not a
+    concrete non-relation column. A non-null terminal behind an optional join
+    still yields NULL cursor values, and a to-many join duplicates source rows.
+    """
+    # In-function import mirrors the file's defensive-Django-imports idiom.
+    from django.core.exceptions import FieldDoesNotExist
+
+    current: Any = model
+    field: Any = None
+    segments = path.split("__")
+    for index, segment in enumerate(segments):
+        if current is None:
+            return None
+        resolved_segment = current._meta.pk.name if segment == "pk" else segment
+        try:
+            field = current._meta.get_field(resolved_segment)
+        except FieldDoesNotExist:
+            return None
+        if index < len(segments) - 1:
+            if not getattr(field, "is_relation", False):
+                return None
+            if (
+                getattr(field, "auto_created", False)
+                or getattr(field, "many_to_many", False)
+                or getattr(field, "one_to_many", False)
+                or getattr(field, "null", False)
+            ):
+                return None
+        current = getattr(field, "related_model", None)
+    if field is None or getattr(field, "is_relation", False):
+        return None
+    if not getattr(field, "concrete", False):
+        return None
+    return field
+
+
+def _keyset_order_state(
+    state: _KeysetConnectionState,
+    queryset: models.QuerySet,
+) -> tuple[tuple[CursorColumn, ...], str, models.QuerySet]:
+    """Resolve the ROOT slicing state for a keyset queryset's effective order.
+
+    The default-ordered page (the effective order IS the declared
+    ``cursor_field`` - what ``_finalize_queryset`` applies when no
+    ``orderBy:`` was supplied) reuses the declared columns and fingerprint,
+    so root cursors and nested-window cursors are byte-identical by
+    construction. An ``orderBy:`` page derives per-order columns instead:
+    each effective entry must map to a non-nullable concrete column (local
+    or ``__``-related; related values are annotated onto the rows so
+    end-cursors can be minted without per-row traversal), and the cursor
+    fingerprint pins THIS order - replay under any other order is rejected
+    at decode. Entries a value cursor cannot anchor (aggregate aliases,
+    expressions, explicit NULLS positioning, nullable columns) raise a
+    ``GraphQLError`` naming the keyset boundary rather than paginating
+    wrongly.
+
+    Also extends the queryset's ``.only()`` projection with the LOCAL cursor
+    columns (the mint reads their attnames off the page rows) - related-path
+    values ride their annotations instead.
+    """
+    effective = tuple(queryset.query.order_by)
+    if not effective or effective == state.cursor_field:
+        # The declared-order fast path (also the defensive no-order shape:
+        # order by the declared cursor_field, the keyset connection default).
+        if not effective:
+            queryset = queryset.order_by(*state.cursor_field)
+        queryset = _extend_only_projection(
+            queryset,
+            tuple(column.field.attname for column in state.columns),
+        )
+        return state.columns, state.fingerprint, queryset
+    model = state.definition.model
+    refs: list[str] = []
+    columns: list[CursorColumn] = []
+    annotations: dict[str, Any] = {}
+    local_attnames: list[str] = []
+    for index, entry in enumerate(effective):
+        parsed = _keyset_order_ref(entry)
+        field = None if parsed is None else _resolve_order_path_field(model, parsed[1])
+        if parsed is None or field is None:
+            raise GraphQLError(
+                "This connection uses keyset cursors (Meta.cursor_field), which "
+                "require every ordering entry to be a database column; the "
+                "requested order cannot anchor stable cursors. Remove the "
+                "unsupported orderBy entry or paginate under the default order.",
+            )
+        ref, name, descending = parsed
+        if getattr(field, "null", False):
+            raise GraphQLError(
+                "This connection uses keyset cursors (Meta.cursor_field), which "
+                f"require non-nullable ordering columns; '{name}' is nullable. "
+                "Order by a non-nullable column or paginate under the default "
+                "order.",
+            )
+        if not _is_supported_cursor_field(field):
+            raise GraphQLError(
+                "This connection uses keyset cursors (Meta.cursor_field), which "
+                f"require portable ordering semantics; '{name}' is a JSONField, "
+                "whose ordering differs between database backends. Order by a "
+                "scalar column or paginate under the default order.",
+            )
+        if "__" in name:
+            value_source = f"_dst_cursor_value_{index}"
+            annotations[value_source] = models.F(name)
+        else:
+            value_source = field.attname
+            local_attnames.append(field.attname)
+        refs.append(ref)
+        columns.append(
+            CursorColumn(
+                order_ref=ref,
+                name=name,
+                descending=descending,
+                field=field,
+                value_source=value_source,
+            ),
+        )
+    if annotations:
+        queryset = queryset.annotate(**annotations)
+    queryset = _extend_only_projection(queryset, tuple(local_attnames))
+    return tuple(columns), order_fingerprint(tuple(refs)), queryset
+
+
+@dataclass(frozen=True)
+class _KeysetPage:
+    """One fetched keyset page plus the spec-algorithm pageInfo inputs."""
+
+    rows: list[Any]
+    overfetched: bool
+    backward: bool
+    after_supplied: bool
+    before_supplied: bool
+
+    @property
+    def has_next_page(self) -> bool:
+        """Relay's ``HasNextPage`` in the value domain.
+
+        The forward overfetch answers it data-driven; otherwise "``before``
+        was supplied" does - a supplied ``before`` cursor positions at
+        extant row values, the same MAY-semantics the offset pipeline's
+        ``start > 0`` arithmetic encodes for ``hasPreviousPage``.
+        """
+        return (not self.backward and self.overfetched) or self.before_supplied
+
+    @property
+    def has_previous_page(self) -> bool:
+        """Relay's ``HasPreviousPage``: the backward overfetch, else "``after`` was supplied"."""
+        return (self.backward and self.overfetched) or self.after_supplied
+
+
+def _resolve_keyset_connection(
+    cls: type,
+    nodes: Any,
+    *,
+    info: Info,
+    want_count: bool,
+    state: _KeysetConnectionState,
+    before: str | None = None,
+    after: str | None = None,
+    first: int | None = None,
+    last: int | None = None,
+    max_results: int | None = None,
+    **kwargs: Any,
+) -> Any:
+    """The framework-owned slicer for KEYSET (``Meta.cursor_field``) connections.
+
+    Serves every non-window keyset path - root connections AND the
+    per-parent fallback pipeline - through the one canonical codec, so a
+    cursor minted anywhere replays everywhere (the cross-strategy parity
+    invariant). Strawberry's ``ListConnection`` is never reached for a
+    keyset connection: it speaks only the offset ``arrayconnection``
+    vocabulary.
+
+    The Relay pagination algorithm, in the value domain:
+
+    1. Resolve the effective-order cursor columns (``_keyset_order_state``);
+       capture the PRE-seek queryset as the ``totalCount`` source (Relay's
+       "count of the pre-pagination set" - the seek IS pagination).
+    2. Apply the ``after:`` / ``before:`` seeks (they compose). The queryset
+       arriving here is ALREADY visibility-scoped (the pipeline ran
+       ``get_queryset`` / cascade permissions / filters first), so the
+       decode filter inherits the viewer's visibility by construction - a
+       cursor minted under one viewer replays under another without leaking
+       rows (the permission-aware-decode contract).
+    3. Fetch page+1: forward for ``first`` (or the ``relay_max_results`` cap
+       when neither bound is given - ``ListConnection`` parity), through the
+       REVERSED order for ``last``-only (restored to forward order in
+       memory). The overfetch answers the data-driven page flag; the spec's
+       cursor-supplied rules answer the opposite one (``_KeysetPage``).
+
+    Sync/async dispatch mirrors ``ListConnection.resolve_connection``: a
+    sync field materializes the lazy queryset in the resolver's context; an
+    async field receives a coroutine that iterates with the async engine
+    and counts via ``acount``.
+    """
+    if not isinstance(nodes, models.QuerySet):
+        raise GraphQLError(
+            "This connection uses keyset cursors (Meta.cursor_field), which "
+            "seek and mint from database rows; the connection resolver must "
+            "return a QuerySet (or a Manager), not a plain iterable.",
+        )
+    _guard_source_not_pre_sliced(nodes)
+    columns, fingerprint, queryset = _keyset_order_state(state, nodes)
+    count_source = queryset
+    if after is not None:
+        cursor = decode_keyset_cursor(after, columns, fingerprint=fingerprint, argument="after")
+        queryset = queryset.filter(KeysetSeek(columns=columns, cursor=cursor).q())
+    if before is not None:
+        cursor = decode_keyset_cursor(before, columns, fingerprint=fingerprint, argument="before")
+        queryset = queryset.filter(KeysetSeek(columns=columns, cursor=cursor, flip=True).q())
+    cap = resolve_relay_max_results(info, max_results)
+    for argument, value in (("first", first), ("last", last)):
+        if isinstance(value, int):
+            # SliceMetadata's exact validation text, so a keyset connection's
+            # pagination errors do not fork from the offset vocabulary's.
+            if value < 0:
+                raise ValueError(f"Argument '{argument}' must be a non-negative integer.")
+            if value > cap:
+                raise ValueError(f"Argument '{argument}' cannot be higher than {cap}.")
+    last_zero_quirk = (
+        isinstance(last, int) and last == 0 and not isinstance(first, int) and before is None
+    )
+    backward = isinstance(last, int) and not isinstance(first, int) and not last_zero_quirk
+    page_size = (
+        None
+        if last_zero_quirk
+        else (last if backward else (first if isinstance(first, int) else cap))
+    )
+    fetch_queryset = queryset.reverse() if backward else queryset
+    fetch_limit = None if page_size is None else page_size + 1
+
+    if not should_resolve_list_connection_edges(info):
+        # ``ListConnection`` parity: nothing under ``edges`` / ``pageInfo``
+        # is selected, so no row is fetched and the placeholder flags are
+        # inert. ``totalCount`` is its own sibling selection and still
+        # counts when requested.
+        conn = cls(
+            edges=[],
+            page_info=relay.PageInfo(
+                start_cursor=None,
+                end_cursor=None,
+                has_previous_page=False,
+                has_next_page=False,
+            ),
+        )
+        if want_count and isinstance(nodes, (AsyncIterator, AsyncIterable)) and in_async_context():
+
+            async def _resolve_count_only_async() -> Any:
+                return _set_total_count(
+                    conn,
+                    want_count=True,
+                    value=await count_source.acount(),
+                )
+
+            return _resolve_count_only_async()
+        return _set_total_count(conn, want_count=want_count, value=count_source.count)
+
+    def _build(page: _KeysetPage, total: Any) -> Any:
+        rows = page.rows[:page_size] if page.overfetched and page_size is not None else page.rows
+        if page.backward:
+            rows = list(reversed(rows))
+        edge_class = _window_edge_class(cls)
+        edges = [
+            edge_class(
+                node=cls.resolve_node(row, info=info, **kwargs),
+                cursor=encode_keyset_cursor(columns, row, fingerprint=fingerprint),
+            )
+            for row in rows
+        ]
+        conn = cls(
+            edges=edges,
+            page_info=relay.PageInfo(
+                start_cursor=edges[0].cursor if edges else None,
+                end_cursor=edges[-1].cursor if edges else None,
+                has_previous_page=page.has_previous_page,
+                has_next_page=page.has_next_page,
+            ),
+        )
+        return _set_total_count(conn, want_count=want_count, value=total)
+
+    def _page(rows: list[Any]) -> _KeysetPage:
+        return _KeysetPage(
+            rows=rows,
+            overfetched=fetch_limit is not None and len(rows) == fetch_limit,
+            backward=backward,
+            after_supplied=after is not None,
+            before_supplied=before is not None,
+        )
+
+    if isinstance(nodes, (AsyncIterator, AsyncIterable)) and in_async_context():
+
+        async def _resolve_async() -> Any:
+            source = fetch_queryset if fetch_limit is None else fetch_queryset[:fetch_limit]
+            rows = [row async for row in source]
+            total = await count_source.acount() if want_count else None
+            return _build(_page(rows), total)
+
+        return _resolve_async()
+
+    return _build(
+        _page(list(fetch_queryset if fetch_limit is None else fetch_queryset[:fetch_limit])),
+        count_source.count() if want_count else None,
+    )
 
 
 def _guard_first_and_last(first: int | None, last: int | None) -> None:
@@ -704,6 +1221,24 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
         )
         if built is not _NOT_A_WINDOW:
             return built
+        keyset_state = _keyset_connection_context(cls)
+        if keyset_state is not None:
+            # Keyset-mode (Meta.cursor_field): root and per-parent-fallback
+            # slicing is framework-owned - ``ListConnection`` cannot decode
+            # or mint value cursors.
+            return _resolve_keyset_connection(
+                cls,
+                nodes,
+                info=info,
+                want_count=False,
+                state=keyset_state,
+                before=before,
+                after=after,
+                first=first,
+                last=last,
+                max_results=max_results,
+                **kwargs,
+            )
         return super().resolve_connection(
             nodes,
             info=info,
@@ -757,10 +1292,20 @@ def _generate_connection_class(
     filter / order input types derive from.
     """
     definition = target_type.__django_strawberry_definition__
+
+    def _populate(namespace: dict) -> None:
+        # The node type rides the generated class (no annotation, so
+        # Strawberry never surfaces it) - the keyset-mode resolution
+        # (``_keyset_connection_context``) reads the target's
+        # ``Meta.cursor_field`` through it at resolve time.
+        namespace["_dst_node_type"] = target_type
+        if populate is not None:
+            populate(namespace)
+
     generated = types.new_class(
         f"{definition.graphql_type_name}Connection",
         (DjangoConnection[target_type],),
-        exec_body=populate,
+        exec_body=_populate,
     )
     return strawberry.type(generated, description=description)
 
@@ -829,6 +1374,26 @@ def _build_total_count_connection(target_type: type) -> type:
         )
         if built is not _NOT_A_WINDOW:
             return built
+        keyset_state = _keyset_connection_context(cls)
+        if keyset_state is not None:
+            # Keyset-mode: the framework slicer owns slicing AND the count
+            # attach (its ``count_source`` is the same pre-pagination
+            # queryset the attach helpers would count; keeping both inside
+            # the slicer spares the M1 non-queryset guard a second raise
+            # site - the slicer's own QuerySet guard already covers it).
+            return _resolve_keyset_connection(
+                cls,
+                nodes,
+                info=info,
+                want_count=want_count,
+                state=keyset_state,
+                before=before,
+                after=after,
+                first=first,
+                last=last,
+                max_results=max_results,
+                **kwargs,
+            )
         # Not a window: delegate to super (the inherited guard + slicing) then
         # attach the per-parent count, the shipped totalCount path unchanged.
         conn = super(generated, cls).resolve_connection(
@@ -1026,7 +1591,22 @@ def _finalize_queryset(target_type: type, qs: models.QuerySet, info: Info) -> mo
        queryset behind ``ConnectionExtension``.
     """
     target_model = model_for(target_type)
-    effective = tuple(qs.query.order_by) or tuple(target_model._meta.ordering)
+    cursor_field = getattr(
+        getattr(target_type, "__django_strawberry_definition__", None),
+        "cursor_field",
+        None,
+    )
+    explicit = tuple(qs.query.order_by)
+    if cursor_field is not None and not explicit:
+        # Keyset-mode default order: the declared ``cursor_field`` IS the
+        # connection order (the BACKLOG "enforced matching order" contract) -
+        # it beats model ``Meta.ordering``, whose columns the cursors do not
+        # encode. It is finalization-validated to end in a unique column, so
+        # it is already a total order. An explicit ``orderBy:`` (a non-empty
+        # ``query.order_by``) keeps the shipped derivation below; the keyset
+        # slicer then fingerprints THAT order into its cursors.
+        return apply_connection_optimization(target_type, qs.order_by(*cursor_field), info)
+    effective = explicit or tuple(target_model._meta.ordering)
     # Deterministic total order shared with the plan-time window (the
     # cursor-parity invariant, spec-033 Decision 11): the helper appends the pk
     # as a terminal tiebreaker unless the effective ordering already ends in a

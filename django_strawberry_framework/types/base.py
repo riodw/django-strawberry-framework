@@ -10,9 +10,9 @@ Consumer surface::
 A nested ``Meta`` class declares the model and (optionally) ``fields``,
 ``exclude``, ``name``, ``description``, ``optimizer_hints``,
 ``interfaces``, ``nullable_overrides``, ``required_overrides``,
-``connection``, ``filterset_class``, ``orderset_class``,
-``globalid_strategy``, ``relation_shapes``, and ``primary`` - see
-``ALLOWED_META_KEYS`` for the authoritative set.
+``connection``, ``cursor_field``, ``filterset_class``,
+``orderset_class``, ``globalid_strategy``, ``relation_shapes``, and
+``primary`` - see ``ALLOWED_META_KEYS`` for the authoritative set.
 
 Selection lives in ``Meta.fields`` / ``Meta.exclude``. A field may also be
 written as a class annotation ``name: auto`` ("declare-but-infer"): the name
@@ -67,6 +67,7 @@ DEFERRED_META_KEYS: frozenset[str] = frozenset(
 ALLOWED_META_KEYS: frozenset[str] = frozenset(
     {
         "connection",
+        "cursor_field",
         "description",
         "exclude",
         "fields",
@@ -85,10 +86,11 @@ ALLOWED_META_KEYS: frozenset[str] = frozenset(
 )
 # ``nullable_overrides`` / ``required_overrides`` (spec-029 Decision 6),
 # ``connection`` (spec-030 Decision 8), ``globalid_strategy`` (spec-031
-# Decision 6), and ``relation_shapes`` (spec-032 Decision 7) are net-new
-# ALLOWED keys, NOT DEFERRED_META_KEYS promotions - each one's feature ships
-# in the same card that adds it, so they were never
-# reserved-but-nonfunctional. DEFERRED_META_KEYS stays unchanged.
+# Decision 6), ``relation_shapes`` (spec-032 Decision 7), and
+# ``cursor_field`` (the BACKLOG ``stable_cursor_field`` keyset-cursor
+# opt-in) are net-new ALLOWED keys, NOT DEFERRED_META_KEYS promotions -
+# each one's feature ships in the same card that adds it, so they were
+# never reserved-but-nonfunctional. DEFERRED_META_KEYS stays unchanged.
 
 # The valid relation-shape vocabulary and the package default: the single
 # source for ``_validate_relation_shapes``' typo-guard text, the finalizer's
@@ -220,6 +222,65 @@ def _validate_connection(meta: type, connection: Any, relay_shaped: bool) -> dic
             f"{_RELAY_NODE_GATE_INHERIT_TAIL}",
         )
     return connection
+
+
+def _validate_cursor_field(meta: type, value: Any, relay_shaped: bool) -> tuple[str, ...] | None:
+    """Validate ``Meta.cursor_field`` SHAPE and the Relay-Node gate (keyset cursors).
+
+    Class-creation stage of the ``stable_cursor_field`` two-stage validation
+    (the spec-029 two-stage precedent): ``None``-short-circuits when unset;
+    otherwise requires a non-empty string sequence whose entries parse as
+    Django ``order_by`` strings over LOCAL columns (one optional leading
+    ``-``; no ``__`` relation traversal; no duplicate columns), then applies
+    the same Relay-Node gate as ``Meta.connection`` - keyset cursors only
+    mean anything on a connection-capable type. Column-level checks
+    (existence, concreteness, non-nullability, unique terminal) need the
+    settled model field surface and run at finalization via
+    ``keyset.validate_cursor_field_columns``.
+    """
+    if value is None:
+        return None
+    # In-function import: ``keyset`` imports only leaf modules today, but the
+    # function-scope import keeps ``types/base.py`` order-independent of it,
+    # matching the filterset / orderset validator idiom above.
+    from ..keyset import split_order_ref
+
+    if (
+        isinstance(value, str)
+        or not isinstance(value, Sequence)
+        or not value
+        or not all(isinstance(entry, str) for entry in value)
+    ):
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.cursor_field must be a non-empty non-string "
+            f"sequence of order strings; got {value!r}",
+        )
+    entries = tuple(value)
+    seen: set[str] = set()
+    for entry in entries:
+        name = entry[1:] if entry.startswith("-") else entry
+        if not name:
+            raise ConfigurationError(
+                f"{meta.model.__name__}.Meta.cursor_field entry {entry!r} is not a valid "
+                "order string.",
+            )
+        if "__" in name:
+            raise ConfigurationError(
+                f"{meta.model.__name__}.Meta.cursor_field entry {entry!r} traverses a "
+                "relation; keyset cursor columns must be local columns.",
+            )
+        if name in seen:
+            raise ConfigurationError(
+                f"{meta.model.__name__}.Meta.cursor_field names {name!r} more than once.",
+            )
+        seen.add(name)
+        split_order_ref(entry)  # the shared parse; raises on malformed shapes.
+    if not relay_shaped:
+        raise ConfigurationError(
+            f"{meta.model.__name__}.Meta.cursor_field {_RELAY_NODE_GATE_LEAD} "
+            f"{_RELAY_NODE_GATE_INHERIT_TAIL}",
+        )
+    return entries
 
 
 def _validate_relation_shapes(meta: type, value: Any, relay_shaped: bool) -> dict[str, str] | None:
@@ -639,6 +700,7 @@ class DjangoType:
             filterset_class=validated.filterset_class,
             orderset_class=validated.orderset_class,
             connection=validated.connection,
+            cursor_field=validated.cursor_field,
             globalid_strategy=validated.globalid_strategy,
             relation_shapes=validated.relation_shapes,
         )
@@ -986,6 +1048,7 @@ class _ValidatedMeta(NamedTuple):
     filterset_class: type | None
     orderset_class: type | None
     connection: dict | None
+    cursor_field: tuple[str, ...] | None
     globalid_strategy: str | Callable[..., str] | None
     relation_shapes: dict[str, str] | None
     nullable_overrides: frozenset[str]
@@ -1085,6 +1148,7 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
     filterset_class = _validate_filterset_class(meta, getattr(meta, "filterset_class", None))
     orderset_class = _validate_orderset_class(meta, getattr(meta, "orderset_class", None))
     connection = _validate_connection(meta, getattr(meta, "connection", None), relay_shaped)
+    cursor_field = _validate_cursor_field(meta, getattr(meta, "cursor_field", None), relay_shaped)
     globalid_strategy = _validate_globalid_strategy(
         meta,
         getattr(meta, "globalid_strategy", None),
@@ -1126,6 +1190,7 @@ def _validate_meta(cls: type, meta: type) -> _ValidatedMeta:
         filterset_class=filterset_class,
         orderset_class=orderset_class,
         connection=connection,
+        cursor_field=cursor_field,
         globalid_strategy=globalid_strategy,
         relation_shapes=relation_shapes,
         nullable_overrides=nullable_overrides,

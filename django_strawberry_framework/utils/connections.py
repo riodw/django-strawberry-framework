@@ -246,6 +246,7 @@ def window_range_plan(
     limit: int | None,
     reverse: bool,
     next_page_probe: bool = False,
+    keyset_counted: bool = False,
 ) -> WindowRangePlan:
     """Resolve one slice window into its shared ``WindowRangePlan``.
 
@@ -265,13 +266,24 @@ def window_range_plan(
     caller may pass the raw decision through without re-checking the shape and
     the ``add_marker_rows`` / ``next_page_probe`` fields stay mutually
     exclusive by construction.
+
+    ``keyset_counted`` marks the COUNTED keyset-seek window (a ``cursor_field``
+    connection resolving ``after:`` with an observable count): its row numbers
+    are PAGE-RELATIVE (a filtered running count - pre-seek rows carry 0), so
+    the window keeps an EXCLUSIVE FLOOR at row 0 (``lower_bound = offset``
+    even when the offset is 0) and its empty page is AMBIGUOUS exactly like
+    an overshot ``after:`` offset (a parent whose children all precede the
+    cursor vs a childless parent) - so it plans marker rows, which the
+    renderers express as the partition's ABSOLUTE first row. The count-free
+    keyset shape puts the seek in the base WHERE instead (its rows number
+    1..N natively) and never sets this flag.
     """
     if limit == sys.maxsize:
         limit = None
-    lower_bound = offset if offset else None
+    lower_bound = offset if (offset or keyset_counted) else None
     bounded = limit is not None and limit >= 0
     upper_bound = (limit if reverse else offset + limit) if bounded else None
-    ambiguous = is_ambiguous_empty_window(offset, limit, reverse=reverse)
+    ambiguous = keyset_counted or is_ambiguous_empty_window(offset, limit, reverse=reverse)
     plain_first_page = not reverse and offset == 0 and bounded and limit > 0
     return WindowRangePlan(
         offset=offset,
@@ -282,7 +294,7 @@ def window_range_plan(
         add_marker_rows=ambiguous and (lower_bound is not None or upper_bound is not None),
         plain_first_page=plain_first_page,
         requires_total_count=ambiguous or limit is None,
-        next_page_probe=next_page_probe and plain_first_page,
+        next_page_probe=next_page_probe and plain_first_page and not keyset_counted,
     )
 
 
@@ -459,3 +471,81 @@ def derive_connection_window_bounds(
         raise UnwindowableConnection
     limit = last if reverse else slice_meta.expected
     return ConnectionWindowBounds(slice_meta.start, limit, reverse)
+
+
+#: Strawberry's ``StrawberryConfig.relay_max_results`` default, mirrored for
+#: the keyset bounds derivation when neither an explicit ``max_results`` nor
+#: a readable schema config is in reach (the same terminal default
+#: ``SliceMetadata.from_arguments`` would land on through ``info``).
+_RELAY_MAX_RESULTS_DEFAULT = 100
+
+
+def resolve_relay_max_results(info: Any, max_results: int | None) -> int:
+    """Resolve the effective ``relay_max_results`` cap for a keyset window.
+
+    Precedence mirrors ``SliceMetadata.from_arguments``: an explicit
+    ``max_results`` wins; otherwise the Strawberry schema config is read off
+    ``info`` - accepting BOTH the resolve-time Strawberry ``Info`` shape
+    (``info.schema.config``) and the plan-time graphql-core shape (config on
+    ``info.schema._strawberry_schema``, the same brittle-private contract
+    ``walker.py::_relay_max_results_from_info`` centralizes for the offset
+    path) - and finally Strawberry's documented default. One resolver for
+    both halves so the plan-time and resolve-time caps are the same number
+    (the cursor-parity invariant's keyset leg).
+    """
+    if max_results is not None:
+        return max_results
+    schema = getattr(info, "schema", None)
+    config = getattr(getattr(schema, "_strawberry_schema", None), "config", None)
+    if config is None:
+        config = getattr(schema, "config", None)
+    cap = getattr(config, "relay_max_results", None)
+    return cap if cap is not None else _RELAY_MAX_RESULTS_DEFAULT
+
+
+def derive_keyset_window_bounds(
+    info: Any,
+    *,
+    before: Any,
+    after: Any,  # noqa: ARG001 - signature parity with the offset twin; the seek, not the bounds, consumes it.
+    first: Any,
+    last: Any,
+    max_results: int | None,
+) -> ConnectionWindowBounds:
+    """Derive the window bounds for a KEYSET (``cursor_field``) connection.
+
+    The keyset twin of ``derive_connection_window_bounds``: a keyset cursor
+    is not an offset, so ``SliceMetadata`` cannot parse it - the bounds
+    derivation forks BEFORE the offset engine and this helper owns the
+    keyset fork for both halves (the plan-time walker and the resolve-time
+    window consumer), so the two windows agree by construction. Cursor
+    DECODING is deliberately not done here (``keyset.decode_keyset_cursor``
+    owns it); this is pure slice arithmetic:
+
+    - A keyset window is FORWARD-ONLY and always starts at offset 0 (the
+      seek predicate, not a row offset, positions the page). ``limit`` is
+      ``first`` when supplied (validated against the same negative /
+      over-``max_results`` rules ``SliceMetadata`` applies, with its exact
+      error text so the consumer-visible errors do not fork), else the
+      effective ``relay_max_results`` cap - matching the root / per-parent
+      keyset slicer.
+    - Backward shapes (``last`` with no ``first``, or any ``before:``) raise
+      ``UnwindowableConnection``: the reversed keyset window is not planned
+      in v1, and the per-parent / root keyset slicer resolves those shapes
+      correctly instead (the spec-033 Decision-5 fallback discipline).
+    - ``first`` + ``last`` combined stays for the resolver's own
+      mutual-exclusivity guard - here it is simply forward (``first`` wins
+      the bound), matching the offset path's flow where the guard raises
+      before any window is consumed.
+    """
+    if before is not None or (isinstance(last, int) and not isinstance(first, int)):
+        raise UnwindowableConnection
+    cap = resolve_relay_max_results(info, max_results)
+    limit = cap
+    if isinstance(first, int):
+        if first < 0:
+            raise ValueError("Argument 'first' must be a non-negative integer.")
+        if first > cap:
+            raise ValueError(f"Argument 'first' cannot be higher than {cap}.")
+        limit = first
+    return ConnectionWindowBounds(0, limit, False)

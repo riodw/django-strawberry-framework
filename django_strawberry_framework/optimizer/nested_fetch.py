@@ -128,6 +128,11 @@ class NestedConnectionRequest:
     to_attr: str
     lookup: str
     next_page_probe: bool = False
+    # The decoded ``cursor_field`` value seek (a ``keyset.KeysetSeek``) for a
+    # keyset connection resolving ``after:``, or ``None`` (offset windows AND
+    # keyset first pages alike). Forward-only by the walker's fallback
+    # discipline; ``apply_window_pagination`` enforces that loudly.
+    keyset_seek: Any | None = None
 
     def __post_init__(self) -> None:
         """Enforce the probe/count mutual-exclusion at the strategy seam.
@@ -192,6 +197,7 @@ def attach_windowed_prefetch(
         reverse=request.reverse,
         with_total_count=request.with_total_count,
         next_page_probe=request.next_page_probe,
+        keyset_seek=request.keyset_seek,
     )
     if wrap is not None:
         windowed_queryset = wrap(windowed_queryset)

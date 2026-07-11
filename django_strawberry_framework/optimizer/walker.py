@@ -8,14 +8,21 @@ from typing import Any
 
 from django.db import models
 from django.db.models import Prefetch
-from graphql import OperationType
+from graphql import GraphQLError, OperationType
 from strawberry import relay
 
 from ..exceptions import ConfigurationError
+from ..keyset import (
+    KeysetSeek,
+    cursor_columns_for,
+    decode_keyset_cursor,
+    order_fingerprint,
+)
 from ..registry import registry
 from ..utils.connections import (
     UnwindowableConnection,
     derive_connection_window_bounds,
+    derive_keyset_window_bounds,
     has_connection_sidecar_kwargs,
     window_range_plan,
 )
@@ -36,6 +43,7 @@ from .plans import (
     append_prefetch_unique,
     append_unique,
     append_unique_many,
+    deferred_loading_of,
     deterministic_order,
     order_entry_name_and_direction,
     resolver_key,
@@ -1129,6 +1137,37 @@ def _project_scalar_only_window(
     return child_queryset.only(*fields)
 
 
+def _extend_only_projection(child_queryset: Any, attnames: tuple[str, ...]) -> Any:
+    """Ensure ``attnames`` load under an existing ``.only()`` / ``.defer()`` projection.
+
+    The keyset cursor-column loader: a keyset page mints edge cursors from
+    the rows' ordering-column VALUES, so those columns must survive the
+    ``.only()`` mask even when the query never selects them as GraphQL
+    fields. Django's ``.only()`` chaining REPLACES the load-only set, so the
+    extension re-applies the UNION read through the shared
+    ``deferred_loading_of`` unpack. A ``.defer()`` mask needs the inverse:
+    clear it, then re-apply every deferred field EXCEPT the cursor columns.
+    Otherwise cursor minting lazy-loads once per edge in sync execution and
+    raises ``SynchronousOnlyOperation`` in async execution.
+    """
+    loading = deferred_loading_of(child_queryset)
+    if loading is None:
+        return child_queryset
+    names, defer_flag = loading
+    if defer_flag:
+        remaining = sorted(set(names) - set(attnames))
+        if len(remaining) == len(names):
+            return child_queryset
+        cleared = child_queryset.defer(None)
+        return cleared.defer(*remaining) if remaining else cleared
+    if not names:
+        return child_queryset
+    missing = [attname for attname in attnames if attname not in names]
+    if not missing:
+        return child_queryset
+    return child_queryset.only(*names, *missing)
+
+
 def _ensure_connector_only_fields(
     plan: OptimizationPlan,
     parent_field: Any,
@@ -1544,10 +1583,94 @@ def _connection_window_slice_from_arguments(
     return bounds.offset, bounds.limit, bounds.reverse
 
 
+def _keyset_cursor_context(
+    target_type: type | None,
+) -> tuple[tuple[Any, ...], str] | None:
+    """Resolve a relation target's keyset context: ``(cursor columns, fingerprint)``.
+
+    ``None`` when the target type is absent or does not declare
+    ``Meta.cursor_field`` - the offset-window vocabulary applies. For a
+    keyset target the connection's effective order IS the declared
+    ``cursor_field`` (the BACKLOG "enforced matching order" contract), so
+    the fingerprint every nested cursor embeds is derived from it directly.
+    """
+    definition = getattr(target_type, "__django_strawberry_definition__", None)
+    cursor_field = getattr(definition, "cursor_field", None)
+    if cursor_field is None:
+        return None
+    return (cursor_columns_for(definition.model, cursor_field), order_fingerprint(cursor_field))
+
+
+def _keyset_window_slice_from_arguments(
+    arguments: dict[str, Any],
+    info: Any,
+    *,
+    columns: tuple[Any, ...],
+    fingerprint: str,
+) -> tuple[tuple[int, int | None, bool], KeysetSeek | None] | None:
+    """Resolve one keyset window ``((offset, limit, reverse), seek)`` per payload.
+
+    The keyset twin of ``_connection_window_slice_from_arguments``, forking
+    BEFORE the offset engine (``SliceMetadata`` cannot parse a value cursor):
+    bounds come from the shared ``derive_keyset_window_bounds`` (the same
+    helper the resolve side consumes, so the two windows agree by
+    construction) and the ``after:`` cursor decodes through the canonical
+    codec. Error contract mirrors the offset adapter:
+
+    - ``None`` for malformed pagination - a negative / over-cap ``first``
+      (``ValueError``) or an invalid / tampered / wrong-order cursor (the
+      codec's ``GraphQLError``). The caller records the field as
+      accounted-for and the per-parent pipeline raises the SAME error at
+      the field's own locality.
+    - ``UnwindowableConnection`` propagates for the valid backward shapes
+      (``last`` / ``before:``) the v1 keyset window does not plan - a real
+      per-parent access that must stay strictness-visible.
+    """
+    first = _coerce_pagination_int(arguments.get("first"))
+    last = _coerce_pagination_int(arguments.get("last"))
+    after = arguments.get("after")
+    before = arguments.get("before")
+    seek: KeysetSeek | None = None
+    try:
+        # Validate both cursors before classifying a valid backward shape as
+        # unwindowable. Otherwise strictness can mask malformed ``before:``
+        # (or ``after:`` + ``last``) input as an unplanned N+1.
+        if after is not None:
+            cursor = decode_keyset_cursor(
+                after,
+                columns,
+                fingerprint=fingerprint,
+                argument="after",
+            )
+            seek = KeysetSeek(columns=columns, cursor=cursor)
+        if before is not None:
+            decode_keyset_cursor(
+                before,
+                columns,
+                fingerprint=fingerprint,
+                argument="before",
+            )
+        bounds = derive_keyset_window_bounds(
+            info,
+            before=before,
+            after=after,
+            first=first,
+            last=last,
+            max_results=_relay_max_results_from_info(info),
+        )
+    except (GraphQLError, ValueError, TypeError):
+        return None
+    return (bounds.offset, bounds.limit, bounds.reverse), seek
+
+
 def _divergent_key_windows(
     sel: Any,
     info: Any,
-) -> tuple[list[tuple[str, tuple[int, int | None, bool]]], list[str]]:
+    keyset_context: tuple[tuple[Any, ...], str] | None = None,
+) -> tuple[
+    list[tuple[str, tuple[int, int | None, bool], KeysetSeek | None]],
+    list[str],
+]:
     """Resolve one window per response key for a divergent-alias connection.
 
     The divergent scheme's pure window pass: iterate the merged selection's
@@ -1559,25 +1682,43 @@ def _divergent_key_windows(
 
     - sidecar input (``filter:`` / ``orderBy:``) -> that key stays UNPLANNED
       (per-parent, strictness-visible), siblings unaffected;
-    - ``UnwindowableConnection`` (``after`` + ``last``) and the reversed
-      ``last: 0`` quirk -> likewise that key alone falls back per-parent;
+    - ``UnwindowableConnection`` (``after`` + ``last``; every backward keyset
+      shape) and the reversed ``last: 0`` quirk -> likewise that key alone
+      falls back per-parent;
     - malformed pagination -> that key is returned in ``malformed`` so the
       caller records ONLY its identities (per-key error locality: the
       per-parent pipeline raises that alias's own validation error);
     - otherwise the key's ``(offset, limit, reverse)`` window joins
       ``planned``.
 
+    ``keyset_context`` routes every key through the keyset window adapter
+    instead (each alias decodes its OWN ``after:`` cursor into its own
+    seek); the entry shape gains that seek (``None`` under the offset
+    vocabulary and for keyset first pages alike).
+
     Returns ``(planned, malformed)``; relation-level gates (hint SKIP, join
     windowability, child-queryset safety) stay whole-relation in
     ``_plan_connection_relation``.
     """
-    planned: list[tuple[str, tuple[int, int | None, bool]]] = []
+    planned: list[tuple[str, tuple[int, int | None, bool], KeysetSeek | None]] = []
     malformed: list[str] = []
     for resp_key, key_arguments in sel._optimizer_response_key_arguments.items():
         if has_connection_sidecar_kwargs(key_arguments):
             continue
+        seek: KeysetSeek | None = None
         try:
-            window = _connection_window_slice_from_arguments(key_arguments, info)
+            if keyset_context is not None:
+                columns, fingerprint = keyset_context
+                keyed = _keyset_window_slice_from_arguments(
+                    key_arguments,
+                    info,
+                    columns=columns,
+                    fingerprint=fingerprint,
+                )
+                window = keyed[0] if keyed is not None else None
+                seek = keyed[1] if keyed is not None else None
+            else:
+                window = _connection_window_slice_from_arguments(key_arguments, info)
         except UnwindowableConnection:
             continue
         if window is None:
@@ -1586,7 +1727,7 @@ def _divergent_key_windows(
         _offset, limit, reverse = window
         if reverse and limit == 0:
             continue
-        planned.append((resp_key, window))
+        planned.append((resp_key, window, seek))
     return planned, malformed
 
 
@@ -1678,17 +1819,27 @@ def _plan_connection_relation(
     if django_field.related_model is None:
         return
 
+    # Keyset context (the ``cursor_field`` opt-in): when the relation target
+    # is keyset-mode, every window below derives through the keyset adapter
+    # (value-cursor decode + forward-only bounds) instead of the offset
+    # engine, and the connection order is the DECLARED ``cursor_field``
+    # rather than the child queryset / model ``Meta.ordering`` (the BACKLOG
+    # "enforced matching order" contract - the cursor columns ARE the order).
+    keyset_context = _keyset_cursor_context(target_type)
+
     # (e/f) Slice window(s) from the selection's resolved pagination arguments.
     # Pure (mutates nothing), so resolve BEFORE the child build - a malformed
     # slice must not leave child resolver keys / cacheable flips on the parent
     # plan. ``keyed_windows`` is the scheme-agnostic hand-off: the divergent
-    # scheme yields one ``(response_key, window)`` per plannable alias (each
-    # gets its own per-key ``to_attr``); the single-window scheme yields one
-    # ``(None, window)`` entry (the legacy shared ``to_attr``, byte-identical
-    # to the pre-idea-#2 path by construction).
-    keyed_windows: list[tuple[str | None, tuple[int, int | None, bool]]]
+    # scheme yields one ``(response_key, window, seek)`` per plannable alias
+    # (each gets its own per-key ``to_attr``); the single-window scheme yields
+    # one ``(None, window, seek)`` entry (the legacy shared ``to_attr``,
+    # byte-identical to the pre-idea-#2 path by construction). ``seek`` is the
+    # decoded keyset value seek, ``None`` under the offset vocabulary and for
+    # keyset first pages alike.
+    keyed_windows: list[tuple[str | None, tuple[int, int | None, bool], Any]]
     if divergent:
-        planned_windows, malformed_keys = _divergent_key_windows(sel, info)
+        planned_windows, malformed_keys = _divergent_key_windows(sel, info, keyset_context)
         keyed_windows = list(planned_windows)
         if malformed_keys:
             # Malformed pagination, per key (Decision 4 step f): that alias
@@ -1708,16 +1859,30 @@ def _plan_connection_relation(
             return
     else:
         try:
-            window = _connection_window_slice(sel, info)
+            if keyset_context is not None:
+                columns, fingerprint = keyset_context
+                keyed = _keyset_window_slice_from_arguments(
+                    arguments,
+                    info,
+                    columns=columns,
+                    fingerprint=fingerprint,
+                )
+                window = keyed[0] if keyed is not None else None
+                seek = keyed[1] if keyed is not None else None
+            else:
+                window = _connection_window_slice(sel, info)
+                seek = None
         except UnwindowableConnection:
-            # (b) Offset-bearing backward window (after + last): the reversed window's
-            # whole-partition row numbering cannot honor the after offset, so it falls
-            # back per-parent like the other Decision-6 fallback shapes (sidecar,
-            # distinct). Stay FULLY unplanned - record NO resolver
-            # identities - so the per-parent access stays visible to the Slice-4
-            # strictness contract (spec-033 Decision 5; unlike the malformed-pagination
-            # `window is None` path below, this query resolves correctly per-parent
-            # and never raises its own error, so it is a real per-parent access).
+            # (b) Offset-bearing backward window (after + last) - and, for a
+            # keyset target, EVERY backward shape (``last`` / ``before:``, the
+            # v1 keyset window is forward-only): the reversed window cannot
+            # serve it, so it falls back per-parent like the other Decision-6
+            # fallback shapes (sidecar, distinct). Stay FULLY unplanned -
+            # record NO resolver identities - so the per-parent access stays
+            # visible to the Slice-4 strictness contract (spec-033 Decision 5;
+            # unlike the malformed-pagination `window is None` path below,
+            # this query resolves correctly per-parent and never raises its
+            # own error, so it is a real per-parent access).
             return
         if window is None:
             # Malformed pagination (Decision 4 step f): emit NO window prefetch so the
@@ -1728,7 +1893,9 @@ def _plan_connection_relation(
             # under `"raise"` (spec-033 Decision 8 - error locality wins here). The
             # other Decision-6 fallback shapes (sidecar, hint SKIP,
             # distinct, unwindowable partition) stay fully unplanned on purpose so
-            # strictness CAN see them as real per-parent accesses.
+            # strictness CAN see them as real per-parent accesses. A keyset
+            # target reaches this path for an invalid / tampered / wrong-order
+            # cursor too - the codec raises the SAME GraphQLError per-parent.
             append_unique_many(plan.planned_resolver_keys, resolver_identities)
             return
         offset, limit, reverse = window
@@ -1743,7 +1910,7 @@ def _plan_connection_relation(
             # Decision-6 fallback shapes. ``_resolve_from_window`` keeps its own
             # ``last: 0`` guard as the defensive tail for direct callers.
             return
-        keyed_windows = [(None, window)]
+        keyed_windows = [(None, window, seek)]
 
     # (g, partition) also pure; classify the join before the child build so an
     # unsupported relation kind (single-valued forward, or a shape with no
@@ -1803,10 +1970,17 @@ def _plan_connection_relation(
     # strategy-independent gate; later child-plan application only adds the
     # package's optimizer directives.
 
-    # (d) Deterministic total order shared with the resolve-time pipeline.
-    effective = tuple(child_queryset.query.order_by) or tuple(
-        django_field.related_model._meta.ordering,
-    )
+    # (d) Deterministic total order shared with the resolve-time pipeline. A
+    # keyset target's connection order IS its declared ``cursor_field`` (the
+    # unique-terminal contract is finalization-validated, so
+    # ``deterministic_order`` returns it unchanged); everything else keeps
+    # the child-queryset / model ``Meta.ordering`` derivation.
+    if keyset_context is not None:
+        effective = target_type.__django_strawberry_definition__.cursor_field
+    else:
+        effective = tuple(child_queryset.query.order_by) or tuple(
+            django_field.related_model._meta.ordering,
+        )
     order_by = list(deterministic_order(effective, django_field.related_model))
 
     # A scalar-only (pageInfo/totalCount) selection unwrapped to [] node children,
@@ -1819,6 +1993,16 @@ def _plan_connection_relation(
             django_field,
             order_by,
             enable_only=enable_only,
+        )
+    elif keyset_context is not None:
+        # Keyset edges mint cursors from the rows' ORDERING-COLUMN VALUES
+        # (not the row-number annotation), so the cursor columns must be
+        # loaded on every page row - extend a node-selection ``.only()``
+        # projection that did not select them as GraphQL fields (the
+        # scalar-only branch above already carries its order columns).
+        child_queryset = _extend_only_projection(
+            child_queryset,
+            tuple(column.field.attname for column in keyset_context[0]),
         )
 
     # Conditional total count (workstream B) + count-free ``hasNextPage``
@@ -1856,7 +2040,7 @@ def _plan_connection_relation(
     # ``False`` leaves that window unplanned, keeping the Decision-6
     # strictness contract (no resolver identities recorded for it).
     planned_keys: list[str | None] = []
-    for resp_key, (offset, limit, reverse) in keyed_windows:
+    for resp_key, (offset, limit, reverse), window_seek in keyed_windows:
         range_plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
         next_page_probe = range_plan.wants_next_page_probe(
             has_next_selected=has_next_selected,
@@ -1879,6 +2063,7 @@ def _plan_connection_relation(
             reverse=reverse,
             with_total_count=with_total_count,
             next_page_probe=next_page_probe,
+            keyset_seek=window_seek,
             to_attr=(
                 _relation_connection_to_attr(relation_field_name)
                 if resp_key is None

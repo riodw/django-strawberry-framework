@@ -304,9 +304,65 @@ class PublicPatronType(DjangoType):
         )
 
 
+class IssueType(DjangoType):
+    """The keyset-cursor (``Meta.cursor_field``) acceptance type.
+
+    ``cursor_field = ("-number", "id")`` makes every connection over issues
+    KEYSET-MODE: newest-number-first ordering (the canonical feed shape and
+    the mixed-direction seek arm - DESC ordering column, ASC pk tiebreak),
+    value-encoded signed cursors that survive inserts/deletes, offset
+    cursors rejected. ``get_queryset`` hides embargoed issues from
+    non-staff viewers - the permission-aware cursor-decode substrate: a
+    cursor minted under staff visibility replays for anonymous viewers over
+    ONLY the rows they can see.
+    """
+
+    @classmethod
+    def get_queryset(cls, queryset: Any, info: Info) -> Any:
+        """Hide ``embargoed=True`` issues from non-staff requests."""
+        if _user_is_staff(info):
+            return queryset
+        return queryset.exclude(embargoed=True)
+
+    class Meta:
+        model = models.Issue
+        fields = (
+            "id",
+            "number",
+            "title",
+            "embargoed",
+            "periodical",
+        )
+        interfaces = (relay.Node,)
+        cursor_field = ("-number", "id")
+        connection = {"total_count": True}
+        orderset_class = orders.IssueOrder
+
+
+class PeriodicalType(DjangoType):
+    """Parent of the keyset acceptance type - its ``issuesConnection`` nested
+    connection windows with keyset value seeks (uniform value-position across
+    every parent partition)."""
+
+    class Meta:
+        model = models.Periodical
+        fields = ("id", "name", "issues")
+        interfaces = (relay.Node,)
+        relation_shapes = {"issues": "connection"}
+        orderset_class = orders.PeriodicalOrder
+
+
 @strawberry.type
 class Query:
     """Library acceptance root fields."""
+
+    # Keyset-cursor (Meta.cursor_field) acceptance surface: the root
+    # connection mints/decodes value cursors through the framework slicer;
+    # the periodicals root reaches the NESTED issuesConnection windows.
+    all_library_issues_connection: DjangoConnection[IssueType] = DjangoConnectionField(IssueType)
+    all_library_periodicals_connection: DjangoConnection[PeriodicalType] = DjangoConnectionField(
+        PeriodicalType,
+    )
 
     all_library_branches_via_list_field: list[BranchType] = DjangoListField(
         BranchType,

@@ -707,6 +707,21 @@ def finalize_django_types() -> None:
             _check_composite_pk_for_relay_node(type_cls)
             install_relay_node_resolvers(type_cls)
             install_globalid_typename_resolver(type_cls, definition)
+        if definition.cursor_field is not None:
+            # Keyset-cursor column contract (the ``stable_cursor_field``
+            # finalization half): every ``Meta.cursor_field`` entry must be a
+            # local concrete non-nullable column and the terminal entry a
+            # unique total-order anchor. Runs in this Phase-2.5 window so a
+            # violation raises before Phase 3 flips ``finalized`` (pure
+            # validation - idempotent under the partial-finalize rerun).
+            # Function-local import mirrors the sibling local-import idiom.
+            from ..keyset import validate_cursor_field_columns
+
+            validate_cursor_field_columns(
+                type_cls.__name__,
+                definition.model,
+                definition.cursor_field,
+            )
 
     # No-Node-types check (spec-032 Decision 8): a declared ``DjangoNodeField()``
     # / ``DjangoNodesField()`` on a registry with NO Relay-Node-shaped types is

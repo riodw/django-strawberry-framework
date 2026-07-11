@@ -9,6 +9,8 @@ diagnostics were active.
 
 # TODO(spec-044 Slice 1): Replace this planning stub with the
 # DjangoDebugExtension described in docs/spec-044-debug_extension-0_0_14.md.
+# Delete the file-level ERA001 suppression with the commented pseudocode; the
+# implemented module must not inherit a commented-out-code exemption.
 #
 # High-quality DRY pseudocode for the production module:
 #
@@ -62,12 +64,14 @@ diagnostics were active.
 #                set database_connection.force_debug_cursor = True
 #                store depth=1 and the saved value
 #            else:
-#                replace/increment state to depth + 1 without resaving
+#                replace state with a new immutable _ActiveCapture carrying
+#                depth + 1 and the original saved value; do not resave
 #            return _CaptureToken(database_connection)
 #    - release(token):
 #        with lock:
 #            locate the state for token.connection
-#            if depth > 1: decrement only
+#            if depth > 1:
+#                replace state with a new immutable record at depth - 1
 #            else:
 #                restore the exact saved_force_debug_cursor value
 #                delete the active-map entry
@@ -103,8 +107,10 @@ diagnostics were active.
 #                traceback.format_exception(type(exc), exc, exc.__traceback__),
 #            ),
 #        }
-#      The explicit traceback is required because serialization occurs after
-#      the original except block.
+#      Keep the three explicit arguments to pin the supported-floor form and
+#      avoid ambient traceback.format_exc()/sys.exc_info() state, which is gone
+#      after the original except block. The exception's own __traceback__
+#      remains attached and is the durable source.
 #    - _terminal_original_error(error):
 #        start from error.original_error
 #        track object identities in a set

@@ -1,6 +1,21 @@
 """Planning anchors for spec-044 DjangoDebugExtension mechanics tests."""
 
+import importlib
+
+import pytest
+
+
+def test_planning_stub_fails_loudly_on_import():
+    """Pin the temporary fail-loud contract until Slice 1 replaces the stub."""
+    with pytest.raises(
+        NotImplementedError,
+        match="DjangoDebugExtension is not implemented yet",
+    ):
+        importlib.import_module("django_strawberry_framework.extensions.debug")
+
+
 # TODO(spec-044 Slice 1): Replace these anchors after implementing the leaf.
+# Delete the temporary import guard above together with the fail-loud stub.
 # Do not run pytest unless the maintainer explicitly asks.
 #
 # Test construction rules:

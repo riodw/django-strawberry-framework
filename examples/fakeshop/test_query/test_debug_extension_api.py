@@ -45,8 +45,11 @@
 #    - assert SQL shows the projected/joined columns that make the debug
 #      payload an optimizer observability surface
 # 3. Mutation capture:
-#    - create_users(1), choose only the user with the required add permission,
-#      and authenticate via `with client.login(user):`
+#    - create_users(1), fetch the non-staff view_item_1 user, grant only
+#      Permission(codename="add_item", content_type__app_label="products")
+#      following test_client_api.py's permitted_writer precedent, and re-fetch
+#      the user after the grant to discard any stale permission cache
+#    - authenticate via `with client.login(user):`
 #    - post createItem
 #    - assert an INSERT row with isSelect False is present
 #    - tolerate/select by prefix around pipeline SELECT and transaction rows

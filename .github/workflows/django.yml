@@ -107,7 +107,7 @@ jobs:
         if: matrix.strawberry
         run: |
           uv pip install "strawberry-graphql==${{ matrix.strawberry }}"
-          uv run --no-sync python -c "import strawberry; print('strawberry-graphql', strawberry.__version__)"
+          uv run --no-sync python -c "import importlib.metadata as m; print('strawberry-graphql', m.version('strawberry-graphql'))"
 
       - name: Run Tests (${{ matrix.database }})
         # The latest single-DB node owns the fail_under=100 coverage gate and

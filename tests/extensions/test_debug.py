@@ -279,7 +279,8 @@ def test_hop_policy_long_acyclic_chain_stops_at_the_ceiling():
 
 
 # ---------------------------------------------------------------------------
-# Scenarios 4-7 of the mechanics anchors - the coordinator's two seams.
+# Scenario 8 - the restore contract: the coordinator's two seams, the partial
+# unwind, and the log-slice clamp/rollover.
 # ---------------------------------------------------------------------------
 
 

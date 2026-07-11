@@ -1,6 +1,6 @@
 """Live ``/graphql/`` regression: a mutation must not commit a partial write.
 
-Pins the atomicity gap tracked by KANBAN card **BETA-054** ("Mutation
+Pins the atomicity gap tracked by KANBAN card **BETA-055** ("Mutation
 transactions and idempotency"): a ``DjangoMutation`` runs its write inside
 ``transaction.atomic()``, but graphql-core completes (serializes) the returned
 payload *after* the resolver returns - i.e. after the transaction has already
@@ -15,14 +15,14 @@ at completion as ``Cannot return null for non-nullable field CategoryType.create
 - by which point the create/update/delete side effect has committed.
 
 Marked ``xfail(strict=True)`` rather than ``skip`` on purpose: the test runs and
-is expected to fail today, and the moment BETA-054 extends the transaction
+is expected to fail today, and the moment BETA-055 extends the transaction
 boundary to span response completion it will XPASS, turning the suite red so
 this marker is removed (the ``skip`` alternative would silently rot). When that
 happens, delete the ``xfail`` marker - the assertions already encode the
 desired post-fix contract (no 500, the completion error is surfaced, and the
 write rolled back).
 
-Keep future BETA-054 response-completion partial-commit regressions in this
+Keep future BETA-055 response-completion partial-commit regressions in this
 module so the card's eventual implementation has one live HTTP acceptance file
 to un-xfail and satisfy.
 """
@@ -216,9 +216,9 @@ def _insert_item_with_description(name: str, category_pk: int, description: obje
 
 @pytest.mark.xfail(
     strict=True,
-    reason="KANBAN BETA-054 (Mutation transactions and idempotency): the mutation transaction "
+    reason="KANBAN BETA-055 (Mutation transactions and idempotency): the mutation transaction "
     "boundary ends when the resolver returns, before graphql-core completes the payload, so a "
-    "response-completion failure commits a partial write. Remove this marker when BETA-054 lands.",
+    "response-completion failure commits a partial write. Remove this marker when BETA-055 lands.",
 )
 @pytest.mark.django_db(transaction=True)
 def test_update_does_not_commit_when_response_completion_fails():
@@ -246,9 +246,9 @@ def test_update_does_not_commit_when_response_completion_fails():
 
 @pytest.mark.xfail(
     strict=True,
-    reason="KANBAN BETA-054 (Mutation transactions and idempotency): response completion can "
+    reason="KANBAN BETA-055 (Mutation transactions and idempotency): response completion can "
     "also fail while serializing a scalar field on the mutated object itself. Remove this "
-    "marker when BETA-054 lands.",
+    "marker when BETA-055 lands.",
 )
 @pytest.mark.django_db(transaction=True)
 def test_update_does_not_commit_when_own_scalar_response_completion_fails():
@@ -285,8 +285,8 @@ def test_update_does_not_commit_when_own_scalar_response_completion_fails():
 
 @pytest.mark.xfail(
     strict=True,
-    reason="KANBAN BETA-054 (Mutation transactions and idempotency): create has the same "
-    "response-completion transaction gap as update. Remove this marker when BETA-054 lands.",
+    reason="KANBAN BETA-055 (Mutation transactions and idempotency): create has the same "
+    "response-completion transaction gap as update. Remove this marker when BETA-055 lands.",
 )
 @pytest.mark.django_db(transaction=True)
 def test_create_does_not_commit_when_response_completion_fails():
@@ -310,8 +310,8 @@ def test_create_does_not_commit_when_response_completion_fails():
 
 @pytest.mark.xfail(
     strict=True,
-    reason="KANBAN BETA-054 (Mutation transactions and idempotency): delete has the same "
-    "response-completion transaction gap as update. Remove this marker when BETA-054 lands.",
+    reason="KANBAN BETA-055 (Mutation transactions and idempotency): delete has the same "
+    "response-completion transaction gap as update. Remove this marker when BETA-055 lands.",
 )
 @pytest.mark.django_db(transaction=True)
 def test_delete_does_not_commit_when_response_completion_fails():

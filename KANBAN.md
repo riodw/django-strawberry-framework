@@ -95,7 +95,8 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 | Card | Spec file |
 | --- | --- |
-| `DONE-043-0.0.14` - Test client helper | [spec-043-test_client-0_0_14.md](docs/spec-043-test_client-0_0_14.md) |
+| `WIP-ALPHA-044-0.0.14` - Response-extensions debug middleware | [spec-044-debug_extension-0_0_14.md](docs/spec-044-debug_extension-0_0_14.md) |
+| `DONE-043-0.0.14` - Test client helper | [spec-043-test_client-0_0_14.md](docs/SPECS/spec-043-test_client-0_0_14.md) |
 | `DONE-042-0.0.14` - Debug-toolbar middleware | [spec-042-debug_toolbar-0_0_14.md](docs/SPECS/spec-042-debug_toolbar-0_0_14.md) |
 | `DONE-041-0.0.14` - Channels ASGI router (migration aid) | [spec-041-channels_router-0_0_14.md](docs/SPECS/spec-041-channels_router-0_0_14.md) |
 | `DONE-040-0.0.13` - Auth mutations (login / logout / register) | [spec-040-auth_mutations-0_0_13.md](docs/SPECS/spec-040-auth_mutations-0_0_13.md) |
@@ -144,13 +145,14 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
 
 <a id="response_extensions_debug_middleware"></a>
-### [TODO-ALPHA-044-0.0.14 - Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
+### [WIP-ALPHA-044-0.0.14 - Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
-- Status: To Do
+- Status: WIP
 - Relative size: M
 - Labels: `debugging`, `graphql-api`, `middleware`
+- Spec: [spec-044-debug_extension-0_0_14.md](docs/spec-044-debug_extension-0_0_14.md)
 
 #### Predicted files
 
@@ -236,7 +238,7 @@ Cards that complete the django-graphene-filters Layer-3 richness on top of parit
 
 #### Definition of done
 
-- [ ] Every other Alpha card (`DONE-013-0.0.4` through `TODO-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`.
+- [ ] Every other Alpha card (`DONE-013-0.0.4` through `WIP-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`.
 - [ ] Full test pass under each supported `(Python, Django, Strawberry)` combination.
 - [ ] Coverage stays at 100% for the package source tree.
 - [ ] Version bumped to `0.1.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
@@ -269,9 +271,9 @@ Cards that complete the django-graphene-filters Layer-3 richness on top of parit
 
 #### Card references
 
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `TODO-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-013-0.0.4` - Real M2M coverage
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `TODO-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `TODO-ALPHA-044-0.0.14` - Response-extensions debug middleware
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `TODO-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method`
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `WIP-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-013-0.0.4` - Real M2M coverage
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `WIP-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `WIP-ALPHA-044-0.0.14` - Response-extensions debug middleware
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `WIP-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method`
 
 <a id="fieldset"></a>
 ### [TODO-BETA-046-0.1.1 - `FieldSet`](KANBAN.html#fieldset)
@@ -1064,7 +1066,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - Status: Done
 - Relative size: M
 - Labels: `graphql-api`, `test-client`, `tests`, `uploads`
-- Spec: [spec-043-test_client-0_0_14.md](docs/spec-043-test_client-0_0_14.md)
+- Spec: [spec-043-test_client-0_0_14.md](docs/SPECS/spec-043-test_client-0_0_14.md)
 
 #### Glossary terms
 

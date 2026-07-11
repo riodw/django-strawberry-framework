@@ -1,0 +1,26 @@
+term,anchor,notes
+Response-extensions debug middleware,response-extensions-debug-middleware,the subject entry (one row also covers the shipped DjangoDebugExtension symbol); planned for 0.0.14 -> shipped at the Slice-3 cut
+Debug-toolbar middleware,debug-toolbar-middleware,the 0.0.14 sibling mechanism; documented as complements both directions
+DjangoOptimizerExtension,djangooptimizerextension,extension precedent (engine base) + the composition test scenario
+DjangoGraphQLProtocolRouter,djangographqlprotocolrouter,status flip carried by this card's Slice-3 cut
+Channels request adapter,channels-request-adapter,router-companion entry whose status flip rides the cut
+require_optional_module,require_optional_module,router-companion status flip + D-N2 deliberate non-reuse
+TestClient,testclient,HTTP ergonomics the request-driving tests post through
+GraphQLTestCase,graphqltestcase,test-client family status flip carried by the cut
+Joint version cut,joint-version-cut,Decision 12 - this card completes the 0.0.14 cut
+Live-first coverage mandate,live-first-coverage-mandate,Decision 11 - the recorded package-tier justification
+Schema reload discipline,schema-reload-discipline,fixture obligation for the request-driving tests
+seed_data,seed_data,the repo seed-helper rule in the Test plan
+Soft dependency,soft-dependency,cited as contrast - zero-dependency card
+Eviction-simulated absence,eviction-simulated-absence,cited as contrast - no absence fixture needed
+PEP 562 lazy export,pep-562-lazy-export,rejected in favor of the eager subpackage re-export
+Single-upstream parity,single-upstream-parity,graphene-django-only parity posture
+Strictness mode,strictness-mode,adjacent diagnostic; composes with the debug payload (one row also covers OptimizerError - a strictness raise surfaces in the exceptions list)
+Plan cache,plan-cache,why the optimizer is a singleton and this extension is not
+Multi-database cooperation,multi-database-cooperation,per-alias capture makes the alias visible (Decision 10)
+only() projection,only-projection,visible in the captured sql strings (scenario 2)
+ConfigurationError,configurationerror,explicitly NOT used by this card - stated in Key glossary references
+get_queryset visibility hook,get_queryset-visibility-hook,the payload is a read-only window over what visibility hooks emitted
+Django Trac #37064 hardening,django-trac-37064-hardening,the cursor-wrapping hazard precedent in Decision 4's rejection
+finalize_django_types,finalize_django_types,appears in the User-facing API code example
+strawberry_config,strawberry_config,appears in the User-facing API code example

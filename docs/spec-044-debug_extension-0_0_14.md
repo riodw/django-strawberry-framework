@@ -271,6 +271,58 @@ Revision history (kept inline so the spec is self-contained):
   `queries_log` and explicitly excludes `callproc()`; async overlap coverage
   pre-materializes and proves shared wrapper identity; and nested same-thread
   sync execution is documented as restoration-safe but cross-attributed.
+- **Revision 8** — deep architectural review fold-in (2026-07-11; the
+  review's 21 findings applied as one coherent pass, each verified against
+  the installed Strawberry 0.316.0, Django 6.0.5, asgiref, and repository
+  sources before editing). The five implementation blockers: Test plan
+  scenario 2 and Goals item 5 rewritten to the **visibility-safe two-query
+  prefetch shape** (`CategoryType.get_queryset` makes the optimizer plan
+  `Prefetch`, never a joined single query — the existing
+  `test_products_api.py` proof is the assertion precedent); the
+  byte-identical / off-by-default overclaim replaced with the narrow
+  no-instrumentation/no-key claim plus
+  [Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)'s
+  release-wide floor **migration notes** (zero-argument construction,
+  direct-instance deprecation, per-operation lifecycle; `uv.lock` + tests —
+  not the open bound — pin semantics; the stale `optimizer/extension.py`
+  `__init__` comment joins the Slice-1 file map); a **two-phase failure
+  policy** in [Error shapes](#error-shapes) (setup fail-loud after
+  `ExitStack` unwind; post-execution diagnostic failures caught as
+  `Exception`, logged, degrading the payload — never replacing the real
+  result — with the generic-recovery claim qualified to
+  stash-published-only); the **cursor-construction capture-interval
+  boundary** documented in Decision 4 / Edge cases (Django selects the
+  wrapper at `connection.cursor()` time and never re-checks — pre-opened
+  and retained cursors are named boundary cases, not fixed by a wrap port);
+  and the Slice-3 wrap re-ordered **DB-mutations → Done flip →
+  `import_spec_terms` → GLOSSARY/TREE renders → KANBAN renders → `--check`
+  modes**, with the glossary flips enumerated from the companion terms CSV.
+  Also folded: transaction scope narrowed to brackets completing inside the
+  hook (enclosing `ATOMIC_REQUESTS` excluded); a real sharded-tier capture
+  proof (scenario 16); experimental incremental execution and
+  `inc_thread_sharing()` cross-thread wrappers excluded explicitly;
+  sibling-hook SQL ordering documented and tested; the `original_error`
+  walk gains a 64-hop ceiling with deterministic stop; the enabled-cost
+  language replaced with exact complexity/retention wording; the async
+  follow-on's false universal-executor premise corrected
+  (`ThreadSensitiveContext` is per-request under ASGI HTTP — a prototype,
+  not prose, decides the follow-on); the security disclosure enumerates
+  interpolated SQL values, traceback paths, retention, and downstream
+  copies; targeted pytest commands gain the coverage-free
+  `-o addopts="-v -n0"` override; the Strawberry floor gains a durable CI
+  node (`.github/workflows/django.yml` joins the file map); live scenarios
+  gain their `django_db` / `django_db(transaction=True)` markers and
+  scenario 3 its full permitted-writer + required-`categoryId` setup;
+  scenario 13 drops threaded ORM in favor of exception/identity markers;
+  and scenarios 17–21 add the non-interference, cursor-lifetime,
+  transaction-boundary, sibling-order, and hop-policy regressions. Two
+  findings required no spec change, recorded so they are not re-litigated:
+  the settings-lookup concern (F12) does not occur — this spec introduces
+  no settings key, and the shipped `conf.py` / `types/relay.py` split is
+  correct as-is; and the temporary fail-loud stub needs no import-guard
+  test (F21) — `pyproject.toml` already excludes `raise
+  NotImplementedError` from coverage, so the staged
+  `tests/extensions/test_debug.py` guard is deleted rather than kept.
 
 ## Key glossary references
 
@@ -517,7 +569,16 @@ doc breadth.
         materializes classes/factories in `Schema.get_extensions()` for every
         operation. Record both source inspections and run the concurrent sync
         isolation scenario at the new floor in an isolated throwaway venv
-        (never the shared `.venv`) before calling the floor supported
+        (never the shared `.venv`, and with the coverage-free
+        `-o addopts=...` override — [Test plan](#test-plan)) before calling
+        the floor supported. The floor must also be **durably exercised**,
+        not a one-time throwaway run: the existing minimum-support CI node in
+        [`.github/workflows/django.yml`][workflow-django] force-installs
+        exactly `strawberry-graphql==0.316.0` and runs the suite with
+        coverage disabled (the latest node keeps the coverage gate); at
+        minimum a repeatable floor job installs the dev dependencies,
+        force-installs `0.316.0`, records the resolved versions, and runs the
+        lifecycle/isolation node ID
         ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)).
         This is a constraint bump, not a new dependency;
         `[dependency-groups].dev` remains untouched. The package's own
@@ -551,9 +612,15 @@ doc breadth.
         bracket coordinator (lock + active-capture map), one log-slice
         helper, one payload builder — and no `__init__`.
         Module + symbol docstrings state the off-by-default posture, the
-        class-form opt-in, the dev-only security caveat, the
+        class-form opt-in, the dev-only security caveat with the full
+        disclosure surface (unmasked exceptions, **interpolated SQL
+        parameter values**, traceback file paths, in-process query-log
+        retention, downstream response copies), the
         masking-extension ordering (list the debug class after `MaskErrors`),
-        `callproc()` omission, nested-sync attribution boundary, and the async
+        `callproc()` omission, the cursor-construction capture-interval
+        boundary (pre-opened and retained cursors), the transaction-boundary
+        scope (resolver-owned `atomic()` in, enclosing `ATOMIC_REQUESTS`
+        out), nested-sync attribution boundary, and the async
         SQL caveat
         ([Edge cases](#edge-cases-and-constraints)).
   - [ ] `examples/fakeshop/test_query/test_debug_extension_api.py` (new) —
@@ -646,12 +713,29 @@ doc breadth.
         per the [`docs/SPECS/NEXT.md`][next] convention that the owning
         spec's release slice carries the grant; the maintainer's commit
         review remains the final gate.
-  - [ ] **Only after every preceding cut item succeeds**, wrap the card:
-        `044` → Done with the `DONE-044-0.0.14` id and its `SpecDoc` pointing
-        at this spec (kanban DB edit +
-        [`scripts/build_kanban_md.py`][build-kanban-md] /
-        `build_kanban_html.py` re-render, never a hand-edit), then import the
-        companion terms CSV via `manage.py import_spec_terms`.
+  - [ ] **Only after every preceding cut item succeeds**, wrap the card in
+        the **DB-mutations-first, renders-last** order (the importer writes
+        glossary-link rows the KANBAN builders render, so rendering before
+        importing would ship stale generated artifacts):
+        1. apply all remaining card, `SpecDoc`, `TrackedPath`,
+           glossary-status, and version DB updates — the GLOSSARY status
+           flips cover **every** spec-044 glossary term whose `planned for
+           0.0.14` status changes, derived from the companion
+           `docs/spec-044-debug_extension-0_0_14-terms.csv`, not only the
+           four headline release surfaces;
+        2. flip `044` → Done with the `DONE-044-0.0.14` id and its
+           `SpecDoc` pointing at this spec (the importer processes only
+           Done cards);
+        3. run `manage.py import_spec_terms` for the companion terms CSV;
+        4. render [`docs/GLOSSARY.md`][glossary] and [`docs/TREE.md`][tree]
+           after their final DB mutations (`TrackedPath.is_current`
+           synchronized for all new files/directories first);
+        5. render [`KANBAN.md`][kanban] / `KANBAN.html` via
+           [`scripts/build_kanban_md.py`][build-kanban-md] /
+           `build_kanban_html.py` **after** the terms import (never a
+           hand-edit);
+        6. finish with every available importer/builder `--check` mode
+           after the last DB mutation.
 
 ## Problem statement
 
@@ -799,9 +883,13 @@ A true description of the repo as this spec is authored:
 1. **The response carries its own diagnosis.** With the extension enabled, a
    consumer (or Apollo DevTools) reads `extensions.debug.sql` — one row per
    new `queries_log` entry produced by Django's instrumented
-   `execute()` / `executemany()` and transaction logging, with vendor / alias /
-   logged SQL / duration; `CursorDebugWrapper` does not instrument
-   `callproc()`, so stored-procedure calls are outside this contract —
+   `execute()` / `executemany()`, plus transaction boundaries whose logging
+   completes while the debug hook is active (an enclosing
+   `ATOMIC_REQUESTS` / middleware transaction brackets the view outside the
+   hook and is excluded, [Edge cases](#edge-cases-and-constraints)), with
+   vendor / alias / logged SQL / duration; `CursorDebugWrapper` does not
+   instrument `callproc()`, so stored-procedure calls are outside this
+   contract —
    and `extensions.debug.exceptions` — one row per execution exception
    represented by graphql-core's `original_error` chain,
    with type / message / stack — from the same JSON payload that carried
@@ -817,14 +905,17 @@ A true description of the repo as this spec is authored:
    share one log and therefore cross-attribute rows
    ([Decision 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)).
 3. **Off by default, one-line opt-in, zero new dependencies.** Absent from
-   the `extensions=` list, the package's behavior is byte-identical to
-   `0.0.13`; present (as the class), every executed operation on that schema
-   carries the payload, while parse and validation failures follow the
-   documented no-key rule. No package is added and no dev-group or settings
-   key changes;
+   the `extensions=` list, **no debug instrumentation runs and no `debug`
+   response key is added**; present (as the class), every executed operation
+   on that schema carries the payload, while parse and validation failures
+   follow the documented no-key rule. No package is added and no dev-group
+   or settings key changes;
    the existing Strawberry requirement is raised to `>=0.316.0` for
-   per-request isolation
-   ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160),
+   per-request isolation. The floor raise is deliberately **not** claimed as
+   a debug-only no-op: it is a release-wide engine lifecycle change that
+   applies to every consumer schema whether or not the extension is enabled
+   ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)'s
+   migration notes,
    [Decision 2](#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring)).
 4. **A graphene migrant recognizes the shape.** The row field names are
    graphene's own wire names (`vendor`, `alias`, `sql`, `duration`,
@@ -834,8 +925,15 @@ A true description of the repo as this spec is authored:
    ([Decision 8](#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports)).
 5. **It composes with the optimizer.** A schema carrying both extensions
    works, and the debug payload becomes the optimizer's demonstration
-   surface: the captured row list *shows* the single planned query where a
-   naive resolver chain would show N+1 ([Test plan](#test-plan) scenario 2).
+   surface: the captured row list *shows* the optimizer's planned
+   **visibility-safe two-query shape** — exactly one `products_item` slice
+   plus one `products_category` prefetch, no per-item category queries —
+   where a naive resolver chain would show N+1. Not a joined single query:
+   `CategoryType` defines a custom `get_queryset` visibility hook, so the
+   optimizer deliberately downgrades the forward FK to a `Prefetch` rather
+   than `select_related` (the shipped rule the existing live proof
+   `test_products_api.py::test_products_optimizer_merges_duplicate_root_field_nodes_over_http`
+   already pins) ([Test plan](#test-plan) scenario 2).
 6. **The `0.0.14` release becomes real.** Slice 3 aligns the version quintet
    and flips the release-status wording for all four `0.0.14` cards — the
    joint cut the three predecessors deferred
@@ -883,6 +981,15 @@ A true description of the repo as this spec is authored:
   extension's contract is pinned for query / mutation operations. Whatever
   Strawberry's subscription lifecycle does with `get_results` is untested
   and undocumented here.
+- **Experimental incremental execution (`@defer` / `@stream`).** With
+  Strawberry's `enable_experimental_incremental_execution` config,
+  `Schema._handle_execution_result` returns incremental result objects
+  before the ordinary extension-result assignment — the two-list,
+  one-final-map contract does not define which of the initial and
+  subsequent payloads would carry debug data. The `0.0.14` contract covers
+  **non-incremental query/mutation `ExecutionResult`s only**; no
+  transport-universal behavior is implied until incremental payload
+  semantics are designed and tested (a follow-on, not a v1 promise).
 - **Async SQL-capture fidelity.** Exception capture is
   execution-color-agnostic; SQL capture is guaranteed on the ordinary
   non-reentrant sync execution path and documented as **typically empty**
@@ -1112,9 +1219,17 @@ Consumer-visible behavior:
   ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping),
   [Edge cases](#edge-cases-and-constraints)); the docstring states the
   required ordering.
-- **Nothing else changes.** The extension never mutates the queryset, the
-  context, or the result's `data` / `errors`; it is a read-only window. With
-  the extension absent, response bytes are identical to `0.0.13`.
+- **Nothing else about the response changes.** The extension never mutates
+  the queryset, the context, or the result's `data` / `errors`; it is a
+  read-only window, and its diagnostic collection is forbidden from
+  replacing an already-produced result even when serialization fails
+  ([Error shapes](#error-shapes)). With the extension absent, no debug
+  instrumentation runs and no `debug` key is added. (That is the precise
+  claim — not "byte-identical to `0.0.13`": the release's Strawberry-floor
+  raise is a separate, engine-wide lifecycle change that applies with or
+  without the extension,
+  [Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)'s
+  migration notes.)
 
 ### Error shapes
 
@@ -1139,8 +1254,12 @@ Consumer-visible behavior:
   escaping the hooks or the executor (the sync parse handler catches only
   `GraphQLError`, so a non-`GraphQLError` parse crash lands here too) is
   coerced to a GraphQL error **after** teardown ran, so that error response
-  *does* carry the `debug` key, reflecting whatever executed before the
-  abort. Generic recovery alone does not imply two `get_results()` calls.
+  carries the `debug` key **when the debug hook was entered and its
+  teardown completed enough to publish the stash** — an earlier sibling
+  hook's setup failure can abort before the debug hook ever enters, in
+  which case no stash exists and the key is absent; the qualified claim is
+  the honest one. Generic recovery alone does not imply two
+  `get_results()` calls.
   Two calls occur only when an early parse/validation return has already
   evaluated `_handle_execution_result` (and therefore `get_results()`), then
   an `on_operation` teardown raises while that return unwinds: the outer
@@ -1149,16 +1268,34 @@ Consumer-visible behavior:
   return the stash, never mutate or pop it
   ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash),
   Test plan scenario 11).
-- **An exception inside the extension's own teardown** — designed against
-  rather than assumed away: on the sync parse/validation paths teardown
-  runs during the early return's unwind with `execution_context.result`
-  still unset, so the exception collector is `None`-guarded by contract
+- **An exception inside the extension's own machinery** — governed by an
+  explicit **two-phase failure policy**, because an exception escaping
+  `on_operation` teardown makes Strawberry abandon the real result and
+  construct a replacement `PreExecutionError`: a "read-only window" that
+  can discard the operation's `data` / `errors` through a diagnostic
+  serialization failure would betray its own contract.
+  - **Setup (pre-`yield`) stays fail-loud**: an acquisition failure
+    propagates after `ExitStack` restores every previously acquired
+    wrapper — nothing executed yet, so no result is at risk.
+  - **Teardown (post-execution) never replaces the result**: query-log
+    materialization, snapshot slicing, SQL-row serialization, exception
+    stringification, and traceback formatting are wrapped so a failure is
+    caught as `Exception` (never `BaseException`), logged server-side, and
+    **degrades** the payload to whatever rows serialized successfully (or
+    an empty list) — the wire contract is unchanged (a completed payload
+    still owns both `sql` and `exceptions` lists; no third error shape),
+    and the original `data` / `errors` survive (Test plan scenario 17).
+  The known pre-execution corner remains designed-in: on the sync
+  parse/validation paths teardown runs during the early return's unwind
+  with `execution_context.result` still unset, so the exception collector
+  is `None`-guarded by contract
   ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping));
   an unguarded read would raise out of the `with`-unwind and the engine
   would coerce *that* into the response, discarding the real parse error.
   Independently, the restore of every connection's `force_debug_cursor`
-  rides a `finally` so an unexpected serializer failure cannot leave a
-  connection permanently instrumented.
+  rides a `finally` so no failure mode can leave a connection permanently
+  instrumented — flag restoration and result preservation are separately
+  protected.
 - **A consumer extension also publishing a `debug` extensions key** — among
   extension outputs, the runner merges `get_results()` dicts in
   extensions-list order ([`runner.py`][venv-runner] `#"data.update"`), so
@@ -1298,6 +1435,25 @@ having populated the log, because bare `connection.queries` is empty under
 production-shaped deployment. An extension that silently returned
 `{"sql": []}` outside dev servers would fail its one job in exactly the
 environments where enabling it is a deliberate act.
+
+**The capture interval is defined by cursor construction, not only by
+operation entry/exit.** Django selects the wrapper class in
+`BaseDatabaseWrapper._prepare_cursor()` when `connection.cursor()` is
+called — `queries_logged` is read **once**, at cursor creation, and
+`CursorDebugWrapper.execute()` never re-checks it. Two boundary cases
+follow, documented rather than papered over: a normal cursor **created
+before** the hook entered stays uninstrumented even when executed during
+the operation, and a debug cursor created while the flag was true **remains
+a debug wrapper** — if a consumer retains it, executions after the hook
+restored the flag keep appending to `queries_log`. The SQL guarantee
+therefore covers the normal case — short-lived cursors acquired while the
+operation hook is active (every ORM call opens and closes its own cursor) —
+and the two long-lived-cursor directions are pinned by Test plan
+scenario 18 and named in the class docstring, [Edge
+cases](#edge-cases-and-constraints), and the GLOSSARY entry. Flag
+restoration is the coordinator's job; it does not by itself define a
+perfect logging interval, and porting the rejected cursor wrap to "fix"
+this would abandon the chosen Django-native fidelity source.
 
 Grounds:
 
@@ -1457,6 +1613,34 @@ Grounds:
    its own bundled extensions take classes in `extensions=`; instances are
    the deprecated path (the engine emits a `DeprecationWarning` for bare
    instances at `Schema.__init__`).
+
+**Release/migration notes — the floor is a release-wide engine change, not
+a debug-only no-op.** Raising `[project].dependencies` to
+`strawberry-graphql>=0.316.0` changes engine behavior for every consumer
+schema, including schemas that never import `DjangoDebugExtension`, and the
+`0.0.14` docs must say so rather than claiming byte-identical behavior:
+
+- pre-`0.316` sync execution **cached** extension instances; `0.316`
+  constructs class/factory entries **per operation**, rebuilding the
+  middleware manager each time;
+- `0.316` invokes classes and factories with **zero arguments** and assigns
+  `extension.execution_context` afterward — a consumer factory that relied
+  on the old `execution_context=` call shape can fail after the upgrade;
+- direct **instance** entries now draw a `DeprecationWarning` and a changed
+  lifecycle.
+
+The floor is justified — the old cached-sync lifecycle is unsafe for this
+extension — but the honest wording is that `>=0.316.0` **excludes the known
+cached-sync lifecycle**; an open lower bound does not "pin today's
+semantics". What pins the resolved behavior is `uv.lock` plus the
+regression tests (Test plan scenario 13 at the exact floor). The
+`CHANGELOG.md` `0.0.14` section and the GLOSSARY entry carry these
+migration notes ([Doc updates](#doc-updates)). One in-repo casualty of the
+same change: `optimizer/extension.py`'s `__init__` comment still says
+Strawberry instantiates extension classes *with* the `execution_context`
+keyword — false at the new floor. The parameter stays (direct-construction
+compatibility) but Slice 1 corrects the comment's rationale (the
+[Implementation plan](#implementation-plan) carries the row).
 
 Alternatives considered (and rejected):
 
@@ -1640,15 +1824,24 @@ runs during the early return's unwind before any result exists,
 **only** those members whose `original_error` is non-`None` —
 Strawberry/graphql-core's marker distinguishing an execution exception from a
 pure GraphQL validation error. Starting from that first original, a private helper
-walks nested `GraphQLError.original_error` links to the terminal exception,
-with an identity set preventing malformed cycles. The walk follows the
+walks nested `GraphQLError.original_error` links to the terminal exception.
+The walk is **doubly bounded**: an identity set terminates malformed cycles,
+and a local maximum-hop constant (64 — `utils/typing.py`'s existing
+`_MAX_TYPE_WRAPPER_DEPTH` ceiling, re-spelled locally) bounds a long acyclic
+chain, which an identity set alone cannot (calling a cycle guard "bounded"
+would conflict with the repository's Power-of-Ten loop discipline). The stop
+behavior is deterministic: return the **last unique candidate seen** before
+a repeated identity or the hop ceiling. The bound covers only the
+`original_error` traversal — traceback cause/context formatting and string
+byte size remain unbounded, acknowledged in [Edge
+cases](#edge-cases-and-constraints)' cost language. The walk follows the
 bounded-walk posture `utils/typing.py` pins for attribute-chain peels (never
-a bare unbounded `while` loop; the identity set is the bound) with a
-deliberately different failure policy — stop on cycle and keep the terminal,
-so a malformed consumer exception chain degrades to best-effort capture
-instead of failing the response — the policy difference that keeps it a
-local helper rather than a shared extraction
-([DRY D6](#helper-reuse-obligations-dry)). A terminal
+a bare unbounded `while` loop) with a deliberately different failure policy
+— stop and keep the best-effort terminal, so a malformed consumer exception
+chain degrades to best-effort capture instead of failing the response — the
+policy difference that keeps it a local helper rather than a shared
+extraction ([DRY D6](#helper-reuse-obligations-dry)); Test plan scenario 21
+pins a self-cycle, a multi-node cycle, and a long acyclic chain. A terminal
 `GraphQLError` is retained: graphql-core uses that exact two-link shape when
 a resolver explicitly raises `GraphQLError`, and graphene's resolver
 middleware records it. Each match serializes via the
@@ -1720,9 +1913,18 @@ sharded mode and any consumer router setup without alias knowledge, and the
 per-alias `alias` field is what makes the payload useful under
 [multi-database cooperation][glossary-multi-database-cooperation] — the
 debug view shows *which* database served each statement. An untouched alias
-costs one attribute write and contributes zero rows; per
+contributes zero rows at the cost of its wrapper materialization, one
+saved-flag record, and one teardown log copy ([Edge
+cases](#edge-cases-and-constraints) carries the exact complexity language);
+per
 [Decision 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)'s
-third alternative, no connection is force-opened.
+third alternative, no connection is force-opened. The per-alias contract is
+a **documented promise and therefore needs a real proof**: Test plan
+scenario 16 executes a real `shard_b` query through a debug-enabled probe
+schema on the `FAKESHOP_SHARDED=1` tier and asserts the captured
+`alias == "shard_b"` row plus both-alias restoration — serializer units and
+fake partial-acquisition tests alone do not prove a second alias appears in
+the response.
 
 Alternatives considered (and rejected): **bracketing only
 `connections["default"]`** — rejected, silently blind on sharded setups;
@@ -1847,7 +2049,10 @@ specified in the decisions cited; the version moves **only** in Slice 3,
 | [`docs/GLOSSARY.md`][glossary] | `shipped (0.0.14)` status flips for all four `0.0.14` surfaces + companions + the [Joint version cut][glossary-joint-version-cut] wording (glossary DB + re-render) | 3 |
 | [`README.md`][readme] / [`docs/README.md`][docs-readme] / [`TODAY.md`][today] | "Coming next / already landed ahead of the release" → shipped-`0.0.14` status wording | 3 |
 | `CHANGELOG.md` | The `0.0.14` release section (all four cards) — under this spec's explicit Slice-3 grant | 3 |
-| [`KANBAN.md`][kanban] / `KANBAN.html` | Final card wrap via DB edit + re-render after every cut item succeeds; then `import_spec_terms` for the companion CSV | 3 |
+| [`KANBAN.md`][kanban] / `KANBAN.html` | Final card wrap: DB edits + Done flip + `import_spec_terms` **first**, generated renders **last**, `--check` modes after the final DB mutation (the ordered wrap sequence in the [Slice checklist](#slice-checklist)) | 3 |
+| [`.github/workflows/django.yml`][workflow-django] | Make the minimum-support CI node force-install `strawberry-graphql==0.316.0` (coverage disabled on that node; the latest node keeps the coverage gate) so the advertised floor is durably exercised, not a one-time throwaway run ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)) | 1 |
+| [`optimizer/extension.py`][optimizer-extension] | Correct the `__init__` comment's rationale: Strawberry no longer passes `execution_context=` to class entries at the `0.316` floor; the parameter stays for direct-construction compatibility ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160) migration notes) | 1 |
+| [`test_multi_db.py`][test-multi-db] (or a dedicated `FAKESHOP_SHARDED`-gated debug module) | Real sharded-tier capture proof: a `shard_b` query through a debug-enabled probe schema asserts `alias == "shard_b"` + vendor + both-alias restoration ([Decision 10](#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each), Test plan scenario 16) | 1 |
 
 ## Helper-reuse obligations (DRY)
 
@@ -1890,7 +2095,11 @@ discipline survives review.
   app-type imports; domain rows come from `seed_data(N)` /
   `create_users(N)` with only the permission a scenario needs (mutation
   auth through `with client.login(user):`, expected-error posts through
-  `assert_no_errors=False`); the module keeps **one** schema holder, one
+  `assert_no_errors=False`; the "first domain-setup line is `seed_data`"
+  rule governs product/catalog setup — auth setup may precede the seed
+  when a scenario needs a user first, and a write scenario grants its one
+  write permission on top of a non-staff fixture user rather than
+  reaching for the superuser); the module keeps **one** schema holder, one
   view, one `urlpatterns` — a fixture swaps the held schema per scenario
   (debug-only, optimizer + debug, no-debug, raising field) rather than
   duplicating the holder — and the schema-construction seam never sorts,
@@ -1976,7 +2185,9 @@ discipline survives review.
   `finally`-guarded reverse-order release). The `original_error` walk
   follows the bounded-walk posture `utils/typing.py` pins with
   `_MAX_TYPE_WRAPPER_DEPTH` — never a bare unbounded
-  `while error.original_error:` peel; the identity set is the bound — while
+  `while error.original_error:` peel; the identity set terminates cycles
+  and a local 64-hop ceiling bounds acyclic chains
+  ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping)) — while
   its *failure policy* deliberately differs (stop-on-cycle and retain the
   terminal, versus the type unwrappers' loud terminal raise), which is why
   it stays a local helper: extraction of a shared `peel_attr_chain` into
@@ -2151,18 +2362,51 @@ discipline survives review.
   count); the row's `sql` carries it verbatim and `isSelect` correctly reads
   `False` (batch DML is never a select). Documented, not normalized — the
   log is the fidelity contract.
-- **Transaction management statements appear as rows.** Savepoint
-  statements (`SAVEPOINT`, `RELEASE SAVEPOINT`) route through the debug
-  cursor, and connection-level `BEGIN` / `COMMIT` / `ROLLBACK` are appended
-  to `queries_log` by Django's own `debug_transaction` bracket
+- **Transaction statements appear as rows only when their logging completes
+  while the hook is active.** Savepoint statements (`SAVEPOINT`, `RELEASE
+  SAVEPOINT`) route through the debug cursor, and connection-level
+  `BEGIN` / `COMMIT` / `ROLLBACK` are appended to `queries_log` by Django's
+  own `debug_transaction` bracket
   ([`django/db/backends/base/base.py`][venv-django-base] `#"debug_transaction"`
   wraps `_commit` / `_rollback` / `set_autocommit` whenever `queries_logged`
-  is true — Django ≥ 4.2). So a mutation inside `transaction.atomic` emits
-  `BEGIN` / `COMMIT` rows beside its `INSERT` (each with `isSelect: false`).
-  This matches `assertNumQueries` visibility — the payload shows what
+  is true — Django ≥ 4.2). So an `atomic()` block **entered and exited
+  inside a resolver** emits `BEGIN` / `COMMIT` rows beside its `INSERT`
+  (each with `isSelect: false`). Explicitly **excluded**: transaction
+  boundaries that enclose the GraphQL execution itself —
+  `ATOMIC_REQUESTS` / transaction middleware wrap the *view*, so their
+  outer `BEGIN` runs before the extension enters and their final
+  `COMMIT` / `ROLLBACK` (plus any commit failure and `on_commit` work) runs
+  after it tears down; those rows are never captured (Test plan
+  scenario 19 pins the inclusion/exclusion boundary). Within scope, this
+  matches `assertNumQueries` visibility — the payload shows what
   Django's own accounting shows — and it is why the [Test plan](#test-plan)'s
   row assertions filter by `isSelect` / statement prefix rather than
   asserting positional indices or raw totals.
+- **The capture interval follows cursor construction.** Django picks
+  `CursorDebugWrapper` when `connection.cursor()` is called and never
+  re-checks per `execute()`
+  ([Decision 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)):
+  a normal cursor pre-opened before the operation stays silent inside it,
+  and a retained debug cursor keeps logging after the flag restores. The
+  guarantee covers normally short-lived cursors acquired while the hook is
+  active; both boundary directions are pinned by Test plan scenario 18.
+- **SQL from sibling extensions' lifecycle hooks is order-dependent.**
+  `on_operation` hooks enter in `extensions=`-list order and unwind in
+  reverse, so SQL performed by another extension's setup/teardown is
+  captured only when it happens to fall inside the debug hook's active
+  interval. Resolver/engine SQL is the stable core contract; sibling-hook
+  SQL is documented as ordering-dependent, like masking and key collisions
+  already are (Test plan scenario 20 pins both list orders with marker
+  SQL).
+- **Explicitly cross-thread-shared wrappers are unsupported / best
+  effort.** Django permits sharing a connection wrapper across threads via
+  `inc_thread_sharing()`. The coordinator's lock protects flag/depth
+  transitions, but concurrent `queries_log` appends versus teardown's deque
+  materialization are not synchronized, and operation-local attribution is
+  impossible on a shared log. The two-phase failure policy ([Error
+  shapes](#error-shapes)) still applies: whatever a concurrent mutation
+  does to the deque, the GraphQL response must not be corrupted — the
+  payload degrades, the result survives.
 - **Stored procedures are not recorded.** Calls through `callproc()` are
   outside this SQL contract because Django's `CursorDebugWrapper` does not
   instrument them; there is no `queries_log` entry for the extension to
@@ -2177,7 +2421,18 @@ discipline survives review.
   extension with this one exposes to the client what masking hid in
   `errors`. The docstring's security posture covers it: development
   schemas only, never internet-facing production. (graphene's `DjangoDebug`
-  has the same property and the same posture.)
+  has the same property and the same posture.) The disclosure surface is
+  named in full, not just the exception headline: Django's
+  `last_executed_query` output **interpolates parameter values** into the
+  captured `sql` strings — secrets, tokens, email addresses, and other PII
+  included — and tracebacks expose filesystem/source paths; the response
+  containing them is routinely **copied downstream** (browser DevTools,
+  HTTP logs, tracing systems, caches, bug reports, test snapshots), and the
+  rows also persist in the in-process query log after the response (the
+  retention point above). The class docstring, the GLOSSARY entry, and this
+  section all carry that enumeration; the off-by-default, code-level opt-in
+  remains the accepted v1 boundary — no settings gate or redaction
+  subsystem for this card ([Risks](#risks-and-open-questions)).
 - **`extensions`-map cohabitation.** Among extension outputs, the runner
   merges `get_results()` in list order and the later-listed same-key value
   wins. Async execution then overlays
@@ -2187,11 +2442,30 @@ discipline survives review.
   ([Error shapes](#error-shapes)). The payload is
   JSON-serializable by construction (str / float / bool / list / dict
   only), so no transport encoder can choke on it.
-- **Zero cost when disabled, bounded cost when enabled.** Disabled, no code
-  runs (the class is not in the list). Enabled, the per-operation cost is
-  the per-alias flag writes, Django's own debug-cursor overhead (the same
-  cost `DEBUG=True` dev servers already pay), and one serialization pass —
-  no plan interaction, no [plan-cache][glossary-plan-cache] key change, no
+- **Zero debug cost when disabled; cardinality-bounded — not generally
+  bounded — cost when enabled.** Disabled, no debug code runs (the class is
+  not in the list) — though "disabled" does not undo the release-wide
+  Strawberry-floor change ([Goals](#goals) item 3). Enabled, the exact
+  per-operation complexity is: `connections.all()` materializes a Django
+  wrapper for **every configured alias** (no raw DB connection is opened,
+  but wrapper construction can import a backend and surface an invalid
+  alias/backend configuration); setup writes one saved-flag record per
+  alias; execution pays Django's own debug-cursor overhead (the same cost
+  `DEBUG=True` dev servers already pay); and teardown performs
+  `list(connection.queries_log)` per alias — copying up to `queries_limit`
+  (default 9000) entry references even when an old, already-full log holds
+  no rows from this operation — plus one serialization pass. Under async
+  schema execution that synchronous teardown runs **on the event-loop
+  thread** and can stall it. Row count is capped per alias by Django's
+  bounded deque, but SQL string length, exception count/message/traceback
+  size, alias count, and total response bytes are **not** usefully bounded
+  — v1 enforces no row/byte caps and does not claim to
+  ([Risks](#risks-and-open-questions) keeps caps as follow-on knobs).
+  Retention: captured rows also remain in Django's per-connection deque
+  after the response; over HTTP the `request_started` signal resets the log
+  before the next view, but non-HTTP in-process execution has no such
+  reset, so interpolated values persist in memory until reset or eviction.
+  No plan interaction, no [plan-cache][glossary-plan-cache] key change, no
   queryset touch.
 - **The subscription lifecycle is out of contract.** The package ships no
   subscription surface; the extension's documented behavior covers query /
@@ -2201,7 +2475,11 @@ discipline survives review.
 
 Scenarios 1–7 live in
 `examples/fakeshop/test_query/test_debug_extension_api.py`; scenarios 8–15
-live in `tests/extensions/test_debug.py`
+and the Revision-8 additions 17–21 live in `tests/extensions/test_debug.py`;
+the sharded-tier scenario 16 lives with the `FAKESHOP_SHARDED=1`
+infrastructure ([`test_multi_db.py`][test-multi-db] or a dedicated gated
+debug module) — numbering appends rather than renumbers so every existing
+scenario reference stays stable
 ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
 The **request-driving group (1–7)** posts real HTTP through the probe
 URLconf (a debug-enabled schema over freshly-reloaded fakeshop types; the
@@ -2233,13 +2511,27 @@ not same-wrapper reference counting. A future
 hook refactor (e.g. the [Risks](#risks-and-open-questions) facade fallback)
 does not churn the overlap-safety suite.
 Per the repo rule the implementation worker records the exact pytest
-commands (`uv run pytest examples/fakeshop/test_query/test_debug_extension_api.py`
-and `uv run pytest tests/extensions/test_debug.py`) for the maintainer
-and does not run the suite unless explicitly authorized — the
-[`AGENTS.md`][agents] #"Do not run pytest" workflow rule; this spec
-describes the verification but does not override it.
+commands for the maintainer and does not run the suite unless explicitly
+authorized — the [`AGENTS.md`][agents] #"Do not run pytest" workflow rule;
+this spec describes the verification but does not override it. The
+**targeted** development commands must replace `pytest.ini`'s `addopts`
+(which always adds `--cov`, while `pyproject.toml` enforces
+repository-wide `fail_under = 100` — a single-file run passes its tests
+and then fails the global coverage gate):
 
-**Request-driving (probe URLconf, real HTTP):**
+- `uv run pytest -o addopts="-v -n0" examples/fakeshop/test_query/test_debug_extension_api.py`
+- `uv run pytest -o addopts="-v -n0" tests/extensions/test_debug.py`
+- the isolated Strawberry-floor node-ID run uses the same override.
+
+The **full-suite** command (plain `uv run pytest`) — and CI's
+coverage-owning node — remain the sole owners of the 100% gate.
+
+**Request-driving (probe URLconf, real HTTP):** the ORM-touching read
+scenarios (1–2) are marked `django_db`; the mutation scenario (3) is marked
+`django_db(transaction=True)` — its assertions include connection-level
+`BEGIN` / `COMMIT` rows, which the default savepoint-wrapped test
+transaction would suppress. Scenario 16 is the sharded-tier capture proof
+and runs only under `FAKESHOP_SHARDED=1`.
 
 1. **Happy-path SQL capture, `DEBUG=False`.** `seed_data(1)`; a products
    connection query through the probe `/graphql/` → `res.data` intact,
@@ -2264,20 +2556,41 @@ describes the verification but does not override it.
    shared cached optimizer, one fresh uncached debug instance per
    operation, [Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160));
    a nested `allItems { edges { node { name category { name } } } }`
-   selection over `seed_data(2)` rows → the captured **SELECT-row** count
+   selection over `seed_data(2)` rows → the captured **SELECT rows**
    (filter on `isSelect` — transaction rows may interleave,
-   [Edge cases](#edge-cases-and-constraints)) matches the optimizer's
-   planned shape (the joined single query, not N+1), and
-   the row's `sql` contains the join — the payload demonstrating
+   [Edge cases](#edge-cases-and-constraints)) match the optimizer's
+   planned **visibility-safe two-query shape**: exactly one
+   `products_item` slice and exactly one `products_category` prefetch
+   query, with **no** `products_item`/`products_category` JOIN and no
+   per-item category queries ([Goals](#goals) item 5 — `CategoryType`'s
+   custom `get_queryset` makes the optimizer plan a `Prefetch`, never
+   `select_related`, so a joined-single-query assertion would contradict
+   the shipped visibility contract; reuse the semantic row assertions the
+   existing
+   `test_products_api.py::test_products_optimizer_merges_duplicate_root_field_nodes_over_http`
+   proof already pins). The item row's `sql` shows the projected column
+   list — the payload demonstrating
    [`only()` projection][glossary-only-projection] / planning in one
-   assertion set ([Goals](#goals) item 5).
-3. **Mutation capture.** A products `createItem` mutation (write-auth
-   satisfied via `TestClient.login(...)` with a permissioned user) →
-   `debug.sql` contains an `INSERT` row with `isSelect is False`, beside
-   the pipeline's SELECTs (and any `BEGIN` / `COMMIT` rows Django's own
-   transaction accounting logs — assert by statement prefix, never by
-   position or total, [Edge cases](#edge-cases-and-constraints)) — the
-   write path captured like the read path.
+   assertion set.
+3. **Mutation capture.** A products `createItem` mutation with fully
+   specified setup — no such pre-permissioned writer exists in
+   `create_users`' fixture set, so the scenario builds one: `create_users(1)`
+   and `seed_data(1)` (auth setup may precede the catalog seed — the
+   "first domain-setup line" rule governs product/catalog setup, [DRY
+   D3](#helper-reuse-obligations-dry)); grant the **non-staff**
+   `view_item_1` user only
+   `Permission(codename="add_item", content_type__app_label="products")`
+   (the `test_client_api.py` permitted-writer precedent — never the staff
+   superuser, per the least-permission rule), re-fetch the user after the
+   grant to discard the stale permission cache; derive a **visible**
+   category `GlobalID` from the seeded data and pass it as the mutation's
+   required `categoryId` (`Item.category` is non-null); authenticate via
+   `with client.login(user):` → `debug.sql` contains an `INSERT` row with
+   `isSelect is False`, beside the pipeline's SELECTs (and any
+   `BEGIN` / `COMMIT` rows Django's own transaction accounting logs —
+   assert by statement prefix, never by position or total, [Edge
+   cases](#edge-cases-and-constraints)) — the write path captured like the
+   read path.
 4. **Resolver exception.** A probe-schema field that raises
    (`ZeroDivisionError`) → response carries the GraphQL error AND
    `debug.exceptions == [one row]` with `excType ==
@@ -2299,8 +2612,10 @@ describes the verification but does not override it.
    ([User-facing API](#user-facing-api)).
 7. **Off-by-default.** The same probe view mounted with a schema whose
    `extensions=` omits the debug class → response `extensions` carries no
-   `debug` key (and, where the optimizer is the only extension, matches
-   `0.0.13` behavior byte-for-byte on the envelope keys).
+   `debug` key and no unrelated envelope widening (asserted on the envelope
+   keys — the honest claim; the release-wide Strawberry floor means
+   "byte-identical to `0.0.13`" is not this scenario's contract,
+   [Goals](#goals) item 3).
 
 **Mechanics (no request):**
 
@@ -2368,14 +2683,25 @@ describes the verification but does not override it.
     opt-in executes two distinguishable blocking resolvers concurrently in a
     `ThreadPoolExecutor`, synchronized by one small barrier/event helper;
     the two resolver variants are one parameterized body distinguished by
-    marker/message values, not two copied bodies. Each
-    response must contain only its own exception message and query-derived
-    marker, and both connections must restore their prior debug flags. Run
+    marker/message values, not two copied bodies. The resolvers perform
+    **no ORM work in the executor threads** — actual concurrent SQLite ORM
+    would add transaction-visibility, locking, and connection-lifetime
+    problems unrelated to the lifecycle regression being pinned. Isolation
+    is proved by distinct resolver **exception/argument markers**, the
+    captured per-thread wrapper identities, and each thread-local wrapper's
+    restored flag: each response must contain only its own exception marker,
+    and both connections must restore their prior debug flags — together
+    proving fresh extension instances. (If a future revision insists on SQL
+    markers here, it must instead require `transactional_db`, committed seed
+    data, and each worker closing its thread-local database connection
+    before the thread exits — the no-ORM shape is simpler and proves the
+    same 0.315-vs-0.316 lifecycle contract.) Run
     this scenario in the isolated `strawberry-graphql==0.316.0` floor
     environment as well as the normal suite — selected by **node id**, the
-    same test both times, never a copied script. This is the regression that
-    fails under the old cached `_sync_extensions` lifecycle and proves the
-    dependency bump's stated reason. Because each executor thread owns
+    same test both times, never a copied script, with the coverage-free
+    `-o addopts=...` override for the targeted run. This is the regression
+    that fails under the old cached `_sync_extensions` lifecycle and proves
+    the dependency bump's stated reason. Because each executor thread owns
     distinct thread-local database wrappers, this scenario does not prove
     same-wrapper coordinator refcounting; scenario 9 owns that assertion.
 
@@ -2392,6 +2718,49 @@ describes the verification but does not override it.
     contains its interval, and the outer payload intentionally also contains
     the inner SQL rows.
 
+**Revision-8 additions (16 live-sharded; 17–21 mechanics):**
+
+16. **Sharded-tier multi-database capture** (live, gated on
+    `FAKESHOP_SHARDED=1` — the existing [`test_multi_db.py`][test-multi-db]
+    infrastructure). A real query routed to `shard_b` through a
+    debug-enabled probe schema → a captured row reports
+    `alias == "shard_b"` and the correct vendor, and **both** configured
+    aliases restore their prior flags. This is the only real
+    multi-database proof — Decision 10's per-alias contract must not rest
+    solely on `alias == "default"` assertions plus fakes
+    ([Decision 10](#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each)).
+17. **Diagnostic non-interference.** Inject a malformed backend log entry
+    (or a failing snapshot/serializer) at the private boundary so teardown
+    collection fails after execution produced a result → the original
+    `data` / `errors` survive untouched, every saved flag restores, and the
+    payload degrades to the successfully captured rows or empty lists —
+    the two-phase failure policy's post-execution half
+    ([Error shapes](#error-shapes)).
+18. **Cursor-construction lifetime boundary.** Both directions of the
+    documented boundary
+    ([Decision 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)):
+    a cursor opened *before* acquire stays uninstrumented when executed
+    inside the bracket, and a debug cursor opened *inside* keeps logging
+    when executed after release — pinned as documentation of the
+    Django-native boundary, never "fixed" by porting the rejected cursor
+    wrap.
+19. **Transaction-boundary scope.** An `atomic()` block owned by a
+    resolver emits captured `BEGIN` / `COMMIT` rows (inclusion); a schema
+    execution wrapped by an **outer** `transaction.atomic()` proves the
+    enclosing boundary's statements are not captured (exclusion — the
+    `ATOMIC_REQUESTS` shape without rebuilding HTTP infrastructure)
+    ([Edge cases](#edge-cases-and-constraints)).
+20. **Sibling-hook SQL ordering.** A small sibling extension whose
+    `on_operation` performs marker SQL before and after its `yield`, run
+    in both `extensions=` list orders → prove exactly which markers land
+    in the debug payload per order — documenting the SQL-scope ordering
+    dependency beside the masking/key-collision ones
+    ([Edge cases](#edge-cases-and-constraints)).
+21. **`original_error` hop policy.** A self-cycle, a multi-node cycle, and
+    a long acyclic chain exceeding the 64-hop ceiling each terminate
+    deterministically, returning the last unique candidate seen
+    ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping)).
+
 Coverage: the package gate is `fail_under = 100` and `extensions/debug.py`
 is package code — every branch has a named owner above: the bracket loop and
 both restore directions (1, 8), the bounded-log fallback (8), both
@@ -2400,8 +2769,11 @@ serializers, the chain walk/cycle guard, and its `result is None` guard (4,
 `get_results` directions plus direct and real-engine idempotence (6, 7, 11),
 the masking-order dependency (12), per-request sync isolation (13),
 merge/replacement semantics (14), nested sync attribution (15), the async
-hook color and shared-wrapper overlap (9), and the mutation/query independence
-(3). If
+hook color and shared-wrapper overlap (9), the mutation/query independence
+(3), the real sharded per-alias capture (16), the post-execution
+non-interference degrade path (17), both cursor-lifetime directions (18),
+the transaction inclusion/exclusion boundary (19), sibling-hook SQL
+ordering (20), and the hop-capped chain walk (21). If
 implementation finds a branch unreachable through these (e.g. a defensive
 guard), it gets its own targeted unit the same way — named owner, never a
 blanket claim.
@@ -2423,11 +2795,19 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   nested `original_error` walk (including the documented result-level
   widening), the reference-counted `force_debug_cursor` bracket and its
   `DEBUG`-independence, the best-effort bounded-log behavior, the
-  `strawberry-graphql>=0.316.0` isolation floor, the per-alias multi-DB
-  behavior, the `callproc()` omission, the nested-sync attribution boundary,
+  `strawberry-graphql>=0.316.0` isolation floor **with its release-wide
+  migration notes** ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)),
+  the per-alias multi-DB
+  behavior, the `callproc()` omission, the cursor-construction
+  capture-interval boundary, the transaction-boundary scope (enclosing
+  `ATOMIC_REQUESTS` excluded), the two-phase failure policy (setup
+  fail-loud, post-execution non-interfering degrade), the nested-sync
+  attribution boundary,
   extension-list merge precedence, async context-results precedence, result-map
   replacement, the
-  pre-execution-error no-key rule, the dev-only security caveat, and the
+  pre-execution-error no-key rule, the dev-only security caveat with the
+  full disclosure enumeration (interpolated SQL values, traceback paths,
+  retention, downstream copies), and the
   async SQL caveat; the real cookbook migration from the aggregate `_debug`
   field + `GRAPHENE["MIDDLEWARE"]` pair to the one extension class; and the
   resulting client move to `response.extensions.debug` — plus the "distinct
@@ -2463,9 +2843,13 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   the file is otherwise off-limits; the [`docs/SPECS/NEXT.md`][next]
   convention places the grant in the owning spec's release slice, and the
   maintainer's commit review remains the final gate). Only after those cut
-  items succeed, [`KANBAN.md`][kanban] / `KANBAN.html` receive the final card
-  wrap through the DB + re-render, followed by the companion
-  `*-terms.csv` import.
+  items succeed, the final card wrap runs in the ordered sequence the
+  [Slice checklist](#slice-checklist) pins: DB updates and the Done flip,
+  **then** the companion `*-terms.csv` import, **then** the
+  GLOSSARY/TREE/KANBAN renders (the importer writes rows the builders
+  render), closing with every importer/builder `--check` mode. The GLOSSARY
+  status flips enumerate every spec-044 term in the companion CSV whose
+  `planned for 0.0.14` status changes — not only the headline surfaces.
 
 ## Risks and open questions
 
@@ -2529,20 +2913,30 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   exceptions capture is color-agnostic); this matches the
   single upstream's own thread-local scope. **Fallback / follow-on:** a
   per-operation-isolated instrumentation design — worth its own card if
-  async consumers report gaps. (An earlier draft's idea — route the
-  bracket through `sync_to_async(thread_sensitive=True)` — is recorded
-  here as **rejected**, not deferred: asgiref's thread-sensitive executor
-  is one shared thread for *all* concurrent requests' ORM work, so a
-  bracket planted there cannot provide per-operation row attribution.)
+  async consumers report gaps. (An earlier draft's categorical rejection of
+  routing the bracket through `sync_to_async(thread_sensitive=True)` rested
+  on a **false universal premise** — that thread-sensitive work always
+  shares one process-wide thread. That is only asgiref's *fallback*:
+  Django's ASGI handler wraps each HTTP request in a
+  `ThreadSensitiveContext`, which selects a per-request single-thread
+  executor, so worker-thread bracketing **may be viable** for normal ASGI
+  HTTP inside the inherited request context. It is still not universal —
+  direct `schema.execute()`, batching, and work escaping that context lack
+  the per-request executor — so the follow-on must be accepted or rejected
+  against a **real ASGI-request prototype**, not this spec's prose. v1's
+  honest "async SQL is typically empty" limitation stands either way.)
 - **Engine ordering coupling.** The no-`debug`-key-on-pre-execution-errors
   behavior rides the verified 0.316.0 call ordering (`get_results` inside
   the operation context on early returns, after it on the happy path). A
   future Strawberry release could reorder — the failure mode is benign (the
   key appearing with empty lists on validation errors, or vanishing on
   happy paths, both caught loudly by scenarios 1 and 5 under a refreshed
-  lock). **Preferred answer:** accept; the Slice-1 floor gate pins today's
-  semantics at the new `0.316.0` floor and the tests pin them at the
-  installed version.
+  lock). **Preferred answer:** accept; `uv.lock` plus the regression tests
+  pin the resolved version's semantics, and the `>=0.316.0` lower bound
+  excludes the known cached-sync lifecycle (an open bound cannot itself
+  "pin" future semantics —
+  [Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)'s
+  migration notes).
   **Fallback:** assemble defensively in both teardown *and* `get_results`
   (idempotent build) if a reorder ever lands.
 - **`queries_log` eviction under pathological operations.** An operation
@@ -2584,6 +2978,14 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   ([Risks](#risks-and-open-questions)).
 - **Subscriptions** — no package subscription surface exists
   ([Non-goals](#non-goals)).
+- **Experimental incremental execution** (`@defer` / `@stream` payload
+  semantics) — excluded from the `0.0.14` contract
+  ([Non-goals](#non-goals)); design work for initial/subsequent payload
+  debug data is a follow-on.
+- **Explicitly cross-thread-shared connection wrappers**
+  (`inc_thread_sharing()`) — unsupported / best-effort
+  ([Edge cases](#edge-cases-and-constraints)); the non-interference rule
+  still protects the response.
 - **The `0.1.0` milestone chores** (alpha-constraint lifts, the board's
   progress section, milestone prose) — [`TODO-BETA-045-0.1.0`][kanban]; this
   card's cut is a routine patch cut
@@ -2610,7 +3012,9 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
       ([Decision 8](#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports)).
 - [ ] Off by default; the opt-in is the class in `strawberry.Schema(...)`'s
       `extensions=` list (the card's DoD row 4); with the extension absent,
-      behavior is unchanged from `0.0.13` (Test plan scenario 7)
+      no debug instrumentation runs and no `debug` key is added (Test plan
+      scenario 7 — the Strawberry-floor raise is a separate release-wide
+      change with its own migration notes)
       ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)).
 - [ ] `from django_strawberry_framework.extensions import DjangoDebugExtension`
       resolves; nothing is added to the package root
@@ -2619,7 +3023,10 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
       is raised to `strawberry-graphql>=0.316.0` in `[project].dependencies`
       and `uv.lock`; `[dependency-groups].dev` remains untouched. Concurrent
       sync isolation passes at that exact floor in an isolated throwaway venv
-      (never the shared `.venv`), and the command/outcome are recorded.
+      (never the shared `.venv`; coverage disabled via the `-o addopts=...`
+      override), the command/outcome are recorded, and the floor is durably
+      exercised by a CI node force-installing `0.316.0`
+      ([`.github/workflows/django.yml`][workflow-django]).
 - [ ] The split tests cover the [Test plan](#test-plan):
       `examples/fakeshop/test_query/test_debug_extension_api.py` owns real
       probe-URLconf HTTP against fakeshop models (the card's DoD row 5,
@@ -2660,6 +3067,7 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
 
 <!-- Root -->
 [agents]: ../AGENTS.md
+[workflow-django]: ../.github/workflows/django.yml
 [goal]: ../GOAL.md
 [kanban]: ../KANBAN.md
 [pyproject]: ../pyproject.toml

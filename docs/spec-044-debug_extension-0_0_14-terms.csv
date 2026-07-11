@@ -1,5 +1,22 @@
 term,anchor,notes
-Response-extensions debug middleware,response-extensions-debug-middleware,the subject entry (one row also covers the shipped DjangoDebugExtension symbol); planned for 0.0.14 -> shipped at the Slice-3 cut
+Response-extensions debug middleware,response-extensions-debug-middleware,the subject entry; planned for 0.0.14 -> shipped at the Slice-3 cut
+DjangoDebugExtension,djangodebugextension,the public opt-in SchemaExtension symbol and extensions-subpackage import path
+Strawberry extension lifecycle,strawberry-extension-lifecycle,on_operation teardown + get_results response-metadata contract across sync and async execution colors
+Per-operation extension isolation,per-operation-extension-isolation,class-form opt-in and the strawberry-graphql 0.316.0 floor that prevents shared execution_context state
+Debug payload availability,debug-payload-availability,when extensions.debug exists; executed operations versus parse/validation failures and coerced recovery
+Response-extension merge semantics,response-extension-merge-semantics,extensions-map list-order merge and the later-writer-wins debug-key collision rule
+Django debug-cursor capture,django-debug-cursor-capture,force_debug_cursor + queries_log fidelity mechanism independent of settings.DEBUG
+Reference-counted cursor coordinator,reference-counted-cursor-coordinator,lock-protected overlap-safe saved-value restore and ExitStack unwind ownership
+Bounded query-log rollover,bounded-query-log-rollover,best-effort length-snapshot behavior for reset or full queries_log deque rollover
+Async SQL-capture boundary,async-sql-capture-boundary,exception fidelity across execution colors but normally-empty async SQL due thread-local connections
+Debug SQL row,debug-sql-row,the six extensions.debug.sql wire fields; omitted fields; executemany and transaction-row behavior
+Debug exception row,debug-exception-row,the excType/message/stack contract and cycle-safe terminal original_error walk
+Masking-extension ordering,masking-extension-ordering,MaskErrors LIFO teardown order required to retain unmasked debug exception rows
+Developer-only debug posture,developer-only-debug-posture,off-by-default security boundary for raw SQL and traceback exposure
+Graphene debug migration,graphene-debug-migration,remove _debug + DjangoDebugMiddleware; add DjangoDebugExtension; read response.extensions.debug
+Cookbook parity,cookbook-parity,working-reference rule that separates domain declarations from project-level engine configuration
+Probe URLconf,probe-urlconf,test-local URL configuration for real HTTP coverage of an opt-in schema without global fakeshop wiring
+Hard dependency,hard-dependency,required-package contrast explaining why this card needs no optional import guard or new dependency
 Debug-toolbar middleware,debug-toolbar-middleware,the 0.0.14 sibling mechanism; documented as complements both directions
 DjangoOptimizerExtension,djangooptimizerextension,extension precedent (engine base) + the composition test scenario
 DjangoGraphQLProtocolRouter,djangographqlprotocolrouter,status flip carried by this card's Slice-3 cut

@@ -196,6 +196,42 @@ vocabulary used throughout the spec:
   envelope so frontend clients can read them without the toolbar. Slice 2
   updates the entry body to the implemented contract; Slice 3 flips the
   status to `shipped (0.0.14)`.
+- [`DjangoDebugExtension`][glossary-djangodebugextension] — the public,
+  off-by-default class exported from `django_strawberry_framework.extensions`;
+  the entry is the shortest route from the import path to the complete
+  response payload, lifecycle, and security contracts.
+- [Strawberry extension lifecycle][glossary-strawberry-extension-lifecycle] /
+  [Per-operation extension isolation][glossary-per-operation-extension-isolation] /
+  [Debug payload availability][glossary-debug-payload-availability] /
+  [Response-extension merge semantics][glossary-response-extension-merge-semantics]
+  — the four engine boundaries a new implementer must keep together:
+  `on_operation` teardown, one instance per operation, the pre-execution
+  no-key rule, and list-order merging into `ExecutionResult.extensions`.
+- [Django debug-cursor capture][glossary-django-debug-cursor-capture] /
+  [Reference-counted cursor coordinator][glossary-reference-counted-cursor-coordinator] /
+  [Bounded query-log rollover][glossary-bounded-query-log-rollover] /
+  [Async SQL-capture boundary][glossary-async-sql-capture-boundary] — the SQL
+  capture mechanism and its three correctness limits: overlap-safe restore,
+  best-effort bounded-log slicing, and thread-local async fidelity.
+- [Debug SQL row][glossary-debug-sql-row] /
+  [Debug exception row][glossary-debug-exception-row] — the two concrete
+  wire-row contracts under `extensions.debug`, including the deliberate SQL
+  field narrowing and terminal `GraphQLError.original_error` walk.
+- [Masking-extension ordering][glossary-masking-extension-ordering] /
+  [Developer-only debug posture][glossary-developer-only-debug-posture] —
+  the LIFO ordering requirement and the security boundary created by exposing
+  raw exception and interpolated-SQL details to clients.
+- [Graphene debug migration][glossary-graphene-debug-migration] /
+  [Cookbook parity][glossary-cookbook-parity] — the exact project-level move
+  from `_debug` plus `DjangoDebugMiddleware` to the extension class, validated
+  against the working cookbook rather than a hypothetical app.
+- [Probe URLconf][glossary-probe-urlconf] — the repository test pattern that
+  gives this opt-in schema shape real HTTP coverage without enabling it in
+  fakeshop's shipped aggregate schema.
+- [Hard dependency][glossary-hard-dependency] — the positive dependency
+  posture behind this card's zero-new-dependency claim: Django and Strawberry
+  are always installed, so their debug-cursor and extension APIs need no
+  optional-import boundary.
 - [Debug-toolbar middleware][glossary-debug-toolbar-middleware] — the landed
   `0.0.14` sibling ([`DONE-042-0.0.14`][kanban]) this card is documented
   against: that entry's "Distinct from" paragraph already names this card as
@@ -2145,29 +2181,46 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
 <!-- docs/ -->
 [docs-readme]: README.md
 [glossary]: GLOSSARY.md
+[glossary-async-sql-capture-boundary]: GLOSSARY.md#async-sql-capture-boundary
+[glossary-bounded-query-log-rollover]: GLOSSARY.md#bounded-query-log-rollover
 [glossary-channels-request-adapter]: GLOSSARY.md#channels-request-adapter
 [glossary-configurationerror]: GLOSSARY.md#configurationerror
+[glossary-cookbook-parity]: GLOSSARY.md#cookbook-parity
+[glossary-debug-exception-row]: GLOSSARY.md#debug-exception-row
+[glossary-debug-payload-availability]: GLOSSARY.md#debug-payload-availability
+[glossary-debug-sql-row]: GLOSSARY.md#debug-sql-row
 [glossary-debug-toolbar-middleware]: GLOSSARY.md#debug-toolbar-middleware
+[glossary-developer-only-debug-posture]: GLOSSARY.md#developer-only-debug-posture
+[glossary-django-debug-cursor-capture]: GLOSSARY.md#django-debug-cursor-capture
 [glossary-django-trac-37064]: GLOSSARY.md#django-trac-37064-hardening
+[glossary-djangodebugextension]: GLOSSARY.md#djangodebugextension
 [glossary-djangographqlprotocolrouter]: GLOSSARY.md#djangographqlprotocolrouter
 [glossary-djangooptimizerextension]: GLOSSARY.md#djangooptimizerextension
 [glossary-eviction-simulated-absence]: GLOSSARY.md#eviction-simulated-absence
 [glossary-finalize-django-types]: GLOSSARY.md#finalize_django_types
 [glossary-get-queryset]: GLOSSARY.md#get_queryset-visibility-hook
+[glossary-graphene-debug-migration]: GLOSSARY.md#graphene-debug-migration
 [glossary-graphqltestcase]: GLOSSARY.md#graphqltestcase
+[glossary-hard-dependency]: GLOSSARY.md#hard-dependency
 [glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
 [glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
+[glossary-masking-extension-ordering]: GLOSSARY.md#masking-extension-ordering
 [glossary-multi-database-cooperation]: GLOSSARY.md#multi-database-cooperation
 [glossary-only-projection]: GLOSSARY.md#only-projection
 [glossary-pep-562-lazy-export]: GLOSSARY.md#pep-562-lazy-export
+[glossary-per-operation-extension-isolation]: GLOSSARY.md#per-operation-extension-isolation
 [glossary-plan-cache]: GLOSSARY.md#plan-cache
+[glossary-probe-urlconf]: GLOSSARY.md#probe-urlconf
+[glossary-reference-counted-cursor-coordinator]: GLOSSARY.md#reference-counted-cursor-coordinator
 [glossary-require-optional-module]: GLOSSARY.md#require_optional_module
+[glossary-response-extension-merge-semantics]: GLOSSARY.md#response-extension-merge-semantics
 [glossary-response-extensions-debug-middleware]: GLOSSARY.md#response-extensions-debug-middleware
 [glossary-schema-reload-discipline]: GLOSSARY.md#schema-reload-discipline
 [glossary-seed-data]: GLOSSARY.md#seed_data
 [glossary-single-upstream-parity]: GLOSSARY.md#single-upstream-parity
 [glossary-soft-dependency]: GLOSSARY.md#soft-dependency
 [glossary-strawberry-config]: GLOSSARY.md#strawberry_config
+[glossary-strawberry-extension-lifecycle]: GLOSSARY.md#strawberry-extension-lifecycle
 [glossary-strictness-mode]: GLOSSARY.md#strictness-mode
 [glossary-testclient]: GLOSSARY.md#testclient
 [tree]: TREE.md

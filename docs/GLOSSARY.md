@@ -50,6 +50,10 @@ Symbols re-exported from `django_strawberry_framework`:
 - [`auto`](#auto-typed-annotations) — re-export from Strawberry for `auto`-typed field annotations (the declare-but-infer marker).
 - `__version__` — package version string.
 
+Symbols available from the `django_strawberry_framework.extensions` subpackage (opt-in schema extensions):
+
+- [`DjangoDebugExtension`](#djangodebugextension) — off-by-default development extension that reports executed SQL and execution exceptions through `response.extensions.debug`.
+
 Symbols available from the `django_strawberry_framework.testing` subpackage (consumer test utilities):
 
 - [`TestClient`](#testclient) — sync GraphQL test client over `django.test.Client`: post an operation, decode it, and get a typed [`Response`](#testclient) carrying the raw `HttpResponse`.
@@ -76,17 +80,26 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 |---|---|
 | [`AggregateSet`](#aggregateset) | planned for `0.1.3` |
 | [`apply_cascade_permissions`](#apply_cascade_permissions) | shipped (`0.0.10`) |
+| [Async SQL-capture boundary](#async-sql-capture-boundary) | planned for `0.0.14` |
 | [Auth mutations](#auth-mutations) | shipped (`0.0.13`) |
 | [`BigInt` scalar](#bigint-scalar) | shipped (`0.0.6`) |
+| [Bounded query-log rollover](#bounded-query-log-rollover) | planned for `0.0.14` |
 | [Channels request adapter](#channels-request-adapter) | planned for `0.0.14` |
 | [Choice enum generation](#choice-enum-generation) | shipped (`0.0.1`) |
 | [`ConfigurationError`](#configurationerror) | shipped (`0.0.1`) |
 | [Connection-aware optimizer planning](#connection-aware-optimizer-planning) | shipped (`0.0.9`) |
+| [Cookbook parity](#cookbook-parity) | planned through `1.0.0` |
+| [Debug exception row](#debug-exception-row) | planned for `0.0.14` |
+| [Debug payload availability](#debug-payload-availability) | planned for `0.0.14` |
+| [Debug SQL row](#debug-sql-row) | planned for `0.0.14` |
 | [Debug-toolbar middleware](#debug-toolbar-middleware) | planned for `0.0.14` |
 | [Definition-order independence](#definition-order-independence) | shipped (`0.0.4`) |
+| [Developer-only debug posture](#developer-only-debug-posture) | planned for `0.0.14` |
 | [Django `AppConfig`](#django-appconfig) | shipped (`0.0.7`) |
+| [Django debug-cursor capture](#django-debug-cursor-capture) | planned for `0.0.14` |
 | [`DjangoConnection`](#djangoconnection) | shipped (`0.0.9`) |
 | [`DjangoConnectionField`](#djangoconnectionfield) | shipped (`0.0.9`) |
+| [`DjangoDebugExtension`](#djangodebugextension) | planned for `0.0.14` |
 | [`DjangoFileType`](#djangofiletype) | shipped (`0.0.11`) |
 | [`DjangoFormMutation`](#djangoformmutation) | shipped (`0.0.12`) |
 | [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) | planned for `0.0.14` |
@@ -109,10 +122,13 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [FK-id elision](#fk-id-elision) | shipped (`0.0.3`) |
 | [`get_child_queryset`](#get_child_queryset) | planned for `0.1.3` |
 | [`get_queryset` visibility hook](#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [Graphene debug migration](#graphene-debug-migration) | planned for `0.0.14` |
 | [`GraphQLTestCase`](#graphqltestcase) | planned for `0.0.14` |
+| [Hard dependency](#hard-dependency) | shipped |
 | [Input type generation](#input-type-generation) | shipped (`0.0.11`) |
 | [Joint version cut](#joint-version-cut) | shipped (`0.0.13`) |
 | [Live-first coverage mandate](#live-first-coverage-mandate) | shipped (`0.0.4`) |
+| [Masking-extension ordering](#masking-extension-ordering) | planned for `0.0.14` |
 | [`Meta.aggregate_class`](#metaaggregate_class) | planned for `0.1.3` |
 | [`Meta.choice_enum_names`](#metachoice_enum_names) | planned for `0.1.4` |
 | [`Meta.connection`](#metaconnection) | shipped (`0.0.9`) |
@@ -140,8 +156,11 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`order_input_type`](#order_input_type) | shipped (`0.0.8`) |
 | [PEP 562 lazy export](#pep-562-lazy-export) | shipped (`0.0.13`) |
 | [Per-field permission hooks](#per-field-permission-hooks) | planned for `0.1.1` |
+| [Per-operation extension isolation](#per-operation-extension-isolation) | planned for `0.0.14` |
 | [Plan cache](#plan-cache) | shipped (`0.0.3`) |
+| [Probe URLconf](#probe-urlconf) | shipped (repository test pattern) |
 | [Queryset diffing](#queryset-diffing) | shipped (`0.0.3`) |
+| [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator) | planned for `0.0.14` |
 | [`RelatedAggregate`](#relatedaggregate) | planned for `0.1.3` |
 | [`RelatedFilter`](#relatedfilter) | shipped (`0.0.8`) |
 | [`RelatedOrder`](#relatedorder) | shipped (`0.0.8`) |
@@ -150,6 +169,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) | shipped (`0.0.9`) |
 | [`request_from_info`](#request_from_info) | shipped (`0.0.8`) |
 | [`require_optional_module`](#require_optional_module) | planned for `0.0.14` |
+| [Response-extension merge semantics](#response-extension-merge-semantics) | planned for `0.0.14` |
 | [Response-extensions debug middleware](#response-extensions-debug-middleware) | planned for `0.0.14` |
 | [`safe_wrap_connection_method`](#safe_wrap_connection_method) | shipped (`0.0.7`) |
 | [Scalar field conversion](#scalar-field-conversion) | shipped (`0.0.1`+) |
@@ -163,6 +183,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Single-upstream parity](#single-upstream-parity) | shipped |
 | [Soft dependency](#soft-dependency) | shipped (`0.0.13`) |
 | [Specialized scalar conversions](#specialized-scalar-conversions) | shipped (`0.0.6`) |
+| [Strawberry extension lifecycle](#strawberry-extension-lifecycle) | planned for `0.0.14` |
 | [strawberry_config](#strawberry_config) | shipped (`0.0.7`) |
 | [Strictness mode](#strictness-mode) | shipped (`0.0.3`) |
 | [`SyncMisuseError`](#syncmisuseerror) | shipped (`0.0.5`) |
@@ -189,8 +210,8 @@ For readers exploring rather than looking up a specific term:
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoMutationField`](#djangomutationfield) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
 - **File / image uploads:** [`Upload` scalar](#upload-scalar) · [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype).
-- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware) · [Soft dependency](#soft-dependency) · [Joint version cut](#joint-version-cut) · [PEP 562 lazy export](#pep-562-lazy-export) · [`require_optional_module`](#require_optional_module) · [Single-upstream parity](#single-upstream-parity).
-- **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Django Trac #37064 hardening](#django-trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase) · [Live-first coverage mandate](#live-first-coverage-mandate) · [Eviction-simulated absence](#eviction-simulated-absence) · [Schema reload discipline](#schema-reload-discipline) · [`seed_data`](#seed_data).
+- **Integration / tooling:** [Django `AppConfig`](#django-appconfig) · [Schema export management command](#schema-export-management-command) · [Schema introspection management command](#schema-introspection-management-command) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [Response-extensions debug middleware](#response-extensions-debug-middleware) · [Soft dependency](#soft-dependency) · [Joint version cut](#joint-version-cut) · [PEP 562 lazy export](#pep-562-lazy-export) · [`require_optional_module`](#require_optional_module) · [Single-upstream parity](#single-upstream-parity) · [Async SQL-capture boundary](#async-sql-capture-boundary) · [Bounded query-log rollover](#bounded-query-log-rollover) · [Cookbook parity](#cookbook-parity) · [Debug exception row](#debug-exception-row) · [Debug payload availability](#debug-payload-availability) · [Debug SQL row](#debug-sql-row) · [Developer-only debug posture](#developer-only-debug-posture) · [Django debug-cursor capture](#django-debug-cursor-capture) · [`DjangoDebugExtension`](#djangodebugextension) · [Graphene debug migration](#graphene-debug-migration) · [Hard dependency](#hard-dependency) · [Masking-extension ordering](#masking-extension-ordering) · [Per-operation extension isolation](#per-operation-extension-isolation) · [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator) · [Response-extension merge semantics](#response-extension-merge-semantics) · [Strawberry extension lifecycle](#strawberry-extension-lifecycle).
+- **Testing:** [`safe_wrap_connection_method`](#safe_wrap_connection_method) · [Django Trac #37064 hardening](#django-trac-37064-hardening) · [`TestClient`](#testclient) · [`GraphQLTestCase`](#graphqltestcase) · [Live-first coverage mandate](#live-first-coverage-mandate) · [Eviction-simulated absence](#eviction-simulated-absence) · [Schema reload discipline](#schema-reload-discipline) · [`seed_data`](#seed_data) · [Probe URLconf](#probe-urlconf).
 
 ---
 
@@ -233,6 +254,14 @@ qs = await aapply_cascade_permissions(cls, qs, info)
 
 **See also:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [Per-field permission hooks](#per-field-permission-hooks).
 
+## Async SQL-capture boundary
+
+**Status:** planned for `0.0.14`.
+
+The execution-color boundary of [`DjangoDebugExtension`](#djangodebugextension). Exception capture is result-based and therefore works for sync and async operations. SQL capture is guaranteed on Django's sync path but is normally empty on async execution: the extension brackets the event-loop thread's thread-local connection objects, while Django ORM work runs in `sync_to_async` executor threads with different connection objects. The [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator) guarantees restoration for overlapping async operations, but it cannot attribute executor-thread SQL to an operation. Under `DJANGO_ALLOW_ASYNC_UNSAFE`, concurrent loop-thread ORM work can be cross-attributed. This is a documented fidelity limit, not a partial async guarantee.
+
+**See also:** [`DjangoDebugExtension`](#djangodebugextension) · [Django debug-cursor capture](#django-debug-cursor-capture) · [Per-operation extension isolation](#per-operation-extension-isolation).
+
 ## Auth mutations
 
 **Status:** shipped (`0.0.13`).
@@ -252,6 +281,14 @@ JSON-safe scalar typically used to map Django's 64-bit integer fields `BigIntege
 Consumers register `BigInt` via the [`strawberry_config`](#strawberry_config) factory on their `strawberry.Schema(...)` call: `strawberry.Schema(query=Query, config=strawberry_config(), extensions=[lambda: _optimizer])` (the optimizer is a module-level singleton wrapped in a factory — see [`DjangoOptimizerExtension`](#djangooptimizerextension)). Direct `BigInt` annotations (`category: BigInt`, `@strawberry.field def big_id(self) -> BigInt: ...`) continue to work unchanged at the schema-declaration site; the registration path changes, not the symbol. The migration applies to any schema that resolves to `BigInt` — including [`DjangoType`](#djangotype) schemas whose fields are backed by `BigIntegerField` or `PositiveBigIntegerField` (resolved to `BigInt` by the [`Specialized scalar conversions`](#specialized-scalar-conversions) converter table) even when the consumer never imports or annotates `BigInt` directly.
 
 **See also:** [Scalar field conversion](#scalar-field-conversion) · [Specialized scalar conversions](#specialized-scalar-conversions).
+
+## Bounded query-log rollover
+
+**Status:** planned for `0.0.14`.
+
+The best-effort capture boundary created by Django's bounded `queries_log` deque. [`DjangoDebugExtension`](#djangodebugextension) snapshots each log's length, materializes the deque at teardown, and reads from `min(snapshot, current_length)`, so a reset or shortened log cannot raise. If a full deque rolls over while keeping the same length, however, a length snapshot cannot distinguish old rows from new rows and the operation may report some or none of its queries. Django's own `CaptureQueriesContext` has the same limitation. The default 9000-row limit makes this pathological, but the behavior is documented and tested rather than represented as exact capture.
+
+**See also:** [Django debug-cursor capture](#django-debug-cursor-capture) · [Debug SQL row](#debug-sql-row).
 
 ## Channels request adapter
 
@@ -300,6 +337,38 @@ The generated connection class then serves `edges` / cursors / `pageInfo` / `tot
 
 **See also:** [`DjangoConnectionField`](#djangoconnectionfield) · [Plan cache](#plan-cache) · [`DjangoOptimizerExtension`](#djangooptimizerextension).
 
+## Cookbook parity
+
+**Status:** planned through `1.0.0`.
+
+The repository's obligation to validate migration claims against the working `django-graphene-filters` cookbook, not a hypothetical Graphene application. Domain declarations in `cookbook/recipes/schema.py` establish the app-level `Meta`-driven target; project-level composition in `cookbook/schema.py` and `cookbook/settings.py` establishes engine configuration such as debug wiring. Import-only migration applies to the domain declaration surface. Aggregate schema extensions, middleware settings, and client wire behavior migrate through an explicit recipe. Spec 044 applies this rule through the [Graphene debug migration](#graphene-debug-migration).
+
+**See also:** [Graphene debug migration](#graphene-debug-migration) · [Single-upstream parity](#single-upstream-parity).
+
+## Debug exception row
+
+**Status:** planned for `0.0.14`.
+
+One item in `extensions.debug.exceptions`. The wire keys mirror graphene-django's `DjangoDebugException`: `excType` is `str(type(exc))`, `message` is `str(exc)`, and `stack` is rendered from the terminal exception's own `__traceback__`. Collection begins only when an execution-result `GraphQLError` has a non-null `original_error`; nested `GraphQLError.original_error` links are walked to the terminal exception with identity-based cycle protection. Pure parse and validation errors are excluded, while resolver errors, explicitly raised `GraphQLError`s, completion errors, and scalar-serialization errors are included. This result-level scope is intentionally broader than graphene-django's resolver wrapper.
+
+**See also:** [`DjangoDebugExtension`](#djangodebugextension) · [Debug payload availability](#debug-payload-availability) · [Masking-extension ordering](#masking-extension-ordering).
+
+## Debug payload availability
+
+**Status:** planned for `0.0.14`.
+
+When `extensions.debug` is present. An enabled schema emits both `sql` and `exceptions` lists for every operation that reaches execution, including successful operations, resolver failures, mutations, and introspection. Parse and validation failures carry no `debug` key because Strawberry asks extensions for results before `on_operation` teardown has assembled the payload. A coerced non-GraphQL exception that escapes execution can carry the payload because teardown has run before the engine's recovery response. `get_results()` is therefore a pure, idempotent stash read and may be called more than once.
+
+**See also:** [Strawberry extension lifecycle](#strawberry-extension-lifecycle) · [Response-extension merge semantics](#response-extension-merge-semantics).
+
+## Debug SQL row
+
+**Status:** planned for `0.0.14`.
+
+One item in `extensions.debug.sql`. The six wire keys are `vendor`, `alias`, `sql`, `duration`, `isSlow`, and `isSelect`, preserving the graphene-django client vocabulary where Django's query log can supply the value. `duration` is float seconds from Django's three-decimal log string; `isSlow` uses graphene's `duration > 10` threshold; `isSelect` uses its leading-`SELECT` sniff. Deliberately omitted are `rawSql`, `params`, `startTime`, `stopTime`, and the Postgres-only `transId`, `transStatus`, `isoLevel`, and `encoding` fields. `executemany` and transaction-management statements retain Django's own logged form.
+
+**See also:** [Django debug-cursor capture](#django-debug-cursor-capture) · [Bounded query-log rollover](#bounded-query-log-rollover) · [Multi-database cooperation](#multi-database-cooperation).
+
 ## Debug-toolbar middleware
 
 **Status:** planned for `0.0.14`.
@@ -342,6 +411,14 @@ Validation that a manual relation annotation matches the Django relation cardina
 
 **See also:** [`finalize_django_types`](#finalize_django_types) · [`DjangoType`](#djangotype) · [Relation handling](#relation-handling).
 
+## Developer-only debug posture
+
+**Status:** planned for `0.0.14`.
+
+The security contract for response-side debugging. [`DjangoDebugExtension`](#djangodebugextension) is off by default and intended only for development-controlled schemas because it returns interpolated SQL plus raw exception types, messages, and tracebacks to the GraphQL client. It can intentionally reveal details that a masking extension hides from the standard `errors` array. The initial surface has no settings gate, request predicate, redaction hook, row cap, or configurable slow-query threshold; consumers control exposure by whether the class appears in the schema's `extensions=` list. Never enable it on an internet-facing production schema.
+
+**See also:** [`DjangoDebugExtension`](#djangodebugextension) · [Masking-extension ordering](#masking-extension-ordering).
+
 ## Django `AppConfig`
 
 **Status:** shipped (`0.0.7`).
@@ -349,6 +426,14 @@ Validation that a manual relation annotation matches the Django relation cardina
 `django_strawberry_framework/apps.py` ships `DjangoStrawberryFrameworkConfig` with `name = "django_strawberry_framework"` and `verbose_name = "Django Strawberry Framework"`. The `ready()` body imports `django_strawberry_framework._django_patches` and calls `apply()` to install the [Django Trac #37064 hardening](#django-trac-37064-hardening) at Django app-load time. Consumers list `"django_strawberry_framework"` in `INSTALLED_APPS` and Django's implicit single-AppConfig discovery resolves the explicit class.
 
 **See also:** [Django Trac #37064 hardening](#django-trac-37064-hardening) · [Schema export management command](#schema-export-management-command).
+
+## Django debug-cursor capture
+
+**Status:** planned for `0.0.14`.
+
+The SQL fidelity source used by [`DjangoDebugExtension`](#djangodebugextension). For every alias in `connections.all()`, the extension saves and enables `connection.force_debug_cursor`, snapshots `len(connection.queries_log)`, then restores the saved flag and serializes new log rows at teardown. This is the flag-and-snapshot mechanism of Django's `CaptureQueriesContext` without constructing that context directly, because its `__enter__` eagerly opens every configured connection. Enabling `force_debug_cursor` makes `CursorDebugWrapper` populate `queries_log` independently of `settings.DEBUG`; the extension adds no package-owned cursor wrapper and does not force unused aliases open.
+
+**See also:** [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator) · [Bounded query-log rollover](#bounded-query-log-rollover) · [Debug SQL row](#debug-sql-row).
 
 ## `DjangoConnection`
 
@@ -367,6 +452,14 @@ Relay-style connection field with `edges` / `node` / `pageInfo` / `totalCount`, 
 The field owns its own optimizer cooperation point (the plan-application logic extracted from [`DjangoOptimizerExtension`](#djangooptimizerextension)`._optimize`) because Strawberry's connection slicing hides the pre-slice queryset from the schema middleware. That seam now also feeds nested `<field>Connection` window planning: a selected nested connection gets a windowed `Prefetch` so its page costs no per-parent query — see [Connection-aware optimizer planning](#connection-aware-optimizer-planning) (shipped `0.0.9`). A [Strictness mode](#strictness-mode) `"raise"` run now flags an unplanned, unserved nested-connection access through the same resolver-key vocabulary the generated list-relation resolvers use.
 
 **See also:** [`DjangoConnection`](#djangoconnection) · [`DjangoNodeField`](#djangonodefield) · [Relay Node integration](#relay-node-integration) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`Meta.relation_shapes`](#metarelation_shapes).
+
+## `DjangoDebugExtension`
+
+**Status:** planned for `0.0.14`.
+
+The public Strawberry `SchemaExtension` exported from `django_strawberry_framework.extensions` by spec 044. Consumers opt in with the **class** in `strawberry.Schema(..., extensions=[..., DjangoDebugExtension])`; the class is not exported from the package root and fakeshop does not enable it globally. One fresh instance per operation captures [Debug SQL rows](#debug-sql-row) and [Debug exception rows](#debug-exception-row), then returns `{"debug": {"sql": [...], "exceptions": [...]}}` through Strawberry's response-extension seam. It is the concrete symbol behind [Response-extensions debug middleware](#response-extensions-debug-middleware), requires `strawberry-graphql>=0.316.0` for instance isolation, and follows the [Developer-only debug posture](#developer-only-debug-posture).
+
+**See also:** [Strawberry extension lifecycle](#strawberry-extension-lifecycle) · [Per-operation extension isolation](#per-operation-extension-isolation) · [Django debug-cursor capture](#django-debug-cursor-capture) · [Debug payload availability](#debug-payload-availability).
 
 ## `DjangoFileType`
 
@@ -677,6 +770,14 @@ The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` 
 
 **See also:** [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Per-field permission hooks](#per-field-permission-hooks).
 
+## Graphene debug migration
+
+**Status:** planned for `0.0.14`.
+
+The concrete migration from graphene-django's debug subsystem to [`DjangoDebugExtension`](#djangodebugextension). The Graphene project-level pair is an aggregate `_debug: DjangoDebug` query field plus `graphene_django.debug.DjangoDebugMiddleware` in `GRAPHENE["MIDDLEWARE"]`; `DjangoDebugSQL` and `DjangoDebugException` define its selected row shapes. The Strawberry migration removes the field and middleware setting, adds `DjangoDebugExtension` to the aggregate schema's `extensions=` list, and changes clients from selecting `_debug` to reading `response.extensions.debug`. Domain app schemas and `Meta` declarations remain unchanged. This is capability parity, not wire compatibility.
+
+**See also:** [Cookbook parity](#cookbook-parity) · [Single-upstream parity](#single-upstream-parity) · [Debug SQL row](#debug-sql-row) · [Debug exception row](#debug-exception-row).
+
 ## `GraphQLTestCase`
 
 **Status:** planned for `0.0.14`.
@@ -684,6 +785,14 @@ The load-bearing behavior is optimizer cooperation: `has_custom_get_queryset()` 
 The `graphene-django`-shaped unittest family: `GraphQLTestMixin` (the reusable mixin) plus its two concrete two-line combinations `GraphQLTestCase` (`(GraphQLTestMixin, django.test.TestCase)`) and `GraphQLTransactionTestCase` (`(GraphQLTestMixin, django.test.TransactionTestCase)`), imported from `django_strawberry_framework.testing`. The mixin's `self.query(...)` delegates to a [`TestClient`](#testclient) built over the test case's own `self.client` (so login / cookie state applies and the body-building lives in one place), returning the typed `Response`; it defaults `assert_no_errors=False` (graphene parity - the flipped default from the pytest-flavored [`TestClient`](#testclient)). The assertion helpers keep graphene's names and semantics: `assertResponseNoErrors` (HTTP 200 **and** no `errors`) and `assertResponseHasErrors` (an `errors` key present - GraphQL still returns HTTP 200). The per-class `GRAPHQL_URL` endpoint knob outranks the `TESTING_ENDPOINT` settings key and is itself outranked by a per-call `url=`. There is deliberately **no** `mutate()` helper - a mutation posts through `query()` like any operation (neither upstream ships one). The `GraphQLTestCase` name and mixin-first shape come from `graphene-django`'s `utils/testing.py`; the underlying HTTP client mirrors `strawberry-django`'s `test/client.py`.
 
 **See also:** [`TestClient`](#testclient).
+
+## Hard dependency
+
+**Status:** shipped.
+
+A package installed unconditionally with `django-strawberry-framework`, so package code may import it without an optional-import guard or install hint. Django and `strawberry-graphql` are hard dependencies. Spec 044 adds no dependency: `SchemaExtension` comes from the existing Strawberry requirement and SQL capture comes from Django; it only raises the Strawberry version floor for [Per-operation extension isolation](#per-operation-extension-isolation). This is the opposite of a [Soft dependency](#soft-dependency), whose feature boundary must remain import-clean when the extra is absent.
+
+**See also:** [Soft dependency](#soft-dependency) · [`require_optional_module`](#require_optional_module) · [Per-operation extension isolation](#per-operation-extension-isolation).
 
 ## Input type generation
 
@@ -713,6 +822,14 @@ Moved only by the cut — the version quintet: `[project].version` in `pyproject
 The repo's test-placement rule (pinned in `AGENTS.md` and `docs/TREE.md` #"Coverage priority"; established by the `0.0.4` testing shift): if a package line can be covered by a real fakeshop `/graphql/` GraphQL request, the covering test lives in the live acceptance suite (`examples/fakeshop/test_query/`); root `tests/` is reserved for package internals, invalid configuration, registry/finalizer mechanics, and paths genuinely unreachable through a realistic GraphQL request. Mock only when the real path is impossible.
 
 A package-tests placement for new surface area must be justified as genuinely-unreachable-live — e.g. the `0.0.14` [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter): the fakeshop example is WSGI-only (no `asgi.py`), so no live request can reach a Channels router line. When coverage is later promoted to the live tier, the package-only stand-in test is deleted rather than kept as duplicate weight (the package coverage gate, `fail_under = 100`, keeps the swap honest).
+
+## Masking-extension ordering
+
+**Status:** planned for `0.0.14`.
+
+The ordering contract between [`DjangoDebugExtension`](#djangodebugextension) and an error-masking `SchemaExtension` such as Strawberry's `MaskErrors`. Extension context teardowns unwind last-in, first-out. `MaskErrors` replaces result errors with copies whose `original_error` is `None`; therefore the debug class must be listed **after** the masker so debug teardown runs first and records the original exception. Reversing the order yields an empty debug `exceptions` list. Even with correct ordering, the standard GraphQL `errors` remain masked while the debug payload is deliberately unmasked.
+
+**See also:** [Debug exception row](#debug-exception-row) · [Developer-only debug posture](#developer-only-debug-posture) · [Strawberry extension lifecycle](#strawberry-extension-lifecycle).
 
 ## `Meta.aggregate_class`
 
@@ -1078,6 +1195,14 @@ Composes with filter / order / aggregate permission gates and with the post-writ
 
 **See also:** [`FieldSet`](#fieldset) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [`get_queryset` visibility hook](#get_queryset-visibility-hook).
 
+## Per-operation extension isolation
+
+**Status:** planned for `0.0.14`.
+
+The guarantee that every GraphQL operation gets a distinct stateful extension instance and engine-owned `execution_context`. Strawberry versions before 0.316.0 cached sync class-created extensions on `Schema._sync_extensions`, so concurrent requests could overwrite one shared instance's context. Spec 044 raises the hard `strawberry-graphql` floor to 0.316.0 and documents the class-form opt-in, which the engine now materializes per operation. [`DjangoDebugExtension`](#djangodebugextension) consequently uses plain instance attributes. The optimizer deliberately keeps its different singleton-in-a-factory shape because its cross-request [Plan cache](#plan-cache) is shared and its per-request state is isolated elsewhere.
+
+**See also:** [`DjangoDebugExtension`](#djangodebugextension) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Hard dependency](#hard-dependency).
+
 ## Plan cache
 
 **Status:** shipped (`0.0.3`).
@@ -1097,6 +1222,14 @@ Properties:
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Queryset diffing](#queryset-diffing) · [FK-id elision](#fk-id-elision).
 
+## Probe URLconf
+
+**Status:** shipped (repository test pattern).
+
+A test-local Django URL configuration used to exercise an opt-in schema shape over real HTTP without changing the example project's shipped URLconf. A module-level `urlpatterns` mounts Strawberry's Django view over a purpose-built schema, and `pytest.mark.urls` selects that URLconf for the test. The request still travels through Django's request/response and JSON serialization path, so it belongs in `examples/fakeshop/test_query/` under the [Live-first coverage mandate](#live-first-coverage-mandate). Spec 044 uses this pattern because [`DjangoDebugExtension`](#djangodebugextension) is off by default in fakeshop.
+
+**See also:** [Live-first coverage mandate](#live-first-coverage-mandate) · [Schema reload discipline](#schema-reload-discipline) · [`TestClient`](#testclient).
+
 ## Queryset diffing
 
 **Status:** shipped (`0.0.3`).
@@ -1112,6 +1245,14 @@ Cooperation rules:
 - **`only()` cooperation.** If your resolver already calls `.only(...)` to enforce a column-level projection (e.g., a permission boundary that restricts which columns leave the database), the optimizer drops its own `only_fields` rather than chaining a second `.only(...)` that would replace yours — Django's `QuerySet.only(...).only(...)` replaces (not merges) the deferred-field set. `.defer(...)` is not treated as a consumer projection because `.defer()` and `.only()` compose cleanly in Django.
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache) · [`OptimizerHint`](#optimizerhint).
+
+## Reference-counted cursor coordinator
+
+**Status:** planned for `0.0.14`.
+
+The module-private, lock-protected coordinator that makes [`DjangoDebugExtension`](#djangodebugextension)'s `force_debug_cursor` bracket overlap-safe. The first active user of a connection saves its prior flag and enables instrumentation; overlapping users increment a depth; only the final release restores the saved value and removes the map entry. Every extension instance keeps its own query-log snapshot, while `contextlib.ExitStack` owns token release so partial multi-alias acquisition and operation failures unwind correctly. The coordinator manages one Boolean flag only: it does not observe queries, attribute rows, or replace Django's cursor wrapper.
+
+**See also:** [Django debug-cursor capture](#django-debug-cursor-capture) · [Async SQL-capture boundary](#async-sql-capture-boundary).
 
 ## `RelatedAggregate`
 
@@ -1237,13 +1378,25 @@ The raising optional-dependency primitive planned for `utils/imports.py` — the
 
 **See also:** [Soft dependency](#soft-dependency) · [Eviction-simulated absence](#eviction-simulated-absence) · [`DjangoGraphQLProtocolRouter`](#djangographqlprotocolrouter).
 
+## Response-extension merge semantics
+
+**Status:** planned for `0.0.14`.
+
+How Strawberry combines extension metadata into `ExecutionResult.extensions`. The runner calls each extension's `get_results()` and applies dictionaries in schema `extensions=` list order; a later extension wins if two publish the same key. [`DjangoDebugExtension`](#djangodebugextension) owns the `debug` key and does not guard a collision with a consumer extension. Its values are JSON-native strings, floats, booleans, lists, and dictionaries so every supported transport can serialize them. This merge order is distinct from the reverse, last-in-first-out teardown order covered by [Masking-extension ordering](#masking-extension-ordering).
+
+**See also:** [Strawberry extension lifecycle](#strawberry-extension-lifecycle) · [Debug payload availability](#debug-payload-availability).
+
 ## Response-extensions debug middleware
 
 **Status:** planned for `0.0.14`.
 
-Surfaces executed SQL queries and raised exceptions through the GraphQL response's `extensions` envelope so frontend clients can read them without the toolbar. Distinct from [Debug-toolbar middleware](#debug-toolbar-middleware): this is in-response surfacing, that is server-side panel.
+The named 0.0.14 capability that surfaces executed SQL and raised execution exceptions through the GraphQL response's `extensions.debug` map. Its public implementation is [`DjangoDebugExtension`](#djangodebugextension), an off-by-default Strawberry extension exported from `django_strawberry_framework.extensions`. The payload always has `sql` and `exceptions` lists after execution; parse and validation failures omit the key. SQL uses [Django debug-cursor capture](#django-debug-cursor-capture), and exceptions use the [Debug exception row](#debug-exception-row) contract.
 
-**See also:** [Debug-toolbar middleware](#debug-toolbar-middleware).
+The complete implementation vocabulary is split into focused entries: [Strawberry extension lifecycle](#strawberry-extension-lifecycle), [Per-operation extension isolation](#per-operation-extension-isolation), [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator), [Bounded query-log rollover](#bounded-query-log-rollover), [Debug SQL row](#debug-sql-row), [Debug payload availability](#debug-payload-availability), [Masking-extension ordering](#masking-extension-ordering), [Async SQL-capture boundary](#async-sql-capture-boundary), [Response-extension merge semantics](#response-extension-merge-semantics), and [Developer-only debug posture](#developer-only-debug-posture).
+
+Distinct from [Debug-toolbar middleware](#debug-toolbar-middleware): this is in-response client-visible surfacing, while the toolbar is a server-side SQL panel. Both are useful and may coexist. A graphene-django consumer follows the documented [Graphene debug migration](#graphene-debug-migration), validated against [Cookbook parity](#cookbook-parity).
+
+**See also:** [`DjangoDebugExtension`](#djangodebugextension) · [Debug-toolbar middleware](#debug-toolbar-middleware) · [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Multi-database cooperation](#multi-database-cooperation).
 
 ## `safe_wrap_connection_method`
 
@@ -1344,13 +1497,13 @@ The positional `type` argument dispatches by shape: a **dotted** object path (`a
 
 The fakeshop suites' order-independence-by-reconstruction rule, single-sited in `examples/fakeshop/schema_reload.py`: any test that rebuilds the aggregate `config.schema` calls `reload_all_project_schemas()`, which clears the global type registry, re-imports every contributing app's `apps.<app>.schema` in dependency-safe order (`glossary` before `kanban`, whose card-term type FKs into the glossary app), then reloads `config.schema` + `config.urls` and clears Django's URL caches.
 
-The rule exists because package tests under root `tests/` call `registry.clear()` for isolation while `config.schema` composes every app's `Query` / `Mutation`: a partial (one-app) reload leaves the other apps unregistered, so the combined build raises a `LazyType` `KeyError` — or `DuplicatedTypeName` when a stale re-imported schema module survives in `sys.modules` — under collection orders that did not happen to pre-materialize the types. `pytest-xdist` can place package and acceptance modules on the same worker, so `test_query/conftest.py` performs a complete rebuild when each acceptance module begins. Every test then gets a fresh aggregate schema, optimizer, and URLconf through a cheaper shell-only rebuild. A function-scoped guard fingerprints every registry map and contributing app module; if a test changes registration state, teardown performs the complete ambient-settings rebuild even after assertion failure. Temporary-settings tests use the same guarded restoration path.
+The rule exists because package tests under root `tests/` call `registry.clear()` for isolation while `config.schema` composes every app's `Query` / `Mutation`: a partial (one-app) reload leaves the other apps unregistered, so the combined build raises a `LazyType` `KeyError` — or `DuplicatedTypeName` when a stale re-imported schema module survives in `sys.modules` — under collection orders that did not happen to pre-materialize the types. `pytest-xdist`'s `--dist loadscope` localizes the flake to whichever worker drew both files, which is why the reload must be complete and per-test rather than fixed by ordering. Every `test_query/` acceptance suite's autouse fixture delegates to the helper (via `test_query/conftest.py`); package tests that execute real GraphQL through fakeshop (e.g. the [Debug-toolbar middleware](#debug-toolbar-middleware) suite) call it on fixture setup, before any URLconf steps.
 
 ## `seed_data`
 
 **Status:** shipped.
 
-fakeshop's deterministic catalog seed helper (`apps.products.services.seed_data(count, db_alias="default")`): for every discovered Faker provider it ensures one `Category`, one `Property` per provider method, and at least `count` `Item` rows (creating only the shortfall), each new `Item` carrying one `Entry` per `Property`. The installed-provider shape is discovered deterministically once per process and reused by later seed calls; generated values remain fresh. `is_private` flags alternate by sorted index for an exact, run-deterministic 50/50 public/private split.
+fakeshop's deterministic catalog seed helper (`apps.products.services.seed_data(count, db_alias="default")`): for every discovered Faker provider it ensures one `Category`, one `Property` per provider method, and at least `count` `Item` rows (creating only the shortfall), each new `Item` carrying one `Entry` per `Property`. `is_private` flags alternate by sorted index for an exact, run-deterministic 50/50 public/private split.
 
 The repo's seed-helper rule: a test that needs products-app rows starts with `seed_data(1)` (or an explicit `seed_data(N)`) as its first executable line rather than hand-building models — so SQL-emitting tests (optimizer-shape assertions, the [Debug-toolbar middleware](#debug-toolbar-middleware) SQL-panel tests) hit real rows through the same path as every other suite.
 
@@ -1398,6 +1551,14 @@ Adds these mappings to [Scalar field conversion](#scalar-field-conversion):
 - `FileField` / `ImageField` read output → structured [`DjangoFileType`](#djangofiletype) / [`DjangoImageType`](#djangoimagetype) objects, nullable by default in the SDL regardless of the column's `null` / `blank` (an empty stored file resolves to `null`; `required_overrides` opts into a non-null object). Switched from `str` in `0.0.11` — breaking wire-format change, parallel to the `PositiveBigIntegerField` → `BigInt` `0.0.6` precedent; opt out of the structured object per field with an `attachment: str` annotation override. The filter / scalar-input value stays `str`; the mutation input is the [`Upload`](#upload-scalar) scalar
 
 **See also:** [Scalar field conversion](#scalar-field-conversion) · [`BigInt` scalar](#bigint-scalar).
+
+## Strawberry extension lifecycle
+
+**Status:** planned for `0.0.14`.
+
+The engine contract [`DjangoDebugExtension`](#djangodebugextension) rides. Strawberry's `SchemaExtension.on_operation` is a generator-style context hook around one GraphQL operation; a synchronous generator can serve both sync and async execution colors. The extension acquires SQL instrumentation before `yield` and assembles its payload during teardown. `SchemaExtension.get_results()` then returns per-operation metadata that Strawberry merges into `ExecutionResult.extensions`. Happy-path result collection occurs after teardown; parse and validation early returns collect before teardown. That ordering defines [Debug payload availability](#debug-payload-availability), while schema-list order defines [Response-extension merge semantics](#response-extension-merge-semantics).
+
+**See also:** [Per-operation extension isolation](#per-operation-extension-isolation) · [Masking-extension ordering](#masking-extension-ordering).
 
 ## strawberry_config
 

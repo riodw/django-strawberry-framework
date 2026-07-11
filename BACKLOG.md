@@ -16,56 +16,47 @@ Cards are grouped by subsystem. Group order and card order within groups carry n
 
 ### `typed_error_envelope_and_code_registry`
 
-**Realistic**: 9/10 — Typed Strawberry classes + a code registry are known patterns; the spec-aligned path format is a constraint, not a risk.
+**Realistic**: 9/10 — The registry decorator is a known pattern, and the envelope it extends already shipped with the mutations cluster.
 
 **Impact**: 8/10 — Major client-DX win; the dependency hub roughly eight other cards emit into.
 
-**Difficulty**: 3/10 — Envelope shape + registry decorator; small slice now that adapters and i18n are split out.
+**Difficulty**: 3/10 — Registry + one additive envelope field; small slice now that the envelope core has shipped and adapters and i18n are split out.
 
-**Source**: item 19 (typed error-code envelope), core half.
+**Source**: item 19 (typed error-code envelope), core half. Re-scoped 2026-07-10: the envelope itself shipped with spec-036 / spec-039 (0.0.11–0.0.13); this card is the registry + `params` remainder.
 
-**What we'd do**: a typed, structured error shape that every other card emits into, plus a code registry.
+**What we'd do**: extend the **shipped** `FieldError` envelope with a package code registry and structured `params`, so every future card emits typed, client-branchable errors through the one existing surface.
 
 **Spec**:
 
-```python path=null start=null
-@strawberry.type
-class FieldError:
-    path: list[str | int] | None   # GraphQL-spec-aligned path segments, e.g. ["items", 0, "quantity"]
-    code: str                      # "validation.unique", "permission.denied", "dst.rate_limit.exceeded"
-    message: str                   # human-readable; localized via the i18n hook card
-    params: JSON                   # JSON-serializable templating values ({"min": 1, "max": 99})
-```
+The envelope core is shipped (`mutations/inputs.py::FieldError`, spec-036 Decision 7 + spec-039 rev6 #4/#13): `field: str` (dotted; `__all__` sentinel), `messages: list[str]`, plus the additive `codes: list[str]` / `path: list[str]` pair, grouped one entry per field. Path segments are strings (`["items", "0", "name"]`) because GraphQL's type system cannot express the error spec's heterogeneous `[String | Int]` path list inside a schema type — clients get spec-shaped segments at string fidelity. This card does **not** reshape any of that published contract; it adds:
 
-- `path` uses the GraphQL spec's error-path convention (array of string and int segments), **not** a dotted string — clients reuse their existing `errors[].path` handling code.
-- Codes come from a package registry that consumers extend via `@register_error_code("payment.declined")`.
+- **The code registry.** Codes come from a package registry that consumers extend via `@register_error_code("payment.declined")`. The shipped framework codes (`invalid`, `null`, `not_found`, `constraint`, plus the DRF / Django validation codes passed through into `codes`) seed the registry as the package-owned vocabulary.
 - The `dst.*` namespace is **reserved for package-emitted codes**. Consumer registration inside `dst.*` raises `ConfigurationError`. Duplicate registration of any code raises `ConfigurationError` at import time.
-- `params` values must be JSON-serializable; the registry validates declared param shapes where provided.
-- The mutations cluster's `errors: list[FieldError]` envelope adopts this shape; it is the single error surface for mutations, DoS rejections, rate limits, export errors, and matrix errors.
+- **`params`** — an additive, default-empty JSON field carrying JSON-serializable templating values (`{"min": 1, "max": 99}`), added the same way spec-039 added `codes` / `path` (default-factory, so every existing construction site and every client selecting only `field` / `messages` is unaffected). The registry validates declared param shapes where provided.
+- The shipped envelope stays the **single** error surface: DoS rejections, rate limits, export errors, and matrix errors emit `FieldError` with registry codes — no parallel error type.
 
 **Out of scope here**: Form/DRF adapters (`form_and_serializer_error_adapters`) and message localization (`error_message_i18n_hook`).
 
-**Composes with**: nearly everything — `cost_limit_extension`, `depth_limit_extension`, `rate_limit_extension`, `dos_policy_stack_framework`, `tabular_export_of_list_fields`, `matrix_dimensions_and_measures`, `snapshot_token_protocol`, `drf_serializer_mutations`. Ship this card early; its `code`/`params` shape is load-bearing for all of them.
+**Composes with**: nearly everything — `cost_limit_extension`, `depth_limit_extension`, `rate_limit_extension`, `dos_policy_stack_framework`, `tabular_export_of_list_fields`, `matrix_dimensions_and_measures`, `snapshot_token_protocol`, and the shipped mutation flavors. Ship this card early; its registry / `params` shape is load-bearing for all of them.
 
 ### `form_and_serializer_error_adapters`
 
-**Realistic**: 9/10 — `form.errors.get_json_data()` and DRF `ValidationError.detail` expose everything needed.
+**Realistic**: 10/10 — Both mappers already exist and are battle-tested by the shipped mutation flavors; the remaining work is a public seam.
 
-**Impact**: 6/10 — Required for the mutations story; invisible until mutations land.
+**Impact**: 4/10 — Consumer-authored mutations reusing the mappers is the only audience left; the package's own flavors already consume them internally.
 
-**Difficulty**: 2/10 — Two mapping functions plus nested-path handling.
+**Difficulty**: 1/10 — Public wrappers + `__all__` promotion + docs over shipped internals.
 
-**Source**: item 19, adapter half.
+**Source**: item 19, adapter half. Re-scoped 2026-07-10: the mapping itself shipped inside the 0.0.12 form and 0.0.13 serializer flavors; this card is the public-API remainder.
 
-**What we'd do**: lossless mapping from Django Form and DRF Serializer validation errors into the `FieldError` envelope.
+**What we'd do**: promote the shipped Form / DRF error mappers to public adapter functions so consumer-authored mutations can emit the same `FieldError` envelope.
 
 **Spec**:
-- Django Forms: map `form.errors.get_json_data()` (which carries per-error `code`) into `FieldError`, preserving field names as path segments and `NON_FIELD_ERRORS` as `path=None`.
-- DRF: map `ValidationError.detail` — including its `code` attribute, nested-serializer dicts, and `ListSerializer` index errors — into path segments (`["items", 0, "quantity"]`).
-- Unknown/missing codes map to `validation.invalid` rather than inventing codes.
-- Adapter functions are public (`errors_from_form(form)`, `errors_from_serializer(serializer)`) so consumer-authored mutations can reuse them.
+- **Shipped internals this card wraps** (do not reimplement): `forms/resolvers.py::_form_errors_to_field_errors` maps `ValidationError(form.errors.as_data())` through `utils/errors.py::validation_error_to_field_errors`, preserving per-error `code`s and normalizing `NON_FIELD_ERRORS` to the `field="__all__"` / `path=[]` root rule; `rest_framework/resolvers.py::serializer_errors_to_field_errors` depth-first-flattens nested-serializer dicts and `ListSerializer` index errors into string path segments (`["items", "0", "quantity"]`) with `ErrorDetail.code`s, re-keying every segment to its GraphQL name.
+- Public surface: `errors_from_form(form)` and `errors_from_serializer(serializer)`. The serializer wrapper owns defaulting the internal flattener's GraphQL reverse map (identity when the caller has no generated input type — a consumer-authored mutation has no field-name map to re-key against).
+- Codeless leaves keep an empty `codes` list, as shipped — the public wrappers do not invent codes; the registry card owns any future default-code policy.
 
-**Composes with**: `drf_serializer_mutations` (its primary consumer), `typed_error_envelope_and_code_registry`.
+**Composes with**: the shipped `SerializerMutation` flavor (`DONE-039-0.0.13`, which shares these internals), `typed_error_envelope_and_code_registry`.
 
 ### `error_message_i18n_hook`
 
@@ -77,11 +68,12 @@ class FieldError:
 
 **Source**: item 19, localization half.
 
-**What we'd do**: localize `FieldError.message` through Django's `gettext` per request locale.
+**What we'd do**: localize registry-authored `FieldError.messages` through Django's `gettext` per request locale.
 
 **Spec**:
+- Scope note (2026-07-10): Form- and DRF-sourced messages in the shipped envelope already arrive localized — Django and DRF run their own validation messages through Django's translation catalogs. This card covers only the messages the **registry** card introduces (package `dst.*` codes and consumer-registered codes).
 - Registry entries carry a lazy translatable message template; `params` interpolate post-translation.
-- `code` and `params` are **never** localized — clients branch on `code`, render `message`.
+- `codes` and `params` are **never** localized — clients branch on `codes`, render `messages`.
 - Locale resolution follows Django's standard request-locale machinery; no package-specific locale plumbing.
 
 **Composes with**: `typed_error_envelope_and_code_registry`.
@@ -178,28 +170,6 @@ DJANGO_STRAWBERRY_FRAMEWORK = {"OPTIMIZER_DEFAULT": "off"}
 
 **Composes with**: `query_time_optimizer_disable` and `anti_n1_ci_audit` (strictness surfaces the affected sites), the shipped Queryset diffing (B8) and Strictness mode subsystems.
 
-### `plan_cache_key_memoization`
-
-**Realistic**: 6/10 — A bounded `WeakKeyDictionary` layer over the existing key build *if* the precondition holds; but the whole win is gated on Strawberry yielding a stable operation-node identity across requests. If it re-parses per request, node-keyed memoization buys nothing and the card is dead — verify first.
-
-**Impact**: 5/10 — Real hot-path latency win that the plan cache does *not* already remove, scaling with query depth (deep operations print a large AST); but pure latency, smaller than the selection-tree walk the cache eliminates, and no new capability.
-
-**Difficulty**: 4/10 — The memoization itself is a few lines; the subtlety is proving cross-request node identity and getting weak-key lifetime / invalidation right so a reused node can never serve a stale key.
-
-**Source**: spec-035 close-out review (2026-06-16), Part 1d-1 ("the next real per-request win after the walk").
-
-**What we'd do**: kill the residual per-request `print_ast` on the cache-**hit** path. On every hit, `extension.py::_get_or_build_plan` → `_build_cache_key` → `_print_operation_with_reachable_fragments` → `print_ast(operation)` still runs once per request (memoized only *within* a request by the `_printed_ast_cache` ContextVar keyed on `id(operation)`, which is reset each request). If Strawberry's document/validation cache hands back the **same** operation-node object across requests for an identical query, memoize the printed-AST key on that node via a module-level `WeakKeyDictionary`, turning a cache hit into a near-free dict lookup instead of a fresh full-AST print + hash.
-
-**Spec**:
-
-- **Precondition is the gate (verify before building).** Confirm Strawberry reuses the same `OperationDefinitionNode` object across requests for an identical query string (its parsed/validated-document cache), not a freshly parsed node each time. graphql-core's `parse` produces fresh nodes, so the entire win rests on Strawberry's caching layer above it — if it re-parses, node identity is unstable and this approach yields zero. Spec this verification as step one; the card does not proceed if it fails.
-- **Mechanism.** A module-level `WeakKeyDictionary[OperationDefinitionNode, str]` mapping the operation node to its printed, reachable-fragment-aware key component. Weak keys so a node collected with its document drops its entry automatically — no unbounded growth, no manual eviction, no invalidation pass.
-- **Only the printed-AST component is memoized, not the whole key.** The full cache key stays `(printed-AST, frozenset vars, model, path tuple, origin)`; variables, model, path, and origin still vary per request and are combined fresh. This card removes only the `print_ast` cost, which is the request-invariant part for a given node.
-- **Correctness.** The printed key already folds in reachable fragments, and a reused node identity *is* the same document — so its printed form is invariant and the memo can never go stale for a live node. The per-execution `_printed_ast_cache` ContextVar stays as the within-request memo; this adds a cross-request layer above it.
-- **Measure it.** Extend [`scripts/bench_plan_cache.py`][bench-plan-cache] to isolate key-build time on the hit path (as it already isolates the walk via warm-vs-cold), so the win is quantified rather than asserted — the residual after the walk is exactly what this targets.
-
-**Composes with**: the shipped Plan cache (B1) and `cache_info()` (this is the next per-request win after the walk the cache already eliminates), and `scripts/bench_plan_cache.py` (the measurement harness).
-
 ### `computed_fields_binding`
 
 **Realistic**: 9/10 — Python property binding is straightforward; the loud-error-on-missing-annotation rule removes the inference risk.
@@ -245,7 +215,7 @@ class ItemType(DjangoType):
 ```
 
 - Hints extend **both** halves of the plan: relation traversals extend `select_related` / `prefetch_related`, **and column reads extend the `only()` projection**. A property reading `self.description` under a plan that projected `description` away triggers a deferred-field load — an N+1 that relation hints alone cannot catch. Both dependency kinds are first-class.
-- Hint syntax mirrors the shipped `OptimizerHint` keys.
+- Relation hints reuse the shipped `OptimizerHint` vocabulary (`select_related` / `prefetch_related` / `SKIP`); the `only` projection key is **new** to this card — the shipped hint type has no projection concept.
 - Under strictness mode, an unhinted lazy load inside a computed field reports the property name and the hint that would fix it.
 
 **Composes with**: `computed_fields_binding` (prerequisite), shipped strictness mode, `anti_n1_ci_audit`.
@@ -291,7 +261,7 @@ uv run python manage.py audit_n1 --depth 5 --include-mutations --seed fakeshop
 
 1. Enumerate reachable query paths via `registry.iter_definitions()`.
 2. Generate synthetic queries using **pairwise relation coverage**, not exhaustive depth-N enumeration — exhaustive combination counts explode combinatorially; pairwise covers the interaction bugs at tractable cost. `--exhaustive` opt-in for small schemas.
-3. Execute against a seeded test database with `OptimizerHint.strictness="raise"`.
+3. Execute against a seeded test database with `DjangoOptimizerExtension(strictness="raise")`.
 4. Fail CI on any unplanned lazy load, reporting the resolver path and the `OptimizerHint` that would fix it.
 
 - **Seeding contract**: every relation must have ≥2 rows on the many side. N+1s do not manifest with one row; a thin seed silently passes everything. The command validates the seed and refuses to certify a run whose seed violates the contract.
@@ -783,42 +753,6 @@ class UpdateOrder(DjangoMutation):
 
 ## Mutations
 
-### `drf_serializer_mutations`
-
-**Realistic**: 8/10 — DRF exposes `is_valid()`/`save()` cleanly; serializer-field mapping is a known pattern; UNSET is the one subtle seam.
-
-**Impact**: 10/10 — The killer migration story — hundreds of battle-tested serializers move to GraphQL without redeclaring validation.
-
-**Difficulty**: 6/10 — Input/payload split, recursive nesting, absent-vs-null correctness battery, context wiring.
-
-**Source**: item 3.
-
-**What we'd do**: reuse DRF Serializers as the source of truth for input shape **and** validation; auto-generate Strawberry input types; wire `is_valid()` / `save()` into the mutation lifecycle.
-
-**Spec**:
-
-```python path=null start=null
-class CreateItem(DjangoMutation):
-    class Meta:
-        serializer_class = ItemSerializer
-        action = "create"
-
-class UpdateItem(DjangoMutation):
-    class Meta:
-        serializer_class = ItemSerializer
-        action = "update"
-        lookup = "id"
-```
-
-- **One serializer yields two GraphQL types**: `write_only` fields appear only on the generated input type; `read_only` fields (and `SerializerMethodField`, which is output-only by construction) appear only on the payload type. The input/payload split is structural, not a filter.
-- **Partial updates hinge on absent-vs-null.** DRF's `partial=True` treats *absent* as "don't touch" and `null` as an explicit value; GraphQL inputs must preserve that distinction via Strawberry's `UNSET`. `action="update"` generates all-optional inputs defaulting to `UNSET`; `UNSET` fields are excluded from the data passed to the serializer; explicit `null` passes through. Getting this wrong nulls fields the client didn't send — this is the card's correctness crux and gets its own test battery.
-- Nested serializers generate nested input types recursively; `many=True` nests as lists with index-bearing error paths.
-- Serializer context wiring: `{"request": ..., "view": None}`-shaped context populated from `info.context` so validators reading `self.context["request"].user` work unmodified.
-- Validation failures map through `form_and_serializer_error_adapters` into the typed envelope.
-- DRF is a soft dependency: lazy import, clear `ImportError` hint when `serializer_class` is declared without DRF installed.
-
-**Composes with**: the mutations cluster (prerequisite surface), `form_and_serializer_error_adapters`, `typed_error_envelope_and_code_registry`.
-
 ### `transactional_mutation_documents`
 
 **Realistic**: 9/10 — The spec already serializes root mutation fields; `transaction.atomic()` is the Django convention.
@@ -833,6 +767,7 @@ class UpdateItem(DjangoMutation):
 
 **Spec**:
 - The GraphQL spec already executes root mutation fields **serially**; wrapping the document's execution in `atomic()` yields all-or-nothing semantics with zero new endpoint, zero dependency DSL, and full compatibility with existing GraphQL clients, validation, and tooling.
+- **The atomic boundary must span response completion, not just resolver execution.** The shipped per-mutation flavor has exactly this gap (KANBAN `BETA-055`, pinned live by the strict-`xfail` suite `examples/fakeshop/test_query/test_mutation_atomicity.py`): graphql-core serializes the payload *after* the resolver returns, so a completion failure after `atomic()` exits leaves a committed write behind `data: null`. A document-level wrapper that closes before completion re-creates the bug at document scale; this card inherits whatever boundary BETA-055 lands and must not regress it.
 - Any root field's failure rolls back the whole document; the response carries the typed-error envelope per failed field and a document-level `code="dst.transaction.rolled_back"` marker on the sibling fields that succeeded-then-rolled-back.
 - Opt-in per schema (`DjangoTransactionalMutationsExtension`) with per-document opt-out directive for mutations that intentionally commit independently.
 
@@ -900,7 +835,7 @@ const result = await client.batch([
 
 **Source**: item 21, narrowed to TypeScript only.
 
-**What we'd do**: extend the planned `export_schema` management command with `--emit typescript`, producing client-ready type definitions without a Node toolchain.
+**What we'd do**: extend the shipped `export_schema` management command (`DONE-022-0.0.7`) with `--emit typescript`, producing client-ready type definitions without a Node toolchain.
 
 **Spec**:
 
@@ -983,7 +918,7 @@ await createItem.mutateAsync({ name: "bar" });
 
 ### `stable_cursor_field`
 
-**Realistic**: 8/10 — Keyset pagination is a known technique; HMAC opacity is standard crypto plumbing.
+**Realistic**: 8/10 — Keyset pagination is a known technique; authenticated encryption is standard crypto plumbing.
 
 **Impact**: 8/10 — Cursor drift on inserts/deletes is where Relay teams give up; this is the fix.
 
@@ -1004,7 +939,7 @@ class ItemType(DjangoType):
 
 - The cursor encodes the row's `(created_at, id)` tuple; decoding produces a `WHERE (created_at, id) > (value, value)` tuple-comparison filter — insert-safe and delete-safe.
 - The connection machinery enforces a matching `order_by` on the queryset so cursor order and result order can't diverge; a final unique tiebreak column (pk) is required and validated at finalization.
-- **The cursor payload is opaque to clients: HMAC-signed (tamper-evident) and optionally encrypted.** A cleartext cursor encoding `created_at` discloses column data from the row it points at — including rows a different viewer shouldn't see when cursors leak across contexts. Opacity is part of the contract, not a hardening afterthought.
+- **The cursor payload is opaque to clients: authenticated-encrypted (tamper-evident and confidential).** A cleartext cursor encoding `created_at` discloses column data from the row it points at — including rows a different viewer shouldn't see when cursors leak across contexts. Opacity is part of the contract, not a hardening afterthought.
 - When `cursor_field` is unset, the default opaque-offset behavior applies; stability is opt-in.
 
 **Composes with**: shipped `DjangoConnectionField`, `permission_aware_cursor_decoding`.
@@ -1243,7 +1178,7 @@ class ItemType(DjangoType):
 - `select_related` joins that would cross a permission boundary downgrade to a filtered `Prefetch` (the optimizer already owns the downgrade machinery); the plan records the downgrade reason for explain output.
 - Integration points: the walker (boundary detection), `_attach_relation_resolvers` skip-set semantics (denied relations), and the `get_queryset` visibility hook (filter composition).
 - Relay surfaces inherit it: `resolve_node`, root `node(id:)` / `nodes(ids:)`, and connection lookups all pass through the same visibility combinator (per the parking lot's Relay-aware-permissions note).
-- Inherits `django-graphene-filters`' `apply_cascade_permissions` semantics as the behavioral baseline.
+- The behavioral baseline already shipped in-package (`DONE-034-0.0.10`): `permissions.py::apply_cascade_permissions` / `aapply_cascade_permissions` narrow forward FK / OneToOne edges through each target type's `get_queryset` as `__in`-subquery composition — but as a **callable** consumers invoke from their own `get_queryset`, acting on the root queryset's forward edges only. This card is the step past it: declarative (`Meta.permissions`), enforced inside every optimizer-built `Prefetch` (the reverse/many side the callable can't reach), and with the `select_related` boundary downgrade.
 
 **Composes with**: `declarative_row_and_field_permissions` (prerequisite), `soft_delete_cooperation` (shared combinator seam), the promoted [Optimizer explain mode][card-optimizer-explain-mode] card (plans show permission filters and downgrade reasons), `permission_aware_cursor_decoding`.
 
@@ -1535,13 +1470,13 @@ class OrderMatrix(DjangoMatrix):
 
 ### `signal_wired_subscriptions`
 
-**Realistic**: 5/10 — Channels integration is well-trodden but Channels is complex; signal-to-push at scale has fan-out and ordering gotchas even with `on_commit` settled.
+**Realistic**: 6/10 — The Channels transport substrate shipped with spec-041, de-risking the integration half; signal-to-push at scale still has fan-out and ordering gotchas even with `on_commit` settled.
 
 **Impact**: 7/10 — Real-time SaaS use case both upstreams punt on.
 
-**Difficulty**: 8/10 — Transport + subscription machinery + permission integration + signal lifecycle; substantial.
+**Difficulty**: 7/10 — Subscription machinery + permission integration + signal lifecycle; the transport half shipped with spec-041 (was 8/10 when this card also carried the transport).
 
-**Source**: item 8.
+**Source**: item 8. Re-scored 2026-07-10 after spec-041 (0.0.14) shipped the Channels router.
 
 **What we'd do**: declarative `Meta.subscriptions = ("post_save", "post_delete", "m2m_changed")` auto-wiring a type into Channels with filtered, permission-respecting pushes.
 
@@ -1549,7 +1484,7 @@ class OrderMatrix(DjangoMatrix):
 - **Every push routes through `transaction.on_commit`.** `post_save` fires *inside* the transaction; pushing on the signal directly sends phantom events for writes that subsequently roll back. This is the classic bug of the feature class and the non-negotiable line of the spec.
 - Subscription visibility runs through `get_queryset` (and the permission cards when they land): a subscriber receives only events for rows they could query.
 - **Documented coverage gap, stated loudly**: Django signals do not fire on `queryset.update()`, `bulk_update`, `bulk_create(ignore_conflicts=...)`, or raw SQL. The feature is "signal-wired", not "change-data-capture"; consumers needing completeness for bulk paths are pointed at explicit publish hooks.
-- Transport: Channels as the first-class backend (soft dependency); the signal→publish seam is transport-agnostic so other async backends can plug in.
+- Transport substrate: **shipped** (spec-041, 0.0.14) — `routers.py::DjangoGraphQLProtocolRouter` already wires Strawberry's Channels consumers onto HTTP + WebSocket with `AuthMiddlewareStack` and origin validation behind the soft `channels` dependency, so the WebSocket endpoint subscriptions ride on exists today. This card owns the signal→publish machinery on top; the seam stays transport-agnostic so other async backends can plug in.
 - Subscription-time policy checks happen at subscription open; a per-event-flood defense (e.g. a `SubscriptionConcurrencyCap` policy) belongs to the DoS stack.
 
 **Composes with**: `opt_in_async_resolvers`, `declarative_row_and_field_permissions`, `dos_policy_stack_framework`.
@@ -1636,18 +1571,18 @@ Cards in this section are intentionally unscheduled — kept for design context,
 
 ### `composite_pk_globalid`
 
-**Realistic**: 4/10 — Blocked on Django's composite-pk API stabilizing; nothing to build against yet.
+**Realistic**: 6/10 — Django 5.2 shipped `models.CompositePrimaryKey`, so there is now a real API to build against; still parked pending demand and the ORM's remaining composite-pk relational limitations.
 
 **Impact**: 3/10 — Unblocks a small set of schemas; loud rejection is acceptable meanwhile.
 
 **Difficulty**: 6/10 — Deterministic encoding + multi-type dispatch resolution.
 
-**Source**: Relay/interface parking lot.
+**Source**: Relay/interface parking lot. Re-scored 2026-07-10: the original "nothing to build against" blocker lifted with Django 5.2.
 
-**What we'd do**: deterministic composite-primary-key GlobalID encoding/decoding, once Django's composite-pk API stabilizes.
+**What we'd do**: deterministic composite-primary-key GlobalID encoding/decoding over Django's `CompositePrimaryKey`.
 
 **Spec**:
-- Current behavior (loud rejection) stands until Django's composite-pk surface is stable enough to encode against.
+- Current behavior stands meanwhile: the shipped Node foundation detects a `CompositePrimaryKey` and rejects loudly (`types/relay.py::_check_composite_pk_for_relay_node`), with the documented escape hatch of pointing the id slot at a non-pk unique column. Unparking now waits on concrete demand plus an assessment of the ORM's remaining composite-pk limitations (e.g. relation targeting), not on the API existing.
 - The encoding must be order-deterministic and round-trip-safe; the multi-encoding question (composite pk + `Meta.primary` multiple types per model) routes through `globalid_alias_map`'s machinery if more than one valid encoding ever exists.
 - Node lookup with [multiple `DjangoType`s per model][card-multiple-djangotypes-per-model-with-metaprimary] must resolve which GraphQL type a decoded ID dispatches to; that resolution rule is part of this card.
 
@@ -1677,9 +1612,10 @@ Cards in this section are intentionally unscheduled — kept for design context,
 
 Per this file's policy, rejected differentiators are struck with a one-line reason, not deleted.
 
-- ~~`rest_escape_hatch` (item 16: REST endpoints from the same `DjangoType` declarations)~~ — struck: the target audience identified by `drf_serializer_mutations` already runs DRF and therefore already has REST; building a parallel HTTP stack duplicates DRF for an audience that owns it. Demoted to a documentation pattern ("mounting DRF viewsets alongside your DjangoTypes").
+- ~~`rest_escape_hatch` (item 16: REST endpoints from the same `DjangoType` declarations)~~ — struck: the target audience identified by the serializer-mutations work (shipped as `DONE-039-0.0.13`) already runs DRF and therefore already has REST; building a parallel HTTP stack duplicates DRF for an audience that owns it. Demoted to a documentation pattern ("mounting DRF viewsets alongside your DjangoTypes").
 - ~~`grpc_sibling_protocol` (item 31: gRPC from the same declarations)~~ — struck: the cost lives outside Python (HTTP/2 lifecycle, Envoy/gRPC-Web bridging, multi-language codegen), and proto3's absent-collapses-to-zero semantics conflict with GraphQL's nullable-by-default fields in every generated message. The salvageable piece is extracted as `proto_migrations_system` (parked).
 - ~~`connection_auto_upgrade_threshold` (item 39, sub-feature 4: per-request list→connection upgrade above a row-count threshold)~~ — struck: the server cannot change the response shape of a field the client already selected, so a per-request threshold can't do what the sketch described; the useful half (declare both shapes, recommend the connection) already shipped in 0.0.9 as `Meta.relation_shapes` / the `"both"` default.
+- ~~`plan_cache_key_memoization` (spec-035 close-out Part 1d-1: memoize the printed-AST cache key on Strawberry's operation node via `WeakKeyDictionary`)~~ — struck 2026-07-10: obsolete — the targeted win (killing the per-request `print_ast` + var-name AST walk on the plan-cache-**hit** path) already shipped as `optimizer/extension.py::_doc_key_cache`, a bounded cross-request LRU keyed on the document's source text + operation name, which sidesteps the card's Strawberry-node-identity precondition entirely.
 
 ---
 
@@ -1691,7 +1627,9 @@ Items 36, 37, and 38 were process rules, not feature cards; they move to `AGENTS
 - **Shared queryset introspection helpers** (item 36) — promote embedded helpers to `utils/queryset.py` only when a second subsystem needs them.
 - **Layered manual relation override test policy** (item 38) — internals tests as the canary, HTTP tests as the contract.
 
-Item 13 (`Meta.field_overrides` for scalar fields) is already promoted as `KANBAN.md` `READY-003` and carries no card here. Parking-lot entries covered by shipped 0.0.9 work (root node fields, `DjangoConnectionField`, GlobalID test helpers, the model-anchored encoding) are likewise retired.
+Item 13 (`Meta.field_overrides` for scalar fields) shipped in `0.0.6` as `DONE-019-0.0.6` (consumer override semantics for scalar fields) — deliberately **without** a `Meta.field_overrides` key: consumer-authored annotations / assignments are the override surface. It carries no card here. Parking-lot entries covered by shipped 0.0.9 work (root node fields, `DjangoConnectionField`, GlobalID test helpers, the model-anchored encoding) are likewise retired.
+
+Item 3 (`drf_serializer_mutations`) shipped in `0.0.13` as `DONE-039-0.0.13` — `SerializerMutation` and the `rest_framework/` subpackage (spec-039), emitting into the shared `FieldError` envelope; its card is retired here (2026-07-10). The public-adapter remainder lives on as `form_and_serializer_error_adapters`.
 
 ---
 
@@ -1732,7 +1670,6 @@ If a card turns out to be wrong (the upstream packages ship it, real-world adopt
 <!-- examples/ -->
 
 <!-- scripts/ -->
-[bench-plan-cache]: scripts/bench_plan_cache.py
 
 <!-- .venv/ -->
 

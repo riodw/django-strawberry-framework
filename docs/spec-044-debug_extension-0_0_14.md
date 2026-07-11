@@ -174,6 +174,16 @@ Revision history (kept inline so the spec is self-contained):
   operations cannot restore `force_debug_cursor` out of order. Added
   concurrent sync isolation, concurrent async restore, and nested-error-chain
   tests as regression gates.
+- **Revision 3** — cross-checked the corrected design against
+  [`GOAL.md`][goal], the requested
+  [`cookbook/recipes/schema.py`][upstream-cookbook-recipes-schema], the
+  cookbook's aggregate [`cookbook/schema.py`][upstream-cookbook-schema], and
+  its Graphene settings (2026-07-10). Added the explicit goal/cookbook mapping
+  and migration diff; confirmed that debug is project-level aggregate-schema
+  configuration rather than recipe-app schema surface; and recorded the one
+  deliberate wire migration (`_debug` selection → `response.extensions.debug`)
+  required to remain Strawberry-native and avoid a Graphene compatibility
+  runtime.
 
 ## Key glossary references
 
@@ -257,6 +267,109 @@ vocabulary used throughout the spec:
   optimizer's `Prefetch` downgrades actually emitted — the debug payload is a
   read-only window, never a queryset participant.
 
+## Goal and cookbook cross-reference
+
+This design was checked against [`GOAL.md`][goal] and the working
+`django-graphene-filters` cookbook rather than only against graphene-django's
+debug implementation:
+
+- **The north star is a modern Strawberry foundation without Graphene runtime
+  baggage.** A Strawberry `SchemaExtension` is the engine-native aggregate
+  configuration seam already demonstrated by [`GOAL.md`][goal]'s canonical
+  schema (`extensions=[lambda: _optimizer]`). Requiring
+  `strawberry-graphql>=0.316.0` for per-request extension isolation follows
+  that foundation instead of building a compatibility runtime around an old
+  engine race. This supports success criterion 7 (remove the source package)
+  and the explicit non-goals "direct port of Graphene internals" and
+  "Graphene compatibility runtime".
+- **The recipe app does not own debug configuration.** The exact file named by
+  the working-reference link,
+  [`cookbook/recipes/schema.py`][upstream-cookbook-recipes-schema], defines
+  only the domain nodes and `Query`. The project aggregate
+  [`cookbook/schema.py`][upstream-cookbook-schema] composes that query, imports
+  `DjangoDebug`, and adds `_debug`;
+  [`cookbook/settings.py`][upstream-cookbook-settings] separately installs
+  `DjangoDebugMiddleware`. The Strawberry port preserves
+  that ownership boundary: app schemas remain untouched and the aggregate
+  `strawberry.Schema(...)` owns the one debug opt-in.
+- **The migration is capability-equivalent, not wire-compatible.** A Graphene
+  cookbook consumer removes the aggregate `_debug` field and the
+  `GRAPHENE["MIDDLEWARE"]` entry, then adds `DjangoDebugExtension` to the
+  Strawberry aggregate schema. Debugging clients stop selecting `_debug` and
+  read `response.extensions.debug`. This is a deliberate exception to
+  success criterion 7's "only the import line changes" migration promise,
+  and the spec is precise about the exception's ground: the `_debug` wire
+  contract *could* be preserved without any Graphene runtime (the
+  Strawberry-native schema-field facade recorded as the fallback in
+  [Risks](#risks-and-open-questions)), so the reason it is not preserved is
+  [Decision 3](#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field)'s
+  rejection of a permanent schema surface — not the goal's
+  no-Graphene-runtime constraints. Because criterion 7 as written carves
+  out no such case, Slice 2 carries the corresponding [`GOAL.md`][goal]
+  clarification: the import-only promise covers `Meta`-driven domain
+  declarations; project-level engine configuration (a schema's
+  `extensions=` list, the `GRAPHENE` settings block) migrates by documented
+  recipe.
+- **The payload still proves core success criteria.** Captured SQL makes
+  success criterion 5's automatic ORM optimization visible, including
+  `select_related` / `prefetch_related` / `only()` behavior, while exception
+  rows expose failures from the declarative permission and mutation surfaces
+  in criteria 4 and 6 without participating in their execution.
+- **The tests belong to the target example.** `GOAL.md` names fakeshop as the
+  shipped proof project. Therefore real debug-enabled HTTP behavior belongs
+  in `examples/fakeshop/test_query/`; package-tier tests cover only lifecycle
+  mechanics that a request cannot isolate
+  ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
+
+The resulting cookbook migration is a **debug-only delta applied after the
+cookbook's broader Strawberry port** — [`GOAL.md`][goal]'s "Cookbook parity"
+target example, whose ported aggregate `cookbook/schema.py` takes the
+canonical shape [`config/schema.py`][config-schema] demonstrates today
+(`finalize_django_types()`, `_optimizer = DjangoOptimizerExtension()`,
+`strawberry.Schema(query=Query, config=strawberry_config(),
+extensions=[lambda: _optimizer])`). That baseline port — a separate effort
+this card does not own — supplies the `strawberry` / `strawberry_config`
+imports, the `_optimizer` construction, and the `Query` conversion; this
+card's delta is only the debug lines. On the Graphene side, shown against
+the original [`cookbook/schema.py`][upstream-cookbook-schema], the aggregate
+field goes:
+
+```diff
+- from graphene_django.debug import DjangoDebug
+
+  class Query(
+      cookbook.recipes.schema.Query,
+      graphene.ObjectType,
+  ):
+-     debug = graphene.Field(DjangoDebug, name="_debug")
+```
+
+with the [`cookbook/settings.py`][upstream-cookbook-settings] entry deleted:
+
+```diff
+- "MIDDLEWARE": ("graphene_django.debug.DjangoDebugMiddleware",),
+```
+
+and on the Strawberry side, one entry is added to the ported aggregate's
+`extensions=` list:
+
+```diff
++ from django_strawberry_framework.extensions import DjangoDebugExtension
+
+  schema = strawberry.Schema(
+      query=Query,
+      config=strawberry_config(),
+-     extensions=[lambda: _optimizer],
++     extensions=[lambda: _optimizer, DjangoDebugExtension],
+  )
+```
+
+(The complete consumer recipe with every import spelled out is in
+[User-facing API](#user-facing-api).) No recipe-app `DjangoType`, sidecar
+`Meta`, visibility hook, or domain query field changes for debug. That is the
+package goal's ownership model applied to the real cookbook, not a
+hypothetical migration.
+
 ## Slice checklist
 
 Each top-level item maps to one commit / PR. **Three slices: the extension +
@@ -332,7 +445,10 @@ doc breadth.
         entry body updated to the implemented contract (import path, the
         class-form opt-in, the `debug` key, the six SQL fields and the named
         omissions, the exception triple, the debug-cursor mechanism and its
-        `DEBUG`-independence, the dev-only caveat, the async SQL caveat);
+        `DEBUG`-independence, the dev-only caveat, the async SQL caveat, and
+        the real cookbook migration (remove `_debug`, remove
+        `DjangoDebugMiddleware`, add the extension class, read
+        `response.extensions.debug`));
         via the glossary app's **database** + a
         [`scripts/build_glossary_md.py`][build-glossary-md] re-render, never
         a hand-edit of the generated file. The status stays `planned for
@@ -349,6 +465,12 @@ doc breadth.
         the shipped `DjangoDebugExtension` and fakeshop's deliberate
         opt-out
         ([Decision 2](#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring)).
+  - [ ] [`GOAL.md`][goal] — success criterion 7 gains the one-sentence
+        scoping clarification: the "only the import line changes" promise
+        covers `Meta`-driven domain declarations; project-level engine
+        configuration (a schema's `extensions=` list, the `GRAPHENE`
+        settings block) migrates by documented recipe
+        ([Goal and cookbook cross-reference](#goal-and-cookbook-cross-reference)).
   - [ ] [`KANBAN.md`][kanban] card wrap: `044` → Done with the
         `DONE-044-0.0.14` id and its `SpecDoc` pointing at this spec (kanban
         DB edit + [`scripts/build_kanban_md.py`][build-kanban-md] /
@@ -962,6 +1084,14 @@ Grounds:
 4. **The card pre-picked it.** The card's proposed shape and its "default
    both to the simpler choice" instruction both name the extensions map;
    this decision confirms rather than re-litigates.
+5. **It preserves the real cookbook's ownership boundary.** The requested
+   [`recipes/schema.py`][upstream-cookbook-recipes-schema] contains no debug
+   field or middleware coupling. Debug is added only by the project aggregate
+   [`cookbook/schema.py`][upstream-cookbook-schema], with middleware installed
+   separately in [`cookbook/settings.py`][upstream-cookbook-settings]. The
+   Strawberry aggregate schema's `extensions=` list replaces both project
+   integration points without changing any recipe-app domain type or `Meta`
+   surface, matching [`GOAL.md`][goal]'s working-reference posture.
 
 Alternatives considered (and rejected):
 
@@ -983,9 +1113,14 @@ Alternatives considered (and rejected):
 The SQL source is Django's per-connection `queries_log`, enabled for the
 operation's duration by the [`CaptureQueriesContext`][venv-django-test-utils]
 mechanism: for each configured connection, save `force_debug_cursor`, set it
-`True`, record `len(connection.queries_log)`; at teardown, slice the log from
-that index and restore the saved flag. This is the card's named default
-("`connection.queries`"), sharpened in one load-bearing way: the extension
+`True`, and record `len(connection.queries_log)`. This extension performs the
+same transition through the reference-counted coordinator pinned in
+[Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash):
+the first active bracket saves and enables the flag, overlapping brackets
+increase its depth, and the final release restores the saved value. Each
+extension instance owns its own log-length snapshot; at teardown it
+materializes and slices the log from that index. This is the card's named
+default ("`connection.queries`"), sharpened in one load-bearing way: the extension
 **owns the instrumentation flag** instead of relying on `settings.DEBUG`
 having populated the log, because bare `connection.queries` is empty under
 `DEBUG=False` — which is every `pytest-django` run and every
@@ -1781,8 +1916,10 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   `strawberry-graphql>=0.316.0` isolation floor, the per-alias multi-DB
   behavior, the
   pre-execution-error no-key rule, the dev-only security caveat, and the
-  async SQL caveat — plus the "distinct from the
-  [Debug-toolbar middleware][glossary-debug-toolbar-middleware]" paragraph
+  async SQL caveat; the real cookbook migration from the aggregate `_debug`
+  field + `GRAPHENE["MIDDLEWARE"]` pair to the one extension class; and the
+  resulting client move to `response.extensions.debug` — plus the "distinct
+  from the [Debug-toolbar middleware][glossary-debug-toolbar-middleware]" paragraph
   updated to shipped tense in both entries' cross-references.
 - [`docs/TREE.md`][tree] (Slice 2) — regenerated via
   [`scripts/build_tree_md.py`][build-tree-md] after the card flips Done:
@@ -1792,6 +1929,12 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
 - [`config/schema.py`][config-schema] (Slice 2) — the docstring's "has no
   direct Strawberry analogue" sentence rewritten
   ([Decision 2](#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring)).
+- [`GOAL.md`][goal] (Slice 2) — success criterion 7's scoping
+  clarification (the import-only promise covers `Meta`-driven domain
+  declarations; engine configuration migrates by documented recipe), so the
+  debug migration becomes a documented application of the criterion rather
+  than an unresolved exception to it
+  ([Goal and cookbook cross-reference](#goal-and-cookbook-cross-reference)).
 - [`KANBAN.md`][kanban] / `KANBAN.html` (Slice 2) — card wrap via the DB +
   re-render; the companion `*-terms.csv` imported via
   `manage.py import_spec_terms` so the Done card's glossary-terms table
@@ -1834,6 +1977,25 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   is the point. **Fallback:** a constructor predicate
   (`DjangoDebugExtension.when(callable)`) or a request-header gate as a
   follow-on knob once a real consumer asks — additive, no shape change.
+- **The cookbook debug migration is not import-only.** [`GOAL.md`][goal]
+  criterion 7 promises the `Meta` mental model carries over with "only the
+  import line" changing, but the real cookbook's debug integration is not a
+  `Meta` surface: it is an aggregate `_debug` field plus a settings
+  middleware entry, and clients select that field. A Strawberry-native
+  `_debug` facade could preserve that wire contract without any Graphene
+  runtime, so the no-Graphene non-goals do not by themselves decide this —
+  the deciding ground is
+  [Decision 3](#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field)'s
+  rejection of a permanent schema surface. **Preferred answer:** keep the
+  Strawberry-native response-extension design, document the exact
+  three-part migration in [Goal and cookbook cross-reference](#goal-and-cookbook-cross-reference),
+  and resolve the criterion-7 contradiction at its source: Slice 2 edits
+  [`GOAL.md`][goal] to scope the import-only promise to `Meta`-driven
+  domain declarations, with project-level engine configuration migrating by
+  documented recipe ([Doc updates](#doc-updates)). **Fallback / follow-on:**
+  add a schema-field facade only if real migrations demonstrate that
+  preserving `_debug` wire compatibility outweighs the permanent schema
+  surface and duplicate exposure matrix.
 - **Async SQL fidelity.** Statements executed on `sync_to_async` executor
   threads escape the event-loop thread's bracket — under async execution
   the `sql` list is typically empty. Concurrent async operations share the
@@ -1950,7 +2112,9 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
       [`docs/TREE.md`][tree], the [`config/schema.py`][config-schema]
       docstring correction, the kanban card wrap, and the "documented as the
       response-side counterpart to `DONE-042-0.0.14`" cross-references in
-      both entries (the card's DoD row 6).
+      both entries. The GLOSSARY entry includes the concrete cookbook
+      migration from `_debug` + `DjangoDebugMiddleware` to the aggregate
+      extension opt-in and response-map read (the card's DoD row 6).
 - [ ] **The joint `0.0.14` cut lands in Slice 3**
       ([Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)):
       the version quintet reads `0.0.14`
@@ -2046,6 +2210,9 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
 [venv-schema]: ../.venv/lib/python3.14/site-packages/strawberry/schema/schema.py
 
 <!-- External -->
+[upstream-cookbook-recipes-schema]: ../../django-graphene-filters/examples/cookbook/cookbook/recipes/schema.py
+[upstream-cookbook-schema]: ../../django-graphene-filters/examples/cookbook/cookbook/schema.py
+[upstream-cookbook-settings]: ../../django-graphene-filters/examples/cookbook/cookbook/settings.py
 [upstream-debug-init]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/__init__.py
 [upstream-debug-middleware]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/middleware.py
 [upstream-debug-types]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/types.py

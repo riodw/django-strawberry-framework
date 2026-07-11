@@ -239,6 +239,26 @@ Revision history (kept inline so the spec is self-contained):
   constrained escape (`execution_context` passthrough only, no `**kwargs`
   sink).
 
+- **Revision 6** — round-3 DRY review fold-in (2026-07-11). The review
+  confirmed the Revision-4/5 shape (its audit re-ran clean against all
+  thirteen `utils/` modules) and required three pins, none a design change:
+  [Test plan](#test-plan) scenario 2 composes the optimizer through the
+  **canonical consumer shape** — one module-local
+  `DjangoOptimizerExtension()` singleton returned by `lambda: _optimizer`
+  (the shipped [`config/schema.py`][config-schema] wiring, plan cache
+  retained) beside the debug **class** entry, with no helper normalizing
+  the two deliberately different lifetimes into one factory form; the
+  probe module's URLconf **activation** is single-sited in
+  [DRY D3](#helper-reuse-obligations-dry) — one module-level
+  `pytest.mark.urls(__name__)` application (or one module-wide fixture),
+  never per-test `override_settings(ROOT_URLCONF=...)` /
+  `clear_url_caches()` blocks; and the no-`__init__` stash sentinel got a
+  concrete home in
+  [Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)
+  — one immutable class-level `_payload = None` default, read directly by
+  `get_results` and overridden on the instance only at successful
+  teardown.
+
 ## Key glossary references
 
 Skim these [`docs/GLOSSARY.md`][glossary] entries first — they anchor the
@@ -1427,7 +1447,17 @@ inherited base constructor (which already binds the engine-owned
   recovery paths invoke it twice for one operation
   ([Error shapes](#error-shapes)). The stash is one instance attribute
   whose absent sentinel is `None` — unambiguous because a completed payload
-  is always a dict, even when both lists are empty.
+  is always a dict, even when both lists are empty. The sentinel's home is
+  pinned concretely: one **immutable class-level default** (an annotated
+  `_payload = None` on the class body), read directly by `get_results` and
+  overridden on the instance only when teardown assigns the completed
+  payload dict. That one default preserves every neighboring rule at once —
+  no constructor duplicated from `SchemaExtension`
+  ([DRY D6](#helper-reuse-obligations-dry)), no
+  `getattr(self, "_payload", None)` fallback re-spelled at read sites, no
+  separate has-payload boolean, no mutable class-level dict shared across
+  instances, and no eager empty dict that would falsely publish `debug`
+  before execution.
 
 Grounds:
 
@@ -1807,6 +1837,15 @@ discipline survives review.
   normalizes, or deduplicates the `extensions=` list, because order is part
   of the contract
   ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping)).
+  URLconf **activation** is likewise single-sited: one module-level
+  `pytestmark = pytest.mark.urls(__name__)` application covers every
+  request-driving scenario (if the marker cannot serve, one fixture owns
+  the equivalent `ROOT_URLCONF` override and `clear_url_caches()` cleanup
+  for the whole module) — never a per-test
+  `override_settings(ROOT_URLCONF=__name__)` / `clear_url_caches()`
+  enter/exit block (the boilerplate [`test_multi_db.py`][test-multi-db]
+  repeats around each request), and never routing setup hidden inside
+  [`TestClient`][glossary-testclient].
   The [`test_multi_db.py`][test-multi-db] holder is the behavioral
   precedent but is deliberately **copied, not promoted** into a shared
   helper: that module is import-gated by `FAKESHOP_SHARDED` while this one
@@ -2132,8 +2171,17 @@ describes the verification but does not override it.
    `settings.DEBUG is False` first — proving the bracket, not Django's
    `DEBUG` logging, produced the capture
    ([Decision 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)).
-2. **Optimizer composition.** The probe schema carries **both**
-   `DjangoOptimizerExtension` (fresh instance) and `DjangoDebugExtension`;
+2. **Optimizer composition.** The probe schema carries **both** extensions
+   in the canonical consumer shape ([User-facing API](#user-facing-api),
+   the shipped [`config/schema.py`][config-schema] wiring): one
+   module-local `_optimizer = DjangoOptimizerExtension()` singleton
+   returned by `lambda: _optimizer` — retaining the instance-bound plan
+   cache the factory exists to preserve — beside `DjangoDebugExtension` as
+   the **class** entry. The two entries stay visibly different — no helper
+   normalizes both into one common factory form, because the shape
+   difference documents their intentionally different lifetimes (one
+   shared cached optimizer, one fresh uncached debug instance per
+   operation, [Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160));
    a nested `allItems { edges { node { name category { name } } } }`
    selection over `seed_data(2)` rows → the captured **SELECT-row** count
    (filter on `isSelect` — transaction rows may interleave,
@@ -2209,7 +2257,11 @@ describes the verification but does not override it.
     context (the sync pre-execution teardown shape — no rows, no raise,
     [Error shapes](#error-shapes)).
 11. **`get_results` no-stash shape and idempotence.** A fresh instance's
-    `get_results()` returns `{}` (never `{"debug": None}`), and after a
+    `get_results()` returns `{}` (never `{"debug": None}`) — the read of
+    the immutable class-level `None` default, since no instance write has
+    happened yet
+    ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)) —
+    and after a
     completed operation returns the stash under exactly the `"debug"` key
     — **twice in a row, identically** (the engine's coerced-exception
     recovery paths call it twice, [Error shapes](#error-shapes)); the

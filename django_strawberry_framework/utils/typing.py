@@ -82,6 +82,34 @@ def unwrap_graphql_type(gql_type: Any) -> Any:
     )
 
 
+def unwrap_container_type(strawberry_type: Any) -> Any:
+    """Peel Strawberry ``StrawberryContainer`` layers only, bounded (DRY review B3).
+
+    The container-scoped sibling of ``unwrap_graphql_type`` for resolved
+    Strawberry field types (``list[Edge[Node]]`` -> ``Edge``): the
+    ``isinstance(StrawberryContainer)`` gate is load-bearing - a concrete leaf
+    class that happens to expose an ``of_type`` attribute must NOT be peeled
+    (the bare-``hasattr`` contract would descend into it) - so the shared
+    unbounded ``while isinstance`` loop lands here with the same
+    ``_MAX_TYPE_WRAPPER_DEPTH`` Power-of-Ten cap and loud cyclic-chain failure,
+    instead of living raw at a call site.
+
+    The ``StrawberryContainer`` import is function-local so this module stays
+    importable without pulling Strawberry's type machinery at import time
+    (matching the module's stdlib-only header).
+    """
+    from strawberry.types.base import StrawberryContainer
+
+    for _ in range(_MAX_TYPE_WRAPPER_DEPTH):
+        if not isinstance(strawberry_type, StrawberryContainer):
+            return strawberry_type
+        strawberry_type = strawberry_type.of_type
+    raise RuntimeError(
+        f"unwrap_container_type: `of_type` container stack exceeded "
+        f"{_MAX_TYPE_WRAPPER_DEPTH} layers; the type chain is likely cyclic or corrupt.",
+    )
+
+
 def unwrap_return_type(rt: Any) -> Any:
     """Unwrap **one layer** of list / Strawberry-list-wrapper around the inner type.
 

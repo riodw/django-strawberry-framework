@@ -272,3 +272,39 @@ def test_make_shape_build_cache_returns_dict_and_clear():
     assert len(cache) == 1
     clear()
     assert cache == {}
+
+
+def test_optional_field_kwargs_defaults_none_and_aliases_only_on_divergence():
+    """The A4 micro-pattern: always ``default=None``; ``name=`` only when the names differ."""
+    from django_strawberry_framework.utils.inputs import optional_field_kwargs
+
+    assert optional_field_kwargs("exact", "exact") == {"default": None}
+    assert optional_field_kwargs("category_name", "categoryName") == {
+        "default": None,
+        "name": "categoryName",
+    }
+
+
+def test_optional_input_field_widens_and_aliases_per_flags():
+    """The A10 widening tail: ``T | None`` + ``UNSET`` default only when ``widen`` is set."""
+    import strawberry
+
+    from django_strawberry_framework.utils.inputs import optional_input_field
+
+    annotation, kwargs = optional_input_field(
+        int,
+        python_attr="category_id",
+        graphql_name="categoryId",
+        widen=True,
+    )
+    assert annotation == (int | None)
+    assert kwargs == {"name": "categoryId", "default": strawberry.UNSET}
+
+    annotation, kwargs = optional_input_field(
+        str,
+        python_attr="name",
+        graphql_name="name",
+        widen=False,
+    )
+    assert annotation is str
+    assert kwargs == {}

@@ -73,25 +73,28 @@ from ..scalars import Upload
 from ..types.converters import build_enum_from_choices, convert_scalar, scalar_for_field
 from ..types.relay import implements_relay_node
 from ..utils.converters import convert_with_mro
-from ..utils.inputs import InputFieldSpec
+
+# The decode kinds the reverse-map record carries. The four base kinds are
+# single-sourced in ``utils/inputs.py`` (DRY review A7 - one conceptual enum,
+# not a per-flavor copy); re-exported here (the ``as`` form marks the explicit
+# re-export) so the Slice 3 resolver + the tests keep addressing them on this
+# module. ``NESTED_SINGLE`` / ``NESTED_MULTI`` are the serializer-only
+# nested-serializer kinds (spec-039 rev6 #17): an EXPLICITLY-opted-in nested
+# ``Serializer`` (single) / ``ListSerializer`` (many), whose recursion is owned
+# by ``rest_framework/inputs.py`` (this converter module has no knowledge of
+# the recursion; it only names the kinds + detects a nested field).
+from ..utils.inputs import FILE as FILE
+from ..utils.inputs import RELATION_MULTI as RELATION_MULTI
+from ..utils.inputs import RELATION_SINGLE as RELATION_SINGLE
+from ..utils.inputs import SCALAR as SCALAR
+from ..utils.inputs import FieldConversionBase, InputFieldSpec
 from ..utils.strings import graphql_camel_name, pascal_case
 
-# The decode kinds the reverse-map record carries, mirroring
-# ``forms/converter.py``'s module constants so the Slice 3 resolver + the tests
-# address ONE source of truth instead of bare string literals. ``NESTED_SINGLE`` /
-# ``NESTED_MULTI`` are the serializer-only nested-serializer kinds (spec-039 rev6 #17):
-# an EXPLICITLY-opted-in nested ``Serializer`` (single) / ``ListSerializer`` (many),
-# whose recursion is owned by ``rest_framework/inputs.py`` (this converter module has
-# no knowledge of the recursion; it only names the kinds + detects a nested field).
-SCALAR: str = "scalar"
-RELATION_SINGLE: str = "relation_single"
-RELATION_MULTI: str = "relation_multi"
-FILE: str = "file"
 NESTED_SINGLE: str = "nested_single"
 NESTED_MULTI: str = "nested_multi"
 
 
-class SerializerFieldConversion:
+class SerializerFieldConversion(FieldConversionBase):
     """The annotation + decode kind + required-ness ``convert_serializer_field`` returns.
 
     The serializer-flavor analog of ``forms/converter.py::FormFieldConversion``.
@@ -102,25 +105,13 @@ class SerializerFieldConversion:
     site (where the backing column - if any - and the related primary
     ``DjangoType`` are known, so the Relay-``GlobalID``-vs-raw-pk id type can be
     resolved), so those kinds carry ``annotation=None`` here and only the ``kind``
-    is authoritative.
+    is authoritative. The ``(annotation, kind, required)`` value-object shape -
+    including the ``kind=SCALAR`` default a consumer-registered converter
+    (spec-039 rev6 #11) relies on - is the shared
+    ``utils/inputs.py::FieldConversionBase`` (DRY review A7).
     """
 
-    __slots__ = ("annotation", "kind", "required")
-
-    def __init__(
-        self,
-        *,
-        annotation: Any,
-        kind: str = SCALAR,
-        required: bool,
-    ) -> None:
-        # ``kind`` defaults to ``SCALAR`` so a consumer-registered converter
-        # (spec-039 rev6 #11) can return ``SerializerFieldConversion(annotation=...,
-        # required=field.required)`` without importing the kind constant; the internal
-        # relation / file / list constructions pass ``kind`` explicitly.
-        self.annotation = annotation
-        self.kind = kind
-        self.required = required
+    __slots__ = ()
 
 
 SerializerFieldConverter = Callable[[serializers.Field], SerializerFieldConversion]

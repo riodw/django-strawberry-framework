@@ -71,6 +71,20 @@ def iter_input_items(input_value: Any) -> list[tuple[str, Any]] | None:
     return [(name, getattr(input_value, name)) for name in dataclass_fields]
 
 
+def input_field_value(input_value: Any, name: str) -> Any:
+    """Read ONE field off a dict-or-dataclass input; ``None`` when absent (DRY review C6).
+
+    The single-field sibling of ``iter_input_items``: the dict-vs-dataclass
+    sniff (``.get`` vs ``getattr``) lives in exactly one module - this one,
+    whose charter is the input-shape traversal primitives - so a caller that
+    needs one branch value (``utils/permissions.py::extract_branch_value``)
+    composes this with ``is_inactive_value`` instead of re-spelling the sniff.
+    """
+    if isinstance(input_value, dict):
+        return input_value.get(name)
+    return getattr(input_value, name, None)
+
+
 def is_inactive_value(value: Any, *, unset_sentinel: Any = None) -> bool:
     """Return ``True`` when ``value`` should be treated as "not supplied".
 

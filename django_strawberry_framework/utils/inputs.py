@@ -38,6 +38,7 @@ from .imports import import_attr_if_importable
 # re-imported here (the ``as`` form marks the explicit re-export) so existing
 # ``from ..utils.inputs import graphql_camel_name`` consumers keep their import
 # path.
+from .strings import flatten_lookup_path
 from .strings import graphql_camel_name as graphql_camel_name
 
 
@@ -54,6 +55,155 @@ class GeneratedInputFieldSpec:
     python_attr: str
     graphql_name: str
     django_source_path: str
+
+
+def optional_field_kwargs(python_attr: str, graphql_name: str) -> dict[str, Any]:
+    """The ``{"default": None}`` + conditional ``name=`` alias micro-pattern (DRY review A4).
+
+    Every generated filter / order input field is optional-with-``None``: an
+    omitted ``default`` means REQUIRED under ``build_strawberry_input_class``'s
+    required-vs-optional contract, so the explicit ``default: None`` keeps the
+    field omittable, and the ``name=`` alias is emitted only when the python
+    attr and the camel-cased GraphQL name differ. Previously spelled inline five
+    times across the filter / order ``_build_input_fields`` (incl. the
+    operator-bag leaf loop and the related arm).
+    """
+    kwargs: dict[str, Any] = {"default": None}
+    if python_attr != graphql_name:
+        kwargs["name"] = graphql_name
+    return kwargs
+
+
+def optional_input_field(
+    annotation: Any,
+    *,
+    python_attr: str,
+    graphql_name: str,
+    widen: bool,
+) -> tuple[Any, dict[str, Any]]:
+    """Apply the write-input optional-widening tail to one field (DRY review A10).
+
+    The per-field tail the form and serializer input builders share, seated
+    beside ``build_strawberry_input_class`` whose required-vs-optional contract
+    (the presence of a ``default``) it exists to satisfy: emit the ``name=``
+    alias when the python attr and GraphQL name differ, and - when ``widen`` is
+    set (the form's ``not required``, the serializer's ``allow_null``-or-optional
+    nullability rule, each computed at its call site) - widen the annotation to
+    ``T | None`` and default it to ``strawberry.UNSET`` so the field is
+    OMITTABLE. A non-widened field gets NO default, so GraphQL enforces
+    presence. Returns the ``(annotation, field_kwargs)`` pair; a flavor may add
+    further kwargs (the serializer's SDL ``description``) on top.
+    """
+    field_kwargs: dict[str, Any] = {}
+    if python_attr != graphql_name:
+        field_kwargs["name"] = graphql_name
+    if widen:
+        annotation = annotation | None
+        field_kwargs["default"] = strawberry.UNSET
+    return annotation, field_kwargs
+
+
+def emit_set_input_field_triples(
+    set_cls: type,
+    entries: Iterator[tuple[str, Any]] | list[tuple[str, Any]],
+    *,
+    related_target_of: Callable[[str, Any], tuple[bool, Any]],
+    related_source_path_of: Callable[[str, Any], str],
+    leaf_of: Callable[[str, str, Any], tuple[Any, str]],
+    input_type_name_for: Callable[[type], str],
+    module_path: str,
+    field_specs: dict[tuple[type, str], GeneratedInputFieldSpec],
+) -> list[tuple[str, Any, dict[str, Any]]]:
+    """Emit the per-field input triples + ``FieldSpec`` rows for one set class (DRY review A4).
+
+    The triple-emission scaffold the filter and order ``_build_input_fields``
+    grew separately: for each ``(top_name, entry)`` pair derive the python attr
+    (``flatten_lookup_path``) + camel-cased GraphQL name + the
+    ``optional_field_kwargs`` shape, then branch:
+
+    - **related** (``related_target_of`` says so): a ``Related*(None, ...)``
+      placeholder target skips silently; otherwise emit the lazy forward-ref
+      ``Annotated[<target input name>, strawberry.lazy(module_path)] | None``
+      and record ``related_source_path_of``'s path (``top_name`` for filters;
+      ``field_name or top_name`` for orders).
+    - **leaf**: ``leaf_of`` owns the family's leaf semantics (the filter side's
+      operator-bag class build + declared-vs-autogen source rule; the order
+      side's fixed ``Ordering | None``) and returns the final
+      ``(annotation, django_source_path)``.
+
+    Each emitted field also lands its ``GeneratedInputFieldSpec`` in the
+    family's ``field_specs`` provenance table keyed ``(set_cls, python_attr)``
+    (what the runtime normalizers walk). Family-specific PRE-filtering (the
+    filter side's expanded-child grouping and ``HIDE_FLAT_FILTERS`` skip)
+    happens in ``entries`` before this scaffold - the same
+    parameterization split ``GeneratedInputArgumentsFactory`` proved out for
+    the BFS: mechanics here, semantics at the call site.
+    """
+    triples: list[tuple[str, Any, dict[str, Any]]] = []
+    for top_name, entry in entries:
+        python_attr = flatten_lookup_path(top_name)
+        graphql_name = graphql_camel_name(python_attr)
+        field_kwargs = optional_field_kwargs(python_attr, graphql_name)
+        is_related, target = related_target_of(top_name, entry)
+        if is_related:
+            if target is None:
+                # ``Related*(None, ...)`` placeholder - skip silently.
+                continue
+            target_name = input_type_name_for(target)
+            inner = Annotated[target_name, strawberry.lazy(module_path)]
+            annotation: Any = inner | None
+            django_source_path = related_source_path_of(top_name, entry)
+        else:
+            annotation, django_source_path = leaf_of(top_name, python_attr, entry)
+        triples.append((python_attr, annotation, field_kwargs))
+        field_specs[(set_cls, python_attr)] = GeneratedInputFieldSpec(
+            python_attr=python_attr,
+            graphql_name=graphql_name,
+            django_source_path=django_source_path,
+        )
+    return triples
+
+
+# The decode-kind vocabulary the write-flavor converters + resolvers share
+# (DRY review A7): one conceptual enum, previously declared per-flavor in
+# ``forms/converter.py`` and ``rest_framework/serializer_converter.py``.
+# Single-sourced here next to ``InputFieldSpec`` (their type-level consumer);
+# the serializer flavor extends with its ``NESTED_SINGLE`` / ``NESTED_MULTI``
+# pair (nested writes are DRF-only). Each flavor's converter module re-exports
+# them so existing ``from .converter import SCALAR`` consumers keep their path.
+SCALAR: str = "scalar"
+RELATION_SINGLE: str = "relation_single"
+RELATION_MULTI: str = "relation_multi"
+FILE: str = "file"
+
+
+class FieldConversionBase:
+    """The annotation + decode kind + required-ness value object (DRY review A7).
+
+    The shared shape behind ``forms/converter.py::FormFieldConversion`` and
+    ``rest_framework/serializer_converter.py::SerializerFieldConversion``:
+    ``required`` is the flavor field's own ``field.required``; ``annotation`` is
+    the resolved Strawberry annotation for a ``SCALAR`` field, while a relation
+    / file (/ nested) field carries ``annotation=None`` here - the annotation is
+    finalized at the flavor's build site, so only the ``kind`` is authoritative.
+    ``kind`` defaults to ``SCALAR`` so a consumer-registered converter
+    (spec-039 rev6 #11) can return a conversion without importing the kind
+    constant; the internal relation / file constructions pass ``kind``
+    explicitly.
+    """
+
+    __slots__ = ("annotation", "kind", "required")
+
+    def __init__(
+        self,
+        *,
+        annotation: Any,
+        kind: str = SCALAR,
+        required: bool,
+    ) -> None:
+        self.annotation = annotation
+        self.kind = kind
+        self.required = required
 
 
 @dataclass(frozen=True)
@@ -331,19 +481,22 @@ def resolve_effective_fields(
         raise ConfigurationError(
             f"{subject} declares both `fields` and `exclude`; supply at most one.",
         )
-    if fields is not None:
-        unknown = [name for name in fields if name not in basis]
+
+    def _reject_unknown(seq: Any, key: str) -> None:
+        # The identical unknown-name check both branches spelled separately
+        # (DRY review C2); the pinned message stays byte-identical via the
+        # threaded ``fields`` / ``exclude`` key.
+        unknown = [name for name in seq if name not in basis]
         if unknown:
             raise ConfigurationError(
-                f"{subject} declares `fields` naming {unknown_noun}: {sorted(unknown)!r}.",
+                f"{subject} declares `{key}` naming {unknown_noun}: {sorted(unknown)!r}.",
             )
+
+    if fields is not None:
+        _reject_unknown(fields, "fields")
         effective = {name: basis[name] for name in fields}
     elif exclude is not None:
-        unknown = [name for name in exclude if name not in basis]
-        if unknown:
-            raise ConfigurationError(
-                f"{subject} declares `exclude` naming {unknown_noun}: {sorted(unknown)!r}.",
-            )
+        _reject_unknown(exclude, "exclude")
         excluded = set(exclude)
         effective = {name: field for name, field in basis.items() if name not in excluded}
     else:
@@ -489,14 +642,112 @@ def materialize_generated_input_class(
         return
     if existing is not None:
         raise ConfigurationError(
-            f"{name!r} is materialized by two distinct {family_label} input classes: "
-            f"{existing.__module__}.{existing.__qualname__} vs "
-            f"{cls.__module__}.{cls.__qualname__}. Rename one {family_label.lower()} "
-            "so its class-derived input type name is unique.",
+            duplicate_name_message(
+                "materialized",
+                name,
+                existing,
+                cls,
+                family_label=f"{family_label} input",
+                rename_noun=family_label.lower(),
+            ),
         )
     module = sys.modules[module_path]
     setattr(module, name, cls)
     ledger[name] = cls
+
+
+def duplicate_name_message(
+    verb: str,
+    name: str,
+    existing: type,
+    claimant: type,
+    *,
+    family_label: str,
+    rename_noun: str,
+) -> str:
+    """Build the "two distinct X claim one name" collision sentence (DRY review A3 / C3).
+
+    The one skeleton behind every generated-input name collision: ``{name!r} is
+    {verb} by two distinct {family_label} classes: A vs B. Rename one
+    {rename_noun} so its class-derived input type name is unique.`` - with the
+    two ``__module__``.``__qualname__`` interpolations spelled once. The pinned
+    per-site wording stays byte-stable via the threaded nouns
+    (``materialize_generated_input_class`` passes ``verb="materialized"`` +
+    ``family_label="<family> input"``; ``GeneratedInputArgumentsFactory``
+    ``verb="claimed"`` + its configured family / rename nouns and prepends its
+    factory-label head).
+    """
+    return (
+        f"{name!r} is {verb} by two distinct {family_label} classes: "
+        f"{existing.__module__}.{existing.__qualname__} vs "
+        f"{claimant.__module__}.{claimant.__qualname__}. Rename one {rename_noun} "
+        "so its class-derived input type name is unique."
+    )
+
+
+def iter_input_field_collisions(
+    field_specs: list,
+    *,
+    subject: str,
+    field_noun: str,
+    rename_clause: str,
+    name_of: Callable[[Any], str],
+    camel_case_note: str = "",
+    source_of: Callable[[Any], str] | None = None,
+) -> Iterator[str]:
+    """Yield every input-field collision message for one generated write input (DRY review A3).
+
+    The seen-dict walk + the collision arms behind the form and serializer
+    input-attr guards, single-sited: two specs colliding on the generated
+    ``input_attr`` (a relation's ``<name>_id`` remap vs a literal ``<name>_id``
+    field) or on the ``graphql_name`` (default camel-casing collapse) would make
+    ``build_strawberry_input_class`` / Strawberry SILENTLY drop one - so each
+    collision yields a fail-loud message. The per-flavor wording stays
+    byte-stable via the threaded nouns: ``subject`` (``"Form 'X'"`` /
+    ``"SerializerMutation for 'X'"``), ``field_noun`` (``"form fields"`` /
+    ``"serializer fields"``), ``rename_clause``, and the serializer's
+    ``camel_case_note`` (the id-like-suffix parenthetical). ``name_of`` reads the
+    flavor's display name off a spec (``form_field_name`` / ``target_name``).
+
+    ``source_of`` enables the serializer-only third arm (two WRITABLE fields
+    sharing one one-segment ``source`` would double-write one model attr); forms
+    have no ``source`` axis and leave it ``None``. The form guard raises on the
+    FIRST yielded message; the serializer aggregates them all (rev6 #5) - the
+    consumption policy stays at each call site.
+    """
+    seen_attr: dict[str, str] = {}
+    seen_graphql: dict[str, str] = {}
+    seen_source: dict[str, str] = {}
+    for spec in field_specs:
+        current = name_of(spec)
+        prior_attr = seen_attr.get(spec.input_attr)
+        if prior_attr is not None:
+            yield (
+                f"{subject} generates two input fields with the same attribute "
+                f"{spec.input_attr!r}: {field_noun} {prior_attr!r} and {current!r} collide "
+                "(a relation field remaps to '<name>_id', clashing with a field literally "
+                f"named that). {rename_clause} or drop one via Meta.fields / Meta.exclude."
+            )
+        prior_graphql = seen_graphql.get(spec.graphql_name)
+        if prior_graphql is not None:
+            yield (
+                f"{subject} generates two input fields with the same GraphQL name "
+                f"{spec.graphql_name!r}: {field_noun} {prior_graphql!r} and {current!r} collide "
+                f"under default camel-casing{camel_case_note}. {rename_clause} or drop one via "
+                "Meta.fields / Meta.exclude."
+            )
+        if source_of is not None:
+            write_source = source_of(spec)
+            prior_source = seen_source.get(write_source)
+            if prior_source is not None:
+                yield (
+                    f"{subject} has two writable fields {prior_source!r} and {current!r} sharing "
+                    f"one source {write_source!r}; they would double-write one model attribute. "
+                    "Give each a distinct source, or drop one via Meta.fields / Meta.exclude."
+                )
+            seen_source[write_source] = current
+        seen_attr[spec.input_attr] = current
+        seen_graphql[spec.graphql_name] = current
 
 
 def build_lazy_input_annotation(
@@ -738,12 +989,18 @@ class GeneratedInputArgumentsFactory:
             target_name = set_cls.type_name_for()
             existing_owner = self._collision_registry.get(target_name)
             if existing_owner is not None and existing_owner is not set_cls:
+                # The shared A3/C3 skeleton, with the factory-label head prepended
+                # (byte-identical to the pre-promotion wording).
                 raise ConfigurationError(
-                    f"{self._factory_label}: input type name {target_name!r} is claimed "
-                    f"by two distinct {self._family_label} classes: "
-                    f"{existing_owner.__module__}.{existing_owner.__qualname__} vs "
-                    f"{set_cls.__module__}.{set_cls.__qualname__}. Rename one "
-                    f"{self._rename_noun} so its class-derived input type name is unique.",
+                    f"{self._factory_label}: input type name "
+                    + duplicate_name_message(
+                        "claimed",
+                        target_name,
+                        existing_owner,
+                        set_cls,
+                        family_label=self._family_label,
+                        rename_noun=self._rename_noun,
+                    ),
                 )
 
             if target_name not in self.input_object_types:

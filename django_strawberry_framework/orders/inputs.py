@@ -22,7 +22,7 @@ spec-028 Decision 9 line 775.
 from __future__ import annotations
 
 import enum
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Any
 
 import strawberry
 from django.db.models import F
@@ -33,6 +33,7 @@ from ..utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
     clear_generated_input_namespace,
+    emit_set_input_field_triples,
     iter_set_subclasses,
     materialize_generated_input_class,
 )
@@ -221,43 +222,31 @@ def _build_input_fields(
     ``*__lookup`` paths through ``django-filter`` expansion).
     """
     del owner_definition  # reserved -- see ``convert_order_field_to_input_annotation``.
-    all_fields = orderset_cls.get_fields()
-    triples: list[tuple[str, Any, dict[str, Any]]] = []
-    for top_name, related_or_none in all_fields.items():
-        python_attr = top_name.replace("__", "_")
-        graphql_name = _camel_case(python_attr)
-        # Every order field is optional (``inner | None`` / ``Ordering | None``):
-        # pass ``default=None`` explicitly now that an omitted ``default`` means
-        # required (``utils/inputs.py`` / ``docs/feedback.md`` Finding 2).
-        field_kwargs: dict[str, Any] = {"default": None}
-        if python_attr != graphql_name:
-            field_kwargs["name"] = graphql_name
-        if related_or_none is not None:
-            target_os = related_or_none.orderset
-            if target_os is None:
-                # ``RelatedOrder(None, ...)`` placeholder -- skip silently
-                # (cookbook lines 124-130).
-                continue
-            target_name = _input_type_name_for(target_os)
-            inner = Annotated[target_name, strawberry.lazy(INPUTS_MODULE_PATH)]
-            triples.append((python_attr, inner | None, field_kwargs))
-            _field_specs[(orderset_cls, python_attr)] = FieldSpec(
-                python_attr=python_attr,
-                graphql_name=graphql_name,
-                django_source_path=related_or_none.field_name or top_name,
-            )
-        else:
-            # Leaf field: ``Ordering | None`` regardless of model-field
-            # type per Spec Decision 5. ``model_field`` discovery is a
-            # future-extension affordance the converter ignores today.
-            annotation = convert_order_field_to_input_annotation(None, None)
-            triples.append((python_attr, annotation, field_kwargs))
-            _field_specs[(orderset_cls, python_attr)] = FieldSpec(
-                python_attr=python_attr,
-                graphql_name=graphql_name,
-                django_source_path=top_name,
-            )
-    return triples
+
+    def _leaf_of(top_name: str, _python_attr: str, _entry: Any) -> tuple[Any, str]:
+        # Leaf field: ``Ordering | None`` regardless of model-field type per
+        # Spec Decision 5. ``model_field`` discovery is a future-extension
+        # affordance the converter ignores today.
+        return convert_order_field_to_input_annotation(None, None), top_name
+
+    # The per-field emission scaffold (python-attr flatten -> camel-case ->
+    # optional kwargs -> related lazy-ref with the ``RelatedOrder(None, ...)``
+    # placeholder skip vs leaf -> triple + ``FieldSpec``) is single-sited in
+    # ``utils/inputs.py::emit_set_input_field_triples`` (DRY review A4); the
+    # closures carry the order-family semantics (fixed ``Ordering | None``
+    # leaves, ``field_name or top_name`` related source paths).
+    return emit_set_input_field_triples(
+        orderset_cls,
+        list(orderset_cls.get_fields().items()),
+        related_target_of=lambda _top_name, entry: (
+            (True, entry.orderset) if entry is not None else (False, None)
+        ),
+        related_source_path_of=lambda top_name, entry: entry.field_name or top_name,
+        leaf_of=_leaf_of,
+        input_type_name_for=_input_type_name_for,
+        module_path=INPUTS_MODULE_PATH,
+        field_specs=_field_specs,
+    )
 
 
 def normalize_input_value(

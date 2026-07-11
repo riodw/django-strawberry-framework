@@ -51,7 +51,7 @@ from ..mutations.inputs import (
     build_payload_type,
     materialize_mutation_input_class,
 )
-from ..mutations.permissions import _PERMISSION_ASYNC_RECOURSE, DenyAll
+from ..mutations.permissions import DenyAll, run_permission_classes
 from ..mutations.sets import (
     NON_DELETE_OPERATION_INPUT_KIND,
     NON_DELETE_WRITE_OPERATIONS,
@@ -71,7 +71,6 @@ from ..mutations.sets import (
     resolver_seams,
 )
 from ..utils.inputs import make_shape_build_cache
-from ..utils.querysets import reject_async_in_sync_context
 from .inputs import (
     FORM,
     build_form_input_class,
@@ -806,19 +805,13 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         coroutine, which ``reject_async_in_sync_context`` closes + raises as a
         ``SyncMisuseError`` (an authorization bypass otherwise - the same discipline
         the model flavor applies).
+
+        The walk body is single-sited in
+        ``mutations/permissions.py::run_permission_classes`` (DRY review A5),
+        shared with ``DjangoMutation.check_permission``, so the authorization
+        seam cannot fork between the flavors.
         """
-        meta = type(self)._mutation_meta
-        for permission_class in meta.permission_classes:
-            allowed = reject_async_in_sync_context(
-                permission_class().has_permission(info, type(self), operation, data, instance),
-                owner=permission_class.__name__,
-                method="has_permission",
-                context="mutation",
-                recourse=_PERMISSION_ASYNC_RECOURSE,
-            )
-            if not allowed:
-                return False
-        return True
+        return run_permission_classes(self, info, operation, data, instance)
 
     @classmethod
     def input_type_name(cls, meta: _ValidatedMutationMeta) -> str:

@@ -52,15 +52,30 @@ def field_error(path: str, messages: Any, *, codes: Any = None) -> FieldError:
     from ..mutations.inputs import NON_FIELD_ERROR_KEY, FieldError
 
     key = path if path else NON_FIELD_ERROR_KEY
-    message_list = [messages] if isinstance(messages, str) else [str(m) for m in messages]
     # rev6 #13 root rule: a model-wide / non-field error (an empty path, or the bare
     # ``"__all__"`` sentinel as the WHOLE path - the DRF flattener joins the top-level
     # non-field bucket to exactly that) carries an EMPTY ``path``, while ``field`` stays
     # ``"__all__"``; a NESTED non-field error (``items.0.__all__``) keeps its segments. So
     # the model + serializer flavors agree on the root-non-field shape.
     segments = [] if not path or path == NON_FIELD_ERROR_KEY else path.split(".")
-    code_list = [codes] if isinstance(codes, str) else [str(c) for c in codes] if codes else []
-    return FieldError(field=key, messages=message_list, codes=code_list, path=segments)
+    return FieldError(
+        field=key,
+        messages=_str_list(messages),
+        codes=_str_list(codes) if codes is not None else [],
+        path=segments,
+    )
+
+
+def _str_list(value: Any) -> list[str]:
+    """Coerce a bare string or an iterable into a ``list[str]`` (DRY review C1).
+
+    The one body behind ``field_error``'s ``messages`` AND ``codes`` coercion
+    (the rule the DRF ``ErrorDetail`` flattener depends on): a bare string
+    becomes a one-element list (never iterated char-by-char); any other iterable
+    (a DRF ``ErrorDetail`` list, a tuple) is materialized with each element
+    stringified.
+    """
+    return [value] if isinstance(value, str) else [str(item) for item in value]
 
 
 def relation_field_error(graphql_name: str) -> FieldError:

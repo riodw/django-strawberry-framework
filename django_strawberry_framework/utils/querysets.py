@@ -255,6 +255,37 @@ def related_visibility_queryset(
     return visibility_scoped_related_queryset(related_type, info, async_recourse)
 
 
+def related_visibility_queryset_or_default(
+    related_model: type,
+    info: Any,
+    async_recourse: str = _RELAY_ASYNC_RECOURSE,
+) -> models.QuerySet:
+    """The visibility-scoped queryset, falling back to the default manager (DRY review C4).
+
+    The "no primary ``DjangoType`` => default-manager, no visibility contract"
+    fallback ``visible_related_object`` and ``visible_related_objects`` both
+    opened with - a security-adjacent rule, now single-bodied: a related model
+    with a registered primary is scoped through its ``get_queryset`` visibility
+    hook; one without gets its plain ``_default_manager.all()`` (existence
+    semantics only). Each caller keeps its own tail (``.filter(pk=pk).first()``
+    vs the batched ``pk__in`` present-set).
+    """
+    queryset = related_visibility_queryset(related_model, info, async_recourse)
+    if queryset is None:
+        return related_model._default_manager.all()
+    return queryset
+
+
+def _stringified(pks: Any) -> set[str]:
+    """Stringify a pk collection into the type-agnostic comparison basis (DRY review C5).
+
+    The ``{str(pk) for pk in ...}`` coercion both membership helpers share, so
+    the comparison basis (an int pk and its ``"3"`` string form compare equal -
+    the GlobalID-in-filter string-explosion class) has exactly one body.
+    """
+    return {str(pk) for pk in pks}
+
+
 def stringified_pks_present(queryset: models.QuerySet, query_pks: Any) -> set[str]:
     """Return the stringified pks among ``query_pks`` actually present in ``queryset`` (one query).
 
@@ -266,7 +297,7 @@ def stringified_pks_present(queryset: models.QuerySet, query_pks: Any) -> set[st
     form compare equal). Single-sites the query + the str-coercion so the
     no-existence-leak comparison basis cannot drift.
     """
-    return {str(pk) for pk in queryset.filter(pk__in=list(query_pks)).values_list("pk", flat=True)}
+    return _stringified(queryset.filter(pk__in=list(query_pks)).values_list("pk", flat=True))
 
 
 def pks_all_present(declared_pks: Any, present: set[str]) -> bool:
@@ -280,7 +311,7 @@ def pks_all_present(declared_pks: Any, present: set[str]) -> bool:
     member fails the subset check, which each caller maps to the uniform field-keyed
     relation error - the same no-existence-leak outcome.
     """
-    return {str(pk) for pk in declared_pks} <= present
+    return _stringified(declared_pks) <= present
 
 
 def visible_related_object(
@@ -317,11 +348,9 @@ def visible_related_object(
     branch; it does NOT imply every generated GraphQL relation input accepts both a
     raw pk and a GlobalID (the input exposes one strategy-dependent shape).
     """
-    queryset = related_visibility_queryset(related_model, info, async_recourse)
-    if queryset is None:
-        # No primary DjangoType: a raw-pk relation with no Relay-Node target. Scope
-        # existence against the default manager (no visibility contract to apply).
-        return related_model._default_manager.filter(pk=pk).first()
+    # The visibility-or-default-manager base is single-sited in
+    # ``related_visibility_queryset_or_default`` (DRY review C4).
+    queryset = related_visibility_queryset_or_default(related_model, info, async_recourse)
     return queryset.filter(pk=pk).first()
 
 
@@ -344,9 +373,9 @@ def visible_related_objects(
     ``SyncMisuseError``. ``related_model`` has a primary type only when a typed relation input
     was generated for it; a raw-pk relation resolves its primary the same way (``registry.get``).
     """
-    queryset = related_visibility_queryset(related_model, info, async_recourse)
-    if queryset is None:
-        queryset = related_model._default_manager.all()
+    # The visibility-or-default-manager base is single-sited in
+    # ``related_visibility_queryset_or_default`` (DRY review C4).
+    queryset = related_visibility_queryset_or_default(related_model, info, async_recourse)
     return stringified_pks_present(queryset, pks)
 
 

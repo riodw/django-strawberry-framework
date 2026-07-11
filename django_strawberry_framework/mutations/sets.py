@@ -41,7 +41,6 @@ declared in this slice is inert: registered + bound at finalize, never resolved.
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple, get_origin
 
@@ -51,8 +50,8 @@ from strawberry.types.base import StrawberryList
 
 from ..exceptions import ConfigurationError
 from ..registry import registry
+from ..utils.imports import import_attr
 from ..utils.inputs import normalize_field_name_sequence
-from ..utils.querysets import reject_async_in_sync_context
 from ..utils.typing import unwrap_return_type
 from .inputs import (
     CREATE,
@@ -67,7 +66,7 @@ from .inputs import (
     payload_object_slot,
     relation_input_annotation,
 )
-from .permissions import _PERMISSION_ASYNC_RECOURSE, DjangoModelPermission
+from .permissions import DjangoModelPermission, run_permission_classes
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from django.db import models
@@ -351,12 +350,7 @@ def resolver_seams(
             id: Any,  # noqa: A002
         ) -> Any:
             """Delegate to the flavor's sync resolver entry (function-local import cycle guard)."""
-            return getattr(importlib.import_module(module_path), sync_name)(
-                cls,
-                info,
-                data=data,
-                id=id,
-            )
+            return import_attr(module_path, sync_name)(cls, info, data=data, id=id)
 
         @classmethod
         def resolve_async(
@@ -367,24 +361,19 @@ def resolver_seams(
             id: Any,  # noqa: A002
         ) -> Any:
             """Delegate to the flavor's async resolver entry (function-local import cycle guard)."""
-            return getattr(importlib.import_module(module_path), async_name)(
-                cls,
-                info,
-                data=data,
-                id=id,
-            )
+            return import_attr(module_path, async_name)(cls, info, data=data, id=id)
 
     else:
 
         @classmethod
         def resolve_sync(cls: type, info: Any, *, data: Any) -> Any:
             """Delegate to the flavor's sync resolver entry (no ``id`` - model-less flavor)."""
-            return getattr(importlib.import_module(module_path), sync_name)(cls, info, data=data)
+            return import_attr(module_path, sync_name)(cls, info, data=data)
 
         @classmethod
         def resolve_async(cls: type, info: Any, *, data: Any) -> Any:
             """Delegate to the flavor's async resolver entry (no ``id`` - model-less flavor)."""
-            return getattr(importlib.import_module(module_path), async_name)(cls, info, data=data)
+            return import_attr(module_path, async_name)(cls, info, data=data)
 
     return resolve_sync, resolve_async
 
@@ -994,25 +983,13 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         the same discipline ``apply_type_visibility_sync`` applies to an async
         ``get_queryset``. (An async ``check_permission`` override is caught by the
         resolver's ``authorize_or_raise`` one level up.)
+
+        The walk body is single-sited in
+        ``mutations/permissions.py::run_permission_classes`` (DRY review A5),
+        shared with the plain ``DjangoFormMutation`` (which is not a
+        ``DjangoMutation`` subclass), so the authorization seam cannot fork.
         """
-        meta = type(self)._mutation_meta
-        for permission_class in meta.permission_classes:
-            allowed = reject_async_in_sync_context(
-                permission_class().has_permission(
-                    info,
-                    type(self),
-                    operation,
-                    data,
-                    instance,
-                ),
-                owner=permission_class.__name__,
-                method="has_permission",
-                context="mutation",
-                recourse=_PERMISSION_ASYNC_RECOURSE,
-            )
-            if not allowed:
-                return False
-        return True
+        return run_permission_classes(self, info, operation, data, instance)
 
 
 def _resolve_primary_type(mutation_cls: type, model: type[models.Model]) -> type:

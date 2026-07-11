@@ -7,7 +7,11 @@ mutation resolver is not the utility module for the other write flavors):
 - ``unencodable_text_error`` - the invalid-Unicode storability preflight;
 - ``raw_choice_value`` - choice-enum member unwrapping;
 - ``coerce_relation_pk_or_none`` - raw relation-pk coercion;
-- ``type_check_relation_id`` - the structural relation-id check.
+- ``type_check_relation_id`` - the structural relation-id check;
+- ``decode_scalar_leaf`` - the shared text-preflight + choice-unwrap compose;
+- ``decode_visible_relation`` - the visibility-on-every-branch single-relation
+  decode spine (type-check -> visible object -> flavor projection);
+- ``decode_provided_fields`` - the kind-routed walk over a bound write input.
 
 The set-level relation guards (visibility / existence / membership) stay in
 ``mutations/resolvers.py`` - they carry model-pipeline contracts, not
@@ -23,8 +27,12 @@ from django.core.exceptions import ValidationError
 from strawberry import relay
 
 from .errors import field_error, relation_field_error
+from .inputs import iter_provided_input_fields
+from .querysets import visible_related_object
 
 if TYPE_CHECKING:  # pragma: no cover
+    from collections.abc import Callable
+
     from ..mutations.inputs import FieldError
 
 
@@ -147,3 +155,104 @@ def type_check_relation_id(
     if pk is None:
         return None, relation_field_error(graphql_name)
     return pk, None
+
+
+def decode_scalar_leaf(graphql_name: str, value: Any) -> tuple[Any, FieldError | None]:
+    """Run the shared scalar leaf decode: text preflight, then choice unwrap (DRY review A6).
+
+    The two-step compose every write flavor runs on a provided scalar value -
+    ``unencodable_text_error`` (an unstorable lone surrogate is a field-keyed
+    ``FieldError`` at decode, never a raw backend ``UnicodeEncodeError`` at
+    ``save()``) then ``raw_choice_value`` (a choice-enum member unwrapped to the
+    raw Django choice value). The primitives were already shared; this owns the
+    compose so a fourth flavor cannot mis-order it. Returns ``(decoded, None)``
+    on success or ``(None, FieldError)``. Flavor-specific scalar steps (the model
+    path's explicit-null rejection and naive-datetime coercion) stay at the call
+    site, composed around this leaf.
+    """
+    error = unencodable_text_error(graphql_name, value)
+    if error is not None:
+        return None, error
+    return raw_choice_value(value), None
+
+
+def decode_visible_relation(
+    value: Any,
+    *,
+    graphql_name: str,
+    related_model: type,
+    info: Any,
+    async_recourse: str,
+    skip: Callable[[Any], bool],
+    project: Callable[[Any], Any],
+) -> tuple[Any, FieldError | None]:
+    """Decode ONE relation id to its visible, flavor-projected value (DRY review A1).
+
+    The single-relation decode spine the form and serializer flavors share - and
+    the owner of the **cross-flavor security invariant** that a writer must never
+    attach a row it cannot see:
+
+    (i) ``skip(value)`` short-circuits a clear / no-value (the form's
+    ``empty_values``, the serializer's explicit ``None``) UNCHANGED, so the bound
+    form / serializer's own validation decides required-ness; (ii) the structural
+    type-check + pk coercion is ``type_check_relation_id`` (a non-``OK``
+    ``GlobalID`` / an uncoercible raw pk is the uniform field-keyed
+    ``FieldError``); (iii) the type-checked pk is resolved to the VISIBLE object
+    via ``visible_related_object`` - a hidden / missing row is the SAME
+    field-keyed ``FieldError`` (hidden and missing indistinguishable, no
+    existence leak); (iv) ``project(obj)`` reduces the visible object to the
+    flavor's bound-data value (the form's ``to_field_name`` key, the serializer's
+    ``obj.pk``).
+
+    Returns ``(projected, None)`` on success or ``(None, FieldError)``. The
+    MULTI decoders deliberately keep their query strategy at each flavor (the
+    form maps this per element - it needs the object for ``to_field_name``; the
+    serializer batches one ``pk__in`` visibility query) - only the per-id spine
+    is promoted.
+    """
+    if skip(value):
+        return value, None
+    pk, error = type_check_relation_id(
+        value,
+        graphql_name=graphql_name,
+        related_model=related_model,
+    )
+    if error is not None:
+        return None, error
+    obj = visible_related_object(related_model, pk, info, async_recourse)
+    if obj is None:
+        return None, relation_field_error(graphql_name)
+    return project(obj), None
+
+
+def decode_provided_fields(
+    specs: list,
+    data: Any,
+    *,
+    handlers: dict[str, Callable[[Any, Any], FieldError | None]],
+    scalar_handler: Callable[[Any, Any], FieldError | None],
+) -> FieldError | None:
+    """Route each provided input field by ``spec.kind`` through a handler map (DRY review A2).
+
+    The kind-dispatch decode loop the form and serializer flavors share: build
+    the ``{spec.input_attr: spec}`` reverse map, walk the PROVIDED input fields
+    (``UNSET`` stripped - single-sited in ``iter_provided_input_fields``), and
+    hand each ``(spec, value)`` to the flavor's handler for ``spec.kind``
+    (falling back to ``scalar_handler`` for the scalar leaf). Each handler owns
+    its flavor's destination policy (the form splits ``provided_files`` for
+    Django's ``files=``; the serializer routes everything into ``data``,
+    including its ``NESTED_*`` recursion) by closing over the destination
+    dict(s), and returns a ``FieldError`` to short-circuit or ``None`` to
+    continue. Returns the first handler ``FieldError`` or ``None``.
+
+    The model flavor's ``mutations/resolvers.py::_decode_relations`` is a
+    near-parallel with a genuinely different key space (model attrs, the batched
+    id-set contract) and stays put (DRY review F5).
+    """
+    spec_by_attr = {spec.input_attr: spec for spec in specs}
+    for python_name, value, _field in iter_provided_input_fields(data):
+        spec = spec_by_attr[python_name]
+        error = handlers.get(spec.kind, scalar_handler)(spec, value)
+        if error is not None:
+            return error
+    return None

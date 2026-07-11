@@ -1,6 +1,10 @@
 """String utility tests for snake_case, camelCase, and PascalCase conversion."""
 
-from django_strawberry_framework.utils.strings import pascal_case, snake_case
+from django_strawberry_framework.utils.strings import (
+    flatten_lookup_path,
+    pascal_case,
+    snake_case,
+)
 
 
 def test_snake_case_round_trips_camel_case():
@@ -26,3 +30,12 @@ def test_pascal_case_empty_output_edges():
     # a future filter "fix" from silently changing generated enum names.
     assert pascal_case("") == ""
     assert pascal_case("_") == ""
+
+
+def test_flatten_lookup_path_flattens_every_lookup_sep():
+    """LOOKUP_SEP never survives into a generated identifier (DRY review A9)."""
+    assert flatten_lookup_path("name") == "name"
+    assert flatten_lookup_path("category__name") == "category_name"
+    assert flatten_lookup_path("entries__property__category__name") == (
+        "entries_property_category_name"
+    )

@@ -44,7 +44,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import strawberry
 from django import forms
 from django.core.exceptions import FieldDoesNotExist
 from django.db import models
@@ -64,7 +63,9 @@ from ..utils.inputs import (
     build_strawberry_input_class,
     generated_input_type_name,
     guard_dropped_required,
+    iter_input_field_collisions,
     make_input_namespace,
+    optional_input_field,
     pascalize_token,
     resolve_effective_fields,
 )
@@ -433,29 +434,20 @@ def _guard_input_attr_collisions(
       differ (so the input-attr check above passes), but Strawberry collapses the
       two onto one schema field. Mirrors the read-type guard in
       ``types/finalizer.py::_audit_field_surface``.
+
+    The seen-dict walk + the two collision arms are single-sited in
+    ``utils/inputs.py::iter_input_field_collisions`` (DRY review A3); the form
+    flavor raises on the FIRST collision (the serializer aggregates instead),
+    with byte-stable wording via the threaded form nouns.
     """
-    seen_attr: dict[str, str] = {}
-    seen_graphql: dict[str, str] = {}
-    for spec in field_specs:
-        prior_attr = seen_attr.get(spec.input_attr)
-        if prior_attr is not None:
-            raise ConfigurationError(
-                f"Form {form_class.__name__!r} generates two input fields with the same "
-                f"attribute {spec.input_attr!r}: form fields {prior_attr!r} and "
-                f"{spec.form_field_name!r} collide (a relation field remaps to "
-                f"'<name>_id', clashing with a field literally named that). Rename one "
-                "of the form fields, or drop one via Meta.fields / Meta.exclude.",
-            )
-        prior_graphql = seen_graphql.get(spec.graphql_name)
-        if prior_graphql is not None:
-            raise ConfigurationError(
-                f"Form {form_class.__name__!r} generates two input fields with the same "
-                f"GraphQL name {spec.graphql_name!r}: form fields {prior_graphql!r} and "
-                f"{spec.form_field_name!r} collide under default camel-casing. Rename one "
-                "of the form fields, or drop one via Meta.fields / Meta.exclude.",
-            )
-        seen_attr[spec.input_attr] = spec.form_field_name
-        seen_graphql[spec.graphql_name] = spec.form_field_name
+    for message in iter_input_field_collisions(
+        field_specs,
+        subject=f"Form {form_class.__name__!r}",
+        field_noun="form fields",
+        rename_clause="Rename one of the form fields,",
+        name_of=lambda spec: spec.form_field_name,
+    ):
+        raise ConfigurationError(message)
 
 
 def build_form_input_class(
@@ -506,15 +498,16 @@ def build_form_input_class(
 
         # Requiredness: the create input honors ``field.required``; the partial
         # input forces a model-backed field optional but a column-less extra
-        # field keeps its declared ``field.required`` (P2).
+        # field keeps its declared ``field.required`` (P2). The widening tail
+        # (``T | None`` + ``UNSET`` default + ``name=`` alias) is single-sited
+        # in ``utils/inputs.py::optional_input_field`` (DRY review A10).
         required = False if (is_partial and column is not None) else field.required
-
-        field_kwargs: dict[str, Any] = {}
-        if python_attr != spec.graphql_name:
-            field_kwargs["name"] = spec.graphql_name
-        if not required:
-            annotation = annotation | None
-            field_kwargs["default"] = strawberry.UNSET
+        annotation, field_kwargs = optional_input_field(
+            annotation,
+            python_attr=python_attr,
+            graphql_name=spec.graphql_name,
+            widen=not required,
+        )
         triples.append((python_attr, annotation, field_kwargs))
 
     _guard_input_attr_collisions(form_class, field_specs)

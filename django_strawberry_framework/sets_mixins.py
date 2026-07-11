@@ -279,6 +279,28 @@ def expanded_once(
         setattr(cls, guard_attr, False)
 
 
+def should_cache_expansion(cls: type, *, related_attr: str, target_slot: str) -> bool:
+    """Return whether a set class's expansion result may be cached (DRY review A8).
+
+    The two-condition cache-write gate ``FilterSet.get_filters`` and
+    ``OrderSet.get_fields`` grew separately, single-sited beside
+    ``expanded_once`` so the string-lazy-target rule (a CORRECTNESS rule:
+    caching too early pins a half-resolved expansion) has one owner. Cache only
+    when:
+
+    1. ``related_attr`` (``related_filters`` / ``related_orders``) is on this
+       class's OWN ``__dict__`` - not inherited from the family base, which
+       carries the empty ``OrderedDict`` the metaclass sets on the in-flight
+       class AFTER ``super().__new__`` returns; and
+    2. every related entry's ``target_slot`` (``_filterset`` / ``_orderset``)
+       is a real class - no unresolved string forward references remain.
+    """
+    return related_attr in cls.__dict__ and all(
+        not isinstance(getattr(entry, target_slot), str)
+        for entry in getattr(cls, related_attr).values()
+    )
+
+
 @dataclass(frozen=True)
 class SetLifecycleAttrs:
     """The class-level lifecycle attribute names a set family resets / caches under.

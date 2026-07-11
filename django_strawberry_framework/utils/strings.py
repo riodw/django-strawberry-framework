@@ -108,3 +108,19 @@ def graphql_camel_name(name: str) -> str:
         return name
     head, *rest = parts
     return head + "".join(part.capitalize() for part in rest)
+
+
+def flatten_lookup_path(name: str) -> str:
+    """Flatten a Django ``LOOKUP_SEP`` path into a single identifier token (DRY review A9).
+
+    ``category__name`` -> ``category_name``: the one owner of the
+    ``.replace("__", "_")`` transform behind (a) python-attr derivation for the
+    generated filter / order input fields, (b) the ``check_<field>_permission``
+    method-name mangle, and (c) the order side's aggregate-alias mangle. The
+    transform is load-bearing: ``LOOKUP_SEP`` must never survive into a
+    generated attribute or alias (Django's ``prefetch_related`` / ``order_by``
+    machinery splits on it - the prefetch ``to_attr`` escaping work exists for
+    exactly this class of bug), so when the escaping rules ever change there is
+    ONE symbol to grep for, not four inline respellings.
+    """
+    return name.replace("__", "_")

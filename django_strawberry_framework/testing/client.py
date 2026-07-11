@@ -180,6 +180,24 @@ class TestClient(BaseGraphQLTestClient):
         body = self._build_body(query, variables, files, operation_name)
 
         resp = self.request(body, headers, files, url=url)
+        return self._finish_response(resp, files=files, assert_no_errors=assert_no_errors)
+
+    def _finish_response(
+        self,
+        resp: Any,
+        *,
+        files: dict[str, object] | None,
+        assert_no_errors: bool | None,
+    ) -> Response:
+        """Decode ``resp`` into the typed :class:`Response` + the ``assert_no_errors`` raise.
+
+        The un-colored tail both ``query()`` colors share (DRY review B4): only
+        the ``request()`` call is sync/async-colored, so the ``_decode`` ->
+        ``Response`` construction -> Decision-5 guard (an EXPLICIT raise, not a
+        bare ``assert``, so it survives ``python -O``) is written once. This
+        factors BELOW the not-calling-``super().query()`` decision, not around
+        it - the async color still owns its own ``await self.request(...)``.
+        """
         data = self._decode(resp, type="multipart" if files else "json")
 
         response = Response(
@@ -399,19 +417,7 @@ class AsyncTestClient(TestClient):
         # client is ``AsyncClient`` (upstream's ``cast("Awaitable", ...)`` as
         # a plain await).
         resp = await self.request(body, headers, files, url=url)
-        data = self._decode(resp, type="multipart" if files else "json")
-
-        response = Response(
-            errors=data.get("errors"),
-            data=data.get("data"),
-            extensions=data.get("extensions"),
-            response=resp,
-        )
-
-        if assert_no_errors and response.errors is not None:
-            raise AssertionError(response.errors)
-
-        return response
+        return self._finish_response(resp, files=files, assert_no_errors=assert_no_errors)
 
     @contextlib.asynccontextmanager
     async def login(self, user: AbstractBaseUser) -> AsyncIterator[None]:

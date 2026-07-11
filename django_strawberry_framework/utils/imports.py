@@ -10,7 +10,8 @@ shape before it was single-sited here:
 
 New optional-import handling (a partially-installed extra, a sidecar
 package absent from a build) belongs here, not inline at a fourth call
-site.
+site. ``import_attr`` (DRY review B2) is the STRICT sibling for internal
+deferred-import seams where a failure must propagate.
 """
 
 from __future__ import annotations
@@ -53,6 +54,22 @@ def loaded_attr(module_path: str, attr_name: str) -> Any | None:
     if module is None:
         return None
     return getattr(module, attr_name)
+
+
+def import_attr(module_path: str, attr_name: str) -> Any:
+    """Import ``module_path`` (STRICT) and return its ``attr_name`` (DRY review B2).
+
+    The strict member of the family: a broken import propagates (unlike the
+    best-effort ``import_attr_if_importable``, which would MASK a broken
+    internal module as ``None``), an unloaded module IS imported (unlike the
+    opt-in-preserving ``loaded_attr``), and no install hint is reframed (unlike
+    ``require_optional_module``). For internal deferred-import seams - e.g. the
+    generated ``resolve_sync`` / ``resolve_async`` bodies' function-local
+    resolver-module import (the cycle guard) - where both the module and the
+    attribute are the package's own and any failure is a real bug that must
+    fail loud. The ``getattr`` has NO default for the same reason.
+    """
+    return getattr(importlib.import_module(module_path), attr_name)
 
 
 def require_optional_module(module_name: str, *, install_hint: str) -> Any:

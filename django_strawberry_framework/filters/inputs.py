@@ -22,6 +22,7 @@ import decimal
 import enum
 import uuid
 from collections import OrderedDict
+from collections.abc import Iterator
 from typing import TYPE_CHECKING, Annotated, Any
 
 import strawberry
@@ -37,8 +38,10 @@ from ..utils.inputs import (
     GeneratedInputFieldSpec,
     build_strawberry_input_class,
     clear_generated_input_namespace,
+    emit_set_input_field_triples,
     iter_set_subclasses,
     materialize_generated_input_class,
+    optional_field_kwargs,
 )
 from ..utils.strings import graphql_camel_name, pascal_case_or_raise
 from .base import (
@@ -670,45 +673,36 @@ def _build_input_fields(
     # operator-bag classes are never built in the first place.
     hide_flat_filters = bool(getattr(settings, "HIDE_FLAT_FILTERS", False))
 
-    triples: list[tuple[str, Any, dict[str, Any]]] = []
-    for top_name, lookup_bag in grouped.items():
-        # A flat relational traversal path (``category__name``,
-        # ``entries__property__category__name``) is an "expanded child" of a
-        # declared ``RelatedFilter`` -- its first path segment names the
-        # relation. Such paths are reachable through the nested branch already;
-        # hide them when ``HIDE_FLAT_FILTERS`` is set (upstream parity:
-        # ``connection_field.py:238-242``).
-        if (
-            hide_flat_filters
-            and "__" in top_name
-            and top_name.split("__", 1)[0] in related_filters
-        ):
-            continue
-        python_attr = top_name.replace("__", "_")
-        graphql_name = _camel_case(python_attr)
-        rel_filter = related_filters.get(top_name)
-        if rel_filter is not None:
-            target_fs = rel_filter.filterset
-            if target_fs is None:
-                continue
-            target_name = _input_type_name_for(target_fs)
-            inner = Annotated[target_name, strawberry.lazy(INPUTS_MODULE_PATH)]
-            # Optional field: ``default=None`` is explicit now that an omitted
-            # ``default`` means required (``utils/inputs.py`` Finding 2).
-            field_kwargs: dict[str, Any] = {"default": None}
-            if python_attr != graphql_name:
-                field_kwargs["name"] = graphql_name
-            triples.append(
-                (python_attr, inner | None, field_kwargs),
-            )
-            _field_specs[(filterset_cls, python_attr)] = FieldSpec(
-                python_attr=python_attr,
-                graphql_name=graphql_name,
-                django_source_path=top_name,
-            )
-            continue
+    def _visible_entries() -> Iterator[tuple[str, OrderedDict[str, Filter]]]:
+        """Yield the grouped entries minus the ``HIDE_FLAT_FILTERS`` expanded children.
 
-        # Leaf path: build a per-field operator-bag input class.
+        A flat relational traversal path (``category__name``,
+        ``entries__property__category__name``) is an "expanded child" of a
+        declared ``RelatedFilter`` - its first path segment names the relation.
+        Such paths are reachable through the nested branch already; hide them
+        when ``HIDE_FLAT_FILTERS`` is set (upstream parity:
+        ``connection_field.py:238-242``). This pre-filter stays filter-family
+        semantics, BEFORE the shared emission scaffold.
+        """
+        for top_name, lookup_bag in grouped.items():
+            if (
+                hide_flat_filters
+                and "__" in top_name
+                and top_name.split("__", 1)[0] in related_filters
+            ):
+                continue
+            yield top_name, lookup_bag
+
+    def _related_target_of(top_name: str, _lookup_bag: Any) -> tuple[bool, Any]:
+        rel_filter = related_filters.get(top_name)
+        if rel_filter is None:
+            return False, None
+        return True, rel_filter.filterset
+
+    def _leaf_of(top_name: str, python_attr: str, lookup_bag: Any) -> tuple[Any, str]:
+        # Leaf path: build a per-field operator-bag input class. Every
+        # operator-bag leaf is optional (``optional_field_kwargs`` - the
+        # Finding 2 required-by-default rule).
         sample_filter = next(iter(lookup_bag.values()))
         bag_name = filterset_cls.type_name_for(python_attr)
         bag_specs: list[tuple[str, Any, dict[str, Any]]] = []
@@ -720,21 +714,14 @@ def _build_input_fields(
                 model_field,
                 owner_definition,
             )
-            # Every operator-bag leaf is optional: pass ``default=None`` so the
-            # bag field stays omittable under the Finding 2 required-by-default rule.
-            leaf_kwargs: dict[str, Any] = {"default": None}
-            if lookup_python_attr != lookup_graphql_name:
-                leaf_kwargs["name"] = lookup_graphql_name
             bag_specs.append(
-                (lookup_python_attr, annotation, leaf_kwargs),
+                (
+                    lookup_python_attr,
+                    annotation,
+                    optional_field_kwargs(lookup_python_attr, lookup_graphql_name),
+                ),
             )
         bag_class = build_input_class(bag_name, bag_specs)
-        outer_kwargs: dict[str, Any] = {"default": None}
-        if python_attr != graphql_name:
-            outer_kwargs["name"] = graphql_name
-        triples.append(
-            (python_attr, bag_class | None, outer_kwargs),
-        )
         # ``django_source_path`` is the form-key prefix the normalizer emits
         # into ``django-filter`` form data. For autogen filters whose form
         # key derives from the field name (``name`` / ``name__icontains``)
@@ -746,12 +733,22 @@ def _build_input_fields(
             django_source_path = top_name
         else:
             django_source_path = sample_filter.field_name
-        _field_specs[(filterset_cls, python_attr)] = FieldSpec(
-            python_attr=python_attr,
-            graphql_name=graphql_name,
-            django_source_path=django_source_path,
-        )
-    return triples
+        return bag_class | None, django_source_path
+
+    # The per-field emission scaffold (python-attr flatten -> camel-case ->
+    # optional kwargs -> related lazy-ref vs leaf -> triple + ``FieldSpec``) is
+    # single-sited in ``utils/inputs.py::emit_set_input_field_triples`` (DRY
+    # review A4); the closures above carry the filter-family semantics.
+    return emit_set_input_field_triples(
+        filterset_cls,
+        _visible_entries(),
+        related_target_of=_related_target_of,
+        related_source_path_of=lambda top_name, _lookup_bag: top_name,
+        leaf_of=_leaf_of,
+        input_type_name_for=_input_type_name_for,
+        module_path=INPUTS_MODULE_PATH,
+        field_specs=_field_specs,
+    )
 
 
 def _model_field_for_filter(filterset_cls: type[FilterSet], filter_instance: Filter) -> Any:

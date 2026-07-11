@@ -128,19 +128,18 @@ from ..utils.errors import (
     relation_field_error,
     validation_error_to_field_errors,
 )
-from ..utils.inputs import iter_provided_input_fields
 from ..utils.permissions import request_from_info
 from ..utils.querysets import (
     pks_all_present,
     related_visibility_queryset,
     sync_pipeline_recourse,
-    visible_related_object,
     visible_related_objects,
 )
 from ..utils.write_values import (
-    raw_choice_value,
+    decode_provided_fields,
+    decode_scalar_leaf,
+    decode_visible_relation,
     type_check_relation_id,
-    unencodable_text_error,
 )
 from .serializer_converter import (
     FILE,
@@ -175,17 +174,13 @@ def _decode_relation_single(
 ) -> tuple[Any, FieldError | None]:
     """Decode ONE relation id to its visible pk (mirrors the ``038`` form single decoder).
 
-    (i) the structural type-check + pk coercion (a ``relay.GlobalID`` through
-    ``decode_model_global_id`` against the target model; a raw pk through
-    ``_coerce_relation_pk_or_none``) is delegated to the shared
-    ``mutations/resolvers.py::type_check_relation_id`` (spec-039 M3) - a non-``OK``
-    GlobalID / an uncoercible raw pk is a field-keyed ``FieldError``; (ii) the
-    type-checked pk is resolved to the VISIBLE object via the promoted
-    ``visible_related_object`` (P1.1) - a hidden / missing row is the SAME
-    field-keyed ``FieldError`` (no existence leak); (iii) reduce the visible object
-    to its pk (what DRF's ``PrimaryKeyRelatedField`` expects).
+    The serializer coloring of the shared
+    ``utils/write_values.py::decode_visible_relation`` spine (DRY review A1):
+    type-check + pk coercion -> visible object (a hidden / missing / wrong-model
+    / uncoercible id is the uniform field-keyed ``FieldError``, no existence
+    leak) -> the pk projection (what DRF's ``PrimaryKeyRelatedField`` expects).
 
-    An explicit ``None`` is NOT an id to decode: it is a clear / no-value passed
+    An explicit ``None`` is NOT an id to decode: it is a clear / no-value skipped
     through unchanged so the serializer's own validation decides (a required
     relation raises its field-keyed required error via ``is_valid()``, an optional
     one clears). The generated GraphQL input field exposes only the one
@@ -193,19 +188,15 @@ def _decode_relation_single(
     and a raw pk because package tests drive the raw-pk / non-Relay branch by direct
     call (M1).
     """
-    if value is None:
-        return None, None
-    pk, error = type_check_relation_id(
+    return decode_visible_relation(
         value,
         graphql_name=graphql_name,
         related_model=related_model,
+        info=info,
+        async_recourse=_SERIALIZER_ASYNC_RECOURSE,
+        skip=lambda candidate: candidate is None,
+        project=lambda obj: obj.pk,
     )
-    if error is not None:
-        return None, error
-    obj = visible_related_object(related_model, pk, info, _SERIALIZER_ASYNC_RECOURSE)
-    if obj is None:
-        return None, relation_field_error(graphql_name)
-    return obj.pk, None
 
 
 def _decode_relation_multi(
@@ -273,8 +264,8 @@ def _decode_input_object(
     ``result[spec.target_name]`` (the DECLARED serializer field name DRF maps to ``source``
     internally):
 
-    - ``SCALAR`` -> the choice-enum member unwrapped to its raw value via the reused
-      ``raw_choice_value`` (with the ``036`` / ``038`` invalid-Unicode preflight).
+    - ``SCALAR`` -> through the shared scalar leaf ``decode_scalar_leaf`` (the ``036`` /
+      ``038`` invalid-Unicode preflight + choice-enum unwrap).
     - ``RELATION_SINGLE`` / ``RELATION_MULTI`` -> the visibility-checked relation pk(s),
       type-checked against the relation's target model.
     - ``NESTED_SINGLE`` / ``NESTED_MULTI`` -> a RECURSIVELY-decoded nested dict / list of dicts
@@ -287,51 +278,70 @@ def _decode_input_object(
     so a decode ``FieldError`` (a hidden relation id, invalid Unicode) is keyed to its FULL path
     (``shelves.0.altBranches``), not just the leaf name. Re-used recursively for nested items.
     A decode ``FieldError`` short-circuits (the shared skeleton maps it to a null payload).
+
+    The reverse-map build + the ``UNSET``-strip walk + the kind dispatch are single-sited in
+    ``utils/write_values.py::decode_provided_fields`` (DRY review A2); the handlers below carry
+    the SERIALIZER destination policy (everything into ``data``, incl. the ``NESTED_*``
+    recursion and the full-path error keying).
     """
-    spec_by_attr = {spec.input_attr: spec for spec in specs}
     provided_data: dict[str, Any] = {}
 
-    # The ``UNSET``-strip walk is single-sited in ``iter_provided_input_fields``
-    # (spec-039 M2); the per-field kind routing (incl. the nested recursion) below
-    # stays serializer-specific.
-    for python_name, value, _field in iter_provided_input_fields(data):
-        spec = spec_by_attr[python_name]
-        field_path = join_error_path(path_prefix, spec.graphql_name)
+    def _field_path(spec: Any) -> str:
+        return join_error_path(path_prefix, spec.graphql_name)
 
-        if spec.kind in (RELATION_SINGLE, RELATION_MULTI):
-            decoder = (
-                _decode_relation_multi if spec.kind == RELATION_MULTI else _decode_relation_single
-            )
-            decoded, error = decoder(
-                value,
-                graphql_name=field_path,
-                related_model=spec.related_model,
-                info=info,
-            )
-            if error is not None:
-                return {}, error
-            provided_data[spec.target_name] = decoded
-        elif spec.kind in (NESTED_SINGLE, NESTED_MULTI):
-            decoded, error = _decode_nested(spec, value, info, path_prefix=field_path)
-            if error is not None:
-                return {}, error
-            provided_data[spec.target_name] = decoded
-        elif spec.kind == FILE:
-            # An ``Upload`` lands in ``data``, NOT a ``files=`` split: DRF serializers
-            # read files from ``data`` (the deliberate contrast with Django forms).
-            provided_data[spec.target_name] = value
-        else:
-            # The same invalid-Unicode preflight the model / form paths apply: a lone
-            # surrogate graphql-core accepts as a ``String`` would otherwise reach the
-            # serializer's ``validate_unique`` lookup or ``save()`` INSERT and raise a
-            # raw ``UnicodeEncodeError`` - a ``ValueError`` neither ``is_valid()`` nor
-            # ``save_or_field_errors`` maps - escaping the envelope. Reject it here,
-            # keyed to the input's (full-path) GraphQL field name.
-            text_error = unencodable_text_error(field_path, value)
-            if text_error is not None:
-                return {}, text_error
-            provided_data[spec.target_name] = raw_choice_value(value)
+    def _relation(spec: Any, value: Any) -> FieldError | None:
+        decoder = (
+            _decode_relation_multi if spec.kind == RELATION_MULTI else _decode_relation_single
+        )
+        decoded, error = decoder(
+            value,
+            graphql_name=_field_path(spec),
+            related_model=spec.related_model,
+            info=info,
+        )
+        if error is not None:
+            return error
+        provided_data[spec.target_name] = decoded
+        return None
 
+    def _nested(spec: Any, value: Any) -> FieldError | None:
+        decoded, error = _decode_nested(spec, value, info, path_prefix=_field_path(spec))
+        if error is not None:
+            return error
+        provided_data[spec.target_name] = decoded
+        return None
+
+    def _file(spec: Any, value: Any) -> None:
+        # An ``Upload`` lands in ``data``, NOT a ``files=`` split: DRF serializers
+        # read files from ``data`` (the deliberate contrast with Django forms).
+        provided_data[spec.target_name] = value
+        return None
+
+    def _scalar(spec: Any, value: Any) -> FieldError | None:
+        # The shared scalar leaf (invalid-Unicode preflight + choice-enum unwrap,
+        # ``decode_scalar_leaf``), keyed to the input's (full-path) GraphQL field
+        # name so a lone surrogate never escapes the envelope as a raw
+        # ``UnicodeEncodeError`` at the serializer's ``save()`` / unique lookup.
+        decoded, text_error = decode_scalar_leaf(_field_path(spec), value)
+        if text_error is not None:
+            return text_error
+        provided_data[spec.target_name] = decoded
+        return None
+
+    error = decode_provided_fields(
+        specs,
+        data,
+        handlers={
+            RELATION_SINGLE: _relation,
+            RELATION_MULTI: _relation,
+            NESTED_SINGLE: _nested,
+            NESTED_MULTI: _nested,
+            FILE: _file,
+        },
+        scalar_handler=_scalar,
+    )
+    if error is not None:
+        return {}, error
     return provided_data, None
 
 

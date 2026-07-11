@@ -34,6 +34,7 @@ from ..sets_mixins import (
     SetLifecycleAttrs,
     collect_related_declarations,
     expanded_once,
+    should_cache_expansion,
 )
 from ..types.relay import implements_relay_node
 from ..utils.input_values import (
@@ -362,15 +363,13 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             # wire `construct_search(all_filters)` from
             # `django_strawberry_framework.filters.inputs.LOOKUP_PREFIXES` here.
 
-            # Cache only when both conditions hold:
-            # 1. `related_filters` is on this class (not inherited from
-            #    `FilterSet` itself, which carries the empty OrderedDict
-            #    `FilterSetMetaclass.__new__` set on the in-flight class
-            #    AFTER `super().__new__` returns).
-            # 2. Every `_filterset` is a real class (no unresolved string
-            #    forward references remain).
-            if "related_filters" in cls.__dict__ and all(
-                not isinstance(f._filterset, str) for f in cls.related_filters.values()
+            # The two-condition cache-write gate (own `related_filters` +
+            # no unresolved string lazy targets) is single-sited in
+            # `sets_mixins.should_cache_expansion` (DRY review A8).
+            if should_cache_expansion(
+                cls,
+                related_attr="related_filters",
+                target_slot="_filterset",
             ):
                 cls._expanded_filters = all_filters
                 cls.base_filters = all_filters

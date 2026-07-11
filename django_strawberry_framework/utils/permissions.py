@@ -36,10 +36,12 @@ from .input_values import (
     LEAF,
     RELATED,
     SetInputTraversal,
+    input_field_value,
     is_inactive_value,
     iter_active_fields,
     iter_input_items,
 )
+from .strings import flatten_lookup_path
 
 
 @lru_cache(maxsize=2048)
@@ -49,9 +51,10 @@ def _check_method_name(field_path: str) -> str:
     The transform is request-independent (it depends only on the declared field
     path), so it is memoized over the bounded set of declared paths; only the
     bound-instance ``getattr`` / ``callable`` probe in
-    ``invoke_permission_method`` stays per-request (feedback L5).
+    ``invoke_permission_method`` stays per-request (feedback L5). The lookup
+    flatten itself is the shared ``flatten_lookup_path`` (DRY review A9).
     """
-    return f"check_{field_path.replace('__', '_')}_permission"
+    return f"check_{flatten_lookup_path(field_path)}_permission"
 
 
 # ``iter_input_items`` is single-sited in ``utils/input_values.py`` (the 0.0.9
@@ -191,14 +194,13 @@ def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: A
     ``input_values.is_inactive_value`` (the 0.0.9 DRY pass, ``docs/feedback.md``
     Major 1). Used by the filter side's logical-branch pre-walk
     (``_collect_nested_visibility_querysets_async``) to read ``and_`` / ``or_`` /
-    ``not_`` arms off the raw input.
+    ``not_`` arms off the raw input. The dict-vs-dataclass single-field read is
+    ``input_values.input_field_value`` (DRY review C6), so the shape sniff stays
+    single-sited in the traversal-primitives module.
     """
     if input_value is None:
         return None
-    if isinstance(input_value, dict):
-        value = input_value.get(field_name)
-    else:
-        value = getattr(input_value, field_name, None)
+    value = input_field_value(input_value, field_name)
     return None if is_inactive_value(value, unset_sentinel=unset_sentinel) else value
 
 

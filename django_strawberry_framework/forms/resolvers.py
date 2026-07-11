@@ -103,15 +103,13 @@ from ..mutations.resolvers import (
     run_write_pipeline_sync,
     save_or_field_errors,
 )
-from ..utils.errors import relation_field_error
-from ..utils.inputs import iter_provided_input_fields
-from ..utils.querysets import sync_pipeline_recourse, visible_related_object
+from ..utils.querysets import sync_pipeline_recourse
 from ..utils.write_values import (
-    raw_choice_value,
-    type_check_relation_id,
-    unencodable_text_error,
+    decode_provided_fields,
+    decode_scalar_leaf,
+    decode_visible_relation,
 )
-from .converter import FILE, RELATION_MULTI, RELATION_SINGLE, FormInputFieldSpec
+from .converter import FILE, RELATION_MULTI, RELATION_SINGLE
 from .inputs import get_form_fields
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
@@ -143,45 +141,34 @@ def _decode_form_relation_single(
     form_field: Any,
     info: Any,
 ) -> tuple[Any, Any | None]:
-    """Decode ONE relation id to its form-key value, visibility-checked (NET-NEW, P1).
+    """Decode ONE relation id to its form-key value, visibility-checked (spec-038 P1).
 
-    The body: (i) the structural type-check + pk coercion (a ``relay.GlobalID`` run
-    through ``decode_model_global_id`` against the related model; a raw pk through
-    ``_coerce_relation_pk_or_none``) is delegated to the shared
-    ``mutations/resolvers.py::type_check_relation_id`` (spec-039 M3) - a non-``OK``
-    GlobalID / an uncoercible raw pk is the uniform field-keyed ``FieldError``;
-    (ii) the type-checked pk is resolved to the VISIBLE object via
-    ``visible_related_object`` - a hidden / missing row is the SAME field-keyed
-    ``FieldError`` (closing the raw-pk visibility gap); (iii) the visible object is
-    converted to the form key by ``to_field_name``.
-
-    Returns ``(form_key_value, None)`` on success or ``(None, FieldError)``. The
-    related model is the form field's ``queryset.model`` (single-sourced off the
-    form field for BOTH the model-backed and model-less relation, matching the
-    Slice-1 input id basis).
+    The form coloring of the shared
+    ``utils/write_values.py::decode_visible_relation`` spine (DRY review A1):
+    type-check + pk coercion -> visible object (a hidden / missing / wrong-model
+    / uncoercible id is the uniform field-keyed ``FieldError``, closing the
+    raw-pk visibility gap) -> the form-key projection via ``to_field_name``
+    (``_to_form_key_value``). The related model is the form field's
+    ``queryset.model`` (single-sourced off the form field for BOTH the
+    model-backed and model-less relation, matching the Slice-1 input id basis).
 
     An explicit ``null`` (or any of the form field's ``empty_values``) is NOT an
-    id to decode: it is a clear / no-value. It is passed through unchanged so the
+    id to decode: it is a clear / no-value, skipped through UNCHANGED so the
     bound form's OWN validation decides - a required ``ModelChoiceField`` raises
     its field-keyed required error via ``form.is_valid()``, an optional one clears
     to the empty value (spec-038 Decision 8 step 1). Treating it as a raw pk
     instead would mis-report a decode-level "Invalid id for relation" error and
     block a legitimate nullable-FK clear.
     """
-    if value in form_field.empty_values:
-        return value, None
-    related_model = form_field.queryset.model
-    pk, error = type_check_relation_id(
+    return decode_visible_relation(
         value,
         graphql_name=graphql_name,
-        related_model=related_model,
+        related_model=form_field.queryset.model,
+        info=info,
+        async_recourse=_FORM_ASYNC_RECOURSE,
+        skip=lambda candidate: candidate in form_field.empty_values,
+        project=lambda obj: _to_form_key_value(obj, form_field),
     )
-    if error is not None:
-        return None, error
-    obj = visible_related_object(related_model, pk, info, _FORM_ASYNC_RECOURSE)
-    if obj is None:
-        return None, relation_field_error(graphql_name)
-    return _to_form_key_value(obj, form_field), None
 
 
 def _decode_form_relation_multi(
@@ -241,66 +228,67 @@ def _decode_form_data(
     keyed by input attr), routes each value by ``kind`` to the right FORM-keyed
     place:
 
-    - ``SCALAR`` -> ``provided_data[form_field_name]``, the choice-enum member
-      unwrapped to its raw Django value via the reused ``raw_choice_value``.
+    - ``SCALAR`` -> ``provided_data[form_field_name]``, through the shared
+      scalar leaf ``decode_scalar_leaf`` (invalid-Unicode preflight +
+      choice-enum unwrap).
     - ``RELATION_SINGLE`` / ``RELATION_MULTI`` -> the visibility-checked,
       ``to_field_name``-converted relation value(s) under ``form_field_name``.
     - ``FILE`` -> ``provided_files[form_field_name]`` (NEVER ``data=`` - a bound
       Django form reads uploads from ``files=``).
 
-    A relation decode ``FieldError`` short-circuits. This is net-new because the
-    ``036`` ``_decode_relations`` keys on MODEL attrs (``<field>_id`` -> pk) and
-    never splits files out; the form decode keys on FORM-field names.
+    A relation decode ``FieldError`` short-circuits. The reverse-map build + the
+    ``UNSET``-strip walk + the kind dispatch are single-sited in
+    ``utils/write_values.py::decode_provided_fields`` (DRY review A2); the
+    handlers below carry the FORM destination policy (data/files split, form-key
+    routing).
     """
-    spec_by_attr: dict[str, FormInputFieldSpec] = {
-        spec.input_attr: spec for spec in mutation_cls._input_field_specs
-    }
     form_fields = get_form_fields(mutation_cls._mutation_meta.form_class)
 
     provided_data: dict[str, Any] = {}
     provided_files: dict[str, Any] = {}
 
-    # The ``UNSET``-strip walk is single-sited in ``iter_provided_input_fields``
-    # (spec-039 M2); the per-field kind routing below stays form-specific.
-    for python_name, value, _field in iter_provided_input_fields(data):
-        spec = spec_by_attr[python_name]
-        form_field = form_fields[spec.form_field_name]
+    def _relation(spec: Any, value: Any) -> Any | None:
+        decoder = (
+            _decode_form_relation_multi
+            if spec.kind == RELATION_MULTI
+            else _decode_form_relation_single
+        )
+        decoded, error = decoder(
+            value,
+            graphql_name=spec.graphql_name,
+            form_field=form_fields[spec.form_field_name],
+            info=info,
+        )
+        if error is not None:
+            return error
+        provided_data[spec.form_field_name] = decoded
+        return None
 
-        if spec.kind in (RELATION_SINGLE, RELATION_MULTI):
-            decoder = (
-                _decode_form_relation_multi
-                if spec.kind == RELATION_MULTI
-                else _decode_form_relation_single
-            )
-            decoded, error = decoder(
-                value,
-                graphql_name=spec.graphql_name,
-                form_field=form_field,
-                info=info,
-            )
-            if error is not None:
-                return {}, {}, error
-            provided_data[spec.form_field_name] = decoded
-        elif spec.kind == FILE:
-            provided_files[spec.form_field_name] = value
-        else:
-            # Same invalid-Unicode preflight the model path applies in
-            # ``_decode_relations`` (feedback #2): a lone surrogate that graphql-core
-            # accepts as a ``String`` would otherwise reach the bound form's
-            # ``validate_unique`` lookup or ``save()`` INSERT and raise a raw
-            # ``UnicodeEncodeError`` - a ``ValueError`` neither the form's own
-            # validation nor ``save_or_field_errors`` maps - escaping the
-            # ``{ node: null, errors: [...] }`` envelope as a top-level error. Reject
-            # it here, keyed to the input's GraphQL field name (the relation branch's
-            # ``spec.graphql_name`` contract), before constructing the form. Only the
-            # storability check belongs here; the form owns its own null / datetime
-            # coercion (so the model path's ``_explicit_null_error`` /
-            # ``_make_aware_if_naive`` siblings are intentionally absent).
-            text_error = unencodable_text_error(spec.graphql_name, value)
-            if text_error is not None:
-                return {}, {}, text_error
-            provided_data[spec.form_field_name] = raw_choice_value(value)
+    def _file(spec: Any, value: Any) -> None:
+        # NEVER ``data=``: a bound Django form reads uploads from ``files=``.
+        provided_files[spec.form_field_name] = value
+        return None
 
+    def _scalar(spec: Any, value: Any) -> Any | None:
+        # The shared scalar leaf (invalid-Unicode preflight + choice-enum unwrap,
+        # ``decode_scalar_leaf``), keyed to the input's GraphQL field name. Only
+        # the storability check belongs here; the form owns its own null /
+        # datetime coercion (so the model path's ``_explicit_null_error`` /
+        # ``_make_aware_if_naive`` siblings are intentionally absent).
+        decoded, text_error = decode_scalar_leaf(spec.graphql_name, value)
+        if text_error is not None:
+            return text_error
+        provided_data[spec.form_field_name] = decoded
+        return None
+
+    error = decode_provided_fields(
+        mutation_cls._input_field_specs,
+        data,
+        handlers={RELATION_SINGLE: _relation, RELATION_MULTI: _relation, FILE: _file},
+        scalar_handler=_scalar,
+    )
+    if error is not None:
+        return {}, {}, error
     return provided_data, provided_files, None
 
 

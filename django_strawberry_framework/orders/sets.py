@@ -37,6 +37,7 @@ from ..sets_mixins import (
     SetLifecycleAttrs,
     collect_related_declarations,
     expanded_once,
+    should_cache_expansion,
 )
 from ..utils.permissions import (
     active_permission_targets,
@@ -47,6 +48,7 @@ from ..utils.permissions import (
     verbatim_path,
 )
 from ..utils.relations import is_many_side_relation_kind, relation_kind
+from ..utils.strings import flatten_lookup_path
 from .base import RelatedOrder
 from .inputs import Ordering, _field_specs, normalize_input_value
 
@@ -207,14 +209,13 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
             for k, v in getattr(cls, "related_orders", {}).items():
                 fields[k] = v
 
-            # Cache only when both conditions hold:
-            # 1. ``related_orders`` is on this class (not inherited from
-            #    ``OrderSet`` itself, which carries the empty OrderedDict
-            #    ``OrderSetMetaclass.__new__`` set on the in-flight class).
-            # 2. Every ``_orderset`` is a real class (no unresolved string
-            #    forward references remain).
-            if "related_orders" in cls.__dict__ and all(
-                not isinstance(f._orderset, str) for f in cls.related_orders.values()
+            # The two-condition cache-write gate (own ``related_orders`` +
+            # no unresolved string lazy targets) is single-sited in
+            # ``sets_mixins.should_cache_expansion`` (DRY review A8).
+            if should_cache_expansion(
+                cls,
+                related_attr="related_orders",
+                target_slot="_orderset",
             ):
                 cls._expanded_fields = fields
             return fields
@@ -513,13 +514,41 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
             if direction is None:
                 continue
             if model is not None and _path_traverses_to_many(model, field_path):
-                alias = f"_dst_order_{index}_{field_path.replace('__', '_')}"
+                # ``flatten_lookup_path``: LOOKUP_SEP must never survive into a
+                # generated alias (DRY review A9 - one owner for the mangle).
+                alias = f"_dst_order_{index}_{flatten_lookup_path(field_path)}"
                 aggregate = models.Min if "ASC" in direction.name else models.Max
                 annotations[alias] = aggregate(field_path)
                 expressions.append(direction.resolve(alias))
             else:
                 expressions.append(direction.resolve(field_path))
         return annotations, expressions
+
+    @classmethod
+    def _apply_orderings(cls, input_value: Any, queryset: models.QuerySet) -> models.QuerySet:
+        """Apply the normalized orderings to ``queryset`` - the un-colored tail (DRY review D1).
+
+        The shared body behind ``apply_sync`` / ``apply_async`` (the order-side
+        mirror of the filter side's ``_apply_common_prelude`` /
+        ``_apply_common_finalize`` split): normalize the input -> empty-out ->
+        ``get_flat_orders`` -> ``_resolve_order_expressions`` (``None``
+        directions filtered; to-many paths ordered via the row-preserving
+        ``Min`` / ``Max`` aggregate annotation) -> conditional
+        ``annotate(**annotations)`` -> ``order_by(*expressions)``; a term-less
+        input returns ``queryset`` unchanged. Pure Python parsing + queryset-
+        method calls that do no I/O, so the sync and async colorings differ
+        ONLY in the permission-check coloring they run before this.
+        """
+        data = cls._normalize_input(input_value)
+        if not data:
+            return queryset
+        flat_orders = cls.get_flat_orders(data)
+        annotations, expressions = cls._resolve_order_expressions(flat_orders)
+        if not expressions:
+            return queryset
+        if annotations:
+            queryset = queryset.annotate(**annotations)
+        return queryset.order_by(*expressions)
 
     @classmethod
     def apply_sync(
@@ -551,16 +580,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         """
         request = cls._request_from_info(info)
         cls._run_permission_checks(input_value, request)
-        data = cls._normalize_input(input_value)
-        if not data:
-            return queryset
-        flat_orders = cls.get_flat_orders(data)
-        annotations, expressions = cls._resolve_order_expressions(flat_orders)
-        if not expressions:
-            return queryset
-        if annotations:
-            queryset = queryset.annotate(**annotations)
-        return queryset.order_by(*expressions)
+        return cls._apply_orderings(input_value, queryset)
 
     @classmethod
     async def apply_async(
@@ -593,13 +613,4 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
             input_value,
             request,
         )
-        data = cls._normalize_input(input_value)
-        if not data:
-            return queryset
-        flat_orders = cls.get_flat_orders(data)
-        annotations, expressions = cls._resolve_order_expressions(flat_orders)
-        if not expressions:
-            return queryset
-        if annotations:
-            queryset = queryset.annotate(**annotations)
-        return queryset.order_by(*expressions)
+        return cls._apply_orderings(input_value, queryset)

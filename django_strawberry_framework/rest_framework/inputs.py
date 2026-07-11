@@ -54,7 +54,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-import strawberry
 from rest_framework import serializers
 
 from ..exceptions import ConfigurationError
@@ -65,9 +64,11 @@ from ..utils.inputs import (
     build_strawberry_input_class,
     generated_input_type_name,
     guard_dropped_required,
+    iter_input_field_collisions,
     make_input_namespace,
     make_shape_build_cache,
     normalize_field_name_sequence,
+    optional_input_field,
     pascalize_token,
     resolve_effective_fields,
 )
@@ -914,45 +915,27 @@ def _collect_input_attr_collision_messages(
       with a writable one is fine (read-only is dropped before this is reached), so
       only the writable-vs-writable collision is reported. (The DRF ``source``-collision
       arm is new - forms have no ``source`` axis.)
+
+    The seen-dict walk + the three collision arms are single-sited in
+    ``utils/inputs.py::iter_input_field_collisions`` (DRY review A3); the
+    serializer flavor collects every yielded message for aggregation (the form
+    raises on the first instead), with byte-stable wording via the threaded
+    serializer nouns (incl. the id-like-suffix ``camel_case_note`` and the
+    serializer-only ``source_of`` arm).
     """
-    messages: list[str] = []
-    seen_attr: dict[str, str] = {}
-    seen_graphql: dict[str, str] = {}
-    seen_source: dict[str, str] = {}
-    for spec in field_specs:
-        prior_attr = seen_attr.get(spec.input_attr)
-        if prior_attr is not None:
-            messages.append(
-                f"SerializerMutation for {serializer_class.__name__!r} generates two input "
-                f"fields with the same attribute {spec.input_attr!r}: serializer fields "
-                f"{prior_attr!r} and {spec.target_name!r} collide (a relation field remaps to "
-                "'<name>_id', clashing with a field literally named that). Rename one, or drop "
-                "one via Meta.fields / Meta.exclude.",
-            )
-        prior_graphql = seen_graphql.get(spec.graphql_name)
-        if prior_graphql is not None:
-            messages.append(
-                f"SerializerMutation for {serializer_class.__name__!r} generates two input "
-                f"fields with the same GraphQL name {spec.graphql_name!r}: serializer fields "
-                f"{prior_graphql!r} and {spec.target_name!r} collide under default camel-casing "
-                "(or the id-like-suffix rule). Rename one, or drop one via Meta.fields / "
-                "Meta.exclude.",
-            )
-        # The write-back source: the resolved one-segment source, or the declared
-        # name when no source was given (the column a write would set).
-        write_source = spec.source if spec.source is not None else spec.target_name
-        prior_source = seen_source.get(write_source)
-        if prior_source is not None:
-            messages.append(
-                f"SerializerMutation for {serializer_class.__name__!r} has two writable fields "
-                f"{prior_source!r} and {spec.target_name!r} sharing one source {write_source!r}; "
-                "they would double-write one model attribute. Give each a distinct source, or "
-                "drop one via Meta.fields / Meta.exclude.",
-            )
-        seen_attr[spec.input_attr] = spec.target_name
-        seen_graphql[spec.graphql_name] = spec.target_name
-        seen_source[write_source] = spec.target_name
-    return messages
+    return list(
+        iter_input_field_collisions(
+            field_specs,
+            subject=f"SerializerMutation for {serializer_class.__name__!r}",
+            field_noun="serializer fields",
+            rename_clause="Rename one,",
+            name_of=lambda spec: spec.target_name,
+            camel_case_note=" (or the id-like-suffix rule)",
+            # The write-back source: the resolved one-segment source, or the declared
+            # name when no source was given (the column a write would set).
+            source_of=lambda spec: spec.source if spec.source is not None else spec.target_name,
+        ),
+    )
 
 
 def _aggregate_field_problems(
@@ -1060,13 +1043,15 @@ def _walk_serializer_fields(
         # required-AND-nullable, so omission is allowed at coercion and the resolver
         # strips ``UNSET`` -> DRF raises its own field-keyed required error in-band). A
         # non-nullable required field gets NO default, so GraphQL enforces presence.
+        # The widening tail itself is single-sited in
+        # ``utils/inputs.py::optional_input_field`` (DRY review A10).
         nullable = getattr(field, "allow_null", False) or not required
-        field_kwargs: dict[str, Any] = {}
-        if python_attr != spec.graphql_name:
-            field_kwargs["name"] = spec.graphql_name
-        if nullable:
-            annotation = annotation | None
-            field_kwargs["default"] = strawberry.UNSET
+        annotation, field_kwargs = optional_input_field(
+            annotation,
+            python_attr=python_attr,
+            graphql_name=spec.graphql_name,
+            widen=nullable,
+        )
         # rev6 #9: thread the DRF field's help_text + a validation-constraint summary into
         # the generated input field's SDL description (documentation only - DRF still owns
         # runtime validation). Deterministic from the field, so it never varies independently

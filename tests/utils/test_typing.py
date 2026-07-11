@@ -10,6 +10,7 @@ from django_strawberry_framework.utils import unwrap_graphql_type
 from django_strawberry_framework.utils.typing import (
     _MAX_TYPE_WRAPPER_DEPTH,
     is_async_callable,
+    unwrap_container_type,
     unwrap_return_type,
 )
 
@@ -115,6 +116,33 @@ def test_unwrap_graphql_type_raises_on_cyclic_of_type_stack():
 
     with pytest.raises(RuntimeError, match="cyclic or corrupt"):
         unwrap_graphql_type(Cyclic())
+
+
+def test_unwrap_container_type_peels_containers_but_not_a_leaf_with_of_type():
+    """Only ``StrawberryContainer`` layers peel; a leaf exposing ``of_type`` is NOT descended.
+
+    The load-bearing distinction from ``unwrap_graphql_type``'s bare-``hasattr``
+    contract (DRY review B3): an ``Edge`` subclass that happens to carry an
+    ``of_type`` attribute must be returned as the leaf, not peeled into.
+    """
+    from strawberry.types.base import StrawberryList
+
+    class Edge:
+        of_type = "not a wrapper"
+
+    assert unwrap_container_type(StrawberryList(of_type=Edge)) is Edge
+    assert unwrap_container_type(Edge) is Edge
+
+
+def test_unwrap_container_type_raises_on_cyclic_container_stack():
+    """A cyclic container chain hits the Power-of-Ten bound and fails loud."""
+    from strawberry.types.base import StrawberryList
+
+    cyclic = StrawberryList(of_type=None)
+    cyclic.of_type = cyclic  # never bottoms out
+
+    with pytest.raises(RuntimeError, match="cyclic or corrupt"):
+        unwrap_container_type(cyclic)
 
 
 def test_unwrap_return_type_returns_direct_class_when_unwrapped():

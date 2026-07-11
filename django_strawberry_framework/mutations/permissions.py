@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..utils.permissions import request_from_info
+from ..utils.querysets import reject_async_in_sync_context
 
 # The one mapping spec-036 Decision 15 names: a mutation ``operation`` to the
 # Django model-permission action verb. Single-sited so Slice 3's resolver reuses
@@ -54,6 +55,48 @@ _PERMISSION_ASYNC_RECOURSE = (
     "an async permission hook; redefine has_permission / check_permission as a sync "
     "method returning a bool."
 )
+
+
+def run_permission_classes(
+    mutation_self: Any,
+    info: Any,
+    operation: str,
+    data: Any,
+    instance: Any,
+) -> bool:
+    """Run every ``Meta.permission_classes`` entry; deny as soon as one denies (DRY review A5).
+
+    The single body behind the default ``check_permission`` on BOTH write-flavor
+    bases (``DjangoMutation`` and the plain ``DjangoFormMutation``, which is not a
+    ``DjangoMutation`` subclass; the serializer flavor inherits the model's).
+    An authorization-seam fork is the exact "fix one side, miss the other" bug
+    class this promotion closes. Each entry's ``has_permission(info, mutation,
+    operation, data, instance)`` result runs through
+    ``reject_async_in_sync_context`` with the shared
+    ``_PERMISSION_ASYNC_RECOURSE``: an ``async def has_permission`` returns a
+    TRUTHY coroutine, so a naive bool test would silently treat an async
+    deny-check as ALLOW - an authorization bypass; the coroutine is closed and
+    raised as a ``SyncMisuseError`` instead. Returns ``False`` on the first
+    denial, ``True`` only when all allow.
+    """
+    meta = type(mutation_self)._mutation_meta
+    for permission_class in meta.permission_classes:
+        allowed = reject_async_in_sync_context(
+            permission_class().has_permission(
+                info,
+                type(mutation_self),
+                operation,
+                data,
+                instance,
+            ),
+            owner=permission_class.__name__,
+            method="has_permission",
+            context="mutation",
+            recourse=_PERMISSION_ASYNC_RECOURSE,
+        )
+        if not allowed:
+            return False
+    return True
 
 
 class DjangoModelPermission:

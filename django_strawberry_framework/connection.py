@@ -54,7 +54,6 @@ from strawberry import relay
 from strawberry.relay.types import NodeIterableType
 from strawberry.relay.utils import should_resolve_list_connection_edges
 from strawberry.types import Info, get_object_definition
-from strawberry.types.base import StrawberryContainer
 from strawberry.utils.await_maybe import AwaitableOrValue
 from strawberry.utils.inspect import in_async_context
 
@@ -107,7 +106,7 @@ from .utils.querysets import (
     model_for,
     normalize_query_source,
 )
-from .utils.typing import is_async_callable
+from .utils.typing import is_async_callable, unwrap_container_type
 
 # Re-export the hoisted deterministic-order predicate under its original
 # private name so the spec-030 ``tests/test_connection.py`` pins keep importing
@@ -275,16 +274,14 @@ def _window_edge_class(cls: type) -> Any:
 
     ``get_object_definition`` -> ``edges`` field -> ``resolve_type`` -> unwrap
     the ``StrawberryContainer`` (``list[Edge[Node]]``) down to the concrete
-    ``Edge`` subclass, so the fast path builds edges through Strawberry's own
-    edge type (cursor PREFIX + base64 stay owned there - the fast path passes
-    only the integer offset).
+    ``Edge`` subclass via the bounded ``unwrap_container_type`` (DRY review B3 -
+    the container-scoped, Power-of-Ten-capped peel), so the fast path builds
+    edges through Strawberry's own edge type (cursor PREFIX + base64 stay owned
+    there - the fast path passes only the integer offset).
     """
     type_def = get_object_definition(cls, strict=True)
     field_def = type_def.get_field("edges")
-    edge_type = field_def.resolve_type(type_definition=type_def)
-    while isinstance(edge_type, StrawberryContainer):
-        edge_type = edge_type.of_type
-    return edge_type
+    return unwrap_container_type(field_def.resolve_type(type_definition=type_def))
 
 
 def _resolve_from_window(

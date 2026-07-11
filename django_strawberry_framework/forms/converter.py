@@ -52,14 +52,16 @@ from django import forms
 from ..exceptions import ConfigurationError
 from ..utils.converters import convert_with_mro
 
-# The four decode kinds the reverse-map record carries. Pinned as module
-# constants so the Slice 3 resolver and the tests address ONE source of truth
-# instead of bare ``"scalar"`` / ``"relation_single"`` literals scattered across
-# the converter / the input builder (spec-038 Decision 7 P1).
-SCALAR: str = "scalar"
-RELATION_SINGLE: str = "relation_single"
-RELATION_MULTI: str = "relation_multi"
-FILE: str = "file"
+# The four decode kinds the reverse-map record carries. Single-sourced in
+# ``utils/inputs.py`` (DRY review A7 - one conceptual enum, not a per-flavor
+# copy); re-exported here (the ``as`` form marks the explicit re-export) so the
+# Slice 3 resolver, the input builder, and the tests keep addressing them on
+# this module (spec-038 Decision 7 P1).
+from ..utils.inputs import FILE as FILE
+from ..utils.inputs import RELATION_MULTI as RELATION_MULTI
+from ..utils.inputs import RELATION_SINGLE as RELATION_SINGLE
+from ..utils.inputs import SCALAR as SCALAR
+from ..utils.inputs import FieldConversionBase
 
 
 @dataclass(frozen=True)
@@ -88,7 +90,7 @@ class FormInputFieldSpec:
     kind: str
 
 
-class FormFieldConversion:
+class FormFieldConversion(FieldConversionBase):
     """The model-less annotation + decode kind ``convert_form_field`` returns.
 
     ``required`` is the form field's own ``field.required``. ``annotation`` is
@@ -97,21 +99,11 @@ class FormFieldConversion:
     (where the backing column - if any - and the related primary ``DjangoType``
     are known, so the Relay-``GlobalID``-vs-raw-pk id type can be resolved), so
     those kinds carry ``annotation=None`` here and only the ``kind`` is
-    authoritative.
+    authoritative. The ``(annotation, kind, required)`` value-object shape is
+    the shared ``utils/inputs.py::FieldConversionBase`` (DRY review A7).
     """
 
-    __slots__ = ("annotation", "kind", "required")
-
-    def __init__(
-        self,
-        *,
-        annotation: Any,
-        kind: str,
-        required: bool,
-    ) -> None:
-        self.annotation = annotation
-        self.kind = kind
-        self.required = required
+    __slots__ = ()
 
 
 # Each supported ``forms.Field`` class -> the scalar annotation it maps to.

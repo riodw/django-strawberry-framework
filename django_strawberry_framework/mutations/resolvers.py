@@ -106,16 +106,14 @@ from ..utils.strings import graphql_camel_name
 # compatibility.
 from ..utils.write_values import (
     coerce_relation_pk_or_none,
-    raw_choice_value,
+    decode_scalar_leaf,
     type_check_relation_id,  # noqa: F401 - re-exported for the form / serializer resolvers + tests.
-    unencodable_text_error,
 )
 from .inputs import FieldError, payload_object_slot
 from .permissions import _PERMISSION_ASYNC_RECOURSE
 
-# Compatibility aliases preserving the pre-move private names (internal call
-# sites and tests address these; the public owners live in utils/write_values.py).
-_unencodable_text_error = unencodable_text_error
+# Compatibility alias preserving the pre-move private name (internal call
+# sites address it; the public owner lives in utils/write_values.py).
 _coerce_relation_pk_or_none = coerce_relation_pk_or_none
 
 # The async-pipeline recourse appended to a ``SyncMisuseError`` raised when an
@@ -322,10 +320,13 @@ def _decode_relations(
         null_error = _explicit_null_error(model, python_name, graphql_name, value)
         if null_error is not None:
             return {}, [], {}, null_error
-        text_error = _unencodable_text_error(graphql_name, value)
+        # The shared scalar leaf (invalid-Unicode preflight + choice-enum unwrap,
+        # ``decode_scalar_leaf`` - DRY review A6), composed between the model-only
+        # explicit-null rejection above and the naive-datetime coercion below.
+        decoded, text_error = decode_scalar_leaf(graphql_name, value)
         if text_error is not None:
             return {}, [], {}, text_error
-        scalar_and_fk_attrs[python_name] = _make_aware_if_naive(raw_choice_value(value))
+        scalar_and_fk_attrs[python_name] = _make_aware_if_naive(decoded)
 
     return scalar_and_fk_attrs, m2m_assignments, excluded_values, None
 

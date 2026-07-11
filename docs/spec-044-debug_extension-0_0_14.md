@@ -6,7 +6,7 @@ completes the joint `0.0.14` cut and owns the version bump**
 This card adds the package's **in-response debug surface**: a new
 `django_strawberry_framework/extensions/debug.py` module exposing
 `DjangoDebugExtension`, a Strawberry `SchemaExtension` that captures the
-executed SQL queries and raised resolver exceptions for the in-flight GraphQL
+executed SQL queries and execution exceptions for the in-flight GraphQL
 operation and attaches them to the response's `extensions` map under the
 `debug` key — so frontend clients, Apollo DevTools, and programmatic consumers
 can read them **inside the GraphQL response itself**, without the server-side
@@ -50,7 +50,7 @@ chain, serialized to graphene's `excType` / `message` / `stack` field names
 exceptions into `result.errors` with the original exception preserved. The
 extension is **off by default**; the opt-in is passing the class in the
 `extensions=` list of `strawberry.Schema(...)`
-([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-not-the-optimizers-singleton-in-a-factory)),
+([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)),
 exactly the card's "Off by default; opt-in via the extensions list" DoD row.
 
 **Version boundary** (see
@@ -72,9 +72,9 @@ all four `0.0.14` cards, and the release-status doc moves — mirroring the
 lone-card ownership shape of [`spec-038`][spec-038] Decision 14.
 
 Status: **PLANNED — no slice built yet.**
-Three slices (the card is an M with one module, one test file, and the joint
+Three slices (the card is an M with one module, two test files, and the joint
 cut's mechanically-wide doc alignment): Slice 1 (**the `extensions/`
-subpackage + `extensions/debug.py` + `tests/extensions/test_debug.py`** — the
+subpackage + `extensions/debug.py` + split live/mechanics coverage** — the
 whole public surface and its coverage land in one commit, green under the
 `fail_under = 100` gate), Slice 2 (**docs + card wrap** — the
 implemented-contract [`docs/GLOSSARY.md`][glossary] entry-body update, the
@@ -130,8 +130,10 @@ Revision history (kept inline so the spec is self-contained):
   root
   ([Decision 5](#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root));
   the opt-in shape pinned as passing the **class** (one fresh instance per
-  operation), explicitly not the optimizer's singleton-in-a-factory pattern
-  ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-not-the-optimizers-singleton-in-a-factory));
+  operation), explicitly not the optimizer's singleton-in-a-factory pattern,
+  and the Strawberry floor raised to `0.316.0` because earlier sync execution
+  cached extension instances
+  ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160));
   the hook shape — one sync `on_operation` generator serving both execution
   colors, payload assembly at teardown, `get_results` returning the stash,
   with the pre-execution-error no-`debug`-key consequence derived from the
@@ -144,10 +146,10 @@ Revision history (kept inline so the spec is self-contained):
   ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping));
   the multi-database bracket over `connections.all()`
   ([Decision 10](#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each));
-  the test strategy — real HTTP through a probe URLconf at the package tier,
-  the card's own `tests/extensions/test_debug.py` placement, with the
-  live-first justification recorded rather than silently assumed
-  ([Decision 11](#decision-11--test-strategy-real-http-through-a-probe-urlconf-at-the-package-tier-with-the-live-first-justification-recorded));
+  the test strategy — real HTTP through a probe URLconf in
+  `examples/fakeshop/test_query/test_debug_extension_api.py`, with only
+  request-impossible mechanics in `tests/extensions/test_debug.py`
+  ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics));
   and the joint-cut ownership
   ([Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)).
   One card-vs-shipped-shape conflict is recorded in
@@ -156,6 +158,22 @@ Revision history (kept inline so the spec is self-contained):
   section says the Strawberry-native shape is a `SchemaExtension`, not a
   Django (or Graphene) middleware — resolved per the card's own posture, with
   the title's word kept only as the card-facing feature name.
+- **Revision 2** — validation pass against the installed `0.316.0` engine,
+  the cached `0.262.0` wheel, Django's query-log implementation, graphene's
+  exception middleware, and the repository's test-placement law
+  (2026-07-10). Corrected six implementation-blocking defects: raised the
+  Strawberry floor to `0.316.0` because the old floor and verified `0.315.3`
+  cache sync extension instances and race `execution_context`; split live HTTP
+  tests into `examples/fakeshop/test_query/` and retained only
+  request-impossible mechanics under `tests/extensions/`; required traceback
+  serialization from `exc.__traceback__`; required walking nested
+  `GraphQLError.original_error` links so explicitly raised GraphQL errors
+  retain graphene parity; replaced the inaccurate bounded-log clamp guarantee
+  with Django's actual best-effort length-snapshot semantics; and added a
+  lock-protected reference-counted flag bracket so overlapping async
+  operations cannot restore `force_debug_cursor` out of order. Added
+  concurrent sync isolation, concurrent async restore, and nested-error-chain
+  tests as regression gates.
 
 ## Key glossary references
 
@@ -180,22 +198,21 @@ vocabulary used throughout the spec:
   factory because its [plan cache][glossary-plan-cache] is cross-request
   state; the debug extension has no cross-request state, so its opt-in is the
   class form
-  ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-not-the-optimizers-singleton-in-a-factory)).
+  ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)).
 - [Joint version cut][glossary-joint-version-cut] — the rule this card
   discharges rather than defers: `041` / `042` / `043` all landed with their
   bumps deferred to the last `0.0.14` card, and this is that card
   ([Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)).
 - [Live-first coverage mandate][glossary-live-first-coverage-mandate] — the
   test-placement rule
-  [Decision 11](#decision-11--test-strategy-real-http-through-a-probe-urlconf-at-the-package-tier-with-the-live-first-justification-recorded)
-  answers explicitly: the shipped fakeshop schema does **not** enable the
-  opt-in extension, so no test through fakeshop's real `/graphql/` URL can
-  reach these lines without changing the example's runtime for every suite —
-  the package-tier placement is the documented justified case, and a future
-  fakeshop opt-in promotes the coverage live and **deletes** the package
-  stand-ins.
+  [Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)
+  applies directly: a probe URLconf is still a live fakeshop GraphQL API test,
+  so request-visible behavior lives in `examples/fakeshop/test_query/` even
+  though the shipped aggregate schema remains off by default. Only serializer
+  and lifecycle mechanics that an HTTP request cannot isolate remain in
+  `tests/extensions/`.
 - [Schema reload discipline][glossary-schema-reload-discipline] — the fixture
-  obligation this card's request-driving package tests inherit: any test that
+  obligation this card's request-driving live tests inherit: any test that
   builds a schema against fakeshop types calls the single-sited
   [`schema_reload.reload_all_project_schemas()`][schema-reload] machinery so
   registry state never leaks across collection orders.
@@ -223,7 +240,7 @@ vocabulary used throughout the spec:
   the debug extension reports *everything that executed* (a general
   observability surface). They compose — a strictness `OptimizerError` raised
   during execution surfaces in the debug payload's `exceptions` list like any
-  other resolver exception.
+  other execution exception.
 - [`only()` projection][glossary-only-projection] /
   [Multi-database cooperation][glossary-multi-database-cooperation] — noted
   because the debug payload makes both *visible*: the captured `sql` strings
@@ -249,27 +266,22 @@ plus a serializer helper riding two engine seams, and the weight is in the
 decision hygiene around the two "pick one" choices and in the joint cut's
 doc breadth.
 
-- [ ] **Slice 1 — `extensions/` subpackage + `extensions/debug.py` +
-  `tests/extensions/test_debug.py`**
-  - [ ] **The engine-seam gate rides the first commit**: confirm
-        `strawberry.extensions.SchemaExtension` with the `on_operation` hook
-        and the `get_results` seam behaves at the package's pinned
-        `strawberry-graphql==0.262.0` floor as verified at the installed
-        0.316.0 ([`base_extension.py`][venv-base-extension] defines both;
-        [`schema.py`][venv-schema] calls `get_extensions_results_sync()` /
-        `await get_extensions_results(...)` after the operation context exits
-        on the happy path) — checked in an isolated throwaway venv (never the
-        shared `.venv`; per the repo rule, `uv pip install --python
-        <isolated-venv-python>`), the [`spec-041`][spec-041] /
-        [`spec-042`][spec-042] / [`spec-043`][spec-043] gate discipline. If
-        the floor's hook semantics differ, bump the project's Strawberry
-        floor instead. The command and outcome are recorded in the build
-        artifact ([Definition of done](#definition-of-done)). **No dependency
-        gate otherwise** — this card adds nothing to `[project].dependencies`
-        or `[dependency-groups].dev`, and `uv.lock`'s dependency entries are
-        untouched (its package-`version` entry moves in Slice 3 with the
-        cut,
-        [Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)).
+- [ ] **Slice 1 — `extensions/` subpackage + `extensions/debug.py` + split
+  live/mechanics tests**
+  - [ ] **The engine isolation correction rides the first commit**:
+        `[project].dependencies` raises `strawberry-graphql>=0.262.0` to
+        `strawberry-graphql>=0.316.0`, and `uv.lock` is re-resolved. The old
+        floor caches the sync extension list on `Schema._sync_extensions`, so
+        even a class entry becomes one shared instance whose
+        `execution_context` races across requests. Installed `0.316.0`
+        materializes classes/factories in `Schema.get_extensions()` for every
+        operation. Record both source inspections and run the concurrent sync
+        isolation scenario at the new floor in an isolated throwaway venv
+        (never the shared `.venv`) before calling the floor supported
+        ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)).
+        This is a constraint bump, not a new dependency;
+        `[dependency-groups].dev` remains untouched. The package's own
+        `uv.lock` version entry still moves only in Slice 3 with the cut.
   - [ ] `django_strawberry_framework/extensions/__init__.py` (new) — the
         subpackage docstring (the [`docs/TREE.md`][tree] render fails on a
         missing module docstring) and the `DjangoDebugExtension` re-export in
@@ -277,15 +289,19 @@ doc breadth.
         ([Decision 5](#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root)).
   - [ ] `django_strawberry_framework/extensions/debug.py` (new) —
         `DjangoDebugExtension(SchemaExtension)`: the sync `on_operation`
-        generator (pre-yield: snapshot + `force_debug_cursor = True` per
-        alias in `connections.all()`; post-yield, inside `finally`: slice
+        generator (pre-yield: acquire the module-private reference-counted
+        debug-cursor bracket + snapshot per alias in `connections.all()`
+        through `contextlib.ExitStack`, so partial setup unwinds;
+        post-yield, inside `finally`: materialize and slice
         each alias's `queries_log`, serialize the SQL rows
         ([Decision 8](#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports)),
-        collect the result's `original_error` exceptions — `None`-guarded
-        for the pre-execution teardown paths
+        collect the terminal exceptions from each result error's nested
+        `original_error` chain — cycle-safe and `None`-guarded for the
+        pre-execution teardown paths
         ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping)) —
-        stash the payload, and restore every connection's prior
-        `force_debug_cursor` value), plus the idempotent `get_results()`
+        stash the payload, and release every bracket token so the final
+        overlapping operation restores the original `force_debug_cursor`
+        value), plus the idempotent `get_results()`
         returning `{"debug": <stash>}` when the stash exists and `{}`
         otherwise
         ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)).
@@ -294,17 +310,17 @@ doc breadth.
         masking-extension ordering (list the debug class after `MaskErrors`),
         and the async SQL caveat
         ([Edge cases](#edge-cases-and-constraints)).
-  - [ ] `tests/extensions/test_debug.py` (new) — the scenarios per the
-        [Test plan](#test-plan): the request-driving group posts real HTTP
-        through a probe URLconf mounting a debug-enabled schema over the
-        fakeshop apps (the [`test_multi_db.py`][test-multi-db] plumbing
-        precedent, under the
-        [schema-reload][glossary-schema-reload-discipline] +
-        [`seed_data`][glossary-seed-data] disciplines, posting through
-        [`TestClient`][glossary-testclient]); the mechanics group pins the
-        serializers, the restore contract, and the no-stash `get_results`
-        shape without a request
-        ([Decision 11](#decision-11--test-strategy-real-http-through-a-probe-urlconf-at-the-package-tier-with-the-live-first-justification-recorded)).
+  - [ ] `examples/fakeshop/test_query/test_debug_extension_api.py` (new) —
+        request-visible scenarios from the [Test plan](#test-plan), posting
+        real HTTP through a probe URLconf mounting a debug-enabled schema over
+        the fakeshop apps (the [`test_multi_db.py`][test-multi-db] plumbing
+        precedent), under the shared schema-reload + `seed_data` disciplines
+        and through [`TestClient`][glossary-testclient].
+  - [ ] `tests/extensions/test_debug.py` (new) — request-impossible mechanics
+        only: serializers and nested error-chain handling, saved-value restore
+        and bounded-log behavior, no-stash/idempotent results, masking order,
+        async exception shape, and concurrent sync request isolation
+        ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
   - [ ] Every new symbol carries its docstring and any
         staged-but-not-implemented seam carries a `TODO(spec-044 Slice N)`
         source anchor per [`AGENTS.md`][agents]; `uv run ruff format .` /
@@ -379,8 +395,8 @@ doc breadth.
 
 ## Problem statement
 
-When a GraphQL request misbehaves — too many queries, a slow query, a
-swallowed resolver exception — the developer's first question is "what did
+When a GraphQL request misbehaves — too many queries, a slow query, or an
+execution exception — the developer's first question is "what did
 this operation actually execute?", and today the package has no in-response
 answer. The [Debug-toolbar middleware][glossary-debug-toolbar-middleware]
 (`0.0.14`, landed) answers it **server-side**: a browser panel over
@@ -459,8 +475,12 @@ A true description of the repo as this spec is authored:
   shapes](#error-shapes) records it.)
   ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)).
   Extension classes passed in `extensions=` are instantiated **per
-  operation** (`schema.py::Schema.get_extensions` `#"ext()"`), which is what
-  makes per-operation instance state safe under the class-form opt-in.
+  operation** (`schema.py::Schema.get_extensions` `#"ext()"`) at the new
+  `strawberry-graphql>=0.316.0` floor. The old `0.262.0` floor cached
+  `Schema._sync_extensions`, sharing both extension state and the engine-set
+  `execution_context` across sync requests; that upstream race is why this
+  card must raise the floor rather than merely verify hook names
+  ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)).
 - **Django's own debug cursor is the fidelity source, and it is not
   `DEBUG`-bound.** [`django/db/backends/base/base.py`][venv-django-base]
   `#"queries_logged"` enables query logging when `force_debug_cursor` is set
@@ -509,7 +529,8 @@ A true description of the repo as this spec is authored:
 1. **The response carries its own diagnosis.** With the extension enabled, a
    consumer (or Apollo DevTools) reads `extensions.debug.sql` — one row per
    executed statement, with vendor / alias / interpolated SQL / duration —
-   and `extensions.debug.exceptions` — one row per raised resolver exception,
+   and `extensions.debug.exceptions` — one row per execution exception
+   represented by graphql-core's `original_error` chain,
    with type / message / stack — from the same JSON payload that carried
    `data`
    ([Decision 3](#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field),
@@ -523,9 +544,10 @@ A true description of the repo as this spec is authored:
 3. **Off by default, one-line opt-in, zero new dependencies.** Absent from
    the `extensions=` list, the package's behavior is byte-identical to
    `0.0.13`; present (as the class), every operation on that schema carries
-   the payload. No `[project].dependencies` change, no dev-group change, no
-   settings key
-   ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-not-the-optimizers-singleton-in-a-factory),
+   the payload. No package is added and no dev-group or settings key changes;
+   the existing Strawberry requirement is raised to `>=0.316.0` for
+   per-request isolation
+   ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160),
    [Decision 2](#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring)).
 4. **A graphene migrant recognizes the shape.** The row field names are
    graphene's own wire names (`vendor`, `alias`, `sql`, `duration`,
@@ -536,7 +558,7 @@ A true description of the repo as this spec is authored:
 5. **It composes with the optimizer.** A schema carrying both extensions
    works, and the debug payload becomes the optimizer's demonstration
    surface: the captured row list *shows* the single planned query where a
-   naive resolver chain would show N+1 ([Test plan](#test-plan) scenario 6).
+   naive resolver chain would show N+1 ([Test plan](#test-plan) scenario 2).
 6. **The `0.0.14` release becomes real.** Slice 3 aligns the version quintet
    and flips the release-status wording for all four `0.0.14` cards — the
    joint cut the three predecessors deferred
@@ -567,10 +589,9 @@ A true description of the repo as this spec is authored:
   does not enable the extension: an always-on debug payload would tax every
   acceptance response, bloat every live suite's decoded body, and misteach
   the off-by-default posture the card pins. A future opt-in (the fakeshop
-  activation card is the natural host) promotes the live coverage and
-  deletes this card's package-tier stand-ins per the
-  [live-first mandate][glossary-live-first-coverage-mandate]'s promotion
-  rule ([Decision 11](#decision-11--test-strategy-real-http-through-a-probe-urlconf-at-the-package-tier-with-the-live-first-justification-recorded)).
+  activation card is the natural host) can replace the probe URLconf with the
+  shipped URLconf while the request tests remain in the live tier
+  ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
 - **Production gating knobs.** No `is_slow` threshold argument, no
   redaction hooks, no per-request enable predicate, no settings key — the
   v1 constructor is the bare engine signature, and the dev-only posture is
@@ -675,7 +696,7 @@ source directly, not memory.
 
 Enabling the extension — the class goes in the `extensions=` list beside the
 optimizer's factory (the two lifecycles differ deliberately,
-[Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-not-the-optimizers-singleton-in-a-factory)):
+[Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)):
 
 ```python
 import strawberry
@@ -785,12 +806,14 @@ Consumer-visible behavior:
   debug cursor logged, and Django's measured duration (3-decimal precision —
   the log stores `"%.3f"`). Rows appear in per-connection log order,
   concatenated across aliases in `connections.all()` order.
-- **`exceptions` rows are raised Python exceptions**, not GraphQL
-  validation errors: an entry appears when a `result.errors` member carries
-  an `original_error` (Strawberry's marker for a resolver-raised exception).
-  A query for a nonexistent field produces a GraphQL error but no
-  `exceptions` row — graphene's semantics exactly (its middleware only
-  captures raised exceptions).
+- **`exceptions` rows are execution exceptions**, not GraphQL validation
+  errors: an entry appears when a `result.errors` member carries an
+  `original_error`. This includes resolver-thrown Python exceptions,
+  explicitly raised `GraphQLError`s, and engine-raised completion or scalar
+  serialization exceptions. A query for a nonexistent field produces a
+  GraphQL error but no `exceptions` row. This is intentionally a little
+  broader than graphene's resolver-only middleware and is the honest cost of
+  using Strawberry's operation result instead of wrapping every field.
 - **The two keys are always both present** when the payload appears —
   `{"sql": [], "exceptions": []}` for a no-op operation — so client code
   indexes without existence checks.
@@ -810,7 +833,7 @@ Consumer-visible behavior:
 
 ### Error shapes
 
-- **A raised resolver exception** — unchanged GraphQL behavior (the error
+- **A raised execution exception** — unchanged GraphQL behavior (the error
   appears in `errors`, masked or not per the consumer's other extensions)
   plus one `exceptions` row carrying the **unmasked** type / message /
   stack (when the debug extension is ordered after any masking extension —
@@ -896,7 +919,7 @@ out:
   live test, and it would misrepresent the off-by-default posture in the
   package's own showcase. Slice 2 rewrites the docstring sentence that
   claimed no analogue exists; the example's opt-in is future work
-  ([Decision 11](#decision-11--test-strategy-real-http-through-a-probe-urlconf-at-the-package-tier-with-the-live-first-justification-recorded),
+  ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics),
   [Out of scope](#out-of-scope-explicitly-tracked-elsewhere)).
 
 Justification: the card is an M and each excluded piece has its own owner —
@@ -972,11 +995,17 @@ environments where enabling it is a deliberate act.
 
 Grounds:
 
-1. **Zero package-owned instrumentation.** Django's `CursorDebugWrapper` is
+1. **No package-owned cursor instrumentation.** Django's
+   `CursorDebugWrapper` is
    maintained, backend-aware (it logs `ops.last_executed_query`, the same
    interpolated form graphene logs), and already battle-tested by every
    `assertNumQueries` in the ecosystem. The package adds a bracket, not a
-   wrapper.
+   wrapper. The bracket has one module-private coordination map protected by
+   `threading.Lock`: overlapping brackets on the same connection increment a
+   depth and only the last release restores the original flag. Entries exist
+   only while active and are deleted at depth zero. This state is required to
+   make async teardown order-independent; it never observes or transforms a
+   query.
 2. **Thread-safety story equals graphene's.** Django connections are
    thread-local; the bracket instruments the calling thread's connections —
    the same scope graphene's own thread-local wrap has (its
@@ -1068,15 +1097,15 @@ Alternatives considered (and rejected):
   strawberry-django's `middlewares/debug_toolbar.py` leaf-naming style the
   package adopted for `middleware/debug_toolbar.py`.
 
-### Decision 6 — Opt-in shape: pass the class — one fresh instance per operation, not the optimizer's singleton-in-a-factory
+### Decision 6 — Opt-in shape: pass the class — one fresh instance per operation requires Strawberry 0.316.0
 
 The documented opt-in is `extensions=[DjangoDebugExtension]` (the class
-object; a zero-argument factory is equivalently correct). Strawberry
-instantiates non-instance entries per operation
-([`schema.py`][venv-schema] `::Schema.get_extensions` `#"ext()"`), so each
-operation gets a fresh instance, and the extension keeps its per-operation
-state (the per-alias snapshots and the assembled payload) as plain instance
-attributes.
+object; a zero-argument factory is equivalently correct). At the required
+`strawberry-graphql>=0.316.0` floor, Strawberry instantiates non-instance
+entries per operation ([`schema.py`][venv-schema] `::Schema.get_extensions`
+`#"ext()"`), so each operation gets a fresh instance and the extension keeps
+its per-operation state (the per-alias snapshots and assembled payload) as
+plain instance attributes.
 
 Grounds:
 
@@ -1087,13 +1116,22 @@ Grounds:
    tolerates the shared-singleton pattern because its per-request state
    rides `ContextVar`s and `info.context` — machinery this extension does
    not need if it simply is not shared.
-2. **The two patterns differ for a stated reason, in the same code
+2. **The old floor is provably unsafe for this design.** Strawberry 0.262.0
+   and verified 0.315.3 cache class-created sync extensions on
+   `Schema._sync_extensions`. Concurrent requests then overwrite the same
+   instance's engine-owned `execution_context`, so a response can expose a
+   sibling request's exception payload. Strawberry 0.316.0 removes that
+   cache and constructs classes/factories per request. A `ContextVar` inside
+   this extension cannot repair the engine's shared `execution_context`
+   attribute, so the root fix is the floor bump. This is the exact upstream
+   race reported and fixed in [Strawberry issue #4369][upstream-strawberry-extension-isolation].
+3. **The two patterns differ for a stated reason, in the same code
    example.** The optimizer's factory exists to preserve its cross-request
    [plan cache][glossary-plan-cache]; the debug extension has no
    cross-request state, so the class form is both simpler and safer. The
    [User-facing API](#user-facing-api) example shows both side by side with
    the reason inline, and both docstrings state their own lifecycle.
-3. **It is the engine's mainstream shape** — Strawberry's documentation and
+4. **It is the engine's mainstream shape** — Strawberry's documentation and
    its own bundled extensions take classes in `extensions=`; instances are
    the deprecated path (the engine emits a `DeprecationWarning` for bare
    instances at `Schema.__init__`).
@@ -1104,6 +1142,9 @@ Alternatives considered (and rejected):
   Rejected: buys nothing (there is no cache to preserve) and costs a
   ContextVar lifecycle with reset-token hygiene — machinery whose only
   consumer would be a usage pattern the docs steer away from anyway.
+- **Retain `strawberry-graphql>=0.262.0` and rely on the class form.**
+  Rejected: the sync path still caches the resulting instance before 0.316.0;
+  class syntax alone does not provide isolation at the old floor.
 - **Guard against shared instances at runtime** (e.g. detect a second
   concurrent `on_operation` on one instance and raise). Rejected: the
   engine already owns instance lifecycle and deprecation signaling for the
@@ -1115,13 +1156,16 @@ Alternatives considered (and rejected):
 
 `DjangoDebugExtension` implements exactly two engine seams:
 
-- **`on_operation`** — a **sync** generator: pre-yield it brackets every
+- **`on_operation`** — a **sync** generator: pre-yield it uses
+  `contextlib.ExitStack` to acquire a reference-counted bracket token and
+  snapshot for every
   alias ([Decision 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port),
   [Decision 10](#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each));
   post-yield — inside a `try` / `finally` so restore always runs — it
   slices each alias's `queries_log`, serializes the SQL rows and the
   exceptions off `self.execution_context`, stashes the completed payload on
-  the instance, and restores each connection's saved `force_debug_cursor`.
+  the instance, and releases every token. The last overlapping token for a
+  connection restores its saved `force_debug_cursor`.
 - **`get_results`** — returns `{"debug": <stash>}` when the stash was
   assembled and `{}` otherwise — **idempotent** (a pure read of the stash,
   never a mutate-or-pop): the engine's coerced-exception recovery paths
@@ -1145,13 +1189,17 @@ Grounds:
    half-open bracket (the error paths), and assembling in `on_execute`'s
    teardown would miss nothing today but couples to a subtler ordering for
    zero gain — `on_operation` is the outermost, symmetric bracket.
-3. **`finally`-guarded restore is the non-negotiable part.** Whatever the
-   operation did — including raising through the engine — connections must
+3. **`ExitStack`-owned, overlap-safe restore is the non-negotiable part.**
+   Whatever the operation did — including raising through the engine — connections must
    come back to their prior instrumentation state, or one enabled operation
    would leave `force_debug_cursor` stuck `True` process-wide (and, in a
    test run, silently corrupt every later `assertNumQueries`-style
-   snapshot). The saved-value restore (not `False`) also keeps the bracket
-   nestable inside a consumer's own `CaptureQueriesContext`.
+   snapshot). `ExitStack` also unwinds aliases already acquired if a later
+   alias fails during setup, before the hook reaches `yield`. The saved-value
+   restore (not `False`) also keeps the bracket nestable inside a consumer's
+   own `CaptureQueriesContext`; reference
+   counting prevents overlapping async operation contexts from restoring the
+   same loop-thread connection out of order.
 
 Alternatives considered (and rejected):
 
@@ -1198,7 +1246,10 @@ explicitly", discharged here and mirrored in the GLOSSARY entry body:
 
 The exception row carries graphene's triple, byte-compatible in form:
 `excType` (`str(type(exc))`, the `"<class 'ValueError'>"` shape), `message`
-(`str(exc)`), `stack` (`"".join(traceback.format_exception(exc))`).
+(`str(exc)`), `stack` (`"".join(traceback.format_exception(type(exc), exc,
+exc.__traceback__))`). The explicit traceback argument is load-bearing:
+serialization happens after graphql-core's `except` block has finished, so
+`traceback.format_exc()` would produce `NoneType: None`.
 
 Grounds: the card's DoD pins "mirrors graphene's `DjangoDebugSQL` /
 `DjangoDebugException` field names where the chosen fidelity supports them".
@@ -1227,9 +1278,14 @@ At teardown the extension reads the operation's errors from
 **`None`-guarded**, because on the sync parse/validation paths teardown
 runs during the early return's unwind before any result exists,
 [Error shapes](#error-shapes)) and serializes
-**only** those members whose `original_error` is a real exception —
-Strawberry/graphql-core's marker distinguishing a resolver-raised Python
-exception from a pure GraphQL error. Each match serializes via the
+**only** those members whose `original_error` is non-`None` —
+Strawberry/graphql-core's marker distinguishing an execution exception from a
+pure GraphQL validation error. Starting from that first original, a private helper
+walks nested `GraphQLError.original_error` links to the terminal exception,
+with an identity set preventing malformed cycles. A terminal
+`GraphQLError` is retained: graphql-core uses that exact two-link shape when
+a resolver explicitly raises `GraphQLError`, and graphene's resolver
+middleware records it. Each match serializes via the
 `wrap_exception`-shaped triple
 ([Decision 8](#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports)),
 using the original exception's own `__traceback__` for `stack`.
@@ -1242,12 +1298,18 @@ Grounds:
    re-implementation with a hot-path cost
    ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)
    alternatives).
-2. **The `original_error` filter reproduces graphene's semantics.**
-   graphene's `on_resolve_error` fires only for raised exceptions; GraphQL
-   validation errors never reach it. Filtering on `original_error is not
-   None` (and not `isinstance(original_error, GraphQLError)`) draws the
-   same line: a bad selection yields `errors` but an empty `exceptions`
-   list.
+2. **The `original_error` filter and chain walk define a deliberate,
+   documented widening from graphene.** Graphene's `on_resolve_error` fires
+   only for resolver-raised exceptions; GraphQL
+   validation errors never reach it. Requiring the outer result error's
+   `original_error is not None` draws the same line: a bad selection yields
+   `errors` but an empty `exceptions` list. Walking nested GraphQL wrappers
+   then preserves the original Python exception, while retaining a terminal
+   explicitly raised `GraphQLError` rather than misclassifying it as
+   validation output. graphql-core also supplies `original_error` for
+   execution-time completion and scalar serialization failures; those are
+   included because result-level capture cannot distinguish them from
+   resolver failures without adding the rejected per-field wrapper.
 3. **Unmasked by design, stated loudly — and order-dependent, stated just
    as loudly.** The debug payload exposes the raw exception type, message,
    and stack even when a masking extension sanitizes `errors` — that is
@@ -1266,10 +1328,11 @@ Alternatives considered (and rejected):
 
 - **A `resolve` hook capturing exceptions per field.** Rejected per
   ground 1.
-- **Serializing every `GraphQLError`** (no filter). Rejected per ground 2 —
-  it would spam the list with entries the standard `errors` array already
-  carries in full fidelity (validation errors have no server-side stack to
-  add).
+- **Serializing every outer result `GraphQLError`** (no `original_error`
+  gate). Rejected per ground 2 — it would spam the list with validation
+  entries the standard `errors` array already carries. This is distinct from
+  retaining a terminal `GraphQLError` reached through a non-`None` original
+  link, which proves it was raised during resolver execution.
 - **Capturing exceptions the resolvers swallowed** (graphene cannot either).
   Out of scope by construction: only errors that reached the result exist
   to report.
@@ -1302,13 +1365,15 @@ rejected, misses the common case of aliases whose connections already exist
 from prior requests, and signal (dis)connection per operation is its own
 leak surface.
 
-### Decision 11 — Test strategy: real HTTP through a probe URLconf at the package tier, with the live-first justification recorded
+### Decision 11 — Test strategy: split live HTTP behavior from package-tier mechanics
 
-The card pins the placement — `tests/extensions/test_debug.py`, "against a
-fakeshop request that emits SQL" — and this spec honors it with two groups in
-that file:
+The card predicts `tests/extensions/`, but predicted files do not override the
+repository's test-placement law. The card also requires coverage "against a
+fakeshop request that emits SQL", so the tests split by behavior:
 
-- **The request-driving group** posts **real HTTP** to a debug-enabled
+- **The request-driving group** lives in
+  `examples/fakeshop/test_query/test_debug_extension_api.py` and posts
+  **real HTTP** to a debug-enabled
   schema mounted on a probe URLconf (`@pytest.mark.urls` /
   a module-level `urlpatterns` over Strawberry's Django view — the
   [`test_multi_db.py`][test-multi-db] `#"_current"` plumbing precedent),
@@ -1317,25 +1382,17 @@ that file:
   [`seed_data`][glossary-seed-data], posted through
   [`TestClient`][glossary-testclient]. These are fakeshop requests emitting
   real SQL — the card's phrase, literally.
-- **The mechanics group** pins what a request cannot isolate: the
-  restore contract (prior `force_debug_cursor` value, `finally` under a
-  raising teardown path), the serializer edges, and the no-stash
-  `get_results() == {}` shape.
+- **The mechanics group** lives in `tests/extensions/test_debug.py` and pins
+  what a request cannot isolate: serializer and nested-chain edges, the
+  restore contract, bounded-log behavior, no-stash/idempotent results,
+  masking order, async exception shape, and concurrent sync isolation.
 
 **The [live-first mandate][glossary-live-first-coverage-mandate]
-justification, recorded rather than assumed:** the mandate sends coverage to
-`examples/fakeshop/test_query/` when a real fakeshop `/graphql/` request can
-reach the line. It cannot here: the extension is off by default and the
-shipped [`config/schema.py`][config-schema] does not enable it
-([Decision 2](#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring)),
-so no request through fakeshop's real URLconf executes a single line of
-`extensions/debug.py`. That is the same documented
-genuinely-unreachable-live posture [`spec-041`][spec-041] took for the
-Channels router (fakeshop is WSGI-only), with the same forward rule: if a
-future card opts fakeshop into the extension, the promoted live tests
-**delete** the package-tier request-driving stand-ins (the
-`fail_under = 100` gate keeps the swap honest), keeping only the mechanics
-group.
+application:** `examples/fakeshop/test_query/` owns live GraphQL HTTP tests for
+any app or package surface. A module-local probe URLconf does not change that
+classification; it is the established way to exercise an opt-in schema shape
+without enabling it in the shipped aggregate schema. Package-tier tests remain
+only for mechanics that cannot be proved by a real request.
 
 Alternatives considered (and rejected):
 
@@ -1344,12 +1401,10 @@ Alternatives considered (and rejected):
   [Decision 2](#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring)
   — every acceptance response pays body weight and capture cost, and the
   example stops modeling the off-by-default posture.
-- **Placing the request-driving group in `test_query/` anyway** (the
-  `test_multi_db.py` cosmetic parallel). Rejected: `test_query/` is
-  fakeshop's consumer-visible API surface; the sharded suite tests a real
-  shipped fakeshop *mode*, while a debug-enabled schema is not part of the
-  example's shipped surface at all. The card's explicit
-  `tests/extensions/` placement settles the tie.
+- **Put all scenarios in the card's predicted `tests/extensions/` path.**
+  Rejected: a live `/graphql/` request belongs to `test_query/` under the
+  explicit repository rule. Predicted paths guide planning; they do not
+  authorize a placement exception.
 - **In-process `schema.execute_sync` instead of HTTP.** Rejected for the
   request-driving group (the card says "request", and HTTP exercises the
   serialization of `extensions` into the response body — JSON round-trip
@@ -1412,10 +1467,12 @@ specified in the decisions cited; the version moves **only** in Slice 3,
 | File | Change | Slice |
 | --- | --- | --- |
 | `django_strawberry_framework/extensions/__init__.py` (new) | Subpackage docstring + `DjangoDebugExtension` re-export in `__all__` ([Decision 5](#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root)) | 1 |
-| `django_strawberry_framework/extensions/debug.py` (new) | `DjangoDebugExtension(SchemaExtension)`: sync `on_operation` generator (per-alias `force_debug_cursor` bracket + snapshot pre-yield; `finally`-guarded slice / serialize / stash / restore at teardown), `get_results()` returning the stash under `"debug"`, the SQL-row and exception-row serializers ([Decisions 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)–[10](#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each)) | 1 |
-| `tests/extensions/test_debug.py` (new) | The [Test plan](#test-plan) scenarios: the probe-URLconf request-driving group (real HTTP via [`TestClient`][glossary-testclient], schema-reload + `seed_data` disciplines) + the DB-adjacent mechanics group ([Decision 11](#decision-11--test-strategy-real-http-through-a-probe-urlconf-at-the-package-tier-with-the-live-first-justification-recorded)) | 1 |
+| `django_strawberry_framework/extensions/debug.py` (new) | `DjangoDebugExtension(SchemaExtension)`: sync `on_operation` generator (per-alias reference-counted `force_debug_cursor` bracket + snapshot pre-yield; `finally`-guarded materialize / slice / serialize / stash / release at teardown), `get_results()` returning the stash under `"debug"`, SQL/exception serializers, and the lock-protected active-bracket coordinator ([Decisions 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)–[10](#decision-10--multi-database-capture-every-alias-in-connectionsall-one-bracket-each)) | 1 |
+| `examples/fakeshop/test_query/test_debug_extension_api.py` (new) | The [Test plan](#test-plan) request-driving scenarios: real probe-URLconf HTTP via [`TestClient`][glossary-testclient], under schema-reload + `seed_data` disciplines ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)) | 1 |
+| `tests/extensions/test_debug.py` (new) | Request-impossible serializer, lifecycle, masking, async-shape, bounded-log, and concurrent-isolation mechanics ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)) | 1 |
+| [`pyproject.toml`][pyproject] / `uv.lock` | Raise the existing Strawberry floor to `>=0.316.0` and re-resolve for per-request extension isolation ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)); the package's own version still moves only in Slice 3 | 1 |
 | [`docs/GLOSSARY.md`][glossary] | [Response-extensions debug middleware][glossary-response-extensions-debug-middleware] entry body → implemented contract (glossary DB + re-render); status flip deferred to Slice 3 | 2 |
-| [`docs/TREE.md`][tree] | Regenerated (script-rendered) after the card flips Done; `extensions/` + `tests/extensions/` planned rows resolve | 2 |
+| [`docs/TREE.md`][tree] | Regenerated (script-rendered) after the card flips Done; `extensions/` + `tests/extensions/` planned rows resolve and the live test row appears | 2 |
 | [`config/schema.py`][config-schema] | Docstring's "no direct Strawberry analogue" sentence rewritten to name the shipped extension and fakeshop's deliberate opt-out | 2 |
 | [`KANBAN.md`][kanban] / `KANBAN.html` | Card wrap via DB edit + re-render; `import_spec_terms` for the companion CSV | 2 |
 | [`pyproject.toml`][pyproject] / [`__init__.py`][init] / [`tests/base/test_init.py`][test-base-init] / `uv.lock` / GLOSSARY version line | The version quintet → `0.0.14` ([Decision 12](#decision-12--this-card-completes-the-joint-0014-cut-and-owns-the-version-bump)) | 3 |
@@ -1435,8 +1492,9 @@ discipline).
   ([Decision 3](#decision-3--exposure-the-response-extensions-map-under-the-debug-key-not-a-schema-level-_debug-field),
   [Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)).
 - [ ] **D2** — SQL instrumentation rides Django's own `CursorDebugWrapper`
-  via the `force_debug_cursor` flag — the package owns a bracket, not a
-  cursor wrapper
+  via the `force_debug_cursor` flag — the package owns only the minimal
+  reference-counted bracket coordinator needed for overlap-safe restoration,
+  not a cursor wrapper or query recorder
   ([Decision 4](#decision-4--fidelity-djangos-own-debug-cursor-via-a-force_debug_cursor-bracket-not-a-cursor-wrap-port)).
 - [ ] **D3** — the request-driving tests reuse the single-sited
   [`schema_reload.reload_all_project_schemas()`][schema-reload] and
@@ -1444,11 +1502,11 @@ discipline).
   [`TestClient`][glossary-testclient], and mirror the
   [`test_multi_db.py`][test-multi-db] probe-URLconf plumbing — never private
   reload logic, hand-built catalog rows, or hand-rolled POST-decode blocks
-  ([Decision 11](#decision-11--test-strategy-real-http-through-a-probe-urlconf-at-the-package-tier-with-the-live-first-justification-recorded)).
+  ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
 - [ ] **D-N1** (non-reuse) — the optimizer's `_context` ContextVar /
   context-stash machinery is **not** reused: that machinery exists because
   the optimizer instance is shared across requests; a per-operation
-  instance ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-not-the-optimizers-singleton-in-a-factory))
+  instance ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160))
   makes plain attributes the simpler correct shape.
 - [ ] **D-N2** (non-reuse) — no `utils/imports.py` guard
   ([`require_optional_module`][glossary-require-optional-module] /
@@ -1468,25 +1526,30 @@ discipline).
 
 ## Edge cases and constraints
 
-- **Restore is saved-value, `finally`-guarded, and nest-safe.** The bracket
-  restores each connection's *prior* `force_debug_cursor` (not `False`), so
+- **Restore is saved-value, `ExitStack`-owned, overlap-safe, and nest-safe.**
+  The bracket restores each connection's *prior* `force_debug_cursor` (not `False`), so
   an operation running inside a consumer's own `CaptureQueriesContext` (or
   under `DEBUG=True`, where `queries_logged` is true anyway) leaves the
-  outer state intact; the `finally` guarantees restore even when the
-  operation or the serializer raises. Without this, one enabled operation
-  could leave process connections instrumented forever
+  outer state intact. A lock-protected active-bracket map counts overlapping
+  users of the same connection object and restores only when the count reaches
+  zero, so async teardown order cannot leave a stale flag. The `finally`
+  guarantees release even when the operation or serializer raises, and
+  unwinds earlier aliases if a later alias fails during acquisition. Without
+  this, one enabled operation could leave process connections instrumented
+  forever
   ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)).
 - **`queries_log` is a bounded deque.** Django caps the per-connection log
-  (`queries_limit`, default 9000); an operation exceeding it evicts its own
-  oldest rows, so the captured list is the **most recent** statements and
-  the pre-yield snapshot index is clamped (`min(snapshot,
-  len(queries_log))` at slice time) so eviction can never produce a
-  negative or out-of-range slice. `CaptureQueriesContext` shares the
-  hazard; the docstring names it and the 9000 default makes it academic
-  for a debug tool. (A mid-operation `reset_queries()` — the
-  `request_started` handler — shares the shorter-log shape and is likewise
-  clamp-safe; over HTTP the signal fires before the view, outside the
-  bracket.)
+  (`queries_limit`, default 9000), and a deque is not sliceable. Teardown
+  first materializes `entries = list(connection.queries_log)`, then reads
+  `entries[min(snapshot, len(entries)):]`. This mirrors Django's
+  length-snapshot approach and cannot raise if `reset_queries()` shortened
+  the log, but it is explicitly **best effort after rollover**: once a full
+  deque evicts old rows while remaining the same length, a length snapshot
+  cannot distinguish old from new entries and may omit some or all operation
+  queries. `CaptureQueriesContext` has the same limitation. The docstring
+  names it; 9000 statements remains a pathological operation for this dev
+  tool. Over HTTP, the normal `request_started` reset happens before the
+  view and therefore before this bracket.
 - **Async execution: exceptions always, SQL typically nothing.** Django
   connections are strictly per-thread (`ConnectionHandler.thread_critical`);
   under async execution the extension's hook runs on the event-loop thread,
@@ -1495,14 +1558,13 @@ discipline).
   connection objects the bracket never touched — so expect an **empty**
   `sql` list under async execution, not a partial one. Exception capture
   reads the execution result and is color-agnostic. Two sharper corners,
-  both documented: **concurrent** async operations on one loop interleave
-  their save/restore pairs on the *shared* loop-thread connection objects
-  (a `force_debug_cursor` flag can be left `True` on objects that execute
-  nothing — inert residue, but real), and under `DJANGO_ALLOW_ASYNC_UNSAFE`
-  (which lets the loop thread run ORM directly) that same interleaving
-  extends to the rows themselves — concurrent operations can capture each
-  other's statements. The docstring carries all of it; the follow-on is a
-  [Risk](#risks-and-open-questions). The sync path — Django's default
+  both documented: **concurrent** async operations on one loop share the
+  loop-thread connection objects, so the reference-counted bracket prevents
+  flag leakage but cannot attribute rows per operation; under
+  `DJANGO_ALLOW_ASYNC_UNSAFE` (which lets the loop thread run ORM directly),
+  concurrent operations can capture each other's statements. The docstring
+  carries all of it; the follow-on is a [Risk](#risks-and-open-questions).
+  The sync path — Django's default
   `/graphql/` view, `schema.execute_sync`, every fakeshop surface — captures
   fully.
 - **Pre-execution failures carry no `debug` key.** Parse and validation
@@ -1559,16 +1621,19 @@ discipline).
 
 ## Test plan
 
-All scenarios live in `tests/extensions/test_debug.py`
-([Decision 11](#decision-11--test-strategy-real-http-through-a-probe-urlconf-at-the-package-tier-with-the-live-first-justification-recorded)).
+Scenarios 1–7 live in
+`examples/fakeshop/test_query/test_debug_extension_api.py`; scenarios 8–13
+live in `tests/extensions/test_debug.py`
+([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
 The **request-driving group (1–7)** posts real HTTP through the probe
 URLconf (a debug-enabled schema over freshly-reloaded fakeshop types; the
 [schema-reload][glossary-schema-reload-discipline] +
 [`seed_data`][glossary-seed-data] disciplines; posts through
 [`TestClient`][glossary-testclient] with `assert_no_errors=False` where a
-scenario expects errors). The **mechanics group (8–12)** needs no request.
+scenario expects errors). The **mechanics group (8–13)** needs no request.
 Per the repo rule the implementation worker records the exact pytest
-command (`uv run pytest tests/extensions/test_debug.py`) for the maintainer
+commands (`uv run pytest examples/fakeshop/test_query/test_debug_extension_api.py`
+and `uv run pytest tests/extensions/test_debug.py`) for the maintainer
 and does not run the suite unless explicitly authorized — the
 [`AGENTS.md`][agents] #"Do not run pytest" workflow rule; this spec
 describes the verification but does not override it.
@@ -1610,16 +1675,15 @@ describes the verification but does not override it.
    `"Traceback"`; `debug.sql` present (empty or not) — the two lists are
    independent
    ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping)).
-5. **Validation error: no `debug` key, and no exception row confusion.** An
+5. **Validation versus execution error boundary.** An
    unknown-field selection → `errors` present, `"debug" not in
    (res.extensions or {})` — the pre-execution path
    ([Decision 7](#decision-7--hook-shape-one-sync-on_operation-generator-assembly-at-teardown-get_results-returns-the-stash)).
-   A second case — a query that *executes* and yields a GraphQL error
-   without a raised exception (e.g. a null-on-non-null propagation) — is
-   noted for implementation: if a clean specimen exists in the probe
-   schema, assert `exceptions == []` for it (the `original_error` filter's
-   positive proof); otherwise scenario 4's shape plus the filter's
-   package-tier unit (scenario 10) cover the line.
+   A second probe field returns `None` for a non-null type: execution occurs,
+   graphql-core raises a completion `TypeError`, and the response carries one
+   `exceptions` row. This pins the documented result-level widening beyond
+   graphene's resolver-only middleware rather than falsely treating
+   `original_error` as a resolver-only marker.
 6. **No-SQL operation.** `{ __typename }` → `debug == {"sql": [],
    "exceptions": []}` — both keys present, both empty
    ([User-facing API](#user-facing-api)).
@@ -1634,26 +1698,32 @@ describes the verification but does not override it.
    enabled schema: a connection whose `force_debug_cursor` was pre-set
    `True` still reads `True` after the operation (saved-value restore, the
    nested-`CaptureQueriesContext` guarantee), and one whose flag was
-   `False` reads `False`; the snapshot-clamp slice under a
-   shorter-than-snapshot `queries_log` (simulated eviction) returns `[]`
-   rather than raising ([Edge cases](#edge-cases-and-constraints)).
-9. **Async color.** An `async def` test drives `await schema.execute(...)`
-   on an enabled schema: a raising async resolver populates
-   `exceptions` (color-agnostic capture), the `debug` key is present, and
-   the payload shape holds. SQL content is deliberately **not** asserted
-   beyond type (the documented thread-locality caveat — this test pins the
-   contract that holds, not the fidelity that varies); marked `django_db`
-   only if it touches the ORM, per the suite's async-connection hygiene
-   ([`tests/conftest.py`][tests-conftest]).
+   `False` reads `False`; a shorter-than-snapshot `queries_log` (simulated
+   reset) returns `[]` rather than raising, and a full bounded deque test
+   pins the documented best-effort rollover behavior without claiming exact
+   capture. A simulated failure while acquiring a later database alias proves
+   the `ExitStack` restores every earlier alias and empties the active-bracket
+   map before propagating the error ([Edge cases](#edge-cases-and-constraints)).
+9. **Async color and overlap-safe restore.** An `async def` test overlaps two
+   `schema.execute(...)` calls with raising async resolvers. Each response
+   populates its own exception row and carries the `debug` key; after both
+   complete, every involved connection has its original
+   `force_debug_cursor` value and the private active-bracket map is empty,
+   regardless of completion order. SQL content is deliberately **not**
+   asserted beyond type (the documented thread-locality caveat — this test
+   pins the contract that holds, not fidelity the design cannot provide);
+   marked `django_db` only if it touches the ORM, per the suite's
+   async-connection hygiene ([`tests/conftest.py`][tests-conftest]).
 10. **Serializer units.** The exception serializer over a hand-raised
     exception (the triple's exact forms, including the
     `"<class '...'>"` `excType` shape and chained-traceback stacks); the
     SQL-row serializer over canned log entries including an `executemany`
     `"3 times: ..."` entry (`isSelect is False`, verbatim `sql`) and a
-    `duration` string → float conversion; the `original_error` filter over
-    a mixed error list (pure `GraphQLError` skipped, wrapped exception
-    kept) and over a `result is None` execution context (the sync
-    pre-execution teardown shape — no rows, no raise,
+    `duration` string → float conversion; the `original_error` collector over
+    a mixed error list (pure validation `GraphQLError` skipped, wrapped
+    Python exception kept, explicitly raised nested `GraphQLError` kept,
+    malformed cycles terminate) and over a `result is None` execution
+    context (the sync pre-execution teardown shape — no rows, no raise,
     [Error shapes](#error-shapes)).
 11. **`get_results` no-stash shape and idempotence.** A fresh instance's
     `get_results()` returns `{}` (never `{"debug": None}`), and after a
@@ -1663,20 +1733,30 @@ describes the verification but does not override it.
     payload round-trips `json.dumps` (the JSON-serializability guard).
 12. **Masking-extension ordering.** Two direct `schema.execute_sync(...)`
     runs over a raising resolver: with
-    `extensions=[MaskErrors(), DjangoDebugExtension]` the response's
+    `extensions=[MaskErrors, DjangoDebugExtension]` the response's
     `errors` are masked while `debug.exceptions` carries the one unmasked
     row; with the order reversed
-    (`[DjangoDebugExtension, MaskErrors()]`), `debug.exceptions == []` —
+    (`[DjangoDebugExtension, MaskErrors]`), `debug.exceptions == []` —
     the LIFO teardown dependency pinned in both directions
     ([Decision 9](#decision-9--exception-capture-the-results-original_error-chain-serialized-like-graphenes-wrap_exception--no-resolver-wrapping)).
+13. **Concurrent sync isolation at the floor.** One schema with the class
+    opt-in executes two distinguishable blocking resolvers concurrently in a
+    `ThreadPoolExecutor`, synchronized so both operations overlap. Each
+    response must contain only its own exception message and query-derived
+    marker, and both connections must restore their prior debug flags. Run
+    this scenario in the isolated `strawberry-graphql==0.316.0` floor
+    environment as well as the normal suite. This is the regression that
+    fails under the old cached `_sync_extensions` lifecycle and proves the
+    dependency bump's stated reason.
 
 Coverage: the package gate is `fail_under = 100` and `extensions/debug.py`
 is package code — every branch has a named owner above: the bracket loop and
-both restore directions (1, 8), the slice clamp (8), both serializers, the
-filter, and its `result is None` guard (4, 10), the empty and populated
+both restore directions (1, 8), the bounded-log fallback (8), both
+serializers, the chain walk/cycle guard, and its `result is None` guard (4,
+10), the empty and populated
 `get_results` directions plus idempotence (6, 7, 11), the masking-order
-dependency (12), the async hook color (9), the mutation/query independence
-(3). If
+dependency (12), per-request sync isolation (13), the async hook color (9),
+and the mutation/query independence (3). If
 implementation finds a branch unreachable through these (e.g. a defensive
 guard), it gets its own targeted unit the same way — named owner, never a
 blanket claim.
@@ -1695,8 +1775,11 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   `django_strawberry_framework.extensions` import path and class-form
   opt-in, the `debug` key and two-list payload, the six SQL fields with the
   named omissions and the `executemany` form, the exception triple and the
-  `original_error` filter, the `force_debug_cursor` bracket and its
-  `DEBUG`-independence, the per-alias multi-DB behavior, the
+  nested `original_error` walk (including the documented result-level
+  widening), the reference-counted `force_debug_cursor` bracket and its
+  `DEBUG`-independence, the best-effort bounded-log behavior, the
+  `strawberry-graphql>=0.316.0` isolation floor, the per-alias multi-DB
+  behavior, the
   pre-execution-error no-key rule, the dev-only security caveat, and the
   async SQL caveat — plus the "distinct from the
   [Debug-toolbar middleware][glossary-debug-toolbar-middleware]" paragraph
@@ -1704,7 +1787,8 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
 - [`docs/TREE.md`][tree] (Slice 2) — regenerated via
   [`scripts/build_tree_md.py`][build-tree-md] after the card flips Done:
   the package tree's planned `extensions/` rows resolve to real
-  docstring-derived rows; the test tree gains `tests/extensions/test_debug.py`.
+  docstring-derived rows; the test tree gains `tests/extensions/test_debug.py`
+  and `examples/fakeshop/test_query/test_debug_extension_api.py`.
 - [`config/schema.py`][config-schema] (Slice 2) — the docstring's "has no
   direct Strawberry analogue" sentence rewritten
   ([Decision 2](#decision-2--card-scope-boundary-the-extension-ships-alone--no-django-middleware-no-schema-field-no-fakeshop-always-on-wiring)).
@@ -1752,20 +1836,20 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   follow-on knob once a real consumer asks — additive, no shape change.
 - **Async SQL fidelity.** Statements executed on `sync_to_async` executor
   threads escape the event-loop thread's bracket — under async execution
-  the `sql` list is typically empty, and concurrent async operations
-  interleave their flag save/restores on the shared loop-thread
-  connections ([Edge cases](#edge-cases-and-constraints)). **Preferred
-  answer:** document the caveat (the sync path — every fakeshop surface
-  and Django's default view — captures fully; exceptions capture is
-  color-agnostic); this matches the single upstream's own thread-local
-  scope, so parity is honest. **Fallback / follow-on:** a
+  the `sql` list is typically empty. Concurrent async operations share the
+  loop-thread connection wrappers; the reference-counted coordinator makes
+  flag restoration safe, but cannot attribute rows if async-unsafe ORM work
+  runs on that thread ([Edge cases](#edge-cases-and-constraints)).
+  **Preferred answer:** guarantee clean restoration and document the fidelity
+  caveat (the sync path — every fakeshop surface and Django's default view —
+  captures fully; exceptions capture is color-agnostic); this matches the
+  single upstream's own thread-local scope. **Fallback / follow-on:** a
   per-operation-isolated instrumentation design — worth its own card if
   async consumers report gaps. (An earlier draft's idea — route the
   bracket through `sync_to_async(thread_sensitive=True)` — is recorded
   here as **rejected**, not deferred: asgiref's thread-sensitive executor
   is one shared thread for *all* concurrent requests' ORM work, so a
-  bracket planted there guarantees exactly the cross-request flag
-  corruption and row leakage the per-operation design must avoid.)
+  bracket planted there cannot provide per-operation row attribution.)
 - **Engine ordering coupling.** The no-`debug`-key-on-pre-execution-errors
   behavior rides the verified 0.316.0 call ordering (`get_results` inside
   the operation context on early returns, after it on the happy path). A
@@ -1773,16 +1857,19 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   key appearing with empty lists on validation errors, or vanishing on
   happy paths, both caught loudly by scenarios 1 and 5 under a refreshed
   lock). **Preferred answer:** accept; the Slice-1 floor gate pins today's
-  semantics at `0.262.0` and the tests pin them at the installed version.
+  semantics at the new `0.316.0` floor and the tests pin them at the
+  installed version.
   **Fallback:** assemble defensively in both teardown *and* `get_results`
   (idempotent build) if a reorder ever lands.
 - **`queries_log` eviction under pathological operations.** An operation
-  emitting more than `queries_limit` statements loses its oldest rows
-  (clamped slice, [Edge cases](#edge-cases-and-constraints)) — the payload
-  is then a suffix, with no explicit truncation marker in v1. **Preferred
-  answer:** accept and document (Django's own `queries` property has the
-  same property plus a warning); a `truncated: true` marker is a cheap
-  follow-on if it ever bites. **Fallback:** the marker.
+  that rolls over a full bounded deque can lose old operation rows and, when
+  the length remains unchanged from the snapshot, can report no rows at all
+  ([Edge cases](#edge-cases-and-constraints)). **Preferred answer:** accept
+  and document the exact best-effort boundary; Django's own capture context
+  has the same length-snapshot limitation. A reliable `truncated: true`
+  marker would require operation-local instrumentation or a monotonic query
+  counter, not merely another comparison against deque length. **Fallback:**
+  a separate fidelity card that changes the capture source.
 - **Payload size on large operations.** A thousand-row capture serializes a
   thousand interpolated SQL strings into every response. **Preferred
   answer:** accept for a dev tool — the operation that emits a thousand
@@ -1801,10 +1888,11 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
   ([Decision 8](#decision-8--the-sql-row-shape-graphenes-wire-names-narrowed-to-what-djangos-log-supports));
   a fidelity upgrade is a swap of the capture source behind the same row
   shape.
-- **Fakeshop opting into the extension** (and the live-tier promotion +
-  package-test deletion that follows) — the fakeshop-activation beta card
+- **Fakeshop opting into the extension** (and replacing the probe URLconf
+  with the shipped URLconf in the existing live tests) — the
+  fakeshop-activation beta card
   ([`TODO-BETA-053-0.1.5`][kanban]) is the natural host
-  ([Decision 11](#decision-11--test-strategy-real-http-through-a-probe-urlconf-at-the-package-tier-with-the-live-first-justification-recorded)).
+  ([Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)).
 - **Production-gating knobs** (enable predicates, slow-query thresholds,
   row caps, redaction) — follow-on once a consumer asks
   ([Risks](#risks-and-open-questions)).
@@ -1838,27 +1926,25 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
 - [ ] Off by default; the opt-in is the class in `strawberry.Schema(...)`'s
       `extensions=` list (the card's DoD row 4); with the extension absent,
       behavior is unchanged from `0.0.13` (Test plan scenario 7)
-      ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-not-the-optimizers-singleton-in-a-factory)).
+      ([Decision 6](#decision-6--opt-in-shape-pass-the-class--one-fresh-instance-per-operation-requires-strawberry-03160)).
 - [ ] `from django_strawberry_framework.extensions import DjangoDebugExtension`
       resolves; nothing is added to the package root
       ([Decision 5](#decision-5--symbol-and-home-djangodebugextension-in-extensionsdebugpy-exported-from-the-extensions-subpackage--never-the-package-root)).
-- [ ] **No new dependencies**: `[project].dependencies` and
-      `[dependency-groups].dev` untouched; the engine-seam gate ran at the
-      `strawberry-graphql==0.262.0` floor in an isolated throwaway venv
-      (never the shared `.venv`), or the project's Strawberry floor was
-      bumped instead; the command and outcome are recorded in the build
-      artifact.
-- [ ] `tests/extensions/test_debug.py` covers the [Test plan](#test-plan):
-      the request-driving group over real probe-URLconf HTTP against
-      fakeshop models (the card's DoD row 5, "against a fakeshop request
-      that emits SQL"), the mechanics group DB-adjacent — under the
-      schema-reload + `seed_data` disciplines, posting through
-      [`TestClient`][glossary-testclient]; the live-first justification is
-      recorded in
-      [Decision 11](#decision-11--test-strategy-real-http-through-a-probe-urlconf-at-the-package-tier-with-the-live-first-justification-recorded)
-      and the promotion-deletes-the-stand-in rule is named. The package
-      coverage gate (`fail_under = 100`) holds with `extensions/` included,
-      each branch mapped to a named owner.
+- [ ] **No new dependency is added**, but the existing Strawberry constraint
+      is raised to `strawberry-graphql>=0.316.0` in `[project].dependencies`
+      and `uv.lock`; `[dependency-groups].dev` remains untouched. Concurrent
+      sync isolation passes at that exact floor in an isolated throwaway venv
+      (never the shared `.venv`), and the command/outcome are recorded.
+- [ ] The split tests cover the [Test plan](#test-plan):
+      `examples/fakeshop/test_query/test_debug_extension_api.py` owns real
+      probe-URLconf HTTP against fakeshop models (the card's DoD row 5,
+      "against a fakeshop request that emits SQL") under schema-reload,
+      `seed_data`, and [`TestClient`][glossary-testclient] disciplines;
+      `tests/extensions/test_debug.py` owns request-impossible mechanics.
+      [Decision 11](#decision-11--test-strategy-split-live-http-behavior-from-package-tier-mechanics)
+      records the placement rule. The package coverage gate (`fail_under =
+      100`) holds with `extensions/` included, each branch mapped to a named
+      owner.
 - [ ] The Slice 2 doc updates land per [Doc updates](#doc-updates): the
       GLOSSARY entry body (via the DB + re-render), the regenerated
       [`docs/TREE.md`][tree], the [`config/schema.py`][config-schema]
@@ -1967,3 +2053,4 @@ Slice 2 — implemented-on-main docs; Slice 3 — the release-status wording
 [upstream-exception-types]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/types.py
 [upstream-sql-tracking]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/tracking.py
 [upstream-sql-types]: ../../django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/types.py
+[upstream-strawberry-extension-isolation]: https://github.com/strawberry-graphql/strawberry/issues/4369

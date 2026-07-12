@@ -49,7 +49,13 @@ and the form-specific invariants this module owns:
   omitted file is preserved via the bound ``form_class(instance=...)``'s ``initial``
   (never re-supplied, never cleared). A required non-model extra field stays
   required in the Slice-1 partial input, so it is always present in
-  ``provided_data``.
+  ``provided_data``. This is a partial-input transport, not partial validation:
+  the reconstructed bound ``ModelForm`` revalidates every declared field. An
+  omitted value that is already stored but no longer satisfies the current form
+  (for example after a validator was tightened) therefore blocks the mutation.
+  The caller must supply a valid replacement in the same request, or repair the
+  row out of band when the field is excluded from the generated input; the
+  framework never silently excludes an invalid untouched field from validation.
 
 - **The form is constructed once via the overridable ``get_form`` /
   ``get_form_kwargs`` hooks** (Decision 8 step 4 / Decision 6); ``form.is_valid()``
@@ -305,7 +311,11 @@ def _reconstruct_partial_data(
     preserved via the bound ``form_class(instance=...)``'s ``initial``. The result
     lets the bound form validate a one-field change against the row's other
     (unchanged) values - e.g. a ``unique_together`` co-member comes from the row,
-    not the input.
+    not the input. That full-form validation is deliberate: if an unchanged stored
+    value no longer passes the form's current validators, the mutation fails without
+    writing any field. The client must include a valid replacement in the same
+    partial input (or the consumer must repair the row out of band if narrowing
+    excluded that field); untouched fields are not silently exempted.
 
     Two reconstruction shapes, each matching what the DECODE produces for a PROVIDED
     field so an omitted field binds byte-compatibly with a provided one:

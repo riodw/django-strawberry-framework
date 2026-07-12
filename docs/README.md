@@ -182,6 +182,12 @@ CSRF enforcement also belongs to the HTTP transport: it depends on the Strawberr
 
 `register_mutation()` derives its input from the user model's `USERNAME_FIELD`, distinct `REQUIRED_FIELDS`, and `password`. It refuses to auto-expose Django's account-control fields (`is_active`, `is_staff`, `is_superuser`, `groups`, and `user_permissions`); custom registration flows must initialize privileges and activation state in server-owned logic.
 
+## Form mutation contracts
+
+The two form mutation bases intentionally return different payload shapes. A model-backed `DjangoModelFormMutation` returns the same object payload as `DjangoMutation`: the saved object in `node` or `result`, plus `errors`. A model-less `DjangoFormMutation` has no object slot and always returns exactly `ok: Boolean!` and `errors: [FieldError!]!`; validation or write failure sets `ok` to `false`, while success sets it to `true`. See the [`DjangoFormMutation`][glossary-djangoformmutation] and [`DjangoModelFormMutation`][glossary-djangomodelformmutation] contracts.
+
+A `DjangoModelFormMutation` update is partial only at the GraphQL input boundary. The resolver reconstructs omitted fields from the current instance and binds a complete `ModelForm`, so Django revalidates every declared form field. If an untouched stored value no longer satisfies the form -- for example, after a validator is tightened -- the mutation fails without writing the requested change. Send a valid replacement for that field in the same request; if `Meta.fields` / `Meta.exclude` removed it from the input, broaden the mutation input or repair the row out of band first.
+
 ## Filter membership semantics
 
 For `ListFilter` and Relay-aware `GlobalIDMultipleChoiceFilter` membership lookups, an explicit empty list means membership in the empty set and therefore matches no rows. Omitting the filter or sending `null` remains the no-constraint form. An excluded empty membership predicate matches every row.
@@ -326,6 +332,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-djangoformmutation]: GLOSSARY.md#djangoformmutation
 [glossary-djangographqlprotocolrouter]: GLOSSARY.md#djangographqlprotocolrouter
 [glossary-djangolistfield]: GLOSSARY.md#djangolistfield
+[glossary-djangomodelformmutation]: GLOSSARY.md#djangomodelformmutation
 [glossary-djangomutation]: GLOSSARY.md#djangomutation
 [glossary-djangonodefield]: GLOSSARY.md#djangonodefield
 [glossary-filterset]: GLOSSARY.md#filterset

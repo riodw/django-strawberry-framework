@@ -7,7 +7,8 @@ payload) driven through a finalized package-test ``@strawberry.type Mutation``
 
 - the products ``Item`` / ``Category`` (FK + ``unique_item_per_category``) cover
   the FK relation decode, the partial-update reconstruction, the ``"__all__"``
-  constraint sentinel, the visibility-scoped locate, and the re-fetch G2 plan;
+  constraint sentinel, untouched stale-value revalidation, the
+  visibility-scoped locate, and the re-fetch G2 plan;
 - the library ``Book`` / ``Genre`` / ``Shelf`` (a real M2M + a ``choices`` field)
   cover the M2M relation decode + the choice-enum unwrap;
 - the scalars ``MediaSpecimen`` (``FileField`` / ``ImageField``) covers the
@@ -129,6 +130,7 @@ def _build_item_form_schema(
     category_get_queryset=None,
     item_get_queryset=None,
     permission_classes=None,
+    form_class=None,
 ):
     """Declare Item/Category Relay primaries + a create/update ModelForm mutation."""
     perms = permission_classes if permission_classes is not None else [_AllowAll]
@@ -155,7 +157,7 @@ def _build_item_form_schema(
         item_body["get_queryset"] = item_get_queryset
     ItemT = type("ItemT", (DjangoType, relay.Node), item_body)
 
-    form_cls = _item_model_form()
+    form_cls = form_class or _item_model_form()
     # Build via ``type(...)`` so the ``Meta`` body can carry the parameterized
     # ``permission_classes`` (a nested ``class Meta:`` body cannot read the
     # enclosing function's parameter name).
@@ -958,6 +960,75 @@ def test_partial_update_preserves_unprovided_fk_and_validates_constraint():
     assert NON_FIELD_ERROR_KEY in [e["field"] for e in payload["errors"]]
     item.refresh_from_db()
     assert item.name == "Mine"  # not written
+
+
+@pytest.mark.django_db
+def test_partial_update_revalidates_untouched_stale_field():
+    """An untouched value that violates the current form blocks the whole partial update.
+
+    Models a row written before the form gained a stricter ``name`` rule. The
+    partial resolver reconstructs the omitted ``name`` from that row and the bound
+    ``ModelForm`` revalidates it, so changing only ``description`` fails without
+    persisting anything. Sending a valid replacement for ``name`` in the same
+    mutation repairs the row and lets the requested description change land.
+    """
+
+    class StricterItemForm(forms.ModelForm):
+        name = forms.CharField(min_length=10)
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "description", "category")
+
+    (
+        schema,
+        (
+            _CategoryT,
+            ItemT,
+            _C,
+            UpdateItem,
+        ),
+    ) = _build_item_form_schema(form_class=StricterItemForm)
+    input_name = UpdateItem._input_class.__name__
+    query = (
+        f"mutation($id: ID!, $d: {input_name}!){{ updateItem(id:$id, data:$d){{ "
+        "node{ name } errors{ field messages } } }"
+    )
+    category = product_models.Category.objects.create(name=_uniq("Cat"))
+    item = product_models.Item.objects.create(
+        name="old",
+        description="Before",
+        category=category,
+    )
+
+    blocked = schema.execute_sync(
+        query,
+        variable_values={"id": global_id_for(ItemT, item.pk), "d": {"description": "Blocked"}},
+    )
+    assert blocked.errors is None, blocked.errors
+    blocked_payload = blocked.data["updateItem"]
+    assert blocked_payload["node"] is None
+    assert [error["field"] for error in blocked_payload["errors"]] == ["name"]
+    item.refresh_from_db()
+    assert item.name == "old"
+    assert item.description == "Before"
+
+    repaired = schema.execute_sync(
+        query,
+        variable_values={
+            "id": global_id_for(ItemT, item.pk),
+            "d": {"name": "valid-name", "description": "After"},
+        },
+    )
+    assert repaired.errors is None, repaired.errors
+    repaired_payload = repaired.data["updateItem"]
+    assert repaired_payload["errors"] == []
+    assert repaired_payload["node"] == {
+        "name": "valid-name",
+    }
+    item.refresh_from_db()
+    assert item.name == "valid-name"
+    assert item.description == "After"
 
 
 @pytest.mark.django_db

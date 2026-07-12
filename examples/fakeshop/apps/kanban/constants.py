@@ -31,7 +31,6 @@ TRACKED_FILE_PATHS = (
     "django_strawberry_framework/management/commands/_imports.py",
     "django_strawberry_framework/management/commands/export_schema.py",
     "django_strawberry_framework/management/commands/inspect_django_type.py",
-    "django_strawberry_framework/management/review.md",
     "django_strawberry_framework/middleware/__init__.py",
     "django_strawberry_framework/middleware/debug_toolbar.py",
     "django_strawberry_framework/mutations/__init__.py",

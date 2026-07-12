@@ -38,11 +38,12 @@ The Python middleware keeps two narrow, deliberate robustness divergences from
 the verbatim upstream borrow, both documented in spec-042: ``process_view``
 guards ``issubclass`` with ``isinstance(view, type)`` (this middleware runs for
 ALL global traffic, and a non-class ``view_class`` must not ``TypeError``/500 an
-unrelated view), and ``_get_payload`` bails to ``None`` on a non-object JSON
-body (a dev-only tool must not turn an unusual response into a 500). The
-injected GraphiQL bridge template carries the third documented divergence:
-defensive DOM guards that keep ``debugToolbar`` payload scrubbing mandatory
-while treating the toolbar DOM updates as best-effort. No other Python behavior
+unrelated view), and ``_get_payload`` bails to ``None`` when a declared-JSON
+body cannot be decoded or parsed, or when the decoded body is not an object (a
+dev-only tool must not turn an unusual response into a 500). The injected
+GraphiQL bridge template carries the third documented divergence: defensive
+DOM guards that keep ``debugToolbar`` payload scrubbing mandatory while
+treating the toolbar DOM updates as best-effort. No other Python behavior
 differs.
 """
 
@@ -140,21 +141,26 @@ def _get_payload(
 ) -> dict | None:
     """Build the ``debugToolbar`` payload for a JSON operation response, or ``None``.
 
-    ``None`` when the toolbar assigned no ``request_id`` (nothing to reference)
-    and when the decoded body is not a JSON object (the P2.3 divergence: a
-    list/scalar body would make the subscript-assign raise and 500 the
-    request). Otherwise the decoded body gains a top-level ``debugToolbar``
-    object carrying the toolbar ``requestId`` plus, per enabled panel, its
-    ``title`` (only when ``panel.has_content`` - ``None`` tells the frontend
-    not to touch that panel's content area) and ``nav_subtitle``, each called
-    when callable. ``TemplatesPanel`` is skipped (upstream's deliberate
-    exclusion: its nav content churns per request and floods the payload).
+    ``None`` when the toolbar assigned no ``request_id`` (nothing to reference),
+    when the response bytes cannot be decoded with their declared charset, when
+    the decoded text is not valid JSON, or when the decoded body is not a JSON
+    object. Those response-shape guards leave an unusual declared-JSON response
+    untouched instead of turning a development diagnostic into a 500. Otherwise
+    the decoded body gains a top-level ``debugToolbar`` object carrying the
+    toolbar ``requestId`` plus, per enabled panel, its ``title`` (only when
+    ``panel.has_content`` - ``None`` tells the frontend not to touch that panel's
+    content area) and ``nav_subtitle``, each called when callable.
+    ``TemplatesPanel`` is skipped (upstream's deliberate exclusion: its nav
+    content churns per request and floods the payload).
     """
     if not toolbar.request_id:
         return None
 
-    content = force_str(response.content, encoding=response.charset)
-    payload = json.loads(content, object_pairs_hook=collections.OrderedDict)
+    try:
+        content = force_str(response.content, encoding=response.charset)
+        payload = json.loads(content, object_pairs_hook=collections.OrderedDict)
+    except (json.JSONDecodeError, LookupError, UnicodeError):
+        return None
     if not isinstance(payload, dict):
         return None
 

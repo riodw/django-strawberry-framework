@@ -12,8 +12,9 @@ the soft-dependency absence matrix (a missing dependency is never a live path) a
 the coverage-only ``_postprocess`` / ``_get_payload`` branch units (streaming
 early-out, the non-object-JSON bail, the non-class ``view_class`` guard, the
 header-present ``Content-Length`` refreshes, and the untagged-JSON passthrough leak
-guard) that the real toolbar lifecycle does not naturally expose - driven directly
-against fake toolbar / middleware objects.
+guard, plus malformed/undecodable declared-JSON response bails) that the real toolbar
+lifecycle does not naturally expose - driven directly against fake toolbar /
+middleware objects.
 
 The toolbar-absent path simulates absence with the importlib-compatible
 ``sys.modules["debug_toolbar"] = None`` sentinel, NOT the router/DRF
@@ -342,6 +343,28 @@ def test_get_payload_bails_on_non_object_json_body(toolbar_leaf):
     request = RequestFactory().post("/graphql/")
     response = HttpResponse(b"[1, 2]", content_type="application/json")
     assert toolbar_leaf._get_payload(request, response, _FakeToolbar(request_id="riid")) is None
+
+
+@pytest.mark.parametrize("content", [b"not json", b"\xff"])
+def test_malformed_json_body_gets_no_package_rewrite(middleware, content):
+    """A tagged declared-JSON body that cannot be parsed or decoded is not rewritten.
+
+    A valid Strawberry operation always returns a JSON object, so the custom
+    response/error-handler path is unreachable through fakeshop's real GraphQL
+    endpoint. Driving the full package postprocess proves the development
+    middleware neither masks the original response nor turns it into a 500. The
+    stock postprocess may still add its normal toolbar headers.
+    """
+    request = RequestFactory().post("/graphql/", data="{}", content_type="application/json")
+    request._is_graphiql = True
+    response = HttpResponse(content, content_type="application/json; charset=utf-8")
+    response["Content-Length"] = len(response.content)
+
+    result = middleware._postprocess(request, response, _FakeToolbar(request_id="riid"))
+
+    assert result is response
+    assert result.content == content
+    assert int(result["Content-Length"]) == len(content)
 
 
 def test_process_view_tolerates_non_class_view_class(middleware):

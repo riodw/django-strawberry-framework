@@ -198,6 +198,60 @@ Generated flat filter paths that cross a reverse foreign key or many-to-many rel
 
 ## Development debug responses
 
+### django-debug-toolbar middleware
+
+The optional `DebugToolbarMiddleware` integrates Strawberry's Django view with
+`django-debug-toolbar`. Install `django-debug-toolbar>=7.0.0`, then wire the
+toolbar's normal prerequisites with one package-specific replacement:
+
+```python
+from debug_toolbar.toolbar import debug_toolbar_urls
+
+INSTALLED_APPS = [
+    # ...
+    "django.contrib.staticfiles",
+    "debug_toolbar",
+    "django_strawberry_framework",
+]
+
+MIDDLEWARE = [
+    "django.middleware.security.SecurityMiddleware",
+    "django_strawberry_framework.middleware.debug_toolbar.DebugToolbarMiddleware",
+    # ...
+]
+
+INTERNAL_IPS = ["127.0.0.1"]
+
+urlpatterns = [
+    # ...
+]
+urlpatterns += debug_toolbar_urls()
+```
+
+The package middleware **replaces**
+`"debug_toolbar.middleware.DebugToolbarMiddleware"`; never list both, because
+the subclass already runs the stock toolbar pipeline and stacking them runs it
+twice. Keep `debug_toolbar_urls()` in the URLconf while the middleware is
+active: the stock postprocessor reverses its panel routes for every processed
+response, so omitting them raises `NoReverseMatch` rather than merely breaking
+panel links.
+
+The integration inherits the stock toolbar's `DEBUG`,
+`SHOW_TOOLBAR_CALLBACK`, and `INTERNAL_IPS` gating. Injection is view-scoped,
+not GraphiQL-client-scoped: whenever that gate enables the toolbar, every JSON
+response from a Strawberry Django view except an `IntrospectionQuery` gains a
+top-level `debugToolbar` key, including responses to programmatic clients. The
+GraphiQL bridge removes the key only inside the IDE. Consequently this remains
+a development-only integration; production exposure requires the stock toolbar
+to be misconfigured to run there. If a tagged response declares
+`application/json` but contains malformed or undecodable content, the package
+performs no package-specific body or `Content-Length` rewrite.
+
+See the [Debug-toolbar middleware glossary entry][glossary-debug-toolbar-middleware]
+for the complete import, template, and failure-mode contract.
+
+### GraphQL response extension
+
 `DjangoDebugExtension` is an opt-in development diagnostic imported from `django_strawberry_framework.extensions`. Pass the **class**, not a constructed instance, in Strawberry's `extensions=` list:
 
 ```python

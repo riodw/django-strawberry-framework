@@ -456,11 +456,10 @@ def _decode_relation_id_set(
     is visibility-checked through ``_raw_pk_relation_error``, exactly as the form
     path does (``forms/resolvers.py::_visible_related_object``), closing the
     model-path raw-pk visibility gap. With NO primary type
-    registered there is no visibility contract to apply: a raw-pk **M2M** set still
-    gets the pre-``.set(...)`` existence check (it is assigned via
-    ``instance.<m2m>.set(pks)``, which writes a dangling through-row for any
-    nonexistent pk it is handed), while a raw-pk **FK** relies on ``full_clean()``'s
-    own FK existence check against the column before ``save()``.
+    registered there is no visibility contract to apply, so the raw-pk set is
+    existence-checked through the related model's default manager. This applies to
+    both M2M and FK / OneToOne inputs, keeping a nonexistent target in the same
+    field-keyed relation-error path before model validation or a database write.
     """
     expected_model = relation_field.related_model
     pks: list[Any] = []
@@ -479,7 +478,7 @@ def _decode_relation_id_set(
         if error is not None:
             return [], error
     elif pks:
-        error = _raw_pk_relation_error(field_name, pks, expected_model, relation_field, info)
+        error = _raw_pk_relation_error(field_name, pks, expected_model, info)
         if error is not None:
             return [], error
     return pks, None
@@ -622,19 +621,16 @@ def _relation_existence_error(
     pks: list[Any],
     related_model: type,
 ) -> FieldError | None:
-    """Confirm every raw-pk M2M member exists before the post-save ``.set(...)`` (feedback).
+    """Confirm every unregistered raw-pk relation target exists before validation / write.
 
-    The raw-pk counterpart to ``_relation_visibility_error``: a non-Relay-Node M2M
-    target has no ``GlobalID`` visibility contract, but ``instance.<m2m>.set(pks)``
-    writes a through-table row for any pk it is given, so a nonexistent pk would
-    create a dangling FK row and return a false success. This confirms existence in
-    one query against the target model's **default manager** (existence only, NOT
-    the visibility ``get_queryset`` - a raw-pk relation carries no visibility
-    contract). A missing member is the uniform ``relation_field_error`` on
-    ``field_name``, the same field-keyed envelope the GlobalID path returns, so the
-    whole write rolls back inside the transaction rather than persisting a dangling
-    row. Used only for raw-pk M2M; the GlobalID path's visibility query already
-    confirms existence (a hidden / missing pk is absent from the visible set).
+    The raw-pk counterpart to ``_relation_visibility_error`` when the target model
+    has no registered primary type and therefore no ``get_queryset`` visibility
+    contract. This confirms existence in one query against the target model's
+    **default manager** for both M2M and FK / OneToOne inputs. A missing member is
+    the uniform ``relation_field_error`` on ``field_name``, the same field-keyed
+    envelope the GlobalID path returns, so it fails before model validation or a
+    database write. Any existing row remains attachable by design: this check is
+    existence only, not an implicit visibility policy.
 
     Each pk is coerced through the target pk field first (``_coerce_relation_pk_or_none``),
     mirroring the coercion the GlobalID path applies via ``decode_model_global_id``:
@@ -658,7 +654,6 @@ def _raw_pk_relation_error(
     field_name: str,
     pks: list[Any],
     related_model: type,
-    relation_field: Any,
     info: Any,
 ) -> FieldError | None:
     """Visibility- or existence-check a RAW-PK relation set before it is attached.
@@ -680,9 +675,10 @@ def _raw_pk_relation_error(
     SAME ``apply_type_visibility_sync(initial_queryset(...))`` query the
     ``GlobalID`` branch uses (a hidden / missing member is the uniform
     ``relation_field_error``, indistinguishable - no existence leak). When NO primary is
-    registered there is no visibility contract: a raw-pk **M2M** set still needs the
-    pre-``.set(...)`` existence check (``_relation_existence_error``), while a raw-pk
-    **FK** relies on ``full_clean``'s own FK existence check.
+    registered there is no visibility contract, but every raw-pk relation still
+    gets the default-manager existence check (``_relation_existence_error``).
+    This preserves the deliberate ability to attach any existing unexposed row
+    while rejecting a nonexistent target before validation / write.
 
     An explicit ``None`` is NOT a pk to check: on a single FK / OneToOne it is a
     nullable-relation clear (the decoded attr is set to ``NULL``, validated by
@@ -708,9 +704,7 @@ def _raw_pk_relation_error(
     # visibility contract), whose per-surface tail stays explicit here.
     queryset = related_visibility_queryset(related_model, info, _MUTATION_ASYNC_RECOURSE)
     if queryset is None:
-        if getattr(relation_field, "many_to_many", False):
-            return _relation_existence_error(field_name, real_pks, related_model)
-        return None
+        return _relation_existence_error(field_name, real_pks, related_model)
     coerced = [
         value
         for value in (_coerce_relation_pk_or_none(related_model, pk) for pk in real_pks)

@@ -1649,45 +1649,63 @@ def test_single_fk_explicit_null_decodes_to_clear_not_relation_error():
 
 
 @pytest.mark.django_db
-def test_raw_pk_relation_with_no_registered_primary_falls_back_to_existence_or_fk_noop():
-    """A raw-pk relation to a model with NO registered primary type has no visibility contract.
+def test_raw_pk_relations_with_no_registered_primary_use_default_manager_existence():
+    """An unregistered raw-pk relation has existence validation but no visibility contract.
 
-    ``_raw_pk_relation_error`` only visibility-scopes when ``registry.get`` returns a
-    primary type. With the registry empty (the autouse fixture clears it, so neither
-    ``Genre`` nor ``Shelf`` has a type), an M2M still gets the pre-``.set()``
-    existence check (a real pk passes, a missing one is a field error) while an FK
-    returns no decode error (``full_clean`` owns its existence). Driven directly:
-    reaching this branch end to end needs a mutated relation whose target has NO
-    registered type at all, which the read surface cannot expose.
+    Only ``Book`` is registered: the generated ``shelfId`` FK and ``genres`` M2M
+    inputs therefore carry raw primary keys with no target ``get_queryset`` policy.
+    Existing target rows remain attachable through the default manager, while a
+    missing member of either relation fails in-band before validation / write.
     """
+
+    class BookT(DjangoType, relay.Node):
+        class Meta:
+            model = library_models.Book
+            fields = ("id", "title")
+            primary = True
+
+    class CreateBook(DjangoMutation):
+        class Meta:
+            model = library_models.Book
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    @strawberry.type
+    class Mutation:
+        create_book = DjangoMutationField(CreateBook)
+
+    finalize_django_types()
+    schema = _schema(Mutation)
+    shelf = _make_branch_shelf()
     genre = library_models.Genre.objects.create(name="Real")
-    m2m_field = library_models.Book._meta.get_field("genres")
-    fk_field = library_models.Book._meta.get_field("shelf")
-    # M2M, no primary -> existence check (default manager).
-    assert (
-        resolvers._raw_pk_relation_error(
-            "genres",
-            [genre.pk],
-            library_models.Genre,
-            m2m_field,
-            None,
+    query = (
+        "mutation($d: BookInput!){ createBook(data:$d){ "
+        "node{ id title } errors{ field messages } } }"
+    )
+
+    valid = schema.execute_sync(
+        query,
+        variable_values={
+            "d": {"title": "Valid", "shelfId": shelf.pk, "genres": [genre.pk]},
+        },
+    )
+    assert valid.errors is None, valid.errors
+    assert valid.data["createBook"]["errors"] == []
+    book = library_models.Book.objects.get(title="Valid")
+    assert book.shelf_id == shelf.pk
+    assert set(book.genres.values_list("pk", flat=True)) == {genre.pk}
+
+    invalid_cases = (
+        ("Missing shelf", {"shelfId": shelf.pk + 9999, "genres": [genre.pk]}, "shelfId"),
+        ("Missing genre", {"shelfId": shelf.pk, "genres": [genre.pk + 9999]}, "genres"),
+    )
+    for title, relations, error_field in invalid_cases:
+        result = schema.execute_sync(
+            query,
+            variable_values={"d": {"title": title, **relations}},
         )
-        is None
-    )
-    missing = resolvers._raw_pk_relation_error(
-        "genres",
-        [genre.pk + 9999],
-        library_models.Genre,
-        m2m_field,
-        None,
-    )
-    assert missing is not None
-    assert missing.field == "genres"
-    # FK, no primary -> no decode error (full_clean validates FK existence).
-    assert (
-        resolvers._raw_pk_relation_error("shelfId", [123], library_models.Shelf, fk_field, None)
-        is None
-    )
+        assert_mutation_field_error(result, "createBook", error_field)
+        assert not library_models.Book.objects.filter(title=title).exists()
 
 
 # ---------------------------------------------------------------------------

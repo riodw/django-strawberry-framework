@@ -5439,6 +5439,48 @@ def test_update_book_via_custom_partial_input_happy_path():
     assert book.subtitle == "keep"
 
 
+@pytest.mark.django_db
+def test_update_book_replaces_m2m_and_returns_row_after_visibility_exit_over_http():
+    """A live update fully replaces M2M membership and returns the newly hidden row.
+
+    ``BookType.get_queryset`` hides repair-state books from anonymous callers.
+    The visible seed is located through that scope, then the update both replaces
+    the complete ``genres`` set and moves the book to ``repair``. The success
+    payload still returns the row because post-write re-fetch intentionally uses
+    the default manager; a visibility-scoped re-fetch would incorrectly lose it.
+    """
+    from apps.library.schema import BookType, GenreType
+
+    shelf = _seed_shelf()
+    old_one = models.Genre.objects.create(name="ReplaceOldOne")
+    old_two = models.Genre.objects.create(name="ReplaceOldTwo")
+    replacement = models.Genre.objects.create(name="ReplaceNew")
+    book = models.Book.objects.create(title="VisibleBeforeUpdate", shelf=shelf)
+    book.genres.set([old_one, old_two])
+
+    response = _post_graphql(
+        "mutation($id: ID!, $d: BookPartialInput!){ updateBookViaCustomInput(id:$id, data:$d){ "
+        "node{ title } errors{ field messages } } }",
+        variables={
+            "id": global_id_for(BookType, book.pk),
+            "d": {
+                "title": "HiddenAfterUpdate",
+                "circulationStatus": "repair",
+                "genres": [global_id_for(GenreType, replacement.pk)],
+            },
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateBookViaCustomInput"]
+    assert result["errors"] == []
+    assert result["node"]["title"] == "HiddenAfterUpdate"
+    book.refresh_from_db()
+    assert book.circulation_status == models.Book.CirculationStatus.REPAIR
+    assert set(book.genres.values_list("pk", flat=True)) == {replacement.pk}
+
+
 # ---------------------------------------------------------------------------
 # spec-015 custom (non-Relay) @strawberry.interface in Meta.interfaces.
 # ---------------------------------------------------------------------------

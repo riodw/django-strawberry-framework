@@ -186,7 +186,38 @@ CSRF enforcement also belongs to the HTTP transport: it depends on the Strawberr
 
 The two form mutation bases intentionally return different payload shapes. A model-backed `DjangoModelFormMutation` returns the same object payload as `DjangoMutation`: the saved object in `node` or `result`, plus `errors`. A model-less `DjangoFormMutation` has no object slot and always returns exactly `ok: Boolean!` and `errors: [FieldError!]!`; validation or write failure sets `ok` to `false`, while success sets it to `true`. See the [`DjangoFormMutation`][glossary-djangoformmutation] and [`DjangoModelFormMutation`][glossary-djangomodelformmutation] contracts.
 
-A `DjangoModelFormMutation` update is partial only at the GraphQL input boundary. The resolver reconstructs omitted fields from the current instance and binds a complete `ModelForm`, so Django revalidates every declared form field. If an untouched stored value no longer satisfies the form -- for example, after a validator is tightened -- the mutation fails without writing the requested change. Send a valid replacement for that field in the same request; if `Meta.fields` / `Meta.exclude` removed it from the input, broaden the mutation input or repair the row out of band first.
+A `DjangoModelFormMutation` update is partial only at the GraphQL input boundary. The resolver reconstructs omitted fields from the current instance and binds a complete `ModelForm`, so Django revalidates every declared form field. If an untouched stored value no longer satisfies the form -- for example, after a validator is tightened -- the mutation fails without writing the requested change. Send a valid replacement for that field in the same request; if `Meta.fields` / `Meta.exclude` removed it from the generated input, broaden the mutation input or repair the row out of band first.
+
+## Model mutation write contracts
+
+`DjangoMutation` authorizes before decoding relation IDs. For updates and deletes,
+the target row is first located through the target type's `get_queryset`; a hidden
+row is therefore not-found before authorization can reveal that it exists.
+Permission denial then raises a top-level `GraphQLError` and nulls the mutation
+field. It is not returned in the payload's typed `errors` list, which is reserved
+for relation decoding, validation, and database-constraint failures.
+
+Relation visibility exists only when the related model has a registered primary
+`DjangoType`. Global IDs and raw primary keys for such targets are resolved through
+that type's `get_queryset`, so hidden and missing rows produce the same field-keyed
+relation error. If the related model has no registered primary type, there is no
+GraphQL visibility policy to apply: raw primary keys are existence-checked through
+the model's default manager, and any existing row may be attached. Do not assume
+that a target model's application-level visibility rules protect a relation unless
+those rules are implemented by its registered primary type.
+
+Many-to-many inputs use replace semantics. Providing a list on create or update
+sets the complete membership to exactly that list; omitted members are removed.
+An empty list clears the relation, omitting the field leaves it unchanged on
+update, and explicit `null` is a field error. There is no additive `add` / `remove`
+input shape.
+
+After a successful write, the payload object is re-fetched through the model's
+default manager rather than the target type's visibility-scoped queryset. This is
+intentional: the actor can round-trip the row it just wrote. Consequently, an
+update that moves a previously visible row outside the actor's `get_queryset`
+scope still returns that row in the success payload; subsequent read operations
+apply normal visibility and may no longer return it.
 
 ## Filter membership semantics
 

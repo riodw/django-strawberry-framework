@@ -20,7 +20,6 @@ from django.db.models.fields.related_descriptors import _filter_prefetch_queryse
 
 from django_strawberry_framework.exceptions import OptimizerError
 from django_strawberry_framework.optimizer.lateral_fetch import (
-    LATERAL_STRATEGY,
     LateralPrefetchStrategy,
     LateralQuerySet,
     _build_lateral_spec,
@@ -28,6 +27,7 @@ from django_strawberry_framework.optimizer.lateral_fetch import (
     _fetch_lateral_rows,
     build_lateral_sql,
 )
+from django_strawberry_framework.optimizer.nested_fetch import AUTO_STRATEGY
 from django_strawberry_framework.optimizer.plans import (
     WINDOW_ROW_NUMBER,
     WINDOW_TOTAL_COUNT,
@@ -899,19 +899,41 @@ def test_fetch_returns_none_for_values_iteration(monkeypatch):
     assert _fetch_lateral_rows(queryset.values_list("id")) is None
 
 
+def test_fetch_vendor_follows_the_queryset_alias_not_default(monkeypatch):
+    """A routed non-Postgres alias windows even when ``default`` is Postgres."""
+    from django_strawberry_framework.optimizer import lateral_fetch
+
+    queryset = _prefetch_filtered(
+        _shelf_books_request(),
+        "shelf",
+        [Shelf(pk=1)],
+    ).using("archive")
+    default = _PostgresFacade(rows=[])
+    archive = SimpleNamespace(vendor="sqlite")
+    monkeypatch.setattr(
+        lateral_fetch,
+        "connections",
+        {"default": default, "archive": archive},
+    )
+
+    assert queryset.db == "archive"
+    assert _fetch_lateral_rows(queryset) is None
+    assert default.scripted_cursor.executed is None
+
+
 # ---------------------------------------------------------------------------
 # The in-object windowed fallback, end to end on SQLite
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
-def test_fallback_executes_the_windowed_body_end_to_end():
-    """Off Postgres the SAME queryset serves the identical windowed page.
+def test_auto_fallback_executes_the_windowed_body_end_to_end():
+    """Off Postgres ``"auto"`` serves the bounded window and count annotations.
 
     This is the correctness floor the lateral path can never fall below: the
-    ``LateralQuerySet`` body IS the windowed queryset, so the worst case of
-    any fetch-time surprise (here: the SQLite vendor) is windowed SQL, not a
-    wrong result.
+    auto strategy's ``LateralQuerySet`` body IS the windowed queryset, so the
+    worst case of any fetch-time surprise (here: the SQLite vendor) is
+    windowed SQL, not an unbounded child fetch or wrong ``hasNextPage`` input.
     """
     from apps.library.models import Branch
 
@@ -922,13 +944,15 @@ def test_fallback_executes_the_windowed_body_end_to_end():
         for title in titles:
             Book.objects.create(title=title, shelf=shelf)
     plan = OptimizationPlan()
-    LATERAL_STRATEGY.plan(_shelf_books_request(), plan)
+    AUTO_STRATEGY.plan(_shelf_books_request(), plan)
     (entry,) = plan.prefetch_related
+    assert isinstance(entry.queryset, LateralQuerySet)
     shelves = list(Shelf.objects.order_by("code").prefetch_related(entry))
     a_rows = shelves[0]._dst_books_connection
     assert [row.title for row in a_rows] == ["t1", "t2"]
     assert [getattr(row, WINDOW_ROW_NUMBER) for row in a_rows] == [1, 2]
     assert [getattr(row, WINDOW_TOTAL_COUNT) for row in a_rows] == [3, 3]
+    assert len(a_rows) < getattr(a_rows[-1], WINDOW_TOTAL_COUNT)
     assert shelves[1]._dst_books_connection == []
 
 

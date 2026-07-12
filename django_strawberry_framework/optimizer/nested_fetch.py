@@ -11,10 +11,10 @@ per-key ``to_attr``), child-queryset construction, the deterministic
 order, and the slice window - then hands each ``NestedConnectionRequest`` to
 the active strategy, which attaches its fetch directives to the plan.
 
-The default (and today only) strategy is ``WindowedPrefetchStrategy`` - the
-verbatim spec-033 windowed prefetch: ``apply_window_pagination`` over the
-child queryset, carried as a ``Prefetch(..., to_attr="_dst_<field>_connection")``.
-Any strategy that lands an ordered list of model instances carrying
+The default strategy is ``WindowedPrefetchStrategy`` - the verbatim spec-033
+windowed prefetch: ``apply_window_pagination`` over the child queryset,
+carried as a ``Prefetch(..., to_attr="_dst_<field>_connection")``. Any
+strategy that lands an ordered list of model instances carrying
 ``_dst_row_number`` (and ``_dst_total_count`` when the request wants it)
 under ``request.to_attr`` inherits the ENTIRE connection fast path
 (``connection.py::_resolve_from_window`` - cursor parity, marker
@@ -26,8 +26,12 @@ Strategy selection is fixed per ``DjangoOptimizerExtension`` INSTANCE at
 construction (``nested_connection_strategy=`` kwarg, falling back to the
 ``DJANGO_STRAWBERRY_FRAMEWORK["NESTED_CONNECTION_STRATEGY"]`` setting, then
 ``"windowed"``). The plan cache is instance-bound, so one cache never mixes
-plans from two strategies; ``"auto"`` resolves from the default DB vendor
-eagerly at construction for the same reason. The walker reaches the active
+plans from two strategies. ``"auto"`` resolves to one stable auto strategy
+whose plan is a lateral-capable WINDOWED queryset: the queryset's effective
+DB alias selects lateral SQL only at fetch time, while every non-Postgres
+alias executes the already-windowed ORM body. This keeps cached plans
+backend-neutral and follows explicit ``.using(...)`` and router decisions
+without consulting the default alias. The walker reaches the active
 instance's strategy through a ``ContextVar`` the extension publishes in
 ``on_execute`` - direct ``plan_optimizations`` callers (tests) get the
 windowed default.
@@ -35,9 +39,11 @@ windowed default.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
+from functools import cache
+from types import MappingProxyType
 from typing import Any, Protocol
 
 from django.db.models import Prefetch
@@ -226,40 +232,49 @@ class WindowedPrefetchStrategy:
 #: every extension and every direct ``plan_optimizations`` caller).
 WINDOWED_STRATEGY = WindowedPrefetchStrategy()
 
-#: Registered built-in strategies by name. ``"lateral"`` loads lazily via
-#: ``_builtin_strategies`` - ``lateral_fetch`` imports THIS module for the
-#: request/protocol types, so the registration cannot be a top-level import.
-_STRATEGIES: dict[str, NestedConnectionStrategy] = {"windowed": WINDOWED_STRATEGY}
 
+class AutoNestedConnectionStrategy:
+    """Plan a backend-neutral queryset that chooses by its fetch-time DB alias.
 
-def _builtin_strategies() -> dict[str, NestedConnectionStrategy]:
-    """The full built-in registry, importing the lateral backend on first use."""
-    if "lateral" not in _STRATEGIES:
+    The lateral backend always carries the complete windowed ORM query as its
+    superclass fallback. Delegating every auto plan to that backend therefore
+    gives Postgres the lateral fast path while every other vendor executes the
+    same bounded window the explicit ``"windowed"`` strategy would have built.
+    The strategy object itself never changes, so an extension's cached plans
+    cannot mix backend-specific planning modes.
+    """
+
+    name = "auto"
+
+    def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
+        """Attach a fetch-time vendor-aware, lateral-capable windowed prefetch."""
+        # Lazy to break the intentional cycle: lateral_fetch imports this
+        # module's request and window-floor primitives.
         from .lateral_fetch import LATERAL_STRATEGY
 
-        _STRATEGIES["lateral"] = LATERAL_STRATEGY
-    return _STRATEGIES
+        return LATERAL_STRATEGY.plan(request, plan)
 
 
-def _strategy_for_vendor(vendor: str) -> str:
-    """Map a DB vendor string to the preferred built-in strategy name.
+#: The shared automatic-strategy singleton. It remains stable across every DB
+#: route; ``LateralQuerySet._fetch_all`` selects by the queryset's actual alias.
+AUTO_STRATEGY = AutoNestedConnectionStrategy()
 
-    The ``"auto"`` resolver, pure so it is unit-testable without a live
-    connection. Postgres prefers the ``"lateral"`` backend
-    (``optimizer/lateral_fetch.py`` - O(parents x page) instead of the
-    window's O(all children), with an in-object windowed fallback for every
-    shape the lateral SQL cannot express); every other vendor windows.
-    """
-    return {"postgresql": "lateral"}.get(vendor, "windowed")
+
+@cache
+def _builtin_strategies() -> Mapping[str, NestedConnectionStrategy]:
+    """Build the immutable built-in registry after breaking the import cycle."""
+    from .lateral_fetch import LATERAL_STRATEGY
+
+    return MappingProxyType({"windowed": WINDOWED_STRATEGY, "lateral": LATERAL_STRATEGY})
 
 
 def resolve_strategy(value: Any) -> NestedConnectionStrategy:
     """Resolve a strategy selection to an instance, failing loud on typos.
 
-    Accepts a registered name (``"windowed"``), ``"auto"`` (eager vendor
-    sniff of the default DB alias - construction-time so the instance-bound
-    plan cache can never mix strategies), or a ``NestedConnectionStrategy``
-    instance (a consumer-authored backend). ``None`` reads the
+    Accepts a registered name (``"windowed"`` / ``"lateral"``), ``"auto"``
+    (one stable strategy whose lateral-capable queryset chooses from its
+    fetch-time DB alias), or a ``NestedConnectionStrategy`` instance (a
+    consumer-authored backend). ``None`` reads the
     ``NESTED_CONNECTION_STRATEGY`` setting, defaulting to ``"windowed"``.
     """
     if value is None:
@@ -268,10 +283,7 @@ def resolve_strategy(value: Any) -> NestedConnectionStrategy:
         value = nested_connection_strategy_setting()
     if isinstance(value, str):
         if value == "auto":
-            from django.db import connections
-            from django.db.utils import DEFAULT_DB_ALIAS
-
-            value = _strategy_for_vendor(connections[DEFAULT_DB_ALIAS].vendor)
+            return AUTO_STRATEGY
         registry = _builtin_strategies()
         strategy = registry.get(value)
         if strategy is None:

@@ -3123,16 +3123,19 @@ def test_divergent_duplicate_payloads_still_plan_per_key():
         registry.clear()
 
 
-def test_divergent_mixed_sidecar_plans_only_the_plain_key():
+def test_divergent_mixed_sidecar_plans_only_the_plain_key(caplog):
     """A sidecar-carrying alias falls back alone; its divergent sibling still plans.
 
     ``a`` carries ``filter:`` (per-parent, strictness-VISIBLE - no resolver
     identity), ``b`` is a plain page (planned under its per-key attr). The
     per-key scheme must not let one alias's fallback shape drag its siblings
-    per-parent.
+    per-parent. The debug diagnostic names only the dropped response key.
     """
+    from django_strawberry_framework.optimizer import logger
+
     registry.clear()
     try:
+        caplog.set_level("DEBUG", logger=logger.name)
         types = _connection_relay_types()
         genre_model, genre_type = types["Genre"]
         plan = plan_optimizations(
@@ -3159,6 +3162,11 @@ def test_divergent_mixed_sidecar_plans_only_the_plain_key():
         # Only ``b`` accounted-for; the sidecar key stays strictness-visible.
         assert len(plan.planned_resolver_keys) == 1
         assert plan.planned_resolver_keys[0].endswith("@b")
+        assert any(
+            "response key 'a'" in record.message and "(sidecar arguments)" in record.message
+            for record in caplog.records
+        )
+        assert not any("response key 'b'" in record.message for record in caplog.records)
     finally:
         registry.clear()
 

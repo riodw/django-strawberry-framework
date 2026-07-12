@@ -811,11 +811,13 @@ class DjangoOptimizerExtension(SchemaExtension):
         self.strictness = strictness
         # The nested-connection fetch strategy is fixed per extension INSTANCE
         # at construction (``None`` reads the ``NESTED_CONNECTION_STRATEGY``
-        # setting, defaulting to windowed; ``"auto"`` vendor-sniffs the default
-        # DB alias eagerly): the plan cache below is instance-bound, so pinning
-        # the strategy here guarantees one cache never mixes plans from two
-        # strategies (``optimizer/nested_fetch.py``). Unknown names raise
-        # ``ConfigurationError`` at construction, not at query time.
+        # setting, defaulting to windowed). The plan cache below is
+        # instance-bound, so pinning the strategy here guarantees one cache
+        # never mixes plans from two strategies. ``"auto"`` itself is one
+        # backend-neutral strategy whose lateral-capable windowed queryset
+        # selects by its fetch-time alias (``optimizer/nested_fetch.py``);
+        # cached plans therefore remain valid across router decisions. Unknown
+        # names raise ``ConfigurationError`` at construction, not at query time.
         self.nested_connection_strategy = resolve_strategy(nested_connection_strategy)
         self._plan_cache: OrderedDict[
             tuple[str, frozenset[tuple[str, Any]], type, tuple[str, ...], type | None],

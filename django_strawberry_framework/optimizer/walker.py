@@ -1670,6 +1670,7 @@ def _divergent_key_windows(
 ) -> tuple[
     list[tuple[str, tuple[int, int | None, bool], KeysetSeek | None]],
     list[str],
+    list[tuple[str, str]],
 ]:
     """Resolve one window per response key for a divergent-alias connection.
 
@@ -1696,14 +1697,17 @@ def _divergent_key_windows(
     seek); the entry shape gains that seek (``None`` under the offset
     vocabulary and for keyset first pages alike).
 
-    Returns ``(planned, malformed)``; relation-level gates (hint SKIP, join
-    windowability, child-queryset safety) stay whole-relation in
+    Returns ``(planned, malformed, fallbacks)``; each fallback carries its
+    stable reason for the caller's debug log. Relation-level gates (hint
+    SKIP, join windowability, child-queryset safety) stay whole-relation in
     ``_plan_connection_relation``.
     """
     planned: list[tuple[str, tuple[int, int | None, bool], KeysetSeek | None]] = []
     malformed: list[str] = []
+    fallbacks: list[tuple[str, str]] = []
     for resp_key, key_arguments in sel._optimizer_response_key_arguments.items():
         if has_connection_sidecar_kwargs(key_arguments):
+            fallbacks.append((resp_key, "sidecar arguments"))
             continue
         seek: KeysetSeek | None = None
         try:
@@ -1720,15 +1724,33 @@ def _divergent_key_windows(
             else:
                 window = _connection_window_slice_from_arguments(key_arguments, info)
         except UnwindowableConnection:
+            fallbacks.append((resp_key, "unsupported pagination window"))
             continue
         if window is None:
             malformed.append(resp_key)
             continue
         _offset, limit, reverse = window
         if reverse and limit == 0:
+            fallbacks.append((resp_key, "last: 0"))
             continue
         planned.append((resp_key, window, seek))
-    return planned, malformed
+    return planned, malformed, fallbacks
+
+
+def _log_connection_fallback(
+    relation_field_name: str,
+    response_keys: Sequence[str],
+    reason: str,
+) -> None:
+    """Log each response key that will use the per-parent connection pipeline."""
+    for resp_key in dict.fromkeys(response_keys):
+        logger.debug(
+            "Optimizer: nested connection %s response key %r falls back "
+            "to per-parent resolution (%s).",
+            relation_field_name,
+            resp_key,
+            reason,
+        )
 
 
 def _identities_for_response_keys(
@@ -1782,6 +1804,11 @@ def _plan_connection_relation(
         return
     # (b) Fallback shapes detectable before any queryset is built -> UNPLANNED.
     if _response_key_arguments_conflict(sel):
+        _log_connection_fallback(
+            relation_field_name,
+            _response_keys(sel),
+            "conflicting arguments for one response key",
+        )
         # ONE response key carries two different argument payloads - reachable
         # only when different parent-alias subtrees were union-merged (their
         # same-named children land in one merged selection). Neither scheme
@@ -1801,6 +1828,11 @@ def _plan_connection_relation(
     arguments = getattr(sel, "arguments", None) or {}
     divergent = _aliased_arguments_diverge(sel)
     if not divergent and has_connection_sidecar_kwargs(arguments):
+        _log_connection_fallback(
+            relation_field_name,
+            _response_keys(sel),
+            "sidecar arguments",
+        )
         return  # sidecar input (filter:/orderBy:) - per-parent fallback.
     hints_map = _resolve_optimizer_hints(definition)
     if hint_is_skip(hints_map.get(relation_field_name)):
@@ -1839,9 +1871,20 @@ def _plan_connection_relation(
     # keyset first pages alike.
     keyed_windows: list[tuple[str | None, tuple[int, int | None, bool], Any]]
     if divergent:
-        planned_windows, malformed_keys = _divergent_key_windows(sel, info, keyset_context)
+        planned_windows, malformed_keys, fallback_keys = _divergent_key_windows(
+            sel,
+            info,
+            keyset_context,
+        )
         keyed_windows = list(planned_windows)
+        for fallback_key, reason in fallback_keys:
+            _log_connection_fallback(relation_field_name, [fallback_key], reason)
         if malformed_keys:
+            _log_connection_fallback(
+                relation_field_name,
+                malformed_keys,
+                "malformed pagination",
+            )
             # Malformed pagination, per key (Decision 4 step f): that alias
             # resolves per-parent and raises its OWN cursor/pagination
             # validation error, so record ONLY its identities as accounted-for
@@ -1873,6 +1916,11 @@ def _plan_connection_relation(
                 window = _connection_window_slice(sel, info)
                 seek = None
         except UnwindowableConnection:
+            _log_connection_fallback(
+                relation_field_name,
+                _response_keys(sel),
+                "unsupported pagination window",
+            )
             # (b) Offset-bearing backward window (after + last) - and, for a
             # keyset target, EVERY backward shape (``last`` / ``before:``, the
             # v1 keyset window is forward-only): the reversed window cannot
@@ -1885,6 +1933,11 @@ def _plan_connection_relation(
             # own error, so it is a real per-parent access).
             return
         if window is None:
+            _log_connection_fallback(
+                relation_field_name,
+                _response_keys(sel),
+                "malformed pagination",
+            )
             # Malformed pagination (Decision 4 step f): emit NO window prefetch so the
             # connection pipeline runs per-parent and raises its OWN cursor/pagination
             # validation error at the field. But RECORD the resolver identities so the
@@ -1900,6 +1953,11 @@ def _plan_connection_relation(
             return
         offset, limit, reverse = window
         if reverse and limit == 0:
+            _log_connection_fallback(
+                relation_field_name,
+                _response_keys(sel),
+                "last: 0",
+            )
             # (b) ``last: 0``: upstream ``ListConnection`` slices ``edges[-0:]``,
             # which is the WHOLE list - only the per-parent pipeline reproduces
             # that quirk, so a planned reversed window would always come back
@@ -2071,8 +2129,16 @@ def _plan_connection_relation(
             ),
             lookup=f"{prefix}{instance_accessor(django_field)}",
         )
-        if active_strategy().plan(request, plan):
+        strategy = active_strategy()
+        if strategy.plan(request, plan):
             planned_keys.append(resp_key)
+        else:
+            _log_connection_fallback(
+                relation_field_name,
+                [resp_key] if resp_key is not None else _response_keys(sel),
+                f"strategy {getattr(strategy, 'name', type(strategy).__name__)!r} "
+                "refused the window",
+            )
     if not planned_keys:
         return
     # Success path: absorb the child metadata the sub-plan collected into the

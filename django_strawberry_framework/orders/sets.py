@@ -25,10 +25,8 @@ expands the file to:
 from __future__ import annotations
 
 from collections import OrderedDict
-from functools import lru_cache
 from typing import TYPE_CHECKING, Any, ClassVar
 
-from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 
 from ..exceptions import ConfigurationError
@@ -47,48 +45,13 @@ from ..utils.permissions import (
     run_active_input_permission_checks,
     verbatim_path,
 )
-from ..utils.relations import is_many_side_relation_kind, relation_kind
+from ..utils.relations import path_traverses_to_many as _path_traverses_to_many
 from ..utils.strings import flatten_lookup_path
 from .base import RelatedOrder
 from .inputs import Ordering, _field_specs, normalize_input_value
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
-
-
-@lru_cache(maxsize=2048)
-def _path_traverses_to_many(model: type, field_path: str) -> bool:
-    """Return whether an ORM ``field_path`` traverses a to-many relation from ``model``.
-
-    Walks the ``__``-separated path segment by segment. A segment that is a
-    to-many relation (reverse FK or forward/reverse M2M -- the
-    ``is_many_side_relation_kind`` set) means a raw ``order_by("rel__col")``
-    would add a fan-out JOIN that multiplies parent rows (one row per matching
-    child). Stops at the first non-relation segment (a terminal scalar column)
-    or an unresolvable segment (a transform / lookup), neither of which can
-    multiply. Used by ``OrderSet._resolve_order_expressions`` to decide between
-    a direct ``order_by`` and the row-preserving aggregate form.
-
-    The answer is pure model metadata for a ``(model, field_path)`` pair, so it
-    is cached across requests. The bounded size keeps dynamic test models and
-    generated path variants from growing the process without limit; eviction only
-    recomputes the same metadata walk.
-    """
-    current = model
-    for segment in field_path.split("__"):
-        try:
-            field = current._meta.get_field(segment)
-        except FieldDoesNotExist:
-            return False
-        if not getattr(field, "is_relation", False):
-            return False
-        if is_many_side_relation_kind(relation_kind(field)):
-            return True
-        related = getattr(field, "related_model", None)
-        if related is None:
-            return False
-        current = related
-    return False
 
 
 class OrderSetMetaclass(type):

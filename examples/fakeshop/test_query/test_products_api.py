@@ -1507,6 +1507,40 @@ def test_products_categories_filter_by_relay_own_pk_global_id_in():
 
 
 @pytest.mark.django_db
+def test_products_categories_empty_relay_global_id_in_matches_nothing():
+    """An explicit empty GlobalID membership set returns no category edges."""
+    seed_data(1)
+
+    _assert_graphql_data(
+        "query { allCategories(filter: { id: { in: [] } }) { edges { node { name } } } }",
+        {"allCategories": {"edges": []}},
+    )
+
+
+@pytest.mark.django_db
+def test_products_categories_generated_reverse_fk_leaf_collapses_duplicate_parents():
+    """A generated reverse-FK leaf returns one parent even when two children match."""
+    seed_data(1)
+    category = models.Category.objects.filter(is_private=False).order_by("pk").first()
+    models.Item.objects.create(
+        name="duplicate-leaf-alpha",
+        category=category,
+        is_private=False,
+    )
+    models.Item.objects.create(
+        name="duplicate-leaf-beta",
+        category=category,
+        is_private=False,
+    )
+
+    _assert_graphql_data(
+        'query { allCategories(filter: { itemsName: { iContains: "duplicate-leaf" } }) '
+        "{ edges { node { name } } } }",
+        {"allCategories": {"edges": [{"node": {"name": category.name}}]}},
+    )
+
+
+@pytest.mark.django_db
 def test_products_categories_filter_by_starts_with_via_all_lookups():
     """``Meta.fields = {"name": "__all__"}`` exposes lookups beyond the explicit set.
 

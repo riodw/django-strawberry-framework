@@ -58,7 +58,11 @@ from ..utils.querysets import (
     apply_type_visibility_async,
     apply_type_visibility_sync,
 )
-from ..utils.relations import is_many_side_relation_kind, relation_kind
+from ..utils.relations import (
+    is_many_side_relation_kind,
+    path_traverses_to_many,
+    relation_kind,
+)
 from .base import GlobalIDFilter, GlobalIDMultipleChoiceFilter, IntegerInFilter, RelatedFilter
 from .inputs import _LOGIC_KEYS, LOOKUP_NAME_MAP, _field_specs, normalize_input_value
 
@@ -487,8 +491,18 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         implements ``relay.Node``, the field becomes ``GlobalIDFilter`` -
         the OWNER is the Relay node so its PK column is a GlobalID over
         the wire.
+
+        Generated flat leaves whose ORM path crosses a reverse FK or M2M
+        relation are marked ``distinct=True`` before any Relay-aware
+        replacement. A fan-out JOIN can otherwise return the same parent
+        once per matching child, corrupting list rows and connection counts.
         """
         default = super().filter_for_field(field, field_name, lookup_expr)
+        requires_distinct = default.distinct or path_traverses_to_many(
+            cls._meta.model,
+            field_name,
+        )
+        default.distinct = requires_distinct
         if cls._is_own_pk_under_relay_owner(field):
             # The owner's own PK is a GlobalID over the wire. Honor the
             # lookup cardinality: an ``in`` lookup consumes a LIST of
@@ -514,6 +528,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             return own_pk_filter_class(
                 field_name=default.field_name,
                 lookup_expr=default.lookup_expr,
+                distinct=requires_distinct,
                 **default.extra,
             )
         target_type = cls._resolve_relation_target_type(field, field_name)
@@ -523,6 +538,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         return relay_filter_class(
             field_name=default.field_name,
             lookup_expr=default.lookup_expr,
+            distinct=requires_distinct,
             **default.extra,
         )
 

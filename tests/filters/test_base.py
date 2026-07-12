@@ -244,6 +244,29 @@ def test_global_id_multiple_choice_filter_passes_through_none():
     assert isinstance(result, _Qs)
 
 
+def test_global_id_multiple_choice_filter_empty_in_matches_nothing_like_list_filter():
+    class _Qs:
+        def none(self):
+            return "none-sentinel"
+
+    qs = _Qs()
+    global_ids = GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="in")
+    list_filter = ListFilter(field_name="id", lookup_expr="in")
+
+    assert global_ids.filter(qs, []) == "none-sentinel"
+    assert list_filter.filter(qs, []) == "none-sentinel"
+
+
+def test_global_id_multiple_choice_filter_empty_excluded_in_matches_everything():
+    class _Qs:
+        pass
+
+    qs = _Qs()
+    f = GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="in", exclude=True)
+
+    assert f.filter(qs, []) is qs
+
+
 # ---------------------------------------------------------------------------
 # LazyRelatedClassMixin
 # ---------------------------------------------------------------------------

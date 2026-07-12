@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import TYPE_CHECKING, Literal, Protocol, TypeAlias
+
+from django.core.exceptions import FieldDoesNotExist
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from django.db import models
@@ -83,6 +86,38 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
 def is_many_side_relation_kind(kind: RelationKind | None) -> bool:
     """Return ``True`` for relation kinds represented as GraphQL lists."""
     return kind in MANY_SIDE_RELATION_KINDS
+
+
+@lru_cache(maxsize=2048)
+def path_traverses_to_many(model: type, field_path: str) -> bool:
+    """Return whether an ORM ``field_path`` traverses a to-many relation.
+
+    Walks the ``__``-separated path from ``model`` until it reaches a
+    terminal scalar, an unresolvable transform/lookup, or a relation without
+    a concrete target model. A reverse FK or forward/reverse M2M hop is
+    row-multiplying and returns ``True`` immediately.
+
+    Filter generation uses the result to set ``distinct=True`` on plain
+    generated leaf filters; order resolution uses it to replace a fan-out
+    ``order_by`` with a row-preserving aggregate. The answer depends only on
+    model metadata, so the bounded process-lifetime cache safely serves both
+    subsystems.
+    """
+    current = model
+    for segment in field_path.split("__"):
+        try:
+            field = current._meta.get_field(segment)
+        except FieldDoesNotExist:
+            return False
+        if not getattr(field, "is_relation", False):
+            return False
+        if is_many_side_relation_kind(relation_kind(field)):
+            return True
+        related = getattr(field, "related_model", None)
+        if related is None:
+            return False
+        current = related
+    return False
 
 
 def is_forward_many_to_many(field: object) -> bool:

@@ -427,6 +427,10 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
     reject submitted GlobalIDs against an empty `choices` set (the stock
     `MultipleChoiceField` would); decode + type validation run in
     `filter` instead.
+
+    An explicit empty list is a real membership predicate: it matches no
+    rows (or every row when ``exclude=True``), matching ``ListFilter``'s
+    empty-set semantics rather than django-filter's no-value pass-through.
     """
 
     field_class = _GlobalIDMultipleChoiceField
@@ -453,7 +457,7 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         if self.lookup_expr != "in":
             return super().filter(qs, node_ids)
         if not node_ids:
-            return qs
+            return qs if self.exclude else qs.none()
         return _apply_lookup_predicate(self, qs, node_ids)
 
 

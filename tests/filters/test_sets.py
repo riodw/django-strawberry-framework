@@ -354,6 +354,36 @@ def test_filter_for_field_returns_default_when_target_model_not_registered():
     assert not isinstance(resolved, GlobalIDFilter)
 
 
+@pytest.mark.parametrize(
+    ("model_class", "field_name"),
+    [
+        (Category, "items__name"),
+        (library_models.Book, "genres__name"),
+        (library_models.Genre, "books__title"),
+    ],
+)
+def test_filter_for_field_marks_generated_to_many_paths_distinct(model_class, field_name):
+    class GeneratedFilter(FilterSet):
+        class Meta:
+            model = model_class
+            fields = {field_name: ["icontains"]}
+
+    filter_instance = GeneratedFilter.get_filters()[f"{field_name}__icontains"]
+
+    assert filter_instance.distinct is True
+
+
+def test_filter_for_field_keeps_generated_to_one_path_non_distinct():
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"shelf__code": ["icontains"]}
+
+    filter_instance = BookFilter.get_filters()["shelf__code__icontains"]
+
+    assert filter_instance.distinct is False
+
+
 # ---------------------------------------------------------------------------
 # Apply pipeline - request extraction
 # ---------------------------------------------------------------------------

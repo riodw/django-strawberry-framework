@@ -182,6 +182,14 @@ CSRF enforcement also belongs to the HTTP transport: it depends on the Strawberr
 
 `register_mutation()` derives its input from the user model's `USERNAME_FIELD`, distinct `REQUIRED_FIELDS`, and `password`. It refuses to auto-expose Django's account-control fields (`is_active`, `is_staff`, `is_superuser`, `groups`, and `user_permissions`); custom registration flows must initialize privileges and activation state in server-owned logic.
 
+## Filter membership semantics
+
+For `ListFilter` and Relay-aware `GlobalIDMultipleChoiceFilter` membership lookups, an explicit empty list means membership in the empty set and therefore matches no rows. Omitting the filter or sending `null` remains the no-constraint form. An excluded empty membership predicate matches every row.
+
+Generated integer `in` filters coerce every member through the Django model field before binding it to the database. Members that fail model-field coercion or range validation are discarded; a mixed list filters on its valid members, while a non-empty list whose members all fail validation matches no rows. This prevents an invalid or out-of-range integer from reaching the backend without widening an all-invalid restrictive filter into an unfiltered query.
+
+Generated flat filter paths that cross a reverse foreign key or many-to-many relation automatically apply `distinct`, so multiple matching related rows cannot duplicate a parent in list or connection results.
+
 ## Development debug responses
 
 `DjangoDebugExtension` is an opt-in development diagnostic imported from `django_strawberry_framework.extensions`. Pass the **class**, not a constructed instance, in Strawberry's `extensions=` list:

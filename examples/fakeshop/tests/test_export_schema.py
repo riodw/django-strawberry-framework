@@ -12,9 +12,10 @@ def test_export_schema_writes_fakeshop_sdl_to_stdout_by_default():
     assert "type BranchType" in out.getvalue()
 
 
-def test_export_schema_writes_fakeshop_sdl_to_path_when_path_set(tmp_path):
+def test_export_schema_overwrites_existing_path_with_utf8_fakeshop_sdl(tmp_path):
     out = StringIO()
     out_path = tmp_path / "schema.graphql"
+    out_path.write_text("stale schema sentinel", encoding="utf-8")
 
     call_command(
         "export_schema",
@@ -25,7 +26,9 @@ def test_export_schema_writes_fakeshop_sdl_to_path_when_path_set(tmp_path):
     )
 
     assert out_path.exists()
-    assert "type BranchType" in out_path.read_text(encoding="utf-8")
+    written = out_path.read_text(encoding="utf-8")
+    assert "type BranchType" in written
+    assert "stale schema sentinel" not in written
     assert f"Wrote schema to {out_path}" in out.getvalue()
 
 

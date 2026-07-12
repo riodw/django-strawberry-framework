@@ -95,7 +95,14 @@ class Command(BaseCommand):
     def add_arguments(self, parser: CommandParser) -> None:
         """Register the positional ``type`` argument and the optional ``--schema`` flag."""
         parser.add_argument("type", type=str, help="DjangoType name or fully-dotted object path")
-        parser.add_argument("--schema", type=str, help="Optional schema selector to import first")
+        parser.add_argument(
+            "--schema",
+            type=str,
+            help=(
+                "Import the project schema first to register and finalize types; "
+                "required for bare names in a cold process"
+            ),
+        )
 
     def handle(self, *args: object, **options: object) -> None:
         """Import the schema (if given), resolve the type, and print its field table."""
@@ -141,14 +148,17 @@ class Command(BaseCommand):
                 "(pass --schema <your project schema dotted path>) or use a fully-dotted path.",
             )
         if len(matches) > 1:
-            candidates = ", ".join(
-                f"{type_cls.__module__}.{type_cls.__qualname__} "
+            candidates = "\n".join(
+                f"  - {type_cls.__module__}.{type_cls.__qualname__} "
                 f"(model {getattr(registry.model_for_type(type_cls), '__name__', '?')})"
-                for type_cls in matches
+                for type_cls in sorted(
+                    matches,
+                    key=lambda type_cls: f"{type_cls.__module__}.{type_cls.__qualname__}",
+                )
             )
             raise CommandError(
-                f"{name} is ambiguous - {len(matches)} registered types share this name: "
-                f"{candidates}. Pass a fully-dotted object path to disambiguate.",
+                f"{name} is ambiguous - {len(matches)} registered types share this name.\n"
+                f"Pass one of these fully-dotted object paths to disambiguate:\n{candidates}",
             )
         return matches[0]
 

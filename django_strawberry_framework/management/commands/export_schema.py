@@ -21,7 +21,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--path",
             type=str,
-            help="Optional file path to write the SDL to; rejects empty values",
+            help="Write UTF-8 SDL to this file, overwriting it without prompting",
         )
 
     def handle(self, *args: object, **options: object) -> None:
@@ -31,9 +31,8 @@ class Command(BaseCommand):
         stdout; ``--path ""`` (empty-string value) raises ``CommandError``
         with "--path requires a non-empty value"; ``--path <file>`` writes
         UTF-8 SDL to the named path. A bare ``--path`` with no following
-        value is rejected earlier by argparse, before ``handle`` runs (the
-        ``[0.0.7] Changed`` "--path now requires a value when the flag is
-        given" contract).
+        value is rejected earlier by argparse, before ``handle`` runs. A
+        non-empty target is encoded as UTF-8 and replaced without prompting.
         """
         schema_symbol = import_or_command_error(
             lambda: import_module_symbol(options["schema"], default_symbol_name="schema"),

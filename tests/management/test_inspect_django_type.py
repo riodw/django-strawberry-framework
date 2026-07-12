@@ -41,6 +41,7 @@ import pytest
 from apps.products.models import Category, Item
 from django.core.management import CommandError, call_command
 from django.db import models
+from django.utils.module_loading import import_string
 from strawberry import relay
 
 from django_strawberry_framework import DjangoType, finalize_django_types
@@ -76,15 +77,49 @@ def test_bad_dotted_path_raises_command_error():
         call_command("inspect_django_type", "does.not.exist.Type")
 
 
-def test_ambiguous_bare_name_raises_command_error():
-    # Two DjangoType classes against different models sharing one __name__.
+def test_ambiguous_bare_name_lists_copyable_dotted_paths(monkeypatch):
+    """Every ambiguity candidate is a directly reusable dotted object path."""
+    module_a = types.ModuleType("management_duplicate_types_a")
+    module_b = types.ModuleType("management_duplicate_types_b")
+    monkeypatch.setitem(sys.modules, module_a.__name__, module_a)
+    monkeypatch.setitem(sys.modules, module_b.__name__, module_b)
     meta_a = type("Meta", (), {"model": Category, "fields": ("id", "name")})
-    type("DupType", (DjangoType,), {"Meta": meta_a})
+    duplicate_a = type(
+        "DupType",
+        (DjangoType,),
+        {"__module__": module_a.__name__, "Meta": meta_a},
+    )
+    module_a.DupType = duplicate_a
     meta_b = type("Meta", (), {"model": Item, "fields": ("id", "name")})
-    type("DupType", (DjangoType,), {"Meta": meta_b})
+    duplicate_b = type(
+        "DupType",
+        (DjangoType,),
+        {"__module__": module_b.__name__, "Meta": meta_b},
+    )
+    module_b.DupType = duplicate_b
 
-    with pytest.raises(CommandError, match=r"DupType is ambiguous.*Category.*Item"):
+    path_a = f"{module_a.__name__}.DupType"
+    path_b = f"{module_b.__name__}.DupType"
+    with pytest.raises(CommandError, match=r"DupType is ambiguous") as exc_info:
         call_command("inspect_django_type", "DupType")
+
+    message = str(exc_info.value)
+    assert f"  - {path_a} (model Category)" in message
+    assert f"  - {path_b} (model Item)" in message
+    assert import_string(path_a) is duplicate_a
+    assert import_string(path_b) is duplicate_b
+
+
+def test_schema_help_documents_cold_process_finalization_requirement():
+    parser = Command().create_parser("manage.py", "inspect_django_type")
+    schema_action = next(
+        action for action in parser._actions if "--schema" in action.option_strings
+    )
+
+    assert schema_action.help == (
+        "Import the project schema first to register and finalize types; "
+        "required for bare names in a cold process"
+    )
 
 
 def test_bad_schema_selector_raises_command_error():

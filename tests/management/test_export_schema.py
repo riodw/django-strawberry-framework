@@ -7,6 +7,8 @@ import pytest
 import strawberry
 from django.core.management import CommandError, call_command
 
+from django_strawberry_framework.management.commands.export_schema import Command
+
 # ---------------------------------------------------------------------------
 # Shared fixture pattern (use inline per test, not a session fixture)
 # ---------------------------------------------------------------------------
@@ -65,6 +67,13 @@ def test_export_schema_raises_command_error_when_path_flag_has_no_value(monkeypa
     _make_test_module(monkeypatch, schema=_make_schema())
     with pytest.raises(CommandError):
         call_command("export_schema", "test_module:schema", "--path")
+
+
+def test_export_schema_path_help_documents_destructive_utf8_write():
+    parser = Command().create_parser("manage.py", "export_schema")
+    path_action = next(action for action in parser._actions if "--path" in action.option_strings)
+
+    assert path_action.help == "Write UTF-8 SDL to this file, overwriting it without prompting"
 
 
 # The ``--path`` directory-missing and empty-string failure branches moved to

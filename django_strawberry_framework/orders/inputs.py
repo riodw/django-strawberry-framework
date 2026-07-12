@@ -266,7 +266,10 @@ def normalize_input_value(
       element and concatenate.
     - per-element ``<T>OrderInputType`` -> walk the dataclass's fields
       via the ``_field_specs`` map; ``None`` attribute values short-
-      circuit (active-input-only scope per Spec Decision 8 step 6).
+      circuit (active-input-only scope per Spec Decision 8 step 6). Thus
+      an omitted field and an explicit GraphQL ``null`` direction have
+      identical no-op semantics: neither contributes an ordering term
+      nor fires that field's permission gate.
     - ``RelatedOrder`` branch -> recurse into the child orderset with
       the django source path as a prefix (e.g. ``shelf`` ->
       ``shelf__code``).

@@ -1647,6 +1647,88 @@ def test_library_branches_order_by_scalar_then_to_many_aggregate_no_multiplicati
 
 
 @pytest.mark.django_db
+def test_library_genres_connection_pages_by_to_many_aggregate():
+    """A root connection paginates a grouped to-many order without duplicate or missing nodes.
+
+    This is the cross-backend acceptance pin for the orders pre-BETA review:
+    the same live HTTP test runs in the default SQLite suite and the PostgreSQL
+    CI tier. ``GenreOrder.books.title`` traverses the reverse M2M, so ASC orders
+    each genre by ``Min("books__title")``. The connection then appends its
+    deterministic pk tiebreaker and cursor-slices that grouped queryset.
+
+    A root connection does not use the nested optimizer's row-number window,
+    while nested connections carrying ``orderBy:`` deliberately use the
+    per-parent fallback. The SQL assertion pins that real boundary: the root
+    page contains ``MIN`` + ``GROUP BY`` and no ``_dst_row_number`` layer.
+    """
+    branch = models.Branch.objects.create(name="Branch", city="Boston")
+    shelf = models.Shelf.objects.create(code="A-1", topic="general", branch=branch)
+    genres = {
+        name: models.Genre.objects.create(name=name)
+        for name in (
+            "Aggregate A",
+            "Aggregate B",
+            "Aggregate C",
+            "Aggregate D",
+        )
+    }
+    for title, genre_name in (
+        ("Alpha", "Aggregate A"),
+        ("Zulu", "Aggregate A"),
+        ("Beta", "Aggregate B"),
+        ("Charlie", "Aggregate C"),
+        ("Delta", "Aggregate D"),
+    ):
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genres[genre_name])
+
+    def _page(after: str | None = None):
+        after_argument = f', after: "{after}"' if after is not None else ""
+        with CaptureQueriesContext(connection) as captured:
+            response = _post_graphql(
+                f"""
+                query {{
+                  allLibraryGenresConnection(
+                    orderBy: [{{ books: {{ title: ASC }} }}]
+                    first: 2
+                    {after_argument}
+                  ) {{
+                    totalCount
+                    edges {{ cursor node {{ name }} }}
+                    pageInfo {{ hasNextPage endCursor }}
+                  }}
+                }}
+                """,
+            )
+        assert response.status_code == 200
+        payload = response.json()
+        assert "errors" not in payload, payload
+        return payload["data"]["allLibraryGenresConnection"], captured
+
+    page_one, captured = _page()
+    aggregate_sql = next(query["sql"] for query in captured if "MIN(" in query["sql"].upper())
+    assert "GROUP BY" in aggregate_sql.upper()
+    assert "_dst_row_number" not in aggregate_sql
+    assert page_one["totalCount"] == 4
+    assert [edge["node"]["name"] for edge in page_one["edges"]] == ["Aggregate A", "Aggregate B"]
+    assert page_one["pageInfo"]["hasNextPage"] is True
+
+    page_two, _captured = _page(page_one["pageInfo"]["endCursor"])
+    assert page_two["totalCount"] == 4
+    assert [edge["node"]["name"] for edge in page_two["edges"]] == ["Aggregate C", "Aggregate D"]
+    assert page_two["pageInfo"]["hasNextPage"] is False
+
+    all_names = [edge["node"]["name"] for page in (page_one, page_two) for edge in page["edges"]]
+    assert all_names == [
+        "Aggregate A",
+        "Aggregate B",
+        "Aggregate C",
+        "Aggregate D",
+    ]
+    assert len(all_names) == len(set(all_names))
+
+
+@pytest.mark.django_db
 def test_library_books_order_by_m2m_absolute_import_path():
     """Spec-028 Slice 4 Test 5: M2M order via Layer-2 absolute-import-path.
 

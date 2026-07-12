@@ -469,6 +469,15 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         NULLS positioning carries onto the aggregate's ``OrderBy`` because the
         alias is resolved through the same ``Ordering.resolve``; mixed scalar +
         to-many terms in one ``orderBy`` annotate independently and compose.
+
+        Connection pagination preserves this shape without stacking incompatible
+        query layers. A root ``DjangoConnectionField`` applies this grouped
+        queryset before its normal cursor slice. A synthesized nested relation
+        connection carrying ``orderBy:`` is deliberately not window/lateral
+        planned and runs the per-parent connection pipeline instead. Therefore a
+        to-many aggregate order never sits below the optimizer's
+        ``_dst_row_number`` window annotation; both SQLite and PostgreSQL execute
+        the grouped root page or the unwindowed nested fallback directly.
         """
         model = getattr(getattr(cls, "Meta", None), "model", None)
         annotations: dict[str, Any] = {}
@@ -498,9 +507,11 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         directions filtered; to-many paths ordered via the row-preserving
         ``Min`` / ``Max`` aggregate annotation) -> conditional
         ``annotate(**annotations)`` -> ``order_by(*expressions)``; a term-less
-        input returns ``queryset`` unchanged. Pure Python parsing + queryset-
-        method calls that do no I/O, so the sync and async colorings differ
-        ONLY in the permission-check coloring they run before this.
+        input returns ``queryset`` unchanged. Omitted fields and explicit
+        GraphQL ``null`` directions both produce no term, preserving any
+        pre-existing queryset order. Pure Python parsing + queryset-method calls
+        that do no I/O, so the sync and async colorings differ ONLY in the
+        permission-check coloring they run before this.
         """
         data = cls._normalize_input(input_value)
         if not data:

@@ -51,7 +51,10 @@ import tempfile
 from collections.abc import Sequence
 from pathlib import Path
 
-from review_inspect import main as review_inspect_main
+if __package__:
+    from scripts.review_inspect import main as review_inspect_main
+else:
+    from review_inspect import main as review_inspect_main
 
 SHADOW_DIR = Path("docs/shadow/current")
 DEFAULT_PACKAGE_DIR = "django_strawberry_framework"

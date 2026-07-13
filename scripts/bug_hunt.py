@@ -1,18 +1,21 @@
-"""Generate the per-commit bug-hunt checklist markdown.
+"""Generate the autonomous per-commit bug-hunt progress file.
 
 The script resolves the current branch's HEAD commit hash, refreshes
 the snapshot helper's ``docs/shadow/current/`` folder in-process via
 ``review_historical_package_snapshot_at_commit.main([<head-sha>])``
 (the output location is imported as ``SHADOW_DIR`` so it cannot drift
 from the snapshot helper), reads the passed-in dicta (default
-``docs/bug_hunt/dicta.md``), appends the static single-file review
-boilerplate, and emits one checkbox + prompt block per ``*.stripped.py``
-file under ``docs/shadow/current/``.
+``docs/bug_hunt/dicta.md``), inventories the live package, and writes a
+progress header, the static single-file hunt brief, one checkbox per live
+non-``__init__.py`` Python file, a package-integration item, and the final
+test gate. Matching shadows are optional baseline aids for those live files.
 
 The output path defaults to ``docs/bug_hunt/bug_hunt.<short-sha>.md``.
+Existing progress is preserved unless ``--force`` is passed for an
+explicit restart.
 
 Usage:
-    uv run python scripts/bug_hunt.py [--dicta PATH] [--output PATH] [--package-dir DIR]
+    uv run python scripts/bug_hunt.py [--dicta PATH] [--output PATH] [--package-dir DIR] [--force]
 """
 
 from __future__ import annotations
@@ -25,69 +28,54 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from review_historical_package_snapshot_at_commit import (
-    DEFAULT_PACKAGE_DIR,
-    SHADOW_DIR,
-)
-from review_historical_package_snapshot_at_commit import (
-    main as review_historical_package_snapshot_at_commit_main,
-)
+if __package__:
+    from scripts import review_historical_package_snapshot_at_commit as snapshot
+else:
+    import review_historical_package_snapshot_at_commit as snapshot
+
+DEFAULT_PACKAGE_DIR = snapshot.DEFAULT_PACKAGE_DIR
+SHADOW_DIR = snapshot.SHADOW_DIR
+review_historical_package_snapshot_at_commit_main = snapshot.main
 
 BUG_HUNT_DIR = Path("docs/bug_hunt")
 DICTA_PATH = BUG_HUNT_DIR / "dicta.md"
 
 # Fallback dicta used when ``--dicta`` points at a missing file.
 _FALLBACK_DICTA = (
-    "# Bug hunt\n"
-    "One prompt per file. Read the stripped + overview shadow companions and\n"
-    "edit the original source if a defect is found. Shadow line numbers are\n"
-    "not canonical; cite original source line numbers in any fix.\n"
+    "## Package questions\n\n"
+    "No maintainer-authored probing questions were supplied. Explore the live source freely; "
+    "shadow inputs are orientation only.\n"
 )
 
-# Static boilerplate describing how to perform a good single-file bug
-# review pass.
-_HOW_TO_REVIEW_ONE_FILE = """## How to review a single file
-Each prompt below targets exactly one source file. Treat it as a focused
-review pass, not a tour:
+# Static boilerplate describing the Worker 2 single-file hunt.
+_HOW_TO_REVIEW_ONE_FILE = """## How to hunt one file
+Each item uses one source file as its entry point into the live system. The
+target is narrow; the investigation and root-cause fix may cross files.
 
-- Read the `.overview.md` shadow first. It is a structural index -
-  quick-scan counts, imports, symbols, control-flow hotspots, executable
-  Django/ORM marker lines, calls of interest, and repeated executable
-  string literals - pulled from the AST without executing the file. Use
-  it to plan the read, not as the source of truth.
-- Read the `.stripped.py` shadow next. Comments and docstring statements
-  are removed, and other string literals are replaced, so the executable
-  structure is easier to scan. **Line numbers in the stripped file are
-  not canonical.** Cite original source-file line numbers in every
-  finding and every fix.
-- Open the original source file alongside (named in the prompt) and
-  reconcile the shadow view against the real code before declaring a
-  defect.
-- Confirm every defect against the actual source. No speculation, no
-  "this might be wrong". If you cannot reproduce the failure shape
-  mentally or with a quick read, drop the finding and move on. Silence
-  on a marker line is acceptable; speculative defects pollute the
-  checklist.
+- Read the shadow overview and stripped source for baseline orientation, then
+  read the complete live target. Shadow markers and stripped line numbers are
+  never authoritative.
+- Trace callers, dependencies, state, framework hooks, tests, examples, and
+  public contracts far enough to understand the target's real behavior. Clean
+  layers often fail only when several reasonable assumptions stack together;
+  hunt those interactions, not only suspicious local lines.
+- Break things, break things, break things. Write messy scratch test files and
+  be maximally destructive inside disposable scratch scope: mutate throwaway
+  state, force hostile sequences, interrupt lifecycles, and try to make every
+  connected layer fail.
+- For every extreme, test the opposite extreme and then combine them across
+  layers. Try to disprove every candidate and record only confirmed defects.
+- Do not clean up scratch probes or disposable state. Report every path and
+  leave it intact so Worker 1 can independently verify it and clean it up only
+  after the item passes.
+- Implement the root-cause fix at the layer that owns the broken invariant,
+  including connected files when required. Add a permanent behavioral test for
+  every production fix at the strongest tier required by `AGENTS.md`.
+- After edits run `uv run ruff format .` and `uv run ruff check --fix .`.
+- Report evidence, changed files, tests, and validation to Worker 1. Do not edit
+  this progress file; Worker 1 independently verifies fixes and advances it.
 
-For each confirmed defect:
-
-- Classify severity using the criteria in the dicta header above.
-- Edit the original source file directly. Stay within the file the
-  prompt names - if the fix needs sibling changes, surface that as a
-  question rather than expanding the diff unilaterally.
-- For **High**-severity fixes, add or update a test that pins the
-  corrected behavior under the correct test tree per AGENTS.md
-  "Test placement is mandatory". Do not rely on validation alone.
-- For **Medium** / **Low** fixes that change a documented contract,
-  update the relevant docstring or comment in the same pass so the
-  prose matches the final behavior.
-- Run `uv run ruff format <file>` and `uv run ruff check <file>` on
-  any source file you touched.
-
-When the file is done, tick its checkbox `- [x]` so the next prompt is
-obvious.
-
-## Per-file prompts
+## Hunt items
 """
 
 
@@ -114,25 +102,30 @@ def _short_sha(commit: str) -> str:
     ).strip()
 
 
-def _source_path_for(stripped_path: Path) -> str:
-    """Recover the original repo-relative source path from a stripped stem.
-
-    ``review_inspect._stable_stem`` joins the relative path's parts with
-    ``__``, so reversing is ``stem.split("__")`` - *not* a blind
-    ``replace("__", "/")``. The difference matters for paths that contain
-    components starting with ``_``: ``optimizer/_context.py`` becomes
-    ``optimizer___context`` (two underscores from the join plus the
-    leading underscore on ``_context``), which ``split("__")`` correctly
-    splits into ``["optimizer", "_context"]`` while a literal replace
-    would produce ``optimizer/_/context``.
-    """
-    stem = stripped_path.name.removesuffix(".stripped.py")
-    return "/".join(stem.split("__")) + ".py"
+def _live_python_sources(repo_root: Path, package_dir: str) -> list[str]:
+    """Return every live non-init Python source under ``package_dir``."""
+    package_root = (repo_root / package_dir).resolve()
+    if not package_root.is_dir():
+        return []
+    return [
+        path.relative_to(repo_root).as_posix()
+        for path in sorted(package_root.rglob("*.py"))
+        if path.name != "__init__.py"
+    ]
 
 
-def _stripped_files(current_dir: Path) -> list[Path]:
-    """Return every ``*.stripped.py`` under ``current_dir``, sorted."""
-    return sorted(current_dir.glob("*.stripped.py"))
+def _shadow_inputs(
+    repo_root: Path,
+    current_dir: Path,
+    source: str,
+) -> tuple[Path | None, Path | None]:
+    """Return repo-relative baseline shadow inputs when both exist."""
+    stem = Path(source).with_suffix("").as_posix().replace("/", "__")
+    stripped = current_dir / f"{stem}.stripped.py"
+    overview = current_dir / f"{stem}.overview.md"
+    if not stripped.is_file() or not overview.is_file():
+        return None, None
+    return stripped.relative_to(repo_root), overview.relative_to(repo_root)
 
 
 def _refresh_historical_package_snapshot(commit: str, package_dir: str, current_dir: Path) -> None:
@@ -151,18 +144,55 @@ def _refresh_historical_package_snapshot(commit: str, package_dir: str, current_
         )
 
 
-def _file_block(source: str, stripped: Path, overview: Path) -> str:
+def _file_block(source: str, stripped: Path | None, overview: Path | None) -> str:
     """Render one checkbox block for a single source file."""
+    lines = [f"- [ ] {source}", "    - Status: pending"]
+    if stripped is not None and overview is not None:
+        lines.extend([f"    - {stripped.as_posix()}", f"    - {overview.as_posix()}"])
+        orientation = (
+            f"Read {stripped.as_posix()} and {overview.as_posix()} for baseline orientation, then "
+        )
+    else:
+        lines.append("    - Baseline shadow: none (live file added or absent at hunt baseline)")
+        orientation = "No baseline shadow exists; "
     prompt = (
-        f"Read {stripped.as_posix()} and {overview.as_posix()} and check for "
-        f"bugs, if any are found make edits to {source}"
+        f"Use {source} as the entry point. {orientation}hunt the connected live system and "
+        "implement every confirmed root-cause fix."
     )
+    lines.extend(["    - Prompt:", f"        - {prompt}"])
+    return "\n".join(lines) + "\n"
+
+
+def _progress_header(commit: str, short_commit: str) -> str:
+    """Render the stable metadata for one autonomous hunt."""
     return (
-        f"- [ ] {source}\n"
-        f"    - {stripped.as_posix()}\n"
-        f"    - {overview.as_posix()}\n"
-        f"    - Prompt:\n"
-        f"        - {prompt}\n"
+        f"# Bug hunt: {short_commit}\n\n"
+        "Status: in-progress\n"
+        "Mode: autonomous\n"
+        f"Baseline commit: `{commit}`\n"
+    )
+
+
+def _integration_block() -> str:
+    """Render the package-wide integration hunt item."""
+    return (
+        "- [ ] Package integration\n"
+        "    - Status: pending\n"
+        "    - Prompt:\n"
+        "        - Hunt the final live package across boundaries, including public exports and "
+        "`__init__.py` files; implement every confirmed root-cause fix.\n"
+    )
+
+
+def _final_gate_block() -> str:
+    """Render the Worker 1 full-suite gate."""
+    return (
+        "- [ ] Final test gate\n"
+        "    - Status: pending\n"
+        "    - Owner: Worker 1\n"
+        "    - Prompt:\n"
+        "        - Run `uv run pytest`; require a passing suite and 100% configured package "
+        "coverage.\n"
     )
 
 
@@ -178,9 +208,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Resolve HEAD, refresh docs/shadow/current/ from that commit, "
-            "then generate the per-commit bug-hunt checklist by combining "
-            "the passed-in dicta, the static how-to-review boilerplate, and "
-            "one prompt per .stripped.py file."
+            "then generate the autonomous per-commit bug-hunt progress file."
         ),
     )
     parser.add_argument(
@@ -188,8 +216,8 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         type=Path,
         default=DICTA_PATH,
         help=(
-            "Markdown file passed in as the bug_hunt.<sha>.md dicta header. "
-            f"Defaults to {DICTA_PATH.as_posix()!r} (HUNT.md Step 1 writes this)."
+            "Optional maintainer-authored probing questions added to the progress file. "
+            f"Defaults to {DICTA_PATH.as_posix()!r}."
         ),
     )
     parser.add_argument(
@@ -211,6 +239,11 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
             f"Defaults to {DEFAULT_PACKAGE_DIR!r}."
         ),
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing progress file for an explicit maintainer-requested restart.",
+    )
     return parser.parse_args(argv)
 
 
@@ -218,7 +251,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Build the bug-hunt checklist and return an exit code."""
     args = _parse_args(sys.argv[1:] if argv is None else argv)
 
-    repo_root = Path(_run_git(["rev-parse", "--show-toplevel"]).strip())
+    repo_root = Path(_run_git(["rev-parse", "--show-toplevel"]).strip()).resolve()
     head_sha = _head_sha()
     short_sha = _short_sha(head_sha)
     current_dir = (repo_root / SHADOW_DIR).resolve()
@@ -228,6 +261,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_path = (repo_root / BUG_HUNT_DIR / f"bug_hunt.{short_sha}.md").resolve()
     else:
         output_path = (repo_root / args.output).resolve()
+    if output_path.exists() and not args.force:
+        print(
+            f"Refusing to overwrite existing bug-hunt progress: {output_path}. "
+            "Resume it, or pass --force only for an explicit restart.",
+            file=sys.stderr,
+        )
+        return 3
     try:
         _refresh_historical_package_snapshot(
             head_sha,
@@ -238,22 +278,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(str(error), file=sys.stderr)
         return 1
 
-    stripped_files = _stripped_files(current_dir)
-    if not stripped_files:
+    source_paths = _live_python_sources(repo_root, args.package_dir)
+    if not source_paths:
         print(
-            f"No *.stripped.py files in {current_dir} after refreshing {args.package_dir!r} from {head_sha}.",
+            f"No live non-init Python files under {args.package_dir!r}.",
             file=sys.stderr,
         )
         return 2
 
-    sections: list[str] = [_read_dicta(dicta_path), _HOW_TO_REVIEW_ONE_FILE]
-    for stripped in stripped_files:
-        source = _source_path_for(stripped)
-        overview = stripped.with_name(stripped.name.removesuffix(".stripped.py") + ".overview.md")
-        # Keep output paths repo-relative.
-        stripped_rel = stripped.relative_to(repo_root)
-        overview_rel = overview.relative_to(repo_root)
-        sections.append(_file_block(source, stripped_rel, overview_rel))
+    sections: list[str] = [
+        _progress_header(head_sha, short_sha),
+        _read_dicta(dicta_path),
+        _HOW_TO_REVIEW_ONE_FILE,
+    ]
+    for source in source_paths:
+        stripped, overview = _shadow_inputs(repo_root, current_dir, source)
+        sections.append(_file_block(source, stripped, overview))
+    sections.extend([_integration_block(), _final_gate_block()])
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(sections), encoding="utf-8")
@@ -261,7 +302,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     rel_output = output_path.relative_to(repo_root)
     print(
         f"Refreshed {SHADOW_DIR.as_posix()}/ from {head_sha} "
-        f"({args.package_dir}) and wrote {len(stripped_files)} prompts to "
+        f"({args.package_dir}) and wrote {len(source_paths)} prompts to "
         f"{rel_output.as_posix()}",
     )
     return 0

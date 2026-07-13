@@ -1390,6 +1390,98 @@ def test_relation_queryset_scope_handles_many_related_field():
     assert field.child_relation.queryset.query.where
 
 
+@pytest.mark.django_db
+def test_relation_queryset_scope_is_isolated_between_concurrent_serializer_instances():
+    """Concurrent requests scope instance-local single/many fields without cross-bleed (review P2).
+
+    DRF deep-copies a serializer class's declared fields into each runtime serializer instance.
+    Synchronizing both requests inside ``get_queryset`` forces their visibility rewrites to
+    interleave, pinning that ``_scope_relation_querysets_to_visibility`` mutates only those
+    instance-local copies and never the shared declarations or a sibling request's fields.
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    scopes_met = threading.Barrier(2)
+
+    class BranchT(DjangoType):
+        class Meta:
+            model = library_models.Branch
+            fields = ("id", "name")
+            primary = True
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            scopes_met.wait(timeout=5)
+            return queryset.filter(city=info.context.request.visibility_city)
+
+    class BranchSer(serializers.Serializer):
+        branch = serializers.PrimaryKeyRelatedField(
+            queryset=library_models.Branch.objects.all(),
+        )
+        branches = serializers.PrimaryKeyRelatedField(
+            many=True,
+            queryset=library_models.Branch.objects.all(),
+        )
+
+    del BranchT
+    library_models.Branch.objects.create(name="ConcurrentLeft", city="left")
+    library_models.Branch.objects.create(name="ConcurrentRight", city="right")
+    specs = [
+        InputFieldSpec(
+            input_attr="branch",
+            graphql_name="branch",
+            target_name="branch",
+            kind=serializer_resolvers.RELATION_SINGLE,
+            related_model=library_models.Branch,
+        ),
+        InputFieldSpec(
+            input_attr="branches",
+            graphql_name="branches",
+            target_name="branches",
+            kind=serializer_resolvers.RELATION_MULTI,
+            related_model=library_models.Branch,
+        ),
+    ]
+    mutation = type("ConcurrentMut", (), {"_input_field_specs": specs})
+    declared_single_queryset = BranchSer._declared_fields["branch"].queryset
+    declared_many_queryset = BranchSer._declared_fields["branches"].child_relation.queryset
+
+    def _scope_for(visibility_city):
+        request = HttpRequest()
+        request.visibility_city = visibility_city
+        info = SimpleNamespace(context=SimpleNamespace(request=request))
+        serializer = BranchSer()
+        serializer_resolvers._scope_relation_querysets_to_visibility(
+            mutation,
+            serializer,
+            info,
+        )
+        return serializer
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        left_future = executor.submit(_scope_for, "left")
+        right_future = executor.submit(_scope_for, "right")
+        left_serializer = left_future.result(timeout=10)
+        right_serializer = right_future.result(timeout=10)
+
+    left_single = left_serializer.fields["branch"]
+    right_single = right_serializer.fields["branch"]
+    left_many = left_serializer.fields["branches"].child_relation
+    right_many = right_serializer.fields["branches"].child_relation
+
+    assert left_single is not right_single
+    assert left_many is not right_many
+    assert list(left_single.queryset.values_list("name", flat=True)) == ["ConcurrentLeft"]
+    assert list(left_many.queryset.values_list("name", flat=True)) == ["ConcurrentLeft"]
+    assert list(right_single.queryset.values_list("name", flat=True)) == ["ConcurrentRight"]
+    assert list(right_many.queryset.values_list("name", flat=True)) == ["ConcurrentRight"]
+    assert BranchSer._declared_fields["branch"].queryset is declared_single_queryset
+    assert BranchSer._declared_fields["branches"].child_relation.queryset is declared_many_queryset
+
+
 # ===========================================================================
 # get_serializer_save_kwargs shadow guard (spec-039 rev6 #12)
 # ===========================================================================

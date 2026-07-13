@@ -750,6 +750,12 @@ def _scope_relation_querysets_to_visibility(
     target has no registered primary (a raw-pk relation with no visibility contract) is left with
     its own queryset. The agreement guard already ran, so every relation spec has a matching
     writable runtime field over the recorded model (with a non-``None`` queryset).
+    The rewrite is deliberately applied to ``serializer.fields``, whose declared fields DRF
+    deep-copies for each serializer instance, never to the serializer class's shared
+    ``_declared_fields``. Concurrent requests therefore receive independently scoped relation
+    fields. The synchronized regression
+    ``tests/rest_framework/test_resolvers.py::test_relation_queryset_scope_is_isolated_between_concurrent_serializer_instances``
+    pins that DRF instance-isolation contract with requests carrying different visibility scopes.
 
     **Nested recursion (rev6 #17).** A nested serializer field's OWN relation fields are scoped
     too, by recursing into the runtime nested serializer's ``.fields`` with the nested reverse

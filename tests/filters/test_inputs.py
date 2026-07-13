@@ -798,11 +798,161 @@ def test_normalize_input_value_list_filter_unwraps_each_element():
 
 
 def test_build_range_input_class_is_cached_on_the_filter_instance():
-    """A second call returns the same cached class rather than rebuilding."""
+    """The same generation identity returns one cached class."""
     f = RangeFilter(field_name="price")
     first = _build_range_input_class(f, int)
     second = _build_range_input_class(f, int)
     assert first is second
+
+
+def test_build_range_input_class_cache_is_keyed_by_owner_field_and_scalar():
+    """One filter instance never reuses a class across generation identities."""
+
+    class FirstFilter(FilterSet):
+        class Meta:
+            model = library_models.Branch
+            fields = []
+
+    class SecondFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = []
+
+    f = RangeFilter(field_name="price")
+    direct = _build_range_input_class(f, int)
+    owned = _build_range_input_class(f, int, FirstFilter)
+    other_owner = _build_range_input_class(f, int, SecondFilter)
+    other_scalar = _build_range_input_class(f, str, FirstFilter)
+    f.field_name = "cost"
+    other_field = _build_range_input_class(f, int, FirstFilter)
+
+    assert (
+        len(
+            {
+                direct,
+                owned,
+                other_owner,
+                other_scalar,
+                other_field,
+            },
+        )
+        == 5
+    )
+    assert owned.__name__ == "FirstFilterPriceRangeInputType"
+    assert other_scalar.__annotations__["start"] == (str | None)
+    assert other_field.__name__ == "FirstFilterCostRangeInputType"
+
+
+def test_build_range_input_class_name_unqualified_without_filterset():
+    """No owning filterset -> the historical ``<Field>RangeInputType`` name is preserved."""
+    f = RangeFilter(field_name="price")
+    assert _build_range_input_class(f, int).__name__ == "PriceRangeInputType"
+
+
+@pytest.mark.django_db
+def test_range_input_type_name_is_scoped_per_filterset():
+    """Two filtersets sharing a ``field_name`` mint DISTINCT range sub-input classes.
+
+    Regression pin for the spec-027 Slice-2 collision hazard. The nested
+    ``RangeFilter`` sub-input class name derived from ``field_name`` alone, so two
+    filtersets that each declare a ``RangeFilter`` for a same-named column both
+    stamped one GraphQL name (``PriceRangeInputType``). These nested classes are
+    embedded directly in the annotation (NOT run through the Decision-9
+    materialization ledger nor the arguments-factory collision registry), so
+    Strawberry does NOT raise on the clash -- it silently keeps whichever class it
+    registers first and drops the other, advertising the wrong axis scalar for the
+    loser. The name is now qualified by the owning filterset so the two are
+    distinct and both survive in the schema.
+    """
+    import re
+
+    from apps.scalars import models as scalar_models
+
+    class ScalarPriceFilter(FilterSet):
+        price = RangeFilter(field_name="price")
+
+        class Meta:
+            model = scalar_models.ScalarSpecimen
+            fields = []
+
+    class TextPriceFilter(FilterSet):
+        # Same generated top-level ``price`` field, but a text-backed source:
+        # this proves the two scoped nested types retain different axis scalars.
+        price = RangeFilter(field_name="price")
+
+        class Meta:
+            model = library_models.Branch
+            fields = []
+
+    def _range_cls_of(bag):
+        for annotation in bag.__annotations__.values():
+            for arg in get_args(annotation):
+                if getattr(arg, "__name__", "").endswith("RangeInputType"):
+                    return arg
+        raise AssertionError("no RangeInputType found in operator bag")
+
+    def _bag(triples):
+        by_attr = {p: a for p, a, _ in triples}
+        return next(x for x in get_args(by_attr["price"]) if x is not type(None))
+
+    bag1 = _bag(_build_input_fields(ScalarPriceFilter))
+    bag2 = _bag(_build_input_fields(TextPriceFilter))
+    r1 = _range_cls_of(bag1)
+    r2 = _range_cls_of(bag2)
+
+    # Owning-filterset qualifier makes the two names distinct (pre-fix: both
+    # were ``PriceRangeInputType``).
+    assert r1.__name__ == "ScalarPriceFilterPriceRangeInputType"
+    assert r2.__name__ == "TextPriceFilterPriceRangeInputType"
+    assert r1.__name__ != r2.__name__
+    assert r1.__annotations__["start"] != r2.__annotations__["start"]
+
+    # Both nested range types survive when both operator bags land in one schema;
+    # pre-fix the name clash silently collapsed the two into a single input type
+    # (Strawberry keeps whichever it registers first and drops the other).
+    @strawberry.type
+    class Query:
+        ok: int
+
+    sdl = str(strawberry.Schema(query=Query, types=[bag1, bag2]))
+    range_defs = set(re.findall(r"input (\w*RangeInputType)", sdl))
+    assert range_defs == {
+        "ScalarPriceFilterPriceRangeInputType",
+        "TextPriceFilterPriceRangeInputType",
+    }
+
+
+@pytest.mark.django_db
+def test_direct_range_conversion_does_not_poison_owned_input_build():
+    """An earlier unowned conversion cannot defeat owner-qualified generation."""
+    from apps.scalars import models as scalar_models
+
+    class OwnedPriceFilter(FilterSet):
+        price = RangeFilter(field_name="price")
+
+        class Meta:
+            model = scalar_models.ScalarSpecimen
+            fields = []
+
+    declared_filter = OwnedPriceFilter.base_filters["price"]
+    model_field = scalar_models.ScalarSpecimen._meta.get_field("price")
+    direct = convert_filter_to_input_annotation(declared_filter, model_field)
+    direct_cls = next(arg for arg in get_args(direct) if arg is not type(None))
+    assert direct_cls.__name__ == "PriceRangeInputType"
+
+    triples = _build_input_fields(OwnedPriceFilter)
+    price_annotation = next(
+        annotation for python_attr, annotation, _kwargs in triples if python_attr == "price"
+    )
+    bag = next(arg for arg in get_args(price_annotation) if arg is not type(None))
+    owned_cls = next(
+        arg
+        for annotation in bag.__annotations__.values()
+        for arg in get_args(annotation)
+        if getattr(arg, "__name__", "").endswith("RangeInputType")
+    )
+    assert owned_cls.__name__ == "OwnedPriceFilterPriceRangeInputType"
+    assert owned_cls is not direct_cls
 
 
 def test_build_input_class_threads_description_into_strawberry_field():

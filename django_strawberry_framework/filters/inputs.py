@@ -346,6 +346,7 @@ def convert_filter_to_input_annotation(
     filter_instance: Filter,
     model_field: Any,
     owner_definition: DjangoTypeDefinition | None = None,
+    filterset_cls: type[FilterSet] | None = None,
 ) -> Any:
     """Return the Strawberry annotation for a resolved ``django-filter`` filter.
 
@@ -356,6 +357,13 @@ def convert_filter_to_input_annotation(
     family (``RangeFilter`` / ``ListFilter`` / ``ArrayFilter``), then
     ``ChoiceFilter``, then the scalar catch-all. ``method=...`` filters
     that do not match any branch raise ``ConfigurationError``.
+
+    ``filterset_cls`` (the owning ``FilterSet`` for a leaf built through
+    ``_build_input_fields``) qualifies the nested ``RangeFilter`` sub-input
+    class name so two filtersets sharing a ``field_name`` cannot mint two
+    distinct classes under one GraphQL type name (spec-027 forward path; see
+    ``_build_range_input_class``). ``None`` (direct converter callers) keeps the
+    unqualified ``<Field>RangeInputType`` name.
     """
     required = bool(filter_instance.extra.get("required", False))
 
@@ -377,7 +385,7 @@ def convert_filter_to_input_annotation(
         annotation = list[_element_annotation(filter_instance, model_field, owner_definition)]
     elif isinstance(filter_instance, (RangeFilter, _DjangoRangeFilter)):
         inner = _scalar_from_model_field(model_field)
-        annotation = _build_range_input_class(filter_instance, inner)
+        annotation = _build_range_input_class(filter_instance, inner, filterset_cls)
     elif isinstance(filter_instance, (ListFilter, ArrayFilter)):
         annotation = list[_element_annotation(filter_instance, model_field, owner_definition)]
     elif isinstance(filter_instance, TypedFilter):
@@ -510,24 +518,55 @@ def _unwrap_enum_member(value: Any) -> Any:
     return value
 
 
-def _build_range_input_class(filter_instance: RangeFilter, inner: type) -> type:
+def _build_range_input_class(
+    filter_instance: RangeFilter,
+    inner: type,
+    filterset_cls: type[FilterSet] | None = None,
+) -> type:
     """Return a Strawberry input dataclass with ``start: T | None`` and ``end: T | None``.
 
-    The class is cached on the filter instance so repeated converter
-    calls do not produce divergent Strawberry input types. The class
-    name derives from the filter's ``field_name`` so introspection-time
-    error messages name a meaningful type.
+    Classes are cached on the filter instance by their full generation identity:
+    owning filterset, Django field path, and inner scalar. A single declared
+    filter instance can be converted first without an owner (a direct converter
+    call) and later through its owning filterset; one unkeyed cache slot would
+    return the earlier unqualified class and defeat owner-scoped naming. Including
+    ``inner`` also prevents a reused/mutated filter from retaining a class whose
+    axes expose the wrong scalar.
+
+    The class name is qualified by the owning ``FilterSet`` when one is
+    supplied -- ``f"{filterset_cls.__name__}{Pascal(field_name)}RangeInputType"``
+    -- mirroring the per-field operator-bag naming
+    (``ClassBasedTypeNameMixin.type_name_for``). Without this qualifier the name
+    derived from ``field_name`` alone, so two filtersets that share a
+    ``field_name`` for a ``RangeFilter`` (e.g. both filter a ``price`` column)
+    each mint a DISTINCT sub-input class under the SAME GraphQL type name.
+    Because these nested classes are embedded directly in the annotation (NOT
+    materialized through Decision 9's ``_materialized_names`` ledger, and NOT
+    checked by the arguments-factory collision registry), Strawberry does not
+    reject the clash -- it SILENTLY keeps whichever class it registers first and
+    drops the other, so a filterset whose ``RangeFilter`` resolves a different
+    scalar (a ``date`` range vs an ``int`` range) is advertised with the wrong
+    axis type over the wire. spec-027 (Slice-2 scope) assumed a duplicate-type
+    error would surface; it does not, so the per-filterset-scoped name (the
+    documented forward path) is applied here. ``None`` (direct converter callers
+    that build no schema) keeps the unqualified ``<Field>RangeInputType`` name.
     """
-    cached = getattr(filter_instance, "_range_input_cls", None)
+    field_name = getattr(filter_instance, "field_name", "field") or "field"
+    cache_key = (filterset_cls, field_name, inner)
+    cache = getattr(filter_instance, "_range_input_classes", None)
+    if cache is None:
+        cache = {}
+        filter_instance._range_input_classes = cache  # type: ignore[attr-defined]
+    cached = cache.get(cache_key)
     if cached is not None:
         return cached
-    field_name = getattr(filter_instance, "field_name", "field") or "field"
-    cls_name = f"{_pascal_case(field_name)}RangeInputType"
+    prefix = filterset_cls.__name__ if filterset_cls is not None else ""
+    cls_name = f"{prefix}{_pascal_case(field_name)}RangeInputType"
     cls = build_input_class(
         cls_name,
         [("start", inner | None, {"default": None}), ("end", inner | None, {"default": None})],
     )
-    filter_instance._range_input_cls = cls  # type: ignore[attr-defined]
+    cache[cache_key] = cls
     return cls
 
 
@@ -716,6 +755,7 @@ def _build_input_fields(
                 leaf_filter,
                 model_field,
                 owner_definition,
+                filterset_cls,
             )
             bag_specs.append(
                 (

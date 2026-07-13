@@ -142,10 +142,11 @@ def emit_set_input_field_triples(
     Fails loud on a generated-field collision. Two set members whose paths
     flatten (``__`` -> ``_`` via ``flatten_lookup_path``) to one python attr --
     e.g. a relation traversal ``branch__name`` beside a declared / scalar
-    ``branch_name`` -- or that camel-case to one GraphQL name (``ab_`` / ``ab``)
-    would make ``build_strawberry_input_class`` silently overwrite one field in
-    the generated input dataclass, dropping a filter / ordering the consumer
-    declared from the public schema with NO error. The type surface
+    ``branch_name`` -- or that camel-case to one GraphQL name
+    (``foo_bar`` / ``fooBar``) would make ``build_strawberry_input_class``
+    silently overwrite one field in the generated input dataclass, dropping a
+    filter / ordering the consumer declared from the public schema with NO
+    error. The type surface
     (``types/finalizer.py::_audit_field_surface``) and the write-input surfaces
     (``iter_input_field_collisions``) already reject this class of silent drop;
     this is the parity guard for the filter / order generated-input surfaces,
@@ -186,7 +187,7 @@ def emit_set_input_field_triples(
         if prior_graphql is not None:
             raise ConfigurationError(
                 f"{set_cls.__qualname__}: members {prior_graphql!r} and {top_name!r} both "
-                f"generate the GraphQL input field name {graphql_name!r} under default "
+                f"generate the GraphQL input field name {graphql_name!r} under package "
                 "camel-casing, so one would silently overwrite the other in the generated "
                 "input type. Rename one member or drop one via Meta.fields / Meta.exclude.",
             )

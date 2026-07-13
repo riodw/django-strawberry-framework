@@ -62,7 +62,6 @@ TRACKED_FILE_PATHS = (
     "django_strawberry_framework/rest_framework/__init__.py",
     "django_strawberry_framework/rest_framework/inputs.py",
     "django_strawberry_framework/rest_framework/resolvers.py",
-    "django_strawberry_framework/rest_framework/review.md",
     "django_strawberry_framework/rest_framework/serializer_converter.py",
     "django_strawberry_framework/rest_framework/sets.py",
     "django_strawberry_framework/routers.py",
@@ -81,7 +80,6 @@ TRACKED_FILE_PATHS = (
     "django_strawberry_framework/types/relations.py",
     "django_strawberry_framework/types/relay.py",
     "django_strawberry_framework/types/resolvers.py",
-    "django_strawberry_framework/types/review.md",
     "django_strawberry_framework/utils/__init__.py",
     "django_strawberry_framework/utils/connections.py",
     "django_strawberry_framework/utils/converters.py",
@@ -92,6 +90,7 @@ TRACKED_FILE_PATHS = (
     "django_strawberry_framework/utils/permissions.py",
     "django_strawberry_framework/utils/querysets.py",
     "django_strawberry_framework/utils/relations.py",
+    "django_strawberry_framework/utils/review.md",
     "django_strawberry_framework/utils/strings.py",
     "django_strawberry_framework/utils/typing.py",
     "django_strawberry_framework/utils/write_values.py",
@@ -244,6 +243,7 @@ TRACKED_FILE_PATHS = (
     "tests/utils/test_relations.py",
     "tests/utils/test_strings.py",
     "tests/utils/test_typing.py",
+    "tests/utils/test_write_values.py",
 )
 TRACKED_DIRECTORY_PATHS = (
     "django_strawberry_framework/",

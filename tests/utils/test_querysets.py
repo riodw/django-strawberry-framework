@@ -18,6 +18,7 @@ import pytest
 from apps.products.models import Category
 from django.db import models
 
+from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.querysets import (
@@ -88,15 +89,27 @@ def test_initial_queryset_uses_default_manager():
 
 
 @pytest.mark.django_db
-def test_visible_related_objects_without_registered_type_uses_default_manager():
-    """A relation target without a primary ``DjangoType`` falls back to the model default manager."""
+def test_relation_write_visibility_boundary_is_controlled_by_type_registration():
+    """Unregistered targets use their default manager; registered targets apply visibility."""
     registry.clear()
-    category = Category.objects.create(name="NoRegisteredPrimary")
+    category = Category.objects.create(name="VisibilityBoundary")
     try:
-        visible = visible_related_objects(Category, [category.pk], info=None)
+        assert visible_related_objects(Category, [category.pk], info=None) == {str(category.pk)}
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = ("id", "name")
+                primary = True
+
+            @classmethod
+            def get_queryset(cls, queryset, info):
+                return queryset.exclude(pk=category.pk)
+
+        del CategoryType
+        assert visible_related_objects(Category, [category.pk], info=None) == set()
     finally:
         registry.clear()
-    assert visible == {str(category.pk)}
 
 
 # ---------------------------------------------------------------------------

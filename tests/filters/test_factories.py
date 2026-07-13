@@ -225,8 +225,11 @@ def test_filter_arguments_factory_rejects_graphql_name_collision():
     from django_filters import CharFilter
 
     class ShelfGraphqlCollide(FilterSet):
-        ab_ = CharFilter(field_name="code", lookup_expr="exact")
-        ab = CharFilter(field_name="topic", lookup_expr="exact")
+        foo_bar = CharFilter(field_name="code", lookup_expr="exact")
+        fooBar = CharFilter(  # noqa: N815 - intentional camel-case collision fixture.
+            field_name="topic",
+            lookup_expr="exact",
+        )
 
         class Meta:
             model = library_models.Shelf
@@ -236,9 +239,9 @@ def test_filter_arguments_factory_rejects_graphql_name_collision():
     with pytest.raises(ConfigurationError) as excinfo:
         factory.arguments
     message = str(excinfo.value)
-    assert "'ab_'" in message
-    assert "'ab'" in message
-    assert "GraphQL input field name 'ab'" in message
+    assert "'foo_bar'" in message
+    assert "'fooBar'" in message
+    assert "GraphQL input field name 'fooBar'" in message
 
 
 @pytest.mark.django_db

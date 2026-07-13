@@ -260,8 +260,11 @@ def test_factory_rejects_related_orders_with_colliding_graphql_names():
             fields = ["code"]
 
     class BookCollisionOrder(OrderSet):
-        ab_ = RelatedOrder(ShelfOrder, field_name="shelf")
-        ab = RelatedOrder(ShelfOrder, field_name="shelf")
+        foo_bar = RelatedOrder(ShelfOrder, field_name="shelf")
+        fooBar = RelatedOrder(  # noqa: N815 - intentional camel-case collision fixture.
+            ShelfOrder,
+            field_name="shelf",
+        )
 
         class Meta:
             model = library_models.Book
@@ -271,9 +274,9 @@ def test_factory_rejects_related_orders_with_colliding_graphql_names():
     with pytest.raises(ConfigurationError) as excinfo:
         factory.arguments
     message = str(excinfo.value)
-    assert "'ab_'" in message
-    assert "'ab'" in message
-    assert "GraphQL input field name 'ab'" in message
+    assert "'foo_bar'" in message
+    assert "'fooBar'" in message
+    assert "GraphQL input field name 'fooBar'" in message
 
 
 # ---------------------------------------------------------------------------

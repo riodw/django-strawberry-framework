@@ -21,7 +21,7 @@ from collections.abc import Callable
 
 @functools.lru_cache(maxsize=2048)
 def snake_case(name: str) -> str:
-    """Convert a strict ``camelCase`` GraphQL name back to ``snake_case``.
+    """Convert a camel/Pascal GraphQL name back to ``snake_case``.
 
     Strawberry's default name converter emits ``camelCase`` from
     ``snake_case`` Python attributes; reversing it lets us look up the
@@ -33,21 +33,32 @@ def snake_case(name: str) -> str:
     rather than recomputed per selection per walk. Pure ``str -> str``,
     so caching is always safe.
 
-    Strict ``camelCase`` only - acronyms are *not* handled.  An input
-    like ``"HTMLParser"`` becomes ``"h_t_m_l_parser"`` because each
-    upper-case letter triggers a boundary; this is unreachable through
-    Strawberry's documented call chain (Python attrs would already be
-    ``html_parser``) but is documented here so a future direct caller
-    is not surprised.
+    Acronym runs stay together and split before their final title-cased
+    word (``"HTTPServer"`` -> ``"http_server"``). Digits stay attached
+    to their surrounding token, and existing underscores are preserved;
+    the latter makes this the inverse of ``graphql_camel_name`` even for
+    leading, trailing, and repeated underscores.
 
     Examples:
         ``"name"`` -> ``"name"``;
         ``"isPrivate"`` -> ``"is_private"``;
-        ``"createdDate"`` -> ``"created_date"``.
+        ``"HTTPServer2API"`` -> ``"http_server2_api"``;
+        ``"_legacyId"`` -> ``"_legacy_id"``.
     """
     out: list[str] = []
     for i, c in enumerate(name):
-        if i > 0 and c.isupper():
+        previous = name[i - 1] if i > 0 else ""
+        following = name[i + 1] if i + 1 < len(name) else ""
+        if (
+            c.isupper()
+            and i > 0
+            and (
+                previous.islower()
+                or previous.isdigit()
+                or previous == "_"
+                or (previous.isupper() and following.islower())
+            )
+        ):
             out.append("_")
         out.append(c.lower())
     return "".join(out)
@@ -100,14 +111,25 @@ def pascal_case_or_raise(name: str, *, make_error: Callable[[str], Exception]) -
 def graphql_camel_name(name: str) -> str:
     """Lowercase the head, then ``PascalCase`` the rest (``galaxy_name`` -> ``galaxyName``).
 
-    Splits on ``_`` and drops empty tokens; returns ``name`` unchanged when it
-    has no word tokens (``""`` -> ``""``, ``"_"`` -> ``"_"``).
+    Leading and trailing underscores are preserved, and an empty token between
+    words becomes one literal underscore. A separator before a digit-leading
+    segment is also retained because capitalization cannot encode that boundary.
+    This keeps the transform injective over normalized snake-case identifiers
+    instead of collapsing ``"_legacy_id"`` into ``"legacyId"``,
+    ``"double__name"`` into ``"doubleName"``, or ``"field_2"`` into
+    ``"field2"``. An all-underscore name passes through unchanged.
     """
-    parts = [part for part in name.split("_") if part]
-    if not parts:
+    core = name.strip("_")
+    if not core:
         return name
+    leading = name[: len(name) - len(name.lstrip("_"))]
+    trailing = name[len(name.rstrip("_")) :]
+    parts = core.split("_")
     head, *rest = parts
-    return head + "".join(part.capitalize() for part in rest)
+    camel = head + "".join(
+        f"_{part}" if not part or part[0].isdigit() else part.capitalize() for part in rest
+    )
+    return f"{leading}{camel}{trailing}"
 
 
 def flatten_lookup_path(name: str) -> str:

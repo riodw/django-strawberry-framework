@@ -1,16 +1,19 @@
 """Forms for the library app's live form-mutation surface.
 
-These exist to earn three framework branches over a LIVE ``/graphql`` request (the
+These exist to earn framework branches over a LIVE ``/graphql`` request (the
 ``examples/fakeshop/test_query/README.md`` discipline - any coverage line reachable
 from a real query must be earned there): the raw-pk relation decode (single + multi)
-and the ``to_field_name`` conversion. ``Shelf.branch`` / ``Shelf.alt_branches``
+and the ``to_field_name`` conversion, including a request-scoped FK queryset.
+``Shelf.branch`` / ``Shelf.alt_branches``
 relate to the NON-Relay ``BranchType`` primary, so their generated inputs are raw pk
 scalars (not ``GlobalID``); the ``branch`` field sets ``to_field_name="name"``
-(``Branch.name`` is unique), so the decode resolves the visible Branch by pk and
-binds it to the form by name. ``BookGenresModelForm`` adds the live FORM
+(``Branch.name`` is unique) and declares ``queryset=None`` before assigning the
+request-time queryset in ``__init__``, so schema construction and relation decoding
+cannot re-derive the target model from the class-level field. ``BookGenresModelForm`` adds the live FORM
 partial-update M2M-preservation case over the Relay-Node ``BookType``: an omitted
 required ``genres`` M2M is reconstructed from the located row rather than cleared.
-``BranchWithShelfForm`` adds the model-less plain-form ``perform_mutate`` write-hook case.
+``BranchWithShelfForm`` and ``BranchPairForm`` add model-less plain-form
+``perform_mutate`` write-hook and transaction-rollback cases.
 """
 
 from __future__ import annotations
@@ -86,3 +89,16 @@ class BranchWithShelfForm(forms.Form):
 
     branch_name = forms.CharField(max_length=200)
     shelf_code = forms.CharField(max_length=200)
+
+
+class BranchPairForm(forms.Form):
+    """A plain form whose mutation creates two uniquely named ``Branch`` rows.
+
+    The second name can race with an existing row after the first branch has
+    already been inserted. That gives the live mutation surface a natural
+    partial-write ``IntegrityError`` case for proving that an ``ok: false``
+    envelope rolls the entire plain-form transaction back.
+    """
+
+    first_name = forms.CharField(max_length=200)
+    second_name = forms.CharField(max_length=200)

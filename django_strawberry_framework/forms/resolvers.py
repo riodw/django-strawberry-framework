@@ -520,6 +520,30 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
     payload_cls = payload_cls_for(mutation_cls)
 
     with transaction.atomic():
+
+        def _error_payload(errors: list[Any]) -> Any:
+            """Roll back, then return the ``{ ok: false }`` envelope (spec-039 H6).
+
+            An ``{ ok: false }`` envelope means the mutation did NOT succeed, so
+            nothing it wrote may persist. A ``perform_mutate`` (or the plain form's
+            own ``form.save()``) that made a partial write and THEN raised an
+            ``IntegrityError`` - mapped to the envelope by ``save_or_field_errors``
+            inside this atomic block - would otherwise COMMIT on the normal return: a
+            real DB error sets the connection's ``needs_rollback`` flag so Django
+            auto-rolls-back, but a caught ``IntegrityError`` that did not itself abort
+            the connection (consumer logic, a manual conflict guard) leaves the
+            partial write committed. Mark the transaction for rollback BEFORE building
+            the payload so the partial write is discarded - the same "an error
+            envelope never commits" invariant the model / ``ModelForm`` / serializer
+            flavors enforce in the shared ``run_write_pipeline_sync`` skeleton, which
+            the plain form does NOT ride (it owns this separate atomic block).
+            Harmless on the read-only authorize / decode / validation paths (nothing
+            was written); ``payload_cls(...)`` runs no ORM query, so it is safe after
+            ``set_rollback``.
+            """
+            transaction.set_rollback(True)
+            return payload_cls(ok=False, errors=errors)
+
         # Authorize BEFORE decoding (see the ModelForm body): a plain form with a
         # ``ModelChoiceField`` would otherwise let an unauthorized caller probe
         # relation visibility pre-auth.
@@ -533,17 +557,17 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
 
         provided_data, provided_files, decode_error = _decode_form_data(mutation_cls, data, info)
         if decode_error is not None:
-            return payload_cls(ok=False, errors=[decode_error])
+            return _error_payload([decode_error])
 
         instance = mutation_cls()
         form = instance.get_form(info, data=provided_data, files=provided_files, instance=None)
 
         if not form.is_valid():
-            return payload_cls(ok=False, errors=_form_errors_to_field_errors(form))
+            return _error_payload(_form_errors_to_field_errors(form))
 
         write_error = save_or_field_errors(lambda: instance.perform_mutate(form, info))
         if write_error is not None:
-            return payload_cls(ok=False, errors=write_error)
+            return _error_payload(write_error)
 
         return payload_cls(ok=True, errors=[])
 

@@ -5752,6 +5752,34 @@ def test_create_branch_with_shelf_perform_mutate_runs_custom_write():
     assert models.Shelf.objects.filter(code="H-1", branch=branch).exists()
 
 
+@pytest.mark.django_db
+def test_create_branch_pair_rolls_back_first_write_when_second_conflicts():
+    """An error envelope from a partial plain-form write rolls back every insert.
+
+    ``CreateBranchPair.perform_mutate`` inserts the first unique branch before
+    attempting the second. Seeding the second name forces a real database
+    ``IntegrityError`` after that first write. The framework maps the failure to
+    ``ok: false`` and must mark the active atomic block for rollback; otherwise
+    the client would see failure while ``RollbackFirst`` remained committed.
+    """
+    models.Branch.objects.create(name="RollbackConflict")
+
+    response = _post_graphql(
+        "mutation($d: BranchPairFormInput!){ createBranchPair(data:$d){ "
+        "ok errors{ field messages } } }",
+        variables={
+            "d": {"firstName": "RollbackFirst", "secondName": "RollbackConflict"},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["createBranchPair"]
+    assert result["ok"] is False
+    assert result["errors"][0]["field"] == "__all__"
+    assert not models.Branch.objects.filter(name="RollbackFirst").exists()
+
+
 # ---------------------------------------------------------------------------
 # Serializer-mutation surface (spec-039): get_serializer_for_schema() schema hook +
 # subclass validation, earned live over /graphql/ (the README live-first mandate).

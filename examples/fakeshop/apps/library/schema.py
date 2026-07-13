@@ -741,6 +741,24 @@ class CreateBranchWithShelf(DjangoFormMutation):
         )
 
 
+class CreateBranchPair(DjangoFormMutation):
+    """Create two branches atomically through a model-less plain form.
+
+    ``Branch.name`` is unique, so a conflict on the second insert occurs after
+    the first row has been written. The framework maps that ``IntegrityError``
+    to ``{ ok: false, errors }`` and must roll back the first insert before
+    returning the envelope.
+    """
+
+    class Meta:
+        form_class = forms.BranchPairForm
+        permission_classes = []
+
+    def perform_mutate(self, form, info):
+        models.Branch.objects.create(name=form.cleaned_data["first_name"])
+        models.Branch.objects.create(name=form.cleaned_data["second_name"])
+
+
 # --------------------------------------------------------------------------- #
 # Serializer-mutation surface (spec-039): the get_serializer_for_schema() schema
 # hook + subclass validation, earned live over /graphql/ per the README live-first
@@ -1218,6 +1236,7 @@ class Mutation:
     create_book_via_custom_input = DjangoMutationField(CreateBookViaCustomInput)
     update_book_via_custom_input = DjangoMutationField(UpdateBookViaCustomInput)
     create_branch_with_shelf = DjangoMutationField(CreateBranchWithShelf)
+    create_branch_pair = DjangoMutationField(CreateBranchPair)
     create_shelf_via_serializer = DjangoMutationField(CreateShelfViaSerializer)
     create_shelf_rejecting_via_serializer = DjangoMutationField(CreateShelfRejectingViaSerializer)
     create_shelf_via_optional_code_strict_serializer = DjangoMutationField(

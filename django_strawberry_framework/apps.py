@@ -1,4 +1,4 @@
-"""Django ``AppConfig`` - registers the package and applies its Django patches at app load."""
+"""Django ``AppConfig`` - registers the package and applies its upstream patches at app load."""
 
 from django.apps import AppConfig
 
@@ -13,14 +13,13 @@ class DjangoStrawberryFrameworkConfig(AppConfig):
         """Apply the package's defensive upstream patches at app-load time.
 
         Three patch modules, one per third-party dependency:
-
-        - :mod:`django_strawberry_framework._django_patches` - the Trac
-          #37064 hardening for ``SimpleTestCase._remove_databases_failures``
-          (test-only).
-        - :mod:`django_strawberry_framework._strawberry_patches` and
-          :mod:`django_strawberry_framework._cross_web_patches` - the
-          non-UTF-8 request-body ``500`` fix for Strawberry's HTTP view
-          (production request handling).
+        :mod:`django_strawberry_framework._django_patches` (Django),
+        :mod:`django_strawberry_framework._strawberry_patches`
+        (Strawberry), and
+        :mod:`django_strawberry_framework._cross_web_patches`
+        (``cross_web``). Each module's own docstring is the single
+        source of truth for exactly which upstream bugs it hardens;
+        this dispatcher deliberately repeats none of that inventory.
 
         All three are gated by the ``APPLY_UPSTREAM_PATCHES`` setting
         (default on); each ``apply()`` self-gates, so a consumer who

@@ -7,8 +7,10 @@ Slice 1's surface (Decision 3 / Decision 4):
 
 - ``DjangoConnection[NodeType]`` - a generic ``strawberry.relay.ListConnection``
   subclass that owns the package's ``first`` + ``last`` mutual-exclusivity
-  guard (which Strawberry's ``SliceMetadata.from_arguments`` does NOT provide)
-  and nothing else. It carries no ``total_count`` field.
+  guard (which Strawberry's ``SliceMetadata.from_arguments`` does NOT provide),
+  consumes optimized nested windows, and dispatches keyset-mode connections to
+  the package slicer. It carries no ``total_count`` field; ordinary non-window
+  offset sources still delegate to Strawberry's ``ListConnection``.
 - ``_connection_type_for(target_type)`` - resolves and caches the connection
   class for a node type: always a generated concrete ``<TypeName>Connection``
   subclass of ``DjangoConnection[target_type]``; the ``totalCount`` opt-in only
@@ -231,14 +233,17 @@ class _WindowedConnectionRows:
     place of the per-parent node iterable when the walker's windowed prefetch
     fired: ``rows`` is the ``_dst_<field>_connection`` ``to_attr`` list of
     annotated model instances (each carrying ``_dst_row_number`` /
-    ``_dst_total_count``), and ``fallback`` re-runs the shipped per-parent
-    pipeline for the ambiguous-empty windows the resolver cannot classify
-    (``first: 0`` / overshot ``after:``) - the resolver lacks the pagination
-    arguments needed to tell genuine-empty from ambiguous-empty (Strawberry's
-    ``ConnectionExtension.resolve`` consumes ``first`` / ``last`` / ``before`` /
-    ``after`` and never forwards them to the resolver, only to
-    ``resolve_connection``), so the slice classification happens in
-    ``resolve_connection``, which falls back via this callable when needed.
+    conditionally ``_dst_total_count``), and ``fallback`` re-runs the shipped
+    per-parent pipeline only when the wrapper cannot be served safely. Planned
+    ``first: 0``, overshot offset ``after:``, and corresponding forward keyset
+    empty pages retain marker rows and are served directly. The callable remains
+    the defensive recovery seam for shapes such as ``last: 0``, a backward
+    keyset wrapper, or missing required count/seek annotations.
+
+    The resolver lacks the pagination arguments needed to classify the rows
+    itself (Strawberry's ``ConnectionExtension.resolve`` consumes ``first`` /
+    ``last`` / ``before`` / ``after`` and forwards them only to
+    ``resolve_connection``), so all window classification happens there.
 
     NOT a connection instance and NOT exported (no public symbol - spec
     "adds no public symbol"); the ``resolve_connection`` paths
@@ -253,9 +258,10 @@ def _build_windowed_fallback(target_type: type, source: Any, info: Info) -> Call
     """Return a zero-arg callable re-running the per-parent pipeline.
 
     Carried on ``_WindowedConnectionRows`` so ``resolve_connection`` can recover
-    the shipped per-parent queryset for an ambiguous-empty window without the
-    walker's slice helper or the live relation manager (which the resolver,
-    not ``resolve_connection``, holds). ``source`` is the same
+    the shipped per-parent queryset when a handed-off wrapper cannot be served
+    safely, without the walker's slice helper or the live relation manager
+    (which the resolver, not ``resolve_connection``, holds). Normal marker-only
+    empty pages do not call it. ``source`` is the same
     ``getattr(root, accessor).all()`` value the fallback path consumes; no
     sidecar input reaches the fast path (the resolver refuses the window when
     ``filter`` / ``order_by`` kwargs are present), so the fallback runs the
@@ -589,10 +595,12 @@ def _consume_window(
     so the resolve-time window matches the plan-time window by construction (the
     cursor-parity invariant's resolve-time half, Decision 4 / Decision 5). When
     the window is consumable, builds the Relay object via ``_resolve_from_window``;
-    when it is an ambiguous-empty window, runs the wrapper's carried per-parent
-    fallback so ``first: 0`` / overshot ``after:`` stay byte-identical. Returns
-    a sentinel string ``"__not_a_window__"`` when ``nodes`` is not a wrapper, so
-    the caller delegates to the shipped path.
+    marker rows directly serve ``first: 0``, overshot offset ``after:``, and
+    corresponding forward keyset empty pages. The carried per-parent fallback
+    runs only for an unservable wrapper such as ``last: 0``, a defensive
+    backward-keyset handoff, or required-annotation drift. Returns
+    ``_NOT_A_WINDOW`` when ``nodes`` is not a wrapper, so the caller delegates
+    to the shipped path.
     """
     if not isinstance(nodes, _WindowedConnectionRows):
         return _NOT_A_WINDOW
@@ -683,10 +691,11 @@ def _consume_fallback(
 ) -> Any:
     """Run the shipped per-parent path over a recovered queryset.
 
-    The ambiguous-empty fallback tail: ``DjangoConnection.resolve_connection``
-    (which ``super()`` reaches) does the ``first`` + ``last`` guard and slicing;
-    the ``totalCount`` variant additionally attaches the count. Reuses the
-    inherited ``ListConnection`` slicing - no second slice implementation.
+    The defensive recovery tail for a wrapper the fast path cannot serve:
+    ``DjangoConnection.resolve_connection`` (which ``super()`` reaches) does the
+    ``first`` + ``last`` guard and slicing; the ``totalCount`` variant additionally
+    attaches the count. Reuses the inherited ``ListConnection`` slicing - no
+    second offset-slice implementation.
 
     A KEYSET connection routes to the framework's keyset slicer instead:
     ``ListConnection`` can neither decode a value cursor nor mint one, so
@@ -1072,10 +1081,9 @@ def _total_count_requested(info: Info) -> bool:
     the WHOLE ``edges { node { ... } }`` subtree, this recurses only THROUGH
     fragment wrappers (so a fragment-wrapped ``totalCount`` at the connection
     level still counts) and does NOT descend into a regular field's selections.
-    Once nested connections land (WIP-032/033), a node-level ``totalCount`` deep
-    inside ``edges { node { ... } }`` must not make the OUTER connection's
-    predicate fire (a spurious ``COUNT`` and, on a non-queryset source, a
-    spurious M1-guard raise).
+    A node-level ``totalCount`` deep inside ``edges { node { ... } }`` must not
+    make the OUTER connection's predicate fire (a spurious ``COUNT`` and, on a
+    non-queryset source, a spurious M1-guard raise).
 
     Delegates the whole walk to the shared per-selection primitive
     ``optimizer/selections.py::connection_total_count_selected`` - the SAME
@@ -1092,13 +1100,12 @@ def _has_next_page_requested(info: Info) -> bool:
     """Return whether the query selects ``pageInfo { hasNextPage }``.
 
     The ``hasNextPage`` sibling of ``_total_count_requested``: the window fast
-    path derives ``hasNextPage`` from the partition's ``_dst_total_count``
-    (``row_number < total``), and workstream B makes that annotation
-    conditional - so when a window arrives WITHOUT the count,
-    ``_resolve_from_window`` consults this predicate to decide whether the
-    missing annotation is observable (defensive per-parent fallback) or inert
-    (placeholder flag, never serialized). Delegates the whole walk to the
-    shared per-selection primitive
+    path derives ``hasNextPage`` either from a conditional partition count or
+    from the count-free n+1 probe used by a plain ``first: N`` page. When a
+    non-probe window arrives without a required count or keyset-seek annotation,
+    ``_resolve_from_window`` consults this predicate to distinguish observable
+    plan drift (defensive per-parent fallback) from an inert placeholder flag.
+    Delegates the whole walk to the shared per-selection primitive
     ``optimizer/selections.py::connection_has_next_page_selected`` - the same
     implementation the plan-time ``connection_count_required`` uses - so the
     two halves cannot drift independently.
@@ -1129,9 +1136,10 @@ def _resolve_connection_fast_path(
     (the 0.0.9 DRY pass, ``docs/feedback.md`` "Connection Resolve-Connection
     Wrapper"): the Decision-3 ``first`` + ``last`` mutual-exclusivity guard, then
     the Decision-5 ``_WindowedConnectionRows`` detection that builds the Relay
-    object straight from the windowed-prefetch ``_dst_row_number`` /
-    ``_dst_total_count`` annotations (or runs the ambiguous-empty per-parent
-    fallback the wrapper carries).
+    object straight from the windowed-prefetch row-number, conditional-count,
+    keyset-seek, and probe shape. Planned marker rows directly serve ``first: 0``
+    and overshot ``after:`` empty pages; the wrapper's callable is reserved for
+    genuine defensive recovery.
 
     ``want_count`` may be a bool or a zero-arg callable. A callable is evaluated
     AFTER the guard, so the ``totalCount`` variant's count-selection inspection
@@ -1144,7 +1152,8 @@ def _resolve_connection_fast_path(
 
     Returns ``(built_or_NOT_A_WINDOW, resolved_want_count)``: the built
     connection when the fast path fired, else ``_NOT_A_WINDOW`` so the caller
-    delegates to its own ``ListConnection`` ``super().resolve_connection`` path.
+    dispatches keyset sources to the framework slicer or delegates an ordinary
+    offset source to its ``ListConnection`` ``super().resolve_connection`` path.
     Count SELECTION and the non-window count ATTACHMENT (``_attach_count_*``)
     stay explicit in the ``totalCount`` variant, per the review.
     """
@@ -1174,13 +1183,14 @@ def _resolve_connection_fast_path(
 
 
 class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
-    """Generic Relay connection base owning the ``first`` + ``last`` guard.
+    """Generic Relay connection base owning package pagination dispatch.
 
-    Subclasses ``strawberry.relay.ListConnection`` so Strawberry owns cursor
-    encoding, ``pageInfo``, edge wrapping, and the slice window. The only
-    behavior this base adds is the Decision 3 ``first`` + ``last`` guard in the
-    ``resolve_connection`` override; it carries no ``total_count`` field (that
-    is the opt-in ``<TypeName>Connection`` variant's job, Decision 4).
+    Adds the Decision-3 ``first`` + ``last`` guard, consumes optimized nested
+    windows, and dispatches ``Meta.cursor_field`` sources to the framework-owned
+    keyset slicer. Ordinary non-window offset sources still delegate cursor
+    encoding, ``pageInfo``, edge wrapping, and slicing to
+    ``strawberry.relay.ListConnection``. The base carries no ``total_count``
+    field; that is the opt-in ``<TypeName>Connection`` variant's job (Decision 4).
     """
 
     @classmethod
@@ -1196,18 +1206,20 @@ class DjangoConnection(relay.ListConnection[NodeType], Generic[NodeType]):
         max_results: int | None = None,
         **kwargs: Any,
     ) -> AwaitableOrValue[Any]:
-        """Apply the ``first`` + ``last`` guard, then delegate to ``ListConnection``.
+        """Guard pagination, consume optimized windows, then dispatch by cursor mode.
 
         The fast path (Decision 5): after the guard and before Strawberry's list
         slicing, detect the internal ``_WindowedConnectionRows`` wrapper the
         synthesized relation-connection resolver returns when the walker's
         windowed prefetch fired, and build the Relay object straight from the
-        ``_dst_row_number`` / ``_dst_total_count`` annotations - one window query
-        for every parent's page, zero per-parent queries. ``nodes`` that is not
-        a wrapper (no optimizer, a fallback shape, a consumer prefetch) falls
-        through to the shipped ``ListConnection`` path unchanged, so correctness
-        never depends on the plan having fired. The through-schema test is
-        mandatory because ``ConnectionExtension.resolve`` wraps the resolver.
+        row-number, conditional-count, keyset-seek, or probe annotations - one
+        window query for every parent's page, zero per-parent queries. Planned
+        marker rows directly serve empty ``first: 0`` and overshot ``after:``
+        pages. Non-window keyset sources use the package's codec-aware slicer;
+        only ordinary offset sources fall through to ``ListConnection``.
+        Correctness never depends on a plan having fired. The through-schema
+        tests are mandatory because ``ConnectionExtension.resolve`` wraps the
+        resolver.
         """
         built, _want_count = _resolve_connection_fast_path(
             cls,
@@ -1321,10 +1333,11 @@ def _build_total_count_connection(target_type: type) -> type:
     The generated class subclasses ``DjangoConnection[target_type]`` (so it
     inherits the ``first`` + ``last`` guard), declares a ``total_count`` field
     whose resolver reads a private instance attribute, and overrides
-    ``resolve_connection`` to count the post-filter pre-slice ``nodes``
-    queryset (sync ``.count()`` / async ``.acount()``) ONLY when ``totalCount``
-    is in the selection set, attach the count to the connection instance, then
-    delegate to super for slicing (Decision 4).
+    ``resolve_connection`` to attach the post-filter pre-slice count ONLY when
+    ``totalCount`` is in the selection set. Optimized windows read the count
+    annotation, keyset pages count through the framework slicer, and ordinary
+    non-window offset querysets use sync ``.count()`` / async ``.acount()`` before
+    or after delegating slicing to the base (Decision 4).
     """
 
     @strawberry.field(description="Total number of nodes in the connection.")
@@ -1359,12 +1372,13 @@ def _build_total_count_connection(target_type: type) -> type:
         # treated as an annotated optimized source: ``totalCount`` is read from
         # ``_dst_total_count`` on any annotated row inside ``_resolve_from_window``
         # rather than counted, bypassing ``_guard_total_count_countable`` /
-        # ``.count()`` entirely (Decision 5). Ambiguous empty wrappers
-        # (``limit == 0`` / ``offset > 0``) fall back to the per-parent pipeline,
-        # which counts correctly, preserving the shipped totalCount / pageInfo
-        # contract. Pins:
+        # ``.count()`` entirely (Decision 5). Marker rows directly serve planned
+        # ``limit == 0`` / overshot-``offset`` pages with their true count and
+        # flags; only unservable wrappers such as ``last: 0`` or required-
+        # annotation drift recover through the per-parent pipeline. Pins:
         # ``test_fast_path_total_count_marker_bypasses_non_queryset_guard`` /
-        # ``test_fast_path_first_zero_falls_back_for_total_count_and_pageinfo``.
+        # ``test_fast_path_ambiguous_empty_served_from_marker_row`` /
+        # ``test_fast_path_last_zero_quirk_parity_via_fallback``.
         built, want_count = _resolve_connection_fast_path(
             cls,
             nodes,
@@ -1862,9 +1876,10 @@ def _window_rows_are_annotated(rows: list) -> bool:
     shape needs it), so a count-less page is still the walker's window. The
     collision probe stays sound on the row number alone because the ``_dst_``
     namespace is package-reserved (spec-033 Decision 4). An empty list has no
-    rows to probe and is still a valid window candidate (a genuinely-empty or
-    ambiguous-empty page); the empty case is classified in
-    ``resolve_connection`` where the slice metadata is known.
+    rows to probe and is still a conclusive planned window candidate: marker
+    shapes retain row 1 whenever the parent has children, so an empty list means
+    the parent genuinely has none. ``resolve_connection`` still owns the slice-
+    aware page and flag construction.
     """
     return all(hasattr(row, WINDOW_ROW_NUMBER) for row in rows)
 
@@ -1906,10 +1921,11 @@ def _build_relation_connection_resolver(
     through ``resolve_connection`` as the node iterable). A sidecar kwarg
     present means the window is ignored and the pipeline runs, so a future
     planner/argument desync can never serve unfiltered wrong data. The marker
-    also carries a fallback factory re-running this pipeline, which
-    ``resolve_connection`` invokes for an ambiguous-empty window (``first: 0`` /
-    overshot ``after:``) it cannot classify (the resolver never sees the
-    pagination arguments - ``ConnectionExtension`` consumes them).
+    also carries a fallback factory re-running this pipeline as a defensive
+    recovery seam when the wrapper cannot be served (for example ``last: 0``, a
+    backward keyset wrapper, or required-annotation drift). Planned ``first: 0``
+    and overshot ``after:`` marker pages are served directly. The resolver never
+    sees the pagination arguments - ``ConnectionExtension`` consumes them.
 
     Sync resolver returning a LAZY queryset by design (the
     committed-at-construction contract on ``_build_connection_resolver`` holds
@@ -1965,7 +1981,9 @@ def _build_relation_connection_resolver(
             # Hand off the windowed page. The marker carries a fallback factory
             # (NOT a prebuilt connection - that would be fed back through
             # ``resolve_connection`` as the node iterable) so ``resolve_connection``
-            # can recover this per-parent pipeline for an ambiguous-empty window.
+            # can recover this per-parent pipeline if defensive window
+            # validation finds the wrapper unservable. Normal marker-only empty
+            # pages are served directly and do not call the factory.
             return _WindowedConnectionRows(
                 rows=window_rows,
                 fallback=_build_windowed_fallback(target_type, source, info),

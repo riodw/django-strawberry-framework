@@ -226,5 +226,6 @@ MEDIA_ROOT = BASE_DIR / "media"
 # ---------------------------------------------------------------------------
 
 DJANGO_STRAWBERRY_FRAMEWORK = {
-    # No settings yet - placeholder for future options.
+    # Intentionally empty: fakeshop exercises package defaults; focused tests
+    # override individual settings.
 }

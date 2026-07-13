@@ -24,6 +24,7 @@ never imports back into the package.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from typing import Any
 
@@ -406,10 +407,41 @@ def post_process_queryset_result_sync(type_cls: type, result: Any, info: Any) ->
     type's ``get_queryset`` visibility hook, and a non-queryset Python
     list / generator passes through unchanged. The default-resolver path bypasses
     this (its source is already ``initial_queryset(...)``, a known ``QuerySet``).
+
+    An awaitable reaching here is rejected loudly. The sync branch is chosen
+    at construction from ``is_async_callable(user_resolver)``, which only sees an
+    ``async def`` / async-callable resolver (or a ``functools.partial`` of one);
+    a plain ``def`` resolver that *returns* an awaitable (e.g. ``return
+    some_async()`` without ``async def``) is classified sync but its awaitable
+    return is not a ``Manager`` / ``QuerySet``. Passing it through unchanged would
+    let graphql-core await it downstream (under async execution) to a ``QuerySet``
+    that never ran the ``get_queryset`` visibility hook -- a silent data-isolation
+    bypass. Native coroutines are ``close()``d first to silence the "coroutine
+    was never awaited" warning that ``filterwarnings = error`` would fail on;
+    asyncio Future-like values are cancelled. A custom ``__await__`` object has
+    no standard disposal contract and has not begun execution, so it is simply
+    rejected. This mirrors the sync
+    ``get_queryset`` coroutine guard (``reject_async_in_sync_context``) and keeps
+    the invariant that a consumer ``QuerySet`` return is never resolved without
+    its visibility hook. The recourse: declare the resolver ``async def`` (the
+    field then awaits it and applies ``get_queryset`` via the async post-process
+    path), or return an already-evaluated ``list`` to opt out of the hook.
     """
     source, is_queryset = normalize_query_source(result)
     if is_queryset:
         return apply_type_visibility_sync(type_cls, source, info)
+    if inspect.isawaitable(source):
+        if inspect.iscoroutine(source):
+            source.close()
+        elif asyncio.isfuture(source):
+            source.cancel()
+        raise SyncMisuseError(
+            f"A sync {type_cls.__name__} consumer resolver returned an awaitable. "
+            "Declare the resolver `async def` (or use an async callable) so the "
+            "field awaits it and applies the get_queryset visibility hook; a plain "
+            "`def` resolver that returns an awaitable is committed to the sync path "
+            "and passing it through would silently skip get_queryset.",
+        )
     return source
 
 

@@ -730,6 +730,153 @@ async def test_djangolistfield_async_consumer_resolver_python_list_return_passes
     )
 
 
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_sync_resolver_returning_coroutine_rejects_loudly(
+    monkeypatch,
+) -> None:
+    """A sync consumer resolver that RETURNS a coroutine is rejected, never silently leaked.
+
+    Regression pin for a visibility-hook (data-isolation) bypass. A plain ``def``
+    resolver that returns a coroutine - ``return some_async()`` without declaring
+    the resolver ``async def`` - is classified SYNC by ``is_async_callable`` (the
+    callable itself is not a coroutine function, and a ``def`` returning an
+    awaitable is out of that predicate's contract), so ``DjangoListField`` picks
+    the sync ``_wrap``. Before the fix, ``post_process_queryset_result_sync`` saw
+    the coroutine as a non-``QuerySet`` and returned it unchanged (the
+    ``django_strawberry_framework/utils/querysets.py::normalize_query_source``
+    ``is_queryset=False`` arm); under ``await schema.execute(...)`` graphql-core
+    then awaited that coroutine to a ``QuerySet`` that NEVER ran
+    ``target_type.get_queryset`` - the ``exclude(name__startswith="a")``
+    visibility filter was silently skipped and every row leaked. The field now
+    rejects the coroutine with ``SyncMisuseError`` (mirroring the sync
+    async-``get_queryset`` guard) so the invariant "a consumer ``QuerySet`` return
+    is never resolved without its visibility hook" holds even for this
+    mis-declared resolver shape.
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.exclude(name__startswith="a")
+
+    async def _inner() -> Any:
+        return await sync_to_async(lambda: Category.objects.all())()
+
+    def _sync_resolver_returning_coroutine(root: Any, info: Info) -> Any:
+        # Plain ``def`` (NOT ``async def``) that returns a coroutine - the
+        # mis-declared shape ``is_async_callable`` classifies as sync.
+        return _inner()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=_sync_resolver_returning_coroutine,
+        )
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories { id name } }")
+    # Loud rejection, not a silent leak.
+    assert result.errors is not None
+    assert len(result.errors) == 1
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "returned an awaitable" in str(result.errors[0])
+    # The non-null list field errors out entirely rather than returning the
+    # unfiltered (leaked) rows the pre-fix pass-through would have produced.
+    assert result.data is None
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_sync_resolver_returning_custom_awaitable_rejects_loudly(
+    monkeypatch,
+) -> None:
+    """A non-coroutine ``__await__`` result cannot bypass queryset visibility."""
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.exclude(name__startswith="a")
+
+    class _DeferredQueryset:
+        def __await__(self):
+            # A real non-coroutine awaitable. If passed through to graphql-core,
+            # awaiting it returns the raw QuerySet without running get_queryset.
+            if False:
+                yield None
+            return Category.objects.all()
+
+    def _sync_resolver_returning_awaitable(root: Any, info: Info) -> Any:
+        return _DeferredQueryset()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=_sync_resolver_returning_awaitable,
+        )
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+    result = await schema.execute("{ allCategories { id name } }")
+
+    assert result.errors is not None
+    assert len(result.errors) == 1
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "returned an awaitable" in str(result.errors[0])
+    assert result.data is None
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_sync_resolver_returning_future_cancels_it(
+    monkeypatch,
+) -> None:
+    """A rejected asyncio Future is cancelled rather than left pending."""
+    import asyncio
+
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+    captured: dict[str, asyncio.Future] = {}
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    def _sync_resolver_returning_future(root: Any, info: Info) -> Any:
+        future = asyncio.get_running_loop().create_future()
+        captured["future"] = future
+        return future
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(
+            CategoryType,
+            resolver=_sync_resolver_returning_future,
+        )
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+    result = await schema.execute("{ allCategories { id } }")
+
+    assert result.errors is not None
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert captured["future"].cancelled() is True
+
+
 # -----------------------------------------------------------------------------
 # Group G - Root-position optimizer cooperation (rev2 M3).
 # (Listed BEFORE the outer-nullability pair to preserve the spec Test plan's

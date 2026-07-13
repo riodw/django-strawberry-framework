@@ -724,14 +724,34 @@ _optimizer = DjangoOptimizerExtension()
 schema = strawberry.Schema(query=Query, extensions=[lambda: _optimizer])
 ```
 
+The phase order is a build contract:
+
+1. Audit primary-type ambiguity and resolve every pending relation failure-atomically.
+2. Attach generated relation and file resolvers.
+3. Apply interfaces, install Relay defaults, and validate keyset cursor columns.
+4. Synthesize relation connections.
+5. Audit GlobalID routing, reset generated emit namespaces, then bind auth, mutations,
+   forms, filtersets, and ordersets.
+6. Audit the complete field surface after synthesis and sidecar binding.
+7. Apply `strawberry.type(...)`, mark each definition finalized, then mark the registry
+   finalized.
+
+The order keeps keyset validation ahead of connection synthesis, connection synthesis ahead
+of sidecar binding, and the field-surface audit after every declared, converted, synthesized,
+and sidecar-derived field is visible. New finalization work must enter the phase that preserves
+those dependencies rather than being appended opportunistically.
+
 Calling it a second time is a no-op. The collected type registry and finalized flag are
 process-global, and finalization mutates the collected Python classes in place. A process therefore
 has one schema-build lifecycle: multiple `strawberry.Schema` objects may reuse that same finalized
 type set, but disjoint independently finalized type sets in one interpreter are unsupported.
 Declaring a new concrete `DjangoType` after finalization raises
 [`ConfigurationError`](#configurationerror); tests that need a new registry lifecycle should use
-`registry.clear()` and fresh type classes, because clearing the registry cannot undo mutations on
-classes from the prior lifecycle.
+`registry.clear()` and fresh type classes. Clearing the registry runs identity-safe teardowns for
+registered generated artifacts such as synthesized relation-connection fields (and restores a
+list form suppressed by `Meta.relation_shapes = {"<field>": "connection"}`), but it is not a
+general Strawberry class unfinalizer: the prior lifecycle's decorated classes remain otherwise
+mutated and must not be re-registered as a new production schema.
 
 **See also:** [Definition-order independence](#definition-order-independence) · [`DjangoType`](#djangotype) · [`ConfigurationError`](#configurationerror).
 

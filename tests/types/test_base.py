@@ -1946,6 +1946,7 @@ def test_meta_cursor_field_rejects_malformed_and_traversing_entries():
 
     for bad_value, match in (
         (("-", "id"), "not a valid order string"),
+        (("--name", "id"), "not a valid order string"),
         (("parent__name", "id"), "traverses a relation"),
         (("name", "-name"), "more than once"),
     ):

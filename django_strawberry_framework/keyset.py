@@ -159,18 +159,56 @@ def order_fingerprint(order_refs: tuple[str, ...]) -> str:
     return ",".join(order_refs)
 
 
-def split_order_ref(order_ref: str) -> tuple[str, bool]:
+def split_order_ref(order_ref: str, *, owner: str | None = None) -> tuple[str, bool]:
     """Parse one ``order_by`` string into ``(name, descending)``.
 
     The ``cursor_field`` twin of ``plans.py::order_entry_name_and_direction``'s
     string branch, kept separate because here a malformed entry is a
-    CONFIGURATION error (loud), never a fallback signal.
+    CONFIGURATION error (loud), never a fallback signal. This is the single
+    syntax owner for both ``types/base.py::_validate_cursor_field`` and
+    ``validate_cursor_field_columns``: one optional leading ``-`` followed by
+    one local field name, with no relation traversal.
     """
+    lead = f"{owner} entry" if owner is not None else "Invalid cursor_field entry:"
+    if not isinstance(order_ref, str):
+        raise ConfigurationError(f"{lead} {order_ref!r} must be a string.")
     descending = order_ref.startswith("-")
     name = order_ref[1:] if descending else order_ref
-    if not name:
-        raise ConfigurationError(f"Invalid cursor_field entry: {order_ref!r}")
+    if not name or name.startswith("-"):
+        raise ConfigurationError(
+            f"{lead} {order_ref!r} is not a valid order string. Expected one optional "
+            "leading '-' followed by a local field name.",
+        )
+    if "__" in name:
+        raise ConfigurationError(
+            f"{lead} {order_ref!r} traverses a relation; keyset cursor columns must be "
+            "local columns.",
+        )
     return name, descending
+
+
+def validate_cursor_field_references(
+    order_refs: tuple[str, ...],
+    *,
+    owner: str,
+) -> tuple[tuple[str, bool], ...]:
+    """Validate and parse one complete cursor-field reference sequence.
+
+    Both declaration-time normalization and finalization-time column checks
+    call this function, so malformed references and duplicate columns cannot
+    pass one stage and fail under a different rule at the other.
+    """
+    if not order_refs:
+        raise ConfigurationError(f"{owner} must contain at least one order string.")
+    parsed = []
+    seen: set[str] = set()
+    for order_ref in order_refs:
+        name, descending = split_order_ref(order_ref, owner=owner)
+        if name in seen:
+            raise ConfigurationError(f"{owner} names {name!r} more than once.")
+        seen.add(name)
+        parsed.append((name, descending))
+    return tuple(parsed)
 
 
 def _resolve_cursor_field_column(model: type[models.Model], name: str) -> models.Field:
@@ -221,8 +259,8 @@ def validate_cursor_field_columns(
     Raises ``ConfigurationError`` naming the offending entry.
     """
     lead = f"{type_name}.Meta.cursor_field"
-    for order_ref in cursor_field:
-        name, _descending = split_order_ref(order_ref)
+    parsed = validate_cursor_field_references(cursor_field, owner=lead)
+    for order_ref, (name, _descending) in zip(cursor_field, parsed, strict=True):
         try:
             field = _resolve_cursor_field_column(model, name)
         except FieldDoesNotExist:
@@ -248,7 +286,7 @@ def validate_cursor_field_columns(
                 "JSON ordering differs between SQLite and PostgreSQL. Use a scalar "
                 "column containing the intended ordering key.",
             )
-    terminal_name, _ = split_order_ref(cursor_field[-1])
+    terminal_name, _ = parsed[-1]
     terminal = _resolve_cursor_field_column(model, terminal_name)
     if not (terminal.primary_key or getattr(terminal, "unique", False)):
         raise ConfigurationError(

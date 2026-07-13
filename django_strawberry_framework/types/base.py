@@ -243,7 +243,7 @@ def _validate_cursor_field(meta: type, value: Any, relay_shaped: bool) -> tuple[
     # In-function import: ``keyset`` imports only leaf modules today, but the
     # function-scope import keeps ``types/base.py`` order-independent of it,
     # matching the filterset / orderset validator idiom above.
-    from ..keyset import split_order_ref
+    from ..keyset import validate_cursor_field_references
 
     if (
         isinstance(value, str)
@@ -256,25 +256,8 @@ def _validate_cursor_field(meta: type, value: Any, relay_shaped: bool) -> tuple[
             f"sequence of order strings; got {value!r}",
         )
     entries = tuple(value)
-    seen: set[str] = set()
-    for entry in entries:
-        name = entry[1:] if entry.startswith("-") else entry
-        if not name:
-            raise ConfigurationError(
-                f"{meta.model.__name__}.Meta.cursor_field entry {entry!r} is not a valid "
-                "order string.",
-            )
-        if "__" in name:
-            raise ConfigurationError(
-                f"{meta.model.__name__}.Meta.cursor_field entry {entry!r} traverses a "
-                "relation; keyset cursor columns must be local columns.",
-            )
-        if name in seen:
-            raise ConfigurationError(
-                f"{meta.model.__name__}.Meta.cursor_field names {name!r} more than once.",
-            )
-        seen.add(name)
-        split_order_ref(entry)  # the shared parse; raises on malformed shapes.
+    owner = f"{meta.model.__name__}.Meta.cursor_field"
+    validate_cursor_field_references(entries, owner=owner)
     if not relay_shaped:
         raise ConfigurationError(
             f"{meta.model.__name__}.Meta.cursor_field {_RELAY_NODE_GATE_LEAD} "

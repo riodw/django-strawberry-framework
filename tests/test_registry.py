@@ -286,6 +286,85 @@ def test_clear_runs_owner_registered_subsystem_callback(fresh_registry):
         _subsystem_clears.update(callbacks)
 
 
+@pytest.mark.parametrize("action", ["clear", "unregister"])
+def test_type_teardowns_run_in_reverse_order_once_before_registration_drops(
+    fresh_registry,
+    action,
+):
+    """Type teardown sees its registration, runs LIFO, and is discarded exactly once."""
+
+    class CategoryType:
+        pass
+
+    calls = []
+    fresh_registry.register(Category, CategoryType)
+
+    def record(label):
+        def teardown():
+            assert fresh_registry.model_for_type(CategoryType) is Category
+            calls.append(label)
+
+        return teardown
+
+    fresh_registry.register_type_teardown(CategoryType, record("first"))
+    fresh_registry.register_type_teardown(CategoryType, record("second"))
+
+    if action == "unregister":
+        fresh_registry.unregister(CategoryType)
+    else:
+        fresh_registry.clear()
+    assert calls == ["second", "first"]
+    assert fresh_registry.model_for_type(CategoryType) is None
+
+    fresh_registry.clear()
+    assert calls == ["second", "first"]
+
+
+@pytest.mark.parametrize("action", ["clear", "unregister"])
+def test_failed_type_teardown_remains_registered_for_retry(fresh_registry, action):
+    """A teardown failure preserves the callback and the type registration."""
+
+    class CategoryType:
+        pass
+
+    attempts = 0
+    fresh_registry.register(Category, CategoryType)
+
+    def teardown():
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("retry teardown")
+
+    def invoke():
+        if action == "clear":
+            fresh_registry.clear()
+        else:
+            fresh_registry.unregister(CategoryType)
+
+    fresh_registry.register_type_teardown(CategoryType, teardown)
+
+    with pytest.raises(RuntimeError, match="retry teardown"):
+        invoke()
+
+    assert fresh_registry.model_for_type(CategoryType) is Category
+    invoke()
+    assert attempts == 2
+    assert fresh_registry.model_for_type(CategoryType) is None
+
+
+def test_register_type_teardown_rejects_invalid_registration(fresh_registry):
+    """A teardown must be callable and belong to an already-registered type."""
+
+    class CategoryType:
+        pass
+
+    with pytest.raises(TypeError, match="zero-argument callable"):
+        fresh_registry.register_type_teardown(CategoryType, object())
+    with pytest.raises(ConfigurationError, match="unregistered type CategoryType"):
+        fresh_registry.register_type_teardown(CategoryType, lambda: None)
+
+
 def test_before_bind_iteration_excludes_full_clear_only_callbacks():
     """The finalizer cannot erase declaration registries before binding them."""
     callbacks = dict(_subsystem_clears)

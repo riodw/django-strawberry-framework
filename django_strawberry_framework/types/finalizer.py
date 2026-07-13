@@ -366,6 +366,7 @@ def _warn_model_label_secondary_collapse(
 # marker lets the rerun recognize its own prior attachment instead of
 # misreading it as a name collision.
 _SYNTHESIZED_RELATION_CONNECTION_MARKER = "_dst_synthesized_relation_connection"
+_MISSING_CLASS_MEMBER = object()
 
 
 def _suppress_relation_list_form(type_cls: type, name: str) -> None:
@@ -398,6 +399,57 @@ def _record_relation_connection(
     if definition.relation_connections is None:
         definition.relation_connections = {}
     definition.relation_connections[generated] = name
+
+
+def _register_relation_connection_teardown(
+    type_cls: type,
+    definition: DjangoTypeDefinition,
+    *,
+    generated: str,
+    field_obj: StrawberryField,
+    relation_name: str,
+    shape: str,
+    annotations: dict[str, object],
+    annotations_snapshot: dict[str, object],
+    list_resolver: object,
+) -> None:
+    """Register the exact inverse of one synthesized relation connection.
+
+    ``strawberry.type`` replaces an assigned ``StrawberryField`` class
+    attribute with its wrapped resolver function. The teardown therefore
+    recognizes exactly those two framework-owned identities and leaves any
+    later same-named consumer replacement untouched.
+
+    A ``"connection"`` shape also suppresses the generated list annotation
+    and resolver. Those values are restored only when their slots remain
+    absent, so registry teardown cannot overwrite consumer changes made after
+    finalization. This is class hygiene for the test-only fresh-registry
+    lifecycle, not a general unfinalizer for Strawberry-decorated classes.
+    """
+    generated_resolver = field_obj.base_resolver.wrapped_func
+
+    def teardown() -> None:
+        current = type_cls.__dict__.get(generated, _MISSING_CLASS_MEMBER)
+        if current is field_obj or current is generated_resolver:
+            delattr(type_cls, generated)
+
+        if definition.relation_connections is not None:
+            definition.relation_connections.pop(generated, None)
+            if not definition.relation_connections:
+                definition.relation_connections = None
+        current_annotations = type_cls.__dict__.get("__annotations__")
+        if current_annotations is None:
+            type_cls.__annotations__ = dict(annotations_snapshot)
+        elif current_annotations is annotations:
+            current_annotations.clear()
+            current_annotations.update(annotations_snapshot)
+
+        if shape != "connection":
+            return
+        if relation_name not in type_cls.__dict__ and list_resolver is not _MISSING_CLASS_MEMBER:
+            setattr(type_cls, relation_name, list_resolver)
+
+    registry.register_type_teardown(type_cls, teardown)
 
 
 def _synthesize_relation_connections() -> None:
@@ -508,10 +560,11 @@ def _synthesize_relation_connections() -> None:
                 if shape == "connection":
                     _suppress_relation_list_form(type_cls, name)
                 # Re-record the walker-readable slot on rerun: a fresh
-                # definition object may have been created after a
-                # ``registry.clear()``, so the early-``continue`` must not skip
-                # the slot write the first-attach branch performs below
-                # (spec-033 Decision 3, re-entrancy path).
+                # partial-finalize pass may have lost the definition slot, so
+                # the early-``continue`` must not skip the write the
+                # first-attach branch performs below (spec-033 Decision 3,
+                # re-entrancy path). ``registry.clear()`` removes this field
+                # through its registered identity-safe teardown instead.
                 _record_relation_connection(definition, generated, name)
                 continue
             existing = (
@@ -529,6 +582,9 @@ def _synthesize_relation_connections() -> None:
                     f"({camel!r} under default camel-casing). Rename the colliding attribute, "
                     f'or opt out with relation_shapes = {{"{name}": "list"}}.',
                 )
+            annotations = type_cls.__annotations__
+            annotations_snapshot = dict(annotations)
+            list_resolver = type_cls.__dict__.get(name, _MISSING_CLASS_MEMBER)
             field_obj = relay.connection(
                 _connection_type_for(target_type),
                 # The resolver reads rows off the instance, so it gets the
@@ -558,6 +614,17 @@ def _synthesize_relation_connections() -> None:
             )
             setattr(field_obj, _SYNTHESIZED_RELATION_CONNECTION_MARKER, True)
             setattr(type_cls, generated, field_obj)
+            _register_relation_connection_teardown(
+                type_cls,
+                definition,
+                generated=generated,
+                field_obj=field_obj,
+                relation_name=name,
+                shape=shape,
+                annotations=annotations,
+                annotations_snapshot=annotations_snapshot,
+                list_resolver=list_resolver,
+            )
             # Record the walker-readable synthesis mapping on the declaring
             # definition (spec-033 Decision 3). This runs exactly when a sibling
             # is attached, so suppressed shapes ("list" / non-Node /

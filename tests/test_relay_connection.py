@@ -592,6 +592,63 @@ def test_connection_only_relation_stays_list_suppressed_on_refinalize():
     assert "items: [" not in sdl
 
 
+def test_registry_clear_preserves_replacement_for_synthesized_connection():
+    """Identity-safe teardown leaves a later same-named consumer value untouched."""
+    _make_type("ItemType", Item, ("id", "name", "category"))
+    category_type = _make_type("CategoryType", Category, ("id", "name", "items"))
+    finalize_django_types()
+
+    replacement = object()
+    category_type.items_connection = replacement
+    registry.clear()
+
+    assert category_type.items_connection is replacement
+
+
+def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild():
+    """A fresh same-named type rebuild cannot inherit the prior connection shape.
+
+    The first lifecycle suppresses ``items`` in favor of ``itemsConnection``.
+    ``registry.clear()`` removes the exact generated field and restores the
+    resolved list annotation/resolver on the discarded class. A module-reload-
+    shaped second lifecycle then declares same-named fresh classes with the
+    explicit ``"list"`` shape and finalizes without a stale connection.
+    """
+    item_type = _make_type("ItemType", Item, ("id", "name", "category"))
+    old_category_type = _make_type(
+        "CategoryType",
+        Category,
+        ("id", "name", "items"),
+        meta_extra={"relation_shapes": {"items": "connection"}},
+    )
+    finalize_django_types()
+    old_definition = old_category_type.__django_strawberry_definition__
+
+    assert "items_connection" in old_category_type.__dict__
+    assert "items" not in old_category_type.__annotations__
+    assert "items" not in old_category_type.__dict__
+
+    registry.clear()
+
+    assert "items_connection" not in old_category_type.__dict__
+    assert "items_connection" not in old_category_type.__annotations__
+    assert old_category_type.__annotations__["items"].__args__ == (item_type,)
+    assert "items" in old_category_type.__dict__
+    assert old_definition.relation_connections is None
+
+    _make_type("ItemType", Item, ("id", "name", "category"))
+    fresh_category_type = _make_type(
+        "CategoryType",
+        Category,
+        ("id", "name", "items"),
+        meta_extra={"relation_shapes": {"items": "list"}},
+    )
+    finalize_django_types()
+
+    assert "items_connection" not in fresh_category_type.__dict__
+    assert fresh_category_type.__django_strawberry_definition__.relation_connections is None
+
+
 # =============================================================================
 # spec-032 Slice 4 - cursor-contract conformance on the synthesized relation
 # connection (Decision 9). The live PRIMARY matrix runs against the shipped

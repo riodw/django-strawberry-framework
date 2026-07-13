@@ -101,6 +101,21 @@ def test_validate_cursor_field_accepts_declared_shape():
     validate_cursor_field_columns("PatronType", Patron, ("name",))
 
 
+@pytest.mark.parametrize(
+    ("cursor_field", "expected"),
+    [
+        (("--number", "id"), "not a valid order string"),
+        (("periodical__name", "id"), "traverses a relation"),
+        (("number", "-number", "id"), "more than once"),
+        ((), "must contain at least one order string"),
+    ],
+)
+def test_validate_cursor_field_references_match_declaration_rules(cursor_field, expected):
+    """Finalization applies the same entry syntax and duplicate rules as class creation."""
+    with pytest.raises(ConfigurationError, match=expected):
+        validate_cursor_field_columns("IssueType", Issue, cursor_field)
+
+
 def test_validate_cursor_field_rejects_unknown_column():
     with pytest.raises(ConfigurationError, match="does not resolve to a field"):
         validate_cursor_field_columns("IssueType", Issue, ("nope", "id"))

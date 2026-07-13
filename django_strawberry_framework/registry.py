@@ -108,6 +108,7 @@ class TypeRegistry:
         self._enums: dict[tuple[type[models.Model], str], type[Enum]] = {}
         self._definitions: dict[type, DjangoTypeDefinition] = {}
         self._pending: list[PendingRelation] = []
+        self._type_teardowns: dict[type, list[Callable[[], None]]] = {}
         self._finalized: bool = False
 
     def _check_mutable(self) -> None:
@@ -202,6 +203,42 @@ class TypeRegistry:
             self._primaries[model] = type_cls
         return True
 
+    def register_type_teardown(self, type_cls: type, teardown: Callable[[], None]) -> None:
+        """Register one inverse for a framework-owned mutation of ``type_cls``.
+
+        Finalization mutates consumer classes in place. Most of those mutations
+        are intentionally one-way because one interpreter owns one schema-build
+        lifecycle, but a generated artifact that can leak into a later test
+        lifecycle must register its exact inverse here. ``clear`` and
+        ``unregister`` run the callbacks before dropping the type registration,
+        in reverse attachment order.
+
+        The callback owns identity checks for the artifact it created: teardown
+        must never delete or overwrite a same-named consumer replacement.
+        """
+        self._check_mutable()
+        if not callable(teardown):
+            raise TypeError("register_type_teardown() requires a zero-argument callable")
+        if type_cls not in self._models:
+            raise ConfigurationError(
+                f"Cannot register class teardown for unregistered type {type_cls.__name__}",
+            )
+        self._type_teardowns.setdefault(type_cls, []).append(teardown)
+
+    def _run_type_teardowns(self, type_cls: type) -> None:
+        """Run ``type_cls`` teardowns LIFO, retaining a failed callback for retry."""
+        teardowns = self._type_teardowns.get(type_cls)
+        if teardowns is None:
+            return
+        while teardowns:
+            teardown = teardowns.pop()
+            try:
+                teardown()
+            except Exception:
+                teardowns.append(teardown)
+                raise
+        self._type_teardowns.pop(type_cls)
+
     def unregister(self, type_cls: type) -> None:
         """Remove all traces of ``type_cls`` from the registry.
 
@@ -231,12 +268,13 @@ class TypeRegistry:
         for re-declaring a primary via a fresh registration cycle.
         """
         self._check_mutable()
-        model = self._models.pop(type_cls, None)
+        model = self._models.get(type_cls)
         if model is None:
             return
+        self._run_type_teardowns(type_cls)
+        self._models.pop(type_cls)
         # ``register`` keeps ``_types[model]`` and ``_models`` in lock-step;
-        # if ``_models.pop`` returned a model, ``type_cls`` is in
-        # ``_types[model]``.
+        # finding ``model`` above guarantees ``type_cls`` is in ``_types[model]``.
         types = self._types[model]
         types.remove(type_cls)
         if not types:
@@ -507,20 +545,25 @@ class TypeRegistry:
         return self._enums.get((model, field_name))
 
     def clear(self) -> None:
-        """Drop all registered types and enums.
+        """Drop all registered types and enums and undo registered class artifacts.
 
         Test-only - production code should never need to call this.
         Wire into ``pytest`` autouse fixtures so each registry-using test
         starts with a clean registry. ``_check_mutable`` is intentionally
         not called so test teardown can reset a finalized registry; this
-        is the only public mutator that bypasses the guard.
+        is the only public mutator that bypasses the guard. Finalized
+        consumer classes remain otherwise mutated; callbacks cover only
+        explicitly registered, identity-safe framework artifacts.
         """
+        for type_cls in reversed(tuple(self._type_teardowns)):
+            self._run_type_teardowns(type_cls)
         self._types.clear()
         self._primaries.clear()
         self._models.clear()
         self._enums.clear()
         self._definitions.clear()
         self._pending.clear()
+        self._type_teardowns.clear()
         self._finalized = False
 
         # Every loaded subsystem announces its own teardown callback. This

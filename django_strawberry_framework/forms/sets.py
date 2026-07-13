@@ -51,7 +51,7 @@ from ..mutations.inputs import (
     build_payload_type,
     materialize_mutation_input_class,
 )
-from ..mutations.permissions import DenyAll, run_permission_classes
+from ..mutations.permissions import DenyAll, DjangoModelPermission, run_permission_classes
 from ..mutations.sets import (
     NON_DELETE_OPERATION_INPUT_KIND,
     NON_DELETE_WRITE_OPERATIONS,
@@ -735,6 +735,28 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
             getattr(meta, "permission_classes", None),
             unset_default=(DenyAll,),
         )
+        # A model-less plain form cannot carry a model-requiring permission class.
+        # ``DjangoModelPermission`` (and any subclass) reads the mutation's model via
+        # ``mutation._resolve_model(mutation.Meta)`` and maps the operation to an
+        # ``add`` / ``change`` / ``delete`` codename - neither of which a plain
+        # ``DjangoFormMutation`` provides (it is not a ``DjangoMutation`` subclass, so
+        # it has no ``_resolve_model``, and its operation is the ``"form"`` sentinel).
+        # ``_validate_permission_classes`` accepts it (it IS a class with a callable
+        # ``has_permission``), so without this guard the misconfiguration finalizes
+        # cleanly and only surfaces as a raw ``AttributeError`` at REQUEST time - the
+        # exact model-permission incompatibility ``DenyAll`` documents and the default
+        # avoids. Reject it at class creation (the package's fail-loud contract), naming
+        # the model-backed base + the two valid plain-form postures.
+        for entry in permission_classes:
+            if isinstance(entry, type) and issubclass(entry, DjangoModelPermission):
+                raise ConfigurationError(
+                    f"DjangoFormMutation {name}.Meta.permission_classes includes "
+                    f"{entry.__name__}, which requires a model to resolve the write "
+                    "permission; a model-less DjangoFormMutation has no model. Use "
+                    "DjangoModelFormMutation for a model-backed form, or on a plain form "
+                    "omit permission_classes (deny-by-default) / set permission_classes = [] "
+                    "(allow any).",
+                )
 
         return _ValidatedMutationMeta(
             model=None,

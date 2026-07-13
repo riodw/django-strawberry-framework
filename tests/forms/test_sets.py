@@ -490,6 +490,34 @@ def test_plain_form_permission_classes_explicit_opt_out():
     assert Submit._mutation_meta.permission_classes == []
 
 
+def test_plain_form_rejects_model_permission_at_class_creation():
+    """``DjangoModelPermission`` on a model-less plain form is rejected at class creation.
+
+    ``DjangoModelPermission.has_permission`` reads the mutation's model via
+    ``mutation._resolve_model(mutation.Meta)`` and maps the operation to an
+    ``add`` / ``change`` / ``delete`` codename. A plain ``DjangoFormMutation`` is
+    NOT a ``DjangoMutation`` subclass (it has no ``_resolve_model``) and carries the
+    ``"form"`` operation sentinel, so the class would only surface the mismatch as a
+    raw ``AttributeError`` at REQUEST time - the exact incompatibility ``DenyAll``
+    documents and the default avoids. The plain-form ``_validate_meta`` rejects it at
+    class creation instead (the package's fail-loud contract), naming the model-backed
+    base and the two valid plain-form postures. A subclass of ``DjangoModelPermission``
+    is rejected too (the ``issubclass`` guard).
+    """
+    form_cls = _contact_form()
+
+    class CustomModelPermission(DjangoModelPermission):
+        pass
+
+    for offending in (DjangoModelPermission, CustomModelPermission):
+        with pytest.raises(ConfigurationError, match="requires a model"):
+
+            class Submit(DjangoFormMutation):
+                class Meta:
+                    form_class = form_cls
+                    permission_classes = [offending]
+
+
 # ---------------------------------------------------------------------------
 # Declaration registration (disjoint ledgers)
 # ---------------------------------------------------------------------------

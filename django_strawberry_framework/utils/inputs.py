@@ -1054,6 +1054,30 @@ class GeneratedInputArgumentsFactory:
         type_name = set_cls.type_name_for()
         owner_definition = getattr(set_cls, "_owner_definition", None)
         triples = self._build_input_triples(set_cls, type_name, owner_definition)
+        if not triples:
+            # A set whose Layer-4 expansion is empty -- an ``OrderSet`` with an
+            # empty / omitted ``Meta.fields`` and no active ``RelatedOrder``, or a
+            # related branch that expands to nothing -- would build a zero-field
+            # ``@strawberry.input``. Strawberry rejects that only at ``Schema(...)``
+            # build with a raw ``ValueError: Input Object type <Name> must define
+            # one or more fields``, naming the GENERATED type rather than the
+            # consumer's set class. Fail loud here at the framework boundary with a
+            # ``ConfigurationError`` naming the offending set + family, mirroring
+            # the write-side empty-input guards (``mutations`` / ``forms`` /
+            # ``rest_framework`` ``inputs.py``). The filter family never reaches
+            # this branch -- its ``_build_input_triples`` always appends the
+            # ``and_`` / ``or_`` / ``not_`` operator bag -- so in practice only the
+            # order family (no operator bag, Spec Decision 8) can be empty; the
+            # guard lives at this single set-family build site so every present and
+            # future family inherits it.
+            raise ConfigurationError(
+                f"{self._factory_label}: {self._family_label} {set_cls.__qualname__} "
+                f"generates the GraphQL input type {type_name!r} with no fields. "
+                "Strawberry rejects a zero-field input object at schema build "
+                f"('Input Object type {type_name} must define one or more fields'). "
+                f"Declare at least one field via the {self._rename_noun}'s Meta.fields "
+                "(or add a RelatedOrder / RelatedFilter branch).",
+            )
         input_cls = build_strawberry_input_class(type_name, triples)
         self.input_object_types[type_name] = input_cls
         self._collision_registry[type_name] = set_cls

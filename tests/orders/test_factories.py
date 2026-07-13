@@ -277,6 +277,80 @@ def test_factory_rejects_related_orders_with_colliding_graphql_names():
 
 
 # ---------------------------------------------------------------------------
+# Empty-orderset guard -- a zero-field OrderSet must fail loud at the factory
+# boundary (a ConfigurationError naming the set), never reach schema build as a
+# raw Strawberry ``ValueError: Input Object type ... must define one or more
+# fields``. The order family is the only set family that can be empty: filters
+# always carry the ``and_`` / ``or_`` / ``not_`` operator bag, so their input is
+# never zero-field. Mirrors the write-side empty-input guards in
+# ``mutations`` / ``forms`` / ``rest_framework`` ``inputs.py``.
+# ---------------------------------------------------------------------------
+
+
+def test_factory_raises_on_orderset_with_no_orderable_fields():
+    """An ``OrderSet`` whose expansion is empty raises ``ConfigurationError``.
+
+    Pre-fix the factory built a zero-field ``@strawberry.input`` that only blew
+    up later at ``strawberry.Schema(...)`` with a raw ``ValueError`` naming the
+    GENERATED type (``EmptyOrderInputType``) rather than the consumer's class.
+    The guard fails loud at the framework boundary instead.
+    """
+
+    class EmptyOrder(OrderSet):
+        # Omitted ``Meta.fields`` and no ``RelatedOrder`` -> ``get_fields()``
+        # expands to nothing -> zero input-field triples.
+        class Meta:
+            model = library_models.Book
+
+    factory = OrderArgumentsFactory(EmptyOrder)
+    with pytest.raises(ConfigurationError) as excinfo:
+        factory.arguments
+    message = str(excinfo.value)
+    assert "EmptyOrderInputType" in message
+    assert "no fields" in message
+    # Family-specific wording is preserved through the shared BFS substrate.
+    assert "OrderArgumentsFactory" in message
+    assert "OrderSet" in message
+
+
+def test_factory_raises_on_orderset_with_empty_fields_list():
+    """``Meta.fields = []`` is also rejected at the factory boundary."""
+
+    class EmptyListOrder(OrderSet):
+        class Meta:
+            model = library_models.Book
+            fields = []
+
+    factory = OrderArgumentsFactory(EmptyListOrder)
+    with pytest.raises(ConfigurationError) as excinfo:
+        factory.arguments
+    assert "EmptyListOrderInputType" in str(excinfo.value)
+
+
+def test_factory_raises_when_reachable_related_orderset_is_empty():
+    """The BFS rejects an empty related target, not only an empty root."""
+
+    class EmptyChildOrder(OrderSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = []
+
+    class ParentOrder(OrderSet):
+        shelf = RelatedOrder(EmptyChildOrder, field_name="shelf")
+
+        class Meta:
+            model = library_models.Book
+            fields = ["title"]
+
+    factory = OrderArgumentsFactory(ParentOrder)
+    with pytest.raises(ConfigurationError) as excinfo:
+        factory.arguments
+    message = str(excinfo.value)
+    assert "EmptyChildOrderInputType" in message
+    assert "no fields" in message
+
+
+# ---------------------------------------------------------------------------
 # Pass-2 B1 coverage closure -- pop-time ``if os_class in seen: continue`` guard
 # ---------------------------------------------------------------------------
 

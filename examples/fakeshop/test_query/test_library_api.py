@@ -1018,6 +1018,66 @@ def test_library_genres_filter_by_relay_own_pk_global_id_in_rejects_wrong_type()
 
 
 @pytest.mark.django_db
+def test_library_genres_filter_malformed_own_pk_global_id_raises_globalid_invalid():
+    """A MALFORMED (undecodable) own-PK GlobalID filter value surfaces the uniform
+    ``GLOBALID_INVALID`` coded error, not a raw ``GlobalIDValueError`` leak.
+
+    ``GenreType`` is a Relay node, so ``GenreFilter.id { exact }`` resolves to a
+    ``GlobalIDFilter``. An unparseable wire string (bad base64 / not a
+    ``type_name:node_id`` payload) must not escape as Strawberry's raw
+    ``GlobalIDValueError`` ("Incorrect padding", ...): the filter mirrors the
+    node-refetch contract (``relay.py::_decode_or_graphql_error``) and every
+    other package decode site, raising ``GraphQLError`` with
+    ``extensions={"code": "GLOBALID_INVALID"}``. The wrong-TYPE case above keeps
+    its own (code-less) ``"GlobalID type mismatch"`` message; this pins the
+    malformed-payload sibling.
+    """
+    models.Genre.objects.create(name="SciFi")
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenres(filter: { id: { exact: "not-a-valid-base64!!!" } }) {
+            name
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    error = payload["errors"][0]
+    assert error["extensions"]["code"] == "GLOBALID_INVALID", payload
+    assert "Invalid GlobalID" in error["message"], payload
+
+
+@pytest.mark.django_db
+def test_library_genres_filter_malformed_own_pk_global_id_in_names_index():
+    """A malformed element inside an own-PK ``id { in: [...] }`` list names its index.
+
+    ``in`` resolves to ``GlobalIDMultipleChoiceFilter``; each element is decoded
+    independently, so a malformed element raises the same ``GLOBALID_INVALID``
+    coded error with its list position named (parity with the per-element
+    ``"GlobalID type mismatch ... at index N"`` message).
+    """
+    models.Genre.objects.create(name="SciFi")
+    response = _post_graphql(
+        """
+        query {
+          allLibraryGenres(filter: { id: { in: ["Zm9v"] } }) {
+            name
+          }
+        }
+        """,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" in payload, payload
+    error = payload["errors"][0]
+    assert error["extensions"]["code"] == "GLOBALID_INVALID", payload
+    assert "at index 0" in error["message"], payload
+
+
+@pytest.mark.django_db
 def test_library_branches_filter_by_reverse_fk_lookup():
     """Spec-021 L1048: reverse-FK filter (``shelves.code``) routes through ``ShelfFilter``."""
     branch_with = models.Branch.objects.create(name="With Match", city="Boston")

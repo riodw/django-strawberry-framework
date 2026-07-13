@@ -352,11 +352,36 @@ def _decode_and_validate_global_id(
     now strategy-aware per spec-031 Decision 13). `callable` / `custom` types,
     an unbound owner,
     or an unresolvable target fall back to node-id-only (the `type_name` guard
-    is skipped). `GlobalIDMultipleChoiceFilter` passes `index` so the rejected
-    list element is named in the error message per spec-027
-    #"validates every element of the list independently".
+    is skipped). A malformed wire string (unparseable base64 / not a
+    `type_name:node_id` payload) raises `GraphQLError(..., extensions={"code":
+    "GLOBALID_INVALID"})` - the uniform coded error the node-refetch path emits
+    (`relay.py::_decode_or_graphql_error`) - instead of leaking Strawberry's raw
+    `GlobalIDValueError`. `GlobalIDMultipleChoiceFilter` passes `index` so the
+    rejected list element is named in both the mismatch and malformed messages
+    per spec-027 #"validates every element of the list independently".
     """
-    decoded = value if isinstance(value, relay.GlobalID) else relay.GlobalID.from_id(value)
+    if isinstance(value, relay.GlobalID):
+        decoded = value
+    else:
+        try:
+            decoded = relay.GlobalID.from_id(value)
+        except ValueError as exc:
+            # A malformed GlobalID filter value (bad base64 / not a
+            # ``type_name:node_id`` payload) must surface as the uniform coded
+            # GraphQL error every OTHER decode site raises -
+            # ``types/relay.py::decode_global_id`` catches the same ``ValueError``
+            # superset and ``relay.py`` wraps it as ``GLOBALID_INVALID`` - rather
+            # than leaking Strawberry's raw ``GlobalIDValueError`` message
+            # ("Incorrect padding", "expected to contain only 2 items", a utf-8
+            # codec error) as an unhandled resolver exception. The wrong-``type_name``
+            # case below keeps its own (code-less) mismatch error; this is the
+            # malformed-payload sibling, mirroring the node-field contract.
+            suffix = "" if index is None else f" at index {index}"
+            raise GraphQLError(
+                f"Invalid GlobalID: {value!r} is not a valid GlobalID (malformed "
+                f"base64 or not a 'type_name:node_id' shape){suffix}.",
+                extensions={"code": "GLOBALID_INVALID"},
+            ) from exc
     definition = _target_definition_for(filter_instance)
     accepted = _accepted_globalid_type_names(definition)
     if accepted is not None and decoded.type_name not in accepted:

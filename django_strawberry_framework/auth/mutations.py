@@ -357,6 +357,7 @@ def _login_resolve_body(
     node).
     """
     from ..mutations import resolvers
+    from ..utils.write_values import unencodable_text_error
 
     request = request_from_info(info, family_label=_AUTH_FAMILY_LABEL)
     resolvers.authorize_or_raise(
@@ -366,9 +367,23 @@ def _login_resolve_body(
         {"username": username},
         instance=None,
     )
-    user = auth.authenticate(request, username=username, password=password)
     payload_cls = resolvers.payload_cls_for(holder_cls)
     slot = payload_object_slot(holder_cls._primary_type)
+    # A credential carrying a lone surrogate code point (a GraphQL ``String`` can,
+    # via a JSON ``\uXXXX`` escape) is not UTF-8 encodable, so handing it to
+    # ``authenticate`` crashes it into a raw ``UnicodeEncodeError`` - the DB
+    # ``USERNAME_FIELD`` lookup for the username, the password hasher's ``.encode()``
+    # for the password - a top-level GraphQL error instead of the pinned failed-login
+    # envelope. Such a credential authenticates no one, so it is short-circuited to
+    # the SAME undifferentiated envelope (never a distinct field-keyed error, which
+    # would break the byte-identical enumeration guard), reusing the ONE write-side
+    # storability preflight so "unstorable text" stays single-sited with the shared
+    # scalar decode (``decode_scalar_leaf``) every other input runs through.
+    unstorable = (
+        unencodable_text_error("username", username) is not None
+        or unencodable_text_error("password", password) is not None
+    )
+    user = None if unstorable else auth.authenticate(request, username=username, password=password)
     if user is None:
         # No error code, deliberately: the user-facing failed-login contract is
         # ``field: "__all__"`` + the one undifferentiated message ONLY. A code
@@ -540,8 +555,21 @@ def _register_write_step(instance: Any, decoded: tuple[Any, ...]) -> Any:
     ``validate_password`` + ``set_password`` are the ONLY auth-specific steps.
     """
     from ..mutations import resolvers
+    from ..utils.write_values import unencodable_text_error
 
     user, m2m_assignments, exclude, raw_password = decoded
+    # ``password`` rides the D6 exclusion seam, so it bypasses the shared decode's
+    # scalar storability preflight (``decode_scalar_leaf``) that every other input
+    # scalar - including this register's own ``username`` - runs through. A
+    # lone-surrogate password passes ``validate_password`` (none of its validators
+    # encode the text) and then crashes ``set_password``'s hasher ``.encode()`` with a
+    # raw ``UnicodeEncodeError``. Preflight it here via the SAME shared primitive the
+    # model decode uses, so an unstorable password is the field-keyed ``password``
+    # envelope (byte-identical to how the shared decode already rejects a surrogate
+    # ``username``), never a top-level GraphQL error.
+    text_error = unencodable_text_error("password", raw_password)
+    if text_error is not None:
+        return [text_error]
     try:
         validate_password(raw_password, user)
     except ValidationError as exc:

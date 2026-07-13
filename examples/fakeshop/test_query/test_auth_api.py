@@ -209,6 +209,68 @@ def test_password_similar_to_username_is_rejected_with_user_context():
     assert payload["errors"][0]["messages"] == ["The password is too similar to the username."]
 
 
+# A GraphQL ``String`` can carry a lone UTF-16 surrogate code point (a JSON
+# ``\uXXXX`` escape); it is not UTF-8 encodable, so it crashes the DB
+# ``USERNAME_FIELD`` lookup / the password hasher's ``.encode()`` if handed raw to
+# Django's auth machinery. The auth surfaces must preflight it (the same
+# storability check every other input scalar gets), never surface a top-level
+# ``UnicodeEncodeError`` (a 500) in place of the normal failure envelope.
+_SURROGATE = "un\ud800storable"
+
+
+@pytest.mark.django_db
+def test_login_surrogate_username_is_the_undifferentiated_envelope_not_a_crash():
+    """A surrogate username authenticates no one: the byte-identical failed-login envelope."""
+    create_users(1)
+    surrogate = _login(Client(), _SURROGATE, TEST_USER_PASSWORD)
+    # No top-level GraphQL error (``_login`` asserts success), node null, and the
+    # SAME single ``__all__`` envelope a wrong password yields - the enumeration
+    # guard holds for malformed input too.
+    assert surrogate["node"] is None
+    assert surrogate["errors"] == [
+        {"field": "__all__", "messages": ["Incorrect username/password"], "codes": []},
+    ]
+    assert surrogate == _login(Client(), "staff_1", "not-the-password")
+
+
+@pytest.mark.django_db
+def test_login_surrogate_password_is_the_undifferentiated_envelope_not_a_crash():
+    """A surrogate password (crashes the hasher if unguarded) is the same envelope."""
+    create_users(1)
+    surrogate = _login(Client(), "staff_1", _SURROGATE)
+    assert surrogate["node"] is None
+    assert surrogate["errors"] == [
+        {"field": "__all__", "messages": ["Incorrect username/password"], "codes": []},
+    ]
+
+
+@pytest.mark.django_db
+def test_register_surrogate_password_keys_to_password_not_a_crash():
+    """A surrogate password bypasses the decode preflight (D6 exclusion seam); key it to ``password``.
+
+    ``password`` rides the register exclusion seam, so it skips the shared decode's
+    scalar unicode preflight; a strong-but-surrogate password passes
+    ``validate_password`` and would crash ``set_password``'s hasher. The register
+    write step must reject it as the field-keyed ``password`` envelope (matching how
+    a surrogate ``username`` is already rejected), never a 500.
+    """
+    create_users(1)
+    # Long, non-common, non-numeric, dissimilar to the username -> only the lone
+    # surrogate can reject it, so the failure is the storability preflight (not a
+    # password-strength validator).
+    surrogate_pw = "correct-horse-9\ud800battery-staple"
+    payload = _graphql_data(
+        _REGISTER,
+        variables={"d": {"username": "surrogate_reg_user", "password": surrogate_pw}},
+    )["register"]
+    assert payload["node"] is None
+    assert [error["field"] for error in payload["errors"]] == ["password"]
+    assert payload["errors"][0]["messages"] == [
+        "Text contains invalid Unicode (unpaired surrogate code points).",
+    ]
+    assert not get_user_model().objects.filter(username="surrogate_reg_user").exists()
+
+
 @pytest.mark.django_db
 def test_anonymous_me_is_null_not_an_error():
     """An anonymous session is an expected state: ``me`` is ``null`` (Decision 7)."""

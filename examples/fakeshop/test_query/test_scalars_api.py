@@ -306,6 +306,60 @@ def test_filter_specimens_by_unsigned_bigint_in_drops_below_zero_members():
 
 
 @pytest.mark.django_db
+def test_filter_specimens_by_bigint_range_out_of_range_bound_no_overflow():
+    """A past-signed-64-bit ``range`` bound is range-adapted, never a raw backend ``OverflowError``.
+
+    The ``range`` counterpart of
+    ``test_filter_specimens_by_bigint_in_drops_past_64bit_members_no_overflow``.
+    A scalar ``__range`` lookup binds BOTH bounds directly (``WHERE col BETWEEN a
+    AND b``), so a bound past the column's signed-64-bit range reached the backend
+    as a raw ``Python int too large to convert to SQLite INTEGER`` top-level error -
+    the same defect the element-binding ``__in`` had before ``IntegerInFilter``.
+    ``filters/base.py::IntegerRangeFilter`` now decomposes the range into Django's
+    range-aware ``gte`` / ``lte`` lookups, which resolve an out-of-range bound
+    (widen to no constraint / match nothing) BEFORE binding, so the query succeeds:
+
+    - upper bound past ``2**63`` widens to just the lower constraint;
+    - both bounds past ``2**63`` identify no row (``[]``), never a backend overflow;
+    - lower bound past ``-(2**63)`` widens to just the upper constraint; and
+    - a fully in-range ``range`` keeps its inclusive-BETWEEN semantics unchanged.
+    """
+    _seed_specimen(label="keep", signed_big=7)
+    _seed_specimen(label="other", signed_big=1_000_000)
+
+    past_max = 9223372036854775808  # 2**63, one past the signed-64-bit maximum
+    past_min = -9223372036854775809  # one past the signed-64-bit minimum
+
+    def _labels(filter_body: str) -> list[str]:
+        response = _post_graphql(
+            f"query {{ allScalarSpecimens(filter: {{ {filter_body} }}) {{ label }} }}",
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert "errors" not in body, body
+        return sorted(row["label"] for row in body["data"]["allScalarSpecimens"])
+
+    # Upper bound past 2**63: BETWEEN 1 AND 2**63 == col >= 1 (the impossible
+    # upper bound imposes no constraint). Both seeded rows are >= 1.
+    assert _labels(f"signedBig: {{ range: [1, {past_max}] }}") == ["keep", "other"]
+
+    # Both bounds past the maximum: no storable value can be >= 2**63, so the
+    # range identifies no row - ``[]``, never a raw OverflowError.
+    assert _labels(f"signedBig: {{ range: [{past_max}, {past_max + 10}] }}") == []
+
+    # Lower bound past -(2**63): BETWEEN past_min AND 100 == col <= 100. Only the
+    # in-range ``keep`` (7) matches; ``other`` (1_000_000) is excluded.
+    assert _labels(f"signedBig: {{ range: [{past_min}, 100] }}") == ["keep"]
+
+    # A fully in-range range keeps ordinary inclusive-BETWEEN semantics.
+    assert _labels("signedBig: { range: [7, 7] }") == ["keep"]
+
+    # An explicitly empty range supplies no bounds: keep django-filter's skip
+    # (no constraint), returning every row rather than matching nothing.
+    assert _labels("signedBig: { range: [] }") == ["keep", "other"]
+
+
+@pytest.mark.django_db
 def test_scalar_specimen_self_referential_parent_children_over_http():
     """Self-FK round-trip: parent + reverse-FK ``children`` traversal both work.
 

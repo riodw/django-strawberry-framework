@@ -63,7 +63,13 @@ from ..utils.relations import (
     path_traverses_to_many,
     relation_kind,
 )
-from .base import GlobalIDFilter, GlobalIDMultipleChoiceFilter, IntegerInFilter, RelatedFilter
+from .base import (
+    GlobalIDFilter,
+    GlobalIDMultipleChoiceFilter,
+    IntegerInFilter,
+    IntegerRangeFilter,
+    RelatedFilter,
+)
 from .inputs import _LOGIC_KEYS, LOOKUP_NAME_MAP, _field_specs, normalize_input_value
 
 # Python-attr tokens of the logical operator keys (``and_`` / ``or_`` / ``not_``),
@@ -590,6 +596,15 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 # is handled above (GlobalIDMultipleChoiceFilter); a non-integer column
                 # carries no binding-range limit so it keeps the upstream filter.
                 return IntegerInFilter, params
+            if lookup_type == "range" and isinstance(field, models.IntegerField):
+                # A bound-binding integer ``__range`` routes through IntegerRangeFilter:
+                # a raw ``BETWEEN a AND b`` binds BOTH bounds directly, so an out-of-range
+                # bound overflows the backend at bind exactly as an ``__in`` member does.
+                # The reroute decomposes the range into Django's range-aware ``gte`` /
+                # ``lte`` lookups (which resolve an out-of-range bound before binding), so
+                # a 64-bit ``BigInt`` bound past the column range never reaches the backend
+                # as a raw ``OverflowError``. Sibling of the ``in`` reroute above.
+                return IntegerRangeFilter, params
             return default_class, params
         target_type = cls._resolve_relation_target_type(field, getattr(field, "name", None))
         if target_type is None or not implements_relay_node(target_type):

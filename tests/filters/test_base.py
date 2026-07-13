@@ -29,6 +29,7 @@ from django_strawberry_framework.filters import (
     validate_range,
 )
 from django_strawberry_framework.filters.base import (
+    IntegerRangeFilter,
     _accepted_globalid_type_names,
     _decode_and_validate_global_id,
     _target_definition_for,
@@ -134,6 +135,72 @@ def test_validate_range_rejects_three_values():
 
 def test_range_filter_uses_range_field_class():
     assert RangeFilter.field_class is RangeField
+
+
+# ---------------------------------------------------------------------------
+# IntegerRangeFilter
+# ---------------------------------------------------------------------------
+
+
+def test_integer_range_filter_decomposes_range_into_gte_lte():
+    """A two-bound range applies a single ``gte`` + ``lte`` predicate, never a raw
+    ``__range`` (``BETWEEN``) bind - so each bound flows through Django's range-aware
+    integer lookup instead of overflowing the backend on an out-of-range value.
+    """
+    captured = {}
+
+    class _Qs:
+        def filter(self, **kwargs):
+            captured.update(kwargs)
+            return self
+
+    f = IntegerRangeFilter(field_name="signed_big", lookup_expr="range")
+    result = f.filter(_Qs(), [1, 100])
+    assert isinstance(result, _Qs)
+    assert captured == {"signed_big__gte": 1, "signed_big__lte": 100}
+
+
+def test_integer_range_filter_excludes_via_negated_conjunction():
+    """Under ``exclude=True`` the decomposed pair is applied through ``qs.exclude`` -
+    the exact complement of ``NOT (col BETWEEN a AND b)``.
+    """
+    captured = {}
+
+    class _Qs:
+        def exclude(self, **kwargs):
+            captured.update(kwargs)
+            return self
+
+    f = IntegerRangeFilter(field_name="signed_big", lookup_expr="range", exclude=True)
+    f.filter(_Qs(), [1, 100])
+    assert captured == {"signed_big__gte": 1, "signed_big__lte": 100}
+
+
+def test_integer_range_filter_passes_through_empty_value():
+    """An empty / ``None`` range keeps django-filter's skip (no bounds supplied)."""
+    sentinel = object()
+    f = IntegerRangeFilter(field_name="signed_big", lookup_expr="range")
+    assert f.filter(sentinel, None) is sentinel
+
+
+def test_integer_range_filter_applies_distinct_when_flagged():
+    """``IntegerRangeFilter.filter`` calls ``.distinct()`` when ``distinct=True``."""
+    calls = {"distinct": 0}
+
+    class _Qs:
+        def distinct(self):
+            calls["distinct"] += 1
+            return self
+
+        def filter(self, **kwargs):
+            calls["filter_kwargs"] = kwargs
+            return self
+
+    f = IntegerRangeFilter(field_name="signed_big", lookup_expr="range", distinct=True)
+    result = f.filter(_Qs(), [1, 100])
+    assert isinstance(result, _Qs)
+    assert calls["distinct"] == 1
+    assert calls["filter_kwargs"] == {"signed_big__gte": 1, "signed_big__lte": 100}
 
 
 # ---------------------------------------------------------------------------

@@ -30,7 +30,7 @@ from django.db import models
 from django.forms import Field, MultipleChoiceField
 from django_filters import Filter, ModelChoiceFilter, MultipleChoiceFilter, NumberFilter
 from django_filters.constants import EMPTY_VALUES
-from django_filters.filters import BaseInFilter, FilterMethod
+from django_filters.filters import BaseInFilter, BaseRangeFilter, FilterMethod
 from django_filters.utils import get_model_field
 from graphql import GraphQLError
 from strawberry import relay
@@ -257,6 +257,43 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
             # no row; never the empty-value skip that would return all rows.
             return qs if self.exclude else qs.none()
         return super().filter(qs, kept)
+
+
+class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
+    """Integer ``__range`` filter that never overflows the backend on an out-of-range bound.
+
+    `filter_for_lookup` routes a non-relation integer column's `range` lookup here
+    instead of django-filter's plain `BaseRangeFilter` (the sibling of the `in` ->
+    `IntegerInFilter` reroute). A `__range` lookup binds BOTH bounds directly as query
+    parameters (`WHERE col BETWEEN a AND b`), so a bound past the column's signed-64-bit
+    range reaches the backend as a raw `OverflowError` (`Python int too large to convert
+    to SQLite INTEGER`) escaping as a top-level error - the same defect `IntegerInFilter`
+    fixes for the element-binding `__in`. A single-bound `gte` / `lte`, by contrast, is
+    resolved by Django's range-aware integer lookups to "matches everything / nothing"
+    BEFORE binding and never overflows.
+
+    The two-bound range is therefore decomposed into a `gte` (lower) + `lte` (upper) pair
+    applied in ONE predicate, so each bound flows through Django's range-aware integer
+    lookup instead of a raw ``BETWEEN`` bind. This preserves inclusive-range semantics
+    (`col >= start AND col <= end`) and its exact complement under `exclude`
+    (`NOT (col >= start AND col <= end)`), while an out-of-range bound simply widens
+    (a below-min lower / above-max upper imposes no constraint) or empties the match
+    (an above-max lower / below-min upper can identify no row) - the same outcome a raw
+    ``BETWEEN`` would express if the backend could bind the value.
+    """
+
+    def filter(self, qs: Any, value: Any) -> Any:
+        """Apply the range as a decomposed ``gte`` + ``lte`` pair (never a raw ``BETWEEN``)."""
+        if value in EMPTY_VALUES:
+            # Explicit empty / None: keep django-filter's skip (no bounds supplied).
+            return super().filter(qs, value)
+        # ``BaseRangeField`` validates length == 2 before we run, and the generated
+        # ``list[BigInt!]`` input carries non-null elements, so both bounds are present.
+        start, end = value
+        if self.distinct:
+            qs = qs.distinct()
+        lookups = {f"{self.field_name}__gte": start, f"{self.field_name}__lte": end}
+        return self.get_method(qs)(**lookups)
 
 
 def _target_definition_for(filter_instance: Filter) -> DjangoTypeDefinition | None:

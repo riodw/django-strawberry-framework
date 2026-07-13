@@ -27,12 +27,16 @@ class ShelfRelationsForm(forms.ModelForm):
     primary with a visibility ``get_queryset`` (it hides ``city="restricted"`` from
     non-staff), so the generated inputs are raw pk - exercising the single + multi
     raw-pk decode arms and the visibility-on-the-raw-pk-branch fix over a live query.
-    ``branch`` declares ``to_field_name="name"`` so the decode binds the resolved
-    Branch by its unique name rather than its pk (the ``to_field_name`` conversion).
+    ``branch`` declares ``queryset=None`` and assigns its real queryset in
+    ``__init__`` (the standard request-scoped-choices idiom), and declares
+    ``to_field_name="name"`` so the decode binds the resolved Branch by its unique
+    name rather than its pk. The generated input and relation decoder must therefore
+    retain the backing model column's related model instead of consulting the
+    class-level form field's absent queryset.
     """
 
     branch = forms.ModelChoiceField(
-        queryset=models.Branch.objects.all(),
+        queryset=None,
         to_field_name="name",
     )
 
@@ -44,6 +48,10 @@ class ShelfRelationsForm(forms.ModelForm):
             "branch",
             "alt_branches",
         )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["branch"].queryset = models.Branch.objects.all()
 
 
 class BookGenresModelForm(forms.ModelForm):

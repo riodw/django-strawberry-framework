@@ -144,6 +144,7 @@ def _decode_form_relation_single(
     value: Any,
     *,
     graphql_name: str,
+    related_model: Any,
     form_field: Any,
     info: Any,
 ) -> tuple[Any, Any | None]:
@@ -154,9 +155,17 @@ def _decode_form_relation_single(
     type-check + pk coercion -> visible object (a hidden / missing / wrong-model
     / uncoercible id is the uniform field-keyed ``FieldError``, closing the
     raw-pk visibility gap) -> the form-key projection via ``to_field_name``
-    (``_to_form_key_value``). The related model is the form field's
-    ``queryset.model`` (single-sourced off the form field for BOTH the
-    model-backed and model-less relation, matching the Slice-1 input id basis).
+    (``_to_form_key_value``). The ``related_model`` is the target the Slice-1
+    build recorded on the reverse-map spec (``FormInputFieldSpec.related_model``),
+    from the SAME basis the generated id type used (the backing column's
+    ``related_model`` for a ``ModelForm`` column, else the form field's
+    ``queryset.model``). It is NOT re-derived from ``form_field.queryset.model``
+    here: the decode reads the CLASS-level ``base_fields`` field, whose
+    ``queryset`` is ``None`` under the request-scoped-choices idiom (a FK declared
+    ``ModelChoiceField(queryset=None)`` that assigns the queryset in ``__init__``),
+    which would crash with a bare ``AttributeError`` on ``None.model``. The
+    ``form_field`` is still consulted for ``empty_values`` (the skip) and
+    ``to_field_name`` (the projection), both class-level and queryset-independent.
 
     An explicit ``null`` (or any of the form field's ``empty_values``) is NOT an
     id to decode: it is a clear / no-value, skipped through UNCHANGED so the
@@ -169,7 +178,7 @@ def _decode_form_relation_single(
     return decode_visible_relation(
         value,
         graphql_name=graphql_name,
-        related_model=form_field.queryset.model,
+        related_model=related_model,
         info=info,
         async_recourse=_FORM_ASYNC_RECOURSE,
         skip=lambda candidate: candidate in form_field.empty_values,
@@ -181,6 +190,7 @@ def _decode_form_relation_multi(
     values: Any,
     *,
     graphql_name: str,
+    related_model: Any,
     form_field: Any,
     info: Any,
 ) -> tuple[Any, Any | None]:
@@ -213,6 +223,7 @@ def _decode_form_relation_multi(
         key, error = _decode_form_relation_single(
             value,
             graphql_name=graphql_name,
+            related_model=related_model,
             form_field=form_field,
             info=info,
         )
@@ -262,6 +273,7 @@ def _decode_form_data(
         decoded, error = decoder(
             value,
             graphql_name=spec.graphql_name,
+            related_model=spec.related_model,
             form_field=form_fields[spec.form_field_name],
             info=info,
         )

@@ -371,8 +371,13 @@ def _field_triple_and_spec(
     widening is applied by the caller. The returned ``FormInputFieldSpec`` records
     the reverse map the Slice 3 resolver consults - ``form_field_name`` is always
     the form's declared name, never the ``<name>_id`` relation attr, because a
-    bound Django form is keyed by form-field name.
+    bound Django form is keyed by form-field name. A relation field also records
+    ``related_model`` from the SAME basis the generated id type uses (the backing
+    column's ``related_model``, else the form field's ``queryset.model``) so the
+    Slice-3 decode never re-derives it from the class-level ``base_fields`` field
+    (whose ``queryset`` is ``None`` under the request-scoped-choices idiom).
     """
+    related_model: Any = None
     if column is not None:
         # ModelForm field with a backing model column: route the ``models.Field``
         # through the read-side converters so the wire contract is symmetric with
@@ -383,6 +388,10 @@ def _field_triple_and_spec(
                 related_primary_type=registry.get(column.related_model),
             )
             kind = RELATION_MULTI if getattr(column, "many_to_many", False) else RELATION_SINGLE
+            # The decode resolves ids against the SAME model the id type derived
+            # from (the backing column's related model), not the form field's
+            # (possibly ``None``) ``queryset.model``.
+            related_model = column.related_model
         elif isinstance(column, (models.FileField, models.ImageField)):
             python_attr, graphql_name, annotation, kind = _simple_triple(name, Upload, FILE)
         else:
@@ -401,6 +410,10 @@ def _field_triple_and_spec(
             python_attr, annotation = _model_less_relation_annotation(name, field, form_class)
             graphql_name = graphql_camel_name(python_attr)
             kind = conversion.kind
+            # ``_model_less_relation_annotation`` has already fail-loud-guarded a
+            # ``None`` queryset, so ``field.queryset.model`` is the resolved target
+            # (the SAME basis it used for the id type).
+            related_model = field.queryset.model
         else:
             python_attr, graphql_name, annotation, kind = _simple_triple(
                 name,
@@ -413,6 +426,7 @@ def _field_triple_and_spec(
         graphql_name=graphql_name,
         form_field_name=name,
         kind=kind,
+        related_model=related_model,
     )
     return python_attr, annotation, spec
 

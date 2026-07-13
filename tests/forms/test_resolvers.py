@@ -1820,6 +1820,7 @@ def test_decode_relation_single_empty_value_passes_through():
     decoded, error = form_resolvers._decode_form_relation_single(
         None,
         graphql_name="categoryId",
+        related_model=field.queryset.model,
         form_field=field,
         info=None,
     )
@@ -1835,6 +1836,7 @@ def test_decode_relation_multi_empty_values_return_empty_list():
         decoded, error = form_resolvers._decode_form_relation_multi(
             empty,
             graphql_name="genres",
+            related_model=field.queryset.model,
             form_field=field,
             info=None,
         )
@@ -1962,6 +1964,7 @@ def test_decode_form_relation_single_uncoercible_raw_pk_is_field_error():
     value, error = form_resolvers._decode_form_relation_single(
         "abc",
         graphql_name="genre",
+        related_model=field.queryset.model,
         form_field=field,
         info=None,
     )
@@ -1979,6 +1982,7 @@ def test_decode_form_relation_multi_collects_valid_then_short_circuits_on_bad():
     keys, error = form_resolvers._decode_form_relation_multi(
         [genre.pk],
         graphql_name="genres",
+        related_model=field.queryset.model,
         form_field=field,
         info=None,
     )
@@ -1988,6 +1992,7 @@ def test_decode_form_relation_multi_collects_valid_then_short_circuits_on_bad():
     keys, error = form_resolvers._decode_form_relation_multi(
         ["abc"],
         graphql_name="genres",
+        related_model=field.queryset.model,
         form_field=field,
         info=None,
     )

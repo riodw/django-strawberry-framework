@@ -82,12 +82,26 @@ class FormInputFieldSpec:
       the key the bound form validates under.
     - ``kind`` - one of ``SCALAR`` / ``RELATION_SINGLE`` / ``RELATION_MULTI`` /
       ``FILE``.
+    - ``related_model`` - the Django target model a relation field decodes its
+      id(s) against (``Category`` for a ``category`` / ``category_id`` relation),
+      recorded at BUILD time from the SAME basis the generated id type uses (the
+      backing ``models.Field.related_model`` for a ``ModelForm`` column, else the
+      form field's ``queryset.model``) so the Slice-3 decode never re-derives it
+      from the class-level (uninstantiated) ``base_fields`` form field. That
+      re-derivation was fragile: a ``ModelForm`` FK declared with ``queryset=None``
+      (the request-scoped-choices idiom that assigns the queryset in ``__init__``)
+      has ``queryset is None`` in ``base_fields``, so a ``queryset.model`` decode
+      crashed with a bare ``AttributeError``; and a form field whose ``queryset``
+      points at a different model than its backing column diverged from the id
+      basis. Mirrors ``utils/inputs.py::InputFieldSpec.related_model`` (spec-039
+      H4). ``None`` for a non-relation (``scalar`` / ``file``) field.
     """
 
     input_attr: str
     graphql_name: str
     form_field_name: str
     kind: str
+    related_model: type | None = None
 
 
 class FormFieldConversion(FieldConversionBase):

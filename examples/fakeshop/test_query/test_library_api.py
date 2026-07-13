@@ -5273,11 +5273,14 @@ def test_create_shelf_via_form_hidden_branch_in_alt_branches_is_field_error():
 
 @pytest.mark.django_db
 def test_create_shelf_via_form_visible_branch_resolves_by_to_field_name_and_writes():
-    """A visible raw-pk FK resolves and binds by ``to_field_name="name"``, and the row writes.
+    """A request-scoped visible FK resolves by ``to_field_name="name"`` and writes.
 
     Earns the success raw-pk decode AND the ``to_field_name`` conversion live: the
-    decode resolves the visible Branch by pk, converts it to its ``name``, and the
-    bound ``ModelChoiceField(to_field_name="name")`` validates by that key.
+    class-level ``ModelChoiceField`` declares ``queryset=None`` and receives its real
+    queryset in ``ShelfRelationsForm.__init__``. The decoder must use the target model
+    recorded from the backing FK column rather than dereference the absent class-level
+    queryset; it resolves the visible Branch by pk, converts it to its ``name``, and
+    the bound ``ModelChoiceField(to_field_name="name")`` validates by that key.
     """
     visible = models.Branch.objects.create(name="FormVisibleOK", city="open")
     response = _post_graphql(

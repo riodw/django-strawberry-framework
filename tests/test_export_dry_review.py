@@ -11,67 +11,25 @@ def _write(path: Path, content: str) -> Path:
     return path
 
 
-def test_extract_dry_handles_commonmark_fences_and_normalized_headings(
+def test_plan_cli_inventories_current_source_and_refuses_accidental_overwrite(
     tmp_path: Path,
 ) -> None:
-    artifact = _write(
-        tmp_path / "closed-0_0_1.md",
-        """\
-# Closed work ###
-
-~~~markdown
-## DRY analysis
-- fenced decoy
-~~~
-
-## DRY analysis ###
-
-+ Reuse the parser.
-* Share the validator.
-- [x] Preserve an existing checkbox.
-
-### Detail
-
-- Include child-section findings.
-
-## Later
-
-- Do not include this.
-""",
-    )
-
-    assert dry._extract_dry(artifact) == (
-        "Closed work",
-        [
-            "- [ ] Reuse the parser.",
-            "- [ ] Share the validator.",
-            "- [x] Preserve an existing checkbox.",
-            "",
-            "### Detail",
-            "",
-            "- [ ] Include child-section findings.",
-        ],
-    )
-
-
-def test_legacy_plan_cli_is_compatible_and_refuses_accidental_overwrite(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "review"
-    _write(
-        source / "closed-0_0_1.md",
-        """\
-# Closed work
-
-## DRY analysis
-
-- Reuse the parser.
-""",
-    )
+    package = tmp_path / "package"
+    _write(package / "__init__.py", "")
+    _write(package / "root.py", "VALUE = 1\n")
+    _write(package / "nested" / "__init__.py", "")
+    _write(package / "nested" / "worker.py", "def work():\n    return 1\n")
+    _write(package / "nested" / "deeper" / "leaf.py", "LEAF = True\n")
+    _write(tmp_path / "closed-review.md", "## DRY analysis\n\n- Ignore historical input.\n")
     output = tmp_path / "dry-0_0_1.md"
     arguments = [
-        "--source-dir",
-        str(source),
+        "plan",
+        "--root",
+        str(tmp_path),
+        "--package-root",
+        "package",
+        "--target-release",
+        "0.0.1",
         "--output",
         str(output),
         "--generated-date",
@@ -80,9 +38,16 @@ def test_legacy_plan_cli_is_compatible_and_refuses_accidental_overwrite(
 
     assert dry.main(arguments) == 0
     report = output.read_text(encoding="utf-8")
-    assert "# DRY consolidation plan: 0.0.1" in report
+    assert "# System-wide DRY review plan: 0.0.1" in report
     assert "Generated: 2026-01-02" in report
-    assert "- [ ] Reuse the parser." in report
+    assert "File `__init__.py`" in report
+    assert "File `nested/worker.py`" in report
+    assert "Folder integration `nested/`" in report
+    assert "Project integration" in report
+    assert "Ignore historical input" not in report
+    assert report.index("File `nested/deeper/leaf.py`") < report.index(
+        "Folder integration `nested/`",
+    )
     assert dry.main(arguments) == 2
     assert dry.main([*arguments, "--force"]) == 0
 

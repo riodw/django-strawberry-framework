@@ -1,10 +1,10 @@
-"""Generate DRY plans, static audit dossiers, and review-completeness checks.
+"""Generate source-driven DRY plans, static dossiers, and completeness checks.
 
 The script has three modes:
 
 ``plan``
-    Preserve the original Worker-0 workflow: extract ``DRY analysis`` sections
-    from closed Markdown artifacts and build ``docs/dry/dry-<release>.md``.
+    Inventory the current package source and build a file-by-file DRY review
+    plan with folder and project integration passes.
 
 ``audit``
     Build the one-stop evidence dossier for a new deep DRY review. It discovers
@@ -18,9 +18,10 @@ The script has three modes:
     Gate a completed review: every targeted definition (class, method,
     function, and optionally constant) and every required topic must be named.
 
-The historical no-subcommand plan invocation remains valid::
+Fresh source-driven plan::
 
-    python docs/dry/export_dry_review.py --source-dir docs/review
+    python docs/dry/export_dry_review.py plan \
+      --target-release 0.0.14
 
 New deep-review workflow::
 
@@ -56,10 +57,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-VERSION_SUFFIX_PATTERN = re.compile(r"-(\d+(?:_\d+)+)\.md$")
 RELEASE_PATTERN = re.compile(r"^\d+(?:\.\d+)+$")
-ATX_HEADING_PATTERN = re.compile(r"^(#{1,6})[ \t]+(.*?)(?:[ \t]+#+[ \t]*)?$")
-TOP_LEVEL_BULLET_PATTERN = re.compile(r"^[-+*][ \t]+(?!\[[ xX]\][ \t]+)(.*)$")
 DEFAULT_EXCLUDES = (
     ".git/**",
     ".mypy_cache/**",
@@ -81,14 +79,6 @@ DEFAULT_SCAN_ROOTS = (
 )
 MAX_SIGNATURE_LENGTH = 180
 MAX_SOURCE_TEXT_LENGTH = 180
-
-
-@dataclass(frozen=True)
-class Fence:
-    """One active CommonMark-style backtick or tilde fence."""
-
-    marker: str
-    length: int
 
 
 @dataclass(frozen=True)
@@ -317,201 +307,82 @@ def _overwrite_error(path: Path) -> str:
     return f"output already exists: {path.as_posix()} (pass --force to replace it)"
 
 
-def _fence_marker(line: str) -> tuple[str, int, str] | None:
-    """Return marker, length, and trailing text for a possible fence line."""
-    stripped = line.lstrip(" ")
-    if len(line) - len(stripped) > 3:
-        return None
-    if not stripped or stripped[0] not in ("`", "~"):
-        return None
-    marker = stripped[0]
-    length = len(stripped) - len(stripped.lstrip(marker))
-    if length < 3:
-        return None
-    return marker, length, stripped[length:]
-
-
-def _compute_fence_mask(lines: list[str]) -> list[bool]:
-    """Return ``mask[i]`` indicating content inside a backtick/tilde fence.
-
-    Fence marker lines are structural and therefore ``False``. A closing fence
-    must use the opener's marker and at least its length.
-    """
-    mask = [False] * len(lines)
-    active: Fence | None = None
-    for index, line in enumerate(lines):
-        candidate = _fence_marker(line)
-        if active is None and candidate is not None:
-            char, length, trailing = candidate
-            if char == "`" and "`" in trailing:
-                continue
-            active = Fence(char, length)
-            continue
-        if active is not None:
-            if candidate is not None:
-                char, length, trailing = candidate
-                if char == active.marker and length >= active.length and not trailing.strip():
-                    active = None
-                    continue
-            mask[index] = True
-        else:
-            mask[index] = False
-    return mask
-
-
-def _heading_level(line: str) -> tuple[int, str] | None:
-    """Return a normalized ATX Markdown ``(level, body)`` pair."""
-    stripped = line.lstrip(" ")
-    if len(line) - len(stripped) > 3:
-        return None
-    match = ATX_HEADING_PATTERN.match(stripped)
-    if match is None:
-        return None
-    body = match.group(2).strip()
-    if not body:
-        return None
-    return len(match.group(1)), body
-
-
-def _extract_dry(path: Path) -> tuple[str, list[str]] | None:
-    """Return ``(title, dry_lines)`` for the first real DRY analysis section."""
-    lines = path.read_text(encoding="utf-8").splitlines()
-    fence_mask = _compute_fence_mask(lines)
-
-    title = path.name
-    for index, line in enumerate(lines):
-        if fence_mask[index]:
-            continue
-        heading = _heading_level(line)
-        if heading is not None and heading[0] == 1:
-            title = heading[1]
-            break
-
-    dry_index: int | None = None
-    dry_level: int | None = None
-    for index, line in enumerate(lines):
-        if fence_mask[index]:
-            continue
-        heading = _heading_level(line)
-        if heading is not None and heading[1].casefold() == "dry analysis":
-            dry_index = index
-            dry_level = heading[0]
-            break
-    if dry_index is None or dry_level is None:
-        return None
-
-    end_index = len(lines)
-    for index in range(dry_index + 1, len(lines)):
-        if fence_mask[index]:
-            continue
-        heading = _heading_level(lines[index])
-        if heading is not None and heading[0] <= dry_level:
-            end_index = index
-            break
-
-    content = lines[dry_index + 1 : end_index]
-    while content and not content[0].strip():
-        content.pop(0)
-    while content and not content[-1].strip():
-        content.pop()
-
-    transformed: list[str] = []
-    for line in content:
-        match = TOP_LEVEL_BULLET_PATTERN.match(line)
-        transformed.append(f"- [ ] {match.group(1)}" if match is not None else line)
-    return title, transformed
-
-
-def _artifact_paths(source_dir: Path, *, recursive: bool) -> list[Path]:
-    """Return deterministic Markdown artifacts under ``source_dir``."""
-    iterator = source_dir.rglob("*.md") if recursive else source_dir.glob("*.md")
-    return sorted(path for path in iterator if path.is_file())
-
-
-def _render_dry_plan(
-    source_dir: Path,
-    *,
-    target_release: str | None,
-    generated_date: str,
-    recursive: bool,
-) -> tuple[str, list[Path], int]:
-    """Render a DRY plan and return ``(content, skipped, finding_count)``."""
-    blocks: list[str] = []
-    skipped: list[Path] = []
-    finding_count = 0
-    for artifact in _artifact_paths(source_dir, recursive=recursive):
-        result = _extract_dry(artifact)
-        if result is None:
-            skipped.append(artifact)
-            continue
-        title, dry_lines = result
-        finding_count += sum(line.startswith("- [ ] ") for line in dry_lines)
-        body = "\n".join(dry_lines) if dry_lines else "- [ ] (no DRY bullets recorded)"
-        blocks.append(f"## {title}\n\n_Source: `{artifact.as_posix()}`_\n\n{body}")
-
-    title_suffix = f": {target_release}" if target_release else ""
-    header = (
-        f"# DRY consolidation plan{title_suffix}\n\n"
-        f"Source: `{source_dir.as_posix()}/`\n"
-        f"Generated: {generated_date}\n"
-        "Workflow: `docs/dry/DRY.md`\n\n"
-        "One finding at a time. Worker 0 dispatches > Worker 1 triages > "
-        "Worker 2 implements > Worker 1 verifies > Worker 0 ticks.\n\n"
-        "## Findings\n\n"
-    )
-    body = (
-        "\n\n---\n\n".join(blocks) + "\n"
-        if blocks
-        else "_No DRY analysis sections found in the source directory._\n"
-    )
-    return header + body, skipped, finding_count
-
-
-def export_dry_plan(
-    source_dir: Path,
-    output: Path,
-    *,
-    target_release: str | None = None,
-) -> list[Path]:
-    """Write a legacy DRY plan and return artifacts without a DRY section.
-
-    This public function retains the original overwrite behavior for callers.
-    The CLI adds safe overwrite and empty-plan gates around the same renderer.
-    """
-    content, skipped, _finding_count = _render_dry_plan(
-        source_dir,
-        target_release=target_release,
-        generated_date=datetime.date.today().isoformat(),
-        recursive=False,
-    )
-    _atomic_write(output, content, force=True)
-    return skipped
-
-
 def _default_output(target_release: str) -> Path:
     """Return ``docs/dry/dry-<release-underscored>.md``."""
     return Path(f"docs/dry/dry-{target_release.replace('.', '_')}.md")
 
 
-def _infer_target_release(source_dir: Path, *, recursive: bool = False) -> str:
-    """Infer one dotted target release from version-suffixed artifacts."""
-    versions = {
-        match.group(1)
-        for path in _artifact_paths(source_dir, recursive=recursive)
-        if (match := VERSION_SUFFIX_PATTERN.search(path.name)) is not None
-    }
-    if not versions:
-        raise ValueError(
-            f"could not infer --target-release: no .md file in {source_dir.as_posix()}/ "
-            "matches '*-X_X_X.md'; pass --target-release explicitly",
-        )
-    if len(versions) > 1:
-        listed = ", ".join(sorted(versions))
-        raise ValueError(
-            f"could not infer --target-release: multiple versions found in "
-            f"{source_dir.as_posix()}/: {listed}; pass --target-release explicitly",
-        )
-    return next(iter(versions)).replace("_", ".")
+def _artifact_name(prefix: str, relative_path: Path) -> str:
+    """Return the artifact name for one source file or package folder."""
+    slug = relative_path.as_posix().removesuffix(".py").replace("/", "__")
+    return f"{prefix}-{slug}.md"
+
+
+def _render_source_plan(
+    package_root: Path,
+    *,
+    target_release: str,
+    generated_date: str,
+    mode: str,
+) -> tuple[str, int, int]:
+    """Render a fresh plan from the current package source inventory."""
+    source_files = sorted(path for path in package_root.rglob("*.py") if path.is_file())
+    if not source_files:
+        raise ValueError(f"no Python files found under {package_root.as_posix()}")
+
+    grouped: dict[Path, list[Path]] = defaultdict(list)
+    for source_file in source_files:
+        grouped[source_file.parent].append(source_file)
+
+    lines = [
+        f"# System-wide DRY review plan: {target_release}",
+        "",
+        f"Target: `{package_root.as_posix()}/`",
+        f"Generated: {generated_date}",
+        f"Mode: {mode}",
+        "Workflow: `docs/dry/DRY.md`",
+        "Cycle baseline: record before dispatch",
+        "",
+        "Fresh source review. Do not import findings from prior build, review, or DRY artifacts.",
+    ]
+
+    folder_count = 0
+
+    def append_folder(folder: Path) -> None:
+        nonlocal folder_count
+        relative_folder = folder.relative_to(package_root)
+        heading = "Package root" if relative_folder == Path(".") else relative_folder.as_posix()
+        lines.extend(["", f"## {heading}", ""])
+        for source_file in grouped[folder]:
+            relative_file = source_file.relative_to(package_root)
+            artifact = _artifact_name("dry-file", relative_file)
+            lines.append(
+                f"- [ ] File `{relative_file.as_posix()}` — [{artifact}]({artifact})",
+            )
+        for child in sorted(candidate for candidate in grouped if candidate.parent == folder):
+            append_folder(child)
+        if relative_folder != Path("."):
+            folder_count += 1
+            artifact = _artifact_name("dry-folder", relative_folder)
+            lines.extend(["", f"## {relative_folder.as_posix()} integration", ""])
+            lines.append(
+                f"- [ ] Folder integration `{relative_folder.as_posix()}/` — "
+                f"[{artifact}]({artifact})",
+            )
+
+    append_folder(package_root)
+
+    lines.extend(
+        [
+            "",
+            "## Project",
+            "",
+            "- [ ] Project integration — [dry-project.md](dry-project.md)",
+            "- [ ] Final test gate",
+            "",
+        ],
+    )
+    return "\n".join(lines), len(source_files), folder_count
 
 
 def _matches_exclude(path: Path, root: Path, patterns: Sequence[str]) -> bool:
@@ -1522,7 +1393,7 @@ def _add_target_arguments(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Build the three-mode CLI parser."""
+    """Build the plan/audit/check CLI parser."""
     parser = argparse.ArgumentParser(
         description="Generate DRY plans/audits and gate completed DRY reviews.",
     )
@@ -1530,13 +1401,21 @@ def _build_parser() -> argparse.ArgumentParser:
 
     plan = subparsers.add_parser(
         "plan",
-        help="Consolidate Markdown DRY-analysis sections (legacy Worker-0 mode).",
+        help="Generate a fresh file-by-file plan from the current package source.",
     )
-    plan.add_argument("--source-dir", type=Path, required=True)
-    plan.add_argument("--target-release")
+    plan.add_argument("--root", type=Path, default=Path.cwd())
+    plan.add_argument(
+        "--package-root",
+        type=Path,
+        default=Path("django_strawberry_framework"),
+    )
+    plan.add_argument("--target-release", required=True)
+    plan.add_argument(
+        "--mode",
+        choices=("autonomous", "pause-after-each-item"),
+        default="autonomous",
+    )
     plan.add_argument("--output", type=Path)
-    plan.add_argument("--recursive", action="store_true")
-    plan.add_argument("--allow-empty", action="store_true")
     plan.add_argument("--force", action="store_true")
     plan.add_argument("--generated-date")
 
@@ -1595,45 +1474,30 @@ def _effective_excludes(args: argparse.Namespace) -> tuple[str, ...]:
 
 
 def _run_plan(args: argparse.Namespace) -> int:
-    """Execute legacy plan generation."""
-    source_dir = args.source_dir.resolve()
-    if not source_dir.is_dir():
-        raise ValueError(f"--source-dir is not a directory: {source_dir.as_posix()}")
-    target_release = args.target_release or _infer_target_release(
-        source_dir,
-        recursive=args.recursive,
-    )
+    """Generate a fresh plan from current package source."""
+    root = args.root.resolve()
+    package_root = _resolve_path(args.package_root, root)
+    if not package_root.is_dir():
+        raise ValueError(f"--package-root is not a directory: {package_root.as_posix()}")
+    target_release = args.target_release
     if not RELEASE_PATTERN.fullmatch(target_release):
         raise ValueError(
             f"invalid --target-release {target_release!r}; expected dotted digits such as 0.0.14",
         )
-    if args.target_release is None:
-        print(f"Inferred --target-release: {target_release}")
-    output = args.output or _default_output(target_release)
+    output = _resolve_path(args.output or _default_output(target_release), root)
     if output.exists() and not args.force:
         raise FileExistsError(_overwrite_error(output))
-    generated_date = _validate_date(args.generated_date)
-    content, skipped, finding_count = _render_dry_plan(
-        source_dir,
+    content, file_count, folder_count = _render_source_plan(
+        package_root,
         target_release=target_release,
-        generated_date=generated_date,
-        recursive=args.recursive,
+        generated_date=_validate_date(args.generated_date),
+        mode=args.mode,
     )
-    if finding_count == 0 and not args.allow_empty:
-        raise ValueError(
-            "no top-level DRY findings found; pass --allow-empty only when an empty plan is intended",
-        )
     _atomic_write(output, content, force=args.force)
     print(
-        f"Wrote {output} ({finding_count} finding(s), "
-        f"{len(_artifact_paths(source_dir, recursive=args.recursive)) - len(skipped)} "
-        "artifact section(s))",
+        f"Wrote {_display_path(output, root)} "
+        f"({file_count} file item(s), {folder_count} folder integration item(s))",
     )
-    if skipped:
-        print(
-            "Skipped files without a DRY analysis section: "
-            + ", ".join(path.name for path in skipped),
-        )
     return 0
 
 
@@ -1718,18 +1582,10 @@ def _run_check(args: argparse.Namespace) -> int:
     return 1
 
 
-def _normalize_legacy_argv(argv: Sequence[str]) -> list[str]:
-    """Inject ``plan`` for the historical option-only invocation."""
-    normalized = list(argv)
-    if normalized and normalized[0].startswith("-") and normalized[0] not in ("-h", "--help"):
-        normalized.insert(0, "plan")
-    return normalized
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the selected DRY toolkit mode and return a process exit code."""
     raw_argv = sys.argv[1:] if argv is None else argv
-    args = _build_parser().parse_args(_normalize_legacy_argv(raw_argv))
+    args = _build_parser().parse_args(raw_argv)
     try:
         if args.command == "plan":
             return _run_plan(args)

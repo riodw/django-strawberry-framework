@@ -646,6 +646,7 @@ def test_resolve_order_expressions_aggregates_to_many_orders_scalar_directly():
 
     annotations, expressions = _MultBranchOrder._resolve_order_expressions(
         [("shelves__code", Ordering.ASC), ("name", Ordering.DESC)],
+        model=Branch,
     )
     # The to-many path produced exactly one aggregate annotation (``Min`` for ASC).
     assert len(annotations) == 1
@@ -668,6 +669,7 @@ def test_resolve_order_expressions_uses_max_for_descending_to_many():
 
     annotations, _expressions = _DescBranchOrder._resolve_order_expressions(
         [("shelves__code", Ordering.DESC_NULLS_LAST)],
+        model=Branch,
     )
     ((_alias, aggregate),) = annotations.items()
     assert isinstance(aggregate, Max)
@@ -726,6 +728,66 @@ def test_orderset_apply_async_annotates_to_many_order():
     # collapsing the reverse-FK fan-out to one row per parent.
     assert any(isinstance(agg, Min) for agg in result.query.annotations.values())
     assert list(result.query.order_by)
+
+
+@pytest.mark.django_db
+def test_modelless_orderset_uses_queryset_model_for_to_many_order():
+    """A direct model-less orderset application still keeps the P1-B aggregate."""
+    from django.db.models import Min
+
+    class ShelfOrderML(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["code"]
+
+    class BranchOrderML(OrderSet):
+        shelves = RelatedOrder(ShelfOrderML, field_name="shelves")
+
+    branch_one = Branch.objects.create(name="Alpha", city="X")
+    Shelf.objects.create(code="a-code", branch=branch_one)
+    Shelf.objects.create(code="b-code", branch=branch_one)
+    branch_two = Branch.objects.create(name="Beta", city="Y")
+    Shelf.objects.create(code="c-code", branch=branch_two)
+
+    factory = OrderArgumentsFactory(BranchOrderML)
+    BranchInput = factory.arguments
+    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderMLInputType"]
+    input_value = [BranchInput(shelves=ShelfInput(code=Ordering.ASC))]
+
+    result = BranchOrderML.apply_sync(input_value, Branch.objects.all(), _make_info())
+    assert any(isinstance(agg, Min) for agg in result.query.annotations.values())
+    assert [branch.name for branch in result] == ["Alpha", "Beta"]
+
+
+@pytest.mark.django_db
+def test_queryset_model_overrides_conflicting_orderset_meta_model():
+    """To-many detection follows the concrete queryset, never stale class metadata."""
+    from django.db.models import Min
+
+    class ShelfOrder(OrderSet):
+        class Meta:
+            model = Shelf
+            fields = ["code"]
+
+    class MisdeclaredBranchOrder(OrderSet):
+        shelves = RelatedOrder(ShelfOrder, field_name="shelves")
+
+        class Meta:
+            # Deliberately incompatible with the direct application below.
+            # Reading this model would miss Branch.shelves and retain fan-out.
+            model = Book
+            fields = ["title"]
+
+    factory = OrderArgumentsFactory(MisdeclaredBranchOrder)
+    BranchInput = factory.arguments
+    ShelfInput = OrderArgumentsFactory.input_object_types["ShelfOrderInputType"]
+    input_value = [BranchInput(shelves=ShelfInput(code=Ordering.ASC))]
+    result = MisdeclaredBranchOrder.apply_sync(
+        input_value,
+        Branch.objects.all(),
+        _make_info(),
+    )
+    assert any(isinstance(agg, Min) for agg in result.query.annotations.values())
 
 
 # Keep imports active so ruff doesn't flag the F-expression / Genre import.

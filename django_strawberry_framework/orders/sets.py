@@ -448,6 +448,8 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
     def _resolve_order_expressions(
         cls,
         flat_orders: list[tuple[str, Ordering | None]],
+        *,
+        model: type[models.Model],
     ) -> tuple[dict[str, Any], list]:
         """Build ``(annotations, order_expressions)`` from flat ``(path, direction)`` pairs.
 
@@ -478,14 +480,22 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         to-many aggregate order never sits below the optimizer's
         ``_dst_row_number`` window annotation; both SQLite and PostgreSQL execute
         the grouped root page or the unwindowed nested fallback directly.
+
+        ``model`` is the concrete ``queryset.model`` supplied by
+        ``_apply_orderings``. Order paths execute against that queryset, so its
+        model is the only authoritative metadata root: ``Meta.model`` may be
+        absent for a related-only set, or may name a base model while a valid
+        direct caller applies the set to a concrete descendant carrying
+        additional relations. Inferring from class/binding metadata makes
+        correctness depend on declaration history and can miss a concrete
+        to-many path, leaving the raw fan-out join this method exists to prevent.
         """
-        model = getattr(getattr(cls, "Meta", None), "model", None)
         annotations: dict[str, Any] = {}
         expressions: list = []
         for index, (field_path, direction) in enumerate(flat_orders):
             if direction is None:
                 continue
-            if model is not None and _path_traverses_to_many(model, field_path):
+            if _path_traverses_to_many(model, field_path):
                 # ``flatten_lookup_path``: LOOKUP_SEP must never survive into a
                 # generated alias (DRY review A9 - one owner for the mangle).
                 alias = f"_dst_order_{index}_{flatten_lookup_path(field_path)}"
@@ -517,7 +527,10 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         if not data:
             return queryset
         flat_orders = cls.get_flat_orders(data)
-        annotations, expressions = cls._resolve_order_expressions(flat_orders)
+        annotations, expressions = cls._resolve_order_expressions(
+            flat_orders,
+            model=queryset.model,
+        )
         if not expressions:
             return queryset
         if annotations:

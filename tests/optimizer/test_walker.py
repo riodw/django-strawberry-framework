@@ -4444,19 +4444,33 @@ def test_default_relations_still_plan_grandchildren_under_resolvers():
         registry.clear()
 
 
+def _mutate_every_plan_field(plan, label):
+    """Make a strategy candidate visibly dirty across every construction field."""
+    plan.select_related.extend([f"{label}_select", f"{label}_select"])
+    plan.prefetch_related.extend([f"{label}_prefetch", f"{label}_prefetch"])
+    plan.only_fields.extend([f"{label}_only", f"{label}_only"])
+    plan.fk_id_elisions.extend([f"{label}_elision", f"{label}_elision"])
+    plan.planned_resolver_keys.extend([f"{label}_planned", f"{label}_planned"])
+    plan.select_path_resolver_keys[f"{label}_select"] = (f"{label}_planned", f"{label}_planned")
+    plan.cacheable = False
+
+
 def test_refusing_nested_fetch_strategy_leaves_selection_unplanned():
-    """A strategy returning ``False`` -> no prefetch, no keys, no child leakage.
+    """A dirty strategy returning ``False`` leaks no directives or metadata.
 
     The seam's Decision-6 discipline (``optimizer/nested_fetch.py``): the
-    walker records resolver identities and merges the child sub-plan ONLY
-    after the strategy accepted, so a refusal behaves exactly like the other
-    fallback shapes - the per-parent access stays strictness-visible and the
-    parent plan absorbs nothing from the throwaway child build.
+    nested planner gives the strategy an isolated candidate and discards it
+    after refusal, so even a callback that mutates every plan field behaves
+    exactly like the other fallback shapes.
     """
     from django_strawberry_framework.optimizer.nested_fetch import _active_strategy
 
+    def decline_after_mutation(request, plan):
+        _mutate_every_plan_field(plan, "leaked")
+        return False
+
     registry.clear()
-    refusing = SimpleNamespace(name="refuse-all", plan=lambda request, plan: False)
+    refusing = SimpleNamespace(name="refuse-all", plan=decline_after_mutation)
     token = _active_strategy.set(refusing)
     try:
         types = _connection_relay_types()
@@ -4473,10 +4487,106 @@ def test_refusing_nested_fetch_strategy_leaves_selection_unplanned():
             info=_fake_info(),
             source_type=genre_type,
         )
-        assert list(plan.prefetch_related) == []
-        assert list(plan.planned_resolver_keys) == []
-        # No child-plan leakage either (the sub-plan merge is post-acceptance).
-        assert not any("title" in f for f in plan.only_fields)
+        assert plan.prefetch_related == ()
+        assert plan.planned_resolver_keys == ()
+        assert plan.select_related == ()
+        assert plan.only_fields == ()
+        assert plan.fk_id_elisions == ()
+        assert plan.select_path_resolver_keys == {}
+        assert plan.cacheable is True
+    finally:
+        _active_strategy.reset(token)
+        registry.clear()
+
+
+def test_accepting_nested_fetch_strategy_merges_candidate_exactly_once():
+    """An accepted dirty candidate commits every field with duplicate collapse."""
+    from django_strawberry_framework.optimizer.nested_fetch import _active_strategy
+
+    def accept_after_mutation(request, plan):
+        _mutate_every_plan_field(plan, "accepted")
+        return True
+
+    registry.clear()
+    accepting = SimpleNamespace(name="accept-all", plan=accept_after_mutation)
+    token = _active_strategy.set(accepting)
+    try:
+        types = _connection_relay_types()
+        genre_model, genre_type = types["Genre"]
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        assert plan.select_related.count("accepted_select") == 1
+        assert plan.prefetch_related.count("accepted_prefetch") == 1
+        assert plan.only_fields.count("accepted_only") == 1
+        assert plan.fk_id_elisions.count("accepted_elision") == 1
+        assert plan.planned_resolver_keys.count("accepted_planned") == 1
+        assert plan.select_path_resolver_keys == {
+            "accepted_select": ("accepted_planned",),
+        }
+        assert plan.cacheable is False
+    finally:
+        _active_strategy.reset(token)
+        registry.clear()
+
+
+def test_raising_nested_fetch_strategy_leaves_parent_byte_identical():
+    """A strategy exception propagates before the walker commits any candidate."""
+    from apps.library.models import Genre
+
+    from django_strawberry_framework.optimizer.nested_fetch import _active_strategy
+    from django_strawberry_framework.optimizer.walker import _plan_connection_relation
+
+    def raise_after_mutation(request, plan):
+        _mutate_every_plan_field(plan, "leaked")
+        raise RuntimeError("strategy exploded")
+
+    registry.clear()
+    raising = SimpleNamespace(name="raise-all", plan=raise_after_mutation)
+    token = _active_strategy.set(raising)
+    try:
+        types = _connection_relay_types()
+        genre_type = types["Genre"][1]
+        definition = registry.get_definition(genre_type)
+        parent = OptimizationPlan(
+            select_related=["existing-select"],
+            prefetch_related=["existing-prefetch"],
+            only_fields=["existing-only"],
+            fk_id_elisions=["existing-elision"],
+            planned_resolver_keys=["existing-key"],
+            select_path_resolver_keys={"existing-select": ("existing-key",)},
+            cacheable=False,
+        )
+        before = parent.finalize()
+
+        with pytest.raises(RuntimeError, match="strategy exploded"):
+            _plan_connection_relation(
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+                definition,
+                relation_field_name="books",
+                field_map=definition.field_map,
+                plan=parent,
+                prefix="",
+                info=_fake_info(),
+                runtime_prefixes=((),),
+                type_cls=genre_type,
+                model=Genre,
+            )
+
+        assert parent.finalize() == before
     finally:
         _active_strategy.reset(token)
         registry.clear()

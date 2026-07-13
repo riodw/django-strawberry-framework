@@ -2,14 +2,16 @@
 
 How a recognized nested Relay connection is FETCHED is a strategy, not the
 optimizer's identity (the lesson from Prisma's ``JoinSelectBuilder`` trait:
-one stable plan interface, swappable SQL shapes behind it). The walker
-(``optimizer/walker.py::_plan_connection_relation``) owns everything
-strategy-independent - recognition, the Decision-6 fallback shapes (sidecar,
-``OptimizerHint.SKIP``, DISTINCT, malformed slice, unwindowable partition),
-the divergent-alias per-response-key scheme (one request per key under a
-per-key ``to_attr``), child-queryset construction, the deterministic
+one stable plan interface, swappable SQL shapes behind it). The private
+planner (``optimizer/nested_planner.py::plan_connection_relation``) owns
+everything strategy-independent - recognition, the Decision-6 fallback shapes
+(sidecar, ``OptimizerHint.SKIP``, DISTINCT, malformed slice, unwindowable
+partition), the divergent-alias per-response-key scheme (one request per key
+under a per-key ``to_attr``), child-queryset construction, the deterministic
 order, and the slice window - then hands each ``NestedConnectionRequest`` to
-the active strategy, which attaches its fetch directives to the plan.
+the active strategy, which attaches its fetch directives to an isolated
+candidate plan. The candidate is merged only when the strategy returns
+``True``; refusal and exceptions cannot mutate the planner result.
 
 The default strategy is ``WindowedPrefetchStrategy`` - the verbatim spec-033
 windowed prefetch: ``apply_window_pagination`` over the child queryset,
@@ -58,7 +60,7 @@ from .plans import OptimizationPlan, append_prefetch_unique, apply_window_pagina
 def unwindowable_child_queryset_reason(queryset: Any) -> str | None:
     """Classify child-queryset states NO fetch strategy can window safely.
 
-    The strategy-independent safety gate the walker runs before building a
+    The strategy-independent safety gate the nested planner runs before building a
     ``NestedConnectionRequest`` (feedback2 P0-3): these shapes come from
     consumer hooks (a target ``get_queryset`` returning a pre-shaped
     queryset) and either crash inside ``apply_window_pagination`` before any
@@ -104,7 +106,7 @@ class NestedConnectionRequest:
     """Everything the walker resolved about one plannable nested connection.
 
     Built only AFTER every strategy-independent fallback shape has been ruled
-    out: ``django_field`` is the RAW Django relation field/rel (the walker's
+    out: ``django_field`` is the RAW Django relation field/rel (the planner's
     ``_raw_relation_field``, not a ``FieldMeta`` - strategies may need
     ``remote_field`` / through metadata only the raw descriptor carries),
     ``child_queryset`` already carries the child plan (``only`` /

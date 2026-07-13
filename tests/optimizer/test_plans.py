@@ -155,6 +155,69 @@ class TestOptimizationPlanApply:
         assert is_deferred is False
 
 
+class TestOptimizationPlanMerge:
+    """Construction-time merge operations commit complete accepted plans."""
+
+    def test_full_merge_covers_every_directive_and_metadata_field_once(self):
+        target = OptimizationPlan(
+            select_related=["category"],
+            prefetch_related=["items"],
+            only_fields=["name"],
+            fk_id_elisions=["existing-elision"],
+            planned_resolver_keys=["existing-key"],
+            select_path_resolver_keys={"category": ("existing-key",)},
+        )
+        source = OptimizationPlan(
+            select_related=["category", "owner", "owner"],
+            prefetch_related=["items", "properties", "properties"],
+            only_fields=["name", "description", "description"],
+            fk_id_elisions=["existing-elision", "new-elision", "new-elision"],
+            planned_resolver_keys=["existing-key", "new-key", "new-key"],
+            select_path_resolver_keys={"category": ("existing-key", "new-key", "new-key")},
+            cacheable=False,
+        )
+
+        target.merge_from(source)
+
+        assert target.select_related == ["category", "owner"]
+        assert target.prefetch_related == ["items", "properties"]
+        assert target.only_fields == ["name", "description"]
+        assert target.fk_id_elisions == ["existing-elision", "new-elision"]
+        assert target.planned_resolver_keys == ["existing-key", "new-key"]
+        assert target.select_path_resolver_keys == {
+            "category": ("existing-key", "new-key"),
+        }
+        assert target.cacheable is False
+
+    def test_metadata_merge_excludes_child_queryset_directives(self):
+        target = OptimizationPlan()
+        child = OptimizationPlan(
+            select_related=["category"],
+            prefetch_related=["entries"],
+            only_fields=["name"],
+            fk_id_elisions=["child-elision"],
+            planned_resolver_keys=["child-key"],
+            select_path_resolver_keys={"category": ("child-key",)},
+            cacheable=False,
+        )
+
+        target.merge_metadata_from(child)
+
+        assert target.select_related == []
+        assert target.prefetch_related == []
+        assert target.only_fields == []
+        assert target.select_path_resolver_keys == {}
+        assert target.fk_id_elisions == ["child-elision"]
+        assert target.planned_resolver_keys == ["child-key"]
+        assert target.cacheable is False
+
+    def test_merge_rejects_finalized_source_and_target(self):
+        with pytest.raises(RuntimeError, match="construction-time"):
+            OptimizationPlan().merge_from(OptimizationPlan().finalize())
+        with pytest.raises(RuntimeError, match="construction-time"):
+            OptimizationPlan().finalize().merge_from(OptimizationPlan())
+
+
 class TestOptimizationPlanFinalize:
     """``finalize`` swaps mutable list fields for tuples so post-handoff mutation raises."""
 

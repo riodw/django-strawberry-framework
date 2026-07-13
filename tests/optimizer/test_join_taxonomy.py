@@ -5,8 +5,8 @@ against real fakeshop fields, so the windowed strategy's partition, the
 prefetch connector column, and the (future) lateral join shape all read from
 one classifier that cannot drift per-consumer. The two shims
 (``plans.py::window_partition_for_prefetch`` and
-``walker.py::_connector_only_field``) keep their own historical pins in
-``test_plans.py`` / ``test_walker.py``; these tests pin the descriptor
+``nested_planner.py::_connector_only_field``) keep their own historical pins
+in ``test_plans.py`` / ``test_walker.py``; these tests pin the descriptor
 directly.
 """
 

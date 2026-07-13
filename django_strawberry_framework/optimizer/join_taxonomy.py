@@ -26,7 +26,7 @@ fact the fetch strategies need:
   ``plans.py::window_partition_for_prefetch``, now a shim over this module).
 - ``parent_join_column`` - the child-side column Django needs loaded to
   attach prefetched rows to parents (previously
-  ``walker.py::_connector_only_field``, now a shim too).
+  ``nested_planner.py::_connector_only_field``, now a shim too).
 - ``through_model`` + ``lateral_shape`` - the Postgres LATERAL strategy's
   join-SQL selector (``optimizer/lateral_fetch.py``: a ``DIRECT_FK`` shape
   correlates the child table directly; a ``THROUGH_TABLE`` shape joins the
@@ -114,8 +114,8 @@ def _partition_expr(field: Any) -> str | None:
 def _parent_join_column(field: Any, kind: RelationKind) -> str | None:
     """The child-side column Django needs loaded to attach rows to parents.
 
-    The relation-kind-specific connector (the former
-    ``walker.py::_connector_only_field`` body, moved verbatim): the child FK
+    The relation-kind-specific connector
+    (``nested_planner.py::_connector_only_field``): the child FK
     attname for a reverse FK / reverse one-to-one, the target field's attname
     for a forward single-valued relation, and the related model's pk attname
     for an M2M (the join table owns the attach, so the child only needs its

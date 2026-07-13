@@ -35,12 +35,12 @@ from django_strawberry_framework.connection import (
     _WindowedConnectionRows,
 )
 from django_strawberry_framework.keyset import cursor_columns_for, order_fingerprint
-from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER, WINDOW_TOTAL_COUNT
-from django_strawberry_framework.optimizer.walker import (
+from django_strawberry_framework.optimizer.nested_planner import (
     _extend_only_projection,
     _keyset_cursor_context,
     _keyset_window_slice_from_arguments,
 )
+from django_strawberry_framework.optimizer.plans import WINDOW_ROW_NUMBER, WINDOW_TOTAL_COUNT
 from django_strawberry_framework.utils.connections import UnwindowableConnection
 
 ISSUE_ORDER = ("-number", "id")
@@ -482,7 +482,7 @@ def test_resolve_order_path_field_arms():
 
 
 # =============================================================================
-# walker helpers
+# nested-planner helpers
 # =============================================================================
 
 

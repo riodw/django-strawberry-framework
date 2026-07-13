@@ -33,8 +33,8 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Iterable, MutableSequence, Sequence
-from dataclasses import dataclass, field, replace
-from typing import Any
+from dataclasses import dataclass, field, fields, replace
+from typing import Any, ClassVar
 
 from django.core.exceptions import FieldDoesNotExist
 from django.db.models import Count, Prefetch, Q, Window
@@ -149,11 +149,9 @@ class OptimizationPlan:
     swapped to tuples, so ``plan.prefetch_related.append(...)`` after
     handoff raises ``AttributeError``; the three ``finalized_*`` metadata fields
     are swapped to frozensets. The ``cacheable`` bool remains a plain settable
-    attribute and its post-handoff immutability is a convention enforced by the
-    single writer ``walker.py::plan_optimizations`` (pre-finalize only).
-    Trigger to move ``OptimizationPlan`` to ``@dataclass(frozen=True)``: a
-    second writer that flips ``cacheable`` lands, or a cache-poisoning incident
-    surfaces a post-finalize mutation.
+    attribute and its post-handoff immutability is a construction-time
+    convention. ``merge_from`` / ``merge_metadata_from`` reject finalized plans,
+    so the extracted nested planner cannot reopen a handed-off plan.
     """
 
     select_related: Sequence[str] = field(default_factory=_indexed_list)
@@ -188,6 +186,21 @@ class OptimizationPlan:
     metadata); mutated only during walker construction, matching the
     ``cacheable`` single-writer convention.
     """
+
+    _FULL_MERGE_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {
+            "select_related",
+            "prefetch_related",
+            "only_fields",
+            "select_path_resolver_keys",
+        },
+    )
+    _METADATA_MERGE_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"fk_id_elisions", "planned_resolver_keys", "cacheable"},
+    )
+    _DERIVED_FINALIZED_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"finalized_fk_id_elisions", "finalized_planned_resolver_keys", "finalized_lookup_paths"},
+    )
     finalized_fk_id_elisions: frozenset[str] | None = None
     """Frozen membership set for ``fk_id_elisions`` after ``finalize()``."""
     finalized_planned_resolver_keys: frozenset[str] | None = None
@@ -276,6 +289,72 @@ class OptimizationPlan:
         if self.prefetch_related:
             queryset = queryset.prefetch_related(*self.prefetch_related)
         return queryset
+
+    def merge_from(self, other: OptimizationPlan) -> None:
+        """Merge one accepted construction-time plan into this plan.
+
+        This is the single full-plan commit operation for transactional planner
+        boundaries. Every mutable directive and its coupled construction-time
+        metadata is merged here; the derived ``finalized_*`` fields are
+        deliberately excluded because both plans must still be under
+        construction. A strategy or component builds into an isolated plan,
+        then calls this method exactly once only after accepting its work.
+        """
+        self._assert_under_construction()
+        other._assert_under_construction()
+        append_unique_many(self.select_related, other.select_related)
+        for prefetch in other.prefetch_related:
+            append_prefetch_unique(self.prefetch_related, prefetch)
+        append_unique_many(self.only_fields, other.only_fields)
+        self.merge_metadata_from(other)
+        for path, resolver_keys in other.select_path_resolver_keys.items():
+            merged = list(self.select_path_resolver_keys.get(path, ()))
+            append_unique_many(merged, resolver_keys)
+            self.select_path_resolver_keys[path] = tuple(merged)
+
+    def merge_metadata_from(self, other: OptimizationPlan) -> None:
+        """Merge accepted child-queryset metadata without its query directives.
+
+        Child plans apply ``select_related`` / ``prefetch_related`` /
+        ``only_fields`` to their own queryset before handoff. Only resolver
+        metadata and cacheability belong on the root plan, so this narrower
+        operation keeps that ownership distinction explicit while sharing the
+        same centralized field handling as ``merge_from``.
+        """
+        self._assert_merge_field_inventory()
+        self._assert_under_construction()
+        other._assert_under_construction()
+        append_unique_many(self.fk_id_elisions, other.fk_id_elisions)
+        append_unique_many(self.planned_resolver_keys, other.planned_resolver_keys)
+        if not other.cacheable:
+            self.cacheable = False
+
+    def _assert_under_construction(self) -> None:
+        """Reject merges after ``finalize()`` has published derived metadata."""
+        if (
+            self.finalized_fk_id_elisions is not None
+            or self.finalized_planned_resolver_keys is not None
+            or self.finalized_lookup_paths is not None
+        ):
+            raise RuntimeError("OptimizationPlan merges are construction-time operations.")
+
+    @classmethod
+    def _assert_merge_field_inventory(cls) -> None:
+        """Require every dataclass field to have explicit merge ownership."""
+        actual = frozenset(item.name for item in fields(cls))
+        classified = (
+            cls._FULL_MERGE_FIELDS | cls._METADATA_MERGE_FIELDS | cls._DERIVED_FINALIZED_FIELDS
+        )
+        if actual != classified:
+            missing = sorted(actual - classified)
+            stale = sorted(classified - actual)
+            raise RuntimeError(
+                "OptimizationPlan merge field inventory drifted; "
+                f"unclassified={missing}, stale={stale}.",
+            )
+
+
+OptimizationPlan._assert_merge_field_inventory()
 
 
 def resolver_key(parent_type: type | None, field_name: str, runtime_path: tuple[str, ...]) -> str:
@@ -665,8 +744,8 @@ def order_entry_name_and_direction(entry: Any) -> tuple[str, bool] | None:
     expression with no resolvable name, a bare ``"-"`` - returns ``None`` and
     the caller decides its fallback posture.
 
-    Shared by the walker's order-column projection
-    (``walker.py::_order_entry_field_name``), the unique-terminal check
+    Shared by the nested planner's order-column projection
+    (``nested_planner.py::_order_entry_field_name``), the unique-terminal check
     (``ends_in_unique_column`` below), and the lateral backend's column
     resolution (``lateral_fetch.py::_order_columns``); historically each
     spelled its own parse and two disagreed on dash stripping.
@@ -729,8 +808,8 @@ def deterministic_order(effective: tuple, model: type) -> tuple:
 
     The effective ordering with the model pk appended as a terminal tiebreaker
     UNLESS it already ends in a unique column (``ends_in_unique_column``). One
-    source for both the plan-time window ``order_by`` (the walker's
-    ``_plan_connection_relation``) and the resolve-time pipeline
+    source for both the plan-time window ``order_by``
+    (``nested_planner.py::plan_connection_relation``) and the resolve-time pipeline
     (``connection.py::_finalize_queryset``) so window row numbers can never drift
     from fallback-path cursors (spec-033 Decision 11, the cursor-parity
     invariant).
@@ -760,7 +839,7 @@ def window_partition_for_prefetch(field: Any) -> str:
     Takes the RAW Django relation field (not a ``FieldMeta``): the forward-M2M
     reverse query name lives only on ``field.remote_field`` and is not carried on
     ``FieldMeta``. Raises ``OptimizerError`` for a single-valued forward relation
-    or any kind without a windowable partition, so ``_plan_connection_relation``
+    or any kind without a windowable partition, so ``plan_connection_relation``
     leaves the selection unplanned and falls back per-parent rather than guessing.
 
     A thin shim over ``optimizer/join_taxonomy.py::classify_relation_join``
@@ -814,11 +893,11 @@ def apply_window_pagination(
 
     ``with_total_count`` is the conditional-count contract (connection window
     rigor, workstream B; the MrThearMan-optimizer lesson): the per-partition
-    count costs on every row, so the walker passes ``False`` when nothing in the
+    count costs on every row, so the nested planner passes ``False`` when nothing in the
     selection can observe the count - and, via the count-free ``hasNextPage``
     probe, ALSO when a plain ``first: N`` page selects only ``hasNextPage`` (not
     ``totalCount``), which overfetches an n+1 sentinel instead (``next_page_probe``
-    below). The walker computes the ``totalCount`` and ``hasNextPage`` observers
+    below). The nested planner computes the ``totalCount`` and ``hasNextPage`` observers
     SEPARATELY and applies that probe exception rather than gating on the combined
     ``selections.py::connection_count_required`` observability predicate; the two
     fetch modes are mutually exclusive by construction (enforced by
@@ -881,7 +960,7 @@ def apply_window_pagination(
       ABSOLUTE first row (``_dst_row_number_abs == 1``) since page-relative
       ``rn == 1`` only exists when the page itself is non-empty.
 
-    Reversed keyset windows are not planned in v1 (the walker's fallback
+    Reversed keyset windows are not planned in v1 (the nested planner's fallback
     discipline routes ``last`` / ``before:`` keyset shapes per-parent), so
     ``keyset_seek`` + ``reverse`` raises the loud ``OptimizerError``.
     """

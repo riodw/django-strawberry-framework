@@ -70,6 +70,11 @@ from .keyset import (
 )
 from .list_field import _validate_relay_djangotype_target
 from .optimizer.extension import apply_connection_optimization
+from .optimizer.nested_planner import (
+    _extend_only_projection,
+    _relation_connection_to_attr,
+    _relation_connection_to_attr_for_key,
+)
 from .optimizer.plans import (
     WINDOW_KEYSET_SEEK_COUNT,
     WINDOW_ROW_NUMBER,
@@ -82,11 +87,6 @@ from .optimizer.selections import (
     connection_has_next_page_selected,
     connection_total_count_selected,
     prime_selected_fields,
-)
-from .optimizer.walker import (
-    _extend_only_projection,
-    _relation_connection_to_attr,
-    _relation_connection_to_attr_for_key,
 )
 from .registry import register_subsystem_clear
 from .types.resolvers import _check_n1

@@ -1,6 +1,6 @@
 # DRY review: `django_strawberry_framework/conf.py`
 
-Status: fix-implemented
+Status: verified
 
 ## System trace
 
@@ -253,3 +253,35 @@ Validation:
 The correction changes no shipped behavior and does not merit a changelog entry. `CHANGELOG.md` was
 not edited. The item is ready for Worker 3's independent verification; Worker 2 has not marked the
 plan item.
+
+### Worker 3 final verification
+
+Verified. The callable-setting contract independently re-traces from
+`conf.py::relay_globalid_strategy_setting` through
+`types/relay.py::_resolve_globalid_strategy` to the shared
+`types/base.py::_validate_globalid_strategy`: the setting accepts the three named strategies or a
+synchronous four-argument callable, freezes the result at schema finalization, and leaves callable
+strategies encode-only. The existing acceptance, wrong-arity, async-function, async-callable-object,
+and partial-wrapped-async-callable tests all passed (`5 passed`); the complete settings-boundary
+file also passed (`40 passed`), both with `--no-cov`.
+
+The authoritative SQLite row 519 now states that schema-wide callable contract accurately, and
+`PRAGMA integrity_check` returned `ok`. Two fresh renders through
+`scripts/build_glossary_md.py` were byte-identical to each other and to `docs/GLOSSARY.md`
+(`2a18964301cfcd8e2e94835d8938c199e2d0d7c70ec9753d0f41d6b611f86aa1`), proving the standing
+document is the deterministic canonical projection rather than a hand edit. The stale
+“a callable is per-type only” claim is absent.
+
+`examples/fakeshop/config/settings.py` still supplies an empty
+`DJANGO_STRAWBERRY_FRAMEWORK` mapping and its comment now describes only stable local intent:
+fakeshop exercises package defaults while focused tests override individual settings. The stale
+“No settings yet” inventory claim is absent, and the scoped diff passes `git diff --check`.
+
+The complete item-scoped delta from
+`25407ae81b8f6bbb4d437fa2f9be38bd0d7af10a` is limited to glossary row 519 and its rendered
+`RELAY_GLOBALID_STRATEGY` paragraphs, the stable-intent example comment, and this preserved DRY
+record/plan routing. The database/render correction is already in `77370fa1`; the example comment
+remains in the worktree. Glossary rows 488–489, the corresponding ordering-documentation hunk in
+that shared commit, and all other dirty/untracked files are concurrent adjacent work and are not
+absorbed into this item. No production fix or permanent test changed for the revision. No further
+Worker 1 or Worker 2 return is required.

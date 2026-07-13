@@ -305,6 +305,52 @@ Executed operations add `extensions["debug"]` with `sql` and `exceptions` lists.
 
 Never enable this extension on an internet-facing production schema: it returns interpolated SQL values and unmasked exception messages and tracebacks. See the [`DjangoDebugExtension` glossary entry][glossary-djangodebugextension] for the complete payload and lifecycle contract.
 
+## Testing GraphQL endpoints
+
+Import the sync or async HTTP helper from `django_strawberry_framework.testing`. Both drive
+Django's in-process test client, decode the GraphQL response, and return a typed
+`Response` carrying `errors`, `data`, `extensions`, and the raw Django response:
+
+```python
+from django_strawberry_framework.testing import TestClient
+
+
+def test_items():
+    response = TestClient().query("{ allItems(first: 1) { edges { node { name } } } }")
+
+    assert response.errors is None
+    assert response.response.status_code == 200
+```
+
+Endpoint selection follows this precedence order:
+
+1. Per-call `query(..., url=...)`.
+2. `TestClient(path=...)` / `AsyncTestClient(path=...)`.
+3. `GraphQLTestMixin.GRAPHQL_URL` for the unittest family.
+4. `DJANGO_STRAWBERRY_FRAMEWORK["TESTING_ENDPOINT"]`.
+5. `"/graphql/"`.
+
+The constructor and class-attribute rungs belong to their respective client flavors; both
+outrank the project setting, and a per-call URL outranks every stored choice without mutating
+it.
+
+The two flavors intentionally have different error-assertion defaults. `TestClient.query()`
+and `AsyncTestClient.query()` default to `assert_no_errors=True` and raise `AssertionError`
+when the GraphQL response carries `errors`. `GraphQLTestMixin.query()` defaults to
+`assert_no_errors=False`, returning the response so unittest-style tests can call
+`assertResponseNoErrors()` or `assertResponseHasErrors()`. Pass the flag explicitly when a
+test switches styles.
+
+An endpoint typo is a transport misconfiguration, not a GraphQL error. The client deliberately
+does not wrap it: Django returns an HTML 404, then `response.json()` raises `ValueError` naming
+the non-JSON `Content-Type`. If the response declares JSON but contains malformed JSON,
+`json.JSONDecodeError` surfaces instead. Check the endpoint and URLconf rather than catching
+either error as an application-level GraphQL result.
+
+See the [`TestClient`][glossary-testclient] and
+[`GraphQLTestCase`][glossary-graphqltestcase] glossary entries for multipart uploads,
+authentication brackets, async usage, and the complete unittest-family contract.
+
 ## Running the example project
 
 The repository ships with a fakeshop example project that exercises the shipped surface against a real Django app.
@@ -421,6 +467,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-djangomutation]: GLOSSARY.md#djangomutation
 [glossary-djangonodefield]: GLOSSARY.md#djangonodefield
 [glossary-filterset]: GLOSSARY.md#filterset
+[glossary-graphqltestcase]: GLOSSARY.md#graphqltestcase
 [glossary-metaglobalid_strategy]: GLOSSARY.md#metaglobalid_strategy
 [glossary-metanullable_overrides]: GLOSSARY.md#metanullable_overrides
 [glossary-inspect-django-type]: GLOSSARY.md#schema-introspection-management-command
@@ -431,6 +478,7 @@ For status, the milestone roadmap, and contributor signposts, see [`../README.md
 [glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
 [glossary-schema-export-management-command]: GLOSSARY.md#schema-export-management-command
 [glossary-serializermutation]: GLOSSARY.md#serializermutation
+[glossary-testclient]: GLOSSARY.md#testclient
 [glossary-upload-scalar]: GLOSSARY.md#upload-scalar
 
 <!-- docs/SPECS/ -->

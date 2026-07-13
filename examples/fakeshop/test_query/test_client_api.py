@@ -1,29 +1,34 @@
 """Live GraphQL HTTP acceptance tests for the spec-043 test-client family.
 
 The request-driving half of ``testing/client.py``'s coverage: every case here
-posts a real operation to fakeshop's ``/graphql/`` through the package's own
-``TestClient`` / ``AsyncTestClient`` / ``GraphQLTestCase`` family, so the live
-behaviour is earned live per the ``test_query/README.md`` coverage rule and
-AGENTS.md's live-first mandate. The DB-free mechanics - endpoint precedence, the
-owned builder's path-keyed map rule and placeholder guard, the assertion-helper
-failure directions against canned responses, and the export / collection guards
-- stay in the package tier at ``tests/testing/test_client.py``.
+posts through Django's real fakeshop URLconf (the live ``/graphql/`` endpoint or
+an intentional missing-endpoint probe) using the package's own ``TestClient`` /
+``AsyncTestClient`` / ``GraphQLTestCase`` family, so the live behaviour is
+earned live per the ``test_query/README.md`` coverage rule and AGENTS.md's
+live-first mandate. The DB-free mechanics - endpoint precedence, the owned
+builder's path-keyed map rule and placeholder guard, the assertion-helper
+failure directions against canned responses, and the export / collection
+guards - stay in the package tier at ``tests/testing/test_client.py``.
 
 Covered live here: the ``assert_no_errors=True`` raising direction on a real
-invalid selection; the ``AsyncTestClient`` happy path (awaited transport, async
-decode), its ``login()`` bracket, and its nested two-file multipart upload (the
-async color of ``test_uploads_api.py``'s sync upload, so the DoD's "multipart
-... on both clients" is earned live on both); and the unittest family end to end
-(``self.query(...)``, both assertion helpers' PASSING directions, the per-call
-and ``GRAPHQL_URL`` endpoint rungs against a real view, and the
-``TransactionTestCase`` combination). The sync ``login()`` bracket and
-``operation_name`` dispatch are earned live in ``test_products_api.py``.
+invalid selection; the source-level non-JSON ``ValueError`` from a real 404 on
+both transport colors; the ``AsyncTestClient`` happy path (awaited transport,
+async decode), its ``login()`` bracket, and its nested two-file multipart
+upload (the async color of ``test_uploads_api.py``'s sync upload, so the DoD's
+"multipart ... on both clients" is earned live on both); and the unittest
+family end to end (``self.query(...)``, both assertion helpers' PASSING
+directions, the per-call and ``GRAPHQL_URL`` endpoint rungs against a real
+view, and the ``TransactionTestCase`` combination). The sync ``login()``
+bracket and ``operation_name`` dispatch are earned live in
+``test_products_api.py``.
 
-The async tests depend on ``transactional_db``: ``django.test.AsyncClient`` runs
-the (sync) GraphQL view on asgiref's executor thread, whose separate SQLite
-connection cannot see rows seeded inside a non-transactional test's uncommitted
-transaction; seeding happens in a sync fixture (not the async body) so the ORM
-work never runs in the event loop and raises ``SynchronousOnlyOperation``.
+The async tests that reach the GraphQL view depend on ``transactional_db``:
+``django.test.AsyncClient`` runs the sync view on asgiref's executor thread,
+whose separate SQLite connection cannot see rows seeded inside a
+non-transactional test's uncommitted transaction; seeding happens in a sync
+fixture (not the async body) so the ORM work never runs in the event loop and
+raises ``SynchronousOnlyOperation``. The missing-endpoint probe stops at
+Django's 404 handler and needs no database.
 """
 
 import io
@@ -105,7 +110,7 @@ def _png_bytes() -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# The sync client's raising direction against a real invalid selection.
+# The sync client's GraphQL-error and non-JSON transport-error shapes.
 # ---------------------------------------------------------------------------
 
 
@@ -123,6 +128,21 @@ def test_assert_no_errors_default_raises_with_the_errors_list():
     with pytest.raises(AssertionError) as excinfo:
         client.query("{ nope }")
     assert "nope" in str(excinfo.value)
+
+
+def test_wrong_configured_endpoint_surfaces_django_non_json_decode_error():
+    """A ``TESTING_ENDPOINT`` typo stays Django's source-level non-JSON ``ValueError``.
+
+    The client deliberately does not replace the transport failure with a
+    framework exception: Django's real 404 response is HTML, so
+    ``HttpResponse.json()`` names its ``text/html`` content type. This pins the
+    public troubleshooting contract against the live URLconf.
+    """
+    with override_settings(
+        DJANGO_STRAWBERRY_FRAMEWORK={"TESTING_ENDPOINT": "/missing-graphql-endpoint/"},
+    ):
+        with pytest.raises(ValueError, match="Content-Type.*text/html"):
+            TestClient().query("{ __typename }")
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +201,12 @@ async def test_async_query_happy_path_and_raise_direction(seeded_catalog):
     with pytest.raises(AssertionError) as excinfo:
         await client.query("{ nope }")
     assert "nope" in str(excinfo.value)
+
+
+async def test_async_wrong_endpoint_surfaces_the_same_non_json_decode_error():
+    """The async color preserves the sync client's source-level transport failure shape."""
+    with pytest.raises(ValueError, match="Content-Type.*text/html"):
+        await AsyncTestClient("/missing-graphql-endpoint/").query("{ __typename }")
 
 
 async def test_async_login_brackets_the_write_authorized_mutation(permitted_writer):

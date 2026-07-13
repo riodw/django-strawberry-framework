@@ -14,8 +14,12 @@ so consumers get it automatically by having
 boilerplate is required. This patch touches **production** request
 handling; like every patch the package ships it is gated by the
 ``APPLY_UPSTREAM_PATCHES`` setting (default on), so a consumer can opt
-out with ``DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES":
-False}``. See
+out globally with ``DJANGO_STRAWBERRY_FRAMEWORK =
+{"APPLY_UPSTREAM_PATCHES": False}`` or for this dependency alone with
+``{"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}`` (note the
+companion ``cross_web`` patch routes the sync transport's bytes into
+``parse_json``, so disabling only one of the pair leaves the sync
+transport's malformed-body hardening incomplete). See
 :func:`django_strawberry_framework.conf.upstream_patches_enabled`.
 
 The bug
@@ -64,11 +68,46 @@ unhandled ``500``. A JSON scalar is never a valid GraphQL-over-HTTP
 request body, so the wrapper rejects a parsed result that is neither a
 ``dict`` nor a ``list`` with the same ``HTTPException(400, ...)``. The
 ``list`` case is passed through so upstream's own batch validation keeps
-ownership of it. ``parse_json`` is the *only* producer of a
-scalar ``data`` that reaches ``parse_http_body`` (the GET
-``parse_query_params`` and ``parse_multipart`` paths always return a
-``dict``), so the one-site fix covers the sync and async views together,
-exactly as the ``UnicodeDecodeError`` widening does.
+ownership of it.
+
+Unlike the ``UnicodeDecodeError`` widening (which is correct wherever
+``parse_json`` runs), the scalar guard is a request-*body* contract
+grafted onto a generic JSON helper, so it fires at every ``parse_json``
+call site in the installed strawberry - nine in total, though one is
+unreachable (``AsyncBaseHTTPView.parse_multipart_subscriptions`` is
+defined but never called anywhere in the installed 0.316.0 package, so
+its body parse is dead code today; eight sites are reachable):
+
+- the sync and async POST-body sites (``sync_base_view.py`` /
+  ``async_base_view.py``) the guard was designed for, plus the async
+  multipart-subscriptions body (the dead-code site above): guard
+  correct;
+- the sync and async multipart ``operations`` / ``map`` form fields:
+  the guard *widens* behavior beneficially - a scalar ``operations`` or
+  ``map`` previously escaped ``replace_placeholders_with_files`` /
+  ``data.get("query")`` as an unhandled ``500`` and now gets the
+  controlled ``400``;
+- the GET ``variables`` / ``extensions`` parses inside
+  ``BaseView.parse_query_params`` (``base.py``): the guard is WRONG
+  here. Upstream's own downstream handling in ``parse_http_body`` is
+  precise (``null`` -> ``None`` -> the request executes; a scalar ->
+  a per-param ``400``), so an unshielded guard breaks a valid request
+  (``?variables=null`` regressing 200 -> 400) and shadows upstream's
+  per-param message with a "request body" message on a bodyless GET.
+
+The two GET sites are therefore shielded: :func:`apply` also installs
+:func:`_patched_parse_query_params`, a source-pinned reimplementation
+of upstream's ``parse_query_params`` whose two nested parses call the
+captured ``_original_parse_json`` directly, restoring exact upstream
+GET semantics while the wrapper keeps hardening the seven
+body/multipart sites. Because the shield is a *reimplementation* rather
+than a delegating wrapper, ``_validate_upstream_shape`` pins the
+superseded upstream body source (the reimplementer's contract
+established by
+``_django_patches._UPSTREAM_REMOVE_DATABASES_FAILURES_SOURCE``) so an
+upstream body change fails loudly at ``apply()`` time instead of being
+silently superseded. The shield shares the scalar guard's lifecycle:
+retire both together when upstream #3398 lands.
 
 Upstream status
 ---------------
@@ -149,6 +188,10 @@ whether this patch is still required:
    (gap 2) on the current ``main``. The latest published version is at
    ``https://pypi.org/pypi/strawberry-graphql/json`` (``info.version``).
 
+The ``parse_query_params`` shield has no upstream bug of its own to
+track - it exists purely to keep the gap-2 guard off the GET path - so
+it retires in the same change that retires the scalar guard.
+
 Surface visibility
 ------------------
 
@@ -159,6 +202,7 @@ the AppConfig.
 """
 
 import inspect
+import textwrap
 from typing import Any
 
 from .conf import upstream_patches_enabled
@@ -173,19 +217,75 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     HTTPException = None  # type: ignore[assignment,misc]
 
 
-# Capture the genuine upstream ``parse_json`` once, at import time, before
-# ``apply()`` can install our wrapper. The wrapper delegates to this so a
-# self-healing re-install never wraps a wrapper.
+# Capture the genuine upstream methods once, at import time, before ``apply()``
+# can install our replacements. ``_patched_parse_json`` delegates to the
+# captured ``parse_json`` (so a self-healing re-install never wraps a wrapper),
+# and ``_patched_parse_query_params`` routes its nested parses through the same
+# captured original to keep the scalar guard off the GET path.
 _original_parse_json = None if BaseView is None else BaseView.__dict__.get("parse_json")
+_original_parse_query_params = (
+    None if BaseView is None else BaseView.__dict__.get("parse_query_params")
+)
+
+
+# The exact upstream body :func:`_patched_parse_query_params` supersedes
+# (verbatim at strawberry-graphql 0.316.0, dedented). Because the shield
+# REIMPLEMENTS upstream's body instead of wrapping and delegating to it, an
+# upstream body change does not flow through the patch the way it does for
+# the delegating ``parse_json`` wrapper. ``_validate_upstream_shape``
+# therefore pins this source so any upstream body change - new query params,
+# changed falsy-skip semantics, or different parse routing - fails loudly at
+# apply() time instead of being silently superseded.
+_UPSTREAM_PARSE_QUERY_PARAMS_SOURCE = textwrap.dedent(
+    """\
+    def parse_query_params(self, params: QueryParams) -> dict[str, Any]:
+        params = dict(params)
+
+        if "variables" in params:
+            variables = params["variables"]
+
+            if variables:
+                params["variables"] = self.parse_json(variables)
+
+        if "extensions" in params:
+            extensions = params["extensions"]
+
+            if extensions:
+                params["extensions"] = self.parse_json(extensions)
+
+        return params
+    """,
+)
 
 
 def _validate_upstream_shape() -> None:
-    """Fail loudly when Strawberry no longer exposes the method shape we wrap."""
-    if BaseView is None or HTTPException is None or not callable(_original_parse_json):
+    """Fail loudly when Strawberry no longer exposes the method shapes we patch.
+
+    Two patched methods, two validation depths (delegators pin the call
+    shape, reimplementers pin the body - the ``_django_patches``
+    precedent):
+
+    - ``parse_json`` is wrapped and delegated to, so only the captured
+      delegation target's presence and ``(self, data)`` arity are
+      pinned; upstream body changes flow through the delegated call.
+    - ``parse_query_params`` is reimplemented, so on top of presence and
+      the ``(self, params)`` arity the captured original's body source
+      is pinned against ``_UPSTREAM_PARSE_QUERY_PARAMS_SOURCE``.
+      Unreadable source (e.g. a bytecode-only distribution) is treated
+      as drift: an unverifiable body must not be silently superseded.
+    """
+    if (
+        BaseView is None
+        or HTTPException is None
+        or not callable(_original_parse_json)
+        or not callable(_original_parse_query_params)
+    ):
         raise RuntimeError(
             "Cannot apply django-strawberry-framework's Strawberry patch: expected "
-            "strawberry.http.base.BaseView.parse_json and cross_web.HTTPException. "
-            "Disable APPLY_UPSTREAM_PATCHES or use supported dependency versions.",
+            "strawberry.http.base.BaseView.parse_json, BaseView.parse_query_params, "
+            "and cross_web.HTTPException. "
+            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"strawberry": False} '
+            "or use supported dependency versions.",
         )
     parameters = tuple(inspect.signature(_original_parse_json).parameters.values())
     if len(parameters) != 2 or any(
@@ -194,7 +294,30 @@ def _validate_upstream_shape() -> None:
         raise RuntimeError(
             "Cannot apply django-strawberry-framework's Strawberry patch: "
             "BaseView.parse_json no longer has the expected (self, data) signature. "
-            "Disable APPLY_UPSTREAM_PATCHES or use a supported Strawberry version.",
+            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"strawberry": False} '
+            "or use a supported Strawberry version.",
+        )
+    parameters = tuple(inspect.signature(_original_parse_query_params).parameters.values())
+    if len(parameters) != 2 or any(
+        parameter.kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD for parameter in parameters
+    ):
+        raise RuntimeError(
+            "Cannot apply django-strawberry-framework's Strawberry patch: "
+            "BaseView.parse_query_params no longer has the expected (self, params) signature. "
+            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"strawberry": False} '
+            "or use a supported Strawberry version.",
+        )
+    try:
+        source = textwrap.dedent(inspect.getsource(_original_parse_query_params))
+    except (OSError, TypeError):
+        source = None
+    if source != _UPSTREAM_PARSE_QUERY_PARAMS_SOURCE:
+        raise RuntimeError(
+            "Cannot apply django-strawberry-framework's Strawberry patch: "
+            "BaseView.parse_query_params no longer matches the upstream body "
+            "this patch supersedes. "
+            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"strawberry": False} '
+            "or use a supported Strawberry version.",
         )
 
 
@@ -214,14 +337,20 @@ def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
        untouched so upstream's own batch validation
        (``_validate_batch_request``) still runs and owns that path.
 
-    ``parse_json`` is the sole producer of a non-object/non-array ``data``
-    reaching ``parse_http_body`` (GET ``parse_query_params`` and
-    ``parse_multipart`` always return a ``dict``), so guarding it here
-    fixes the body path for both the sync and async views from the single
-    method they both inherit - the same one-site rationale as the
-    ``UnicodeDecodeError`` widening. Every other outcome - a successful
-    object/array parse, or any other exception - is passed through
-    untouched.
+    The scalar guard is a request-*body* contract enforced from a generic
+    JSON helper, so it fires at every upstream ``parse_json`` call site
+    (nine, one of them dead code at 0.316.0; see the module docstring's
+    inventory): correct at the seven body/multipart sites (at the
+    multipart sites it converts an upstream scalar-``operations``/``map``
+    ``500`` into this ``400``), and deliberately kept OFF the two GET
+    sites inside
+    ``parse_query_params``, which :func:`_patched_parse_query_params`
+    routes through the captured original so upstream's own per-param
+    handling keeps ownership there. Both views inherit the single
+    ``BaseView`` method, so one install covers sync and async - the same
+    one-site rationale as the ``UnicodeDecodeError`` widening. Every
+    other outcome - a successful object/array parse, or any other
+    exception - is passed through untouched.
     """
     try:
         parsed = _original_parse_json(self, data)
@@ -236,33 +365,95 @@ def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
     return parsed
 
 
+def _patched_parse_query_params(self: Any, params: Any) -> "dict[str, Any]":
+    """Source-pinned reimplementation of ``BaseView.parse_query_params``.
+
+    Byte-for-byte upstream semantics (the superseded body is pinned as
+    ``_UPSTREAM_PARSE_QUERY_PARAMS_SOURCE``) except that the two nested
+    ``self.parse_json`` calls go through the captured
+    ``_original_parse_json`` instead of the patched method. That keeps
+    :func:`_patched_parse_json`'s scalar guard - a request-*body*
+    contract - out of the GET query-param path, where upstream's
+    ``parse_http_body`` has its own precise handling downstream:
+
+    - ``variables=null`` / ``extensions=null`` parse to ``None`` and the
+      request executes (valid "object or null" values per upstream);
+    - a scalar param (``variables=42``) parses and then gets upstream's
+      per-param ``400`` ("must be an object or null, if provided"),
+      not the guard's request-body message on a bodyless GET;
+    - malformed JSON still becomes upstream's ``HTTPException(400,
+      ...)``, raised inside the delegated original. Gap 1 is moot on
+      this path: query params arrive as ``str`` (Django has already
+      decoded the query string), so ``json.loads`` cannot raise
+      ``UnicodeDecodeError`` here.
+
+    An empty-string param is left unparsed (upstream's falsy skip),
+    exactly as upstream leaves it. Installed by :func:`apply` alongside
+    :func:`_patched_parse_json`; both live on ``BaseView`` so the sync
+    and async views share them.
+    """
+    params = dict(params)
+
+    if "variables" in params:
+        variables = params["variables"]
+
+        if variables:
+            params["variables"] = _original_parse_json(self, variables)
+
+    if "extensions" in params:
+        extensions = params["extensions"]
+
+        if extensions:
+            params["extensions"] = _original_parse_json(self, extensions)
+
+    return params
+
+
 def _patch_is_installed() -> bool:
-    """Return ``True`` iff ``BaseView.parse_json`` currently points at our wrapper."""
-    return BaseView is not None and BaseView.__dict__.get("parse_json") is _patched_parse_json
+    """Return ``True`` iff both patched methods currently point at our replacements.
+
+    A partial install (a third party reverted one of the two methods)
+    reports ``False`` so the next ``apply()`` re-installs the pair
+    together - the scalar guard must never run without its GET shield.
+    """
+    return (
+        BaseView is not None
+        and BaseView.__dict__.get("parse_json") is _patched_parse_json
+        and BaseView.__dict__.get("parse_query_params") is _patched_parse_query_params
+    )
 
 
 def apply() -> None:
-    """Apply the Strawberry defensive patch shipped by the package.
+    """Apply the Strawberry defensive patches shipped by the package.
 
-    Idempotent and self-healing: re-entrant calls are no-ops when the
-    patch is still installed, and re-install the patch if a third party
-    reverted ``BaseView.parse_json`` since the prior call. Called from
+    Installs :func:`_patched_parse_json` (the two-gap body hardening) and
+    :func:`_patched_parse_query_params` (the GET shield that keeps the
+    scalar guard off upstream's query-param parses) as a pair.
+
+    Idempotent and self-healing: re-entrant calls are no-ops when both
+    patches are still installed, and re-install the pair if a third
+    party reverted either method since the prior call. Called from
     :meth:`django_strawberry_framework.apps.DjangoStrawberryFrameworkConfig.ready`
     at Django startup.
 
     No-ops in two cases:
 
-    - The ``APPLY_UPSTREAM_PATCHES`` setting is ``False`` (consumer
-      opted out). Returns before logging or touching anything.
-    - The patch is already installed (re-entrant call).
+    - The ``APPLY_UPSTREAM_PATCHES`` setting disables the patches
+      globally (``False``) or for the ``"strawberry"`` dependency
+      (``{"strawberry": False}``). Returns before touching anything.
+    - Both patches are already installed (re-entrant call).
 
-    Before installation, validates the imported symbols and the original
-    ``(self, data)`` signature. Dependency drift raises a targeted
-    ``RuntimeError`` instead of silently dropping the request hardening.
+    Before installation, validates the imported symbols, the delegated
+    ``parse_json``'s ``(self, data)`` signature, and the superseded
+    ``parse_query_params`` body source (see
+    :func:`_validate_upstream_shape`). Dependency drift raises a
+    targeted ``RuntimeError`` instead of silently dropping the request
+    hardening.
     """
-    if not upstream_patches_enabled():
+    if not upstream_patches_enabled("strawberry"):
         return
     _validate_upstream_shape()
     if _patch_is_installed():
         return
     BaseView.parse_json = _patched_parse_json
+    BaseView.parse_query_params = _patched_parse_query_params

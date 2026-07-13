@@ -10,7 +10,12 @@ The patch is applied once from
 so consumers get it automatically by having
 ``"django_strawberry_framework"`` in ``INSTALLED_APPS``. It touches
 **production** request handling, so it is gated by the
-``APPLY_UPSTREAM_PATCHES`` setting (default on); see
+``APPLY_UPSTREAM_PATCHES`` setting (default on): opt out globally with
+``False`` or for this dependency alone with the mapping shape
+``{"APPLY_UPSTREAM_PATCHES": {"cross_web": False}}`` (note this patch
+and the companion Strawberry patch jointly own the sync transport's
+malformed-body hardening, so disabling only one of the pair leaves it
+incomplete). See
 :func:`django_strawberry_framework.conf.upstream_patches_enabled`.
 
 The bug
@@ -28,8 +33,11 @@ directly, and the **async** adapter (``AsyncDjangoHTTPRequestAdapter``)
 already hands Strawberry the raw bytes without decoding. This patch
 brings the sync adapter in line with that contract: when the body
 decodes cleanly it is returned unchanged (byte-for-byte identical to
-upstream), and only the previously-``500``-ing case changes - the raw
-bytes are handed back instead, so ``parse_json`` raises
+upstream), and only the previously-``500``-ing cases change - the raw
+bytes are handed back instead and behave exactly as on the async
+transport. A JSON-decodable non-UTF-8 encoding (UTF-16/UTF-32, which
+``json.loads`` detects per RFC 8259) now parses and the request
+*succeeds*; anything else makes ``parse_json`` raise
 ``UnicodeDecodeError`` from ``json.loads``, which the companion
 :mod:`django_strawberry_framework._strawberry_patches` patch turns into
 a clean ``HTTPException(400, ...)``.
@@ -113,16 +121,13 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
     DjangoHTTPRequestAdapter = None  # type: ignore[assignment,misc]
 
 
-def _original_body_fget(
-    adapter: Any,
-) -> Any:  # pragma: no cover - replaced below when symbol present
-    """Placeholder; rebound to the upstream ``body`` getter at import time."""
-    raise NotImplementedError
-
-
 # Capture the genuine upstream ``body`` getter once, at import time,
 # before ``apply()`` can install our wrapper. The wrapper delegates to
-# this so a self-healing re-install never wraps a wrapper.
+# this so a self-healing re-install never wraps a wrapper. Stays ``None``
+# (the same missing-shape sentinel the sibling patch modules use) when the
+# adapter symbol or the readable ``body`` property is absent at import, so
+# ``apply()`` refuses to install a wrapper with nothing to delegate to.
+_original_body_fget = None
 if DjangoHTTPRequestAdapter is not None:
     _descriptor = DjangoHTTPRequestAdapter.__dict__.get("body")
     if isinstance(_descriptor, property) and _descriptor.fget is not None:
@@ -130,32 +135,35 @@ if DjangoHTTPRequestAdapter is not None:
 
 
 def _validate_upstream_shape() -> None:
-    """Fail loudly when cross_web no longer exposes the property shape we wrap."""
+    """Fail loudly when cross_web no longer exposes the property shape we wrap.
+
+    Validates the delegation target: ``_patched_body`` delegates to the
+    import-time-captured ``_original_body_fget``, so that captured getter -
+    not the live descriptor, which the wrapper never calls - is the shape a
+    broken install would actually expose. The live descriptor is only read
+    by :func:`_patch_is_installed`.
+    """
     if DjangoHTTPRequestAdapter is None:
         raise RuntimeError(
             "Cannot apply django-strawberry-framework's cross_web patch: expected "
-            "cross_web.DjangoHTTPRequestAdapter. Disable APPLY_UPSTREAM_PATCHES or use a "
+            "cross_web.DjangoHTTPRequestAdapter. Disable this patch with "
+            'APPLY_UPSTREAM_PATCHES = {"cross_web": False} or use a '
             "supported cross_web version.",
         )
-    descriptor = DjangoHTTPRequestAdapter.__dict__.get("body")
-    if _patch_is_installed():
-        function = _original_body_fget
-    elif isinstance(descriptor, property):
-        function = descriptor.fget
-    else:
-        function = None
-    if function is None:
+    if _original_body_fget is None:
         raise RuntimeError(
             "Cannot apply django-strawberry-framework's cross_web patch: "
             "DjangoHTTPRequestAdapter.body is no longer a readable property. "
-            "Disable APPLY_UPSTREAM_PATCHES or use a supported cross_web version.",
+            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"cross_web": False} '
+            "or use a supported cross_web version.",
         )
-    parameters = tuple(inspect.signature(function).parameters.values())
+    parameters = tuple(inspect.signature(_original_body_fget).parameters.values())
     if len(parameters) != 1 or parameters[0].kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD:
         raise RuntimeError(
             "Cannot apply django-strawberry-framework's cross_web patch: "
             "DjangoHTTPRequestAdapter.body no longer has the expected (self) getter signature. "
-            "Disable APPLY_UPSTREAM_PATCHES or use a supported cross_web version.",
+            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"cross_web": False} '
+            "or use a supported cross_web version.",
         )
 
 
@@ -164,10 +172,12 @@ def _patched_body(self: Any) -> "str | bytes":
 
     Delegates to the upstream getter; when it raises
     ``UnicodeDecodeError`` (the body is not valid UTF-8) the raw
-    ``self.request.body`` bytes are returned instead. ``json.loads``
-    accepts bytes, so Strawberry's ``parse_json`` handles them and
-    raises a controlled ``400`` (via the Strawberry patch) rather than
-    letting the decode crash escape as a ``500``.
+    ``self.request.body`` bytes are returned instead - the async
+    adapter's existing contract. ``json.loads`` accepts bytes and
+    detects UTF-16/UTF-32 per RFC 8259, so a JSON-decodable non-UTF-8
+    body now succeeds, and anything undecodable gets a controlled
+    ``400`` from Strawberry's ``parse_json`` (via the Strawberry patch)
+    rather than letting the decode crash escape as a ``500``.
     """
     try:
         return _original_body_fget(self)
@@ -186,12 +196,14 @@ def _patch_is_installed() -> bool:
 def apply() -> None:
     """Apply the ``cross_web`` defensive patch shipped by the package.
 
-    Idempotent and self-healing, gated by ``APPLY_UPSTREAM_PATCHES``. Before
-    installation it validates the adapter, property descriptor, and ``(self)``
-    getter signature; dependency drift raises instead of silently disabling the
-    request hardening.
+    Idempotent and self-healing, gated by ``APPLY_UPSTREAM_PATCHES``
+    (globally via ``False``, or for this dependency alone via
+    ``{"cross_web": False}``). Before installation it validates the adapter
+    symbol and the captured upstream getter the wrapper delegates to
+    (presence and ``(self)`` signature); dependency drift raises instead of
+    silently disabling the request hardening.
     """
-    if not upstream_patches_enabled():
+    if not upstream_patches_enabled("cross_web"):
         return
     _validate_upstream_shape()
     if _patch_is_installed():

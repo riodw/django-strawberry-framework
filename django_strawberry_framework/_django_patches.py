@@ -8,9 +8,14 @@ them automatically by having ``"django_strawberry_framework"`` in
 ``INSTALLED_APPS`` - no opt-in boilerplate (no ``conftest.py``
 workaround, no test-case base class to inherit) is required on the
 consumer side. Like every patch the package ships, it is gated by the
-``APPLY_UPSTREAM_PATCHES`` setting (default on); a consumer who wants
+``APPLY_UPSTREAM_PATCHES`` setting (default on): a consumer who wants
 the package to apply no patches at all sets
-``DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}``. See
+``DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}``,
+and a consumer who wants to disable only this module's test-only patch
+(for example while upgrading Django ahead of the package) sets the
+per-dependency mapping ``{"APPLY_UPSTREAM_PATCHES": {"django":
+False}}``, which leaves the production request-hardening patches
+(``strawberry`` / ``cross_web``) installed. See
 :func:`django_strawberry_framework.conf.upstream_patches_enabled`.
 
 Currently implemented
@@ -106,6 +111,7 @@ AppConfig.
 """
 
 import inspect
+import textwrap
 
 from django.db import connections
 from django.test.testcases import SimpleTestCase
@@ -125,8 +131,44 @@ _original_remove_databases_failures = SimpleTestCase.__dict__.get(
 )
 
 
+# The exact upstream body this module supersedes (verbatim at Django 5.2-6.0,
+# dedented). Because :func:`_patched_remove_databases_failures` REIMPLEMENTS
+# upstream's whole loop instead of wrapping and delegating to it, an upstream
+# body change does not flow through the patch the way it does for the
+# delegating siblings (``_cross_web_patches``/``_strawberry_patches``).
+# ``_validate_upstream_shape`` therefore pins this source so any upstream body
+# change - a renamed ``_disallowed_connection_methods``, a changed
+# ``_DatabaseFailure`` protocol, or an upstream fix of Trac #37064 itself -
+# fails loudly at apply() time instead of clobbering a working teardown.
+_UPSTREAM_REMOVE_DATABASES_FAILURES_SOURCE = textwrap.dedent(
+    """\
+    @classmethod
+    def _remove_databases_failures(cls):
+        for alias in connections:
+            if alias in cls.databases:
+                continue
+            connection = connections[alias]
+            for name, _ in cls._disallowed_connection_methods:
+                method = getattr(connection, name)
+                setattr(connection, name, method.wrapped)
+    """,
+)
+
+
 def _validate_upstream_shape() -> None:
-    """Fail loudly when Django no longer matches the private shape this patch wraps."""
+    """Fail loudly when Django no longer matches the private shape this patch supersedes.
+
+    Three tiers: the private symbols exist (``_DatabaseFailure`` plus the
+    ``_remove_databases_failures`` classmethod descriptor), the ``(cls)``
+    call shape holds, and the captured original's body source still
+    matches ``_UPSTREAM_REMOVE_DATABASES_FAILURES_SOURCE``. The body pin
+    is the reimplementer's equivalent of the sibling patches' delegation:
+    they only need their call shape validated because upstream body
+    changes flow through the delegated call, while this module supersedes
+    the whole body and must re-audit whenever that body changes.
+    Unreadable source (e.g. a bytecode-only distribution) is treated as
+    drift: an unverifiable body must not be silently superseded.
+    """
     descriptor = _original_remove_databases_failures
     function = getattr(descriptor, "__func__", None)
     if _DatabaseFailure is None or not isinstance(descriptor, classmethod) or function is None:
@@ -134,14 +176,28 @@ def _validate_upstream_shape() -> None:
             "Cannot apply django-strawberry-framework's Django patch: expected "
             "django.test.testcases._DatabaseFailure and "
             "SimpleTestCase._remove_databases_failures as a classmethod. "
-            "Disable APPLY_UPSTREAM_PATCHES or use a supported Django version.",
+            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"django": False} '
+            "or use a supported Django version.",
         )
     parameters = tuple(inspect.signature(function).parameters.values())
     if len(parameters) != 1 or parameters[0].kind is not inspect.Parameter.POSITIONAL_OR_KEYWORD:
         raise RuntimeError(
             "Cannot apply django-strawberry-framework's Django patch: "
             "SimpleTestCase._remove_databases_failures no longer has the expected (cls) signature. "
-            "Disable APPLY_UPSTREAM_PATCHES or use a supported Django version.",
+            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"django": False} '
+            "or use a supported Django version.",
+        )
+    try:
+        source = textwrap.dedent(inspect.getsource(function))
+    except (OSError, TypeError):
+        source = None
+    if source != _UPSTREAM_REMOVE_DATABASES_FAILURES_SOURCE:
+        raise RuntimeError(
+            "Cannot apply django-strawberry-framework's Django patch: "
+            "SimpleTestCase._remove_databases_failures no longer matches the upstream body "
+            "this patch supersedes. "
+            'Disable this patch with APPLY_UPSTREAM_PATCHES = {"django": False} '
+            "or use a supported Django version.",
         )
 
 
@@ -212,8 +268,9 @@ def apply() -> None:
     """Apply every Django defensive patch shipped by the package.
 
     Gated by the ``APPLY_UPSTREAM_PATCHES`` setting (default on):
-    returns immediately, before logging or touching ``SimpleTestCase``,
-    when a consumer set it to ``False``.
+    returns immediately, before touching ``SimpleTestCase``, when a
+    consumer disabled the patches globally (``False``) or this
+    dependency alone (``{"django": False}``).
 
     Idempotent and self-healing: re-entrant calls are no-ops when the
     patch is still installed, and re-install the patch if a third
@@ -226,13 +283,16 @@ def apply() -> None:
     exposed at the module level so the regression tests can drive the
     apply-and-revert cycle without spinning up a second AppConfig.
 
-    Before installation, validates the private symbol, classmethod descriptor,
-    and ``(cls)`` signature the replacement assumes. Dependency drift raises a
-    targeted ``RuntimeError`` instead of silently dropping the protection;
-    consumers can explicitly disable every upstream patch through
-    ``APPLY_UPSTREAM_PATCHES`` while upgrading dependencies.
+    Before installation, validates the private symbol, classmethod
+    descriptor, and ``(cls)`` signature the replacement assumes, plus the
+    upstream body source the replacement supersedes (see
+    :func:`_validate_upstream_shape`). Dependency drift raises a targeted
+    ``RuntimeError`` instead of silently dropping the protection;
+    consumers can explicitly disable this test-only patch alone
+    (``{"django": False}``) - or every upstream patch (``False``) -
+    through ``APPLY_UPSTREAM_PATCHES`` while upgrading dependencies.
     """
-    if not upstream_patches_enabled():
+    if not upstream_patches_enabled("django"):
         return
     _validate_upstream_shape()
     if _patch_is_installed():

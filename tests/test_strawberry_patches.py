@@ -18,6 +18,18 @@ two upstream gaps that otherwise surface as unhandled ``500``s:
    (batch) but lets a scalar fall through to ``data.get("query")`` ->
    raw ``AttributeError`` -> ``500``. A JSON ``list`` is passed through so
    upstream's batch validation keeps ownership of it.
+
+Because gap 2's scalar guard is a request-*body* contract enforced from
+a generic JSON helper, ``apply()`` also installs
+:func:`_patched_parse_query_params` - a source-pinned reimplementation
+of ``BaseView.parse_query_params`` routing its two nested parses through
+the captured original ``parse_json`` - so the guard never fires on
+upstream's GET ``variables`` / ``extensions`` parses, where upstream has
+its own precise per-param handling (``null`` -> ``None`` -> the request
+executes; a scalar -> a per-param 400). The live GET regressions live in
+``examples/fakeshop/test_query/test_products_api.py``; the tests here pin
+the shield's parse semantics, the pair install lifecycle, and the
+reimplementer's body pin.
 """
 
 from unittest import mock
@@ -53,8 +65,31 @@ def test_apply_reinstalls_when_method_reverted():
 
 
 def test_patch_is_installed_on_base_view():
-    """By the time pytest collects, ``AppConfig.ready()`` has installed the wrapper."""
+    """By the time pytest collects, ``AppConfig.ready()`` has installed both methods."""
     assert BaseView.__dict__["parse_json"] is patches._patched_parse_json
+    assert BaseView.__dict__["parse_query_params"] is patches._patched_parse_query_params
+
+
+def test_apply_reinstalls_pair_when_parse_query_params_reverted():
+    """A partial revert (only ``parse_query_params``) makes ``apply()`` re-install the pair.
+
+    ``_patch_is_installed()`` must report ``False`` when either method was
+    reverted - the scalar guard must never run without its GET shield, so
+    a half-installed state has to fall through to the install path.
+    """
+    patches.apply()
+    assert patches._patch_is_installed() is True
+
+    saved = BaseView.__dict__["parse_query_params"]
+    try:
+        BaseView.parse_query_params = patches._original_parse_query_params
+        assert patches._patch_is_installed() is False
+
+        patches.apply()
+        assert patches._patch_is_installed() is True
+        assert BaseView.__dict__["parse_query_params"] is patches._patched_parse_query_params
+    finally:
+        BaseView.parse_query_params = saved
 
 
 def test_patched_parse_json_translates_unicode_decode_error():
@@ -114,6 +149,64 @@ def test_patched_parse_json_passes_through_list_for_batch_handling():
     ]
 
 
+@pytest.mark.parametrize("param", ["variables", "extensions"])
+def test_patched_parse_query_params_parses_null_param_to_none(param):
+    """A ``null`` query param parses to ``None`` - the scalar guard must not fire.
+
+    ``None`` is a valid "object or null" value per upstream's own contract
+    (``parse_http_body``'s per-param isinstance checks), so the shield must
+    hand it through for the request to execute. An unshielded guard raised
+    the request-body 400 here, regressing a previously-succeeding GET.
+    """
+    result = patches._patched_parse_query_params(
+        BaseView(),
+        {"query": "{ __typename }", param: "null"},
+    )
+    assert result[param] is None
+    assert result["query"] == "{ __typename }"
+
+
+def test_patched_parse_query_params_passes_scalar_through_for_upstream_handling():
+    """A scalar param parses and passes through so upstream's per-param 400 owns it.
+
+    ``parse_http_body`` raises the precise "`variables` must be an object or
+    null, if provided." for a non-dict value; the shield must not shadow it
+    with the guard's request-body message.
+    """
+    result = patches._patched_parse_query_params(
+        BaseView(),
+        {"query": "{ __typename }", "variables": "42"},
+    )
+    assert result["variables"] == 42
+
+
+def test_patched_parse_query_params_parses_object_params():
+    """The happy path: JSON-object params parse exactly as upstream."""
+    result = patches._patched_parse_query_params(
+        BaseView(),
+        {"variables": '{"a": 1}', "extensions": '{"b": 2}'},
+    )
+    assert result["variables"] == {"a": 1}
+    assert result["extensions"] == {"b": 2}
+
+
+def test_patched_parse_query_params_malformed_param_is_upstream_400():
+    """Malformed JSON in a param still becomes upstream's ``HTTPException(400)``.
+
+    The error is raised inside the delegated original ``parse_json`` - the
+    shield adds no error handling of its own.
+    """
+    with pytest.raises(HTTPException) as excinfo:
+        patches._patched_parse_query_params(BaseView(), {"variables": "{not json"})
+    assert excinfo.value.status_code == 400
+
+
+def test_patched_parse_query_params_skips_empty_string_param():
+    """An empty-string param is left unparsed - upstream's falsy skip, byte-for-byte."""
+    result = patches._patched_parse_query_params(BaseView(), {"variables": ""})
+    assert result["variables"] == ""
+
+
 def test_patch_is_installed_false_when_base_view_symbol_missing():
     """``_patch_is_installed`` short-circuits to ``False`` when the symbol moved."""
     with mock.patch.object(patches, "BaseView", None):
@@ -134,6 +227,78 @@ def test_apply_fails_loudly_when_parse_json_signature_changes():
             patches.apply()
 
 
+def test_apply_fails_loudly_when_parse_query_params_missing():
+    """A missing ``parse_query_params`` cannot silently strand the guard unshielded."""
+    with mock.patch.object(patches, "_original_parse_query_params", None):
+        with pytest.raises(RuntimeError, match="parse_query_params"):
+            patches.apply()
+
+
+def test_apply_fails_loudly_when_parse_query_params_signature_changes():
+    """The shield pins the reimplemented method's arity."""
+    with mock.patch.object(patches, "_original_parse_query_params", lambda self: None):
+        with pytest.raises(RuntimeError, match=r"expected \(self, params\) signature"):
+            patches.apply()
+
+
+def test_apply_fails_loudly_when_parse_query_params_body_drifts():
+    """A shape-passing but body-drifted upstream must not be silently superseded.
+
+    The shield *reimplements* upstream's ``parse_query_params`` body, so
+    validation pins the captured original's source, not just the
+    ``(self, params)`` call shape (the ``_django_patches`` reimplementer
+    precedent). A future strawberry that keeps the signature but changes
+    the body - new query params, changed falsy-skip semantics - would
+    otherwise pass validation and have its behavior replaced by a stale
+    reimplementation. ``apply()`` must raise the targeted ``RuntimeError``
+    before installing anything.
+    """
+    saved_parse_json = BaseView.__dict__["parse_json"]
+    saved_parse_query_params = BaseView.__dict__["parse_query_params"]
+    try:
+        BaseView.parse_json = patches._original_parse_json
+        BaseView.parse_query_params = patches._original_parse_query_params
+        assert patches._patch_is_installed() is False
+
+        def _drifted(self, params):
+            """A (self, params)-shaped upstream whose body dropped the falsy skip."""
+            params = dict(params)
+            if "variables" in params:
+                params["variables"] = self.parse_json(params["variables"])
+            if "extensions" in params:
+                params["extensions"] = self.parse_json(params["extensions"])
+            return params
+
+        with mock.patch.object(patches, "_original_parse_query_params", _drifted):
+            with pytest.raises(RuntimeError, match="upstream body"):
+                patches.apply()
+        # ``apply()`` raised during validation, before the install step.
+        assert patches._patch_is_installed() is False
+    finally:
+        BaseView.parse_json = saved_parse_json
+        BaseView.parse_query_params = saved_parse_query_params
+
+
+def test_apply_fails_loudly_when_parse_query_params_source_is_unavailable():
+    """An unreadable captured original is treated as drift, not approved.
+
+    ``inspect.getsource`` raises ``OSError`` for a function with no
+    retrievable source file (built here via ``exec``, the shape a
+    bytecode-only distribution would present). The validator must refuse
+    to supersede a body it cannot verify.
+    """
+    namespace = {}
+    exec("def _sourceless(self, params):\n    return dict(params)\n", namespace)
+
+    with mock.patch.object(
+        patches,
+        "_original_parse_query_params",
+        namespace["_sourceless"],
+    ):
+        with pytest.raises(RuntimeError, match="upstream body"):
+            patches.apply()
+
+
 def test_apply_no_ops_when_toggle_disabled(settings):
     """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install."""
     saved = BaseView.__dict__["parse_json"]
@@ -150,3 +315,29 @@ def test_apply_no_ops_when_toggle_disabled(settings):
         assert patches._patch_is_installed() is True
     finally:
         BaseView.parse_json = saved
+
+
+def test_apply_no_ops_when_strawberry_dependency_opted_out(settings):
+    """``{"strawberry": False}`` disables only this module; ``{"django": False}`` does not.
+
+    The production half of the rev-apps.md Medium-2 scenario: opting out of
+    the test-only Django patch alone leaves this request hardening
+    installing normally (each gate reads its own dependency name).
+    """
+    saved_parse_json = BaseView.__dict__["parse_json"]
+    saved_parse_query_params = BaseView.__dict__["parse_query_params"]
+    try:
+        BaseView.parse_json = patches._original_parse_json
+        BaseView.parse_query_params = patches._original_parse_query_params
+        assert patches._patch_is_installed() is False
+
+        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
+        patches.apply()
+        assert patches._patch_is_installed() is False
+
+        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
+        patches.apply()
+        assert patches._patch_is_installed() is True
+    finally:
+        BaseView.parse_json = saved_parse_json
+        BaseView.parse_query_params = saved_parse_query_params

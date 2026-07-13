@@ -2104,11 +2104,17 @@ def test_cascade_composes_with_filter_and_order_live():
 
 
 # ---------------------------------------------------------------------------
-# Malformed request bodies: a non-UTF-8 body must surface as a controlled 400,
-# not an unhandled 500. Fixed by the framework's upstream patches for
-# Strawberry (`BaseView.parse_json`) and cross_web (`DjangoHTTPRequestAdapter.body`),
-# applied at app load. Without them the sync `GraphQLView` raises a raw
-# `UnicodeDecodeError` while decoding the body, before GraphQL parsing runs.
+# Malformed and non-UTF-8 request bodies. Fixed by the framework's upstream
+# patches for Strawberry (`BaseView.parse_json`) and cross_web
+# (`DjangoHTTPRequestAdapter.body`), applied at app load. Without them the
+# sync `GraphQLView` raises a raw `UnicodeDecodeError` while decoding the
+# body, before GraphQL parsing runs -> an unhandled 500. Patched, the raw
+# bytes reach `parse_json`: a JSON-decodable encoding (UTF-16/32) succeeds
+# exactly as it already did on the async transport, everything else surfaces
+# as a controlled 400. The GET tests pin the patch's `parse_query_params`
+# shield: the scalar-body guard must never fire on upstream's GET
+# `variables` / `extensions` parses, which have their own precise upstream
+# handling downstream in `parse_http_body`.
 # ---------------------------------------------------------------------------
 
 
@@ -2128,6 +2134,24 @@ def test_post_raw_binary_body_returns_400_not_500():
     response = _post_graphql_raw(bytes(range(256)) * 4)
 
     assert response.status_code == 400
+
+
+@pytest.mark.django_db(transaction=True)
+def test_post_utf16_json_body_succeeds_like_async_transport():
+    """A UTF-16-encoded JSON body -> 200 with data, not the upstream 500.
+
+    The cross_web patch hands the raw bytes to `parse_json`, and `json.loads`
+    detects UTF-16/UTF-32 per RFC 8259, so this previously-500-ing request now
+    *succeeds* on the sync view. The async adapter (which always passed raw
+    bytes through) already accepted this body; the test pins that sync/async
+    parity - the bytes fallback is wider than "400 instead of 500".
+    """
+    body = '{"query": "{ __typename }"}'.encode("utf-16")
+
+    response = _post_graphql_raw(body)
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"__typename": "Query"}
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2153,6 +2177,45 @@ def test_post_non_object_json_body_returns_400_not_500(body):
     response = _post_graphql_raw(body)
 
     assert response.status_code == 400
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("param", ["variables", "extensions"])
+def test_get_query_with_null_param_executes_like_upstream(param):
+    """GET `?query=...&variables=null` (and `extensions=null`) -> 200 with data.
+
+    `null` is valid per upstream's own contract (`variables` / `extensions`
+    "must be an object or null, if provided") and upstream executes the
+    request. Pins the patch's `parse_query_params` shield: the scalar-body
+    guard must not intercept the nested GET parses - an unshielded guard
+    regressed this previously-succeeding request to a 400 whose message
+    talked about a "request body" on a bodyless GET.
+    """
+    client = Client()
+
+    response = client.get("/graphql/", {"query": "{ __typename }", param: "null"})
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"__typename": "Query"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_get_query_with_scalar_variables_keeps_upstream_message():
+    """GET `?variables=42` -> upstream's precise per-param 400, not the body message.
+
+    A scalar param is invalid, but the 400 must be upstream's own
+    (`parse_http_body`'s "The GraphQL operation's `variables` must be an
+    object or null, if provided."), raised after the shielded
+    `parse_query_params` hands the parsed scalar through - not the patch's
+    generic request-body message raised before upstream's check can run.
+    """
+    client = Client()
+
+    response = client.get("/graphql/", {"query": "{ __typename }", "variables": "42"})
+
+    assert response.status_code == 400
+    assert b"`variables` must be an object or null" in response.content
+    assert b"request body" not in response.content
 
 
 # =============================================================================

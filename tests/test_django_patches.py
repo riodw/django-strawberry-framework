@@ -248,29 +248,28 @@ def test_patched_remove_databases_failures_covers_direct_simple_test_case_subcla
 def test_unpatched_remove_databases_failures_crashes_on_non_wrapper():
     """Pins that Trac #37064's bug shape IS still in Django at our pin.
 
-    Temporarily reverts ``SimpleTestCase._remove_databases_failures``
-    to its upstream (un-patched) form, exercises the same setup as the
-    happy-path test above, and asserts that the crash happens. A
-    Django upgrade that quietly fixed the bug upstream would make this
-    test fail with a different error, signalling that the package's
-    patch can be retired.
+    Temporarily reverts ``SimpleTestCase._remove_databases_failures`` to
+    the genuine upstream classmethod the module captured at import time
+    (``_original_remove_databases_failures``), exercises the same setup
+    as the happy-path test above, and asserts that the crash happens
+    inside the *installed* Django's own body. A Django upgrade that
+    fixed the bug upstream makes this test fail (no ``AttributeError``
+    raised), signalling that the package's patch can be retired. A
+    hardcoded copy of the upstream body could not deliver that signal:
+    the copy would keep crashing no matter what the installed Django
+    ships.
     """
     # Capture the classmethod descriptor via ``__dict__`` so the
     # ``finally`` restore puts the patch back in its native shape (a
     # ``classmethod`` descriptor on ``SimpleTestCase``).
     patched = SimpleTestCase.__dict__["_remove_databases_failures"]
+    captured = _django_patches._original_remove_databases_failures
+    # Premise check: the import-time capture is genuinely upstream's
+    # method, not this package's patch (the module is imported - and the
+    # capture taken - before ``apply()`` ever runs).
+    assert captured.__func__.__module__ == "django.test.testcases"
 
-    def _unpatched(cls):
-        """Verbatim copy of Django 5.2.13's upstream method body."""
-        for alias in connections:
-            if alias in cls.databases:
-                continue
-            connection = connections[alias]
-            for name, _ in cls._disallowed_connection_methods:
-                method = getattr(connection, name)
-                setattr(connection, name, method.wrapped)
-
-    SimpleTestCase._remove_databases_failures = classmethod(_unpatched)
+    SimpleTestCase._remove_databases_failures = captured
     try:
 
         class _NarrowTest(TransactionTestCase):
@@ -314,6 +313,72 @@ def test_apply_fails_loudly_when_upstream_method_signature_changes():
             _django_patches.apply()
 
 
+def test_apply_fails_loudly_when_upstream_body_drifts():
+    """A shape-passing but body-drifted Django must not get its teardown clobbered.
+
+    The patch *reimplements* upstream's whole body rather than wrapping
+    and delegating to it, so validation pins the captured original's
+    source, not just the ``(cls)`` call shape. A future Django that
+    keeps the classmethod signature but changes the body (renames
+    ``_disallowed_connection_methods``, alters the ``_DatabaseFailure``
+    protocol, or fixes Trac #37064 outright) would otherwise pass
+    validation and have its working teardown replaced by a stale
+    reimplementation that crashes with the very ``AttributeError`` class
+    the patch exists to prevent. ``apply()`` must raise the targeted
+    ``RuntimeError`` before installing anything.
+    """
+    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
+    try:
+
+        def _foreign(cls):
+            pass
+
+        SimpleTestCase._remove_databases_failures = classmethod(_foreign)
+        assert _django_patches._patch_is_installed() is False
+
+        def _drifted(cls):
+            """A (cls)-shaped upstream whose body renamed the method list."""
+            for alias in connections:
+                if alias in cls.databases:
+                    continue
+                connection = connections[alias]
+                for name, _ in cls._forbidden_connection_methods:
+                    method = getattr(connection, name)
+                    setattr(connection, name, method.wrapped)
+
+        with mock.patch.object(
+            _django_patches,
+            "_original_remove_databases_failures",
+            classmethod(_drifted),
+        ):
+            with pytest.raises(RuntimeError, match="upstream body"):
+                _django_patches.apply()
+        # ``apply()`` raised during validation, before the install step.
+        assert _django_patches._patch_is_installed() is False
+    finally:
+        SimpleTestCase._remove_databases_failures = saved
+
+
+def test_apply_fails_loudly_when_upstream_source_is_unavailable():
+    """An unreadable captured original is treated as drift, not approved.
+
+    ``inspect.getsource`` raises ``OSError`` for a function with no
+    retrievable source file (built here via ``exec``, the shape a
+    bytecode-only Django distribution would present). The validator
+    must refuse to supersede a body it cannot verify.
+    """
+    namespace = {}
+    exec("def _sourceless(cls):\n    pass\n", namespace)
+
+    with mock.patch.object(
+        _django_patches,
+        "_original_remove_databases_failures",
+        classmethod(namespace["_sourceless"]),
+    ):
+        with pytest.raises(RuntimeError, match="upstream body"):
+            _django_patches.apply()
+
+
 def test_apply_no_ops_when_toggle_disabled(settings):
     """``APPLY_UPSTREAM_PATCHES = False`` makes ``apply()`` decline to install.
 
@@ -341,3 +406,54 @@ def test_apply_no_ops_when_toggle_disabled(settings):
         assert _django_patches._patch_is_installed() is True
     finally:
         SimpleTestCase._remove_databases_failures = saved
+
+
+def test_apply_no_ops_when_django_dependency_opted_out(settings):
+    """``{"APPLY_UPSTREAM_PATCHES": {"django": False}}`` disables only this module.
+
+    The per-dependency escape (rev-apps.md Medium 2, owned by rev-conf.md):
+    a mapping naming ``"django"`` makes this ``apply()`` decline to install,
+    while a mapping naming only a SIBLING dependency leaves this module
+    installing normally (each gate reads its own name).
+    """
+    saved = SimpleTestCase.__dict__["_remove_databases_failures"]
+    try:
+
+        def _foreign(cls):
+            pass
+
+        SimpleTestCase._remove_databases_failures = classmethod(_foreign)
+        assert _django_patches._patch_is_installed() is False
+
+        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
+        _django_patches.apply()
+        assert _django_patches._patch_is_installed() is False
+
+        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"strawberry": False}}
+        _django_patches.apply()
+        assert _django_patches._patch_is_installed() is True
+    finally:
+        SimpleTestCase._remove_databases_failures = saved
+
+
+def test_django_dependency_opt_out_silences_drifted_pin_abort(settings):
+    """The inherited escape-hatch coupling, resolved end to end.
+
+    A drifted upstream body pin aborts ``apply()`` with a ``RuntimeError``
+    whose text names the per-dependency escape - the exact surface where the
+    trap fires on a consumer upgrading Django ahead of the package - and
+    setting ``{"django": False}`` then silences the abort (the gate precedes
+    validation) without requiring the all-or-nothing global ``False`` that
+    would also drop the production request hardening.
+    """
+    with mock.patch.object(
+        _django_patches,
+        "_UPSTREAM_REMOVE_DATABASES_FAILURES_SOURCE",
+        "def drifted(): ...\n",
+    ):
+        settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
+        with pytest.raises(RuntimeError, match=r'\{"django": False\}'):
+            _django_patches.apply()
+
+        settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
+        _django_patches.apply()  # gated off per-dependency: no raise, no install attempt

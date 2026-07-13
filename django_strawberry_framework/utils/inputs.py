@@ -138,8 +138,22 @@ def emit_set_input_field_triples(
     happens in ``entries`` before this scaffold - the same
     parameterization split ``GeneratedInputArgumentsFactory`` proved out for
     the BFS: mechanics here, semantics at the call site.
+
+    Fails loud on a generated-field collision. Two set members whose paths
+    flatten (``__`` -> ``_`` via ``flatten_lookup_path``) to one python attr --
+    e.g. a relation traversal ``branch__name`` beside a declared / scalar
+    ``branch_name`` -- or that camel-case to one GraphQL name (``ab_`` / ``ab``)
+    would make ``build_strawberry_input_class`` silently overwrite one field in
+    the generated input dataclass, dropping a filter / ordering the consumer
+    declared from the public schema with NO error. The type surface
+    (``types/finalizer.py::_audit_field_surface``) and the write-input surfaces
+    (``iter_input_field_collisions``) already reject this class of silent drop;
+    this is the parity guard for the filter / order generated-input surfaces,
+    which both route their emission through here.
     """
     triples: list[tuple[str, Any, dict[str, Any]]] = []
+    seen_attr: dict[str, str] = {}
+    seen_graphql: dict[str, str] = {}
     for top_name, entry in entries:
         python_attr = flatten_lookup_path(top_name)
         graphql_name = graphql_camel_name(python_attr)
@@ -155,6 +169,29 @@ def emit_set_input_field_triples(
             django_source_path = related_source_path_of(top_name, entry)
         else:
             annotation, django_source_path = leaf_of(top_name, python_attr, entry)
+        # Reject the silent-overwrite collision BEFORE it reaches the input
+        # dataclass / ``field_specs`` (both keyed by ``python_attr``, both of
+        # which the later member would clobber). Checked only for emitted fields
+        # -- placeholder skips above never reach here.
+        prior_attr = seen_attr.get(python_attr)
+        if prior_attr is not None:
+            raise ConfigurationError(
+                f"{set_cls.__qualname__}: members {prior_attr!r} and {top_name!r} both "
+                f"generate the input attribute {python_attr!r} (Django path separators "
+                "flatten to '_'), so one would silently overwrite the other in the "
+                "generated input type. Rename one member or drop one via "
+                "Meta.fields / Meta.exclude.",
+            )
+        prior_graphql = seen_graphql.get(graphql_name)
+        if prior_graphql is not None:
+            raise ConfigurationError(
+                f"{set_cls.__qualname__}: members {prior_graphql!r} and {top_name!r} both "
+                f"generate the GraphQL input field name {graphql_name!r} under default "
+                "camel-casing, so one would silently overwrite the other in the generated "
+                "input type. Rename one member or drop one via Meta.fields / Meta.exclude.",
+            )
+        seen_attr[python_attr] = top_name
+        seen_graphql[graphql_name] = top_name
         triples.append((python_attr, annotation, field_kwargs))
         field_specs[(set_cls, python_attr)] = GeneratedInputFieldSpec(
             python_attr=python_attr,

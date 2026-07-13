@@ -176,6 +176,72 @@ def test_filter_arguments_factory_collision_raises_on_distinct_class_with_same_n
 
 
 @pytest.mark.django_db
+def test_filter_arguments_factory_rejects_flattened_field_collision():
+    """Two members whose paths flatten to one python attr must fail loud, not drop one.
+
+    ``flatten_lookup_path`` maps a relation traversal ``branch__name`` and a
+    declared / scalar ``branch_name`` onto the SAME python attr ``branch_name``
+    (and the SAME GraphQL name ``branchName``). Both survive
+    ``get_filters()`` as distinct entries, but the generated input dataclass and
+    the ``_field_specs`` provenance table are keyed by that one attr, so the
+    second member would silently overwrite the first -- the declared
+    ``branch__name`` exact filter would vanish from the public schema with no
+    error. This is the exact silent-drop class the type surface
+    (``_audit_field_surface``) and the write-input surfaces
+    (``iter_input_field_collisions``) already reject; the generated filter input
+    surface must reject it too. Without the guard in
+    ``utils/inputs.py::emit_set_input_field_triples`` the build silently emits a
+    single ``branchName`` field (the collision is invisible); with it the build
+    raises an actionable ``ConfigurationError`` naming both offending members.
+    """
+    from django_filters import CharFilter
+
+    class ShelfFlattenCollide(FilterSet):
+        # Declared filter literally named ``branch_name``.
+        branch_name = CharFilter(field_name="branch__name", lookup_expr="icontains")
+
+        class Meta:
+            model = library_models.Shelf
+            # Relation-traversal path that flattens to the SAME python attr.
+            fields = {"branch__name": ["exact"]}
+
+    # Both members are distinct entries at the django-filter layer ...
+    assert {"branch__name", "branch_name"} <= set(ShelfFlattenCollide.get_filters())
+
+    # ... but they collapse onto one generated input attribute, so the build
+    # must fail loud instead of silently dropping one.
+    factory = FilterArgumentsFactory(ShelfFlattenCollide)
+    with pytest.raises(ConfigurationError) as excinfo:
+        factory.arguments
+    message = str(excinfo.value)
+    assert "branch__name" in message
+    assert "branch_name" in message
+    assert "ShelfFlattenCollide" in message
+
+
+@pytest.mark.django_db
+def test_filter_arguments_factory_rejects_graphql_name_collision():
+    """Distinct python attrs that camel-case alike must not share one GraphQL field."""
+    from django_filters import CharFilter
+
+    class ShelfGraphqlCollide(FilterSet):
+        ab_ = CharFilter(field_name="code", lookup_expr="exact")
+        ab = CharFilter(field_name="topic", lookup_expr="exact")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = []
+
+    factory = FilterArgumentsFactory(ShelfGraphqlCollide)
+    with pytest.raises(ConfigurationError) as excinfo:
+        factory.arguments
+    message = str(excinfo.value)
+    assert "'ab_'" in message
+    assert "'ab'" in message
+    assert "GraphQL input field name 'ab'" in message
+
+
+@pytest.mark.django_db
 def test_filter_arguments_factory_idempotent_repeated_arguments():
     """Repeated reads of `.arguments` return the same input class object."""
 

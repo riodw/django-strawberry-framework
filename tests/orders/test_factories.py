@@ -251,6 +251,31 @@ def test_factory_skips_related_order_with_none_target():
     assert "BookOrderNoneInputType" in OrderArgumentsFactory.input_object_types
 
 
+def test_factory_rejects_related_orders_with_colliding_graphql_names():
+    """The order family shares the generated GraphQL-name collision guard."""
+
+    class ShelfOrder(OrderSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = ["code"]
+
+    class BookCollisionOrder(OrderSet):
+        ab_ = RelatedOrder(ShelfOrder, field_name="shelf")
+        ab = RelatedOrder(ShelfOrder, field_name="shelf")
+
+        class Meta:
+            model = library_models.Book
+            fields = ["title"]
+
+    factory = OrderArgumentsFactory(BookCollisionOrder)
+    with pytest.raises(ConfigurationError) as excinfo:
+        factory.arguments
+    message = str(excinfo.value)
+    assert "'ab_'" in message
+    assert "'ab'" in message
+    assert "GraphQL input field name 'ab'" in message
+
+
 # ---------------------------------------------------------------------------
 # Pass-2 B1 coverage closure -- pop-time ``if os_class in seen: continue`` guard
 # ---------------------------------------------------------------------------

@@ -1033,6 +1033,18 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         so nested input clauses (e.g. ``shelves: { code: { iContains:
         "A" } }``) narrow the child queryset BEFORE the parent's
         ``<rel>__in=<intersected>`` clause is computed (spec-027 L668-678).
+
+        The child ``apply_sync`` runs with ``run_permissions=False``: this
+        step only needs the child's filtered, visibility-scoped queryset,
+        and the child's ``check_<field>_permission`` gates are fired ONCE by
+        the top-level ``_run_permission_checks`` pass, which recurses into
+        every active related branch. Letting the derivation's child apply
+        ALSO fire them re-runs each nested gate once per enclosing level
+        (compounding with related-nesting depth) and breaks the documented
+        "the tree-composition/derivation paths deliberately do NOT re-run
+        permission checks" contract. Permission methods never mutate the
+        queryset, so skipping them here leaves the derived queryset
+        identical.
         """
         result: dict[str, models.QuerySet] = {}
         for (
@@ -1043,7 +1055,12 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             child_base,
         ) in cls._iter_visibility_steps(input_value):
             scoped = apply_type_visibility_sync(target_type, child_base, info)
-            result[field_name] = child_filterset.apply_sync(child_input, scoped, info)
+            result[field_name] = child_filterset.apply_sync(
+                child_input,
+                scoped,
+                info,
+                run_permissions=False,
+            )
         return result
 
     @classmethod
@@ -1052,7 +1069,13 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         input_value: Any,
         info: Any,
     ) -> dict[str, models.QuerySet]:
-        """Async sibling of `_derive_related_visibility_querysets_sync`."""
+        """Async sibling of `_derive_related_visibility_querysets_sync`.
+
+        Runs the child ``apply_async`` with ``run_permissions=False`` for the
+        same reason the sync twin passes ``run_permissions=False`` (see there):
+        the top-level ``_run_permission_checks`` pass owns every nested gate,
+        so the derivation must not re-fire them.
+        """
         result: dict[str, models.QuerySet] = {}
         for (
             field_name,
@@ -1062,7 +1085,12 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             child_base,
         ) in cls._iter_visibility_steps(input_value):
             scoped = await apply_type_visibility_async(target_type, child_base, info)
-            result[field_name] = await child_filterset.apply_async(child_input, scoped, info)
+            result[field_name] = await child_filterset.apply_async(
+                child_input,
+                scoped,
+                info,
+                run_permissions=False,
+            )
         return result
 
     @classmethod
@@ -1730,6 +1758,8 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         filterset_instance: FilterSet,
         input_value: Any,
         request: Any,
+        *,
+        run_permissions: bool = True,
     ) -> models.QuerySet:
         """Run the perm check + form validate + ``.qs`` read trailer.
 
@@ -1739,8 +1769,18 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         filter body / leaf-clause ORM evaluation does not block the
         event loop. The thread-sensitive shape mirrors how Django wraps
         consumer sync hooks on its own async paths.
+
+        ``run_permissions=False`` skips the ``_run_permission_checks`` pass.
+        The related-visibility derivation invokes the child filterset's
+        ``apply_*`` purely to compute the child's filtered queryset; the
+        child's gates are already fired ONCE by the top-level pass that
+        recurses into every active related branch, so re-running them here
+        would double-fire nested gates (compounding with nesting depth).
+        Form validation still runs so a malformed nested clause still raises
+        ``FILTER_INVALID``.
         """
-        cls._run_permission_checks(input_value, request)
+        if run_permissions:
+            cls._run_permission_checks(input_value, request)
         cls._validate_form_or_raise(filterset_instance)
         return filterset_instance.qs
 
@@ -1750,6 +1790,8 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         input_value: Any,
         queryset: models.QuerySet,
         info: Any,
+        *,
+        run_permissions: bool = True,
     ) -> models.QuerySet:
         """Sync resolver entry point (Decision 8 / H3 of rev8).
 
@@ -1758,6 +1800,11 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         BEFORE constructing the filterset (so the constraints land in
         `self.queryset` and propagate through to `.qs`), then permission
         check, form validate, and return the materialized queryset.
+
+        ``run_permissions`` defaults to ``True`` for every consumer entry
+        point; the related-visibility derivation passes ``False`` so a nested
+        child filterset's gates are fired only by the single top-level
+        ``_run_permission_checks`` pass (see ``_apply_common_finalize``).
         """
         child_qs_by_branch = cls._derive_related_visibility_querysets_sync(input_value, info)
         filterset_instance, request = cls._apply_common_prelude(
@@ -1766,7 +1813,12 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             info,
             child_qs_by_branch,
         )
-        return cls._apply_common_finalize(filterset_instance, input_value, request)
+        return cls._apply_common_finalize(
+            filterset_instance,
+            input_value,
+            request,
+            run_permissions=run_permissions,
+        )
 
     @classmethod
     async def apply_async(
@@ -1774,6 +1826,8 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         input_value: Any,
         queryset: models.QuerySet,
         info: Any,
+        *,
+        run_permissions: bool = True,
     ) -> models.QuerySet:
         """Async sibling of `apply_sync` awaiting every blocking step.
 
@@ -1798,6 +1852,11 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                read does not block the event loop. The thread-sensitive
                shape mirrors how Django wraps consumer sync hooks on its
                own async paths.
+
+        ``run_permissions`` defaults to ``True`` for consumer entry points;
+        the related-visibility derivation passes ``False`` so a nested child
+        filterset's gates fire only once, via the top-level pass (see
+        ``_apply_common_finalize`` / ``_derive_related_visibility_querysets_sync``).
         """
         child_qs_by_branch = await cls._derive_related_visibility_querysets_async(
             input_value,
@@ -1818,6 +1877,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             filterset_instance,
             input_value,
             request,
+            run_permissions=run_permissions,
         )
 
     @classmethod

@@ -934,6 +934,198 @@ def test_permission_checks_run_only_through_apply_entrypoint():
 
 
 @pytest.mark.django_db
+def test_apply_sync_nested_related_gate_fires_once_not_per_level():
+    """A nested ``RelatedFilter`` child gate fires exactly once through ``apply_sync``.
+
+    Regression test for the double-fire defect: the related-visibility
+    derivation invoked the child filterset's ``apply_sync``, which runs
+    ``_run_permission_checks``, AND the top-level dedicated
+    ``_run_permission_checks`` pass ALSO recursed into the child -- so a
+    nested ``check_<field>_permission`` gate fired once per enclosing level
+    (twice at one level of relation nesting, three times at two levels,
+    compounding with depth). This violated the documented contract that the
+    derivation / tree-composition paths do NOT re-run permission checks
+    (only the single up-front pass fires gates) and double-invoked
+    side-effectful gates (audit logging, rate limiting, metrics).
+
+    The fix threads ``run_permissions=False`` into the derivation's child
+    ``apply_*`` calls so the child's gates fire only via the top-level pass.
+    """
+    branch = library_models.Branch.objects.create(name="alpha")
+    shelf = library_models.Shelf.objects.create(branch=branch, code="AAA")
+    library_models.Book.objects.create(shelf=shelf, title="T")
+
+    fired: list[str] = []
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+    class BookType(DjangoType):
+        class Meta:
+            model = library_models.Book
+            fields = ("id", "title")
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = library_models.Book
+            fields = {"title": ["exact", "icontains"]}
+
+        def check_title_permission(self, request):
+            fired.append("title")
+
+    class ShelfFilter(FilterSet):
+        books = RelatedFilter(BookFilter, field_name="books")
+
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+        def check_books_permission(self, request):
+            fired.append("shelf.books")
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+        def check_shelves_permission(self, request):
+            fired.append("branch.shelves")
+
+    # One level of relation nesting: the child ``code`` gate is absent, but
+    # the parent per-branch ``check_shelves_permission`` must fire once.
+    BranchFilter.apply_sync(
+        {"shelves": {"code": {"exact": "AAA"}}},
+        library_models.Branch.objects.all(),
+        _make_info(),
+    )
+    assert fired == ["branch.shelves"]
+
+    # Two levels of relation nesting: the deepest gate
+    # (``BookFilter.check_title_permission``) must fire EXACTLY ONCE, not
+    # three times (pre-fix: once per enclosing derivation level plus the
+    # dedicated pass).
+    fired.clear()
+    BranchFilter.apply_sync(
+        {"shelves": {"books": {"title": {"i_contains": "T"}}}},
+        library_models.Branch.objects.all(),
+        _make_info(),
+    )
+    assert fired.count("title") == 1
+    assert fired.count("shelf.books") == 1
+    assert fired.count("branch.shelves") == 1
+
+
+@pytest.mark.django_db
+def test_apply_sync_nested_related_gate_still_denies():
+    """The single-fire fix must not weaken enforcement: a nested gate still denies.
+
+    The derivation no longer fires the child's gates, but the top-level
+    ``_run_permission_checks`` pass still recurses into every active related
+    branch, so a raising ``check_<field>_permission`` inside a nested branch
+    still aborts ``apply_sync`` with the consumer's ``GraphQLError`` before
+    any rows are returned.
+    """
+    branch = library_models.Branch.objects.create(name="alpha")
+    library_models.Shelf.objects.create(branch=branch, code="AAA")
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact", "icontains"]}
+
+        def check_code_permission(self, request):
+            raise GraphQLError("denied shelf code")
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    with pytest.raises(GraphQLError) as excinfo:
+        BranchFilter.apply_sync(
+            {"shelves": {"code": {"i_contains": "AAA"}}},
+            library_models.Branch.objects.all(),
+            _make_info(),
+        )
+    assert "denied shelf code" in str(excinfo.value)
+
+
+@pytest.mark.django_db
+def test_apply_async_nested_related_gate_fires_once_and_still_denies():
+    """The async related derivation neither duplicates nor bypasses nested gates."""
+    import asyncio
+
+    branch = library_models.Branch.objects.create(name="alpha")
+    library_models.Shelf.objects.create(branch=branch, code="AAA")
+    fired: list[str] = []
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact", "icontains"]}
+
+        def check_code_permission(self, request):
+            fired.append("code")
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    queryset = asyncio.run(
+        BranchFilter.apply_async(
+            {"shelves": {"code": {"i_contains": "AAA"}}},
+            library_models.Branch.objects.all(),
+            _make_info(),
+        ),
+    )
+    assert list(queryset.values_list("name", flat=True)) == ["alpha"]
+    assert fired == ["code"]
+
+    class DenyingShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+        def check_code_permission(self, request):
+            raise GraphQLError("denied async shelf code")
+
+    class DenyingBranchFilter(FilterSet):
+        shelves = RelatedFilter(DenyingShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    with pytest.raises(GraphQLError, match="denied async shelf code"):
+        asyncio.run(
+            DenyingBranchFilter.apply_async(
+                {"shelves": {"code": {"exact": "AAA"}}},
+                library_models.Branch.objects.all(),
+                _make_info(),
+            ),
+        )
+
+
+@pytest.mark.django_db
 def test_apply_sync_passes_through_empty_filter_input():
     Category.objects.create(name="alpha")
     Category.objects.create(name="beta")

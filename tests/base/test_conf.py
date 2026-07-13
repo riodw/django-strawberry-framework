@@ -5,7 +5,12 @@ from types import MappingProxyType
 import pytest
 
 from django_strawberry_framework import conf
-from django_strawberry_framework.conf import Settings, reload_settings, upstream_patches_enabled
+from django_strawberry_framework.conf import (
+    Settings,
+    reload_settings,
+    testing_endpoint_setting,
+    upstream_patches_enabled,
+)
 from django_strawberry_framework.exceptions import ConfigurationError
 
 # ---------------------------------------------------------------------------
@@ -173,17 +178,131 @@ def test_settings_normalization_attribute_error_does_not_recurse(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_upstream_patches_enabled_defaults_true_when_key_absent(settings):
+@pytest.mark.parametrize("dependency", sorted(conf.UPSTREAM_PATCH_DEPENDENCIES))
+def test_upstream_patches_enabled_defaults_true_when_key_absent(settings, dependency):
     """Missing key (or whole dict) -> ``True``: consumers opt out, not in."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
-    assert upstream_patches_enabled() is True
+    assert upstream_patches_enabled(dependency) is True
 
 
-def test_upstream_patches_enabled_true_when_set_true(settings):
+@pytest.mark.parametrize("dependency", sorted(conf.UPSTREAM_PATCH_DEPENDENCIES))
+def test_upstream_patches_enabled_true_when_set_true(settings, dependency):
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": True}
-    assert upstream_patches_enabled() is True
+    assert upstream_patches_enabled(dependency) is True
 
 
-def test_upstream_patches_enabled_false_when_set_false(settings):
+@pytest.mark.parametrize("dependency", sorted(conf.UPSTREAM_PATCH_DEPENDENCIES))
+def test_upstream_patches_enabled_false_when_set_false(settings, dependency):
+    """The plain global ``False`` keeps its pre-mapping semantics (back-compat)."""
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": False}
-    assert upstream_patches_enabled() is False
+    assert upstream_patches_enabled(dependency) is False
+
+
+def test_upstream_patches_enabled_mapping_opts_out_per_dependency(settings):
+    """A mapping disables exactly the named dependency; missing names stay on.
+
+    The rev-apps.md Medium-2 escape hatch: ``{"django": False}`` silences the
+    test-only Django patch without dropping the production request-hardening
+    patches (``strawberry`` / ``cross_web``).
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": False}}
+    assert upstream_patches_enabled("django") is False
+    assert upstream_patches_enabled("strawberry") is True
+    assert upstream_patches_enabled("cross_web") is True
+
+
+@pytest.mark.parametrize("dependency", sorted(conf.UPSTREAM_PATCH_DEPENDENCIES))
+def test_upstream_patches_enabled_empty_mapping_keeps_every_patch_on(settings, dependency):
+    """An empty mapping is "no opt-outs", identical to the missing key."""
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {}}
+    assert upstream_patches_enabled(dependency) is True
+
+
+def test_upstream_patches_enabled_mapping_accepts_non_dict_mappings(settings):
+    """Any ``Mapping`` works, mirroring ``_normalize_user_settings``'s contract."""
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {
+        "APPLY_UPSTREAM_PATCHES": MappingProxyType({"strawberry": False}),
+    }
+    assert upstream_patches_enabled("strawberry") is False
+    assert upstream_patches_enabled("django") is True
+
+
+def test_upstream_patches_enabled_rejects_unknown_mapping_name(settings):
+    """A typo'd dependency name must not silently keep patching.
+
+    The whole mapping is validated on every read: the raise fires even when
+    the requested dependency itself is spelled correctly.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"stawberry": False}}
+    with pytest.raises(ConfigurationError, match="stawberry"):
+        upstream_patches_enabled("django")
+
+
+def test_upstream_patches_enabled_rejects_non_bool_mapping_value(settings):
+    """``{"django": "false"}`` must fail loud, not silently invert intent."""
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {"django": "false"}}
+    with pytest.raises(ConfigurationError, match="must be a bool"):
+        upstream_patches_enabled("django")
+
+
+def test_upstream_patches_enabled_rejects_non_string_mapping_key(settings):
+    """A non-string mapping key gets the ``ConfigurationError`` framing, not a ``TypeError``.
+
+    Mixed unorderable key types (``{1: False, "x": False}``) once leaked
+    ``TypeError: '<' not supported`` from the unknown-name framing's
+    ``sorted()`` while building the error message; the key-type guard runs
+    first (the ``types/base.py::_validate_relation_shapes`` precedent) so the
+    docstring-promised ``ConfigurationError`` fires instead.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": {1: False, "x": False}}
+    with pytest.raises(ConfigurationError, match="dependency name strings"):
+        upstream_patches_enabled("django")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "false",
+        0,
+        1,
+        None,
+    ],
+)
+def test_upstream_patches_enabled_rejects_non_bool_non_mapping_value(settings, value):
+    """A non-bool/non-mapping top-level value fails loud.
+
+    Closes the old ``bool()`` coercion's silent wrong-shape acceptance: a
+    ``"false"`` string was truthy and ENABLED the patches; ``0``/``1``
+    silently coerced. An explicit ``None`` is a per-key value, not the
+    missing-key case, so it is rejected like any other wrong shape.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"APPLY_UPSTREAM_PATCHES": value}
+    with pytest.raises(ConfigurationError, match="bool or a mapping"):
+        upstream_patches_enabled("django")
+
+
+def test_upstream_patches_enabled_rejects_unknown_dependency_argument():
+    """The gate call sites and ``UPSTREAM_PATCH_DEPENDENCIES`` cannot drift.
+
+    A future patch module whose ``apply()`` passes a name missing from the
+    constant would otherwise be silently un-opt-out-able; the internal-API
+    guard fails loud at the first gate read instead.
+    """
+    with pytest.raises(ValueError, match="graphql_core"):
+        upstream_patches_enabled("graphql_core")
+
+
+# ---------------------------------------------------------------------------
+# testing_endpoint_setting pytest-collection guard
+# ---------------------------------------------------------------------------
+
+
+def test_testing_endpoint_setting_carries_pytest_collection_guard():
+    """The reader's ``test*``-matching name must never be collected as a test.
+
+    Self-proving: this module imports ``testing_endpoint_setting`` UNALIASED,
+    so if the ``__test__ = False`` guard is ever dropped, pytest collects the
+    function, its ``str`` return trips ``PytestReturnNotNoneWarning``, and
+    the suite fails under ``filterwarnings = error`` at this very import.
+    """
+    assert testing_endpoint_setting.__test__ is False

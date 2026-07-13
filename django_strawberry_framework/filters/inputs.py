@@ -31,7 +31,7 @@ from django_filters import RangeFilter as _DjangoRangeFilter
 from django_filters.filters import BaseCSVFilter
 from strawberry import UNSET, relay
 
-from ..conf import settings
+from ..conf import hide_flat_filters_setting
 from ..exceptions import ConfigurationError
 from ..registry import register_subsystem_clear
 from ..utils.input_values import is_inactive_value
@@ -671,8 +671,10 @@ def _build_input_fields(
     # (``connection_field.py::_get_trimmed_filterset_class``); because this
     # package emits a single Strawberry input type here, the same
     # ``is_expanded_child`` rule is just a skip in this loop, so the hidden
-    # operator-bag classes are never built in the first place.
-    hide_flat_filters = bool(getattr(settings, "HIDE_FLAT_FILTERS", False))
+    # operator-bag classes are never built in the first place. The key is
+    # read through its ``conf.py`` named reader; truthiness coercion is this
+    # consumer's own semantics (the reader stays thin).
+    hide_flat_filters = bool(hide_flat_filters_setting())
 
     def _visible_entries() -> Iterator[tuple[str, OrderedDict[str, Filter]]]:
         """Yield the grouped entries minus the ``HIDE_FLAT_FILTERS`` expanded children.

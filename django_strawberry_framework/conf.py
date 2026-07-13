@@ -35,7 +35,7 @@ legitimate shapes, and coercion is unconditionally correct. Do not
 unify the two.
 """
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from django.conf import settings as django_settings
@@ -46,11 +46,23 @@ from django_strawberry_framework.exceptions import ConfigurationError
 DJANGO_SETTINGS_KEY = "DJANGO_STRAWBERRY_FRAMEWORK"
 _DISPATCH_UID = "django_strawberry_framework.conf.reload_settings"
 
-# Toggle for every defensive patch the package ships for upstream bugs
+# Toggle for the defensive patches the package ships for upstream bugs
 # (see ``_django_patches`` / ``_strawberry_patches`` / ``_cross_web_patches``).
-# Opt-out: defaults to ``True`` so consumers get the fixes automatically,
-# matching the "no opt-in boilerplate" stance of the patch modules.
+# Accepts a ``bool`` (the global toggle) or a ``Mapping[str, bool]`` keyed by
+# ``UPSTREAM_PATCH_DEPENDENCIES`` names (per-dependency opt-out; missing names
+# stay enabled). Opt-out: defaults to ``True`` so consumers get the fixes
+# automatically, matching the "no opt-in boilerplate" stance of the patch
+# modules. See ``upstream_patches_enabled`` for the full shape contract.
 APPLY_UPSTREAM_PATCHES_KEY = "APPLY_UPSTREAM_PATCHES"
+
+# Canonical ``APPLY_UPSTREAM_PATCHES`` mapping keys - one name per patch
+# module, matching the package's one-module-per-dependency organizing rule.
+# ``strawberry`` and ``cross_web`` jointly own one fix (the malformed-body
+# ``400`` hardening: the Strawberry patch hardens both transports' body
+# parse, the cross_web patch routes the sync transport's bytes into it), so
+# disabling one of the pair alone is safe but leaves the sync transport
+# unfixed.
+UPSTREAM_PATCH_DEPENDENCIES = frozenset({"django", "strawberry", "cross_web"})
 
 # Default nested-connection fetch strategy for ``DjangoOptimizerExtension``
 # instances constructed without an explicit ``nested_connection_strategy=``
@@ -65,6 +77,22 @@ NESTED_CONNECTION_STRATEGY_KEY = "NESTED_CONNECTION_STRATEGY"
 # convention; graphene's slash-less ``"/graphql"`` is a documented
 # non-borrow).
 TESTING_ENDPOINT_KEY = "TESTING_ENDPOINT"
+
+# Whether generated filter inputs hide the flat relational traversal fields
+# (``categoryName``, deep ``entriesPropertyCategoryName``, ...) in favor of
+# the nested ``RelatedFilter`` branches alone (see
+# ``filters/inputs.py::_build_input_fields``). Defaults to ``False`` - both
+# shapes emitted (graphene-django parity; matches
+# ``django-graphene-filters``'s default).
+HIDE_FLAT_FILTERS_KEY = "HIDE_FLAT_FILTERS"
+
+# Schema-wide default GlobalID type-name-slot strategy for Relay-Node-shaped
+# types without a per-type ``Meta.globalid_strategy`` (spec-031 Decision 5;
+# see ``types/relay.py::_resolve_globalid_strategy``, which validates the
+# value where the strategy vocabulary lives). Defaults to ``None`` - no
+# schema-wide override; the ``DEFAULT_GLOBALID_STRATEGY`` package default
+# applies downstream.
+RELAY_GLOBALID_STRATEGY_KEY = "RELAY_GLOBALID_STRATEGY"
 
 
 def _normalize_user_settings(value: Any) -> dict[str, Any]:
@@ -179,21 +207,85 @@ class Settings:
 settings = Settings(None)
 
 
-def upstream_patches_enabled() -> bool:
-    """Whether the package applies its upstream defensive patches at app load.
+def upstream_patches_enabled(dependency: str) -> bool:
+    """Whether ``dependency``'s upstream defensive patches apply at app load.
 
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["APPLY_UPSTREAM_PATCHES"]``,
     defaulting to ``True`` when the key (or the whole settings dict) is
-    absent. Set it to ``False`` to stop the framework from
-    monkey-patching its upstream dependencies (Django, Strawberry, and
-    ``cross_web``) at startup.
+    absent. Two configured shapes are accepted:
+
+    - ``bool`` - the global toggle: ``False`` stops the framework from
+      monkey-patching any of its upstream dependencies (Django,
+      Strawberry, and ``cross_web``) at startup.
+    - ``Mapping[str, bool]`` keyed by ``UPSTREAM_PATCH_DEPENDENCIES``
+      names - per-dependency opt-out: ``{"django": False}`` disables
+      only the test-only Django teardown patch while the production
+      request-hardening patches (``strawberry`` / ``cross_web``) stay
+      installed. Missing names default to ``True`` (the opt-out stance
+      holds per dependency). ``strawberry`` and ``cross_web`` jointly
+      own the malformed-body hardening - see the
+      ``UPSTREAM_PATCH_DEPENDENCIES`` comment.
+
+    Any other shape raises ``ConfigurationError`` (the
+    ``_normalize_user_settings`` fail-loud precedent): a non-bool /
+    non-mapping value (a ``"false"`` string is truthy and would silently
+    ENABLE the patches under bool coercion), a non-string mapping key
+    (dependency names are strings; anything else is a wrong shape, not a
+    candidate name), an unknown mapping name (a typo'd name must not
+    silently keep patching), or a non-bool mapping value (``{"django":
+    "false"}`` would silently invert intent). The whole mapping is
+    validated on every read, not just ``dependency``'s entry, so a typo
+    fails loud at the first gate regardless of which patch module reads
+    first.
+
+    Internal API (not exported from the package ``__init__``): the only
+    callers are the three patch modules' ``apply()`` gates, each passing
+    its own canonical name. A ``dependency`` outside
+    ``UPSTREAM_PATCH_DEPENDENCIES`` raises ``ValueError`` so the
+    constant and the gate call sites cannot drift apart.
 
     Read once per patch ``apply()`` (i.e. at app load). A *malformed*
     (non-mapping) ``DJANGO_STRAWBERRY_FRAMEWORK`` value still fails loud
     via the ``ConfigurationError`` path shared by every setting read -
     only a missing key falls back to the default.
     """
-    return bool(getattr(settings, APPLY_UPSTREAM_PATCHES_KEY, True))
+    if dependency not in UPSTREAM_PATCH_DEPENDENCIES:
+        raise ValueError(
+            f"upstream_patches_enabled() got unknown dependency {dependency!r}; add new "
+            "patch-module names to UPSTREAM_PATCH_DEPENDENCIES so consumers can opt out.",
+        )
+    configured = getattr(settings, APPLY_UPSTREAM_PATCHES_KEY, True)
+    if isinstance(configured, bool):
+        return configured
+    if isinstance(configured, Mapping):
+        # Key-type guard FIRST so a non-string key never reaches the
+        # unknown-name framing below, whose ``sorted()`` would leak a bare
+        # ``TypeError`` on mixed unorderable key types instead of the
+        # promised ``ConfigurationError`` (the
+        # ``types/base.py::_validate_relation_shapes`` key-guard precedent).
+        for name in configured:
+            if not isinstance(name, str):
+                raise ConfigurationError(
+                    f"`{APPLY_UPSTREAM_PATCHES_KEY}` keys must be dependency name strings; "
+                    f"got {name!r}.",
+                )
+        unknown = set(configured) - UPSTREAM_PATCH_DEPENDENCIES
+        if unknown:
+            raise ConfigurationError(
+                f"`{APPLY_UPSTREAM_PATCHES_KEY}` names unknown patch dependencies "
+                f"{sorted(unknown)}; valid names are {sorted(UPSTREAM_PATCH_DEPENDENCIES)}.",
+            )
+        for name, value in configured.items():
+            if not isinstance(value, bool):
+                raise ConfigurationError(
+                    f"`{APPLY_UPSTREAM_PATCHES_KEY}[{name!r}]` must be a bool; "
+                    f"got {type(value).__name__}.",
+                )
+        return configured.get(dependency, True)
+    raise ConfigurationError(
+        f"`{APPLY_UPSTREAM_PATCHES_KEY}` must be a bool or a mapping of dependency names "
+        f"to bools; got {type(configured).__name__}.",
+    )
 
 
 def nested_connection_strategy_setting() -> str:
@@ -222,6 +314,41 @@ def testing_endpoint_setting() -> str:
     at request time, where the failure names the actual response.
     """
     return getattr(settings, TESTING_ENDPOINT_KEY, "/graphql/")
+
+
+# Pytest collection guard: the reader's name matches pytest's default
+# ``test*`` function pattern, so a test module importing it UNALIASED gets it
+# collected as a test; it returns a ``str``, which fails the run via
+# ``PytestReturnNotNoneWarning`` under a ``filterwarnings = error`` posture.
+# Same hazard class (and same idiom) as ``testing/client.py::TestClient``'s
+# class-level guard.
+testing_endpoint_setting.__test__ = False
+
+
+def hide_flat_filters_setting() -> bool:
+    """Whether generated filter inputs hide the flat relational traversal fields.
+
+    Reads ``DJANGO_STRAWBERRY_FRAMEWORK["HIDE_FLAT_FILTERS"]``, defaulting to
+    ``False`` when the key (or the whole settings dict) is absent. Consumed by
+    ``filters/inputs.py::_build_input_fields`` at input-class build time,
+    which owns the truthiness coercion and the skip semantics (hidden flat
+    paths remain reachable through their nested ``RelatedFilter`` branch).
+    """
+    return getattr(settings, HIDE_FLAT_FILTERS_KEY, False)
+
+
+def relay_globalid_strategy_setting() -> str | Callable[..., str] | None:
+    """The configured schema-wide GlobalID type-name-slot strategy (or ``None``).
+
+    Reads ``DJANGO_STRAWBERRY_FRAMEWORK["RELAY_GLOBALID_STRATEGY"]``,
+    defaulting to ``None`` ("no schema-wide override") when the key (or the
+    whole settings dict) is absent. Consumed by
+    ``types/relay.py::_resolve_globalid_strategy`` at finalization, where the
+    value is validated through the shared ``_validate_globalid_strategy``
+    rule - ``conf.py`` stays a thin reader that does not validate domain
+    values.
+    """
+    return getattr(settings, RELAY_GLOBALID_STRATEGY_KEY, None)
 
 
 def reload_settings(setting: str, value: Any, **kwargs: Any) -> None:

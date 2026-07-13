@@ -369,7 +369,7 @@ def _resolve_globalid_strategy(
     # after module load - so the local import resolves cheaply. Same cycle-dodge
     # justification ``base.py`` documents for its ``FilterSet`` / ``OrderSet``
     # in-function imports. Do NOT hoist either import to module top.
-    from ..conf import settings as conf_settings
+    from ..conf import relay_globalid_strategy_setting
     from .base import (
         DEFAULT_GLOBALID_STRATEGY,
         _validate_globalid_strategy,
@@ -378,7 +378,7 @@ def _resolve_globalid_strategy(
     strategy = definition.globalid_strategy
     if strategy is not None:
         return strategy
-    setting = getattr(conf_settings, "RELAY_GLOBALID_STRATEGY", None)
+    setting = relay_globalid_strategy_setting()
     if setting is not None:
         return _validate_globalid_strategy(
             None,

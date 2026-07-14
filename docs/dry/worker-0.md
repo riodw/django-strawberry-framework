@@ -20,15 +20,14 @@ approve them. `docs/dry/DRY.md` is canonical.
 1. Capture `ITEM_BASELINE=$(git stash create)`. An empty value means workers compare with `HEAD`.
 2. Spawn a fresh Worker 1 with the target, artifact, plan item, baseline, and required reading.
 3. Dispatch by artifact status:
-   - `implementation-ready` → fresh Worker 2;
-   - `fix-implemented` → fresh Worker 3;
-   - `revision-needed` → Worker 2, or Worker 1 when the review itself is incomplete;
+   - `fix-implemented` → fresh Worker 2;
+   - `revision-needed` → Worker 1;
    - `verified` → advance.
 4. Let the artifact and item-scoped diff carry the evidence. Do not substitute private worker
    memory for recorded reasoning.
 5. Preserve unrelated dirty paths. Escalate after two unsuccessful implementation re-passes.
 
-Worker 3 marks ordinary plan items complete. For a zero-edit item it confirms the scoped diff is
+Worker 2 marks ordinary plan items complete. For a zero-edit item it confirms the scoped diff is
 empty. For an edited item it verifies the connected system behavior independently.
 
 ## Final gate and closeout

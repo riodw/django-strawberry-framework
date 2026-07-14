@@ -1,43 +1,38 @@
-# Worker 2: consolidation implementer
+# Worker 2: independent verifier
 
-Worker 2 turns one reviewed artifact into the best root-cause consolidation. It does not approve
-its own work. `docs/dry/DRY.md` is canonical.
+Worker 2 decides whether one DRY item is complete. It independently challenges the claimed shared
+responsibility and the resulting ownership; it never writes the production fix.
+`docs/dry/DRY.md` is canonical.
 
 ## Required reading
 
-Read `AGENTS.md`, `START.md`, `docs/dry/DRY.md`, this file, the artifact, the complete target, every
-confirmed duplicate site, their important consumers, and relevant tests. Inspect the item-scoped
-diff from the baseline. Do not use historical cycle artifacts or another worker's private memory.
+Read `AGENTS.md`, `docs/dry/DRY.md`, this file, the artifact, item-scoped diff, complete target,
+consolidated sites, important consumers, and relevant tests. Do not use historical cycle artifacts
+or Worker 1's private reasoning beyond the shared artifact.
 
-## Implementation job
+## Verification job
 
-1. Reproduce each finding before editing. Reject it when the sites do not share a contract or
-   reason to change; record the concrete evidence.
-2. Put the single source of truth at the layer that owns the shared responsibility. Prefer extending
-   an existing owner, deleting an obsolete path, or establishing one canonical representation over
-   adding a forwarding helper.
-3. Migrate every confirmed site. Preserve intentional variation explicitly; do not accumulate mode
-   flags merely to make unrelated behavior share a function.
-4. Add permanent behavioral tests at the strongest reachable tier required by `AGENTS.md`. Tests
-   must prove the shared contract and protect any boundary that intentionally remains separate.
-5. Review comments, docstrings, exports, and public docs affected by the new ownership.
-6. Run focused verification when useful, then `uv run ruff format .` and
-   `uv run ruff check --fix .` after edits.
+1. Re-trace the responsibility through the system rather than reviewing only edited lines.
+2. Independently verify that every consolidated site shares the promised contract and reason to
+   change. Confirm that rejected or intentionally separate sites truly differ.
+3. Search for missed implementations, stale representations, bypasses, duplicate policy, imports,
+   tests, docs, and exports.
+4. Try to break the result with different inputs, state sequences, lifecycle phases, framework
+   paths, and extension points relevant to the target.
+5. Use focused tests or fresh scratch tests under `docs/dry/temp-tests/<scope>/` when useful.
+   Permanent behavior gaps return to Worker 1 for production tests and fixes.
+6. Confirm the new owner is clearer than the old repetition, all call sites migrated, compatibility
+   is preserved, validation is credible, and unrelated work was not absorbed.
 
-## Artifact update
+## Outcome
 
-Append `## Implementation (Worker 2)` and record:
+Append `## Independent verification (Worker 2)` and dispose of every finding and material rejected
+candidate.
 
-- the owner chosen and why it is the correct boundary;
-- every source, caller, test, export, or doc migrated;
-- behavior deliberately kept separate;
-- permanent and scratch verification results;
-- formatter and linter results;
-- evidence for rejected findings;
-- whether the completed change merits a changelog entry.
+- If complete, set `Status: verified` and mark the matching plan item.
+- If anything remains, set `Status: revision-needed` with concrete, reproducible feedback and leave
+  the plan item open.
 
-Do not edit `CHANGELOG.md` without explicit maintainer authorization. Set
-`Status: fix-implemented` only when the complete item is ready for independent verification. On a
-later pass, append to `## Iterations`; preserve the audit trail.
-
-Keep unrelated cleanup out of the diff, preserve concurrent work, and do not commit.
+Every review or implementation problem returns to Worker 1. For a zero-edit item, first confirm the
+scoped diff is empty and independently search for a real consolidation opportunity. Preserve
+unrelated work and do not commit.

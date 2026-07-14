@@ -151,7 +151,7 @@ Keep the artifact concise. Expand only where the target warrants it.
 ```text
 # DRY review: `path/to/target.py`
 
-Status: investigating | implementation-ready | fix-implemented | revision-needed | verified
+Status: investigating | fix-implemented | revision-needed | verified
 
 ## System trace
 
@@ -173,8 +173,8 @@ Write `None — <evidence-backed reason>` when no change is warranted.
 A short overall conclusion.
 ```
 
-Worker 2 appends `## Implementation (Worker 2)`. Worker 3 appends
-`## Independent verification (Worker 3)`. Later passes append `## Iterations`; no worker erases the
+Worker 1 appends `## Implementation (Worker 1)` when tracked changes are needed. Worker 2 appends
+`## Independent verification (Worker 2)`. Later passes append `## Iterations`; no worker erases the
 reasoning that preceded it. Avoid inventories, copied tool output, pseudo-code ceremonies, and empty
 placeholder sections.
 
@@ -182,21 +182,20 @@ placeholder sections.
 
 Each plan item uses fresh workers so the author of a change never approves it:
 
-1. Worker 1 performs the system-wide review and writes the artifact. It sets
-   `implementation-ready` when a tracked change is needed, or `fix-implemented` for a proved
-   zero-edit result.
-2. Worker 2 reproduces the findings, implements every accepted consolidation at its true owner,
-   adds permanent tests, and sets `fix-implemented`.
-3. Worker 3 independently re-traces the connected behavior, challenges equivalence and boundaries,
+1. Worker 1 performs the system-wide review, tries to disprove each candidate, and writes the
+   artifact. When a tracked change is needed, the same worker implements every accepted
+   consolidation at its true owner and adds permanent tests. It sets `fix-implemented` for both
+   edited and proved zero-edit results.
+2. Worker 2 independently re-traces the connected behavior, challenges equivalence and boundaries,
    and sets `verified` or `revision-needed`.
-4. A revision returns to Worker 2; an incomplete review returns to Worker 1. Worker 3 marks the plan
-   item complete only after verification.
+3. Every revision returns to Worker 1. Worker 2 marks the plan item complete only after
+   verification.
 
 Worker 0 coordinates and preserves the baseline; it does not review, implement, or approve. The
 artifact and item-scoped diff are the shared record. Cross-file changes are expected when the target
 reveals a system-owned rule. Unrelated cleanup stays out of scope.
 
-After an edit, Worker 2 runs `uv run ruff format .` and `uv run ruff check --fix .` as required by
+After an edit, Worker 1 runs `uv run ruff format .` and `uv run ruff check --fix .` as required by
 `AGENTS.md`. Focused tests may be used to verify a consolidation; permanent tests belong at the
 strongest reachable tier required by `AGENTS.md`. Changelog edits require explicit maintainer
 authorization.

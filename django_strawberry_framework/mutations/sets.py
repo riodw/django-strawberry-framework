@@ -106,6 +106,15 @@ _VALID_OPERATIONS: frozenset[str] = frozenset({"create", "update", "delete"})
 # ``_modelform_operation_kind`` copies.
 NON_DELETE_OPERATION_INPUT_KIND: dict[str, str] = {"create": CREATE, "update": PARTIAL}
 
+# The consumer override each non-delete operation honors. This is deliberately
+# separate from ``NON_DELETE_OPERATION_INPUT_KIND`` (forms and serializers reuse
+# the generator-kind map but do not support consumer input overrides), and is the
+# single source for both model-flavor validation and bind-time selection.
+_OPERATION_INPUT_OVERRIDE_ATTR: dict[str, str] = {
+    "create": "input_class",
+    "update": "partial_input_class",
+}
+
 # The create/update-only write operations the form + serializer flavors share
 # (spec-039 P1.2). A ``DjangoModelFormMutation`` and a ``SerializerMutation`` both
 # reject ``"delete"`` (a form has no delete pipeline; DRF serializers do not
@@ -790,6 +799,9 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         - **bad ``operation``** - missing or not in
           ``{"create", "update", "delete"}``.
         - **``fields`` + ``exclude`` both supplied** - mutual exclusion.
+        - **inapplicable consumer input override** - ``input_class`` on anything
+          other than create, or ``partial_input_class`` on anything other than
+          update; delete accepts neither because it has no input.
         - **bad ``input_class`` / ``partial_input_class``** - not a
           ``@strawberry.input`` type, or field names diverging from the generated
           scheme (AR-M2).
@@ -849,6 +861,20 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
                 f"DjangoMutation {name}.Meta.operation is 'delete', which is id-only and "
                 "takes no input; remove the inapplicable Meta.fields / Meta.exclude.",
             )
+
+        # Reject consumer input overrides that the declared operation cannot use.
+        # Delete has no input; create and update each read only their matching
+        # override. Without this guard, a valid customization is accepted and then
+        # silently discarded at bind time. The same mapping selects the override in
+        # ``_materialize_input_for``, so validation cannot drift from materialization.
+        for applies_to, override_key in _OPERATION_INPUT_OVERRIDE_ATTR.items():
+            if operation != applies_to and getattr(meta, override_key, None) is not None:
+                raise ConfigurationError(
+                    f"DjangoMutation {name}.Meta.{override_key} applies only to "
+                    f"operation='{applies_to}' (it customizes the {applies_to} input); this "
+                    f"mutation declares operation={operation!r}, so Meta.{override_key} would be "
+                    "silently ignored at the bind. Remove it.",
+                )
 
         input_class = getattr(meta, "input_class", None)
         if input_class is not None:
@@ -1057,7 +1083,7 @@ def _materialize_input_for(
     if operation_kind is None:
         return None  # delete: id-only, no input.
 
-    consumer_input = meta.input_class if operation_kind == CREATE else meta.partial_input_class
+    consumer_input = getattr(meta, _OPERATION_INPUT_OVERRIDE_ATTR[meta.operation])
     if consumer_input is not None:
         return _materialize_merged_input(
             mutation_name,

@@ -250,6 +250,65 @@ def test_meta_input_class_following_scheme_validates_clean():
     assert CreateItem._mutation_meta.input_class is GoodItemInput
 
 
+@pytest.mark.parametrize(
+    ("operation", "override_name", "applies_to"),
+    (
+        ("delete", "input_class", "create"),
+        ("delete", "partial_input_class", "update"),
+        ("create", "partial_input_class", "update"),
+        ("update", "input_class", "create"),
+    ),
+)
+def test_meta_inapplicable_input_override_raises(operation, override_name, applies_to):
+    """Every input override fails loud when its operation cannot consume it."""
+
+    @strawberry.input
+    class GoodItemInput:
+        name: str
+        category_id: int
+
+    mutation_meta = type(
+        "Meta",
+        (),
+        {"model": product_models.Item, "operation": operation, override_name: GoodItemInput},
+    )
+    with pytest.raises(
+        ConfigurationError,
+        match=rf"Meta\.{override_name} applies only to operation='{applies_to}'",
+    ):
+
+        class MisconfiguredItemMutation(DjangoMutation):
+            Meta = mutation_meta
+
+
+@pytest.mark.parametrize(
+    ("operation", "override_name", "other_override_name"),
+    (
+        ("create", "input_class", "partial_input_class"),
+        ("update", "partial_input_class", "input_class"),
+    ),
+)
+def test_meta_applicable_input_override_is_accepted(operation, override_name, other_override_name):
+    """Create and update retain the one consumer override each binds."""
+
+    @strawberry.input
+    class GoodItemInput:
+        name: str
+        category_id: int
+
+    mutation_meta = type(
+        "Meta",
+        (),
+        {"model": product_models.Item, "operation": operation, override_name: GoodItemInput},
+    )
+
+    class ItemMutation(DjangoMutation):
+        Meta = mutation_meta
+
+    assert getattr(ItemMutation._mutation_meta, override_name) is GoodItemInput
+    assert getattr(ItemMutation._mutation_meta, other_override_name) is None
+
+
 # ---------------------------------------------------------------------------
 # permission_classes default + override
 # ---------------------------------------------------------------------------

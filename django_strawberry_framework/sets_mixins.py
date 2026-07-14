@@ -199,6 +199,8 @@ def collect_related_declarations(
     declaration_type: type,
     collection_attr: str,
     inherit_from_bases: bool,
+    class_items: Any | None = None,
+    base_declarations_attr: str | None = None,
 ) -> OrderedDict:
     """Collect a metaclass's related-set declarations onto ``new_class`` and bind each.
 
@@ -211,13 +213,25 @@ def collect_related_declarations(
     ``inherit_from_bases`` selects the MRO-merge policy:
 
     - ``False`` (filter side): ``own_items`` is ``declared_filters.items()``,
-      which ``django_filters``' metaclass has ALREADY MRO-merged across bases, so
-      only the ``isinstance`` filter runs.
+      whose upstream MRO merge establishes the candidate order before the final
+      precedence reconciliation below.
     - ``True`` (order side): the plain ``type`` metaclass does no merge, so each
-      base's existing ``collection_attr`` is copied first (reversed MRO -> later
-      bases override earlier ones) and then ``own_items`` (the class body's
-      ``attrs``) override inherited same-named declarations.
+      base's existing ``collection_attr`` is copied first (reverse iteration lets
+      earlier bases override later ones, matching Python's MRO) and then
+      ``own_items`` (the class body's ``attrs``) override inherited same-named
+      declarations.
+
+    A non-declaration class attribute shadows and removes an inherited declaration.
+    The final base-precedence reconciliation also preserves that removal through
+    diamond inheritance: an earlier base's tombstone must not let a declaration
+    from a later base reappear. ``class_items`` preserves the raw class body when
+    an upstream metaclass mutates it, while ``base_declarations_attr`` identifies
+    that family's complete declaration map (including non-related declarations).
     """
+    own_items = tuple(own_items)
+    class_values = dict(own_items if class_items is None else class_items)
+    base_declarations_attr = base_declarations_attr or collection_attr
+
     collected: OrderedDict = OrderedDict()
     if inherit_from_bases:
         for base in reversed(bases):
@@ -226,6 +240,37 @@ def collect_related_declarations(
     for name, declaration in own_items:
         if isinstance(declaration, declaration_type):
             collected[name] = declaration
+        elif name in collected:
+            del collected[name]
+
+    # Resolve every inherited candidate against direct-base precedence. A base
+    # with the name in its complete declaration map owns that slot; otherwise a
+    # normal class attribute anywhere in that base's MRO is a tombstone. This
+    # catches the diamond case that a flattened declaration map cannot represent.
+    missing = object()
+    for name in tuple(collected):
+        if name in class_values:
+            continue
+        for base in bases:
+            declarations = getattr(base, base_declarations_attr, {})
+            if name in declarations:
+                selected = declarations[name]
+                if isinstance(selected, declaration_type):
+                    collected[name] = selected
+                else:
+                    del collected[name]
+                break
+            inherited_value = next(
+                (
+                    ancestor.__dict__[name]
+                    for ancestor in base.__mro__
+                    if name in ancestor.__dict__
+                ),
+                missing,
+            )
+            if inherited_value is not missing:
+                del collected[name]
+                break
     setattr(new_class, collection_attr, collected)
     for declaration in collected.values():
         declaration._bind_owner(new_class)

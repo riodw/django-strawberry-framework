@@ -185,6 +185,8 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
         attrs: dict[str, Any],
     ) -> FilterSetMetaclass:
         """Build the class, collect `RelatedFilter`s, and bind them to the owner."""
+        class_items = tuple(attrs.items())
+
         # Allow consumers to use `filter_fields` as a synonym for `fields`
         # under `Meta`; matches the cookbook's `graphene-django` alias.
         meta_class = attrs.get("Meta")
@@ -199,17 +201,33 @@ class FilterSetMetaclass(filterset.FilterSetMetaclass):
 
         # Collect the ``RelatedFilter`` declarations and bind each to the new
         # class via the shared set-family collector (the 0.0.9 DRY pass,
-        # ``docs/feedback.md`` Major 3). ``declared_filters`` is already MRO-merged
-        # by ``django_filters``' metaclass, so ``inherit_from_bases=False`` - only
-        # the ``isinstance`` filter runs (the order side merges from bases itself).
-        collect_related_declarations(
+        # ``docs/feedback.md`` Major 3). ``declared_filters`` supplies the
+        # django-filter-ordered candidate stream; the shared collector reconciles
+        # it against the unmodified class body and direct-base precedence so a
+        # tombstone cannot be lost in a diamond hierarchy.
+        related_candidates = {
+            name
+            for name, declaration in new_class.declared_filters.items()
+            if isinstance(declaration, RelatedFilter)
+        }
+        related_filters = collect_related_declarations(
             new_class,
             bases,
             own_items=new_class.declared_filters.items(),
             declaration_type=RelatedFilter,
             collection_attr="related_filters",
             inherit_from_bases=False,
+            class_items=class_items,
+            base_declarations_attr="declared_filters",
         )
+        removed_candidates = related_candidates - related_filters.keys()
+        if removed_candidates:
+            for field_name in removed_candidates:
+                del new_class.declared_filters[field_name]
+            # ``django-filter`` computed ``base_filters`` during ``super().__new__``.
+            # Rebuild from the now-corrected declaration map through its
+            # implementation so model-generated filters remain intact.
+            new_class.base_filters = filterset.BaseFilterSet.get_filters.__func__(new_class)
 
         return new_class
 
@@ -365,7 +383,11 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         def _build() -> OrderedDict:
             all_filters = get_base()
             if cls._meta.model is not None:
-                related_filters_val = getattr(cls, "related_filters", OrderedDict())
+                # During ``FilterSetMetaclass.__new__``, the new class does not
+                # own ``related_filters`` yet. Expanding an inherited map here
+                # would leak removed relations into django-filter's class-level
+                # ``base_filters`` snapshot.
+                related_filters_val = cls.__dict__.get("related_filters", OrderedDict())
                 for filter_name, f in related_filters_val.items():
                     expanded = _expand_related_filter(filter_name, f)
                     all_filters.update(expanded)

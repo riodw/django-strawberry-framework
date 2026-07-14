@@ -97,6 +97,44 @@ def test_filterset_metaclass_collects_related_filters():
     assert BranchFilter.related_filters["shelves"].bound_filterset is BranchFilter
 
 
+def test_filterset_metaclass_none_removal_survives_diamond_inheritance():
+    """An earlier base's ``None`` tombstone prevents later-base resurrection."""
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BaseFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    class RemovedFilter(BaseFilter):
+        shelves = None
+
+    class KeptFilter(BaseFilter):
+        pass
+
+    class CombinedFilter(RemovedFilter, KeptFilter):
+        pass
+
+    for filterset_cls in (RemovedFilter, CombinedFilter):
+        assert "shelves" not in filterset_cls.declared_filters
+        assert "shelves" not in filterset_cls.related_filters
+        assert not any(
+            name == "shelves" or name.startswith("shelves__")
+            for name in filterset_cls.base_filters
+        )
+        assert not any(
+            name == "shelves" or name.startswith("shelves__")
+            for name in filterset_cls.get_filters()
+        )
+    assert "shelves" in BaseFilter.related_filters
+
+
 def test_filterset_metaclass_aliases_filter_fields_to_fields():
     class ShelfFilter(FilterSet):
         class Meta:

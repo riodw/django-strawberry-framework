@@ -95,6 +95,39 @@ def test_metaclass_subclass_overrides_inherited_related_order():
     assert ChildOwner.related_orders["rel"].field_name == "rel_override"
 
 
+def test_metaclass_none_removal_survives_diamond_inheritance():
+    """An earlier base's ``None`` tombstone prevents later-base resurrection."""
+
+    class TargetOrder(OrderSet):
+        pass
+
+    class BaseOwner(OrderSet):
+        rel = RelatedOrder(TargetOrder, field_name="rel")
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    class RemovedOwner(BaseOwner):
+        rel = None  # django-filter removal idiom
+
+        class Meta:
+            model = Book
+            fields = ["title"]
+
+    class KeptOwner(BaseOwner):
+        pass
+
+    class CombinedOwner(RemovedOwner, KeptOwner):
+        pass
+
+    assert "rel" not in RemovedOwner.related_orders
+    assert "rel" not in RemovedOwner.get_fields()
+    assert "rel" not in CombinedOwner.related_orders
+    assert "rel" not in CombinedOwner.get_fields()
+    assert "rel" in BaseOwner.related_orders
+
+
 # ---------------------------------------------------------------------------
 # Class slot defaults
 # ---------------------------------------------------------------------------

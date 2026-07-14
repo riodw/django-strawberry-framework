@@ -78,8 +78,9 @@ class OrderSetMetaclass(type):
         # class via the shared set-family collector (the 0.0.9 DRY pass,
         # ``docs/feedback.md`` Major 3). The plain ``type`` metaclass does no MRO
         # merge, so ``inherit_from_bases=True`` copies each base's
-        # ``related_orders`` first (reversed MRO -> later bases win) before the
-        # class body's own ``attrs`` override - the cookbook lines 30-38 behavior.
+        # ``related_orders`` first (reverse iteration lets earlier bases win)
+        # before the class body's own ``attrs`` override - the cookbook lines
+        # 30-38 behavior.
         collect_related_declarations(
             new_class,
             bases,

@@ -76,25 +76,16 @@ __all__ = [
 
 
 class ChannelsRequestAdapter:
-    """A request-like WRAPPER over Strawberry's ``ChannelsRequest`` (spec-041 Decision 11).
+    """Request-like wrapper for Strawberry's Channels context values.
 
-    Strawberry's Channels consumers hand resolvers a dict context whose
-    ``"request"`` is a ``ChannelsRequest`` (a ``consumer`` + ``body`` dataclass)
-    with the authenticated actor at ``request.consumer.scope["user"]``. This
-    adapter is what ``request_from_info`` returns for that shape: ``.user`` /
-    ``.session`` / ``.scope`` are exposed explicitly from the consumer scope
-    (populated by ``AuthMiddlewareStack``), and EVERY other attribute is
-    delegated to the wrapped request via ``__getattr__`` - so consumer-written
-    ``check_<field>_permission`` hooks and DRF serializer overrides reading
-    ``request.headers`` / ``.COOKIES`` / ``.path`` / ``.method`` /
-    ``.consumer`` keep working under Channels instead of raising
-    ``AttributeError`` (spec-041 finding P1.1: the adapter must not silently
-    narrow the framework request contract).
+    The HTTP consumer supplies a ``ChannelsRequest`` whose scope lives at
+    ``request.consumer.scope``. The WebSocket consumer supplies itself, with the
+    scope directly at ``request.scope``. This adapter exposes ``user``,
+    ``session``, and ``scope`` consistently for both shapes and delegates every
+    other attribute to the original context value.
 
-    Deliberately duck-typed: this module imports nothing from ``channels`` (the
-    package's second soft dependency stays soft), and the adapter works for
-    consumers who wire Strawberry's Channels consumers WITHOUT the package's
-    ``DjangoGraphQLProtocolRouter``.
+    The contract is deliberately duck-typed so importing this module does not
+    require the optional ``channels`` dependency (spec-041 Decision 11).
     """
 
     def __init__(self, request: Any, scope: Mapping[str, Any]) -> None:
@@ -103,7 +94,7 @@ class ChannelsRequestAdapter:
 
     @property
     def scope(self) -> Mapping[str, Any]:
-        """The Channels connection scope carried by the wrapped request's consumer."""
+        """Return the resolved Channels connection scope."""
         return self._scope
 
     @property
@@ -117,28 +108,36 @@ class ChannelsRequestAdapter:
         return self._scope.get("session")
 
     def __getattr__(self, name: str) -> Any:
-        """Delegate every non-scope attribute to the wrapped ``ChannelsRequest``."""
+        """Delegate every non-scope attribute to the original context value."""
         return getattr(self._request, name)
+
+
+def _channels_scope(request: Any) -> Mapping[str, Any] | None:
+    """Resolve Strawberry's HTTP or WebSocket Channels scope shape."""
+    consumer = getattr(request, "consumer", None)
+    scope = getattr(consumer, "scope", None)
+    if isinstance(scope, Mapping):
+        return scope
+    scope = getattr(request, "scope", None)
+    if isinstance(scope, Mapping):
+        return scope
+    return None
 
 
 def _channels_request_adapter(context: Any) -> ChannelsRequestAdapter | None:
     """Resolve a mapping context to the Channels adapter; ``None`` for every other shape.
 
-    Recognizes exactly the Strawberry-Channels context contract (a mapping whose
-    ``"request"`` value exposes ``consumer.scope`` as a mapping), duck-typed so
-    the helper never imports ``channels``. Any other shape returns ``None`` and
-    the caller's final family-labelled ``ConfigurationError`` stays
-    authoritative (Helper-reuse D-P2: this is the ONE place a new request shape
-    is supported - no local decoders in routers/auth/mutation/permission code).
+    The recognized value carries a mapping scope through ``consumer.scope``
+    (HTTP) or directly through ``scope`` (WebSocket). Keeping this recognition
+    here preserves the single request-decoder boundary from spec-041 D-P2.
     """
     if not isinstance(context, Mapping):
         return None
     request = context.get("request")
     if request is None:
         return None
-    consumer = getattr(request, "consumer", None)
-    scope = getattr(consumer, "scope", None)
-    if not isinstance(scope, Mapping):
+    scope = _channels_scope(request)
+    if scope is None:
         return None
     return ChannelsRequestAdapter(request, scope)
 
@@ -149,9 +148,10 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
     Canonical Strawberry-Django shape: ``info.context.request``. The
     wrapper-less alternative (``info.context`` *is* a bare ``HttpRequest`` -- the
     Django test-client default) is also accepted so consumers work without
-    bespoke wiring, and so is Strawberry's Channels consumer context (a mapping
-    whose ``"request"`` exposes ``consumer.scope`` -- resolved to the wrapping
-    ``ChannelsRequestAdapter``, spec-041 Decision 11). Any other shape raises
+    bespoke wiring. Strawberry's Channels mapping context is also accepted: its
+    ``"request"`` carries the ASGI scope through ``consumer.scope`` for HTTP or
+    directly through ``scope`` for WebSockets and is wrapped in a
+    ``ChannelsRequestAdapter`` (spec-041 Decision 11). Any other shape raises
     ``ConfigurationError`` naming ``family_label`` (``FilterSet`` / ``OrderSet``
     / ``DjangoMutation``) so the consumer sees which surface failed. The message
     is **family-neutral** (no ``.apply`` suffix): the helper is shared by the
@@ -175,8 +175,9 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
     raise ConfigurationError(
         f"{family_label} could not resolve a Django HttpRequest from `info.context` "
         f"(got {type(context).__name__}). Expected `info.context.request`, a bare "
-        "HttpRequest, or a Strawberry Channels mapping context with "
-        '`context["request"].consumer.scope`.',
+        "HttpRequest, or a Strawberry Channels mapping context whose `request` "
+        'carries an ASGI scope (`context["request"].consumer.scope` for the HTTP '
+        'consumer, `context["request"].scope` for the WebSocket consumer).',
     )
 
 

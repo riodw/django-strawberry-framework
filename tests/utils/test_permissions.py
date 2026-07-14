@@ -154,6 +154,54 @@ def test_non_mapping_scope_is_not_recognized_as_channels():
 
 
 # ---------------------------------------------------------------------------
+# request_from_info -- Strawberry's WebSocket context puts the consumer itself
+# at context["request"], so its ASGI scope is direct at request.scope.
+# ---------------------------------------------------------------------------
+
+
+class _FakeWSConsumer:
+    """The ``GraphQLWSConsumer`` duck shape: the consumer is the request."""
+
+    def __init__(self, scope):
+        self.scope = scope
+        self.channel_name = "specific..inmemory!probe"
+
+
+def _channels_ws_info(scope):
+    consumer = _FakeWSConsumer(scope)
+    context = {"request": consumer, "ws": consumer}
+    return type("Info", (), {"context": context})()
+
+
+def test_channels_websocket_context_resolves_to_a_wrapping_adapter():
+    """Direct scope fields resolve and other consumer attributes still delegate."""
+    user, session = object(), object()
+    scope = {"user": user, "session": session, "type": "websocket"}
+    adapter = request_from_info(_channels_ws_info(scope), family_label="FilterSet")
+    assert adapter.user is user
+    assert adapter.session is session
+    assert adapter.scope is scope
+    assert adapter.channel_name == "specific..inmemory!probe"
+
+
+def test_channels_websocket_scope_fields_default_to_none_when_middleware_absent():
+    """A WS scope with no ``user`` key -> ``.user`` / ``.session`` are ``None``, not errors."""
+    adapter = request_from_info(
+        _channels_ws_info({"type": "websocket"}),
+        family_label="OrderSet",
+    )
+    assert adapter.user is None
+    assert adapter.session is None
+
+
+def test_non_mapping_websocket_scope_is_not_recognized_as_channels():
+    """A direct WebSocket scope must still be a mapping."""
+    info = _channels_ws_info(["not", "a", "mapping"])
+    with pytest.raises(ConfigurationError, match="OrderSet could not resolve"):
+        request_from_info(info, family_label="OrderSet")
+
+
+# ---------------------------------------------------------------------------
 # iter_input_items / extract_branch_value
 # ---------------------------------------------------------------------------
 

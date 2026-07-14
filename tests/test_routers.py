@@ -78,6 +78,12 @@ class Query:
         request = request_from_info(info, family_label="FilterSet")
         return request.user.username
 
+    @strawberry.field
+    def actor(self, info: strawberry.Info) -> str:
+        """Read the scope-backed actor without requiring HTTP-only attributes."""
+        request = request_from_info(info, family_label="FilterSet")
+        return f"{type(request).__name__}|{request.user.is_anonymous}"
+
 
 SCHEMA = strawberry.Schema(query=Query)
 
@@ -493,6 +499,50 @@ async def test_request_contract_resolves_through_the_router_for_anonymous_reads(
     router = _router_class()(SCHEMA)
     data = await _graphql_data(router, "{ whoami }")
     assert data == {"whoami": "ChannelsRequestAdapter|True|POST"}
+
+
+async def _ws_graphql_data(application, query):
+    """Run one GraphQL operation over the WS branch via graphql-transport-ws.
+
+    connection_init -> connection_ack -> subscribe -> next (the single result),
+    the strawberry graphql-transport-ws single-result-operation flow.
+    """
+    communicator = WebsocketCommunicator(
+        application,
+        "/graphql",
+        headers=[(b"origin", b"http://testserver")],
+        subprotocols=["graphql-transport-ws"],
+    )
+    connected, protocol = await communicator.connect(timeout=10)
+    try:
+        assert connected, "websocket handshake failed"
+        assert protocol == "graphql-transport-ws"
+        await communicator.send_json_to({"type": "connection_init"})
+        ack = await communicator.receive_json_from(timeout=10)
+        assert ack["type"] == "connection_ack", ack
+        await communicator.send_json_to(
+            {"type": "subscribe", "id": "1", "payload": {"query": query}},
+        )
+        msg = await communicator.receive_json_from(timeout=10)
+    finally:
+        await communicator.disconnect()
+    assert msg["type"] == "next", msg
+    payload = msg["payload"]
+    assert payload.get("errors") is None, payload
+    return payload["data"]
+
+
+@pytest.mark.django_db
+async def test_request_contract_resolves_over_the_websocket_branch():
+    """Test 16b: the request contract resolves over WS, not just HTTP.
+
+    The WebSocket consumer is the context request, with scope directly on it.
+    The router's AuthMiddlewareStack populates that scope, so the shared helper
+    must resolve it just as it resolves the HTTP consumer's wrapped request.
+    """
+    router = _router_class()(SCHEMA)
+    data = await _ws_graphql_data(router, "{ actor }")
+    assert data == {"actor": "ChannelsRequestAdapter|True"}
 
 
 @pytest.mark.django_db(transaction=True)

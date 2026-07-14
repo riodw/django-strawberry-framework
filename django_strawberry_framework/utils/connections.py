@@ -57,17 +57,13 @@ CONNECTION_SIDECAR_KWARGS = (CONNECTION_FILTER_KWARG, CONNECTION_ORDER_KWARG)
 class UnwindowableConnection(Exception):  # noqa: N818 - control-flow signal, not a surfaced error
     """Internal signal: this pagination shape cannot be served by a windowed prefetch.
 
-    Raised by ``derive_connection_window_bounds`` for an offset-bearing backward
-    window (``after`` + ``last``, no ``first``, no ``before``). The reversed
-    row-number window numbers rows from the partition END, so the forward
-    ``_dst_row_number`` the resolver reads its page flags from spans the WHOLE
-    partition, not the ``after``-filtered subset; pairing that with a non-zero
-    ``after`` offset makes ``hasPreviousPage`` (and the offset cursor) diverge
-    from the per-parent pipeline whenever the after-remainder is ``<= last`` rows
-    (spec-033 Decision 5 scopes the reversed window to ``last``-only and defers
-    the offset-bearing shapes to the per-parent fallback - "combinations the
-    offset arithmetic cannot push down fall back per-parent rather than
-    approximating").
+    Raised by ``derive_connection_window_bounds`` when Strawberry's Python-slice
+    metadata cannot be represented by the SQL row-number window without changing
+    results or page flags. This includes offset-bearing backward windows
+    (``after`` + ``last``) and inverted ``after`` + ``before`` intervals. Per
+    spec-033 Decision 5 these valid shapes fall back per parent rather than being
+    approximated. Malformed negative cursor indices raise ``TypeError`` instead,
+    preserving the existing pagination-error locality path.
 
     A control-flow sentinel, deliberately NOT a ``DjangoStrawberryFrameworkError``
     and NOT a ``ValueError`` / ``TypeError``: the walker catches the pagination
@@ -256,10 +252,15 @@ def window_range_plan(
     - ``limit is None`` OR Relay's ``sys.maxsize`` means "no upper bound"
       (the offset floor still applies). Normalized here so no renderer ever
       sees ``sys.maxsize``.
-    - A negative limit is not a valid window and is treated as unbounded
-      (unreachable through ``SliceMetadata`` - it raises on negative
-      ``first`` / ``last`` - but direct callers get one deliberate rule
-      instead of per-renderer drift).
+    - A negative limit is an invalid internal window specification and raises
+      ``OptimizerError``. Pagination shapes that Strawberry maps to a negative
+      ``expected`` are classified upstream by
+      ``derive_connection_window_bounds`` and fall back per parent; silently
+      treating a negative direct-call limit as unbounded would recreate the same
+      wrong-row failure in both renderers.
+    - A negative offset likewise raises ``OptimizerError``. Derived offset-cursor
+      starts are classified as malformed pagination upstream, but direct request
+      objects must not turn one into an absolute SQL row-number floor.
 
     ``next_page_probe`` (the count-free ``hasNextPage`` overfetch) is honored
     only on the ``plain_first_page`` shape and ignored everywhere else, so a
@@ -278,10 +279,14 @@ def window_range_plan(
     keyset shape puts the seek in the base WHERE instead (its rows number
     1..N natively) and never sets this flag.
     """
+    if offset < 0:
+        raise OptimizerError("A connection window offset cannot be negative.")
+    if limit is not None and limit < 0:
+        raise OptimizerError("A connection window limit cannot be negative.")
     if limit == sys.maxsize:
         limit = None
     lower_bound = offset if (offset or keyset_counted) else None
-    bounded = limit is not None and limit >= 0
+    bounded = limit is not None
     upper_bound = (limit if reverse else offset + limit) if bounded else None
     ambiguous = keyset_counted or is_ambiguous_empty_window(offset, limit, reverse=reverse)
     plain_first_page = not reverse and offset == 0 and bounded and limit > 0
@@ -455,6 +460,15 @@ def derive_connection_window_bounds(
     forward window either (``end == sys.maxsize`` so ``expected is None``, an
     uncapped tail). Per spec-033 Decision 5 this falls back per-parent rather than
     approximating, so raise ``UnwindowableConnection`` to leave it unplanned.
+
+    Strawberry's metadata is a Python slice, so only a nonnegative,
+    non-inverted interval can be translated to positive SQL row numbers. An
+    inverted ``after`` + ``before`` interval has a negative ``expected`` and
+    means an empty Python slice, not an unbounded SQL tail, so it falls back per
+    parent under spec-033 Decision 5. A correctly prefixed but forged negative
+    cursor can produce a negative ``start`` or ``end``; classify that as malformed
+    pagination (``TypeError``), not a valid fallback, so strictness cannot mask
+    the field's own negative-index error.
     """
     slice_meta = SliceMetadata.from_arguments(
         info,
@@ -465,9 +479,17 @@ def derive_connection_window_bounds(
         max_results=max_results,
     )
     reverse = isinstance(last, int) and not isinstance(first, int) and before is None
+    if slice_meta.start < 0:
+        raise TypeError("Argument 'after' contains a non-existing value.")
+    if slice_meta.end < 0:
+        raise TypeError("Argument 'before' contains a non-existing value.")
     if reverse and after is not None:
         # Offset-bearing backward window: the reversed window's whole-partition
         # row numbering cannot honor the ``after`` offset (spec-033 Decision 5).
+        raise UnwindowableConnection
+    if slice_meta.expected is not None and slice_meta.expected < 0:
+        # SQL row numbers cannot reproduce an inverted Python slice. Fall back
+        # instead of approximating it as an unbounded forward tail.
         raise UnwindowableConnection
     limit = last if reverse else slice_meta.expected
     return ConnectionWindowBounds(slice_meta.start, limit, reverse)

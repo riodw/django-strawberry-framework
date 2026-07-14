@@ -145,6 +145,137 @@ def test_after_with_first_stays_a_windowed_forward_offset():
     assert bounds == ConnectionWindowBounds(offset=3, limit=2, reverse=False)
 
 
+def test_inverted_after_before_is_unwindowable_not_a_negative_limit_window():
+    """An inverted ``after`` + ``before`` window raises ``UnwindowableConnection``.
+
+    When ``before`` resolves at or before ``after``, ``SliceMetadata`` yields
+    ``start > end`` so ``expected`` is NEGATIVE (the range is empty). Pre-fix the
+    helper passed that negative ``expected`` straight through as ``limit``, and
+    the pre-fix ``window_range_plan`` read it as "no upper bound". The windowed
+    prefetch therefore served the forward tail instead of the empty page from the
+    per-parent ``ListConnection``. The fix makes it an unwindowable fallback
+    (spec-033 Decision 5).
+    """
+    after_cursor = to_base64("arrayconnection", "3")
+    before_cursor = to_base64("arrayconnection", "2")
+    slice_meta = SliceMetadata.from_arguments(
+        None,
+        before=before_cursor,
+        after=after_cursor,
+        max_results=_MAX,
+    )
+    # The trap: a NEGATIVE expected (start 4 > end 2), which the pre-fix path
+    # forwarded as a negative ``limit`` that the pre-fix range planner unbounded.
+    assert slice_meta.start == 4
+    assert slice_meta.expected == -2
+
+    with pytest.raises(UnwindowableConnection):
+        derive_connection_window_bounds(
+            None,
+            before=before_cursor,
+            after=after_cursor,
+            first=None,
+            last=None,
+            max_results=_MAX,
+        )
+    # The same inverted range with a trailing ``last:`` bound is unwindowable too.
+    with pytest.raises(UnwindowableConnection):
+        derive_connection_window_bounds(
+            None,
+            before=before_cursor,
+            after=after_cursor,
+            first=None,
+            last=2,
+            max_results=_MAX,
+        )
+
+
+def test_negative_after_cursor_start_is_malformed_not_windowable():
+    """A forged negative offset stays a field-local pagination error."""
+    after_cursor = to_base64("arrayconnection", "-2")
+    slice_meta = SliceMetadata.from_arguments(
+        None,
+        after=after_cursor,
+        first=2,
+        max_results=_MAX,
+    )
+    assert slice_meta.start == -1
+    assert slice_meta.expected == 2
+
+    with pytest.raises(TypeError, match="Argument 'after' contains a non-existing value"):
+        derive_connection_window_bounds(
+            None,
+            before=None,
+            after=after_cursor,
+            first=2,
+            last=None,
+            max_results=_MAX,
+        )
+
+
+def test_negative_before_cursor_end_is_malformed_not_inverted():
+    """A forged negative end is malformed, not a strictness-visible fallback."""
+    before_cursor = to_base64("arrayconnection", "-2")
+    slice_meta = SliceMetadata.from_arguments(
+        None,
+        before=before_cursor,
+        max_results=_MAX,
+    )
+    assert slice_meta.start == 0
+    assert slice_meta.end == -2
+
+    with pytest.raises(TypeError, match="Argument 'before' contains a non-existing value"):
+        derive_connection_window_bounds(
+            None,
+            before=before_cursor,
+            after=None,
+            first=None,
+            last=None,
+            max_results=_MAX,
+        )
+
+
+def test_non_inverted_after_before_stays_a_windowed_forward_offset():
+    """A NON-inverted ``after`` + ``before`` window stays windowable (guards over-rejection).
+
+    ``after`` index 1, ``before`` index 4 resolves ``start=2``, ``end=4`` (a
+    positive ``expected`` of 2), so the forward offset window is fully
+    expressible - only the negative-``expected`` inverted shape is unwindowable.
+    """
+    bounds = derive_connection_window_bounds(
+        None,
+        before=to_base64("arrayconnection", "4"),
+        after=to_base64("arrayconnection", "1"),
+        first=None,
+        last=None,
+        max_results=_MAX,
+    )
+    assert bounds == ConnectionWindowBounds(offset=2, limit=2, reverse=False)
+
+
+def test_zero_width_after_before_stays_windowable():
+    """A zero-width interval is representable and must not be over-rejected."""
+    bounds = derive_connection_window_bounds(
+        None,
+        before=to_base64("arrayconnection", "4"),
+        after=to_base64("arrayconnection", "3"),
+        first=None,
+        last=None,
+        max_results=_MAX,
+    )
+    assert bounds == ConnectionWindowBounds(offset=4, limit=0, reverse=False)
+
+
+@pytest.mark.parametrize(
+    ("offset", "limit", "message"),
+    [(-1, 2, "window offset cannot be negative"), (4, -2, "window limit cannot be negative")],
+)
+def test_window_range_plan_rejects_negative_direct_bounds(offset, limit, message):
+    """A malformed internal request fails loud instead of changing its range."""
+    with pytest.raises(OptimizerError, match=message):
+        window_range_plan(offset=offset, limit=limit, reverse=False)
+
+
 def test_sidecar_kwarg_family_constants():
     """The sidecar kwarg family is the Python kwarg names ``filter`` / ``order_by``."""
     assert CONNECTION_FILTER_KWARG == "filter"

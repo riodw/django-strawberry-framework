@@ -331,12 +331,12 @@ def _connection_window_slice(sel: Any, info: Any) -> tuple[int, int | None, bool
     resolver calls the same helper directly with already-coerced Strawberry
     arguments and lets the pagination error propagate instead.
 
-    ``UnwindowableConnection`` (the offset-bearing backward shape, ``after`` +
-    ``last``) is deliberately NOT caught here: it is a VALID query that resolves
-    correctly per-parent, so ``plan_connection_relation`` must treat it as a
-    fully-unplanned Decision-6 fallback (no ``planned_resolver_keys`` entry, like
-    the sidecar / distinct shapes) rather than the malformed-pagination ``None``
-    path that records the field as accounted-for (spec-033 Decision 5).
+    ``UnwindowableConnection`` (an offset-bearing backward or inverted interval)
+    is deliberately NOT caught here: it is a VALID query that resolves correctly
+    per-parent, so ``plan_connection_relation`` must treat it as a fully-unplanned
+    Decision-6 fallback (no ``planned_resolver_keys`` entry, like the sidecar /
+    distinct shapes) rather than the malformed-pagination ``None`` path that
+    records the field as accounted-for (spec-033 Decision 5).
     """
     return _connection_window_slice_from_arguments(
         getattr(sel, "arguments", None) or {},
@@ -485,9 +485,9 @@ def _divergent_key_windows(
 
     - sidecar input (``filter:`` / ``orderBy:``) -> that key stays UNPLANNED
       (per-parent, strictness-visible), siblings unaffected;
-    - ``UnwindowableConnection`` (``after`` + ``last``; every backward keyset
-      shape) and the reversed ``last: 0`` quirk -> likewise that key alone
-      falls back per-parent;
+    - ``UnwindowableConnection`` (``after`` + ``last``; inverted offset interval;
+      every backward keyset shape) and the reversed ``last: 0`` quirk -> likewise
+      that key alone falls back per-parent;
     - malformed pagination -> that key is returned in ``malformed`` so the
       caller records ONLY its identities (per-key error locality: the
       per-parent pipeline raises that alias's own validation error);
@@ -742,16 +742,13 @@ def plan_connection_relation(
                 _response_keys(sel),
                 "unsupported pagination window",
             )
-            # (b) Offset-bearing backward window (after + last) - and, for a
-            # keyset target, EVERY backward shape (``last`` / ``before:``, the
-            # v1 keyset window is forward-only): the reversed window cannot
-            # serve it, so it falls back per-parent like the other Decision-6
-            # fallback shapes (sidecar, distinct). Stay FULLY unplanned -
-            # record NO resolver identities - so the per-parent access stays
-            # visible to the Slice-4 strictness contract (spec-033 Decision 5;
-            # unlike the malformed-pagination `window is None` path below,
-            # this query resolves correctly per-parent and never raises its
-            # own error, so it is a real per-parent access).
+            # (b) A valid offset interval the SQL window cannot represent
+            # (``after`` + ``last`` or inverted ``after`` + ``before``) - and,
+            # for a keyset target, EVERY backward shape (``last`` / ``before:``;
+            # the v1 keyset window is forward-only). Fall back per-parent like
+            # the other Decision-6 shapes (sidecar, distinct). Stay FULLY
+            # unplanned so the per-parent access remains strictness-visible;
+            # unlike malformed pagination, this query resolves normally there.
             return NestedConnectionPlanResult(plan=plan)
         if window is None:
             _log_connection_fallback(

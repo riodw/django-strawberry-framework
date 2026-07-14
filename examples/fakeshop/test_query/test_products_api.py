@@ -1847,6 +1847,121 @@ def test_products_categories_items_connection_fixed_query_count():
     assert three_items_each == 2
 
 
+# ``after`` + ``before`` on the windowed nested ``itemsConnection``. An INVERTED
+# range (``before`` at or before ``after``) makes ``SliceMetadata`` yield a
+# NEGATIVE ``expected`` (``start > end``). ``utils/connections.py``'s
+# ``derive_connection_window_bounds`` must reject that shape as
+# ``UnwindowableConnection`` (fall back per-parent), or the pre-fix
+# ``window_range_plan`` reads the negative bound as "no upper bound" and serves
+# the forward tail instead of the empty page the per-parent ``ListConnection``
+# serves - an optimizer-on / optimizer-off cursor-parity break.
+_ITEMS_CONNECTION_WINDOW_QUERY = """
+query($after: String, $before: String, $first: Int, $last: Int) {
+  allCategories {
+    edges {
+      node {
+        name
+        itemsConnection(after: $after, before: $before, first: $first, last: $last) {
+          edges { node { name } cursor }
+          pageInfo { hasNextPage hasPreviousPage startCursor endCursor }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def _items_connection_page(category_name: str, variables: dict) -> dict:
+    """Return one seeded category's ``itemsConnection`` page over live /graphql."""
+    data = _graphql_data(_ITEMS_CONNECTION_WINDOW_QUERY, variables=variables)
+    nodes = [edge["node"] for edge in data["allCategories"]["edges"]]
+    return next(node["itemsConnection"] for node in nodes if node["name"] == category_name)
+
+
+@pytest.mark.django_db
+def test_products_items_connection_inverted_after_before_window_is_empty():
+    """An inverted ``after`` + ``before`` nested window serves the empty page.
+
+    Regression guard for the negative-``expected`` cursor-parity bug: with
+    ``before`` resolving at or before ``after`` the range is empty, so the
+    per-parent ``ListConnection`` serves ``edges: []`` with
+    ``hasPreviousPage = start > 0`` and ``hasNextPage = False``. Pre-fix, the
+    windowed fast path treated the negative slice bound as unbounded and returned
+    the two rows past ``after``; the fix makes ``derive_connection_window_bounds``
+    reject the shape as ``UnwindowableConnection`` so the windowed and
+    non-windowed paths agree.
+
+    Uses one public seeded category and makes its six seeded items visible so the
+    window spans a deterministic partition without hand-rolling catalog rows.
+    """
+    seed_data(6)
+    category = models.Category.objects.filter(is_private=False).order_by("pk").first()
+    category.items.update(is_private=False)
+    expected_names = list(category.items.order_by("pk").values_list("name", flat=True))
+
+    # Capture the REAL positional cursors (index -> cursor) from a full page.
+    full = _items_connection_page(category.name, {"first": 100})
+    cursors = [edge["cursor"] for edge in full["edges"]]
+    assert len(cursors) == 6, full
+
+    # Inverted range: ``after`` the 4th row (index 3), ``before`` the 3rd (index 2).
+    inverted = _items_connection_page(
+        category.name,
+        {"after": cursors[3], "before": cursors[2]},
+    )
+    assert inverted["edges"] == []
+    assert inverted["pageInfo"] == {
+        "hasNextPage": False,
+        "hasPreviousPage": True,  # start (=4) > 0
+        "startCursor": None,
+        "endCursor": None,
+    }
+
+    # The inverted shape also arises with a trailing ``last:`` bound.
+    inverted_last = _items_connection_page(
+        category.name,
+        {"after": cursors[3], "before": cursors[2], "last": 2},
+    )
+    assert inverted_last["edges"] == []
+    assert inverted_last["pageInfo"]["hasNextPage"] is False
+    assert inverted_last["pageInfo"]["hasPreviousPage"] is True
+
+    # A NON-inverted ``before``-capped window still windows correctly (guards the
+    # fix against over-rejecting): ``after`` index 1, ``before`` index 4 -> the
+    # middle rows (indices 2, 3), overfetch reports a further next page.
+    middle = _items_connection_page(
+        category.name,
+        {"after": cursors[1], "before": cursors[4]},
+    )
+    assert [edge["node"]["name"] for edge in middle["edges"]] == expected_names[2:4]
+    assert middle["pageInfo"]["hasPreviousPage"] is True
+    assert middle["pageInfo"]["hasNextPage"] is True
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("argument", ["after", "before"])
+def test_products_items_connection_negative_cursor_preserves_pipeline_error(argument):
+    """A forged negative offset cursor cannot be approximated by a SQL window.
+
+    Strawberry decodes these correctly prefixed cursors to a negative slice
+    boundary. Its per-parent Django ``QuerySet`` path rejects negative indexing;
+    pre-fix, the optimizer translated the boundary to an SQL row-number range and
+    silently served rows instead. Falling back preserves the field's own error.
+    """
+    seed_data(1)
+    variables = {argument: relay.to_base64("arrayconnection", "-2")}
+    if argument == "after":
+        variables["first"] = 2
+    response = _post_graphql(
+        _ITEMS_CONNECTION_WINDOW_QUERY,
+        variables=variables,
+    )
+    payload = response.json()
+    assert response.status_code == 200
+    assert payload["errors"][0]["message"] == "Negative indexing is not supported."
+
+
 # Slice 6 (spec-033) deliberately adds NO Meta.connection opt-in on the four
 # products types (no totalCount; minimal cookbook-mirror conversion) and NO root
 # node(id:) / nodes(ids:) entry points (those stay TODO-BETA-053-0.1.5).

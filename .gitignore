@@ -196,6 +196,11 @@ docs/builder/temp-tests/
 # The tracked permanent record is the dry-<0_0_X>.md plan, never these notes.
 docs/dry/worker-memory/
 
+# Temp test files created during active DRY and bug-hunt cycles.
+# Deleted at closeout; permanent tests live under the AGENTS.md trees.
+docs/dry/temp-tests/
+docs/bug_hunt/temp-tests/
+
 # LSP config files
 pyrightconfig.json
 

@@ -17,6 +17,7 @@ import pytest
 import strawberry
 from apps.library.models import Book, Issue, Patron, Periodical
 from apps.scalars.models import ScalarSpecimen
+from django.db import models
 from django.db.models import Count, F
 from graphql import GraphQLError
 from strategy_schemas import make_django_type
@@ -479,6 +480,26 @@ def test_resolve_order_path_field_arms():
         _meta=SimpleNamespace(get_field=lambda _name: virtual_field),
     )
     assert _resolve_order_path_field(virtual_model, "virtual") is None
+
+
+def test_resolve_order_path_field_accepts_mti_parent_link():
+    """A concrete auto-created parent link is a safe non-null forward hop."""
+
+    class Parent(models.Model):
+        label = models.CharField(max_length=20)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class Child(Parent):
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    parent_link = Child._meta.pk
+
+    assert _resolve_order_path_field(Child, f"{parent_link.name}__label").name == "label"
 
 
 # =============================================================================

@@ -311,7 +311,7 @@ def _make_relation_resolver(field: Any, parent_type: type | None = None) -> Any:
       the optimizer has prefetched) so the same shape works on or off
       the optimizer. ``list(...)`` materializes the queryset to a Python
       list, matching strawberry-graphql-django's ``get_result`` shape.
-    - Reverse OneToOne (``one_to_one`` and ``auto_created``):
+    - Reverse OneToOne (a non-concrete ``OneToOneRel`` descriptor):
       ``getattr(root, name)`` wrapped in ``try/except DoesNotExist`` so
       the resolver returns ``None`` when the reverse row is absent.
     - Forward FK / forward OneToOne: ``getattr(root, name)`` - returns

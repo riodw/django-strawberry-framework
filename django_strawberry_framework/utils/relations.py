@@ -23,19 +23,20 @@ MANY_SIDE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
 
 
 class _RelationFieldLike(Protocol):
-    """Shape contract for the four Django relation flags this classifier reads.
+    """Shape contract for the five Django relation flags this classifier reads.
 
     Every caller in the package hands in a real Django relation field or rel
     descriptor whose ``many_to_many`` / ``one_to_many`` / ``one_to_one`` /
-    ``auto_created`` attributes are always present. The narrower annotation
-    documents the read contract; ``getattr(..., False)`` in the body still
-    defends against shapes that omit a flag.
+    ``auto_created`` / ``concrete`` attributes are always present. The narrower
+    annotation documents the read contract; ``getattr(..., False)`` in the body
+    still defends against shapes that omit a flag.
     """
 
     many_to_many: bool
     one_to_many: bool
     one_to_one: bool
     auto_created: bool
+    concrete: bool
 
 
 def relation_kind(field: _RelationFieldLike) -> RelationKind:
@@ -52,10 +53,13 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
       consumers (and the registry's typed ``PendingRelation`` sentinel)
       can disambiguate.
     - ``"reverse_one_to_one"`` - the reverse side of a
-      ``OneToOneField`` (``one_to_one=True`` + ``auto_created=True``).
+      ``OneToOneField`` (Django's ``OneToOneRel`` descriptor:
+      ``one_to_one=True`` + ``auto_created=True`` + ``concrete=False``).
+      ``concrete`` distinguishes it from Django's auto-created MTI parent
+      link, which is a forward ``OneToOneField`` with the same other flags.
     - ``"forward_single"`` - every other forward single-row relation
-      (``ForeignKey``, forward ``OneToOneField`` - i.e.,
-      ``auto_created=False``).
+      (``ForeignKey``, forward ``OneToOneField``, and the concrete
+      auto-created MTI parent link).
 
     Any ``one_to_many=True`` shape without ``auto_created`` falls back to
     ``"many"`` as a defensive mapping; stock Django relation descriptors
@@ -70,7 +74,8 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
         ``ManyToManyField``-like -> ``"many"``;
         ``ManyToOneRel``-like -> ``"reverse_many_to_one"``;
         ``OneToOneRel``-like -> ``"reverse_one_to_one"``;
-        ``ForeignKey``-like -> ``"forward_single"``.
+        ``ForeignKey``-like -> ``"forward_single"``;
+        MTI ``<parent>_ptr``-like -> ``"forward_single"``.
     """
     if getattr(field, "many_to_many", False):
         return "many"
@@ -78,7 +83,11 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
         if getattr(field, "auto_created", False):
             return "reverse_many_to_one"
         return "many"
-    if getattr(field, "one_to_one", False) and getattr(field, "auto_created", False):
+    if (
+        getattr(field, "one_to_one", False)
+        and getattr(field, "auto_created", False)
+        and not getattr(field, "concrete", False)
+    ):
         return "reverse_one_to_one"
     return "forward_single"
 

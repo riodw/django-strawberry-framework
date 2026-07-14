@@ -110,6 +110,7 @@ from .utils.querysets import (
     normalize_query_source,
     reject_awaitable_sync_source,
 )
+from .utils.relations import relation_kind
 from .utils.typing import is_async_callable, unwrap_container_type
 
 # Re-export the hoisted deterministic-order predicate under its original
@@ -766,12 +767,7 @@ def _resolve_order_path_field(model: type, path: str) -> Any:
         if index < len(segments) - 1:
             if not getattr(field, "is_relation", False):
                 return None
-            if (
-                getattr(field, "auto_created", False)
-                or getattr(field, "many_to_many", False)
-                or getattr(field, "one_to_many", False)
-                or getattr(field, "null", False)
-            ):
+            if relation_kind(field) != "forward_single" or getattr(field, "null", False):
                 return None
         current = getattr(field, "related_model", None)
     if field is None or getattr(field, "is_relation", False):

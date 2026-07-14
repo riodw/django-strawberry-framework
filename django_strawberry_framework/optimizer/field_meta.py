@@ -102,7 +102,8 @@ class FieldMeta:
         reverse_connector_attname: For reverse FK relations, the forward
             FK column on the related model that points back to the
             parent model.
-        auto_created: ``True`` for reverse-side auto-created fields.
+        auto_created: Django's auto-created flag. ``True`` for reverse
+            descriptors and concrete MTI parent links.
         accessor_name: The attribute name relation rows are reached
             through on a model INSTANCE (``utils.relations
             .instance_accessor``). Diverges from ``name`` for reverse
@@ -112,6 +113,10 @@ class FieldMeta:
             ``FieldMeta`` carries no ``get_accessor_name`` to ask live.
             ``None`` only on hand-built instances; both builders always
             populate it.
+        concrete: Whether the field stores a column on the source model.
+            Distinguishes a concrete auto-created MTI parent link from a
+            non-concrete reverse ``OneToOneRel`` when this snapshot is
+            reclassified by ``relation_kind``.
     """
 
     name: str
@@ -129,6 +134,7 @@ class FieldMeta:
     reverse_connector_attname: str | None = None
     auto_created: bool = False
     accessor_name: str | None = None
+    concrete: bool = False
 
     @property
     def relation_kind(self) -> RelationKind:
@@ -194,11 +200,12 @@ class FieldMeta:
         is_o2m = bool(getattr(field, "one_to_many", False))
         attname = getattr(field, "attname", None)
         auto_created = bool(getattr(field, "auto_created", False))
+        kind = relation_kind(field)
         # Cardinality-gated nullable rule - see ``nullable`` field docstring above for the full rationale.
         if is_m2m or is_o2m:
             nullable = False
         else:
-            nullable = relation_kind(field) == "reverse_one_to_one" or bool(
+            nullable = kind == "reverse_one_to_one" or bool(
                 getattr(field, "null", False),
             )
         return cls(
@@ -220,12 +227,13 @@ class FieldMeta:
                 and target_field_name == target_pk_name
                 and not is_m2m
                 and not is_o2m
-                and not auto_created
+                and kind == "forward_single"
                 and not has_composite_pk(related_model)
             ),
             reverse_connector_attname=getattr(getattr(field, "field", None), "attname", None),
             auto_created=auto_created,
             accessor_name=instance_accessor(field),
+            concrete=bool(getattr(field, "concrete", False)),
         )
 
 

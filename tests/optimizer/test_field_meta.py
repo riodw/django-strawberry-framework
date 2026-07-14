@@ -5,14 +5,36 @@ Covers ``FieldMeta.from_django_field``, definition-backed field maps on
 """
 
 import pytest
+import strawberry
 from apps.library.models import Book, Genre, MembershipCard, Patron
 from apps.products import services
 from apps.products.models import Category, Item
+from django.db import models
 
-from django_strawberry_framework import DjangoType
+from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import OptimizerError
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.registry import registry
+
+
+class _MtiPlace(models.Model):
+    """Unmanaged MTI parent used for metadata-only tests."""
+
+    name = models.CharField(max_length=50)
+
+    class Meta:
+        app_label = "tests"
+        managed = False
+
+
+class _MtiRestaurant(_MtiPlace):
+    """MTI child whose primary key is an auto-created parent link."""
+
+    serves_pizza = models.BooleanField(default=False)
+
+    class Meta:
+        app_label = "tests"
+        managed = False
 
 
 @pytest.fixture(autouse=True)
@@ -365,3 +387,52 @@ def test_walker_produces_same_plan_with_cached_map(django_assert_num_queries):
     plan = ctx.dst_optimizer_plan
     # The plan should contain select_related for the forward FK.
     assert "category" in plan.select_related
+
+
+# ---------------------------------------------------------------------------
+# Multi-table-inheritance auto-created parent link (forward, concrete, non-null)
+# ---------------------------------------------------------------------------
+
+
+def test_from_django_field_mti_parent_link_is_forward_single_and_non_null():
+    """The concrete auto-created MTI link stays forward, required, and elidable."""
+    parent_link = _MtiRestaurant._meta.pk
+    assert parent_link.one_to_one is True
+    assert parent_link.auto_created is True
+    assert parent_link.concrete is True
+
+    fm = FieldMeta.from_django_field(parent_link)
+    assert fm.is_relation is True
+    assert fm.one_to_one is True
+    assert fm.auto_created is True
+    assert fm.concrete is True
+    assert fm.related_model is _MtiPlace
+    assert fm.relation_kind == "forward_single"
+    assert fm.is_many_side is False
+    assert fm.nullable is False
+    assert fm.fk_id_elision_eligible is True
+
+
+def test_mti_child_type_renders_parent_link_non_null():
+    """A DjangoType exposes the MTI parent link as required in the SDL."""
+
+    class MtiPlaceType(DjangoType):
+        class Meta:
+            model = _MtiPlace
+            fields = ("id", "name")
+
+    class MtiRestaurantType(DjangoType):
+        class Meta:
+            model = _MtiRestaurant
+            fields = "__all__"
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def restaurant(self) -> MtiRestaurantType:
+            raise NotImplementedError
+
+    finalize_django_types()
+    sdl = str(strawberry.Schema(query=Query))
+
+    assert "MtiplacePtr: MtiPlaceType!" in sdl

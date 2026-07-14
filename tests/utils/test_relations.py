@@ -88,6 +88,7 @@ def test_relation_kind_classifies_auto_created_one_to_one_as_reverse():
         one_to_many=False,
         one_to_one=True,
         auto_created=True,
+        concrete=False,
     )
 
     assert relation_kind(field) == "reverse_one_to_one"
@@ -99,6 +100,19 @@ def test_relation_kind_classifies_forward_single_relations():
         one_to_many=False,
         one_to_one=True,
         auto_created=False,
+    )
+
+    assert relation_kind(field) == "forward_single"
+
+
+def test_relation_kind_classifies_concrete_auto_created_o2o_as_forward_single():
+    """An auto-created MTI parent link is concrete and forward."""
+    field = SimpleNamespace(
+        many_to_many=False,
+        one_to_many=False,
+        one_to_one=True,
+        auto_created=True,
+        concrete=True,
     )
 
     assert relation_kind(field) == "forward_single"

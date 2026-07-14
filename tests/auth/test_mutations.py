@@ -43,8 +43,6 @@ from django_strawberry_framework.mutations.inputs import _materialized_names
 from django_strawberry_framework.mutations.resolvers import _model_decode_step
 from django_strawberry_framework.mutations.sets import _mutation_registry
 from django_strawberry_framework.registry import (
-    _clear_if_importable,
-    _clear_if_loaded,
     iter_subsystem_clears,
     registry,
 )
@@ -186,8 +184,8 @@ def test_declarations_survive_the_pre_bind_reset():
     login_mutation()
     logout_mutation()
     assert len(_auth_declarations) == 2
-    for module_path, attr in iter_subsystem_clears():
-        _clear_if_importable(module_path, attr, lambda clear: clear())
+    for clear in iter_subsystem_clears(before_bind=True):
+        clear()
     assert len(_auth_declarations) == 2
 
 
@@ -205,28 +203,15 @@ def test_registry_clear_drains_ledger_and_resets_conflict_state():
     assert fresh_holder._mutation_meta.permission_classes == [_AllowAll]
 
 
-def test_clear_if_loaded_skips_and_never_imports_an_unloaded_module():
-    """The unloaded path: no action runs and the module is NOT imported as a side effect."""
-    import sys
-
-    module_path = "django_strawberry_framework.auth.queries_never_loaded_probe"
-    assert module_path not in sys.modules
-    ran = []
-    _clear_if_loaded(module_path, "does_not_matter", ran.append)
-    assert ran == []
-    assert module_path not in sys.modules
-
-
 def test_registry_clear_does_not_import_the_auth_subsystem():
     """``registry.clear()`` in an auth-free process never imports ``auth.mutations``.
 
     The structural opt-in (spec-040 Decision 3) covers BOTH consumer-reachable
-    paths: the finalizer's bind is guarded on ``sys.modules``, and the
-    ``TypeRegistry.clear()`` hand row rides ``_clear_if_loaded`` (never the
-    importing ``_clear_if_importable`` - ``auth.mutations`` is always importable,
-    so the importable variant would silently defeat the opt-in). Subprocess-based
-    so the assertion is deterministic regardless of what this worker already
-    imported.
+    paths: the finalizer's bind is guarded on ``sys.modules``, and a clear
+    callback only exists on the registry once its owner module has been
+    imported and self-registered - so clearing can never import an unloaded
+    subsystem as a side effect. Subprocess-based so the assertion is
+    deterministic regardless of what this worker already imported.
     """
     import subprocess
     import sys
@@ -332,6 +317,27 @@ def test_logout_only_schema_binds_with_no_user_type_and_no_orphan_payloads():
     assert "LogoutPayload" in _materialized_names
     assert "LoginPayload" not in _materialized_names
     assert "logout" in str(schema)
+
+
+@pytest.mark.django_db
+def test_logout_without_auth_middleware_is_anonymous_and_flushes_the_session():
+    """A session-only request has no actor but still receives Django's teardown."""
+
+    @strawberry.type
+    class Mutation:
+        logout = logout_mutation()
+
+    schema = _finalize_schema(Mutation)
+    request = RequestFactory().post("/graphql/")
+    SessionMiddleware(lambda _request: None).process_request(request)
+    request.session["logout_residue"] = "must be flushed"
+    request.session.save()
+
+    result = schema.execute_sync(_LOGOUT_Q, context_value=request)
+
+    assert result.errors is None, result.errors
+    assert result.data["logout"] == {"ok": False, "errors": []}
+    assert "logout_residue" not in request.session
 
 
 def test_login_only_bind_emits_no_orphan_logout_payload():

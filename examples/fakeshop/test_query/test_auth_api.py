@@ -88,7 +88,7 @@ def test_inactive_user_gets_the_same_envelope():
 
 @pytest.mark.django_db
 def test_logout_round_trip_and_anonymous_logout():
-    """Authenticated logout is ``ok: true`` and ends the session; anonymous is ``ok: false``."""
+    """Logout ends authenticated and anonymous sessions; ``ok`` reports actor state."""
     create_users(1)
     client = Client()
     _login(client, "staff_1", TEST_USER_PASSWORD)
@@ -97,9 +97,15 @@ def test_logout_round_trip_and_anonymous_logout():
     assert payload == {"ok": True, "errors": []}
     # The session is gone: the same client's follow-up ``me`` is null.
     assert _graphql_data(_ME, client=client)["me"] is None
-    # Idempotent anonymous logout: ``ok: false``, still no errors.
-    anonymous = _graphql_data(_LOGOUT, client=Client())["logout"]
+    # Anonymous requests can still carry session data. Teardown must flush it even
+    # though ``ok`` reports that no authenticated actor existed.
+    anonymous_client = Client()
+    anonymous_session = anonymous_client.session
+    anonymous_session["logout_residue"] = "must be flushed"
+    anonymous_session.save()
+    anonymous = _graphql_data(_LOGOUT, client=anonymous_client)["logout"]
     assert anonymous == {"ok": False, "errors": []}
+    assert "logout_residue" not in anonymous_client.session
 
 
 @pytest.mark.django_db

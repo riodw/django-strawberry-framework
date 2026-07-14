@@ -400,16 +400,21 @@ def _logout_resolve_body(holder_cls: type, info: Any) -> Any:
 
     Gate first (denial target reads the holder ``__name__`` - the pinned
     ``"Not authorized to logout Session."`` string), then the upstream-borrowed
-    semantics: capture ``request.user.is_authenticated`` BEFORE teardown as the
-    ``ok`` value, then ``auth.logout(request)`` unconditionally (a flush on an
-    anonymous session is a no-op - idempotent logout), returning the pinned
-    model-less ``{ ok, errors }`` payload with empty ``errors``.
+    semantics: capture whether the request has an authenticated actor, then call
+    Django's ``logout`` unconditionally. A request with SessionMiddleware but no
+    AuthenticationMiddleware has no ``user`` attribute, so the capture treats that
+    shape as anonymous. Teardown still runs because an anonymous request can carry
+    session data that logout must flush. Session-mutating auth continues to require
+    Django's session transport; Channels auth mutations remain outside the verified
+    read-path-only adapter contract. Returns the pinned model-less
+    ``{ ok, errors }`` payload with empty ``errors``.
     """
     from ..mutations import resolvers
 
     request = request_from_info(info, family_label=_AUTH_FAMILY_LABEL)
     resolvers.authorize_or_raise(holder_cls, info, "logout", None, instance=None)
-    ok = bool(request.user.is_authenticated)
+    user = getattr(request, "user", None)
+    ok = bool(user is not None and user.is_authenticated)
     auth.logout(request)
     payload_cls = resolvers.payload_cls_for(holder_cls)
     return payload_cls(ok=ok, errors=[])

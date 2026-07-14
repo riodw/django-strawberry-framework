@@ -1880,6 +1880,135 @@ def test_collect_nested_pagination_var_names_ignores_inline_literals():
     assert names == frozenset()
 
 
+def test_hashable_variable_value_builds_typed_structural_identity():
+    """Runtime values become hashable identities without cross-shape collisions."""
+    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
+
+    assert _hashable_variable_value(5) == _hashable_variable_value(5)
+    assert _hashable_variable_value(1) != _hashable_variable_value(True)
+    assert _hashable_variable_value([1, 2]) != _hashable_variable_value((1, 2))
+    assert _hashable_variable_value({"b": 2, "a": [1]}) == _hashable_variable_value(
+        {"a": [1], "b": 2},
+    )
+    assert _hashable_variable_value({1, "a"}) == _hashable_variable_value({"a", 1})
+    assert isinstance(hash(_hashable_variable_value({"k": [1, {"x": 2}]})), int)
+
+
+def test_hashable_variable_value_safely_degrades_for_opaque_and_cyclic_values():
+    """Unknown custom-scalar values avoid both crashes and unsafe cache hits."""
+    from django_strawberry_framework.optimizer.extension import _hashable_variable_value
+
+    class Opaque:
+        __hash__ = None
+
+    first = _hashable_variable_value(Opaque())
+    second = _hashable_variable_value(Opaque())
+    assert isinstance(hash(first), int)
+    assert first != second
+
+    cyclic = []
+    cyclic.append(cyclic)
+    assert isinstance(hash(_hashable_variable_value(cyclic)), int)
+
+
+def test_build_cache_key_tolerates_unhashable_pagination_variable():
+    """Nested pagination-named args accept every standard input container.
+
+    A non-connection field reusing ``after`` / ``before`` / ``first`` / ``last``
+    can bind an unhashable list, input-object dict, or custom-scalar value that
+    the syntactic collector over-collects. The cache key must remain buildable
+    while keeping structurally different values distinct.
+    """
+    from graphql import parse
+
+    doc = parse(
+        "query Q($x: [Int!]!) { parents { logs(after: $x) { value } } }",
+    ).definitions[0]
+
+    def _key(values):
+        info = SimpleNamespace(
+            operation=doc,
+            fragments={},
+            variable_values=values,
+            path=SimpleNamespace(key="parents", prev=None),
+        )
+        return DjangoOptimizerExtension._build_cache_key(info, Category)
+
+    assert _key({"x": [1, 2, 3]}) != _key({"x": [4, 5]})
+
+    # An input-object (dict) value on ``before`` is likewise tolerated.
+    doc2 = parse(
+        "query Q($x: DateRange) { parents { events(before: $x) { value } } }",
+    ).definitions[0]
+    info2 = SimpleNamespace(
+        operation=doc2,
+        fragments={},
+        variable_values={"x": {"start": "2020", "end": "2021"}},
+        path=SimpleNamespace(key="parents", prev=None),
+    )
+    dict_key = DjangoOptimizerExtension._build_cache_key(info2, Category)
+    info2.variable_values = {"x": {"end": "2021", "start": "2020"}}
+    assert DjangoOptimizerExtension._build_cache_key(info2, Category) == dict_key
+
+
+@pytest.mark.django_db
+def test_optimizer_survives_sibling_field_with_unhashable_custom_scalar():
+    """A custom scalar's unhashable runtime value cannot abort optimization.
+
+    ``objs`` is a Django-backed root field, so the optimizer plans it and builds
+    the plan-cache key from the whole operation. ``misc.logs(after: $x)`` is an
+    unrelated field whose custom scalar parser returns a set. The operation-wide
+    name-based walk over-collects ``$x``; before the root fix, the cache-key
+    frozenset raised ``TypeError`` and nullified the valid operation.
+    """
+    services.seed_data(2)
+
+    from typing import NewType
+
+    SetValue = NewType("SetValue", object)
+    set_scalar = strawberry.scalar(
+        name="SetValue",
+        serialize=lambda value: sorted(value),
+        parse_value=set,
+    )
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    @strawberry.type
+    class Misc:
+        @strawberry.field
+        def logs(self, after: SetValue) -> list[str]:
+            return sorted(after)
+
+    ext = DjangoOptimizerExtension()
+
+    @strawberry.type
+    class Query:
+        objs: list[CategoryType] = DjangoListField(CategoryType)
+
+        @strawberry.field
+        def misc(self) -> Misc:
+            return Misc()
+
+    finalize_django_types()
+    schema = strawberry.Schema(
+        query=Query,
+        config=strawberry_config(extra_scalar_map={SetValue: set_scalar}),
+        extensions=[lambda: ext],
+    )
+    result = schema.execute_sync(
+        "query Q($x: SetValue!) { objs { name } misc { logs(after: $x) } }",
+        variable_values={"x": ["b", "a"]},
+    )
+    assert result.errors is None, result.errors
+    assert result.data["misc"]["logs"] == ["a", "b"]
+    assert len(result.data["objs"]) >= 1
+
+
 def _categories_list_schema(ext):
     """Build a ``DjangoListField(CategoryType)`` root over the reverse FK ``Category.items``.
 

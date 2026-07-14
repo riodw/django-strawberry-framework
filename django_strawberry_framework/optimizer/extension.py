@@ -30,7 +30,7 @@ type-tracing through graphql-core wrappers.
 
 import inspect
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Set
 from contextlib import suppress
 from contextvars import ContextVar
 from typing import Any, NamedTuple
@@ -307,6 +307,76 @@ def _collect_cache_relevant_var_names(operation: Any, fragments: dict[str, Any])
     """
     directive_names, pagination_names = _collect_cache_var_families(operation, fragments)
     return frozenset(directive_names | pagination_names)
+
+
+def _hashable_variable_value(value: Any) -> Any:
+    """Return a hashable, collision-resistant cache identity for a variable value.
+
+    ``_build_cache_key`` stores cache-relevant ``(name, value)`` pairs in a
+    ``frozenset``. GraphQL lists and input objects arrive as unhashable Python
+    containers, and custom scalar parsers may legally return any Python value,
+    including sets or user-defined unhashable objects. This matters even when a
+    value cannot affect a plan: the nested-pagination collector deliberately
+    over-collects by argument name, so a plain nested field such as
+    ``logs(after: $values)`` can put any input type on this cache boundary.
+
+    Standard containers receive tagged structural identities. Tags preserve
+    distinctions such as list versus tuple and bool versus int; unordered
+    containers sort by ``repr`` so mixed, mutually-unorderable values remain
+    deterministic. An opaque unhashable object has no generally correct
+    structural identity, so it receives a fresh token: that request may miss the
+    cross-request plan cache, but it cannot collide with another value and serve
+    the wrong plan. The same fallback terminates a custom scalar that returns a
+    cyclic container.
+    """
+    return _freeze_variable_value(value, set())
+
+
+def _freeze_variable_value(value: Any, active_containers: set[int]) -> Any:
+    """Recursive implementation for ``_hashable_variable_value``."""
+    try:
+        hash(value)
+    except TypeError:
+        pass
+    else:
+        return ("scalar", type(value), value)
+
+    is_container = isinstance(
+        value,
+        (
+            Mapping,
+            list,
+            tuple,
+            Set,
+        ),
+    )
+    if not is_container:
+        return ("opaque", type(value), object())
+
+    container_id = id(value)
+    if container_id in active_containers:
+        return ("cycle", type(value), object())
+    active_containers.add(container_id)
+    try:
+        if isinstance(value, Mapping):
+            items = (
+                (
+                    _freeze_variable_value(key, active_containers),
+                    _freeze_variable_value(item, active_containers),
+                )
+                for key, item in value.items()
+            )
+            return ("mapping", type(value), tuple(sorted(items, key=repr)))
+        if isinstance(value, Set):
+            items = (_freeze_variable_value(item, active_containers) for item in value)
+            return ("set", type(value), tuple(sorted(items, key=repr)))
+        return (
+            "list" if isinstance(value, list) else "tuple",
+            type(value),
+            tuple(_freeze_variable_value(item, active_containers) for item in value),
+        )
+    finally:
+        active_containers.remove(container_id)
 
 
 def _collect_reachable_fragment_definitions(
@@ -1292,8 +1362,14 @@ class DjangoOptimizerExtension(SchemaExtension):
         if parts is None:
             doc_key, relevant_var_names = _doc_cache_entry(operation, fragments)
             variable_values = info.variable_values or {}
+            # The name-keyed pagination collector deliberately over-collects, so
+            # any GraphQL input shape (including an arbitrary custom-scalar
+            # result) can reach this frozenset through a same-named argument on a
+            # non-connection field. Normalize every value at the cache boundary.
             relevant_vars = frozenset(
-                (k, variable_values[k]) for k in relevant_var_names if k in variable_values
+                (k, _hashable_variable_value(variable_values[k]))
+                for k in relevant_var_names
+                if k in variable_values
             )
             parts = (doc_key, relevant_vars)
             if memo is not None:

@@ -21,23 +21,33 @@ def is_async_callable(value: Any) -> bool:
     """Return whether calling ``value`` yields a coroutine.
 
     ``inspect.iscoroutinefunction`` only reports on the value handed to it
-    directly; it misses two realistic wrapper shapes the field factories and the
+    directly; it misses three realistic wrapper shapes the field factories and the
     GlobalID-callable validator both must see through:
 
     1. a callable *instance* whose ``__call__`` is ``async def`` -- the instance
        itself is not a coroutine function, so its ``__call__`` is checked too;
     2. a ``functools.partial`` around either of the above -- ``iscoroutinefunction``
        only unwraps a partial whose ``.func`` is itself an ``async def`` function,
-       not a partial around an async callable instance.
+       not a partial around an async callable instance;
+    3. a raw ``staticmethod`` descriptor -- a ``@staticmethod async def`` referenced
+       by name inside its own class body is the descriptor object, not the function.
+       Since Python 3.10 that descriptor is directly callable, but
+       ``iscoroutinefunction`` still reads it as sync; ``.__func__`` recovers the
+       underlying coroutine function. A raw ``classmethod`` is not callable and is
+       therefore outside this predicate's contract.
 
-    A single ``.func`` hop reaches the target with no loop to bound: ``partial``
-    flattens nested partials at construction (``partial(partial(f)).func is f``),
-    so ``.func`` is never itself a ``partial`` and the traversal is depth-1.
-    Resolvers whose sync entry point returns an awaitable from elsewhere remain
-    undetected -- the contract is to signal async-ness through the standard
-    coroutine-function flag, not an opaque awaitable return.
+    A single ``.func`` hop reaches the partial target with no loop to bound:
+    ``partial`` flattens nested partials at construction
+    (``partial(partial(f)).func is f``), so ``.func`` is never itself a ``partial``
+    and the traversal is depth-1; the descriptor unwrap then runs on that target so
+    ``partial(staticmethod_obj)`` is handled too. Resolvers whose sync entry point
+    returns an awaitable from elsewhere remain undetected -- the contract is to
+    signal async-ness through the standard coroutine-function flag, not an opaque
+    awaitable return.
     """
     target = value.func if isinstance(value, functools.partial) else value
+    if isinstance(target, staticmethod):
+        target = target.__func__
     # Inspecting ``__call__``'s async-ness, not testing callability -- so
     # ``callable()`` (what B004 suggests) is the wrong tool here.
     return inspect.iscoroutinefunction(target) or inspect.iscoroutinefunction(

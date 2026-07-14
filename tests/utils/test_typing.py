@@ -187,6 +187,25 @@ class _SyncCallable:
     def __call__(self): ...
 
 
+class _MethodHolder:
+    @staticmethod
+    async def async_static(): ...
+
+    @staticmethod
+    def sync_static(): ...
+
+    @classmethod
+    async def async_cls(cls): ...
+
+
+# The RAW descriptor objects (as seen when a ``@staticmethod async def`` resolver
+# is referenced by name INSIDE its own class body, e.g. ``resolver=async_static``);
+# attribute access via the class would unwrap these to the underlying function.
+_async_static_obj = _MethodHolder.__dict__["async_static"]
+_sync_static_obj = _MethodHolder.__dict__["sync_static"]
+_async_cls_obj = _MethodHolder.__dict__["async_cls"]
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
@@ -197,13 +216,20 @@ class _SyncCallable:
         (functools.partial(_async_fn), True),  # partial around an async function
         (functools.partial(_AsyncCallable()), True),  # partial around an async instance
         (functools.partial(_sync_fn), False),
+        (_async_static_obj, True),  # raw ``staticmethod`` descriptor around an async def
+        (_sync_static_obj, False),
+        (_async_cls_obj, False),  # raw ``classmethod`` descriptors are not callable
+        (functools.partial(_async_static_obj), True),  # partial around a staticmethod descriptor
     ],
 )
-def test_is_async_callable_sees_through_instances_and_partials(value, expected):
-    """The predicate sees through async ``__call__`` instances and ``functools.partial`` wrappers.
+def test_is_async_callable_sees_through_supported_wrappers(value, expected):
+    """The predicate sees through supported async callable wrappers.
 
     These are the shapes ``inspect.iscoroutinefunction`` alone misses; both the
     public field factories and the GlobalID-callable validator depend on the
-    shared predicate catching them at construction/validation time.
+    shared predicate catching them at construction time. The raw ``staticmethod``
+    case is reachable when a class-body resolver references the decorated method
+    by name. The classmethod case pins the opposite boundary: its raw descriptor
+    is not callable, even when its underlying function is async.
     """
     assert is_async_callable(value) is expected

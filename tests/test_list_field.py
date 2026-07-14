@@ -578,6 +578,48 @@ async def test_djangolistfield_async_callable_object_resolver_gets_get_queryset_
 
 
 @pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_async_staticmethod_resolver_gets_get_queryset_applied(
+    monkeypatch,
+) -> None:
+    """A ``@staticmethod async def`` resolver referenced in its class body dispatches async.
+
+    The class-body name is the raw, callable ``staticmethod`` descriptor. Without
+    unwrapping its ``.__func__``, it is misclassified as sync and its coroutine
+    return raises ``SyncMisuseError``. The visibility exclusion proves the fixed
+    path awaited the resolver and applied async post-processing.
+    """
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    await sync_to_async(services.seed_data)(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.exclude(name__startswith="a")
+
+    @strawberry.type
+    class Query:
+        @staticmethod
+        async def _resolve(root: Any, info: Info) -> Any:
+            return await sync_to_async(lambda: Category.objects.all())()
+
+        # ``_resolve`` here is the raw ``staticmethod`` descriptor (class-body scope).
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_resolve)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories { id name } }")
+    assert result.errors is None
+    names = [row["name"] for row in result.data["allCategories"]]
+    assert names, "expected at least one non-filtered Category row"
+    assert all(not name.startswith("a") for name in names)
+
+
+@pytest.mark.django_db(transaction=True)
 async def test_djangolistfield_partial_wrapped_async_resolver_gets_get_queryset_applied(
     monkeypatch,
 ) -> None:

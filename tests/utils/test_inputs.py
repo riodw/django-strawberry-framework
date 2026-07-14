@@ -10,12 +10,15 @@ than via a silently drifted second copy (``docs/feedback.md`` Major 1).
 import sys
 
 import pytest
+import strawberry
 
+from django_strawberry_framework import strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.inputs import (
     GeneratedInputFieldSpec,
     InputFieldSpec,
     build_strawberry_input_class,
+    emit_set_input_field_triples,
     graphql_camel_name,
     iter_set_subclasses,
     make_input_namespace,
@@ -42,6 +45,75 @@ def test_build_strawberry_input_class_emits_name_alias_and_description():
     assert any(field.graphql_name == "in" for field in fields)
     note = next(field for field in fields if field.python_name == "note")
     assert note.description == "a note"
+
+
+def test_builder_pins_names_so_digit_boundary_fields_do_not_silently_collide():
+    """A ``field_2`` / ``field2`` pair survives as two distinct GraphQL input fields.
+
+    Regression for the silent collision caused by leaving an identity ``name=``
+    alias to Strawberry's converter.
+    ``graphql_camel_name`` keeps ``field_2`` and ``field2`` distinct (the injective
+    camel-name convention), and the emit collision guard compares those values, so
+    it does NOT reject the pair. But when the alias was emitted only on divergence,
+    ``field_2`` (equal to its own camel-name) carried no ``name=``, so Strawberry's
+    ``NameConverter`` collapsed it to ``field2`` -- overwriting the sibling ``field2``
+    and dropping one consumer-declared field from the public schema with no error.
+    The shared builder now pins every field's package-derived name, so both survive.
+    """
+
+    class _ProbeSet:  # stand-in set class; only ``__qualname__`` is read (error path).
+        pass
+
+    entries = [("field_2", object()), ("field2", object())]
+    field_specs: dict = {}
+    triples = emit_set_input_field_triples(
+        _ProbeSet,
+        entries,
+        related_target_of=lambda _t, _e: (False, None),
+        related_source_path_of=lambda t, _e: t,
+        leaf_of=lambda _t, _pa, _e: (int | None, _t),
+        input_type_name_for=lambda cls: cls.__name__,
+        module_path=__name__,
+        field_specs=field_specs,
+    )
+    assert [triple[0] for triple in triples] == ["field_2", "field2"]
+
+    input_cls = build_strawberry_input_class("ProbeDigitBoundaryInput", triples)
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def probe(self, inp: input_cls) -> int:  # type: ignore[valid-type]
+            return 1
+
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
+    sdl = schema.as_str()
+    block = sdl[sdl.index("input ProbeDigitBoundaryInput") :]
+    block = block[: block.index("}")]
+    # Both distinct wire names present -- no silent collapse to a single ``field2``.
+    assert "field_2:" in block
+    assert "field2:" in block
+    # The runtime provenance names match the pinned wire names.
+    assert field_specs[(_ProbeSet, "field_2")].graphql_name == "field_2"
+    assert field_specs[(_ProbeSet, "field2")].graphql_name == "field2"
+
+
+def test_builder_rejects_duplicate_python_attributes():
+    """The last defensive layer rejects a duplicate before the namespace drops a field."""
+    with pytest.raises(ConfigurationError, match="input attribute 'same'.*more than once"):
+        build_strawberry_input_class(
+            "DuplicateAttrInput",
+            [("same", int, {}), ("same", str, {})],
+        )
+
+
+def test_builder_rejects_duplicate_effective_graphql_names():
+    """Explicit aliases cannot collapse two distinct attrs onto one GraphQL field."""
+    with pytest.raises(ConfigurationError, match="same GraphQL field name 'same'"):
+        build_strawberry_input_class(
+            "DuplicateGraphQLInput",
+            [("first", int, {"name": "same"}), ("second", str, {"name": "same"})],
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +347,7 @@ def test_make_shape_build_cache_returns_dict_and_clear():
 
 
 def test_optional_field_kwargs_defaults_none_and_aliases_only_on_divergence():
-    """The A4 micro-pattern: always ``default=None``; ``name=`` only when the names differ."""
+    """The A4 helper carries aliases; the builder pins package-default names."""
     from django_strawberry_framework.utils.inputs import optional_field_kwargs
 
     assert optional_field_kwargs("exact", "exact") == {"default": None}
@@ -283,12 +355,11 @@ def test_optional_field_kwargs_defaults_none_and_aliases_only_on_divergence():
         "default": None,
         "name": "categoryName",
     }
+    assert optional_field_kwargs("field_2", "field_2") == {"default": None}
 
 
 def test_optional_input_field_widens_and_aliases_per_flags():
-    """The A10 widening tail: ``T | None`` + ``UNSET`` default only when ``widen`` is set."""
-    import strawberry
-
+    """The A10 helper widens optional fields and carries only divergent aliases."""
     from django_strawberry_framework.utils.inputs import optional_input_field
 
     annotation, kwargs = optional_input_field(

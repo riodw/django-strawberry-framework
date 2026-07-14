@@ -39,7 +39,7 @@ from strawberry import UNSET, relay
 from strawberry.types.base import StrawberryList, StrawberryOptional
 
 import django_strawberry_framework
-from django_strawberry_framework import DjangoType
+from django_strawberry_framework import DjangoType, strawberry_config
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations import FieldError as FieldErrorFromPackage
 from django_strawberry_framework.mutations.inputs import (
@@ -420,6 +420,170 @@ def test_consumer_override_skips_generated_field():
 
 
 # ---------------------------------------------------------------------------
+# build_mutation_input - generated-field collision guard (silent-drop parity)
+# ---------------------------------------------------------------------------
+
+
+def test_fk_id_attr_collision_with_m2m_is_fail_loud():
+    """A forward FK ``category`` (-> ``category_id``) colliding with a forward M2M literally
+    named ``category_id`` raises ``ConfigurationError`` rather than silently dropping one input.
+
+    Both generate the input attr ``category_id`` (the FK remaps to ``<field>_id``; the M2M
+    keeps its plain field name), so ``build_strawberry_input_class`` would write the second
+    over the first in its annotations dict, dropping a writable column. Crucially this is a
+    Django-legal, snake-case pair: an M2M has no local column, so Django's own field-name
+    clash check (``models.E006``) does NOT fire against the FK's ``category_id`` attname -
+    the framework must catch and name the collision itself, mirroring the form / serializer
+    generated-input guards (``iter_input_field_collisions``).
+    """
+    relay_target, _ = _make_relay_target()
+
+    class Owner(models.Model):
+        category = models.ForeignKey(relay_target, on_delete=models.CASCADE, related_name="+")
+        category_id = models.ManyToManyField(relay_target, related_name="+")
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class OwnerType(DjangoType, relay.Node):
+        class Meta:
+            model = Owner
+            fields = ("id",)
+
+    with pytest.raises(ConfigurationError) as exc:
+        build_mutation_input(Owner, operation_kind=CREATE, primary_type=OwnerType)
+    message = str(exc.value)
+    assert "category_id" in message
+    assert "'category'" in message
+    assert "collide" in message
+
+    # One consumer attr cannot disambiguate two model fields. The collision must
+    # survive the override skip instead of treating both columns as customized.
+    with pytest.raises(ConfigurationError, match="same attribute 'category_id'"):
+        build_mutation_input(
+            Owner,
+            operation_kind=CREATE,
+            primary_type=OwnerType,
+            overrides=frozenset({"category_id"}),
+        )
+
+
+def test_camel_case_graphql_name_collision_is_fail_loud():
+    """Two columns whose names default-camel-case to ONE GraphQL name raise rather than
+    silently dropping one input.
+
+    ``foo_bar`` and ``fooBar`` produce DISTINCT input attrs (the input-attr arm passes) but
+    the SAME ``graphql_name`` ``fooBar``; Strawberry would collapse the two onto one schema
+    field with no error. The graphql-name arm catches and names them, at parity with the
+    form / serializer flavors and the read-type guard ``types/finalizer.py::_audit_field_surface``.
+    """
+
+    class CamelCollide(models.Model):
+        foo_bar = models.IntegerField()
+        fooBar = models.IntegerField()  # noqa: N815 - intentional collision fixture
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class CamelCollideType(DjangoType, relay.Node):
+        class Meta:
+            model = CamelCollide
+            fields = ("id",)
+
+    with pytest.raises(ConfigurationError) as exc:
+        build_mutation_input(CamelCollide, operation_kind=CREATE, primary_type=CamelCollideType)
+    message = str(exc.value)
+    assert "fooBar" in message
+    assert "collide" in message
+
+    # Unlike an attr collision, distinct Python attrs can be disambiguated by a
+    # consumer wire alias. Audit the effective merged surface, not the discarded
+    # generated name for the overridden field.
+    remainder = build_mutation_input(
+        CamelCollide,
+        operation_kind=CREATE,
+        primary_type=CamelCollideType,
+        overrides=frozenset({"foo_bar"}),
+    )
+
+    @strawberry.input
+    class ConsumerInput:
+        foo_bar: int = strawberry.field(name="fooBarAlternate")
+
+    merged = strawberry.input(type("ResolvedCamelInput", (ConsumerInput, remainder), {}))
+    materialize_mutation_input_class("ResolvedCamelInput", merged)
+
+
+def test_no_false_positive_collision_on_ordinary_model():
+    """The collision guard does not false-positive on a normal model (products ``Item``).
+
+    ``Item`` (name / description / category FK / attachment / is_private) has no colliding
+    generated attrs or GraphQL names, so the full editable create input still builds.
+    """
+    cls = build_mutation_input(product_models.Item, operation_kind=CREATE, primary_type=ItemType)
+    assert set(_field_map(cls)) == {
+        "name",
+        "description",
+        "category_id",
+        "attachment",
+        "is_private",
+    }
+
+
+def test_digit_boundary_columns_do_not_silently_collide_in_generated_input():
+    """Two editable columns differing only by an underscore-adjacent digit survive distinctly.
+
+    ``field_2`` and ``field2`` produce DISTINCT ``graphql_camel_name`` values
+    (``field_2`` vs ``field2``), so the generated-input collision guard -- which
+    compares ``graphql_camel_name`` -- does NOT reject the pair. But when the
+    ``name=`` alias was pinned only on divergence, ``field_2`` (equal to its own
+    camel-name) carried no alias, so Strawberry's ``NameConverter`` re-derived it
+    to ``field2`` via ``to_camel_case`` and silently overwrote the sibling
+    ``field2`` -- dropping one consumer-declared column from the generated
+    ``<Model>Input`` SDL with no error. The shared generated-input builder now
+    pins every package-derived wire name, so both survive.
+    """
+
+    class DigitBoundary(models.Model):
+        field_2 = models.IntegerField()
+        field2 = models.IntegerField()
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class DigitBoundaryType(DjangoType, relay.Node):
+        class Meta:
+            model = DigitBoundary
+            fields = ("id",)
+
+    input_cls = build_mutation_input(
+        DigitBoundary,
+        operation_kind=CREATE,
+        primary_type=DigitBoundaryType,
+    )
+
+    # ``from __future__ import annotations`` stringizes source-level annotations,
+    # so set the resolver's ``__annotations__`` to real objects to reference the
+    # generated input class as a schema-field argument type.
+    def _probe(inp) -> int:
+        return 1
+
+    _probe.__annotations__ = {"inp": input_cls, "return": int}
+
+    @strawberry.type
+    class Query:
+        probe: int = strawberry.field(resolver=_probe)
+
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
+    sdl = schema.as_str()
+    block = sdl[sdl.index("input DigitBoundaryInput") :]
+    block = block[: block.index("}")]
+    # Both distinct wire names present -- no silent collapse to a single ``field2``.
+    assert "field_2:" in block
+    assert "field2:" in block
+
+
+# ---------------------------------------------------------------------------
 # mutation_input_type_name - stable full name + shape-derived narrowed name
 # ---------------------------------------------------------------------------
 
@@ -528,6 +692,24 @@ def test_distinct_shapes_colliding_on_one_name_raise_configuration_error():
     materialize_mutation_input_class("CollidingInput", cls_a)
     with pytest.raises(ConfigurationError, match="DjangoMutation"):
         materialize_mutation_input_class("CollidingInput", cls_b)
+
+
+def test_materializer_rejects_consumer_alias_colliding_with_generated_remainder():
+    """A merged input is audited after inheritance combines both field surfaces."""
+
+    @strawberry.input
+    class ConsumerInput:
+        custom: str = strawberry.field(name="name")
+
+    remainder = build_mutation_input(
+        product_models.Item,
+        operation_kind=CREATE,
+        primary_type=ItemType,
+    )
+    merged = strawberry.input(type("MergedItemInput", (ConsumerInput, remainder), {}))
+
+    with pytest.raises(ConfigurationError, match="same GraphQL field name 'name'"):
+        materialize_mutation_input_class("MergedItemInput", merged)
 
 
 # ---------------------------------------------------------------------------

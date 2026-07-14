@@ -225,8 +225,13 @@ def test_field_spec_maps_galaxy_name_flat_field_to_django_source_path():
 
 
 @pytest.mark.django_db
-def test_build_input_fields_emits_lookup_name_override_only_when_python_attr_differs():
-    """`name=...` is emitted ONLY when the python attr and the GraphQL name differ."""
+def test_build_input_fields_pins_every_lookup_name_to_its_camel_name():
+    """The operator-bag wire name is pinned to ``graphql_camel_name`` for EVERY lookup.
+
+    The shared input builder pins ``exact`` -> ``exact`` even though the optional-field
+    helper does not need to carry an identity alias. Strawberry's converter therefore
+    cannot re-derive generated names or collapse a digit-adjacent underscore.
+    """
 
     class ItemFilter(FilterSet):
         class Meta:
@@ -242,9 +247,8 @@ def test_build_input_fields_emits_lookup_name_override_only_when_python_attr_dif
     bag_fields = {
         field.python_name: field.graphql_name for field in bag.__strawberry_definition__.fields
     }
-    # `exact` -> attr `exact`, NO alias emitted (python_attr == graphql_name).
-    # Strawberry returns `None` for `graphql_name` when no explicit alias is set.
-    assert bag_fields["exact"] is None
+    # `exact` -> attr `exact`, pinned by the shared builder rather than Strawberry.
+    assert bag_fields["exact"] == "exact"
     # `icontains` -> attr `i_contains`, alias `iContains`.
     assert bag_fields["i_contains"] == "iContains"
     # `isnull` -> attr `is_null`, alias `isNull`.

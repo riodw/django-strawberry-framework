@@ -42,6 +42,7 @@ import strawberry
 from django.core.exceptions import NON_FIELD_ERRORS
 from django.db import models
 from strawberry import relay
+from strawberry.utils.str_converters import to_camel_case
 
 from ..exceptions import ConfigurationError
 from ..registry import register_subsystem_clear, registry
@@ -51,7 +52,9 @@ from ..types.relay import implements_relay_node
 from ..utils.inputs import (
     build_strawberry_input_class,
     generated_input_type_name,
+    iter_input_field_collisions,
     make_input_namespace,
+    optional_input_field,
     pascalize_token,
 )
 from ..utils.relations import is_forward_many_to_many
@@ -130,20 +133,33 @@ _materialized_names, _materialize_input, _clear_input_namespace = make_input_nam
 )
 
 
+def _audit_mutation_input_surface(name: str, input_cls: type) -> None:
+    """Reject a duplicate effective GraphQL name on generated or merged inputs."""
+    seen: dict[str, str] = {}
+    for field in input_cls.__strawberry_definition__.fields:
+        graphql_name = field.graphql_name or to_camel_case(field.python_name)
+        if graphql_name in seen:
+            raise ConfigurationError(
+                f"DjangoMutation input {name!r} maps input attributes "
+                f"{seen[graphql_name]!r} and {field.python_name!r} to the same GraphQL "
+                f"field name {graphql_name!r}; one would silently overwrite the other.",
+            )
+        seen[graphql_name] = field.python_name
+
+
 def materialize_mutation_input_class(name: str, input_cls: type) -> None:
     """Set ``input_cls`` as a real module global of ``mutations.inputs`` under ``name``.
 
-    Thin family wrapper over the ``make_input_namespace`` materializer (which
-    delegates to ``utils/inputs.py::materialize_generated_input_class`` pinning
-    the mutation-side module path, family label, and ledger). See that helper for
-    the Strawberry ``LazyType.resolve_type`` contract, the ``(name, input_cls)``
-    idempotency clause (re-materializing the same class under the same name is a
-    no-op, so identical shapes dedupe), and the distinct-class collision raise (a
-    second, DIFFERENT class under one name raises ``ConfigurationError`` - the
-    spec-036 AR-H1 / AR-M6 collision raise).
+    Audits the final Strawberry field surface first, which is the earliest point
+    both consumer-authored fields and the generated remainder of a merged input
+    are visible together. It then delegates to the ``make_input_namespace``
+    materializer. See that helper for the ``LazyType.resolve_type`` contract, the
+    idempotent ``(name, input_cls)`` clause, and the distinct-class name collision
+    raise (spec-036 AR-H1 / AR-M6).
 
     Defined here; called only by Slice 2's phase-2.5 bind.
     """
+    _audit_mutation_input_surface(name, input_cls)
     _materialize_input(name, input_cls)
 
 
@@ -453,6 +469,36 @@ def mutation_input_shape(
     )
 
 
+class _GeneratedInputFieldName(NamedTuple):
+    """Minimal model-field naming record consumed by the shared collision walk."""
+
+    input_attr: str
+    graphql_name: str
+    model_field_name: str
+
+
+def _reject_generated_input_collisions(
+    model: type[models.Model],
+    operation_kind: str,
+    names: list[_GeneratedInputFieldName],
+    *,
+    check_input_attrs: bool,
+    check_graphql_names: bool,
+) -> None:
+    """Fail loud when distinct model fields collapse to one generated input field."""
+    kind = "create" if operation_kind == CREATE else "update"
+    for message in iter_input_field_collisions(
+        names,
+        subject=f"DjangoMutation {kind} input for {model.__name__}",
+        field_noun="model fields",
+        rename_clause="Rename one of the model fields,",
+        name_of=lambda spec: spec.model_field_name,
+        check_input_attrs=check_input_attrs,
+        check_graphql_names=check_graphql_names,
+    ):
+        raise ConfigurationError(message)
+
+
 def build_mutation_input(
     model: type[models.Model],
     *,
@@ -497,6 +543,8 @@ def build_mutation_input(
     overrides = overrides or frozenset()
 
     triples: list[tuple[str, Any, dict[str, Any]]] = []
+    selected_names: list[_GeneratedInputFieldName] = []
+    emitted_names: list[_GeneratedInputFieldName] = []
     for field in selected:
         if _is_relation(field):
             python_attr, graphql_name, annotation = relation_input_annotation(
@@ -522,6 +570,8 @@ def build_mutation_input(
             graphql_name = graphql_camel_name(python_attr)
             annotation = _scalar_input_annotation(field, type_name)
 
+        field_name = _GeneratedInputFieldName(python_attr, graphql_name, field.name)
+        selected_names.append(field_name)
         if python_attr in overrides:
             continue
 
@@ -534,13 +584,14 @@ def build_mutation_input(
         # is consulted only for scalar / FK columns.
         is_m2m = getattr(field, "many_to_many", False)
         required = is_create and not is_m2m and input_field_required(field)
-        field_kwargs: dict[str, Any] = {}
-        if python_attr != graphql_name:
-            field_kwargs["name"] = graphql_name
-        if not required:
-            annotation = annotation | None
-            field_kwargs["default"] = strawberry.UNSET
+        annotation, field_kwargs = optional_input_field(
+            annotation,
+            python_attr=python_attr,
+            graphql_name=graphql_name,
+            widen=not required,
+        )
         triples.append((python_attr, annotation, field_kwargs))
+        emitted_names.append(field_name)
 
     if not triples and not overrides:
         # An empty effective field set (``Meta.fields = ()``, an ``exclude`` that
@@ -559,6 +610,23 @@ def build_mutation_input(
             "(or the model declares no editable columns). A mutation input must "
             "define at least one field.",
         )
+    # An attr collision is ambiguous even when a consumer override hides both
+    # generated fields; GraphQL-name collisions are checked only across the
+    # generated remainder because a consumer alias may legitimately replace one.
+    _reject_generated_input_collisions(
+        model,
+        operation_kind,
+        selected_names,
+        check_input_attrs=True,
+        check_graphql_names=False,
+    )
+    _reject_generated_input_collisions(
+        model,
+        operation_kind,
+        emitted_names,
+        check_input_attrs=False,
+        check_graphql_names=True,
+    )
     return build_strawberry_input_class(type_name, triples)
 
 

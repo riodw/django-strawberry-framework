@@ -58,15 +58,14 @@ class GeneratedInputFieldSpec:
 
 
 def optional_field_kwargs(python_attr: str, graphql_name: str) -> dict[str, Any]:
-    """The ``{"default": None}`` + conditional ``name=`` alias micro-pattern (DRY review A4).
+    """Return the optional default plus any non-identity GraphQL alias (DRY review A4).
 
     Every generated filter / order input field is optional-with-``None``: an
     omitted ``default`` means REQUIRED under ``build_strawberry_input_class``'s
     required-vs-optional contract, so the explicit ``default: None`` keeps the
-    field omittable, and the ``name=`` alias is emitted only when the python
-    attr and the camel-cased GraphQL name differ. Previously spelled inline five
-    times across the filter / order ``_build_input_fields`` (incl. the
-    operator-bag leaf loop and the related arm).
+    field omittable. ``build_strawberry_input_class`` pins the package-derived
+    name when this helper does not need to carry an alias, so Strawberry never
+    re-derives the wire name through a different converter.
     """
     kwargs: dict[str, Any] = {"default": None}
     if python_attr != graphql_name:
@@ -85,14 +84,17 @@ def optional_input_field(
 
     The per-field tail the form and serializer input builders share, seated
     beside ``build_strawberry_input_class`` whose required-vs-optional contract
-    (the presence of a ``default``) it exists to satisfy: emit the ``name=``
-    alias when the python attr and GraphQL name differ, and - when ``widen`` is
-    set (the form's ``not required``, the serializer's ``allow_null``-or-optional
-    nullability rule, each computed at its call site) - widen the annotation to
-    ``T | None`` and default it to ``strawberry.UNSET`` so the field is
-    OMITTABLE. A non-widened field gets NO default, so GraphQL enforces
-    presence. Returns the ``(annotation, field_kwargs)`` pair; a flavor may add
-    further kwargs (the serializer's SDL ``description``) on top.
+    (the presence of a ``default``) it exists to satisfy: carry any ``name=``
+    alias, and - when ``widen`` is set (the form's ``not required``, the
+    serializer's ``allow_null``-or-optional nullability rule, each computed at
+    its call site) - widen the annotation to ``T | None`` and default it to
+    ``strawberry.UNSET`` so the field is OMITTABLE. A non-widened field gets NO
+    default, so GraphQL enforces presence. Returns the ``(annotation,
+    field_kwargs)`` pair; a flavor may add further kwargs (the serializer's SDL
+    ``description``) on top.
+
+    ``build_strawberry_input_class`` pins the package-derived name when no alias
+    is needed, keeping Strawberry's converter out of generated-input naming.
     """
     field_kwargs: dict[str, Any] = {}
     if python_attr != graphql_name:
@@ -598,7 +600,7 @@ def build_strawberry_input_class(
     """Construct a ``@strawberry.input``-decorated dataclass.
 
     ``field_specs`` is a list of ``(python_attr, annotation, field_kwargs)``
-    triples. ``field_kwargs`` may carry ``name=`` for the GraphQL alias,
+    triples. ``field_kwargs`` may carry ``name=`` for a GraphQL alias,
     ``default=`` for the dataclass default, and ``description=`` for the
     Strawberry field description.
 
@@ -613,6 +615,15 @@ def build_strawberry_input_class(
     inputs (Strawberry tolerates a required field after a defaulted one; its
     inputs are keyword-only).
 
+    Every field receives an explicit GraphQL name. When a triple omits ``name``,
+    the package's injective ``graphql_camel_name`` result is pinned rather than
+    allowing Strawberry's converter to derive a different wire name. This
+    matters at underscore/digit boundaries: the package keeps ``field_2``
+    distinct from ``field2``, while Strawberry's default converter maps both to
+    ``field2``. Duplicate Python attrs and duplicate effective GraphQL names are
+    rejected before namespace construction so a caller can never silently lose
+    a field even if it misses its domain-level collision guard.
+
     The class is constructed via ``type(name, (), namespace)`` rather than
     ``dataclasses.make_dataclass`` because ``make_dataclass`` replaces any
     ``strawberry.field(...)`` default with a plain ``dataclasses.Field`` and
@@ -622,32 +633,45 @@ def build_strawberry_input_class(
     ``@strawberry.input`` decoration.
     """
     namespace: dict[str, Any] = {"__annotations__": {}}
+    seen_graphql_names: dict[str, str] = {}
     for python_attr, annotation, raw_kwargs in field_specs:
         kwargs = dict(raw_kwargs or {})
+        if python_attr in namespace["__annotations__"]:
+            raise ConfigurationError(
+                f"Generated input {name!r} declares input attribute {python_attr!r} more than "
+                "once; a later field would silently overwrite the earlier field.",
+            )
+        requested_name = kwargs.get("name")
+        graphql_name = (
+            requested_name if requested_name is not None else graphql_camel_name(python_attr)
+        )
+        if graphql_name in seen_graphql_names:
+            prior_attr = seen_graphql_names[graphql_name]
+            raise ConfigurationError(
+                f"Generated input {name!r} maps input attributes {prior_attr!r} and "
+                f"{python_attr!r} to the same GraphQL field name {graphql_name!r}; one would "
+                "silently overwrite the other.",
+            )
+        kwargs["name"] = graphql_name
+        seen_graphql_names[graphql_name] = python_attr
         # The PRESENCE of ``default`` (not its value) decides required-vs-optional:
         # a required field gets NO class default at all, so ``None`` is a legal
         # explicit default for an optional field rather than the required sentinel.
         has_default = "default" in kwargs
         default = kwargs.pop("default", None)
-        strawberry_field_kwargs: dict[str, Any] = {}
-        if "name" in kwargs:
-            strawberry_field_kwargs["name"] = kwargs.pop("name")
+        strawberry_field_kwargs: dict[str, Any] = {"name": kwargs.pop("name")}
         if "description" in kwargs:
             strawberry_field_kwargs["description"] = kwargs.pop("description")
         namespace["__annotations__"][python_attr] = annotation
-        if strawberry_field_kwargs:
-            # An aliased / described field still needs a ``strawberry.field``;
-            # pass ``default`` only when one was supplied so a required aliased
-            # field (e.g. a required FK ``categoryId``) stays non-null.
-            namespace[python_attr] = (
-                strawberry.field(default=default, **strawberry_field_kwargs)
-                if has_default
-                else strawberry.field(**strawberry_field_kwargs)
-            )
-        elif has_default:
-            namespace[python_attr] = default
-        # else: a required, un-aliased field -> NO class attribute, so
-        # ``@strawberry.input`` renders it non-null and coercion rejects omission.
+        # Every field carries a pinned ``name``, so it always gets a
+        # ``strawberry.field``; pass ``default`` only when one was supplied so
+        # a required field (e.g. a required FK ``categoryId``) stays non-null
+        # and coercion rejects omission.
+        namespace[python_attr] = (
+            strawberry.field(default=default, **strawberry_field_kwargs)
+            if has_default
+            else strawberry.field(**strawberry_field_kwargs)
+        )
     cls = type(name, (), namespace)
     return strawberry.input(cls)
 
@@ -733,6 +757,8 @@ def iter_input_field_collisions(
     name_of: Callable[[Any], str],
     camel_case_note: str = "",
     source_of: Callable[[Any], str] | None = None,
+    check_input_attrs: bool = True,
+    check_graphql_names: bool = True,
 ) -> Iterator[str]:
     """Yield every input-field collision message for one generated write input (DRY review A3).
 
@@ -753,6 +779,12 @@ def iter_input_field_collisions(
     have no ``source`` axis and leave it ``None``. The form guard raises on the
     FIRST yielded message; the serializer aggregates them all (rev6 #5) - the
     consumption policy stays at each call site.
+
+    ``check_input_attrs`` / ``check_graphql_names`` let a caller audit the two
+    axes at different lifecycle points. Model mutation inputs use that split so
+    an impossible relation-attr ambiguity is checked across the whole selected
+    shape, while a consumer override may legitimately replace a generated
+    GraphQL name before the effective wire surface is audited.
     """
     seen_attr: dict[str, str] = {}
     seen_graphql: dict[str, str] = {}
@@ -760,7 +792,7 @@ def iter_input_field_collisions(
     for spec in field_specs:
         current = name_of(spec)
         prior_attr = seen_attr.get(spec.input_attr)
-        if prior_attr is not None:
+        if check_input_attrs and prior_attr is not None:
             yield (
                 f"{subject} generates two input fields with the same attribute "
                 f"{spec.input_attr!r}: {field_noun} {prior_attr!r} and {current!r} collide "
@@ -768,7 +800,7 @@ def iter_input_field_collisions(
                 f"named that). {rename_clause} or drop one via Meta.fields / Meta.exclude."
             )
         prior_graphql = seen_graphql.get(spec.graphql_name)
-        if prior_graphql is not None:
+        if check_graphql_names and prior_graphql is not None:
             yield (
                 f"{subject} generates two input fields with the same GraphQL name "
                 f"{spec.graphql_name!r}: {field_noun} {prior_graphql!r} and {current!r} collide "

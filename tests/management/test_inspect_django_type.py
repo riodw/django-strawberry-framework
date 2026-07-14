@@ -35,20 +35,25 @@ pinned here against real fakeshop models, finalized in registry isolation.
 
 import sys
 import types
+from enum import Enum
 from io import StringIO
+from typing import NewType
 
 import pytest
+import strawberry
 from apps.products.models import Category, Item
 from django.core.management import CommandError, call_command
 from django.db import models
 from django.utils.module_loading import import_string
 from strawberry import relay
+from strawberry.schema.name_converter import NameConverter
 
-from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework import DjangoType, finalize_django_types, strawberry_config
 from django_strawberry_framework.management.commands.inspect_django_type import (
     Command,
     _matched_scalar_key,
     _render_annotation,
+    _scalar_name,
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.converters import DjangoFileType, DjangoImageType
@@ -115,16 +120,72 @@ def test_ambiguous_bare_name_lists_copyable_dotted_paths(monkeypatch):
     assert import_string(path_b) is duplicate_b
 
 
-def test_schema_help_documents_cold_process_finalization_requirement():
+def test_schema_help_documents_naming_and_cold_process_requirements():
     parser = Command().create_parser("manage.py", "inspect_django_type")
     schema_action = next(
         action for action in parser._actions if "--schema" in action.option_strings
     )
 
     assert schema_action.help == (
-        "Import the project schema first to register and finalize types; "
-        "required for bare names in a cold process"
+        "Import the project schema first to register and finalize types and use its "
+        "naming configuration; required for bare names in a cold process"
     )
+
+
+def test_schema_option_uses_schema_naming_configuration(monkeypatch):
+    """``--schema`` makes object and scalar names match that schema's actual SDL."""
+
+    class PrefixedNames(NameConverter):
+        def from_object(self, definition):
+            return f"Api{super().from_object(definition)}"
+
+    TokenValue = NewType("TokenValue", str)
+    token_definition = strawberry.scalar(name="OpaqueToken", serialize=str)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            primary = True
+            fields = ("id", "name")
+
+    class ItemRefType(DjangoType):
+        description: TokenValue
+
+        class Meta:
+            model = Item
+            fields = ("id", "description", "category")
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def item(self) -> ItemRefType:
+            raise NotImplementedError
+
+    schema = strawberry.Schema(
+        query=Query,
+        config=strawberry_config(
+            extra_scalar_map={TokenValue: token_definition},
+            name_converter=PrefixedNames(),
+        ),
+    )
+    _make_test_module(monkeypatch, schema=schema)
+    out = StringIO()
+    call_command(
+        "inspect_django_type",
+        "ItemRefType",
+        "--schema",
+        "test_module:schema",
+        stdout=out,
+    )
+    rendered = out.getvalue()
+
+    assert "ApiCategoryType!" in _connection_row(rendered, "category")
+    assert "OpaqueToken!" in _connection_row(rendered, "description")
+    sdl = str(schema)
+    assert "category: ApiCategoryType!" in sdl
+    assert "description: OpaqueToken!" in sdl
 
 
 def test_bad_schema_selector_raises_command_error():
@@ -323,3 +384,63 @@ def test_inspect_connection_only_relation_shape_renders_row():
     assert "[ItemNode!]!" not in items_row
     # The converter names the relation cardinality AND the connection-only shape.
     assert "relation: reverse FK (connection-only)" in items_row
+
+
+def test_inspect_uses_sdl_names_for_renamed_relation_and_consumer_enum():
+    """Renamed auto-relation and finalized consumer-enum metadata report SDL names."""
+
+    @strawberry.enum(name="PublishedState")
+    class State(Enum):
+        DRAFT = "draft"
+
+    class RenamedCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            primary = True
+            fields = ("id", "name")
+            name = "Category"
+
+    class ItemRefType(DjangoType):
+        name: State
+
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    finalize_django_types()
+    out = StringIO()
+    call_command("inspect_django_type", "ItemRefType", stdout=out)
+    text = out.getvalue()
+
+    category_row = _connection_row(text, "category")
+    assert "Category!" in category_row
+    assert "relation: forward FK" in category_row
+    assert "RenamedCategoryType" not in text
+    assert "PublishedState!" in _connection_row(text, "name")
+
+
+def test_scalar_name_uses_custom_scalar_definition_name():
+    """A custom scalar wrapper reports its explicit SDL name, never its object repr."""
+
+    class TokenValue:
+        pass
+
+    with pytest.warns(DeprecationWarning):
+        token = strawberry.scalar(TokenValue, name="OpaqueToken", serialize=str)
+
+    assert _scalar_name(token) == "OpaqueToken"
+
+
+def test_scalar_name_uses_named_union_metadata():
+    """A finalized named union leaf reports its SDL name, never its object repr."""
+
+    assert _scalar_name(strawberry.union("SearchResult")) == "SearchResult"
+
+
+def test_scalar_name_falls_back_to_dunder_name_for_definitionless_type():
+    """A mapless leaf with no Strawberry definition falls back to ``__name__``."""
+
+    class UnmappedCustomScalar:
+        pass
+
+    assert _scalar_name(UnmappedCustomScalar) == "UnmappedCustomScalar"

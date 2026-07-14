@@ -85,6 +85,13 @@ class TestPrefetchFactory:
         assert hint.force_select is False
         assert hint.force_prefetch is False
 
+    def test_none_rejected(self) -> None:
+        """``None`` must not collapse into the empty no-op hint."""
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="Prefetch"):
+            OptimizerHint.prefetch(None)  # type: ignore[arg-type]
+
 
 class TestFrozenImmutability:
     """Hints are frozen dataclasses - mutation raises."""
@@ -117,15 +124,22 @@ class TestEquality:
         assert OptimizerHint.prefetch(Prefetch("a")) != OptimizerHint.prefetch(Prefetch("b"))
 
 
-class TestConflictingFlagsRejected:
-    """``__post_init__`` rejects flag combinations the walker would silently drop.
+class TestInvalidStatesRejected:
+    """``__post_init__`` rejects states the walker would silently misread.
 
     Pins the Medium fix from ``rev-optimizer__hints.md``: combining flags
-    beyond the documented four shapes (``SKIP``, ``select_related()``,
-    ``prefetch_related()``, ``prefetch(obj)``) lets the walker's priority
-    order silently swallow the lower-priority directive.  Each rejected
-    combination raises ``ConfigurationError`` at construction time.
+    beyond the four directives and the empty no-op form lets the walker's
+    priority order silently swallow the lower-priority directive. Each
+    rejected state raises ``ConfigurationError`` at construction time.
     """
+
+    def test_non_bool_flags_raise(self) -> None:
+        """Truthy and falsy non-booleans must not control dispatch."""
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        for kwargs in ({"force_select": 1}, {"force_prefetch": ""}, {"skip": "false"}):
+            with pytest.raises(ConfigurationError, match="bool values"):
+                OptimizerHint(**kwargs)  # type: ignore[arg-type]
 
     def test_skip_with_force_select_raises(self) -> None:
         from django_strawberry_framework.exceptions import ConfigurationError

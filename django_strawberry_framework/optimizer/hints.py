@@ -69,19 +69,26 @@ class OptimizerHint:
     SKIP: ClassVar[OptimizerHint]
 
     def __post_init__(self) -> None:
-        """Reject conflicting flag combinations at construction time.
+        """Reject invalid flag types and conflicting directives.
 
         Construction-time rejection is the load-bearing contract: any
-        combination beyond the four documented shapes raises
-        ``ConfigurationError`` at ``OptimizerHint(...)`` time, surfacing
-        the mistake at ``Meta.optimizer_hints`` build time instead of at
-        query time. The walker's own priority order
+        shape beyond the four directives and the empty no-op form raises
+        ``ConfigurationError`` at ``OptimizerHint(...)`` time. This surfaces
+        mistakes at ``Meta.optimizer_hints`` build time instead of query time.
+        The walker's own priority order
         (``skip`` -> ``prefetch_obj`` -> ``force_select`` -> ``force_prefetch``
         in ``optimizer/walker.py::_apply_hint``) is therefore documentation
         of the dispatch sequence, not collision arbitration - every
         conflict the priority order would have arbitrated has already
         been rejected here.
         """
+        flag_names = ("force_select", "force_prefetch", "skip")
+        invalid_flags = [name for name in flag_names if type(getattr(self, name)) is not bool]
+        if invalid_flags:
+            raise ConfigurationError(
+                "OptimizerHint force_select, force_prefetch, and skip flags must be bool values; "
+                f"got non-bool values for: {invalid_flags}.",
+            )
         if self.skip and (
             self.force_select or self.force_prefetch or self.prefetch_obj is not None
         ):
@@ -126,7 +133,17 @@ class OptimizerHint:
         This is a leaf operation. The consumer-provided queryset is the
         source of truth, and nested selections under this field are not
         walked by the optimizer.
+
+        The factory validates ``obj`` because ``None`` is the dataclass's
+        legitimate "no prefetch object" default. Leaving validation solely
+        to ``__post_init__`` would turn ``prefetch(None)`` into a silent
+        no-op instead of rejecting the invalid factory argument.
         """
+        if not isinstance(obj, Prefetch):
+            raise ConfigurationError(
+                "OptimizerHint.prefetch(obj) requires a django.db.models.Prefetch "
+                f"instance; got {type(obj).__name__}.",
+            )
         return cls(prefetch_obj=obj)
 
 

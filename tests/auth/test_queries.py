@@ -27,9 +27,9 @@ from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.auth import current_user, login_mutation
 from django_strawberry_framework.auth import queries as auth_queries
 from django_strawberry_framework.auth.queries import (
-    AUTH_QUERIES_MODULE_PATH,
     CURRENT_USER_ALIAS_NAME,
     _current_user_alias_names,
+    clear_current_user_alias_namespace,
 )
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.inputs import _materialized_names
@@ -94,15 +94,33 @@ def _me_schema(**current_user_kwargs) -> strawberry.Schema:
     return strawberry.Schema(query=Query)
 
 
+class _FakeConsumer:
+    """The ``consumer`` half of Strawberry's ``ChannelsRequest`` duck shape."""
+
+    def __init__(self, scope):
+        self.scope = scope
+
+
+class _FakeChannelsRequest:
+    """A ``ChannelsRequest``-shaped object: ``consumer.scope`` + request attrs."""
+
+    def __init__(self, scope):
+        self.consumer = _FakeConsumer(scope)
+        self.headers = {}
+        self.method = "POST"
+
+
+def _channels_context(scope):
+    """A Strawberry-Channels mapping context (spec-041) that resolves to the adapter."""
+    return {"request": _FakeChannelsRequest(scope)}
+
+
 _ME_Q = "{ me { username } }"
 
 
 def test_alias_namespace_rides_make_input_namespace_and_the_pre_bind_row():
     """The alias is a ``make_input_namespace``-owned emit artifact with a pre-bind row."""
-    assert (
-        AUTH_QUERIES_MODULE_PATH,
-        "clear_current_user_alias_namespace",
-    ) in iter_subsystem_clears()
+    assert clear_current_user_alias_namespace in iter_subsystem_clears(before_bind=True)
 
     user_type = _declare_user_type()
 
@@ -163,6 +181,39 @@ def test_allow_any_default_returns_null_for_anonymous_and_the_user_when_authenti
     authenticated = schema.execute_sync(_ME_Q, context_value=_session_request(user))
     assert authenticated.errors is None, authenticated.errors
     assert authenticated.data["me"] == {"username": "me_probe"}
+
+
+@pytest.mark.django_db
+def test_me_is_null_not_a_crash_when_the_request_user_is_absent():
+    """An absent request user is anonymous -> ``null``, never a ``'NoneType'`` crash.
+
+    ``request.user`` is ``None`` for a Strawberry-Channels
+    ``ChannelsRequestAdapter`` whose scope carries no
+    ``AuthMiddlewareStack``-populated user (spec-041's supported adapter shape;
+    ``tests/utils/test_permissions.py`` pins ``.user`` -> ``None`` there), and
+    absent entirely for a bare request wired without ``AuthenticationMiddleware``.
+    Both must resolve ``me`` to ``null`` under the AllowAny default - the
+    nullable-return contract is "not authenticated -> null", matching
+    ``DjangoModelPermission.has_permission``'s ``getattr(request, "user", None)``
+    / ``user is None`` guard. Pre-fix each path raised a top-level
+    ``'NoneType' object has no attribute 'is_authenticated'``.
+    """
+    schema = _me_schema()
+
+    # The Channels adapter shape: a mapping context whose scope has no ``user`` key,
+    # so ``ChannelsRequestAdapter.user`` returns ``None``.
+    channels = schema.execute_sync(
+        _ME_Q,
+        context_value=_channels_context({"type": "websocket"}),
+    )
+    assert channels.errors is None, channels.errors
+    assert channels.data["me"] is None
+
+    # A bare request that never had ``request.user`` set (no AuthenticationMiddleware).
+    bare = RequestFactory().post("/graphql/")
+    bare_res = schema.execute_sync(_ME_Q, context_value=bare)
+    assert bare_res.errors is None, bare_res.errors
+    assert bare_res.data["me"] is None
 
 
 @pytest.mark.django_db

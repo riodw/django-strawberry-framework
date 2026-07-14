@@ -78,8 +78,11 @@ def _current_user_resolve_body(holder_cls: type, info: Any) -> Any:
     from ..mutations import resolvers
 
     request = request_from_info(info, family_label=_AUTH_FAMILY_LABEL)
-    user = request.user
-    actor = user if user.is_authenticated else None
+    # The Channels adapter returns ``None`` when its scope has no auth middleware;
+    # a bare HttpRequest without AuthenticationMiddleware has no ``user`` attribute.
+    # Both are anonymous under this field's nullable-return contract.
+    user = getattr(request, "user", None)
+    actor = user if (user is not None and user.is_authenticated) else None
     resolvers.authorize_or_raise(holder_cls, info, "current_user", None, instance=actor)
     return actor
 

@@ -839,22 +839,23 @@ def finalize_django_types() -> None:
     # ``DEFERRED_META_KEYS`` / ``ALLOWED_META_KEYS`` change (a mutation ``Meta`` is
     # its own namespace).
     # Reset the cross-pass materialization ledgers ONCE before the bind sequence so
-    # finalize is retry-idempotent (feedback #6). Both bind passes clear their OWN
-    # per-pass build cache and then rebuild fresh input class objects, but the
-    # ``mutations.inputs`` / ``forms.inputs`` ledgers persist across passes (the
-    # ``ModelForm`` flavor rides ``bind_mutations`` yet writes the FORM ledger; the
-    # plain-form payload writes the MUTATION ledger), so neither pass can soundly
-    # clear them itself - a per-pass clear would wipe the sibling pass's entries.
+    # finalize is retry-idempotent (feedback #6). Mutation and form binders clear
+    # their own build caches; the pre-bind sweep clears the serializer build cache
+    # because it has no independent binder. The cross-pass materialization ledgers
+    # persist across passes: the ``ModelForm`` flavor rides ``bind_mutations`` yet
+    # writes the FORM ledger, while the plain-form payload writes the MUTATION ledger.
+    # Neither pass can soundly clear them itself because it would wipe the sibling
+    # pass's entries.
     # Without this, a re-call after a fixable later-phase failure (the documented
     # recover-in-place path) hit a spurious distinct-class collision in
     # ``materialize_generated_input_class`` that masked the original, now-fixed
     # error. Parked module globals are overwritten in place by the next ``setattr``
     # (the parked-globals lifecycle), so a ledger-only clear is safe. ``registry``
     # is NOT cleared here - this resets only the emit ledgers, not declarations.
-    # The pre-bind input-namespace reset uses owner-registered callables. The
-    # phase filter selects only emitted namespaces, never declaration registries
-    # or full-clear-only caches. Optional subsystems remain absent unless their
-    # owner was imported, so this does not pull DRF or auth into other schemas.
+    # The pre-bind generated-state reset uses owner-registered callables. The
+    # phase filter selects emitted namespaces and per-pass caches, never declaration
+    # registries or full-clear-only state. Optional subsystems remain absent unless
+    # their owner was imported, so this does not pull DRF or auth into other schemas.
     from ..mutations.sets import bind_mutations
     from ..registry import iter_subsystem_clears
 

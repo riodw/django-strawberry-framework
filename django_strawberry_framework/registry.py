@@ -62,7 +62,7 @@ def register_subsystem_clear(
 
     A callable registration cannot silently drift when an attribute is renamed or
     moved: importing the owner must resolve the function before registration can
-    succeed. ``before_bind`` marks emit-namespace resets that the finalizer also
+    succeed. ``before_bind`` marks generated-state resets that the finalizer also
     runs before rebuilding generated types; every callback runs for the test-only
     full ``TypeRegistry.clear()`` lifecycle.
 
@@ -81,8 +81,8 @@ def register_subsystem_clear(
 def iter_subsystem_clears(*, before_bind: bool = False) -> tuple[Callable[[], None], ...]:
     """Return an immutable snapshot of registered teardown callbacks.
 
-    ``before_bind=True`` selects only generated emit-namespace resets. The
-    default returns every registered callback for ``TypeRegistry.clear()``.
+    ``before_bind=True`` selects only per-pass generated-state resets. The default
+    returns every registered callback for ``TypeRegistry.clear()``.
     """
     return tuple(
         clear

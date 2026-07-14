@@ -44,6 +44,7 @@ from rest_framework import serializers
 import django_strawberry_framework
 from django_strawberry_framework import (
     DjangoModelPermission,
+    DjangoMutationField,
     DjangoType,
     SerializerMutation,
     finalize_django_types,
@@ -1298,3 +1299,87 @@ def test_unopted_writable_nested_reports_opt_in_error_not_materialization():
     # The phase-2.5 bind's field walk raises the CANONICAL opt-in error (not the materialization wrap).
     with pytest.raises(ConfigurationError, match="opt-in only"):
         finalize_django_types()
+
+
+# ---------------------------------------------------------------------------
+# Per-pass shape-build-cache clear (spec-039 P1.3 - the serializer twin of the
+# model / form per-pass clears)
+# ---------------------------------------------------------------------------
+
+
+def _nested_category_serializer():
+    """A ``Category`` ``ModelSerializer`` with a nested writable ``items`` list + a ``create`` override."""
+
+    class ItemInline(serializers.ModelSerializer):
+        class Meta:
+            model = product_models.Item
+            fields = ("name",)
+
+    class CategoryWithItems(serializers.ModelSerializer):
+        items = ItemInline(many=True)
+
+        class Meta:
+            model = product_models.Category
+            fields = ("name", "items")
+
+        def create(self, validated_data):
+            return None
+
+    return CategoryWithItems
+
+
+def test_nested_input_materialized_in_ledger_after_finalize():
+    """Pre-bind name discovery cannot make a nested input disappear during finalization."""
+    _declare_products_primaries()
+
+    class CreateCategory(SerializerMutation):
+        class Meta:
+            serializer_class = _nested_category_serializer()
+            operation = "create"
+            nested_fields = {"items": NestedSerializerConfig()}
+            permission_classes = []
+
+    # The field factory discovers the name before finalization and primes both the
+    # shape cache and the nested-input ledger.
+    @strawberry.type
+    class Mutation:
+        create_category = DjangoMutationField(CreateCategory)
+
+    assert "ItemInlineInput" in serializer_materialized_names
+    prebind_nested = serializer_materialized_names["ItemInlineInput"]
+    finalize_django_types()
+
+    top_name = CreateCategory._input_class.__name__
+    assert top_name in serializer_materialized_names
+    assert "ItemInlineInput" in serializer_materialized_names
+    assert serializer_materialized_names["ItemInlineInput"] is not prebind_nested
+    assert Mutation.__strawberry_definition__ is not None
+
+
+def test_nested_input_rematerialized_after_recover_in_place(monkeypatch):
+    """A failed finalization cannot leave a cache that suppresses nested re-emission."""
+    _declare_products_primaries()  # Category + Item primaries (Category needed for the parent).
+
+    class CreateCategory(SerializerMutation):
+        class Meta:
+            serializer_class = _nested_category_serializer()
+            operation = "create"
+            nested_fields = {"items": NestedSerializerConfig()}
+            permission_classes = []
+
+    def _boom() -> None:
+        raise RuntimeError("injected post-bind finalization failure")
+
+    monkeypatch.setattr("django_strawberry_framework.types.finalizer._bind_ordersets", _boom)
+    with pytest.raises(RuntimeError, match="injected post-bind"):
+        finalize_django_types()
+    assert "ItemInlineInput" in serializer_materialized_names
+    first_nested = serializer_materialized_names["ItemInlineInput"]
+    assert registry.is_finalized() is False
+
+    monkeypatch.undo()
+    finalize_django_types()
+
+    assert registry.is_finalized() is True
+    assert "ItemInlineInput" in serializer_materialized_names
+    assert serializer_materialized_names["ItemInlineInput"] is not first_nested

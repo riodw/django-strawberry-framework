@@ -1156,12 +1156,14 @@ def _dedupe_and_materialize_nested(
     the descriptors differ), and materializes through the SAME ledger, so a genuine
     distinct-class-same-name clash (an astronomically-unlikely digest collision) still fails loud
     at materialize. Identical descriptors return the cached class; a first sighting is cached +
-    materialized.
+    materialized. Materializing a cache hit is intentionally idempotent and keeps
+    the cache from assuming that the independently reset ledger is still warm.
     """
     cached = _serializer_shape_build_cache.get(nested_shape.cache_key)
-    if cached is not None:
-        return cached
-    _serializer_shape_build_cache[nested_shape.cache_key] = (nested_cls, nested_shape)
+    if cached is None:
+        cached = (nested_cls, nested_shape)
+        _serializer_shape_build_cache[nested_shape.cache_key] = cached
+    nested_cls, nested_shape = cached
     materialize_serializer_input_class(nested_shape.type_name, nested_cls)
     return nested_cls, nested_shape
 
@@ -1526,13 +1528,12 @@ def build_serializer_inputs(
     return create_cls, create_shape, partial_cls, partial_shape
 
 
-# The serializer per-shape build cache plumbing (spec-039 P1.3). Authored here in
-# Slice 1 (the helper + its unit test live in ``utils/inputs.py`` / ``tests/utils``);
-# the CONSUMER that keys on ``SerializerInputShape`` and the ``registry.clear()``
-# registration are Slice 2 (``rest_framework/sets.py``). Exposed so the Slice-2
-# bind imports the ready-made ``(cache, clear)`` pair rather than re-rolling it.
+# The serializer shape cache can be primed before finalization by
+# ``SerializerMutation.input_type_name()``. Clear it with the generated-input
+# ledgers before every bind so nested cache hits cannot suppress re-materialization.
 _serializer_shape_build_cache, clear_serializer_shape_build_cache = make_shape_build_cache()
 register_subsystem_clear(
     clear_serializer_shape_build_cache,
     owner="rest_framework.shape_cache",
+    before_bind=True,
 )

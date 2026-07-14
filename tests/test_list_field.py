@@ -342,6 +342,36 @@ def test_djangolistfield_sync_path_rejects_coroutine_from_get_queryset() -> None
     assert "returned a coroutine in a sync resolver context" in str(result.errors[0])
 
 
+def test_djangolistfield_sync_path_rejects_custom_awaitable_from_get_queryset() -> None:
+    """A truthy custom awaitable cannot escape the sync visibility boundary."""
+
+    class DeferredQueryset:
+        def __await__(self):
+            if False:
+                yield None
+            return Category.objects.all()
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return DeferredQueryset()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    result = strawberry.Schema(query=Query).execute_sync("{ allCategories { id } }")
+
+    assert result.errors is not None
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "returned an awaitable in a sync resolver context" in str(result.errors[0])
+
+
 # -----------------------------------------------------------------------------
 # Group D - Sync consumer-resolver paths (rev2 H1).
 # -----------------------------------------------------------------------------

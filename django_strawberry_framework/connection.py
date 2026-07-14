@@ -108,6 +108,7 @@ from .utils.querysets import (
     initial_queryset,
     model_for,
     normalize_query_source,
+    reject_awaitable_sync_source,
 )
 from .utils.typing import is_async_callable, unwrap_container_type
 
@@ -1686,8 +1687,14 @@ def _pipeline_sync(
     a ``QuerySet`` receives steps 2-6 (visibility -> filter -> orderBy ->
     default-order -> optimizer); a non-queryset iterable is passed through
     unchanged after the sidecar-input guard rejects ``filter:`` / ``orderBy:``.
+
+    Awaitable sources are rejected before normalization. They can only come
+    from a plain ``def`` consumer resolver that returns an awaitable, a shape
+    committed to this sync path at field construction. The list field enforces
+    the same boundary through ``post_process_queryset_result_sync``.
     """
     definition = target_type.__django_strawberry_definition__
+    reject_awaitable_sync_source(source, target_type)
     source, is_queryset = _prepare_pipeline_source(
         source,
         filter_input=filter_input,

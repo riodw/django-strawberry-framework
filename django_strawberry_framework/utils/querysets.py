@@ -64,7 +64,7 @@ def reject_async_in_sync_context(
     context: str,
     recourse: str,
 ) -> Any:
-    """Guard a synchronous hook result against an ``async def`` override.
+    """Guard a synchronous hook result against any awaitable return.
 
     Three sync pipeline seams invoke a consumer-overridable hook that
     Decision 9 / Decision 15 allow to be sync OR async: the ``get_queryset``
@@ -76,20 +76,27 @@ def reject_async_in_sync_context(
     truthy coroutine as success would be a silent bug - an authorization
     BYPASS for the permission hooks - so it is rejected loudly.
 
-    When ``value`` is a coroutine it is ``close()``d (silencing the "coroutine
-    was never awaited" warning that ``filterwarnings = error`` would otherwise
-    turn into a test failure) and a ``SyncMisuseError`` is raised naming the
-    offending ``owner.method`` and the ``context`` it ran in, with the
-    surface-specific ``recourse`` appended. The message template lives here so
-    the three seams cannot drift. Otherwise ``value`` is returned unchanged, so
-    callers read ``x = reject_async_in_sync_context(x, ...)``.
+    Awaitables cannot be consumed by these sync pipelines. Native coroutines
+    are closed and futures are cancelled before ``SyncMisuseError`` is raised;
+    other awaitables have no standard cleanup protocol. Native-coroutine error
+    text is preserved for compatibility. Otherwise ``value`` is returned
+    unchanged, so callers read ``x = reject_async_in_sync_context(x, ...)``.
     """
-    if inspect.iscoroutine(value):
-        value.close()
+    if inspect.isawaitable(value):
+        kind = "a coroutine" if inspect.iscoroutine(value) else "an awaitable"
+        _dispose_sync_awaitable(value)
         raise SyncMisuseError(
-            f"{owner}.{method} returned a coroutine in a sync {context} context. {recourse}",
+            f"{owner}.{method} returned {kind} in a sync {context} context. {recourse}",
         )
     return value
+
+
+def _dispose_sync_awaitable(value: Any) -> None:
+    """Release an awaitable rejected at a synchronous boundary when possible."""
+    if inspect.iscoroutine(value):
+        value.close()
+    elif asyncio.isfuture(value):
+        value.cancel()
 
 
 def model_for(type_cls: type) -> type[models.Model]:
@@ -399,6 +406,26 @@ async def apply_type_visibility_async(
     return result
 
 
+def reject_awaitable_sync_source(source: Any, type_cls: type) -> None:
+    """Reject an awaitable source from a sync list or connection resolver.
+
+    A plain ``def`` that returns an awaitable is committed to the sync field
+    path. Passing that value onward would either skip queryset visibility or
+    leak a Strawberry pagination error, so both field factories share this
+    boundary.
+    """
+    if not inspect.isawaitable(source):
+        return
+    _dispose_sync_awaitable(source)
+    raise SyncMisuseError(
+        f"A sync {type_cls.__name__} consumer resolver returned an awaitable. "
+        "Declare the resolver `async def` (or use an async callable) so the "
+        "field awaits it and applies the get_queryset visibility hook; a plain "
+        "`def` resolver that returns an awaitable is committed to the sync path "
+        "and passing it through would silently skip get_queryset.",
+    )
+
+
 def post_process_queryset_result_sync(type_cls: type, result: Any, info: Any) -> Any:
     """Normalize a consumer-resolver return then apply visibility (sync).
 
@@ -408,40 +435,14 @@ def post_process_queryset_result_sync(type_cls: type, result: Any, info: Any) ->
     list / generator passes through unchanged. The default-resolver path bypasses
     this (its source is already ``initial_queryset(...)``, a known ``QuerySet``).
 
-    An awaitable reaching here is rejected loudly. The sync branch is chosen
-    at construction from ``is_async_callable(user_resolver)``, which only sees an
-    ``async def`` / async-callable resolver (or a ``functools.partial`` of one);
-    a plain ``def`` resolver that *returns* an awaitable (e.g. ``return
-    some_async()`` without ``async def``) is classified sync but its awaitable
-    return is not a ``Manager`` / ``QuerySet``. Passing it through unchanged would
-    let graphql-core await it downstream (under async execution) to a ``QuerySet``
-    that never ran the ``get_queryset`` visibility hook -- a silent data-isolation
-    bypass. Native coroutines are ``close()``d first to silence the "coroutine
-    was never awaited" warning that ``filterwarnings = error`` would fail on;
-    asyncio Future-like values are cancelled. A custom ``__await__`` object has
-    no standard disposal contract and has not begun execution, so it is simply
-    rejected. This mirrors the sync
-    ``get_queryset`` coroutine guard (``reject_async_in_sync_context``) and keeps
-    the invariant that a consumer ``QuerySet`` return is never resolved without
-    its visibility hook. The recourse: declare the resolver ``async def`` (the
-    field then awaits it and applies ``get_queryset`` via the async post-process
-    path), or return an already-evaluated ``list`` to opt out of the hook.
+    An awaitable reaching here is rejected loudly through the single-sited
+    ``reject_awaitable_sync_source`` guard, which keeps the invariant that a
+    consumer ``QuerySet`` return is never resolved without its visibility hook.
     """
+    reject_awaitable_sync_source(result, type_cls)
     source, is_queryset = normalize_query_source(result)
     if is_queryset:
         return apply_type_visibility_sync(type_cls, source, info)
-    if inspect.isawaitable(source):
-        if inspect.iscoroutine(source):
-            source.close()
-        elif asyncio.isfuture(source):
-            source.cancel()
-        raise SyncMisuseError(
-            f"A sync {type_cls.__name__} consumer resolver returned an awaitable. "
-            "Declare the resolver `async def` (or use an async callable) so the "
-            "field awaits it and applies the get_queryset visibility hook; a plain "
-            "`def` resolver that returns an awaitable is committed to the sync path "
-            "and passing it through would silently skip get_queryset.",
-        )
     return source
 
 

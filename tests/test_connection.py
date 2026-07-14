@@ -1045,6 +1045,29 @@ def test_sync_context_async_get_queryset_raises_sync_misuse():
     assert any(isinstance(err.original_error, SyncMisuseError) for err in result.errors)
 
 
+async def test_connection_sync_resolver_returning_coroutine_raises_sync_misuse():
+    """A plain ``def`` returning a coroutine cannot enter connection slicing."""
+    node_type = _make_sidecar_node_type("CoroSyncConnNode")
+
+    async def _inner():
+        return []
+
+    def _sync_resolver_returning_coroutine(root, info) -> Iterable:
+        return _inner()
+
+    schema = _field_schema(
+        node_type,
+        resolver=_sync_resolver_returning_coroutine,
+    )
+    result = await schema.execute("{ items { edges { node { id } } } }")
+
+    assert result.errors is not None
+    assert len(result.errors) == 1
+    assert isinstance(result.errors[0].original_error, SyncMisuseError)
+    assert "returned an awaitable" in str(result.errors[0])
+    assert result.data is None
+
+
 # =============================================================================
 # Slice 3 - optimizer cooperation point + connection-aware-planning gap guard
 # =============================================================================

@@ -32,6 +32,7 @@ from django_strawberry_framework import (
     DjangoMutation,
     DjangoMutationField,
     DjangoType,
+    SyncMisuseError,
     finalize_django_types,
 )
 from django_strawberry_framework.mutations.permissions import _OPERATION_PERMISSION_ACTION
@@ -418,6 +419,43 @@ def test_async_has_permission_is_rejected_not_bypassed():
     assert res.errors is not None
     assert "coroutine" in res.errors[0].message.lower()
     assert not product_models.Item.objects.filter(name="AsyncBlocked").exists()
+
+
+@pytest.mark.django_db
+def test_awaitable_has_permission_is_rejected_not_bypassed():
+    """A custom awaitable permission result cannot be treated as truthy authorization."""
+
+    class DeferredDeny:
+        def __await__(self):
+            if False:
+                yield None
+            return False
+
+    class AwaitableDeny:
+        def has_permission(
+            self,
+            info,
+            mutation,
+            operation,
+            data,
+            instance=None,
+        ):
+            return DeferredDeny()
+
+    schema, (CategoryT, _ItemT) = _build_auth_schema(
+        create_permission_classes=[AwaitableDeny],
+    )
+    cat = product_models.Category.objects.create(name="Cat-awaitable-deny")
+    res = _execute(
+        schema,
+        _CREATE_Q,
+        AnonymousUser(),
+        {"d": {"name": "AwaitableBlocked", "categoryId": global_id_for(CategoryT, cat.pk)}},
+    )
+
+    assert res.errors is not None
+    assert isinstance(res.errors[0].original_error, SyncMisuseError)
+    assert not product_models.Item.objects.filter(name="AwaitableBlocked").exists()
 
 
 @pytest.mark.django_db

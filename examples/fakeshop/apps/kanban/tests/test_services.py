@@ -41,6 +41,13 @@ def beta_version():
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize("identifier", ["\u00b2", "1" * 5000])
+def test_resolve_card_digit_like_invalid_reference_raises_service_error(identifier):
+    with pytest.raises(services.KanbanServiceError, match="Cannot resolve card reference"):
+        services.resolve_card(identifier)
+
+
+@pytest.mark.django_db
 def test_create_card_from_spec_builds_card_and_children(beta_version):
     dependency = kf.make_card(number=1, title="Dependency")
     related = kf.make_card(number=2, title="Related")

@@ -218,8 +218,14 @@ def resolve_card(identifier: object, *, using: str | None = None) -> models.Card
         card = card_manager.filter(title=identifier).first()
         if card is not None:
             return card
-    if isinstance(identifier, int) or (isinstance(identifier, str) and identifier.isdigit()):
-        card = card_manager.filter(number=int(identifier)).first()
+    number = identifier if isinstance(identifier, int) else None
+    if isinstance(identifier, str) and identifier.isdigit():
+        try:
+            number = int(identifier)
+        except ValueError:
+            number = None
+    if number is not None:
+        card = card_manager.filter(number=number).first()
         if card is not None:
             return card
     raise KanbanServiceError(

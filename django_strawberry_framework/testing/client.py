@@ -326,13 +326,26 @@ class TestClient(BaseGraphQLTestClient):
             current: Any = variables
             for segment in key.split("."):
                 if isinstance(current, list):
-                    if not segment.isdigit() or int(segment) >= len(current):
+                    # Multipart operation paths use ``object-path`` numeric segments:
+                    # a list index is its canonical non-negative decimal rendering.
+                    # Guard the conversion itself because digit-like Unicode and very
+                    # long decimal strings do not share ``int()``'s acceptance domain.
+                    try:
+                        index = int(segment)
+                    except ValueError:
+                        index = None
+                    if (
+                        index is None
+                        or index < 0
+                        or str(index) != segment
+                        or index >= len(current)
+                    ):
                         raise AssertionError(
                             f"files= path {key!r} has no matching placeholder in "
                             f"variables: {segment!r} is not a valid index into a "
                             f"{len(current)}-item list.",
                         )
-                    current = current[int(segment)]
+                    current = current[index]
                 elif isinstance(current, dict):
                     if segment not in current:
                         raise AssertionError(

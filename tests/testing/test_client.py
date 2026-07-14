@@ -209,13 +209,31 @@ def test_files_placeholder_cannot_descend_into_a_scalar_raises():
         )
 
 
-def test_files_placeholder_non_integer_list_index_raises():
-    """A list-path segment that is not a valid integer index raises."""
+@pytest.mark.parametrize(
+    "index",
+    [
+        "x",
+        "\u00b2",
+        "\u0663",
+        "01",
+        "-1",
+        "1" * 5000,
+    ],
+)
+def test_files_placeholder_noncanonical_list_index_raises(index):
+    """Every invalid ``object-path`` list index uses the placeholder guard's error type."""
     with pytest.raises(AssertionError, match="valid index"):
         TestClient().query(
             "mutation($tags: [Upload!]!) { up }",
-            variables={"tags": [None]},
-            files={"tags.x": object()},
+            variables={
+                "tags": [
+                    None,
+                    None,
+                    None,
+                    None,
+                ],
+            },
+            files={f"tags.{index}": object()},
         )
 
 

@@ -486,10 +486,13 @@ def version_tuple(text: str | None) -> tuple[int, ...]:
     """
     parts: list[int] = []
     for segment in (text or "").split("."):
-        digits = "".join(ch for ch in segment if ch.isdigit())
+        digits = "".join(ch for ch in segment if ch in "0123456789")
         if not digits:
             break
-        parts.append(int(digits))
+        try:
+            parts.append(int(digits))
+        except ValueError:
+            break
     return tuple(parts) or (0,)
 
 

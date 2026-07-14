@@ -199,6 +199,7 @@ TRACKED_FILE_PATHS = (
     "tests/rest_framework/test_soft_dependency.py",
     "tests/test_apps.py",
     "tests/test_bug_hunt.py",
+    "tests/test_build_kanban_html.py",
     "tests/test_clean_up.py",
     "tests/test_connection.py",
     "tests/test_cross_web_patches.py",

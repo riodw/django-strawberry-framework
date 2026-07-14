@@ -515,6 +515,43 @@ def test_allow_null_difference_yields_distinct_descriptor_names():
     assert cre_non_null.__name__ != cre_nullable.__name__
 
 
+def test_description_difference_yields_distinct_descriptor_names():
+    """Description-only hook variations get distinct descriptors and generated names."""
+
+    class Ser(serializers.Serializer):
+        x = serializers.CharField()
+
+    def _hook_fields(*, help_text: str, max_length: int) -> dict:
+        class _HookSer(serializers.Serializer):
+            x = serializers.CharField()
+            note = serializers.CharField(
+                required=True,
+                help_text=help_text,
+                max_length=max_length,
+            )
+
+        return dict(_HookSer().fields)
+
+    cre_a, shape_a, _, _ = build_serializer_inputs(
+        Ser,
+        field_map=_hook_fields(help_text="Help A", max_length=10),
+    )
+    cre_b, shape_b, _, _ = build_serializer_inputs(
+        Ser,
+        field_map=_hook_fields(help_text="Help B", max_length=99),
+    )
+    assert shape_a.field_specs == shape_b.field_specs
+    assert shape_a.annotations == shape_b.annotations
+    assert shape_a.required_state == shape_b.required_state
+    assert shape_a.optional_fields == shape_b.optional_fields
+    assert shape_a.descriptions != shape_b.descriptions
+    assert shape_a.cache_key != shape_b.cache_key
+    assert cre_a.__name__ != cre_b.__name__
+    assert _field_map(cre_a)["note"].description == "Help A Constraints: max_length=10."
+    assert _field_map(cre_b)["note"].description == "Help B Constraints: max_length=99."
+    assert _field_map(cre_a)["x"].description is None
+
+
 def test_descriptor_name_distinguishes_relation_target_model():
     """Two relation shapes differing ONLY in ``related_model`` get DISTINCT names (spec-039).
 
@@ -547,6 +584,7 @@ def test_descriptor_name_distinguishes_relation_target_model():
             field_specs=(spec,),
             annotations=("relay.GlobalID",),  # identical annotation for both targets
             required_state=(True,),
+            descriptions=(None,),
         )
 
     # Same field name + same annotation + same kind, only the target model differs.
@@ -923,7 +961,7 @@ def test_describe_serializer_input_reports_shape():
     from django_strawberry_framework.rest_framework.inputs import describe_serializer_input
 
     class SourceSer(serializers.Serializer):
-        display_name = serializers.CharField(source="name")
+        display_name = serializers.CharField(source="name", help_text="Public display name.")
 
     _cre, cre_shape, _par, _par_shape = build_serializer_inputs(SourceSer)
     description = describe_serializer_input(cre_shape.type_name)
@@ -933,6 +971,7 @@ def test_describe_serializer_input_reports_shape():
     assert "name:" in description
     assert "display_name" in description  # a field appears in the description
     assert "source='name'" in description
+    assert "description='Public display name.'" in description
     assert describe_serializer_input("NoSuchGeneratedInput") is None
 
 

@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, ClassVar
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.forms import Field, MultipleChoiceField
+from django.forms import Field, MultipleChoiceField, SelectMultiple
 from django_filters import Filter, ModelChoiceFilter, MultipleChoiceFilter, NumberFilter
 from django_filters.constants import EMPTY_VALUES
 from django_filters.filters import BaseInFilter, BaseRangeFilter, FilterMethod
@@ -457,6 +457,28 @@ class GlobalIDFilter(Filter):
         return super().filter(qs, node_id)
 
 
+class _AbsentGlobalIDMultipleChoiceWidget(SelectMultiple):
+    """Preserve an absent membership key as ``None`` rather than ``[]``.
+
+    ``SelectMultiple`` reads a ``QueryDict`` through ``getlist()``, which returns
+    ``[]`` for both an absent key and a present empty key. Those values have different
+    filter semantics here: omission skips the filter, while ``{in: []}`` matches no
+    rows. Key presence retains that distinction across plain dictionaries and
+    ``QueryDict`` instances.
+    """
+
+    def value_from_datadict(
+        self,
+        data: Any,
+        files: Any,
+        name: str,
+    ) -> Any:
+        """Return ``None`` for an absent key; defer to ``SelectMultiple`` otherwise."""
+        if name not in data:
+            return None
+        return super().value_from_datadict(data, files, name)
+
+
 class _GlobalIDMultipleChoiceField(MultipleChoiceField):
     """`MultipleChoiceField` that skips fixed-`choices` validation.
 
@@ -470,11 +492,32 @@ class _GlobalIDMultipleChoiceField(MultipleChoiceField):
     fixed set, so this field accepts any submitted value and defers
     validation to the filter. Mirrors graphene-django's
     `GlobalIDMultipleChoiceField`.
+
+    The custom widget and field overrides preserve ``None`` for an omitted key:
+    ``SelectMultiple`` otherwise maps an absent ``QueryDict`` key to ``[]``, and
+    ``MultipleChoiceField.to_python`` maps a widget-provided ``None`` to ``[]``.
+    An explicit empty list remains ``[]`` and therefore keeps its match-nothing
+    membership semantics.
     """
+
+    widget = _AbsentGlobalIDMultipleChoiceWidget
 
     def valid_value(self, value: Any) -> bool:  # noqa: ARG002 - signature fixed by Django.
         """Accept any value; GlobalID validation happens in the filter."""
         return True
+
+    def to_python(self, value: Any) -> Any:
+        """Preserve omission without bypassing ``Field.clean`` validation."""
+        if value is None:
+            return None
+        return super().to_python(value)
+
+    def validate(self, value: Any) -> None:
+        """Validate omitted values through ``Field`` and lists through the parent."""
+        if value is None:
+            Field.validate(self, value)
+            return
+        super().validate(value)
 
 
 class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):

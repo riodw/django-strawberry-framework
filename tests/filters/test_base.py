@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from apps.library import models
 from django.core.exceptions import ValidationError
+from django.http import QueryDict
 from graphql import GraphQLError
 from strawberry import relay
 
@@ -309,6 +310,26 @@ def test_global_id_multiple_choice_filter_passes_through_none():
     result = f.filter(_Qs(), None)
     assert captured == {}
     assert isinstance(result, _Qs)
+
+
+def test_global_id_multiple_choice_field_distinguishes_absent_from_explicit_empty():
+    """Form cleaning keeps omission as ``None`` and a supplied empty list as ``[]``."""
+    field = GlobalIDMultipleChoiceFilter(field_name="id").field
+
+    absent = field.widget.value_from_datadict(QueryDict(), {}, "id")
+    explicit_empty = field.widget.value_from_datadict({"id": []}, {}, "id")
+
+    assert field.clean(absent) is None
+    assert field.clean(explicit_empty) == []
+
+
+def test_global_id_multiple_choice_field_omission_still_enforces_required():
+    """Preserving ``None`` must not bypass Django's required-field validation."""
+    field = GlobalIDMultipleChoiceFilter(field_name="id", required=True).field
+    absent = field.widget.value_from_datadict(QueryDict(), {}, "id")
+
+    with pytest.raises(ValidationError, match="required"):
+        field.clean(absent)
 
 
 def test_global_id_multiple_choice_filter_empty_in_matches_nothing_like_list_filter():

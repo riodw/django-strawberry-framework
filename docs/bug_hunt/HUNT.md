@@ -50,8 +50,9 @@ external blocker requires maintainer input.
 
 ## Progress file and setup
 
-Worker 1 owns one generated `docs/bug_hunt/bug_hunt.<short-sha>.md` file for the entire run. It is
-the canonical plan, progress record, and handoff between workers.
+Worker 1 owns one generated `docs/bug_hunt/bug_hunt-<release>.md` file for the entire run, named
+from the release like the review and DRY flows (`0.0.13` becomes `bug_hunt-0_0_13.md`). It is the
+canonical plan, progress record, and handoff between workers.
 
 If an in-progress file already exists, resume it. Otherwise Worker 1 runs:
 
@@ -67,7 +68,8 @@ The generator:
 - reads `docs/bug_hunt/dicta.md` as optional maintainer-authored probing questions;
 - inventories the live package and creates one item for every non-`__init__.py` Python file,
   followed by a package integration item and the final test gate;
-- records autonomous mode and the full baseline commit; and
+- records autonomous mode and the full baseline commit, and names the file from the matching
+  `pyproject.toml` and package `__init__.py` version (`--target-release` overrides it); and
 - refuses to overwrite an existing progress file unless the maintainer explicitly requests a
   restart with `--force`.
 

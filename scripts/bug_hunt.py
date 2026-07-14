@@ -1,4 +1,4 @@
-"""Generate the autonomous per-commit bug-hunt progress file.
+"""Generate the autonomous release-scoped bug-hunt progress file.
 
 The script resolves the current branch's HEAD commit hash, refreshes
 the snapshot helper's ``docs/shadow/current/`` folder in-process via
@@ -10,12 +10,16 @@ progress header, the static single-file hunt brief, one checkbox per live
 non-``__init__.py`` Python file, a package-integration item, and the final
 test gate. Matching shadows are optional baseline aids for those live files.
 
-The output path defaults to ``docs/bug_hunt/bug_hunt.<short-sha>.md``.
+The output path defaults to ``docs/bug_hunt/bug_hunt-<release>.md``, where
+``<release>`` is the matching version in ``pyproject.toml`` and the package
+``__init__.py`` (dots become underscores). This matches the review and DRY
+agentflow progress-file naming; ``--target-release`` overrides the version.
 Existing progress is preserved unless ``--force`` is passed for an
 explicit restart.
 
 Usage:
-    uv run python scripts/bug_hunt.py [--dicta PATH] [--output PATH] [--package-dir DIR] [--force]
+    uv run python scripts/bug_hunt.py [--dicta PATH] [--output PATH]
+        [--package-dir DIR] [--target-release RELEASE] [--force]
 """
 
 from __future__ import annotations
@@ -23,10 +27,16 @@ from __future__ import annotations
 import argparse
 import contextlib
 import io
+import re
 import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    tomllib = None
 
 if __package__:
     from scripts import review_historical_package_snapshot_at_commit as snapshot
@@ -39,6 +49,19 @@ review_historical_package_snapshot_at_commit_main = snapshot.main
 
 BUG_HUNT_DIR = Path("docs/bug_hunt")
 DICTA_PATH = BUG_HUNT_DIR / "dicta.md"
+PACKAGE_INIT = Path("django_strawberry_framework/__init__.py")
+
+# Dotted-digit release such as 0.0.13; shared with the review and DRY flows.
+RELEASE_PATTERN = re.compile(r"^\d+(?:\.\d+)+$")
+_PROJECT_TABLE_PATTERN = re.compile(
+    r"(?ms)^\[project\][ \t]*(?:#.*)?\n(?P<body>.*?)(?=^\[|\Z)",
+)
+_VERSION_ASSIGNMENT_PATTERN = re.compile(
+    r"""(?m)^version\s*=\s*(?P<quote>["'])(?P<version>[^"']+)(?P=quote)\s*(?:#.*)?$""",
+)
+_INIT_VERSION_PATTERN = re.compile(
+    r"""(?m)^__version__\s*=\s*(?P<quote>["'])(?P<version>[^"']+)(?P=quote)\s*(?:#.*)?$""",
+)
 
 # Fallback dicta used when ``--dicta`` points at a missing file.
 _FALLBACK_DICTA = (
@@ -95,11 +118,65 @@ def _head_sha() -> str:
     return _run_git(["rev-parse", "HEAD"]).strip()
 
 
-def _short_sha(commit: str) -> str:
-    """Return the short SHA for ``commit``."""
-    return _run_git(
-        ["rev-parse", "--short", commit],
-    ).strip()
+def _pyproject_version(repo_root: Path) -> str:
+    """Read ``[project] version`` from pyproject.toml."""
+    pyproject_path = repo_root / "pyproject.toml"
+    try:
+        text = pyproject_path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(f"could not read pyproject.toml: {error}") from error
+
+    if tomllib is None:
+        project_match = _PROJECT_TABLE_PATTERN.search(text)
+        version_match = (
+            _VERSION_ASSIGNMENT_PATTERN.search(project_match.group("body"))
+            if project_match is not None
+            else None
+        )
+        if version_match is None:
+            raise RuntimeError("[project] version not found in pyproject.toml")
+        return version_match.group("version")
+
+    try:
+        project = tomllib.loads(text)["project"]
+        version = project["version"]
+    except (KeyError, tomllib.TOMLDecodeError) as error:
+        raise RuntimeError(
+            f"could not read [project] version from pyproject.toml: {error}",
+        ) from error
+    if not isinstance(version, str) or not version:
+        raise RuntimeError("[project] version in pyproject.toml must be a non-empty string")
+    return version
+
+
+def _init_version(repo_root: Path) -> str:
+    """Read ``__version__`` from the package ``__init__.py``."""
+    init_path = repo_root / PACKAGE_INIT
+    try:
+        text = init_path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise RuntimeError(f"could not read {PACKAGE_INIT.as_posix()}: {error}") from error
+    match = _INIT_VERSION_PATTERN.search(text)
+    if match is None:
+        raise RuntimeError(f"__version__ not found in {PACKAGE_INIT.as_posix()}")
+    return match.group("version")
+
+
+def _package_release(repo_root: Path) -> str:
+    """Return the release shared by pyproject.toml and the package ``__init__``.
+
+    Mirrors the review flow: the release is read from the matching versions so
+    the three agentflows name their progress files identically. A mismatch is
+    an error -- the two versions must be bumped together.
+    """
+    pyproject_version = _pyproject_version(repo_root)
+    init_version = _init_version(repo_root)
+    if pyproject_version != init_version:
+        raise RuntimeError(
+            f"version mismatch: pyproject.toml has {pyproject_version!r} but "
+            f"{PACKAGE_INIT.as_posix()} has {init_version!r}; bump them together",
+        )
+    return pyproject_version
 
 
 def _live_python_sources(repo_root: Path, package_dir: str) -> list[str]:
@@ -163,10 +240,10 @@ def _file_block(source: str, stripped: Path | None, overview: Path | None) -> st
     return "\n".join(lines) + "\n"
 
 
-def _progress_header(commit: str, short_commit: str) -> str:
+def _progress_header(commit: str, release: str) -> str:
     """Render the stable metadata for one autonomous hunt."""
     return (
-        f"# Bug hunt: {short_commit}\n\n"
+        f"# Bug hunt: {release}\n\n"
         "Status: in-progress\n"
         "Mode: autonomous\n"
         f"Baseline commit: `{commit}`\n"
@@ -208,7 +285,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Resolve HEAD, refresh docs/shadow/current/ from that commit, "
-            "then generate the autonomous per-commit bug-hunt progress file."
+            "then generate the autonomous release-scoped bug-hunt progress file."
         ),
     )
     parser.add_argument(
@@ -226,8 +303,17 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
         default=None,
         help=(
             "Override the output checklist path. Defaults to "
-            "docs/bug_hunt/bug_hunt.<short-sha>.md where <short-sha> is "
-            "`git rev-parse --short HEAD`."
+            "docs/bug_hunt/bug_hunt-<release>.md where <release> is the package "
+            "version (dots as underscores)."
+        ),
+    )
+    parser.add_argument(
+        "--target-release",
+        default=None,
+        help=(
+            "Release used to name the progress file, matching the review and DRY "
+            "flows. Defaults to the matching version in pyproject.toml and "
+            f"{PACKAGE_INIT.as_posix()}."
         ),
     )
     parser.add_argument(
@@ -253,12 +339,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     repo_root = Path(_run_git(["rev-parse", "--show-toplevel"]).strip()).resolve()
     head_sha = _head_sha()
-    short_sha = _short_sha(head_sha)
+    try:
+        release = (
+            _package_release(repo_root) if args.target_release is None else args.target_release
+        )
+    except RuntimeError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    if not RELEASE_PATTERN.fullmatch(release):
+        print(
+            f"invalid release {release!r}; expected dotted digits such as 0.0.14",
+            file=sys.stderr,
+        )
+        return 1
     current_dir = (repo_root / SHADOW_DIR).resolve()
     dicta_path = (repo_root / args.dicta).resolve()
 
     if args.output is None:
-        output_path = (repo_root / BUG_HUNT_DIR / f"bug_hunt.{short_sha}.md").resolve()
+        release_slug = release.replace(".", "_")
+        output_path = (repo_root / BUG_HUNT_DIR / f"bug_hunt-{release_slug}.md").resolve()
     else:
         output_path = (repo_root / args.output).resolve()
     if output_path.exists() and not args.force:
@@ -287,7 +386,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     sections: list[str] = [
-        _progress_header(head_sha, short_sha),
+        _progress_header(head_sha, release),
         _read_dicta(dicta_path),
         _HOW_TO_REVIEW_ONE_FILE,
     ]

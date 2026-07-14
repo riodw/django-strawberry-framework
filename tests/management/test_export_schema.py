@@ -69,6 +69,19 @@ def test_export_schema_raises_command_error_when_path_flag_has_no_value(monkeypa
         call_command("export_schema", "test_module:schema", "--path")
 
 
+@pytest.mark.parametrize(
+    ("selector", "message"),
+    [
+        ("", "module path is empty"),
+        (":schema", "module path is empty"),
+        (".config.schema", "relative module paths"),
+    ],
+)
+def test_export_schema_raises_command_error_for_malformed_selector(selector, message):
+    with pytest.raises(CommandError, match=message):
+        call_command("export_schema", selector)
+
+
 def test_export_schema_path_help_documents_destructive_utf8_write():
     parser = Command().create_parser("manage.py", "export_schema")
     path_action = next(action for action in parser._actions if "--path" in action.option_strings)

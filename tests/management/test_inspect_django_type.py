@@ -77,6 +77,11 @@ def test_bad_dotted_path_raises_command_error():
         call_command("inspect_django_type", "does.not.exist.Type")
 
 
+def test_malformed_dotted_path_raises_command_error():
+    with pytest.raises(CommandError, match="module path is empty"):
+        call_command("inspect_django_type", ".BookType")
+
+
 def test_ambiguous_bare_name_lists_copyable_dotted_paths(monkeypatch):
     """Every ambiguity candidate is a directly reusable dotted object path."""
     module_a = types.ModuleType("management_duplicate_types_a")
@@ -127,6 +132,19 @@ def test_bad_schema_selector_raises_command_error():
     # (the import failure is caught before any type resolution runs).
     with pytest.raises(CommandError, match="No module named"):
         call_command("inspect_django_type", "BookType", "--schema", "nonexistent_xyz_module")
+
+
+@pytest.mark.parametrize(
+    ("selector", "message"),
+    [
+        ("", "module path is empty"),
+        (":schema", "module path is empty"),
+        (".config.schema", "relative module paths"),
+    ],
+)
+def test_malformed_schema_selector_raises_command_error(selector, message):
+    with pytest.raises(CommandError, match=message):
+        call_command("inspect_django_type", "BookType", "--schema", selector)
 
 
 def test_unregistered_bare_name_raises_command_error():

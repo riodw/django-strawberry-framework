@@ -5,9 +5,10 @@ import pathlib
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from strawberry import Schema
 from strawberry.printer import print_schema
-from strawberry.utils.importer import import_module_symbol
 
-from django_strawberry_framework.management.commands._imports import import_or_command_error
+from django_strawberry_framework.management.commands._imports import (
+    import_module_symbol_or_command_error,
+)
 
 
 class Command(BaseCommand):
@@ -34,8 +35,9 @@ class Command(BaseCommand):
         value is rejected earlier by argparse, before ``handle`` runs. A
         non-empty target is encoded as UTF-8 and replaced without prompting.
         """
-        schema_symbol = import_or_command_error(
-            lambda: import_module_symbol(options["schema"], default_symbol_name="schema"),
+        schema_symbol = import_module_symbol_or_command_error(
+            options["schema"],
+            default_symbol_name="schema",
         )
 
         if not isinstance(schema_symbol, Schema):

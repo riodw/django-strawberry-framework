@@ -252,6 +252,63 @@ def test_abstract_base_target_raises_at_construction():
         DjangoMutationField(DjangoMutation)
 
 
+def test_inherited_meta_target_rejected_at_construction():
+    """An inherited snapshot cannot make an unregistered child a concrete mutation."""
+    from django import forms
+
+    from django_strawberry_framework import DjangoFormMutation
+    from django_strawberry_framework.forms.sets import iter_form_mutations
+    from django_strawberry_framework.mutations.sets import iter_mutations
+
+    class CreateItem(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    # Inherits ``_mutation_meta`` without its own ``Meta`` -> unregistered -> rejected HERE.
+    class CreateItemSubclass(CreateItem):
+        pass
+
+    class ContactForm(forms.Form):
+        message = forms.CharField()
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = ContactForm
+            permission_classes = [_AllowAll]
+
+    class SubmitSubclass(Submit):
+        pass
+
+    cases = (
+        (CreateItem, CreateItemSubclass, iter_mutations),
+        (Submit, SubmitSubclass, iter_form_mutations),
+    )
+    for parent, child, declarations in cases:
+        assert child._mutation_meta is parent._mutation_meta
+        assert "_mutation_meta" not in child.__dict__
+        assert child not in declarations()
+        with pytest.raises(ConfigurationError, match="own nested Meta"):
+            DjangoMutationField(child)
+
+    class CreateItemRedeclared(CreateItem):
+        class Meta:
+            model = product_models.Item
+            operation = "create"
+            permission_classes = [_AllowAll]
+
+    assert "_mutation_meta" in CreateItemRedeclared.__dict__
+    assert CreateItemRedeclared in iter_mutations()
+    assert DjangoMutationField(CreateItemRedeclared) is not None
+
+    registry.clear()
+    assert CreateItemRedeclared._mutation_meta is not None
+    assert CreateItemRedeclared not in iter_mutations()
+    with pytest.raises(ConfigurationError, match="current registry lifecycle"):
+        DjangoMutationField(CreateItemRedeclared)
+
+
 # ---------------------------------------------------------------------------
 # Three-axis generalization (spec-038 Slice 3)
 # ---------------------------------------------------------------------------

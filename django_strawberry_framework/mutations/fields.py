@@ -85,16 +85,31 @@ def _validate_mutation_target(mutation_cls: Any) -> None:
     import (when ``@strawberry.type class Mutation`` evaluates) BEFORE the bind
     runs. A failure raises ``ConfigurationError`` naming ``DjangoMutationField`` so
     the error fires at the assignment line, not at finalize.
+
+    Concreteness is ownership- and lifecycle-sensitive: each mutation metaclass
+    stamps the validated snapshot and registers a class for phase-2.5 binding only
+    when that class declares its own ``Meta``. An MRO lookup would let an
+    unregistered child inherit its parent's snapshot, while a stale own snapshot
+    can survive ``registry.clear()`` after its declaration has been drained. Both
+    shapes would create lazy references to payloads that finalization cannot
+    materialize, so this guard requires an own snapshot and current ledger entry.
     """
     if not isinstance(mutation_cls, type) or not _has_mutation_protocol(mutation_cls):
         raise ConfigurationError(
             f"DjangoMutationField requires a concrete DjangoMutation / DjangoFormMutation / "
             f"DjangoModelFormMutation subclass; got {mutation_cls!r}.",
         )
-    if getattr(mutation_cls, "_mutation_meta", None) is None:
+    if mutation_cls.__dict__.get("_mutation_meta") is None:
         raise ConfigurationError(
-            f"DjangoMutationField requires a concrete mutation subclass with a nested Meta; "
-            f"{mutation_cls.__name__} is the abstract base (no Meta).",
+            "DjangoMutationField requires a concrete mutation subclass with its own nested "
+            f"Meta; {mutation_cls.__name__} is an abstract base or only inherits Meta and is "
+            f"not registered for finalization. Redeclare Meta on {mutation_cls.__name__}.",
+        )
+    if not _is_registered_mutation_target(mutation_cls):
+        raise ConfigurationError(
+            f"DjangoMutationField target {mutation_cls.__name__} is not registered for "
+            "finalization in the current registry lifecycle. Declare the mutation after the "
+            "most recent registry.clear().",
         )
 
 
@@ -116,6 +131,14 @@ def _has_mutation_protocol(mutation_cls: type) -> bool:
         and callable(getattr(mutation_cls, "input_type_name", None))
         and getattr(mutation_cls, "input_module_path", None) is not None
     )
+
+
+def _is_registered_mutation_target(mutation_cls: type) -> bool:
+    """Return whether either phase-2.5 declaration ledger will bind ``mutation_cls``."""
+    from ..forms.sets import iter_form_mutations
+    from .sets import iter_mutations
+
+    return mutation_cls in iter_mutations() or mutation_cls in iter_form_mutations()
 
 
 def _lazy_ref(type_name: str, module_path: str) -> Any:

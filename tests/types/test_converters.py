@@ -218,6 +218,49 @@ def test_choice_member_name_sanitization():
     assert _sanitize_member_name("") == "MEMBER_"
 
 
+def test_sanitize_member_name_neutralizes_python_enum_reserved_shapes():
+    """Values that sanitize to Python-``enum``-reserved member names get ``MEMBER_``-prefixed.
+
+    ``Enum(cls_name, {name: value})`` refuses ``"mro"`` and treats any single-
+    underscore ``_sunder_`` name as a reserved directive -- raising for most
+    (``_x_`` / ``_name_``) and SILENTLY dropping the recognised ones
+    (``_ignore_`` / ``_missing_``). Python 3.11+ also silently omits names in the
+    generated class's private namespace. ``_sanitize_member_name`` must rewrite
+    every such shape with the same ``MEMBER_`` prefix it already uses for
+    GraphQL-reserved and introspection-prefixed names, so no hostile choice value
+    escapes as a raw ``enum`` crash, a vanished member, or a version-dependent
+    schema.
+    """
+    # Symbol-wrapped tokens collapse to a ``_word_`` sunder shape and must be
+    # neutralised (previously a raw ``ValueError`` from ``Enum(...)``).
+    assert _sanitize_member_name("-x-") == "MEMBER__x_"
+    assert _sanitize_member_name("[a]") == "MEMBER__a_"
+    assert _sanitize_member_name("-1-") == "MEMBER__1_"
+    # Recognised sunder directives (previously SILENTLY dropped as members).
+    assert _sanitize_member_name("_ignore_") == "MEMBER__ignore_"
+    assert _sanitize_member_name("_missing_") == "MEMBER__missing_"
+    # The special-cased ``mro`` (case-sensitive: only the lowercase form is reserved).
+    assert _sanitize_member_name("mro") == "MEMBER_mro"
+    assert _sanitize_member_name("MRO") == "MRO"
+    # A generated enum's class-private namespace is class-name-specific and
+    # silently becomes an attribute instead of a member without the prefix.
+    assert (
+        _sanitize_member_name(
+            "_FixtureTypeStatusEnum__hidden",
+            enum_name="FixtureTypeStatusEnum",
+        )
+        == "MEMBER__FixtureTypeStatusEnum__hidden"
+    )
+    assert (
+        _sanitize_member_name("_OtherEnum__hidden", enum_name="FixtureTypeStatusEnum")
+        == "_OtherEnum__hidden"
+    )
+    # Non-sunder single-underscore names stay untouched (boundary guards).
+    assert _sanitize_member_name("_x") == "_x"  # no trailing underscore
+    assert _sanitize_member_name("x_") == "x_"  # no leading underscore
+    assert _sanitize_member_name("caf\u00e9") == "caf_"  # trailing-only underscore
+
+
 def test_choice_enum_with_graphql_reserved_and_non_ascii_values_builds_schema(
     choice_fixture_model,
 ):
@@ -350,6 +393,94 @@ def test_convert_choices_to_enum_raises_on_graphql_safe_name_collision(choice_fi
     field = choice_fixture_model._meta.get_field("status")
     original = field.choices
     field.choices = (("true", "Reserved"), ("MEMBER_true", "Already prefixed"))
+    registry.clear()
+    try:
+        with pytest.raises(ConfigurationError, match="sanitize to the same enum member"):
+            convert_choices_to_enum(field, "FixtureType")
+    finally:
+        field.choices = original
+        registry.clear()
+
+
+def test_convert_choices_to_enum_with_python_enum_reserved_values_builds_schema(
+    choice_fixture_model,
+):
+    """Choice values that map to Python-``enum``-reserved member names build a working enum.
+
+    Without the ``_is_enum_reserved_member`` neutralisation in
+    ``_sanitize_member_name`` this raised a raw ``ValueError`` from ``Enum(...)``
+    for the ``_sunder_``-shaped / ``mro`` values (``"-x-"``, ``"mro"``) and --
+    worse -- SILENTLY dropped the recognised-directive value ``"_ignore_"`` from
+    the enum. Python 3.11+ also dropped ``"_FixtureTypeStatusEnum__hidden"`` as a
+    class-private attribute, making the generated schema interpreter-dependent.
+    Every choice must survive as a member with its DB value preserved and the
+    schema must build + execute.
+    """
+    field = choice_fixture_model._meta.get_field("status")
+    original = field.choices
+    field.choices = (
+        ("-x-", "Dash X"),  # -> _x_ sunder shape: previously ValueError at Enum build.
+        ("mro", "Method Resolution Order"),  # previously ValueError at Enum build.
+        ("_ignore_", "Ignore Directive"),  # previously SILENTLY dropped as a member.
+        # Previously SILENTLY installed as a class attribute, not a member.
+        ("_FixtureTypeStatusEnum__hidden", "Private Namespace"),
+        ("active", "Active"),  # plain control value.
+    )
+    registry.clear()
+    try:
+        enum_cls = convert_choices_to_enum(field, "FixtureType")
+
+        # Every choice value survives as a distinct member (none dropped).
+        assert {member.value for member in enum_cls} == {
+            "-x-",
+            "mro",
+            "_ignore_",
+            "_FixtureTypeStatusEnum__hidden",
+            "active",
+        }
+        assert [member.name for member in enum_cls] == [
+            "MEMBER__x_",
+            "MEMBER_mro",
+            "MEMBER__ignore_",
+            "MEMBER__FixtureTypeStatusEnum__hidden",
+            "active",
+        ]
+
+        @strawberry.type
+        class Query:
+            @strawberry.field
+            def statuses(self) -> list[enum_cls]:
+                return list(enum_cls)
+
+        schema = strawberry.Schema(query=Query)
+        result = schema.execute_sync("{ statuses }")
+
+        assert result.errors is None
+        assert result.data == {
+            "statuses": [
+                "MEMBER__x_",
+                "MEMBER_mro",
+                "MEMBER__ignore_",
+                "MEMBER__FixtureTypeStatusEnum__hidden",
+                "active",
+            ],
+        }
+    finally:
+        field.choices = original
+        registry.clear()
+
+
+def test_convert_choices_to_enum_raises_on_enum_reserved_sanitize_collision(choice_fixture_model):
+    """Collision detection still fires after the Python-``enum``-reserved rewrite.
+
+    ``"-x-"`` and ``"_x_"`` both sanitize to ``MEMBER__x_``; the collision must
+    surface as the localised ``ConfigurationError`` rather than a silently
+    dropped member -- the same contract already held for the
+    ``true`` / ``MEMBER_true`` GraphQL-reserved collision above.
+    """
+    field = choice_fixture_model._meta.get_field("status")
+    original = field.choices
+    field.choices = (("-x-", "Symbol wrapped"), ("_x_", "Sunder shaped"))
     registry.clear()
     try:
         with pytest.raises(ConfigurationError, match="sanitize to the same enum member"):

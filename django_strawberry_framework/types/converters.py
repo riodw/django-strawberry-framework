@@ -448,7 +448,37 @@ def convert_field_output(
     return output_type | None if file_effective_null else output_type
 
 
-def _sanitize_member_name(value: Any) -> str:
+def _is_enum_reserved_member(name: str, *, enum_name: str | None = None) -> bool:
+    """Return whether ``name`` is a member name Python's ``enum`` reserves.
+
+    ``Enum(cls_name, {name: value})`` refuses ``"mro"`` outright and reserves every
+    single-underscore ``_sunder_`` name for directives. Python 3.11+ also treats
+    ``_<cls_name>__private`` as a class attribute instead of a member. Some of
+    these names raise, while recognised directives and class-private names are
+    silently omitted from the enum. All must receive the same ``MEMBER_`` prefix
+    used for GraphQL-reserved and introspection-prefixed names. Applying the
+    private-name rule on Python 3.10 too keeps the generated schema stable across
+    every supported interpreter.
+
+    The shape checks mirror ``enum``'s private predicates rather than importing
+    them. ``__dunder__`` names are already handled by the ``startswith("__")``
+    branch in :func:`_sanitize_member_name`.
+    """
+    if name == "mro" or (
+        len(name) > 2 and name[0] == "_" and name[-1] == "_" and name[1] != "_" and name[-2] != "_"
+    ):
+        return True
+    if enum_name is None:
+        return False
+    private_prefix = f"_{enum_name}__"
+    return (
+        len(name) > len(private_prefix)
+        and name.startswith(private_prefix)
+        and (name[-1] != "_" or name[-2] != "_")
+    )
+
+
+def _sanitize_member_name(value: Any, *, enum_name: str | None = None) -> str:
     """Produce a Strawberry / GraphQL-safe enum member from a Django choice value.
 
     The choice value (DB-side, not the human label) is the input. We coerce
@@ -456,19 +486,24 @@ def _sanitize_member_name(value: Any) -> str:
     identifier characters with ``_``, prefix with ``MEMBER_`` if the
     result starts with a digit (or is empty), and prefix with an
     underscore if it collides with a Python keyword. GraphQL-reserved enum
-    values (``true``, ``false``, ``null``) and introspection-prefixed
-    names are also prefixed so Strawberry can build the schema.
+    values (``true``, ``false``, ``null``), introspection-prefixed
+    names, and names Python's ``enum`` reserves are also prefixed so Strawberry
+    can build the schema without a raw ``enum`` crash or a silently dropped
+    member. ``enum_name`` enables detection of the class-specific
+    ``_<enum_name>__private`` namespace used by Python's name mangling.
     Sanitization is a function of the raw value, not the label, so schema
     member names stay stable when consumers edit human-readable labels.
 
     Rules apply in this order: (1) ASCII non-identifier characters
     rewritten to ``_``; (2) leading-digit or empty result prefixed with
     ``MEMBER_``; (3) Python-keyword result prefixed with ``_``;
-    (4) GraphQL-reserved (``true`` / ``false`` / ``null``) or
-    ``__``-prefixed result prefixed with ``MEMBER_``. The order is
-    load-bearing because the keyword-and-reserved rewrites in steps 3 and
-    4 cannot collapse into a single condition without changing how
-    downstream collision detection (see ``convert_choices_to_enum``)
+    (4) GraphQL-reserved (``true`` / ``false`` / ``null``),
+    ``__``-prefixed, or Python-``enum``-reserved (``mro``, ``_sunder_``, or the
+    generated class's private namespace; see :func:`_is_enum_reserved_member`)
+    result prefixed with ``MEMBER_``.
+    The order is load-bearing because the keyword-and-reserved rewrites in
+    steps 3 and 4 cannot collapse into a single condition without changing
+    how downstream collision detection (see ``convert_choices_to_enum``)
     categorises ambiguous values.
     """
     sanitized = _NON_IDENT.sub("_", str(value))
@@ -476,7 +511,11 @@ def _sanitize_member_name(value: Any) -> str:
         sanitized = f"MEMBER_{sanitized}"
     if keyword.iskeyword(sanitized):
         sanitized = f"_{sanitized}"
-    if sanitized.casefold() in _GRAPHQL_RESERVED_ENUM_VALUES or sanitized.startswith("__"):
+    if (
+        sanitized.casefold() in _GRAPHQL_RESERVED_ENUM_VALUES
+        or sanitized.startswith("__")
+        or _is_enum_reserved_member(sanitized, enum_name=enum_name)
+    ):
         sanitized = f"MEMBER_{sanitized}"
     return sanitized
 
@@ -541,7 +580,7 @@ def build_enum_from_choices(
     members: dict[str, Any] = {}
     collisions: dict[str, list[Any]] = {}
     for value, _label in choice_pairs:
-        member = _sanitize_member_name(value)
+        member = _sanitize_member_name(value, enum_name=enum_name)
         if member in members:
             collisions.setdefault(member, [members[member]]).append(value)
         else:

@@ -369,6 +369,117 @@ def test_plan_converts_camel_case_to_snake_case():
     assert sorted(plan.select_related) == ["item", "property"]
 
 
+def test_plan_projects_digit_boundary_field_under_real_django_name():
+    """A ``<word>_<digit>`` field survives the lossy camel/snake round-trip.
+
+    Strawberry's default ``to_camel_case`` drops the ``_`` before a digit, so a
+    Django field ``address_2`` is exposed in the schema as ``address2`` and a
+    forward FK ``parent_2`` as ``parent2``. ``snake_case`` cannot recover the
+    dropped underscore (``snake_case("address2") == "address2"``), so a lookup
+    by the reversed selection name misses the real ``"address_2"`` field-map
+    key. Before the walker's forward-resolution fallback the scalar was silently
+    dropped from ``.only(...)`` (a per-row deferred-load N+1) and the relation
+    was left entirely unplanned (a per-parent N+1) - exactly the failures the
+    optimizer exists to prevent. The walker now resolves the selection name
+    forward against the real field names and projects / plans the REAL Django
+    name.
+    """
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class DigitParent(models.Model):
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class DigitChild(models.Model):
+        title = models.CharField(max_length=32)
+        address_2 = models.CharField(max_length=32)
+        parent_2 = models.ForeignKey(
+            DigitParent,
+            on_delete=models.CASCADE,
+            related_name="children",
+        )
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    registry.clear()
+    try:
+
+        class DigitParentNode(DjangoType):
+            class Meta:
+                model = DigitParent
+                fields = ("name",)
+
+        class DigitChildNode(DjangoType):
+            class Meta:
+                model = DigitChild
+                fields = ("title", "address_2", "parent_2")
+
+        finalize_django_types()
+
+        # Scalar: selected as the schema name ``address2`` -> projected as the
+        # real ``address_2`` column (pre-fix: dropped, only_fields=("title",)).
+        scalar_plan = plan_optimizations(
+            [_sel("title"), _sel("address2")],
+            DigitChild,
+            source_type=DigitChildNode,
+        )
+        assert "address_2" in scalar_plan.only_fields
+        assert "address2" not in scalar_plan.only_fields
+
+        # Relation: forward FK selected as ``parent2`` -> select_related on the
+        # real ``parent_2`` name (pre-fix: unplanned, select_related=()).
+        relation_plan = plan_optimizations(
+            [_sel("parent2", selections=[_sel("name")])],
+            DigitChild,
+            source_type=DigitChildNode,
+        )
+        assert relation_plan.select_related == ("parent_2",)
+    finally:
+        registry.clear()
+
+
+def test_plan_uses_exact_graphql_names_for_explicitly_named_fields():
+    """Explicit GraphQL names resolve forward and remain distinct during selection merging."""
+    import strawberry
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class Address(models.Model):
+        address_2 = models.CharField(max_length=32)
+        postal_code = models.CharField(max_length=16)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    registry.clear()
+    try:
+
+        class AddressNode(DjangoType):
+            address_2: str = strawberry.field(name="secondaryAddress")
+            postal_code: str = strawberry.field(name="secondary_address")
+
+            class Meta:
+                model = Address
+                fields = ("address_2", "postal_code")
+
+        finalize_django_types()
+
+        plan = plan_optimizations(
+            [_sel("secondaryAddress"), _sel("secondary_address")],
+            Address,
+            source_type=AddressNode,
+        )
+        assert plan.only_fields == ("address_2", "postal_code")
+    finally:
+        registry.clear()
+
+
 def test_plan_empty_selections_produces_empty_plan():
     """An empty selection list produces an empty plan."""
     plan = plan_optimizations([], Category)
@@ -834,6 +945,44 @@ def test_plan_elides_forward_fk_when_target_pk_is_not_named_id():
     plan = plan_optimizations(
         [_sel("target", selections=[_sel("uuid")])],
         UuidSource,
+    )
+    assert plan.select_related == ()
+    assert plan.only_fields == ("target_id",)
+    assert plan.fk_id_elisions == ("target@target",)
+
+
+def test_plan_elides_forward_fk_when_target_pk_is_digit_boundary_name():
+    """B2: FK-id elision resolves a ``<word>_<digit>`` target pk via forward matching.
+
+    Site 3 of the digit-boundary reconciliation: ``_selected_scalar_names``
+    reversed each pk selection with ``snake_case`` and missed a digit-boundary pk
+    field-map key (``code_2`` is exposed as ``code2``, and
+    ``snake_case("code2") == "code2"`` misses the real ``"code_2"`` key). The
+    miss made the helper return ``None`` (elision unsafe), so the walker fell
+    back to a redundant ``select_related`` JOIN loading the whole related row
+    rather than eliding to the source FK column. The helper now forward-resolves
+    the real ``code_2`` name through the same primitive as the main walk, so an
+    ``{ code2 }``-only child selection elides the JOIN.
+    """
+
+    class DigitPkTarget(models.Model):
+        code_2 = models.IntegerField(primary_key=True)
+        label = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    class DigitPkSource(models.Model):
+        target = models.ForeignKey(DigitPkTarget, on_delete=models.CASCADE)
+
+        class Meta:
+            app_label = "tests"
+            managed = False
+
+    plan = plan_optimizations(
+        [_sel("target", selections=[_sel("code2")])],
+        DigitPkSource,
     )
     assert plan.select_related == ()
     assert plan.only_fields == ("target_id",)
@@ -2445,6 +2594,127 @@ def test_nested_connection_planned_as_windowed_prefetch():
         assert WINDOW_ROW_NUMBER in annotations
         # Nothing in the selection observes the count -> not annotated.
         assert WINDOW_TOTAL_COUNT not in annotations
+    finally:
+        registry.clear()
+
+
+def test_plan_projects_digit_boundary_relation_connection_as_windowed_prefetch():
+    """A ``<word>_<digit>`` many-relation's connection survives the lossy round-trip.
+
+    Gap 2a of the digit-boundary reconciliation. Strawberry renders the
+    synthesized ``line_2_connection`` sibling as ``line2Connection``
+    (``to_camel_case`` drops the ``_`` before the digit), but the walker
+    reversed the selection with ``snake_case`` -> ``"line2_connection"``, which
+    misses the ``"line_2_connection"`` ``relation_connections`` slot key.
+    ``_field_by_graphql_name`` cannot rescue it either: the connection GraphQL
+    name carries a ``Connection`` suffix the underlying relation name lacks
+    (``to_camel_case("line_2") == "line2" != "line2Connection"``). Before the
+    consolidated forward resolver the nested connection was dropped from the plan
+    entirely - no windowed ``Prefetch``, no ``planned_resolver_keys`` entry - so
+    every parent ran its own connection query (a per-parent N+1). The walker now
+    forward-matches the synthesized slot key and plans the batched window.
+
+    Uses the ``managed=False`` + installed-``products``-app-label pattern from
+    ``_ordered_connection_types`` so the reverse relation is wired into
+    ``_meta.get_fields()`` (Django only builds reverse relations for installed
+    apps) and the ``line2Connection`` sibling actually synthesizes.
+    """
+    from strawberry import relay
+    from strawberry.schema.name_converter import NameConverter
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class DigitConnParent(models.Model):
+        name = models.CharField(max_length=32)
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    class DigitConnChild(models.Model):
+        title = models.CharField(max_length=32)
+        owner = models.ForeignKey(
+            DigitConnParent,
+            on_delete=models.CASCADE,
+            related_name="line_2",
+        )
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    registry.clear()
+    try:
+
+        class DigitConnChildNode(DjangoType):
+            class Meta:
+                model = DigitConnChild
+                fields = ("id", "title")
+                interfaces = (relay.Node,)
+
+        class DigitConnParentNode(DjangoType):
+            class Meta:
+                model = DigitConnParent
+                fields = ("id", "name", "line_2")
+                interfaces = (relay.Node,)
+
+        finalize_django_types()
+
+        # The synthesis records the slot under the Python attr name; Strawberry
+        # renders it in the schema as ``line2Connection``.
+        definition = registry.get_definition(DigitConnParentNode)
+        assert definition.relation_connections == {"line_2_connection": "line_2"}
+
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "line2Connection",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            DigitConnParent,
+            info=_fake_info(),
+            source_type=DigitConnParentNode,
+        )
+        # Planned as a batched windowed Prefetch on the real relation accessor
+        # (pre-fix: prefetch_related=() and planned_resolver_keys=() - dropped).
+        prefetch = _prefetch_entry(plan)
+        assert prefetch.to_attr == "_dst_line_2_connection"
+        assert prefetch.prefetch_through == "line_2"
+        assert plan.planned_resolver_keys == ("DigitConnParentNode.line_2@line2Connection",)
+
+        class ConnectionNameConverter(NameConverter):
+            def get_graphql_name(self, field):
+                if field.python_name == "line_2_connection":
+                    return "numberedLines"
+                return super().get_graphql_name(field)
+
+        custom_info = _fake_info()
+        custom_info.schema = SimpleNamespace(
+            _strawberry_schema=SimpleNamespace(
+                config=SimpleNamespace(
+                    name_converter=ConnectionNameConverter(),
+                    relay_max_results=100,
+                ),
+            ),
+        )
+        custom_plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "numberedLines",
+                    node_selections=[_sel("title")],
+                    arguments={"first": 3},
+                ),
+            ],
+            DigitConnParent,
+            info=custom_info,
+            source_type=DigitConnParentNode,
+        )
+        custom_prefetch = _prefetch_entry(custom_plan)
+        assert custom_prefetch.to_attr == "_dst_line_2_connection"
+        assert custom_prefetch.prefetch_through == "line_2"
+        assert custom_plan.planned_resolver_keys == ("DigitConnParentNode.line_2@numberedLines",)
     finally:
         registry.clear()
 

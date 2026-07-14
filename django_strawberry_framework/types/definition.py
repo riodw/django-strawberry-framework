@@ -96,8 +96,10 @@ class DjangoTypeDefinition:
           same channel it uses for ``field_map`` / ``optimizer_hints`` -
           without reaching into ``connection.py`` internals or the
           ``_dst_synthesized_relation_connection`` field marker (spec-033
-          Decision 3). Lookup normalizes via the SAME ``snake_case(sel.name)``
-          the field-map lookup uses.
+          Decision 3). The walker resolves connection and model-field names
+          through the same boundary: an exact reverse lookup first, then an
+          authoritative forward match through the active Strawberry name
+          converter when reversal is lossy or impossible.
         - ``globalid_strategy`` is the raw normalized ``Meta.globalid_strategy``
           value (``"model"`` / ``"type"`` / ``"type+model"`` / a callable /
           ``None``) populated by ``DjangoType.__init_subclass__`` from the

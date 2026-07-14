@@ -1109,6 +1109,28 @@ class CreateShelfWithSaveKwargs(SerializerMutation):
         return {"topic": "stamped-at-save"}
 
 
+class CreateShelfWithRenamedSaveKwargsCollision(SerializerMutation):
+    """Prove save kwargs cannot replace a renamed serializer input (spec-039 rev6 #12).
+
+    ``RenamedShelfSerializer.shelf_code`` writes through ``source="code"``. Returning a
+    server-side ``code`` kwarg would make DRF merge it over the client's validated value, so the
+    framework must reject the configuration before ``serializer.save()`` writes either value.
+    """
+
+    class Meta:
+        serializer_class = serializers.RenamedShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+    def get_serializer_save_kwargs(
+        self,
+        info,
+        data,
+        instance=None,
+    ):
+        return {"code": "server-shadow"}
+
+
 class CreateShelfViaAltBranchesSerializer(SerializerMutation):
     """Create a ``Shelf`` with a raw-pk M2M ``alt_branches`` input - the batched multi-relation visibility path (spec-039 rev6 #3).
 
@@ -1280,6 +1302,9 @@ class Mutation:
     )
     create_shelf_with_save_kwargs = DjangoMutationField(
         CreateShelfWithSaveKwargs,
+    )
+    create_shelf_with_renamed_save_kwargs_collision = DjangoMutationField(
+        CreateShelfWithRenamedSaveKwargsCollision,
     )
     update_book_via_serializer_with_lock = DjangoMutationField(
         UpdateBookViaSerializerWithLock,

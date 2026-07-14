@@ -838,21 +838,27 @@ def _assert_injected_fields_supplied(mutation_cls: type, serializer: Any) -> Non
 def _assert_save_kwargs_no_shadow(mutation_cls: type, save_kwargs: dict[str, Any]) -> None:
     """Raise if a ``get_serializer_save_kwargs`` key shadows a serializer input field (rev6 #12).
 
-    ``serializer.save(**kwargs)`` merges its kwargs OVER the validated data, so a save kwarg
-    whose name matches a serializer INPUT field would silently override the client's value. Save
-    kwargs are for server-side data NOT in the input (``owner`` / ``created_by``), so a name
-    collision with an input field is a configuration mistake - fail loud rather than silently
-    clobber. (``_input_field_specs`` is keyed by the declared serializer field name -
-    ``spec.target_name`` - the same key DRF's ``validated_data`` uses.)
+    DRF merges save kwargs over ``validated_data``. That mapping is keyed by a field's resolved
+    ``source``, not necessarily its declared serializer name: ``display_name =
+    CharField(source="name")`` validates into ``{"name": ...}``. Save kwargs are for server-side
+    data outside the input, so reject collisions against that validated-data key before a caller's
+    value can silently replace the client's value.
     """
-    input_fields = {spec.target_name for spec in mutation_cls._input_field_specs}
-    shadowed = sorted(set(save_kwargs) & input_fields)
+    inputs_by_validated_key = {
+        (spec.source or spec.target_name): spec.graphql_name
+        for spec in mutation_cls._input_field_specs
+    }
+    shadowed = sorted(set(save_kwargs) & set(inputs_by_validated_key))
     if shadowed:
+        collisions = ", ".join(
+            f"{key!r} (input {inputs_by_validated_key[key]!r})" for key in shadowed
+        )
         raise ConfigurationError(
             f"SerializerMutation {mutation_cls.__name__}.get_serializer_save_kwargs returned "
-            f"kwarg(s) {shadowed!r} that shadow serializer input field(s); a save kwarg would "
-            "silently override the client's input. Save kwargs are for server-side data not in "
-            "the input (rename them, or drop the field from the input).",
+            f"kwarg(s) {shadowed!r} that shadow serializer input field(s) [{collisions}]; a save "
+            "kwarg merged over validated_data would silently override the client's input. Save "
+            "kwargs are for server-side data not in the input (rename them, or drop the field "
+            "from the input).",
         )
 
 

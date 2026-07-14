@@ -6469,6 +6469,33 @@ def test_serializer_save_kwargs_hook_injects_server_side_data_over_http():
 
 
 @pytest.mark.django_db
+def test_serializer_save_kwargs_rejects_renamed_source_shadow_over_http():
+    """A save kwarg cannot silently replace a renamed input's value (spec-039 rev6 #12).
+
+    ``shelfCode`` is declared as ``shelf_code`` but validates into DRF's ``code`` key through
+    ``source="code"``. The colliding server-side ``code`` kwarg is rejected before save, and
+    neither the client nor server value reaches the database.
+    """
+    branch = models.Branch.objects.create(name="SaveKwargsAliasBranch", city="Boston")
+    response = _post_graphql(
+        "mutation($d: RenamedShelfSerializerInput!) { "
+        "createShelfWithRenamedSaveKwargsCollision(data: $d) { "
+        "result { code } errors { field messages } } }",
+        variables={"d": {"shelfCode": "client-value", "branchId": branch.pk}},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert payload["errors"][0]["path"] == ["createShelfWithRenamedSaveKwargsCollision"]
+    assert "'code' (input 'shelfCode')" in payload["errors"][0]["message"]
+    assert not models.Shelf.objects.filter(
+        code__in=("client-value", "server-shadow"),
+        branch=branch,
+    ).exists()
+
+
+@pytest.mark.django_db
 def test_serializer_update_with_select_for_update_over_http():
     """An update serializer mutation with ``Meta.select_for_update = True`` updates cleanly over HTTP (spec-039 rev6 #14).
 

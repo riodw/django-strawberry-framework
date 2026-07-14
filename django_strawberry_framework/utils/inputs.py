@@ -258,9 +258,10 @@ class InputFieldSpec:
       for an FK relation, ``name`` for a scalar).
     - ``graphql_name`` - the camel-cased GraphQL wire name (``categoryId``).
     - ``target_name`` - the per-flavor decode key. For the serializer flavor this
-      is the DECLARED serializer field name (``category_pk``), the key a built
-      ``validated_data`` payload is keyed by; for a form it would be the form
-      field name. Never the ``<name>_id`` relation attr.
+      is the DECLARED serializer field name (``category_pk``), which the framework
+      supplies in the serializer's input ``data`` before DRF maps it through
+      ``source`` into ``validated_data``; for a form it would be the form field name.
+      Never the ``<name>_id`` relation attr.
     - ``kind`` - one of the flavor's decode kinds (``scalar`` /
       ``relation_single`` / ``relation_multi`` / ``file``).
     - ``source`` - the serializer-only extra axis: the one-segment ``source`` the

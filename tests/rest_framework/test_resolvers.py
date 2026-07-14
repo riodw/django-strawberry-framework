@@ -1531,6 +1531,35 @@ def test_save_kwargs_not_shadowing_input_field_is_allowed():
     serializer_resolvers._assert_save_kwargs_no_shadow(fake, {"owner": object()})
 
 
+def test_save_kwargs_shadowing_renamed_field_source_raises():
+    """A save kwarg matching a renamed field's validated-data key fails loud (rev6 #12)."""
+    from django_strawberry_framework.utils.inputs import InputFieldSpec
+
+    fake = type(
+        "M",
+        (),
+        {
+            "_input_field_specs": [
+                InputFieldSpec(
+                    input_attr="display_name",
+                    graphql_name="displayName",
+                    target_name="display_name",
+                    kind=SCALAR,
+                    source="name",
+                ),
+            ],
+        },
+    )
+    with pytest.raises(
+        ConfigurationError,
+        match=r"'name' \(input 'displayName'\).*silently override",
+    ):
+        serializer_resolvers._assert_save_kwargs_no_shadow(fake, {"name": "clobber"})
+
+    # The declared alias is not the key DRF places in validated_data.
+    serializer_resolvers._assert_save_kwargs_no_shadow(fake, {"display_name": "ok"})
+
+
 @pytest.mark.django_db
 def test_relation_queryset_scope_composes_with_author_queryset():
     """Visibility scoping AND-s the author's field queryset - never replaces it (rev6 rev2 P1).

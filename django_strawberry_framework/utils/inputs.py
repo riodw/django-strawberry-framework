@@ -474,11 +474,12 @@ def normalize_field_name_sequence(
 
     ``None`` means "unset". A non-``None`` value is coerced to a tuple so the bind
     and the generator see one shape. A bare string is rejected (it would iterate
-    as characters); a duplicate name is rejected (it would collapse silently when
-    the effective field set is taken as a ``frozenset``, masking a malformed
-    declaration), failing loud naming the repeated field(s). ``label`` names which
-    key (``fields`` / ``exclude``) is at fault; ``flavor`` names the mutation
-    base(s) in the message (e.g. ``"DjangoMutation"`` or
+    as characters); a non-string entry is rejected (it would otherwise surface as a
+    confusing "unknown field" later); a duplicate name is rejected (it would
+    collapse silently when the effective field set is taken as a ``frozenset``,
+    masking a malformed declaration), failing loud naming the repeated field(s).
+    ``label`` names which key (``fields`` / ``exclude``) is at fault; ``flavor``
+    names the mutation base(s) in the message (e.g. ``"DjangoMutation"`` or
     ``"DjangoFormMutation / DjangoModelFormMutation"``).
     """
     if value is None:
@@ -489,6 +490,12 @@ def normalize_field_name_sequence(
             f"names, not a bare string: {value!r}.",
         )
     names = tuple(value)
+    non_strings = [name for name in names if not isinstance(name, str)]
+    if non_strings:
+        raise ConfigurationError(
+            f"{flavor} Meta.{label} must be a sequence of field name strings; "
+            f"got non-string entry(ies): {non_strings!r}.",
+        )
     seen: set[str] = set()
     duplicates = sorted({name for name in names if name in seen or seen.add(name)})
     if duplicates:

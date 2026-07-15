@@ -97,6 +97,32 @@ def test_meta_without_model_raises():
                 operation = "create"
 
 
+def test_meta_model_string_raises_at_class_creation():
+    """A string ``Meta.model`` raises ``ConfigurationError`` at class creation.
+
+    Before the gate, ``Meta.model = "Item"`` snapshotted successfully and the
+    phase-2.5 bind crashed with ``AttributeError: 'str' object has no attribute
+    '__name__'``. Mirror ``DjangoType``'s ``Meta.model must be a Django model
+    class`` posture so a typo'd / lazy string never reaches finalize.
+    """
+    with pytest.raises(ConfigurationError, match="must be a Django model class"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = "Item"
+                operation = "create"
+
+
+def test_meta_model_instance_raises_at_class_creation():
+    """A model *instance* ``Meta.model`` raises at class creation (not finalize)."""
+    with pytest.raises(ConfigurationError, match="must be a Django model class"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item()
+                operation = "create"
+
+
 def test_meta_bad_operation_raises():
     """An ``operation`` outside the valid set raises naming the bad value + valid set."""
     with pytest.raises(ConfigurationError, match="operation must be one of"):
@@ -165,6 +191,45 @@ def test_meta_duplicate_exclude_raises():
                 model = product_models.Item
                 operation = "create"
                 exclude = ("description", "description")
+
+
+def test_meta_unknown_fields_raises_at_class_creation():
+    """An unknown ``Meta.fields`` name raises at class creation (not finalize).
+
+    ``editable_input_fields`` already rejected unknown names, but only when the
+    bind / generator walked the set - so a typo'd create/update ``Meta.fields``
+    registered cleanly and failed later. The model ``_validate_meta`` now runs
+    that walk at class creation (form-flavor parity).
+    """
+    with pytest.raises(ConfigurationError, match="non-editable or unknown field"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                fields = ("not_a_real_field",)
+
+
+def test_meta_empty_fields_raises_at_class_creation():
+    """``Meta.fields = ()`` on create/update raises at class creation (empty input)."""
+    with pytest.raises(ConfigurationError, match="narrowed the editable column set to empty"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                fields = ()
+
+
+def test_meta_fields_non_string_entry_raises():
+    """A non-string entry in ``Meta.fields`` raises at class creation."""
+    with pytest.raises(ConfigurationError, match="non-string entry"):
+
+        class CreateItem(DjangoMutation):
+            class Meta:
+                model = product_models.Item
+                operation = "create"
+                fields = (1, 2)
 
 
 def test_meta_delete_with_fields_raises():

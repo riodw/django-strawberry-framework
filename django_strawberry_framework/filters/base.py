@@ -47,6 +47,7 @@ from ..sets_mixins import RelatedSetTargetMixin
 # cycle (spec-031 Slice 2 plan). These are the single source of truth for the
 # strategy->payload-shape mapping shared with the encoder and the Slice-3 decoder.
 from ..types.relay import MODEL_LABEL_STRATEGIES, TYPE_NAME_STRATEGIES
+from ..utils.querysets import coerce_field_value_or_none
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from django.http import HttpRequest
@@ -208,19 +209,19 @@ def _coerce_int_in_members(model_field: models.IntegerField, values: list) -> li
     as a raw ``OverflowError`` (`Python int too large to convert to SQLite INTEGER`)
     escaping as a top-level error - unlike a scalar `exact` / comparison, which
     Django's range-aware integer lookups resolve to "matches nothing" BEFORE binding.
-    Each element is coerced through the column (`to_python` + `run_validators`) and an
-    uncoercible / out-of-range element is DROPPED - it can identify no row - so the
-    common case (some valid members) still filters and never overflows the backend.
-    Mirrors `mutations/resolvers.py::_coerce_relation_pk_or_none`.
+    Each element is coerced through the shared
+    `utils/querysets.py::coerce_field_value_or_none` primitive and an uncoercible /
+    out-of-range element is DROPPED - it can identify no row - so the common case
+    (some valid members) still filters and never overflows the backend. Sibling of
+    `utils/write_values.py::coerce_relation_pk_or_none` (the raw-pk M2M coercion)
+    and `relay.py::_coerce_pk_or_none` (the GlobalID id-attr coercion) - same
+    coercion mechanics, a different field.
     """
     kept: list = []
     for value in values:
-        try:
-            coerced = model_field.to_python(value)
-            model_field.run_validators(coerced)
-        except (ValidationError, ValueError, TypeError):
-            continue
-        kept.append(coerced)
+        coerced = coerce_field_value_or_none(model_field, value)
+        if coerced is not None:
+            kept.append(coerced)
     return kept
 
 

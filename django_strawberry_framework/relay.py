@@ -55,7 +55,7 @@ from enum import Enum
 from typing import Any, NamedTuple
 
 import strawberry
-from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.core.exceptions import FieldDoesNotExist
 from graphql import GraphQLError
 from strawberry.types import Info
 from strawberry.utils.inspect import in_async_context
@@ -64,7 +64,7 @@ from .exceptions import ConfigurationError
 from .list_field import _validate_relay_djangotype_target
 from .registry import register_subsystem_clear
 from .types.relay import _NODE_TYPE_HINT_ATTR, decode_global_id
-from .utils.querysets import model_for
+from .utils.querysets import coerce_field_value_or_none, model_for
 
 __all__ = ("DjangoNodeField", "DjangoNodesField")
 
@@ -116,20 +116,13 @@ def _coerce_pk_or_none(resolved_type: type, node_id: str) -> Any:
     ``ValueError: Field 'id' expected a number``. A coercion failure is treated
     as "identifies no row" -> ``null`` (single) / positional ``null`` hole
     (batch), with no query issued, so the no-existence-oracle property is
-    unaffected (Decision 5, Revision 7 P2).
-
-    Coercion is ``to_python`` **then** ``run_validators``: ``to_python`` is a pure
-    type cast that does NOT range-check, so a syntactically-numeric but
-    out-of-range literal (e.g. ``"9" * 400`` against a 64-bit integer column)
-    casts to a Python ``int`` cleanly and would reach the ORM, where SQLite's
-    ``pk__in`` parameter binding raises a raw ``OverflowError`` (``Python int too
-    large to convert to SQLite INTEGER``). The field's own validators carry the
-    backend ``integer_field_range`` Min/MaxValueValidators, so ``run_validators``
-    rejects an out-of-range value as a ``ValidationError`` here - the SAME
-    "identifies no row" outcome as a non-numeric literal, decided before any query
-    so neither the node lookup nor the relation ``pk__in`` visibility query can
-    raise a backend ``OverflowError`` (feedback - relation huge-pk crash). A
-    column with no range/length validators (a plain string id) is unaffected.
+    unaffected (Decision 5, Revision 7 P2). The coercion mechanics
+    (``to_python`` then ``run_validators``, out-of-range literals rejected
+    before any query so neither the node lookup nor the relation ``pk__in``
+    visibility query can raise a backend ``OverflowError`` - feedback relation
+    huge-pk crash) are the shared ``utils/querysets.py::coerce_field_value_or_none``
+    primitive; this function's only job is picking WHICH field to coerce
+    against.
 
     The coercion field is the SAME one the resolution filters on -
     ``resolved_type.resolve_id_attr()`` (the value
@@ -153,12 +146,7 @@ def _coerce_pk_or_none(resolved_type: type, node_id: str) -> Any:
             field = model._meta.get_field(id_attr)
         except FieldDoesNotExist:
             return node_id
-    try:
-        value = field.to_python(node_id)
-        field.run_validators(value)
-    except (ValueError, ValidationError):
-        return None
-    return value
+    return coerce_field_value_or_none(field, node_id)
 
 
 def _check_typed_match(target_type: type | None, resolved: type) -> None:

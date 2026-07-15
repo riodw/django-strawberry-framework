@@ -23,12 +23,11 @@ from __future__ import annotations
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
-from django.core.exceptions import ValidationError
 from strawberry import relay
 
 from .errors import field_error, relation_field_error
 from .inputs import iter_provided_input_fields
-from .querysets import visible_related_object
+from .querysets import coerce_field_value_or_none, visible_related_object
 
 if TYPE_CHECKING:  # pragma: no cover
     from collections.abc import Callable
@@ -93,25 +92,18 @@ def coerce_relation_pk_or_none(related_model: type, pk: Any) -> Any:
     ``GlobalID`` ``node_id`` through the resolved Strawberry type's id field). A
     raw-pk relation has no Relay-Node type and so no ``resolve_id_attr`` seam: the
     existence query filters on ``pk__in`` directly, so coercion is against
-    ``related_model._meta.pk``. Coercion is ``to_python`` **then**
-    ``run_validators`` - the same two-step the GlobalID path uses: ``to_python`` is
-    a pure cast that does NOT range-check, so a syntactically-numeric but
-    out-of-range literal (a pk beyond the backend's signed-64-bit column range)
-    would reach ``pk__in`` and raise a raw backend ``OverflowError`` (``Python int
-    too large to convert to SQLite INTEGER``); the field's ``integer_field_range``
-    Min/MaxValueValidators reject it here as a ``ValidationError`` instead. An
-    uncoercible / out-of-range pk is treated as "identifies no row" - excluded from
-    the existence query and so absent from the visible set, which makes it
-    the same not-found ``relation_field_error`` as a genuinely missing pk, never a
-    backend crash (feedback - relation huge-pk crash).
+    ``related_model._meta.pk`` via the shared
+    ``querysets.py::coerce_field_value_or_none`` primitive - the same
+    ``to_python``-then-``run_validators`` mechanics the GlobalID path uses, so an
+    out-of-range pk (beyond the backend's signed-64-bit column range) is rejected
+    as a ``ValidationError`` here rather than reaching ``pk__in`` and raising a raw
+    backend ``OverflowError`` (``Python int too large to convert to SQLite
+    INTEGER``). An uncoercible / out-of-range pk is treated as "identifies no
+    row" - excluded from the existence query and so absent from the visible set,
+    which makes it the same not-found ``relation_field_error`` as a genuinely
+    missing pk, never a backend crash (feedback - relation huge-pk crash).
     """
-    pk_field = related_model._meta.pk
-    try:
-        value = pk_field.to_python(pk)
-        pk_field.run_validators(value)
-    except (ValueError, ValidationError):
-        return None
-    return value
+    return coerce_field_value_or_none(related_model._meta.pk, pk)
 
 
 def type_check_relation_id(

@@ -10,6 +10,13 @@ these tests pin the neutral mechanics directly. The deep behavioral coverage
 (through-schema list / connection / node / filter visibility) lives in the
 surface suites (``tests/test_list_field.py``, ``tests/test_connection.py``,
 ``tests/test_relay_node_field.py``, ``tests/filters/test_sets.py``).
+
+``coerce_field_value_or_none`` (the 0.0.13 DRY pass) is the sibling "raw
+literal -> Django field value, or nothing" primitive shared by the Relay id
+decode, the raw relation-pk decode, and the ``__in`` filter member decode; its
+own through-schema coverage lives in the same surface suites plus
+``examples/fakeshop/test_query/test_scalars_filter_api.py`` (the out-of-range
+``__in`` member drop).
 """
 
 from types import SimpleNamespace
@@ -25,6 +32,7 @@ from django_strawberry_framework.utils.querysets import (
     SyncMisuseError,
     apply_type_visibility_async,
     apply_type_visibility_sync,
+    coerce_field_value_or_none,
     initial_queryset,
     normalize_query_source,
     post_process_queryset_result_async,
@@ -86,6 +94,33 @@ def test_initial_queryset_uses_default_manager():
     qs = initial_queryset(_SyncType)
     assert isinstance(qs, models.QuerySet)
     assert qs.model is Category
+
+
+# ---------------------------------------------------------------------------
+# coerce_field_value_or_none -- the shared "raw literal -> field value" coercion
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_field_value_or_none_returns_coerced_value():
+    """A well-formed literal coerces through ``to_python`` + ``run_validators``."""
+    assert coerce_field_value_or_none(Category._meta.pk, "3") == 3
+
+
+def test_coerce_field_value_or_none_drops_non_numeric_literal():
+    """A non-numeric literal fails ``to_python`` (wrapped as ``ValidationError``) -> ``None``."""
+    assert coerce_field_value_or_none(Category._meta.pk, "not-a-number") is None
+
+
+def test_coerce_field_value_or_none_drops_out_of_range_literal():
+    """A syntactically-valid but out-of-range literal fails ``run_validators`` -> ``None``.
+
+    ``to_python`` alone would cast ``2**63`` (one past the ``BigAutoField`` pk's
+    signed-64-bit range) to a plain Python ``int`` with no error; only
+    ``run_validators`` catches the range violation, which is the whole point of
+    running both steps rather than ``to_python`` alone (never a raw backend
+    ``OverflowError`` at ``pk__in``).
+    """
+    assert coerce_field_value_or_none(Category._meta.pk, 2**63) is None
 
 
 @pytest.mark.django_db

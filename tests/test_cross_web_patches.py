@@ -4,12 +4,12 @@ System-under-test: :mod:`django_strawberry_framework._cross_web_patches`,
 applied at app-load time by
 :meth:`django_strawberry_framework.apps.DjangoStrawberryFrameworkConfig.ready`.
 
-The patch makes the **sync** ``DjangoHTTPRequestAdapter.body`` fall back
-to the raw request bytes when the body is not valid UTF-8, instead of
-letting the bare ``self.request.body.decode()`` raise
-``UnicodeDecodeError`` before Strawberry's ``parse_json`` is even
-entered. The decoded-cleanly path is byte-for-byte unchanged from
-upstream.
+The patch replaces the **sync** ``DjangoHTTPRequestAdapter.body`` so it
+always returns the raw request bytes (the async ``get_body`` contract)
+instead of UTF-8-decoding first. That both stops undecodable bodies from
+raising ``UnicodeDecodeError`` before ``parse_json`` and keeps
+UTF-8-decodable non-UTF-8 JSON (BOM-less UTF-16/32, UTF-8 BOM) on the
+bytes path ``json.loads`` accepts.
 """
 
 from unittest import mock
@@ -57,16 +57,44 @@ def test_patch_is_installed_on_adapter():
     assert descriptor.fget is patches._patched_body
 
 
-def test_body_returns_str_for_valid_utf8():
-    """The success path is untouched: a decodable body returns the decoded ``str``."""
-    adapter = DjangoHTTPRequestAdapter(_FakeRequest(b'{"a": 1}'))
-    assert adapter.body == '{"a": 1}'
+def test_body_returns_raw_bytes_for_valid_utf8():
+    """Valid UTF-8 is returned as raw bytes (async parity), not decoded ``str``."""
+    raw = b'{"a": 1}'
+    adapter = DjangoHTTPRequestAdapter(_FakeRequest(raw))
+    assert adapter.body == raw
+    assert isinstance(adapter.body, bytes)
 
 
 def test_body_returns_raw_bytes_for_invalid_utf8():
-    """A non-UTF-8 body falls back to the raw bytes (so ``parse_json`` can 400 it)."""
+    """A non-UTF-8 body is returned as raw bytes (so ``parse_json`` can 400 it)."""
     adapter = DjangoHTTPRequestAdapter(_FakeRequest(b"\xff\xfe\xfa"))
     assert adapter.body == b"\xff\xfe\xfa"
+
+
+def test_body_returns_raw_bytes_for_utf8_bom():
+    """UTF-8 BOM must stay bytes - decoded ``str`` makes ``json.loads`` reject the body."""
+    raw = b"\xef\xbb\xbf" + b'{"a": 1}'
+    adapter = DjangoHTTPRequestAdapter(_FakeRequest(raw))
+    assert adapter.body == raw
+    assert isinstance(adapter.body, bytes)
+
+
+def test_body_returns_raw_bytes_for_utf16_le_without_bom():
+    """BOM-less UTF-16-LE is UTF-8-decodable (NUL-padded ASCII); must still be bytes.
+
+    Upstream's ``.decode()`` succeeds and returns a NUL-studded ``str`` that
+    ``json.loads`` rejects. The permanent ``encode("utf-16")`` e2e case includes
+    a BOM that forces ``UnicodeDecodeError`` and masked this gap.
+    """
+    raw = '{"query":"{ __typename }"}'.encode("utf-16-le")
+    # Sanity: upstream still "succeeds" into a str - that is the bug shape.
+    assert isinstance(
+        patches._original_body_fget(DjangoHTTPRequestAdapter(_FakeRequest(raw))),
+        str,
+    )
+    adapter = DjangoHTTPRequestAdapter(_FakeRequest(raw))
+    assert adapter.body == raw
+    assert isinstance(adapter.body, bytes)
 
 
 def test_patch_is_installed_false_when_symbol_missing():
@@ -83,20 +111,20 @@ def test_apply_fails_loudly_when_symbol_missing():
 
 
 def test_apply_fails_loudly_when_body_getter_signature_changes():
-    """The patch pins the getter arity it delegates to."""
+    """The patch pins the getter arity it replaces."""
     with mock.patch.object(patches, "_original_body_fget", lambda self, extra: None):
         with pytest.raises(RuntimeError, match=r"expected \(self\) getter signature"):
             patches.apply()
 
 
 def test_apply_fails_loudly_when_original_getter_was_never_captured():
-    """A valid-looking live ``body`` property cannot mask a missing delegation target.
+    """A valid-looking live ``body`` property cannot mask a missing capture.
 
     When the import-time capture never happened (``_original_body_fget`` is the
     ``None`` sentinel), ``apply()`` must refuse to install even though the live
-    descriptor is a perfectly-shaped property: the wrapper would have nothing
-    to delegate to and every sync request would break. Pins that the shape
-    validation inspects the captured getter, not the live descriptor.
+    descriptor is a perfectly-shaped property: shape validation would otherwise
+    have nothing authoritative to pin against. Pins that the shape validation
+    inspects the captured getter, not the live descriptor.
     """
     saved = DjangoHTTPRequestAdapter.__dict__["body"]
     try:

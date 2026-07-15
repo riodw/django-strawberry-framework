@@ -2223,13 +2223,14 @@ def test_cascade_composes_with_filter_and_order_live():
 # patches for Strawberry (`BaseView.parse_json`) and cross_web
 # (`DjangoHTTPRequestAdapter.body`), applied at app load. Without them the
 # sync `GraphQLView` raises a raw `UnicodeDecodeError` while decoding the
-# body, before GraphQL parsing runs -> an unhandled 500. Patched, the raw
-# bytes reach `parse_json`: a JSON-decodable encoding (UTF-16/32) succeeds
-# exactly as it already did on the async transport, everything else surfaces
-# as a controlled 400. The GET tests pin the patch's `parse_query_params`
-# shield: the scalar-body guard must never fire on upstream's GET
-# `variables` / `extensions` parses, which have their own precise upstream
-# handling downstream in `parse_http_body`.
+# body, before GraphQL parsing runs -> an unhandled 500. Patched, the sync
+# adapter returns raw bytes (async `get_body` parity): a JSON-decodable
+# encoding (UTF-16/32, with or without BOM, and UTF-8-with-BOM) succeeds
+# exactly as on the async transport, everything else surfaces as a controlled
+# 400. The GET tests pin the patch's `parse_query_params` shield: the
+# scalar-body guard must never fire on upstream's GET `variables` /
+# `extensions` parses, which have their own precise upstream handling
+# downstream in `parse_http_body`.
 # ---------------------------------------------------------------------------
 
 
@@ -2253,15 +2254,48 @@ def test_post_raw_binary_body_returns_400_not_500():
 
 @pytest.mark.django_db(transaction=True)
 def test_post_utf16_json_body_succeeds_like_async_transport():
-    """A UTF-16-encoded JSON body -> 200 with data, not the upstream 500.
+    """A UTF-16-encoded JSON body (with BOM) -> 200 with data, not the upstream 500.
 
     The cross_web patch hands the raw bytes to `parse_json`, and `json.loads`
     detects UTF-16/UTF-32 per RFC 8259, so this previously-500-ing request now
     *succeeds* on the sync view. The async adapter (which always passed raw
     bytes through) already accepted this body; the test pins that sync/async
-    parity - the bytes fallback is wider than "400 instead of 500".
+    parity - the bytes path is wider than "400 instead of 500".
     """
     body = '{"query": "{ __typename }"}'.encode("utf-16")
+
+    response = _post_graphql_raw(body)
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"__typename": "Query"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_post_utf16_le_json_body_succeeds_like_async_transport():
+    """BOM-less UTF-16-LE JSON -> 200; must not take upstream's UTF-8 ``str`` path.
+
+    ``encode("utf-16-le")`` has no BOM, so the interleaved NULs are valid UTF-8.
+    Upstream's ``.decode()`` therefore *succeeds* and returns a NUL-studded
+    ``str`` that ``json.loads`` rejects (400), while raw bytes parse. The
+    ``encode("utf-16")`` sibling includes a BOM that forces ``UnicodeDecodeError``
+    and does not cover this gap.
+    """
+    body = '{"query": "{ __typename }"}'.encode("utf-16-le")
+
+    response = _post_graphql_raw(body)
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"__typename": "Query"}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_post_utf8_bom_json_body_succeeds_like_async_transport():
+    """UTF-8 JSON with a leading BOM -> 200; decoded ``str`` would 400.
+
+    ``json.loads`` accepts BOM'd *bytes* but rejects a ``str`` that still
+    starts with U+FEFF. Returning raw bytes keeps sync on the async contract.
+    """
+    body = b"\xef\xbb\xbf" + b'{"query": "{ __typename }"}'
 
     response = _post_graphql_raw(body)
 

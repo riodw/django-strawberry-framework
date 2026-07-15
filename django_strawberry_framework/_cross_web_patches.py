@@ -23,28 +23,33 @@ The bug
 
 :attr:`cross_web.DjangoHTTPRequestAdapter.body` (the **sync** adapter)
 returns ``self.request.body.decode()`` - a bare UTF-8 decode with no
-error handling. A request body that is not valid UTF-8 therefore raises
-``UnicodeDecodeError`` from inside the property, *before* Strawberry's
-``parse_json`` is entered, so Strawberry's ``400`` handling never gets a
-chance and the request surfaces as an unhandled ``500``.
+error handling. That has two production consequences before Strawberry's
+``parse_json`` can own the body:
 
-The decode is also gratuitous: ``json.loads`` accepts ``bytes``
-directly, and the **async** adapter (``AsyncDjangoHTTPRequestAdapter``)
-already hands Strawberry the raw bytes without decoding. This patch
-brings the sync adapter in line with that contract: when the body
-decodes cleanly it is returned unchanged (byte-for-byte identical to
-upstream), and only the previously-``500``-ing cases change - the raw
-bytes are handed back instead and behave exactly as on the async
-transport. A JSON-decodable non-UTF-8 encoding (UTF-16/UTF-32, which
-``json.loads`` detects per RFC 8259) now parses and the request
-*succeeds*; anything else makes ``parse_json`` raise
-``UnicodeDecodeError`` from ``json.loads``, which the companion
+1. A body that is not valid UTF-8 raises ``UnicodeDecodeError`` from
+   inside the property, so Strawberry's ``400`` handling never runs and
+   the request surfaces as an unhandled ``500``.
+2. A body that *is* UTF-8-decodable but is not UTF-8 JSON - notably
+   BOM-less UTF-16-LE/BE and UTF-32-LE/BE (ASCII code units padded with
+   NUL bytes, which are valid UTF-8) and a UTF-8 BOM payload - returns a
+   ``str`` that ``json.loads`` rejects, while the **async** adapter
+   (``AsyncDjangoHTTPRequestAdapter.get_body``) already hands Strawberry
+   the raw ``bytes`` that ``json.loads`` accepts per RFC 8259.
+
+The decode is therefore both unsafe and gratuitous: ``json.loads``
+accepts ``bytes`` directly. This patch replaces the sync ``body``
+property with the async contract - always return
+``self.request.body`` unchanged. JSON-decodable UTF-16/UTF-32 (with or
+without BOM) and UTF-8-with-BOM then parse and the request *succeeds*
+on sync exactly as on async; anything undecodable makes ``parse_json``
+raise ``UnicodeDecodeError`` from ``json.loads``, which the companion
 :mod:`django_strawberry_framework._strawberry_patches` patch turns into
 a clean ``HTTPException(400, ...)``.
 
-The patch wraps the original property getter rather than
-reimplementing it, so the success path stays exactly upstream's and
-only the failure path gains the bytes fallback.
+Upstream's getter is still captured at import time so retirement probes
+and shape validation can see the bare ``.decode()``, but the installed
+property does not call it - calling it would re-introduce the
+UTF-8-decodable-but-wrong-encoding gap (2) on the success path.
 
 Upstream status
 ---------------
@@ -69,13 +74,15 @@ The same two checks as
 
 1. End-to-end (definitive). Set ``DJANGO_STRAWBERRY_FRAMEWORK =
    {"APPLY_UPSTREAM_PATCHES": False}`` and run the fakeshop tests
-   ``test_post_invalid_utf8_json_body_returns_400_not_500`` and
-   ``test_post_raw_binary_body_returns_400_not_500``::
+   covering both gaps - undecodable bodies (``utf8`` / ``binary``) and
+   UTF-8-decodable non-UTF-8 JSON (``utf16_le`` / ``bom``)::
 
-       uv run pytest examples/fakeshop/test_query/test_products_api.py -k "utf8 or binary"
+       uv run pytest examples/fakeshop/test_query/test_products_api.py \
+           -k "utf8 or binary or utf16_le or bom"
 
-   Passing with the patch off means upstream is fixed and this module
-   can be deleted; a 500 means the patch is still needed.
+   Passing with the patch off means upstream returns raw bytes (or
+   otherwise matches async) and this module can be deleted; a 500 on
+   binary or a 400 on ``utf16_le`` / BOM means the patch is still needed.
 
 2. Quick probe of the *installed* version, via the captured upstream
    getter::
@@ -122,11 +129,12 @@ except ImportError:  # pragma: no cover - exercised via monkeypatch in tests
 
 
 # Capture the genuine upstream ``body`` getter once, at import time,
-# before ``apply()`` can install our wrapper. The wrapper delegates to
-# this so a self-healing re-install never wraps a wrapper. Stays ``None``
+# before ``apply()`` can replace it. Retirement probes and shape
+# validation still need the bare ``.decode()`` getter; the installed
+# property does not call it (see :func:`_patched_body`). Stays ``None``
 # (the same missing-shape sentinel the sibling patch modules use) when the
 # adapter symbol or the readable ``body`` property is absent at import, so
-# ``apply()`` refuses to install a wrapper with nothing to delegate to.
+# ``apply()`` refuses to install over an unexpected shape.
 _original_body_fget = None
 if DjangoHTTPRequestAdapter is not None:
     _descriptor = DjangoHTTPRequestAdapter.__dict__.get("body")
@@ -135,13 +143,15 @@ if DjangoHTTPRequestAdapter is not None:
 
 
 def _validate_upstream_shape() -> None:
-    """Fail loudly when cross_web no longer exposes the property shape we wrap.
+    """Fail loudly when cross_web no longer exposes the property shape we replace.
 
-    Validates the delegation target: ``_patched_body`` delegates to the
-    import-time-captured ``_original_body_fget``, so that captured getter -
-    not the live descriptor, which the wrapper never calls - is the shape a
-    broken install would actually expose. The live descriptor is only read
-    by :func:`_patch_is_installed`.
+    Pins the import-time-captured upstream getter (presence and ``(self)``
+    signature) so a missing or reshaped ``body`` property fails at
+    ``apply()`` instead of silently leaving the sync transport on the
+    bare ``.decode()``. The live descriptor is only read by
+    :func:`_patch_is_installed`; :func:`_patched_body` reads
+    ``self.request.body`` directly (the async contract) and does not
+    call the captured getter.
     """
     if DjangoHTTPRequestAdapter is None:
         raise RuntimeError(
@@ -167,26 +177,22 @@ def _validate_upstream_shape() -> None:
         )
 
 
-def _patched_body(self: Any) -> "str | bytes":
-    """Wrapper around ``DjangoHTTPRequestAdapter.body`` with a bytes fallback.
+def _patched_body(self: Any) -> bytes:
+    """Return raw ``self.request.body`` bytes - the async adapter's contract.
 
-    Delegates to the upstream getter; when it raises
-    ``UnicodeDecodeError`` (the body is not valid UTF-8) the raw
-    ``self.request.body`` bytes are returned instead - the async
-    adapter's existing contract. ``json.loads`` accepts bytes and
-    detects UTF-16/UTF-32 per RFC 8259, so a JSON-decodable non-UTF-8
-    body now succeeds, and anything undecodable gets a controlled
-    ``400`` from Strawberry's ``parse_json`` (via the Strawberry patch)
-    rather than letting the decode crash escape as a ``500``.
+    Upstream's sync getter UTF-8-decodes first. That both ``500``s on
+    undecodable bodies and mis-handles UTF-8-decodable non-UTF-8 JSON
+    (BOM-less UTF-16/32, UTF-8 BOM) by feeding ``json.loads`` a ``str``.
+    Always returning the raw bytes matches
+    ``AsyncDjangoHTTPRequestAdapter.get_body`` so RFC 8259 encoding
+    detection runs inside ``json.loads``; undecodable bodies become a
+    controlled ``400`` via the Strawberry ``parse_json`` patch.
     """
-    try:
-        return _original_body_fget(self)
-    except UnicodeDecodeError:
-        return self.request.body
+    return self.request.body
 
 
 def _patch_is_installed() -> bool:
-    """Return ``True`` iff ``DjangoHTTPRequestAdapter.body`` points at our wrapper."""
+    """Return ``True`` iff ``DjangoHTTPRequestAdapter.body`` points at our patched getter."""
     if DjangoHTTPRequestAdapter is None:
         return False
     descriptor = DjangoHTTPRequestAdapter.__dict__.get("body")
@@ -199,9 +205,9 @@ def apply() -> None:
     Idempotent and self-healing, gated by ``APPLY_UPSTREAM_PATCHES``
     (globally via ``False``, or for this dependency alone via
     ``{"cross_web": False}``). Before installation it validates the adapter
-    symbol and the captured upstream getter the wrapper delegates to
-    (presence and ``(self)`` signature); dependency drift raises instead of
-    silently disabling the request hardening.
+    symbol and the captured upstream getter's presence and ``(self)``
+    signature (so a reshaped ``body`` property fails loud); dependency
+    drift raises instead of silently disabling the request hardening.
     """
     if not upstream_patches_enabled("cross_web"):
         return

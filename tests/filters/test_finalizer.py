@@ -154,80 +154,55 @@ def test_phase_2_5_binds_all_owners_before_expansion():
 # ---------------------------------------------------------------------------
 
 
-def test_phase_2_5_rejects_multi_owner_with_diverging_target():
-    """Two owners that resolve a shared field to different DjangoTypes raise."""
+def test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity():
+    """Two REAL owners diverging on own-PK Relay identity are rejected end-to-end.
 
-    class ShelfFilter(FilterSet):
-        class Meta:
-            model = Shelf
-            fields = {"code": ["exact"]}
+    Exercises the genuinely owner-dependent axis of the H2-rev8 strict
+    multi-owner check: one Relay-shaped owner and one plain owner share a
+    single ``FilterSet``, so the shared filterset's own ``id`` filter
+    would resolve to a GlobalID under one owner but a scalar under the
+    other. ``finalize_django_types()`` must reject the second binding via
+    ``_check_filterset_owner_pk_identity`` rather than silently pinning
+    the first owner.
 
-    # Both PrimaryShelfType and SecondaryShelfType are registered against
-    # Shelf, but only one is primary. ``PrimaryBookType`` resolves
-    # ``shelf`` to ``PrimaryShelfType``; ``SecondaryBookType`` will
-    # resolve to the same primary unless we force otherwise - to actually
-    # test divergence we set the primary differently before each book
-    # binds, but H2-rev8's check operates on the FilterSet's stored
-    # ``_owner_definition`` vs the candidate. Simulate divergence by
-    # manually pre-binding a different owner via direct registry use.
-    class PrimaryShelfType(DjangoType):
-        class Meta:
-            model = Shelf
-            fields = ("id", "code")
-            primary = True
+    Historical note: this test previously simulated divergence on the
+    relation-TARGET axis by hand-planting a ``FakeOwnerDefinition`` on the
+    filterset before finalize. That shape is structurally impossible now:
+    the finalizer's pre-bind reset (``clear_filter_input_namespace`` in
+    the before-bind loop) delattrs every FilterSet's ``_owner_definition``
+    back to the default ``None``, wiping any pre-seed; and relation
+    targets resolve via the process-global ``registry.primary_for(model)``
+    keyed on the TARGET model - not the owner - so two legitimate owners
+    (which share the filterset's ``Meta.model``) can never diverge there.
+    Own-PK Relay identity is the axis that CAN diverge for real owners.
+    """
 
     class BookFilter(FilterSet):
-        shelf = RelatedFilter(ShelfFilter, field_name="shelf")
-
         class Meta:
             model = Book
             fields = {"title": ["exact"]}
 
-    class PrimaryBookType(DjangoType):
+    class RelayBookType(DjangoType):
         class Meta:
             model = Book
-            fields = ("id", "title", "shelf")
+            fields = ("id", "title")
+            interfaces = (relay.Node,)
             primary = True
             filterset_class = BookFilter
 
-    # Pre-bind BookFilter to a fake owner-definition whose
-    # related_target_for returns a different target than PrimaryBookType's
-    # to trigger H2-rev8 strict mismatch.
-    fake_definition = PrimaryBookType.__django_strawberry_definition__
+    class PlainBookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            filterset_class = BookFilter
 
-    class FakeOwnerDefinition:
-        origin = type("OtherBookType", (), {"__qualname__": "OtherBookType"})
-        name = None
-
-        @staticmethod
-        def related_target_for(field_name):
-            if field_name == "shelf":
-
-                class _SyntheticDefinition:
-                    origin = type(
-                        "DivergedShelfType",
-                        (),
-                        {"__qualname__": "DivergedShelfType"},
-                    )
-                    name = "DivergedShelfType"
-
-                return (_SyntheticDefinition, object())
-            return None
-
-    BookFilter._owner_definition = FakeOwnerDefinition  # type: ignore[assignment]
-
-    # Now finalize: the binding pass tries to bind ``PrimaryBookType``
-    # over BookFilter and the H2-rev8 strict check rejects the diverging
-    # target.
     with pytest.raises(ConfigurationError) as exc_info:
         finalize_django_types()
     msg = str(exc_info.value)
-    assert "diverging targets" in msg
-    assert "shelf" in msg
-    # Ensure the canonical name resolution surfaced in the message.
-    assert "DivergedShelfType" in msg or "PrimaryShelfType" in msg
-    # Quiet the linter - fake_definition pinned for inspection.
-    assert isinstance(fake_definition.origin.__qualname__, str)
+    assert "own-primary-key Relay identity" in msg
+    assert "BookFilter" in msg
+    assert "RelayBookType" in msg
+    assert "PlainBookType" in msg
 
 
 def test_phase_2_5_accepts_multi_owner_with_identical_target():
@@ -235,7 +210,7 @@ def test_phase_2_5_accepts_multi_owner_with_identical_target():
 
     Pins the H2-rev8 strict-equality walk through ``related_filters``
     (per spec-021 line 1030's companion to
-    ``test_phase_2_5_rejects_multi_owner_with_diverging_target``). The
+    ``test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity``). The
     pre-existing
     ``test_phase_2_5_accepts_idempotent_rebind_of_same_filterset_owner_pair``
     only exercises the ``previous is definition`` identity short-circuit

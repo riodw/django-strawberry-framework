@@ -11,11 +11,12 @@ model permission codename (``create -> add``, ``update -> change``,
 denied by default (the safe default that makes "anonymous cannot mutate"
 derivable from the foundation rather than from per-schema resolver workarounds).
 
-**Slice 2 ships the class + its ``has_permission`` body + the export only.** The
-*enforcement wiring* - the resolver invoking ``Meta.permission_classes`` /
-``check_permission`` at the right pipeline step (spec-036 Decision 8 step 3) - is
-Slice 3. Nothing in this slice calls ``has_permission`` from a ``/graphql/``
-request; the body is exercised directly by the Slice-2 unit test.
+Enforcement is wired into the mutation resolver pipeline: the resolver invokes
+``Meta.permission_classes`` / ``check_permission`` at the authorization step
+(spec-036 Decision 8 step 3), so ``has_permission`` runs on every ``/graphql/``
+write. Each hook must be a SYNC method returning a ``bool`` - an ``async def``
+returns a truthy coroutine and any non-bool is truthy too, so both are rejected
+outright rather than silently treated as "allow" (an authorization bypass).
 
 The ``info.context.request.user`` extraction reuses
 ``utils/permissions.py::request_from_info`` (the read-side request resolver the
@@ -32,7 +33,7 @@ from ..utils.permissions import request_from_info
 from ..utils.querysets import reject_async_in_sync_context
 
 # The one mapping spec-036 Decision 15 names: a mutation ``operation`` to the
-# Django model-permission action verb. Single-sited so Slice 3's resolver reuses
+# Django model-permission action verb. Single-sited so the resolver reuses
 # it if it needs the action verb (e.g. for an error message). Django's own
 # ``Permission`` codename scheme is ``<action>_<model_name>`` (the DRF
 # ``DjangoModelPermissions`` ``perms_map`` shape).
@@ -114,7 +115,7 @@ class DjangoModelPermission:
     The default member of ``Meta.permission_classes`` (spec-036 Decision 15) and
     the documented base consumers subclass for a custom class-based check. The
     ``has_permission`` signature matches the seam the spec pins
-    (``has_permission(info, mutation, operation, data, instance)``); Slice 3's
+    (``has_permission(info, mutation, operation, data, instance)``); the
     resolver invokes it once per operation.
 
     A caller is authorized only when ``info.context.request.user`` holds
@@ -135,7 +136,7 @@ class DjangoModelPermission:
         """Return whether the request user holds the model perm for ``operation``.
 
         ``mutation`` is the ``DjangoMutation`` subclass; its resolved model is
-        read via ``mutation._resolve_model(mutation.Meta)`` (the Slice-2
+        read via ``mutation._resolve_model(mutation.Meta)`` (the shared
         ``_resolve_model`` seam), so the form / serializer flavors that resolve a
         model without ``Meta.model`` authorize through the same default. ``data``
         and ``instance`` are accepted for the spec signature (an object-level

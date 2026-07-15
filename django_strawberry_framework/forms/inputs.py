@@ -274,21 +274,30 @@ def _model_column_for(form_class: type[forms.BaseForm], name: str) -> Any:
     """Return the backing model column for a ``ModelForm`` field ``name``, or ``None``.
 
     A ``ModelForm`` exposes its model via ``_meta.model``; a field with a backing
-    concrete column resolves through ``model._meta.get_field(name)``. A plain
+    forward column / M2M resolves through ``model._meta.get_field(name)``. A plain
     ``Form`` (no ``_meta.model``), or a ``ModelForm`` extra field that declares no
     model column (a ``confirm``, a captcha), yields ``None`` - the caller routes
     it through the model-less ``convert_form_field`` table instead. The two key
     spaces stay separate: only a resolved ``models.Field`` ever reaches the
     read-side converters (spec-038 Decision 7).
+
+    ``get_field`` also resolves reverse relations (``ForeignObjectRel`` - e.g.
+    ``Category.items``). Those are NOT ModelForm column-backed fields: an extra
+    form field that reuses the reverse accessor name (``items = forms.CharField()``)
+    must stay on the model-less path. Treating the reverse rel as a column would
+    mis-emit a relation id input (``itemsId``) for a scalar extra.
     """
     meta = getattr(form_class, "_meta", None)
     model = getattr(meta, "model", None)
     if model is None:
         return None
     try:
-        return model._meta.get_field(name)
+        column = model._meta.get_field(name)
     except FieldDoesNotExist:
         return None
+    if isinstance(column, models.ForeignObjectRel):
+        return None
+    return column
 
 
 def _model_less_relation_annotation(

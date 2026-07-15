@@ -705,6 +705,38 @@ def test_camel_case_graphql_name_collision_is_fail_loud():
     assert "collide" in message
 
 
+def test_extra_field_shadowing_reverse_relation_stays_scalar():
+    """An extra ModelForm field reusing a reverse-accessor name stays on the scalar path.
+
+    ``model._meta.get_field("items")`` resolves ``Category.items`` (a reverse
+    ``ManyToOneRel``). Treating that as a backing column would emit ``itemsId`` /
+    ``relation_single`` for a declared ``CharField`` extra. ``_model_column_for``
+    must ignore ``ForeignObjectRel`` so the extra routes through ``convert_form_field``.
+    """
+    from apps.products.models import Category
+
+    rev = Category._meta.get_field("items")
+    assert rev.is_relation and not rev.concrete
+
+    class CategoryForm(forms.ModelForm):
+        items = forms.CharField()
+
+        class Meta:
+            model = Category
+            fields = ("name", "items")
+
+    cre, specs = build_form_input_class(CategoryForm, operation_kind=CREATE)
+    items_spec = next(s for s in specs if s.form_field_name == "items")
+    assert items_spec.input_attr == "items"
+    assert items_spec.graphql_name == "items"
+    assert items_spec.kind == SCALAR
+    assert items_spec.related_model is None
+    fields = _field_map(cre)
+    assert "items" in fields
+    assert "items_id" not in fields
+    assert not _is_optional(fields["items"])
+
+
 def test_digit_boundary_form_fields_survive_distinct_in_sdl():
     """``field_2`` / ``field2`` both appear on the generated form input (shared pin path).
 

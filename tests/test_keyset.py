@@ -368,6 +368,51 @@ def test_serialize_cursor_value_uses_field_codec():
     assert serialize_cursor_value(number_field, 7) == "7"
 
 
+def test_serialize_cursor_value_rejects_null():
+    """NULL must not reach ``value_to_string`` (Char/Text would mint ``"None"``)."""
+    title_field = Issue._meta.get_field("title")
+    with pytest.raises(ValueError, match="NULL value for keyset cursor column"):
+        serialize_cursor_value(title_field, None)
+    number_field = Issue._meta.get_field("number")
+    with pytest.raises(ValueError, match="NULL value for keyset cursor column"):
+        serialize_cursor_value(number_field, None)
+
+
+def test_encode_keyset_cursor_rejects_null_ordering_value():
+    """Minting with a NULL column fails loudly instead of encoding string ``"None"``."""
+    columns = cursor_columns_for(Issue, ("title", "id"))
+
+    class _Shim:
+        title = None
+        id = 1
+
+    with pytest.raises(GraphQLError, match="NULL value was read from 'title'"):
+        encode_keyset_cursor(
+            columns,
+            _Shim(),
+            fingerprint=order_fingerprint(("title", "id")),
+        )
+
+
+def test_encode_keyset_cursor_preserves_literal_string_none():
+    """A real Char/Text value equal to ``\"None\"`` is still a valid cursor payload."""
+    columns = cursor_columns_for(Issue, ("title", "id"))
+    fingerprint = order_fingerprint(("title", "id"))
+
+    class _Shim:
+        title = "None"
+        id = 1
+
+    cursor = encode_keyset_cursor(columns, _Shim(), fingerprint=fingerprint)
+    decoded = decode_keyset_cursor(
+        cursor,
+        columns,
+        fingerprint=fingerprint,
+        argument="after",
+    )
+    assert decoded.values == ("None", 1)
+
+
 # ---------------------------------------------------------------------------
 # seek predicate
 # ---------------------------------------------------------------------------

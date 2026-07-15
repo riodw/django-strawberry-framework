@@ -212,6 +212,33 @@ def test_root_keyset_order_by_mints_order_fingerprinted_cursors():
     assert "invalid cursor" in payload["errors"][0]["message"]
 
 
+@pytest.mark.django_db
+def test_root_keyset_order_by_literal_string_none_title_round_trips():
+    """A real ``title == \"None\"`` row mints and seeks correctly (null is not encoded)."""
+    astronomy, _botany, _empty = _seed_periodicals()
+    models.Issue.objects.create(periodical=astronomy, number=80, title="None")
+    models.Issue.objects.create(periodical=astronomy, number=81, title="None2")
+    query = """
+    query ($first: Int, $after: String) {
+      allLibraryIssuesConnection(
+        first: $first, after: $after, orderBy: [{ title: ASC }]
+      ) {
+        edges { cursor node { title } }
+      }
+    }
+    """
+    data = _assert_graphql_success(query, variables={"first": 20})
+    edges = data["allLibraryIssuesConnection"]["edges"]
+    none_edge = next(e for e in edges if e["node"]["title"] == "None")
+    data2 = _assert_graphql_success(
+        query,
+        variables={"first": 5, "after": none_edge["cursor"]},
+    )
+    titles = [e["node"]["title"] for e in data2["allLibraryIssuesConnection"]["edges"]]
+    assert "None" not in titles
+    assert "None2" in titles
+
+
 NESTED_QUERY = """
 query ($first: Int, $after: String) {
   allLibraryPeriodicalsConnection(first: 10) {

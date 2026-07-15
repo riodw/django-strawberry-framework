@@ -305,7 +305,16 @@ def serialize_cursor_value(field: models.Field, value: Any) -> Any:
     ``Field.to_python`` is its documented inverse. Comparison happens only
     in the database as bind parameters, so column collation governs string
     ordering, never Python's.
+
+    ``None`` is rejected here (not passed to ``value_to_string``): Char/Text
+    fields stringify ``None`` as the literal ``"None"``, which would mint a
+    cursor that seeks the string ``"None"`` and collide with a real row of
+    that title. Nullable columns are already excluded at finalization; a
+    runtime NULL is a contract violation and must fail loudly.
     """
+    if value is None:
+        attname = getattr(field, "attname", getattr(field, "name", "?"))
+        raise ValueError(f"NULL value for keyset cursor column {attname!r}")
     return field.value_to_string(SimpleNamespace(**{field.attname: value}))
 
 
@@ -413,11 +422,22 @@ def encode_keyset_cursor(columns: tuple[CursorColumn, ...], row: Any, *, fingerp
     (module docstring), then base64-wrapped under ``KEYSET_CURSOR_PREFIX``
     so bounds derivation can discriminate the cursor vocabulary without
     decrypting the payload first.
+
+    A ``None`` ordering value raises ``GraphQLError`` (same boundary language
+    as the ``orderBy:`` nullable-column rejection in ``connection.py``): the
+    v1 contract forbids NULL cursor columns, and ``value_to_string(None)`` is
+    not a safe encoding for Char/Text fields (it becomes the string ``"None"``).
     """
-    values = [
-        serialize_cursor_value(column.field, getattr(row, column.value_source))
-        for column in columns
-    ]
+    values = []
+    for column in columns:
+        value = getattr(row, column.value_source)
+        if value is None:
+            raise GraphQLError(
+                "This connection uses keyset cursors (Meta.cursor_field), which "
+                "require non-nullable ordering columns; a NULL value was read "
+                f"from {column.value_source!r}.",
+            )
+        values.append(serialize_cursor_value(column.field, value))
     encrypted = _encrypt_cursor_payload({"o": fingerprint, "v": values})
     return to_base64(KEYSET_CURSOR_PREFIX, encrypted)
 

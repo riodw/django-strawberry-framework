@@ -480,6 +480,23 @@ def decode_keyset_cursor(
     )
 
 
+def keyset_seek_greater(descending: bool, *, flip: bool) -> bool:
+    """Whether a seek comparison on one column points 'greater' in the total order.
+
+    The single direction rule every seek dialect renders from: an ascending
+    column seeks greater values going forward (``flip=False``, the
+    ``after:`` seek); a descending column flips it; a ``before:`` seek
+    (``flip=True``) inverts again. Shared by the ORM ``keyset_seek_q``
+    below and the raw-SQL lateral renderer
+    (``optimizer/lateral_fetch.py::build_lateral_sql`` /
+    ``_keyset_seek_quals_match``), so the two dialects can never seek
+    opposite sides of the same cursor - the module's cross-strategy
+    byte-parity invariant applies to the seek DIRECTION, not only the
+    minted cursor bytes.
+    """
+    return descending if flip else not descending
+
+
 def keyset_seek_q(
     columns: tuple[CursorColumn, ...],
     cursor: KeysetCursor,
@@ -508,11 +525,11 @@ def keyset_seek_q(
     seek = models.Q()
     equal_prefix = models.Q()
     for column, value in zip(columns, cursor.values, strict=True):
-        greater = column.descending if flip else not column.descending
+        greater = keyset_seek_greater(column.descending, flip=flip)
         op = "gt" if greater else "lt"
         seek |= equal_prefix & models.Q(**{f"{column.name}__{op}": value})
         equal_prefix &= models.Q(**{column.name: value})
     first, first_value = columns[0], cursor.values[0]
-    first_greater = first.descending if flip else not first.descending
+    first_greater = keyset_seek_greater(first.descending, flip=flip)
     bound_op = "gte" if first_greater else "lte"
     return models.Q(**{f"{first.name}__{bound_op}": first_value}) & seek

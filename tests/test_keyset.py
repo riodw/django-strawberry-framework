@@ -34,6 +34,7 @@ from django_strawberry_framework.keyset import (
     cursor_columns_for,
     decode_keyset_cursor,
     encode_keyset_cursor,
+    keyset_seek_greater,
     keyset_seek_q,
     order_fingerprint,
     serialize_cursor_value,
@@ -416,6 +417,14 @@ def test_encode_keyset_cursor_preserves_literal_string_none():
 # ---------------------------------------------------------------------------
 # seek predicate
 # ---------------------------------------------------------------------------
+
+
+def test_keyset_seek_greater_direction_table():
+    """The canonical direction rule both ``keyset_seek_q`` and the lateral SQL renderer share."""
+    assert keyset_seek_greater(descending=False, flip=False) is True
+    assert keyset_seek_greater(descending=True, flip=False) is False
+    assert keyset_seek_greater(descending=False, flip=True) is False
+    assert keyset_seek_greater(descending=True, flip=True) is True
 
 
 @pytest.mark.django_db

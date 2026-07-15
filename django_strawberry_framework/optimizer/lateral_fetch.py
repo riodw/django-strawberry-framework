@@ -69,6 +69,7 @@ from django.db.models import QuerySet
 from django.db.models.expressions import Window
 from django.db.models.query import ModelIterable
 
+from ..keyset import keyset_seek_greater
 from ..utils.connections import assert_window_fetch_mode_for, window_range_plan
 from .join_taxonomy import LateralJoinShape
 from .nested_fetch import (
@@ -364,16 +365,6 @@ def build_lateral_sql(
     return sql, params
 
 
-def _keyset_seek_greater(descending: bool, *, flip: bool) -> bool:
-    """Whether the seek comparison on a column points 'greater' in SQL terms.
-
-    The lateral twin of the direction rule in ``keyset.keyset_seek_q``: an
-    ascending column seeks greater values going forward; descending flips
-    it; a ``before:`` seek (``flip``) inverts again.
-    """
-    return descending if flip else not descending
-
-
 def _keyset_seek_sql(
     spec: LateralWindowSpec,
     qn: Any,
@@ -399,7 +390,7 @@ def _keyset_seek_sql(
     ]
     columns = spec.order_columns
     refs = [f"{child}.{qn(column)}" for column, _ in columns]
-    greater = [_keyset_seek_greater(descending, flip=seek.flip) for _, descending in columns]
+    greater = [keyset_seek_greater(descending, flip=seek.flip) for _, descending in columns]
     if len(set(greater)) == 1:
         op = ">" if greater[0] else "<"
         if len(refs) == 1:
@@ -620,7 +611,7 @@ def _keyset_seek_quals_match(nodes: list[Any], spec: LateralWindowSpec) -> bool:
     values = list(seek.cursor.values)
     if len(nodes) != 2 or len(columns) != len(values):
         return False
-    greater = [_keyset_seek_greater(descending, flip=seek.flip) for _, descending in columns]
+    greater = [keyset_seek_greater(descending, flip=seek.flip) for _, descending in columns]
 
     def is_lookup(node: Any, lookup_name: str, index: int) -> bool:
         if getattr(node, "lookup_name", None) != lookup_name:

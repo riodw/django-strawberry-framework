@@ -34,14 +34,19 @@ if TYPE_CHECKING:  # pragma: no cover
 def _clear_if_importable(module_path: str, attr_name: str, action: Callable[[Any], None]) -> None:
     """Best-effort: import ``module_path.attr_name`` and run ``action`` on it.
 
-    The cycle-safe local-import shape that ``TypeRegistry.clear`` /
-    ``TypeRegistry.unregister`` repeat for each subsystem co-clear (filter /
-    order input namespaces + helper ledgers, the connection-class cache, the
-    root node-field ledger), delegating the import handling to its single owner
-    ``utils/imports.py::import_attr_if_importable``. An
-    unreachable subsystem (a partial-load build state where ``registry`` is
-    imported but a sidecar package is not) is skipped so it
-    never prevents a LATER co-clear from running -- each block stays independent.
+    The cycle-safe local-import shape for a PER-TYPE co-clear -
+    ``TypeRegistry.unregister``'s connection-class cache eviction is the only
+    caller today - delegating the import handling to its single owner
+    ``utils/imports.py::import_attr_if_importable``. An unreachable subsystem
+    (a partial-load build state where ``registry`` is imported but a sidecar
+    package is not) is skipped so a missing subsystem never turns "all traces
+    of this one type" into a raise.
+
+    ``clear()``'s REGISTRY-WIDE co-clears (filter / order input namespaces
+    and helper ledgers, the connection-class cache, the root node-field
+    ledger) do not go through this helper - each subsystem owner registers
+    its own callback via ``register_subsystem_clear`` at import time, and
+    ``clear()`` replays the resolved callables via ``iter_subsystem_clears()``.
     """
     target = import_attr_if_importable(module_path, attr_name)
     if target is None:
@@ -125,6 +130,30 @@ class TypeRegistry:
                 "TypeRegistry is finalized; mutators are import-time only "
                 "(call registry.clear() before registering new types)",
             )
+
+    def _detach_type_from_model(self, model: type[models.Model], type_cls: type) -> None:
+        """Remove ``type_cls`` from ``_types[model]`` and ``_models`` in lock-step.
+
+        The exact inverse of the two mutations ``register`` performs when it
+        appends ``type_cls`` (``existing_types.append(type_cls)`` /
+        ``self._models[type_cls] = model``), including the invariant that
+        ``_types`` never keeps an empty list around for a model with zero
+        registered types. Shared by ``unregister`` (full removal of a live
+        registration) and ``register_with_definition``'s rollback (undo of
+        THIS call's own ``register`` when the paired ``register_definition``
+        then raises) so the two sites cannot drift apart on how that
+        invariant is maintained. Callers own everything else that ``register``
+        does NOT touch here - ``_primaries``, ``_definitions``, pending
+        relations, type teardowns - because ``unregister`` and the rollback
+        deliberately disagree on those (``unregister`` purges the primary slot
+        unconditionally; the rollback restores whatever primary predated its
+        own call).
+        """
+        types = self._types[model]
+        types.remove(type_cls)
+        if not types:
+            self._types.pop(model, None)
+        self._models.pop(type_cls, None)
 
     @staticmethod
     def _already_registered(label: str, name: str, existing_name: str) -> ConfigurationError:
@@ -272,13 +301,9 @@ class TypeRegistry:
         if model is None:
             return
         self._run_type_teardowns(type_cls)
-        self._models.pop(type_cls)
         # ``register`` keeps ``_types[model]`` and ``_models`` in lock-step;
         # finding ``model`` above guarantees ``type_cls`` is in ``_types[model]``.
-        types = self._types[model]
-        types.remove(type_cls)
-        if not types:
-            self._types.pop(model, None)
+        self._detach_type_from_model(model, type_cls)
         if self._primaries.get(model) is type_cls:
             self._primaries.pop(model, None)
         self._definitions.pop(type_cls, None)
@@ -411,11 +436,7 @@ class TypeRegistry:
         except Exception:
             # Inverse of register's mutations above; mirror any new register side-effect here on rollback.
             if appended:
-                types = self._types[model]
-                types.remove(type_cls)
-                if not types:
-                    self._types.pop(model, None)
-                self._models.pop(type_cls, None)
+                self._detach_type_from_model(model, type_cls)
                 if pre_primary is None:
                     self._primaries.pop(model, None)
                 else:

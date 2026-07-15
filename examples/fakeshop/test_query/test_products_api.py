@@ -2317,15 +2317,42 @@ def test_post_non_object_json_body_returns_400_not_500(body):
     """A valid-JSON-but-non-object body (scalar / null) -> controlled 400, never a 500.
 
     Strawberry's `parse_http_body` handles a JSON object (a single operation) and
-    a JSON array (a batch), but lets a bare scalar fall through to
+    a JSON array of objects (a batch), but lets a bare scalar fall through to
     `data.get("query")`, raising a raw `AttributeError` -> 500. The framework's
-    Strawberry patch rejects a parsed body that is neither object nor array as a
-    400. A JSON *array* body is deliberately excluded here - that is upstream's
-    batch path, which the patch passes through untouched.
+    Strawberry patch rejects a parsed body that is neither a JSON object nor a
+    well-typed batch array as a 400.
     """
     response = _post_graphql_raw(body)
 
     assert response.status_code == 400
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b"[1, 2, 3]", id="array-of-numbers"),
+        pytest.param(b"[null]", id="array-of-null"),
+        pytest.param(b'[{"query": "{ __typename }"}, 42]', id="mixed-batch"),
+    ],
+)
+def test_post_batch_with_non_object_elements_returns_400_not_500(body):
+    """A JSON array with any non-object element -> controlled 400, never a 500.
+
+    Upstream's batch branch validates enablement / size only, then calls
+    `item.get("query")` on every element. With batching enabled that is an
+    unhandled `AttributeError` -> 500; with batching off the same bodies
+    previously 400'd as "Batching is not enabled" *before* `.get`, hiding the
+    hole. The Strawberry patch rejects non-object batch elements at
+    `parse_json` so both configurations stay on a controlled 400. A
+    well-typed batch array (every element an object) is deliberately
+    excluded - that remains upstream's batch path.
+    """
+    response = _post_graphql_raw(body)
+
+    assert response.status_code == 400
+    assert b"request body" in response.content
+    assert b"Batching is not enabled" not in response.content
 
 
 @pytest.mark.django_db(transaction=True)

@@ -12,12 +12,15 @@ two upstream gaps that otherwise surface as unhandled ``500``s:
    Strawberry already raises for malformed JSON. Without it the
    non-UTF-8 body escapes upstream's ``except json.JSONDecodeError``
    (``UnicodeDecodeError`` is a ``ValueError``, not a ``JSONDecodeError``).
-2. A body that parses to a top-level JSON *scalar* (string / number /
-   boolean / ``null``) is rejected with ``HTTPException(400, ...)``.
-   Upstream's ``parse_http_body`` handles a JSON object and a JSON array
-   (batch) but lets a scalar fall through to ``data.get("query")`` ->
-   raw ``AttributeError`` -> ``500``. A JSON ``list`` is passed through so
-   upstream's batch validation keeps ownership of it.
+2. A body that is not a GraphQL-over-HTTP envelope is rejected with
+   ``HTTPException(400, ...)``: a top-level JSON *scalar*, or a JSON
+   *array* containing any non-object element. Upstream's
+   ``parse_http_body`` handles a JSON object and a JSON array of objects
+   (batch) but lets a scalar fall through to ``data.get("query")`` and a
+   non-object batch element fall through to ``item.get("query")`` -> raw
+   ``AttributeError`` -> ``500``. A well-typed batch ``list`` (every
+   element a ``dict``) is passed through so upstream's batch validation
+   keeps ownership of enablement / size limits.
 
 Because gap 2's scalar guard is a request-*body* contract enforced from
 a generic JSON helper, ``apply()`` also installs
@@ -139,14 +142,38 @@ def test_patched_parse_json_rejects_non_object_body_as_400(body):
 
 
 def test_patched_parse_json_passes_through_list_for_batch_handling():
-    """A JSON array passes through unchanged so upstream's batch validation owns it.
+    """A JSON array of objects passes through so upstream's batch validation owns it.
 
-    The guard rejects scalars but must NOT intercept a ``list`` - upstream's
-    ``_validate_batch_request`` is the path that accepts or rejects a batch.
+    The guard rejects scalars and lists with non-dict elements, but must NOT
+    intercept a well-typed batch ``list`` - upstream's ``_validate_batch_request``
+    is the path that accepts or rejects enablement / size limits.
     """
     assert patches._patched_parse_json(BaseView(), '[{"query": "{ x }"}]') == [
         {"query": "{ x }"},
     ]
+    assert patches._patched_parse_json(BaseView(), "[]") == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "[1, 2, 3]",
+        "[null]",
+        '[{"query": "{ x }"}, 42]',
+        '["not", "objects"]',
+    ],
+)
+def test_patched_parse_json_rejects_batch_with_non_object_elements_as_400(body):
+    """A JSON array containing any non-object -> ``HTTPException(400)``, not a pass-through.
+
+    Upstream's ``_validate_batch_request`` never checks element types; with
+    batching enabled the batch branch then does ``item.get("query")`` and
+    raises a raw ``AttributeError`` -> ``500``. The envelope guard must reject
+    those bodies before that path runs.
+    """
+    with pytest.raises(HTTPException) as excinfo:
+        patches._patched_parse_json(BaseView(), body)
+    assert excinfo.value.status_code == 400
 
 
 @pytest.mark.parametrize("param", ["variables", "extensions"])

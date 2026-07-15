@@ -65,13 +65,25 @@ is a valid JSON *scalar* - ``"a string"``, ``42``, ``true``, ``null`` -
 falls through both branches to ``data.get("query")`` and raises a raw
 ``AttributeError`` (``'str' object has no attribute 'get'``) -> an
 unhandled ``500``. A JSON scalar is never a valid GraphQL-over-HTTP
-request body, so the wrapper rejects a parsed result that is neither a
-``dict`` nor a ``list`` with the same ``HTTPException(400, ...)``. The
-``list`` case is passed through so upstream's own batch validation keeps
-ownership of it.
+request body, so the wrapper rejects a parsed result that is not a
+JSON object with the same ``HTTPException(400, ...)`` - and, for
+arrays, only accepts a well-typed batch (see below).
+
+A JSON *array* is only a valid batch envelope when every element is a
+JSON object. Upstream's ``_validate_batch_request`` checks batching
+config / ``max_operations`` but never element types, then does
+``item.get("query")`` on each entry - so ``[1, 2, 3]``, ``[null]``, or
+``[{...}, 42]`` still ``AttributeError`` -> ``500`` once batching is
+enabled (with batching off the same bodies 400 as "Batching is not
+enabled" *before* the ``.get``, which hides the hole). The wrapper
+therefore accepts a ``list`` only when ``all(isinstance(item, dict)
+for item in parsed)``; a list containing any non-dict is rejected with
+the same ``HTTPException(400, ...)``. A well-formed batch (every element
+a ``dict``, including ``[]``) still passes through so upstream's own
+batch validation keeps ownership of enablement / size limits.
 
 Unlike the ``UnicodeDecodeError`` widening (which is correct wherever
-``parse_json`` runs), the scalar guard is a request-*body* contract
+``parse_json`` runs), the body-envelope guard is a request-*body* contract
 grafted onto a generic JSON helper, so it fires at every ``parse_json``
 call site in the installed strawberry - nine in total, though one is
 unreachable (``AsyncBaseHTTPView.parse_multipart_subscriptions`` is
@@ -106,7 +118,7 @@ superseded upstream body source (the reimplementer's contract
 established by
 ``_django_patches._UPSTREAM_REMOVE_DATABASES_FAILURES_SOURCE``) so an
 upstream body change fails loudly at ``apply()`` time instead of being
-silently superseded. The shield shares the scalar guard's lifecycle:
+silently superseded. The shield shares the envelope guard's lifecycle:
 retire both together when upstream #3398 lands.
 
 Upstream status
@@ -129,7 +141,8 @@ fails loudly so that retirement is deliberate.
 The second gap (non-object body) is likewise unfixed in 0.317.2 and
 ``main`` (checked 2026-06-19). ``parse_http_body`` still handles only the
 ``list`` (batch) branch and then calls ``data.get("query")`` with no
-``isinstance(data, dict)`` guard:
+``isinstance(data, dict)`` guard, and the batch branch still does
+``item.get(...)`` with no per-element ``isinstance(item, dict)`` guard:
 <https://github.com/strawberry-graphql/strawberry/blob/e7d4a8235a11a4c4fd2b9fa605c437c9f86e5fb7/strawberry/http/sync_base_view.py>
 (and the ``async_base_view.py`` sibling). It is tracked by the **open**
 issue #3398, "AttributeError when query passed is a list and not a dict"
@@ -137,10 +150,11 @@ issue #3398, "AttributeError when query passed is a list and not a dict"
 <https://github.com/strawberry-graphql/strawberry/issues/3398>. The
 issue's title says *list* because at 0.219.2 a top-level list was
 unguarded too; current versions intercept lists in the batch branch, so
-the still-unhandled trigger is the JSON *scalar* case - the same
-``data.get()``-on-a-non-dict root cause, narrowed to scalars. Retire the
-scalar guard once #3398 lands an ``isinstance(data, dict)`` check (or
-equivalent) ahead of ``data.get("query")``.
+the still-unhandled triggers are the JSON *scalar* case and the
+*non-object batch element* case - the same ``.get()``-on-a-non-dict root
+cause. Retire the envelope guard once #3398 lands ``isinstance`` checks
+(or equivalent) ahead of both ``data.get("query")`` and each batch
+``item.get(...)``.
 
 Re-checking whether upstream fixed this
 ---------------------------------------
@@ -154,14 +168,18 @@ whether this patch is still required:
    both gaps - ``test_post_invalid_utf8_json_body_returns_400_not_500``
    and ``test_post_raw_binary_body_returns_400_not_500`` (UnicodeDecodeError)
    plus ``test_post_non_object_json_body_returns_400_not_500`` (scalar
-   body)::
+   body) and ``test_post_batch_with_non_object_elements_returns_400_not_500``
+   (non-object batch elements)::
 
        uv run pytest examples/fakeshop/test_query/test_products_api.py \
-           -k "utf8 or binary or non_object"
+           -k "utf8 or binary or non_object or non_object_elements"
 
    If they still return 400 with the patch off, upstream has fixed that
    gap; if they 500, the patch is still needed. Both gaps must be fixed
-   upstream before this module can be deleted.
+   upstream before this module can be deleted. For the batch-element
+   half of gap 2, a 400 of "Batching is not enabled" with the patch off
+   (fakeshop's default) is *not* proof of an upstream fix - enable
+   ``batching_config`` and re-check that ``[1,2,3]`` still 500s.
 
 2. Quick probe of the *installed* version. This module captures the
    unwrapped upstream callable, so you can exercise each gap directly::
@@ -189,8 +207,8 @@ whether this patch is still required:
    ``https://pypi.org/pypi/strawberry-graphql/json`` (``info.version``).
 
 The ``parse_query_params`` shield has no upstream bug of its own to
-track - it exists purely to keep the gap-2 guard off the GET path - so
-it retires in the same change that retires the scalar guard.
+track - it exists purely to keep the gap-2 envelope guard off the GET
+path - so it retires in the same change that retires the envelope guard.
 
 Surface visibility
 ------------------
@@ -328,20 +346,23 @@ def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
        ``except json.JSONDecodeError`` does not catch) is translated to
        the same ``HTTPException(400, ...)`` Strawberry already raises for
        unparseable JSON.
-    2. A successfully-parsed body that is a top-level JSON *scalar*
-       (string / number / boolean / ``null``) is rejected with
-       ``HTTPException(400, ...)``. ``parse_http_body`` handles a JSON
-       object (a single operation) and a JSON array (a batch), but a bare
-       scalar falls through to ``data.get("query")`` and raises a raw
-       ``AttributeError`` -> ``500``. A JSON ``list`` is passed through
-       untouched so upstream's own batch validation
-       (``_validate_batch_request``) still runs and owns that path.
+    2. A successfully-parsed body that is not a GraphQL-over-HTTP envelope
+       is rejected with ``HTTPException(400, ...)``. ``parse_http_body``
+       handles a JSON object (a single operation) and a JSON array of
+       objects (a batch), but a bare scalar falls through to
+       ``data.get("query")`` and a batch array containing any non-object
+       falls through to ``item.get("query")`` - both raw
+       ``AttributeError`` -> ``500``. Upstream's ``_validate_batch_request``
+       does not check element types, so a well-typed batch ``list`` (every
+       element a ``dict``, including ``[]``) is passed through untouched
+       for that validator to own enablement / size limits; scalars and
+       lists with any non-``dict`` element are rejected here.
 
-    The scalar guard is a request-*body* contract enforced from a generic
-    JSON helper, so it fires at every upstream ``parse_json`` call site
-    (nine, one of them dead code at 0.316.0; see the module docstring's
-    inventory): correct at the seven body/multipart sites (at the
-    multipart sites it converts an upstream scalar-``operations``/``map``
+    The body-envelope guard is a request-*body* contract enforced from a
+    generic JSON helper, so it fires at every upstream ``parse_json`` call
+    site (nine, one of them dead code at 0.316.0; see the module
+    docstring's inventory): correct at the seven body/multipart sites (at
+    the multipart sites it converts an upstream scalar-``operations``/``map``
     ``500`` into this ``400``), and deliberately kept OFF the two GET
     sites inside
     ``parse_query_params``, which :func:`_patched_parse_query_params`
@@ -349,20 +370,22 @@ def _patched_parse_json(self: Any, data: "str | bytes") -> Any:
     handling keeps ownership there. Both views inherit the single
     ``BaseView`` method, so one install covers sync and async - the same
     one-site rationale as the ``UnicodeDecodeError`` widening. Every
-    other outcome - a successful object/array parse, or any other
-    exception - is passed through untouched.
+    other outcome - a successful object / well-typed-array parse, or any
+    other exception - is passed through untouched.
     """
     try:
         parsed = _original_parse_json(self, data)
     except UnicodeDecodeError as exc:
         raise HTTPException(400, "Unable to parse request body as JSON") from exc
-    if not isinstance(parsed, (dict, list)):
-        raise HTTPException(
-            400,
-            "The GraphQL request body must be a JSON object "
-            "(or an array of operations for a batch request).",
-        )
-    return parsed
+    if isinstance(parsed, dict):
+        return parsed
+    if isinstance(parsed, list) and all(isinstance(item, dict) for item in parsed):
+        return parsed
+    raise HTTPException(
+        400,
+        "The GraphQL request body must be a JSON object "
+        "(or an array of operations for a batch request).",
+    )
 
 
 def _patched_parse_query_params(self: Any, params: Any) -> "dict[str, Any]":

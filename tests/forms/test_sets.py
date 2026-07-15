@@ -279,6 +279,38 @@ def test_plain_base_rejects_any_operation(operation):
                 operation = declared_operation
 
 
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "create",
+        "update",
+        "delete",
+        None,
+    ],
+)
+def test_plain_base_rejects_inherited_meta_operation(operation):
+    """Decision 10 rejects ``Meta.operation`` inherited via a shared Meta parent too.
+
+    ``form_class`` / ``permission_classes`` resolve through ``getattr`` (MRO-visible),
+    so a shared ``Meta`` parent is a real consumer pattern. Presence of ``operation``
+    must use the same visibility (``hasattr``), not ``vars(meta)`` own-keys-only -
+    otherwise ``class Meta(Shared): pass`` with ``Shared.operation = ...`` silently
+    accepts while ``Submit.Meta.operation`` still resolves to the inherited value.
+    """
+    form_cls = _contact_form()
+    declared_operation = operation
+
+    class SharedMeta:
+        form_class = form_cls
+        operation = declared_operation
+
+    with pytest.raises(ConfigurationError, match="operation is not supported"):
+
+        class Submit(DjangoFormMutation):
+            class Meta(SharedMeta):
+                pass
+
+
 # ---------------------------------------------------------------------------
 # Meta validation matrix - allowed keys + narrowing
 # ---------------------------------------------------------------------------

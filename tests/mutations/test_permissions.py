@@ -360,6 +360,30 @@ def test_permission_classes_override_allow_all_lets_anonymous_through():
 
 
 @pytest.mark.django_db
+def test_empty_permission_classes_never_resolves_request_auth():
+    """The explicit allow-any opt-out does not invoke lazy user or auth-backend code."""
+
+    class ExplodingUser:
+        @property
+        def is_authenticated(self):
+            raise AssertionError("permission-free mutations must not resolve auth")
+
+        def get_all_permissions(self):
+            raise AssertionError("permission-free mutations must not call auth backends")
+
+    schema, (CategoryT, _ItemT) = _build_auth_schema(create_permission_classes=[])
+    cat = product_models.Category.objects.create(name="Cat-no-auth")
+    res = _execute(
+        schema,
+        _CREATE_Q,
+        ExplodingUser(),
+        {"d": {"name": "Open", "categoryId": global_id_for(CategoryT, cat.pk)}},
+    )
+    assert res.errors is None, res.errors
+    assert res.data["createItem"]["node"]["name"] == "Open"
+
+
+@pytest.mark.django_db
 def test_permission_classes_override_deny_blocks_permitted_caller():
     """A custom deny-all override blocks an otherwise-permitted caller (proving the override path)."""
 

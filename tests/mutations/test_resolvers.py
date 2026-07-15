@@ -2465,6 +2465,7 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch):
     from django_strawberry_framework.utils.write_transaction import managed_write_transaction
 
     mutation_cls = MagicMock()
+    mutation_cls.__name__ = "FakePipelineMutation"  # the alias guard names the mutation
     mutation_cls._mutation_meta.operation = "create"
     mutation_cls._mutation_meta.select_for_update = False
     mutation_cls._primary_type = object()
@@ -2516,6 +2517,143 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch):
 
     assert result == "ok"
     assert captured["using"] == "shard_b"
+
+
+def _pipeline_harness(monkeypatch, *, operation="update", authorize=None):
+    """Scaffold ``run_write_pipeline_sync`` with mocked locate/authorize/refetch (snapshot tests)."""
+    from unittest.mock import MagicMock
+
+    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+
+    mutation_cls = MagicMock()
+    mutation_cls.__name__ = "SnapshotMutation"
+    mutation_cls._mutation_meta.operation = operation
+    mutation_cls._mutation_meta.select_for_update = False
+    mutation_cls._primary_type = object()
+
+    monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: MagicMock(__name__="Row"))
+    monkeypatch.setattr(mutation_resolvers, "payload_object_slot", lambda _t: "node")
+    monkeypatch.setattr(mutation_resolvers, "payload_cls_for", lambda _m: MagicMock())
+    monkeypatch.setattr(mutation_resolvers, "coerce_lookup_id", lambda _id, _t: (7, None))
+    monkeypatch.setattr(mutation_resolvers, "check_instance_write_alias", lambda *a, **k: None)
+    monkeypatch.setattr(
+        mutation_resolvers,
+        "authorize_or_raise",
+        authorize if authorize is not None else (lambda *a, **k: None),
+    )
+    monkeypatch.setattr(mutation_resolvers, "refetch_optimized", lambda *a, **k: MagicMock())
+    monkeypatch.setattr(mutation_resolvers, "build_payload", lambda *a, **k: "ok")
+    return mutation_cls, mutation_resolvers
+
+
+def test_pipeline_snapshots_authorized_pk_before_permission_hook(monkeypatch):
+    """The authorized pk is captured BEFORE the permission hook can touch the mutable instance.
+
+    A malicious ``check_permission`` re-pointing ``instance.pk`` at a hidden row must not
+    poison the snapshot the saved-result validation compares against: the write step
+    returning the (mutated) instance fails the flavor-independent backstop.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from django_strawberry_framework.exceptions import ConfigurationError
+    from django_strawberry_framework.utils.write_transaction import managed_write_transaction
+
+    located = SimpleNamespace(pk=7)
+
+    def evil_authorize(*_args, **_kwargs):
+        located.pk = 999  # re-point at a hidden row AFTER authorization
+
+    mutation_cls, mutation_resolvers = _pipeline_harness(monkeypatch, authorize=evil_authorize)
+    monkeypatch.setattr(mutation_resolvers, "locate_instance", lambda *a, **k: located)
+
+    with (
+        patch.object(mutation_resolvers.transaction, "atomic"),
+        managed_write_transaction("default"),
+        pytest.raises(ConfigurationError, match="must write the row that was authorized"),
+    ):
+        mutation_resolvers.run_write_pipeline_sync(
+            mutation_cls,
+            info=None,
+            data=None,
+            id="ignored",
+            decode_step=lambda _instance: ("decoded",),
+            write_step=lambda instance, _decoded: instance,
+        )
+
+
+def test_pipeline_publishes_authorized_pk_on_write_context(monkeypatch):
+    """The post-locate snapshot is published on the write-pipeline context for the flavors."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from django_strawberry_framework.utils.write_transaction import (
+        managed_write_transaction,
+        require_write_pipeline,
+    )
+
+    located = SimpleNamespace(pk=7)
+    seen: dict = {}
+
+    def probe_authorize(*_args, **_kwargs):
+        seen["authorized_pk"] = require_write_pipeline().authorized_pk
+
+    mutation_cls, mutation_resolvers = _pipeline_harness(monkeypatch, authorize=probe_authorize)
+    monkeypatch.setattr(mutation_resolvers, "locate_instance", lambda *a, **k: located)
+
+    with (
+        patch.object(mutation_resolvers.transaction, "atomic"),
+        managed_write_transaction("default"),
+    ):
+        result = mutation_resolvers.run_write_pipeline_sync(
+            mutation_cls,
+            info=None,
+            data=None,
+            id="ignored",
+            decode_step=lambda _instance: ("decoded",),
+            write_step=lambda instance, _decoded: instance,
+        )
+    assert result == "ok"
+    assert seen["authorized_pk"] == 7
+
+
+def test_delete_pipeline_rejects_pk_drift_during_authorization(monkeypatch):
+    """A delete permission hook re-pointing ``instance.pk`` fails closed before any delete."""
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+
+    from django_strawberry_framework.exceptions import ConfigurationError
+    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+    from django_strawberry_framework.utils.write_transaction import write_pipeline
+
+    mutation_cls = MagicMock()
+    mutation_cls.__name__ = "SnapshotDeleteMutation"
+    mutation_cls._mutation_meta.select_for_update = False
+
+    located = SimpleNamespace(pk=7)
+
+    def evil_authorize(*_args, **_kwargs):
+        located.pk = 999
+
+    monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: MagicMock(__name__="Row"))
+    monkeypatch.setattr(mutation_resolvers, "coerce_lookup_id", lambda _id, _t: (7, None))
+    monkeypatch.setattr(mutation_resolvers, "locate_instance", lambda *a, **k: located)
+    monkeypatch.setattr(mutation_resolvers, "check_instance_write_alias", lambda *a, **k: None)
+    monkeypatch.setattr(mutation_resolvers, "authorize_or_raise", evil_authorize)
+
+    with (
+        write_pipeline("default", lock=False),
+        pytest.raises(ConfigurationError, match="pk changed"),
+    ):
+        mutation_resolvers._run_delete(
+            mutation_cls,
+            info=None,
+            id="ignored",
+            primary_type=object(),
+            slot="node",
+            payload_cls=MagicMock(),
+            alias="default",
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -28,6 +28,7 @@ Critical contract pins (do not violate without an explicit spec revision):
   ``clear_url_caches()`` on enter AND in teardown.
 """
 
+
 # ``os`` owns the import-time environment gate below.
 
 import os
@@ -57,6 +58,15 @@ from strawberry.types import Info
 from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config
 from django_strawberry_framework.extensions import DjangoDebugExtension
 from django_strawberry_framework.testing import TestClient
+
+_UPDATE_BOOK_TITLE_VALIDATOR_MUTATION = """
+mutation($id: ID!, $d: AliasValidatedBookSerializerPartialInput!) {
+  updateBookTitleWithAliasValidator(id: $id, data: $d) {
+    node { title }
+    errors { field messages }
+  }
+}
+"""
 
 # ---------------------------------------------------------------------------
 # Holder-pattern URLConf (per Decision 6 + rev3 R4 + rev3 R5)
@@ -462,3 +472,202 @@ def test_mutation_validation_envelope_rolls_back_on_the_write_alias(_project_sch
     # Nothing changed on either alias.
     assert product_models.Item.objects.using("shard_b").get(pk=sibling.pk).name == "pin-sibling"
     assert product_models.Item.objects.using("default").get(pk=90011).name == "pin-item-default"
+
+
+# ---------------------------------------------------------------------------
+# Serializer-flavor write-alias pinning (the DRF hardening pass)
+# ---------------------------------------------------------------------------
+#
+# The serializer twin of the model-flavor pinning tests above: the SERIALIZER
+# pipeline's locate, relation decode, DRF's second relation lookup (the scoped
+# field queryset), the save, the re-fetch, and the envelope rollback must all
+# ride the router's ONE write answer. Routed on the library app so the project
+# schema's ``updateBookGenresViaSerializer`` (a ``SerializerMutation`` with an
+# M2M ``genres`` relation) is the surface under test.
+
+
+class _LibraryWriteToShardBRouter:
+    """Route library reads to ``default`` and library writes to ``shard_b``."""
+
+    def db_for_read(self, model, **hints):
+        if model._meta.app_label != "library":
+            return None
+        instance = hints.get("instance")
+        instance_db = getattr(getattr(instance, "_state", None), "db", None)
+        if instance_db is not None:
+            return instance_db
+        return "default"
+
+    def db_for_write(self, model, **hints):
+        if model._meta.app_label == "library":
+            return "shard_b"
+        return None
+
+    def allow_relation(self, obj1, obj2, **hints):
+        return True
+
+
+def _seed_same_pk_book_pair(pk_base: int) -> None:
+    """Seed a same-pk ``Branch -> Shelf -> Book`` chain on BOTH aliases.
+
+    Same rationale as ``_seed_same_pk_item_pair``: only per-alias field values
+    can prove which alias each pipeline step really used.
+    """
+    for alias in ("default", "shard_b"):
+        branch = models.Branch.objects.using(alias).create(
+            pk=pk_base,
+            name=f"ser-branch-{alias}-{pk_base}",
+            city="Boston",
+        )
+        shelf = models.Shelf.objects.using(alias).create(
+            pk=pk_base,
+            code=f"ser-shelf-{alias}",
+            topic="Test",
+            branch=branch,
+        )
+        models.Book.objects.using(alias).create(
+            pk=pk_base,
+            title=f"ser-book-{alias}",
+            shelf=shelf,
+        )
+
+
+_UPDATE_BOOK_GENRES_MUTATION = """
+mutation($id: ID!, $d: BookGenresSerializerPartialInput!) {
+  updateBookGenresViaSerializer(id: $id, data: $d) {
+    node { title }
+    errors { field messages }
+  }
+}
+"""
+
+
+def _library_gid(type_name: str, pk: int) -> str:
+    import strawberry.relay as relay_module
+
+    return str(relay_module.GlobalID(type_name=type_name, node_id=str(pk)))
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
+def test_serializer_mutation_pins_locate_relation_save_and_refetch_to_write_alias(
+    _project_schema,
+):
+    """Under a divergent read/write router the WHOLE serializer update rides ``shard_b``.
+
+    The genre attached exists ONLY on ``shard_b``, so the relation decode, DRF's
+    second relation lookup (the pinned, visibility-scoped field queryset), and the
+    M2M write all had to run on the write alias - any step slipping to the read
+    alias would fail to find the genre. The shard_b book twin is the one written;
+    the default twin (same pk) is untouched.
+    """
+    _seed_same_pk_book_pair(91001)
+    shard_genre = models.Genre.objects.using("shard_b").create(
+        pk=91001,
+        name="ser-genre-shard-b-only",
+    )
+
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        DATABASE_ROUTERS=[_LibraryWriteToShardBRouter()],
+    ):
+        clear_url_caches()
+        try:
+            res = TestClient().query(
+                _UPDATE_BOOK_GENRES_MUTATION,
+                variables={
+                    "id": _library_gid("library.book", 91001),
+                    "d": {
+                        "title": "ser-pinned-write",
+                        "genres": [_library_gid("library.genre", shard_genre.pk)],
+                    },
+                },
+            )
+        finally:
+            clear_url_caches()
+
+    payload = res.data["updateBookGenresViaSerializer"]
+    assert payload["errors"] == []
+    assert payload["node"]["title"] == "ser-pinned-write"
+    shard_book = models.Book.objects.using("shard_b").get(pk=91001)
+    assert shard_book.title == "ser-pinned-write"
+    assert list(shard_book.genres.values_list("name", flat=True)) == ["ser-genre-shard-b-only"]
+    default_book = models.Book.objects.using("default").get(pk=91001)
+    assert default_book.title == "ser-book-default"
+    assert default_book.genres.count() == 0
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
+def test_serializer_unique_validator_reads_write_alias(_project_schema):
+    """A default-only collision does not poison validation of the shard_b update."""
+    _seed_same_pk_book_pair(91006)
+    default_shelf = models.Shelf.objects.using("default").get(pk=91006)
+    models.Book.objects.using("default").create(
+        title="validator-default-only-collision",
+        shelf=default_shelf,
+    )
+
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        DATABASE_ROUTERS=[_LibraryWriteToShardBRouter()],
+    ):
+        clear_url_caches()
+        try:
+            res = TestClient().query(
+                _UPDATE_BOOK_TITLE_VALIDATOR_MUTATION,
+                variables={
+                    "id": _library_gid("library.book", 91006),
+                    "d": {"title": "validator-default-only-collision"},
+                },
+            )
+        finally:
+            clear_url_caches()
+
+    payload = res.data["updateBookTitleWithAliasValidator"]
+    assert payload["errors"] == []
+    assert payload["node"]["title"] == "validator-default-only-collision"
+    assert (
+        models.Book.objects.using("shard_b").get(pk=91006).title
+        == "validator-default-only-collision"
+    )
+    assert models.Book.objects.using("default").get(pk=91006).title == "ser-book-default"
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
+def test_serializer_mutation_envelope_rolls_back_on_the_write_alias(_project_schema):
+    """A serializer save-time failure rolls back on ``shard_b`` (the pinned alias).
+
+    Renaming the shard_b book to a same-shelf sibling's title trips the
+    ``unique_book_title_per_shelf`` constraint at ``save()`` as the in-band
+    ``"__all__"`` envelope, and the pinned rollback leaves both twins untouched
+    on both aliases.
+    """
+    _seed_same_pk_book_pair(91011)
+    shard_shelf = models.Shelf.objects.using("shard_b").get(pk=91011)
+    models.Book.objects.using("shard_b").create(
+        title="ser-sibling",
+        shelf=shard_shelf,
+    )
+
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        DATABASE_ROUTERS=[_LibraryWriteToShardBRouter()],
+    ):
+        clear_url_caches()
+        try:
+            res = TestClient().query(
+                _UPDATE_BOOK_GENRES_MUTATION,
+                variables={
+                    "id": _library_gid("library.book", 91011),
+                    "d": {"title": "ser-sibling"},
+                },
+                assert_no_errors=False,
+            )
+        finally:
+            clear_url_caches()
+
+    payload = res.data["updateBookGenresViaSerializer"]
+    assert payload["node"] is None
+    assert payload["errors"], payload
+    # Nothing changed on either alias.
+    assert models.Book.objects.using("shard_b").get(pk=91011).title == "ser-book-shard_b"
+    assert models.Book.objects.using("default").get(pk=91011).title == "ser-book-default"

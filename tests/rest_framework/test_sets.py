@@ -18,12 +18,13 @@ Covers ``django_strawberry_framework/rest_framework/sets.py``:
   into ``mutations.inputs``);
 - the retry-idempotence seam lock (the serializer ledger clears in the pre-bind
   reset via ``register_subsystem_clear``, not a per-pass clear);
-- the ``build_input`` create-required guard + ``get_serializer_kwargs`` waiver
-  (the guard fires through ``build_input`` at finalize when a required writable
-  field is narrowed away on create; a ``get_serializer_kwargs`` override waives
-  it; and - the load-bearing per-declaration property - a waiving declaration
-  that materializes a narrowed shape FIRST does NOT poison the per-shape build
-  cache for a later non-waiving declaration over the same shape);
+- the ``build_input`` create-required guard (the guard fires through ``build_input``
+  at finalize when a required writable field is narrowed away on create; a
+  ``get_serializer_kwargs`` override no longer waives it - ``Meta.injected_fields``
+  is the only subtraction; and - the load-bearing per-declaration property - an
+  injecting declaration that materializes a narrowed shape FIRST does NOT poison
+  the per-shape build cache for a later non-injecting declaration over the same
+  shape);
 - the no-registered-primary-type finalize error;
 - the model-flavor seam defaults unchanged (the base is unregressed).
 
@@ -347,6 +348,7 @@ def test_late_declaration_after_finalize_raises():
             class Meta:
                 serializer_class = _item_serializer()
                 operation = "create"
+                permission_classes = []
 
 
 # ---------------------------------------------------------------------------
@@ -477,7 +479,7 @@ def test_bind_is_retry_idempotent_after_fixable_later_phase_failure(monkeypatch)
 
 
 # ---------------------------------------------------------------------------
-# build_input create-required guard + get_serializer_kwargs waiver
+# build_input create-required guard (Meta.injected_fields is the only subtraction)
 # ---------------------------------------------------------------------------
 
 
@@ -520,13 +522,13 @@ def test_create_required_guard_fires_through_build_input():
         finalize_django_types()
 
 
-def test_get_serializer_kwargs_override_waives_create_required_guard():
-    """A ``get_serializer_kwargs`` override WAIVES the create-required guard (it injects the value).
+def test_get_serializer_kwargs_override_no_longer_waives_create_required_guard():
+    """Overriding ``get_serializer_kwargs`` does NOT waive the create-required guard (hardened).
 
-    ``build_input`` detects the override via ``_hook_overridden(cls,
-    SerializerMutation, "get_serializer_kwargs")`` and skips the guard - the
-    override is trusted to supply whatever the narrowing dropped, so the same
-    narrowed shape that raised above now binds.
+    The old blanket waiver (``_hook_overridden`` skipping the guard) let a constructor hook
+    silently own required-field coverage - the exact bypass the hardening pass removes. The
+    same narrowed shape that raises without an override still raises WITH one; the sanctioned
+    path is ``Meta.injected_fields`` + ``get_serializer_injected_data``.
     """
     _declare_products_primaries()
     serializer_cls = _item_serializer_with_required_extra()
@@ -544,27 +546,25 @@ def test_get_serializer_kwargs_override_waives_create_required_guard():
             data,
             instance=None,
         ):
-            return {"data": {**data, "confirm": "x"}}
+            return {"context": {"extra": "x"}}
 
-    # The waiver suppresses the guard: finalize binds without raising.
-    finalize_django_types()
-    assert CreateItem._input_class is not None
+    with pytest.raises(ConfigurationError, match="confirm"):
+        finalize_django_types()
 
 
 def test_build_input_runs_required_guard_per_declaration():
-    """A waiving declaration that builds the narrowed shape FIRST must not let a later non-waiving declaration skip the guard (Finding 5 / Decision 7).
+    """An injecting declaration that builds the narrowed shape FIRST must not let a later non-injecting declaration skip the guard (Finding 5 / Decision 7).
 
     The serializer twin of
     ``tests/forms/test_sets.py::test_cached_build_form_input_runs_required_guard_per_declaration``.
     The per-shape build cache (``_serializer_shape_build_cache``) is keyed on the
-    ``SerializerInputShape`` DESCRIPTOR - NOT on whether the guard is waived.
-    ``build_input`` runs the create-required guard PER declaration, BEFORE building +
-    deduping the shape, so a WAIVING declaration (overriding ``get_serializer_kwargs``)
-    that materializes the narrowed shape FIRST must not poison the cache for a later
-    NON-waiving declaration over the SAME serializer + effective set: the second still
-    raises (its guard runs before its build, so the cached waived shape is irrelevant).
-    Were the guard tied to the built shape instead of the declaration, the cache hit
-    would silently skip it.
+    ``SerializerInputShape`` DESCRIPTOR - NOT on the injection state. ``build_input`` runs the
+    create-required guard PER declaration, BEFORE building + deduping the shape, so a
+    declaration whose ``Meta.injected_fields`` subtracts the dropped field and materializes
+    the narrowed shape FIRST must not poison the cache for a later declaration over the SAME
+    serializer + effective set WITHOUT the injection: the second still raises (its guard runs
+    before its build, so the cached shape is irrelevant). Were the guard tied to the built
+    shape instead of the declaration, the cache hit would silently skip it.
 
     Driven at the ``finalize_django_types()`` integration level, with BOTH declarations
     in the same build so they share the per-shape cache.
@@ -572,27 +572,28 @@ def test_build_input_runs_required_guard_per_declaration():
     _declare_products_primaries()
     serializer_cls = _item_serializer_with_required_extra()
 
-    # The WAIVING declaration narrows `confirm` away and (because the override
-    # waives the guard) materializes the narrowed `ItemSerializerInput` shape first,
-    # populating the per-shape build cache.
-    class WaivedCreateItem(SerializerMutation):
+    # The INJECTING declaration narrows `confirm` away and (because injected_fields
+    # subtracts it from the guard) materializes the narrowed `ItemSerializerInput`
+    # shape first, populating the per-shape build cache.
+    class InjectingCreateItem(SerializerMutation):
         class Meta:
             serializer_class = serializer_cls
             operation = "create"
             fields = ("name", "category")
+            injected_fields = ("confirm",)
 
-        def get_serializer_kwargs(
+        def get_serializer_injected_data(
             self,
             info,
             *,
             data,
             instance=None,
         ):
-            return {"data": {**data, "confirm": "x"}}
+            return {"confirm": "x"}
 
-    # A NON-waiving declaration over the SAME serializer + effective set. It does
-    # NOT override get_serializer_kwargs, so its guard must still fire - the cached
-    # waived shape must not suppress it (guard-before-cache-lookup, per declaration).
+    # A NON-injecting declaration over the SAME serializer + effective set. It
+    # declares no injected_fields, so its guard must still fire - the cached
+    # shape must not suppress it (guard-before-cache-lookup, per declaration).
     class GuardedCreateItem(SerializerMutation):
         class Meta:
             serializer_class = serializer_cls
@@ -601,6 +602,165 @@ def test_build_input_runs_required_guard_per_declaration():
 
     with pytest.raises(ConfigurationError, match="confirm"):
         finalize_django_types()
+
+
+def test_meta_injected_field_still_in_input_raises_at_class_creation():
+    """An injected field still present in the generated GraphQL input fails loud (hardened).
+
+    An injected field is server-supplied by definition; leaving it in the input would make
+    the client's value and the hook's value compete for one serializer key, so the overlap
+    is rejected at class creation.
+    """
+    with pytest.raises(ConfigurationError, match="still in the generated GraphQL input"):
+
+        class OverlapInject(SerializerMutation):
+            class Meta:
+                serializer_class = _item_serializer()
+                operation = "create"
+                injected_fields = ("name",)  # `name` is NOT narrowed out of the input
+                permission_classes = []
+
+
+@pytest.mark.parametrize(
+    "field",
+    [serializers.CharField(read_only=True), serializers.HiddenField(default="server")],
+)
+def test_meta_injected_field_must_be_writable_at_class_creation(field):
+    """Injected fields use the generated input's writable schema-time basis."""
+
+    class NonWritableInjectedSerializer(serializers.ModelSerializer):
+        server_value = field
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category", "server_value")
+
+    with pytest.raises(ConfigurationError, match="unknown or non-writable at schema time"):
+
+        class NonWritableInjectedMutation(SerializerMutation):
+            class Meta:
+                serializer_class = NonWritableInjectedSerializer
+                operation = "create"
+                fields = ("name", "category")
+                injected_fields = ("server_value",)
+                permission_classes = []
+
+
+def test_hidden_field_source_collision_with_client_input_raises_at_class_creation():
+    """A HiddenField default cannot silently replace a client's value for the same source."""
+
+    class HiddenCollisionSerializer(serializers.ModelSerializer):
+        hidden_name = serializers.HiddenField(default="server", source="name")
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category", "hidden_name")
+
+    with pytest.raises(ConfigurationError, match="HiddenField"):
+
+        class HiddenCollisionMutation(SerializerMutation):
+            class Meta:
+                serializer_class = HiddenCollisionSerializer
+                operation = "create"
+                permission_classes = []
+
+
+def test_narrowed_default_field_source_collision_raises_at_class_creation():
+    """A narrowed-out defaulted field remains part of DRF's validated-data write surface."""
+
+    class DefaultCollisionSerializer(serializers.ModelSerializer):
+        server_name = serializers.CharField(default="server", source="name")
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "category", "server_name")
+
+    with pytest.raises(ConfigurationError, match="narrowed-out field defaults"):
+
+        class DefaultCollisionMutation(SerializerMutation):
+            class Meta:
+                serializer_class = DefaultCollisionSerializer
+                operation = "create"
+                fields = ("name", "category")
+                permission_classes = []
+
+
+def _dup_source_serializer():
+    """A serializer where `summary` (source=) and `description` feed ONE model attribute."""
+
+    class DupSourceSer(serializers.ModelSerializer):
+        summary = serializers.CharField(source="description")
+
+        class Meta:
+            model = product_models.Item
+            fields = (
+                "name",
+                "category",
+                "summary",
+                "description",
+            )
+
+    return DupSourceSer
+
+
+def test_duplicate_source_across_input_and_injected_raises_at_class_creation():
+    """A client input field and an injected field binding ONE source fail loud (hardened).
+
+    The name-disjointness check cannot see a ``source=`` alias: two differently-named
+    fields feeding the same model attribute make DRF's ``to_internal_value``
+    last-write-wins, so the injected value would silently replace the client's validated
+    value. Rejected at class creation.
+    """
+    with pytest.raises(ConfigurationError, match="bind one serializer source"):
+
+        class DupBoundaryMut(SerializerMutation):
+            class Meta:
+                serializer_class = _dup_source_serializer()
+                operation = "create"
+                fields = ("name", "category", "summary")
+                injected_fields = ("description",)
+                permission_classes = []
+
+
+def test_star_source_fields_are_exempt_from_the_source_collision_guard():
+    """``source="*"`` (whole-object) fields never falsely collide at class creation.
+
+    ``"*"`` is not a model attribute two fields could compete for; the serializer
+    converter separately rejects a ``source="*"`` model-column field at finalize, so the
+    class-creation guard must not preempt it with a misleading collision error.
+    """
+
+    class StarSer(serializers.ModelSerializer):
+        alpha = serializers.CharField(source="*")
+        beta = serializers.CharField(source="*")
+
+        class Meta:
+            model = product_models.Item
+            fields = (
+                "name",
+                "category",
+                "alpha",
+                "beta",
+            )
+
+    class StarMut(SerializerMutation):  # no raise: the guard skips "*"
+        class Meta:
+            serializer_class = StarSer
+            operation = "create"
+            permission_classes = []
+
+    assert StarMut is not None
+
+
+def test_duplicate_source_between_two_input_fields_raises_at_class_creation():
+    """Two CLIENT input fields sharing one source are rejected too (same last-write-wins hazard)."""
+    with pytest.raises(ConfigurationError, match="bind one serializer source"):
+
+        class DupInputMut(SerializerMutation):
+            class Meta:
+                serializer_class = _dup_source_serializer()
+                operation = "create"
+                permission_classes = []
 
 
 # ---------------------------------------------------------------------------
@@ -1199,6 +1359,36 @@ def test_nested_fields_stored_on_snapshot_and_builds():
     sdl = str(_sb.Schema(query=Query, mutation=Mutation))
     # The nested input type is generated (canonical nested name, ItemInline full shape).
     assert "ItemInlineInput" in sdl
+
+
+def test_nested_hidden_field_source_collision_raises_at_class_creation():
+    """An opted-in nested serializer cannot hide a last-write-wins source collision."""
+
+    class ItemInline(serializers.ModelSerializer):
+        hidden_name = serializers.HiddenField(default="server", source="name")
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "hidden_name")
+
+    class CategoryWithItems(serializers.ModelSerializer):
+        items = ItemInline(many=True)
+
+        class Meta:
+            model = product_models.Category
+            fields = ("name", "items")
+
+        def create(self, validated_data):
+            return None
+
+    with pytest.raises(ConfigurationError, match="nested serializer path 'items'"):
+
+        class CreateCategoryWithCollision(SerializerMutation):
+            class Meta:
+                serializer_class = CategoryWithItems
+                operation = "create"
+                nested_fields = {"items": NestedSerializerConfig()}
+                permission_classes = []
 
 
 def test_read_only_nested_serializer_narrowed_away_does_not_break_class_creation():

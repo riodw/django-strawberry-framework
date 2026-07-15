@@ -56,6 +56,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from rest_framework import serializers
+from rest_framework.fields import empty
 
 from ..exceptions import ConfigurationError
 from ..mutations.inputs import CREATE, PARTIAL
@@ -459,6 +460,56 @@ def _serializer_model(serializer_class: type[serializers.BaseSerializer]) -> Any
     return _serializer_meta_value(serializer_class, "model")
 
 
+def writable_serializer_fields(
+    field_map: Mapping[str, serializers.Field],
+) -> dict[str, serializers.Field]:
+    """Return the schema-time fields that can accept mutation input.
+
+    This is the one writable basis for generated inputs, ``Meta.injected_fields``
+    validation, and writable-source collision checks. DRF ``read_only`` fields and
+    ``HiddenField`` instances cannot accept client or injected serializer data.
+    """
+    return {
+        name: field
+        for name, field in field_map.items()
+        if not field.read_only and not isinstance(field, serializers.HiddenField)
+    }
+
+
+def runtime_validated_data_fields(
+    field_map: Mapping[str, serializers.Field],
+    *,
+    supplied_fields: set[str],
+    apply_defaults: bool,
+) -> dict[str, serializers.Field]:
+    """Return every runtime field capable of contributing to ``validated_data``.
+
+    ``supplied_fields`` are the client-input and injected names the framework can
+    place in serializer data. On non-partial validation, DRF can additionally supply
+    defaults from narrowed-out fields (including ``HiddenField``); partial updates
+    skip defaults. Read-only fields never contribute.
+    """
+    return {
+        name: field
+        for name, field in field_map.items()
+        if not field.read_only
+        and (name in supplied_fields or (apply_defaults and field.default is not empty))
+    }
+
+
+def writable_source_collisions(
+    field_sources: Mapping[str, str | None],
+) -> dict[str, list[str]]:
+    """Return duplicate writable-source ownership, excluding DRF's whole-object ``"*"``."""
+    source_owners: dict[str, list[str]] = {}
+    for name, source in field_sources.items():
+        write_source = source or name
+        if write_source == "*":
+            continue
+        source_owners.setdefault(write_source, []).append(name)
+    return {source: owners for source, owners in source_owners.items() if len(owners) > 1}
+
+
 def resolve_effective_serializer_fields(
     serializer_class: type[serializers.BaseSerializer],
     *,
@@ -499,11 +550,7 @@ def resolve_effective_serializer_fields(
     # in ``utils/inputs.py::resolve_effective_fields`` (spec-039 M4), shared with the
     # form flavor; this wrapper supplies the WRITABLE basis + the serializer message
     # knobs so the read-only drop stays intrinsic to the serializer flavor.
-    writable = {
-        name: field
-        for name, field in discovered.items()
-        if not field.read_only and not isinstance(field, serializers.HiddenField)
-    }
+    writable = writable_serializer_fields(discovered)
     return resolve_effective_fields(
         writable,
         fields=fields,
@@ -561,7 +608,7 @@ def resolve_injected_field_specs(
 ) -> list[InputFieldSpec]:
     """Resolve the schema-time ``InputFieldSpec`` for each ``Meta.injected_fields`` name (rev6 rev2 P1).
 
-    ``Meta.injected_fields`` names required schema-time fields a ``get_serializer_kwargs``
+    ``Meta.injected_fields`` names required schema-time fields a ``get_serializer_injected_data``
     override supplies (they are NARROWED OUT of the generated input, so their specs are NOT in
     ``_input_field_specs``). This resolves their schema-time specs from the SAME field map the
     input build used, so the Slice-3 resolver can hold each injected field to the SAME
@@ -850,13 +897,8 @@ def _required_writable_field_names(
     result threaded from the bind (else the default module discovery in isolation).
     """
     discovered = get_serializer_for_schema(serializer_class) if field_map is None else field_map
-    return {
-        name
-        for name, field in discovered.items()
-        if field.required
-        and not field.read_only
-        and not isinstance(field, serializers.HiddenField)
-    }
+    writable = writable_serializer_fields(discovered)
+    return {name for name, field in writable.items() if field.required}
 
 
 def guard_create_required_serializer_fields(
@@ -876,26 +918,25 @@ def guard_create_required_serializer_fields(
     both ``Meta.fields`` and ``Meta.exclude``. ``read_only`` / ``HiddenField``
     fields are exempt (already dropped, never required input).
 
-    **The explicit injection contract (spec-039 rev6 #2).** ``injected_fields`` names the
-    fields a ``get_serializer_kwargs`` override supplies into ``data`` (``Meta.injected_fields``);
-    they are SUBTRACTED from the dropped-required set, so a required field a narrowing drops
-    but that is DECLARED injected does not raise, while a dropped required field NOT declared
-    injected STILL raises. This replaces the old blanket "overriding ``get_serializer_kwargs``
-    waives ALL required-field coverage" waiver with an auditable, per-field declaration (the
-    broad waiver survives only as an explicitly-named unsafe legacy path in ``build_input``).
+    **The explicit injection contract (spec-039 rev6 #2, hardened).** ``injected_fields``
+    names the fields a ``get_serializer_injected_data`` override supplies
+    (``Meta.injected_fields``); they are SUBTRACTED from the dropped-required set, so a
+    required field a narrowing drops but that is DECLARED injected does not raise, while a
+    dropped required field NOT declared injected STILL raises. The guard always runs on create,
+    and declared injection is its only field-level subtraction.
 
     Factored out so the Slice-2 bind's per-shape build cache can run it PER
     mutation DECLARATION rather than only on the first build of a given shape: the
-    cache key (the ``SerializerInputShape`` descriptor) excludes the waiver / injection
-    state, so a waiving mutation that materializes a shape FIRST must not suppress the guard
-    for a later non-waiving mutation reusing the same cached shape. The guard is tied to the
+    cache key (the ``SerializerInputShape`` descriptor) excludes the injection
+    state, so a mutation that materializes a shape FIRST must not suppress the guard
+    for a later mutation reusing the same cached shape. The guard is tied to the
     declaration, not the built input shape (the
     ``forms/inputs.py::guard_create_required_fields`` per-declaration precedent).
     """
-    # The drop-detection (``required - effective - waived``) is single-sited in
+    # The drop-detection (``required - effective - injected``) is single-sited in
     # ``utils/inputs.py::guard_dropped_required`` (spec-039 Md1), shared with the form
-    # create guard; the serializer passes ``Meta.injected_fields`` as ``waived`` and
-    # keeps its own pinned error wording.
+    # create guard; the serializer passes ``Meta.injected_fields`` through the shared
+    # subtraction parameter and keeps its own pinned error wording.
     guard_dropped_required(
         _required_writable_field_names(serializer_class, field_map=field_map),
         effective_field_names,
@@ -904,7 +945,8 @@ def guard_create_required_serializer_fields(
             f"SerializerMutation create input for {serializer_class.__name__} drops required "
             f"serializer field(s) {dropped!r} via Meta.fields / Meta.exclude; the "
             "serializer can never validate without them. Keep them in the input, or declare them "
-            "in Meta.injected_fields and supply them from a get_serializer_kwargs override.",
+            "in Meta.injected_fields and supply them from a get_serializer_injected_data "
+            "override.",
         ),
     )
 
@@ -948,7 +990,7 @@ def _collect_input_attr_collision_messages(
     serializer nouns (incl. the id-like-suffix ``camel_case_note`` and the
     serializer-only ``source_of`` arm).
     """
-    return list(
+    messages = list(
         iter_input_field_collisions(
             field_specs,
             subject=f"SerializerMutation for {serializer_class.__name__!r}",
@@ -956,11 +998,19 @@ def _collect_input_attr_collision_messages(
             rename_clause="Rename one,",
             name_of=lambda spec: spec.target_name,
             camel_case_note=" (or the id-like-suffix rule)",
-            # The write-back source: the resolved one-segment source, or the declared
-            # name when no source was given (the column a write would set).
-            source_of=lambda spec: spec.source if spec.source is not None else spec.target_name,
         ),
     )
+    collisions = writable_source_collisions(
+        {spec.target_name: spec.source for spec in field_specs},
+    )
+    for source, owners in collisions.items():
+        messages.append(
+            f"SerializerMutation for {serializer_class.__name__!r} has two writable fields "
+            f"{owners[0]!r} and {owners[1]!r} sharing one source {source!r}; they would "
+            "double-write one model attribute. Give each a distinct source, or drop one via "
+            "Meta.fields / Meta.exclude.",
+        )
+    return messages
 
 
 def _aggregate_field_problems(
@@ -1491,12 +1541,11 @@ def build_serializer_inputs(
     **The create-required-narrowing guard (spec-039 Decision 7).** When
     ``guard_required`` is True, raises ``ConfigurationError`` naming any required
     writable serializer field dropped by ``Meta.fields`` / ``Meta.exclude`` (the
-    serializer can never validate without it). The waiver (``guard_required=False``)
-    is the ``get_serializer_kwargs`` override escape hatch (Slice 2): when the
-    mutation overrides that hook to inject the values, the guard cannot know which
-    fields the override supplies, so it trusts the explicit override - surfaced as
-    an explicit parameter so Slice 2 can pass ``guard_required=False``, never
-    hard-coded always-on.
+    serializer can never validate without it). ``guard_required=False`` exists for
+    ISOLATED shape builds (package tests exercising the generator without a
+    mutation declaration); the mutation bind path never passes it - the guard
+    always runs there, with ``Meta.injected_fields`` as the only per-field
+    subtraction.
     """
     effective = resolve_effective_serializer_fields(
         serializer_class,

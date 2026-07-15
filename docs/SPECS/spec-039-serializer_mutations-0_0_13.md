@@ -53,6 +53,84 @@ card [`TODO-ALPHA-040-0.0.13`][kanban] (which reuses the same envelope and
 [`spec-036`][spec-036] Decision 13 took for the joint `0.0.11` cut it shared with
 [`spec-037`][spec-037]. No slice in this card bumps the version.
 
+> **Post-ship hardening revision (2026-07-15, on `main` after `0.0.13`).** A security
+> audit of the shipped serializer pipeline superseded parts of this spec's hook
+> contract — an intentional pre-`1.0` break with no compatibility shim (retaining hook
+> ownership of `data` / `instance` preserved an authorization bypass). Where this spec
+> and the code disagree, the code and [`docs/README.md`][docs-readme]
+> #"Serializer mutation contracts" govern:
+>
+> - `get_serializer_kwargs` is now **constructor-only**. `data`, `instance`,
+>   `partial`, `context["request"]`, and `context["write_alias"]` are framework-owned;
+>   a conflicting reserved return is a `ConfigurationError`. The framework builds the
+>   serializer data itself (decoded client data + declared injection) and passes the
+>   hook a copy. The reserved returns are checked by **omission sentinel + object
+>   identity**, never deep equality: the returned `data` must be omitted or the exact
+>   clone object the hook received, the returned `instance` omitted or the located row
+>   itself (an explicit `data=None` / `instance=None` and a rebuilt-equal copy are
+>   rejected too — a deep `!=` over two independently cloned structures recurses on
+>   deep valid payloads, and a `pop(..., None)` default conflates explicit `None` with
+>   omission).
+> - Narrowed-away required fields pair `Meta.injected_fields` with
+>   `get_serializer_injected_data(info, *, data, instance=None)` hook, whose returned
+>   keys must exactly match the declaration; an injected field must be narrowed out of
+>   the GraphQL input (enforced at class creation).
+> - The `get_serializer_save_kwargs` shadow check now compares against the actual
+>   top-level `serializer.validated_data` keys (renamed, injected, defaulted, and
+>   hidden fields alike), not a reconstruction from the input specs.
+> - Every top-level and nested relation field's queryset is composed as author
+>   queryset ∩ target visibility, pinned to the operation's write alias, and locked
+>   when `Meta.select_for_update` locks; a cross-alias author queryset fails closed.
+> - Every **consumer-reachable pipeline phase** — the permission hook, decode,
+>   validation, write, and re-fetch, for **all three write flavors** (and delete) —
+>   runs under a pipeline-wide **alias guard**
+>   (`utils/write_transaction.py::pipeline_alias_guard`): an `execute_wrapper` on
+>   every non-pinned configured connection rejects **every SQL statement** — with
+>   deliberately **no read/write classification**, since a lexical keyword test is
+>   bypassable (leading SQL comments, PostgreSQL `EXPLAIN ANALYZE UPDATE`, and
+>   write-capable functions invoked through `SELECT`) — **before the query executes**
+>   (post-hoc detection could not roll back an already-escaped cross-alias write), so
+>   the signal-less `QuerySet.update()` / `bulk_create` / raw-cursor paths are covered
+>   by construction; a thread-scoped `pre_save` guard gives the `Model.save()` path an
+>   earlier, clearer error. The framework warms the request's auth state (the lazy
+>   `request.user` + the backend's per-user permission cache) **before** installing
+>   the guard, since the auth models legitimately live on their own router alias.
+> - The **authorized pk is snapshotted by the pipeline skeleton immediately after
+>   the update locate** — before the permission hook, the first consumer-controlled
+>   code, can touch the mutable located instance — published on the write-pipeline
+>   context, and enforced by a flavor-independent backstop: an update result whose pk
+>   drifted from the snapshot, or a delete whose instance pk drifts during
+>   authorization, fails closed.
+> - The serializer write phase additionally runs under a thread-scoped **write
+>   witness**: a `post_save` recorder collects the backing model's actual writes
+>   **with a pk snapshot taken at the signal** (the model object is mutable, so
+>   identity alone is forgeable). The `get_serializer_save_kwargs` hook runs
+>   inside the same value-preserving, error-mapped closure as `save()` itself.
+> - The `serializer.save()` result is validated before the re-fetch: correct model,
+>   identity with `serializer.instance` (DRF's `save()` bookkeeping — a detached
+>   saved-looking fabrication fails closed), non-null pk and not `_state.adding`,
+>   exactly the pinned alias, on **create** a witnessed `created=True` write of the
+>   returned row on the pinned alias **whose snapshotted pk still equals the returned
+>   pk** (identity alone is forgeable through normal DRF bookkeeping — a custom
+>   `create()` returning an existing row is still assigned to `self.instance`, and a
+>   really-inserted object can be re-pointed at a hidden row's pk afterwards; only
+>   the observed INSERT + pk snapshot proves it was not laundered through the
+>   visibility-free re-fetch; signal-less bulk persistence fails closed), and — on
+>   update — the same pk as the **post-locate authorized-pk snapshot** (a live
+>   `instance.pk` comparison would be forgeable, since `instance` and the returned
+>   object can be the same mutable object).
+> - A writable serializer `source` must be **unique across the whole write surface**
+>   (input fields and `Meta.injected_fields`): two differently-named fields feeding one
+>   model attribute are rejected at class creation (DRF resolves the collision
+>   last-write-wins, so an injected value could silently replace the client's).
+> - Every hook copy of the serializer data (`get_serializer_injected_data`,
+>   `get_serializer_kwargs`, `get_serializer_save_kwargs`) is a **recursive**,
+>   **iteratively-built** plain-container clone: nested in-place mutations cannot reach
+>   the authoritative data or `validated_data`, client-controlled JSON nesting depth
+>   cannot crash the pipeline with a `RecursionError`, a hook-constructed **cyclic**
+>   container fails loud as a `ConfigurationError` instead of looping forever, and a
+>   merely shared (diamond) reference clones once and stays shared.
+
 Status: **IMPLEMENTED ON MAIN** — all five slices (Slice 0 + Slices 1-4) are
 final-accepted and on main; the implemented-on-main docs + the card wrap landed in
 Slice 4 ([`DONE-039-0.0.13`][kanban]). **Release deferred to the joint `0.0.13` cut**
@@ -219,7 +297,7 @@ Revision history (kept inline so the spec is self-contained):
   (2) a **create-required narrowing guard** (`guard_create_required_serializer_fields`,
   the form `guard_create_required_fields` analog) fails at bind, per declaration, before
   the descriptor cache lookup, when `Meta.fields` / `Meta.exclude` drops a writeable
-  required-no-default field (waived by a `get_serializer_kwargs` override)
+  required-no-default field; `Meta.injected_fields` is the only explicit subtraction
   ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
   Plus: an **id-like-suffix rule** so a relation field already named `*_id` / `*_pk` is
   not double-suffixed (`category` → `categoryId`, `category_id` → `categoryId`,
@@ -710,10 +788,10 @@ doc + card-wrap only (no version bump — [Decision 14](#decision-14--version-bu
     narrowing guard (`guard_create_required_serializer_fields`) PER declaration, BEFORE
     the descriptor cache lookup** — raise if `Meta.fields` / `Meta.exclude` drops a
     writeable (`read_only` / `HiddenField` exempt) `field.required`-with-no-default
-    serializer field; waived (`guard_required=False`) when the mutation overrides
-    `get_serializer_kwargs` to inject the values (the [`forms/inputs.py`][forms-inputs]
-    `guard_create_required_fields` + [`forms/sets.py`][forms-sets] per-declaration
-    precedent). Reuse [`utils/inputs.py`][utils-inputs]'s `build_strawberry_input_class`
+    serializer field. `Meta.injected_fields` is the only field-level subtraction:
+    each name must be writable on the same schema-time basis as input generation,
+    narrowed out of the client input, and supplied by `get_serializer_injected_data`.
+    Reuse [`utils/inputs.py`][utils-inputs]'s `build_strawberry_input_class`
     + `materialize_generated_input_class` core (the latter's ledger gives the collision
     raise for free) and materialize as module globals of the `rest_framework` input
     namespace for the [`strawberry.lazy`][glossary-djangomutationfield] forward-ref.
@@ -750,11 +828,10 @@ doc + card-wrap only (no version bump — [Decision 14](#decision-14--version-bu
     relation kind** likewise diverge (or raise `ConfigurationError` on a name collision),
     identical descriptors dedupe; **the create-required narrowing guard** — excluding a
     required scalar, a required serializer-only field, or a required relation raises
-    [`ConfigurationError`][glossary-configurationerror], `read_only` / `HiddenField`
-    exclusions do **not**, and the `get_serializer_kwargs` waiver
-    (`guard_required=False`) suppresses it; the guard runs **per declaration** (a waiving
-    mutation materializing a shape first does not suppress it for a later non-waiving
-    mutation on the same shape).
+    [`ConfigurationError`][glossary-configurationerror], while `read_only` /
+    `HiddenField` fields are outside the writable basis. The guard runs **per
+    declaration**; one declaration's `Meta.injected_fields` never suppresses a later
+    declaration's guard on the same cached shape.
   - [ ] **DRY / reuse** ([Cross-flavor reuse and DRY obligations](#cross-flavor-reuse-and-dry-obligations)):
     `convert_serializer_field` rides the shared fail-loud dispatch **skeleton** promoted to
     `utils/converters.py` (supplying only its precheck table + scalar registry — the
@@ -892,9 +969,9 @@ doc + card-wrap only (no version bump — [Decision 14](#decision-14--version-bu
     **P1.7**) — but its per-shape dedupe is keyed on the `SerializerInputShape` DESCRIPTOR,
     which is only knowable AFTER the build, so it does NOT route through
     `cached_build_input` (whose pre-build key lookup the form flavor can use but the
-    serializer cannot without building the shape twice); the
-    `get_serializer_kwargs` waiver reuses the generalized
-    `_hook_overridden(cls, base, name)` (**P2.6**); and the input-ledger clear registers
+    serializer cannot without building the shape twice); required-field injection is
+    explicit through `Meta.injected_fields` + `get_serializer_injected_data`, never inferred
+    from constructor-hook overrides; and the input-ledger clear registers
     through `register_subsystem_clear` (**P1.6**, the finalizer item above). The serializer's
     only genuinely-new `_validate_meta` logic is the `serializer_class`
     is-a-`ModelSerializer` (+ resolvable `Meta.model`) check and `optional_fields`
@@ -950,7 +1027,14 @@ doc + card-wrap only (no version bump — [Decision 14](#decision-14--version-bu
     reconstruction); inject `context={"request": request_from_info(info,
     family_label="SerializerMutation")}` (the package's shared request-extraction
     helper, [`utils/permissions.py`][utils-permissions]) so the serializer's own
-    validators / `HiddenField(default=CurrentUserDefault())` resolve;
+    validators / `HiddenField(default=CurrentUserDefault())` resolve
+    **[superseded by the 2026-07-15 hardening revision — the framework now builds the
+    authoritative `data` ITSELF (decoded client input + the exact-match
+    `Meta.injected_fields` injection via `get_serializer_injected_data`) and calls the
+    hook for NON-RESERVED constructor kwargs only; `data`, `instance`, `partial`,
+    `context["request"]`, and `context["write_alias"]` are framework-owned, so the
+    `serializer_class(**get_serializer_kwargs(...))` shape above no longer describes the
+    construct step]**;
     **validate** via `serializer.is_valid()` — a failure maps the nested
     `serializer.errors` onto the [`FieldError` envelope][glossary-fielderror-envelope]
     via a **dedicated recursive flattener** (`serializer_errors_to_field_errors`, dotted
@@ -2087,12 +2171,10 @@ input, raise [`ConfigurationError`][glossary-configurationerror] naming any **wr
 serializer field with `field.required` (and no serializer `default`) that the effective
 set drops. `read_only` / `HiddenField` fields are never client inputs, so they do **not**
 count as dropped-required. The guard runs **per mutation declaration, before the
-shape-cache lookup** (the cache key is the descriptor, which excludes the waiver flag —
-exactly the form discipline), so a waiving mutation that materializes a narrowed shape
-first cannot suppress the guard for a later non-waiving mutation reusing the cached
-shape. The **waiver** is explicit: a mutation that overrides `get_serializer_kwargs(...)`
-to inject the missing values builds with `guard_required=False` (the form
-`get_form_kwargs` / `get_form` waiver precedent). Update inputs need no such guard — DRF
+shape-cache lookup**. `Meta.injected_fields` is the only subtraction and is declaration
+state rather than shape identity, so an injecting mutation that materializes a narrowed
+shape first cannot suppress the guard for a later non-injecting mutation reusing the
+cached shape. Update inputs need no such guard — DRF
 `partial=True` makes every field optional, so a dropped field is simply un-validated.
 
 Justification: deriving the input from the serializer's fields is the card's headline
@@ -2134,10 +2216,9 @@ knowable after the build, the per-shape dedupe stays an inline lookup-or-store r
 input namespace is the
 promoted `make_input_namespace(...)` **one-ledger** trio — the form / mutation clear
 shape, **not** the heavier `clear_generated_input_namespace` (**P2.2**); the
-divergent-shape suffix reuses `mutations/inputs.py::_pascalize_token` (**P2.3**); and the
-`get_serializer_kwargs` create-required **waiver** reuses the generalized
-`_hook_overridden(cls, base, name)` rather than re-deriving the `cls.<name> is base.<name>`
-test (**P2.6**).
+divergent-shape suffix reuses `mutations/inputs.py::_pascalize_token` (**P2.3**).
+Required-field injection is declaration-scoped through `Meta.injected_fields`; constructor
+hook identity is not part of guard behavior.
 
 ### Decision 8 — Resolver pipeline: instantiate → `is_valid()` → `serializer.errors` → `save()` → optimizer re-fetch → payload
 
@@ -2868,20 +2949,18 @@ identity guard that the symbol is imported and not redefined under `rest_framewo
   serializer's only genuinely-new validation is `serializer_class`
   is-a-`ModelSerializer` (+ resolvable `Meta.model`) and `Meta.optional_fields`
   normalization. ([Decision 6](#decision-6--base-class-strategy-serializermutation-rides-the-djangomutation-base-modelserializer-driven) / Slice 2.)
-- **P2.6 — share the override-detection helper.** The `get_serializer_kwargs` default
-  body and the override-detection that waives the create-required guard parallel
-  `forms/sets.py::_default_get_form_kwargs` + the existing `_form_kwargs_overridden`. The
+- **P2.6 — keep constructor-hook ownership narrow.** The `get_serializer_kwargs` default
+  body parallels `forms/sets.py::_default_get_form_kwargs`, but the serializer hook does
+  not participate in required-field guard decisions. The
   serializer flavor ships **only** the finer `get_serializer_kwargs` hook — it has **no**
   coarse `get_serializer` constructor hook (unlike the form flavor's `get_form`): its
   H3 invariants (`partial` and the authorized-actor `context["request"]`) are
   framework-owned in `_merged_serializer_kwargs` and cannot be entrusted to a
   consumer-overridable constructor (a `get_serializer()` override could subvert them),
   so the default body sets **neither** `partial` **nor** `context`
-  (spec-039 Medium-7 — the dead-hook removal). The **override-detection** is generic:
-  **generalize the existing `_form_kwargs_overridden` into a shared
-  `_hook_overridden(cls, base, name)`** identity check the serializer's
-  `get_serializer_kwargs` waiver reuses rather than re-deriving `cls.<name> is
-  base.<name>`. ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) guard-waiver / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload).)
+  (spec-039 Medium-7 — the dead-hook removal). Required-field injection is instead
+  explicit through `Meta.injected_fields` + `get_serializer_injected_data`.
+  ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth) / [Decision 8](#decision-8--resolver-pipeline-instantiate--is_valid--serializererrors--save--optimizer-refetch--payload).)
 - **P2.7 — promote the `Meta` typo-guard, do not add a third normalize wrapper.** Every
   `_validate_meta` computes `unknown = sorted(declared - _ALLOWED_<FLAVOR>_META_KEYS)` and
   raises (`mutations/sets.py::_ALLOWED_MUTATION_META_KEYS`, and both form bases). Promote
@@ -2942,7 +3021,7 @@ duplicates a listed symbol's logic is a finding:
 | --- | --- |
 | [`serializer_converter.py`][rf-converter] | the shared dispatch skeleton (**P1.4**), the unified conversion / field-spec dataclass (**P2.1**), `utils/inputs.py::graphql_camel_name`, `utils/relations.py::{relation_kind, is_forward_many_to_many, is_many_side_relation_kind}`, the [`Upload`][glossary-upload-scalar] scalar, the read-side `types/converters.py::{convert_scalar, scalar_for_field, convert_choices_to_enum}`, `exceptions.ConfigurationError` |
 | [`inputs.py`][rf-inputs] | `utils/inputs.py::{build_strawberry_input_class, materialize_generated_input_class, normalize_field_name_sequence, graphql_camel_name}`, the shared input-namespace trio (**P2.2**), the shared shape-build cache (**P1.3**), the shared build/stash core (**P1.7**), `mutations/inputs.py::{_pascalize_token, build_payload_type, payload_object_slot, relation_input_annotation}` |
-| [`sets.py`][rf-sets] | `mutations/sets.py::{DjangoMutation, _validate_permission_classes, _normalize_field_sequence, _ValidatedMutationMeta, register_mutation}`, the shared non-delete ops constant (**P1.2**), `reject_unknown_meta_keys` (**P2.7**), `mutations/inputs.py::{CREATE, PARTIAL}`, the `_hook_overridden` helper (**P2.6**) |
+| [`sets.py`][rf-sets] | `mutations/sets.py::{DjangoMutation, _validate_permission_classes, _normalize_field_sequence, _ValidatedMutationMeta, register_mutation}`, the shared non-delete ops constant (**P1.2**), `reject_unknown_meta_keys` (**P2.7**), `mutations/inputs.py::{CREATE, PARTIAL}` |
 | [`resolvers.py`][rf-resolvers] | `mutations/resolvers.py::{locate_instance, coerce_lookup_id, authorize_or_raise, refetch_optimized, build_payload, not_found_error, save_or_field_errors, payload_cls_for, run_pipeline_async, _coerce_relation_pk_or_none, raw_choice_value}`, the promoted `_visible_related_object` (**P1.1**), the promoted sync-pipeline skeleton (**P1.5**), `utils/querysets.py::{visibility_scoped_related_queryset, apply_type_visibility_async}`, `utils/permissions.py::request_from_info`, the shared leaf-error sentinel / ctor (**P2.4**) |
 | [`__init__.py`][rf-init] | `require_drf()` guard only (Decision 12) |
 
@@ -2965,7 +3044,7 @@ code lands). Line deltas are planning estimates.
 | Slice | Files touched | New / changed tests | Approx. delta |
 | --- | --- | --- | --- |
 | **0 — pre-Slice-1 dependency gate** (**F11**) | [`pyproject.toml`][pyproject] (`djangorestframework` → `[dependency-groups].dev`, NOT `[project].dependencies`) + `uv.lock` (`uv lock`), [`pytest.ini`][pytest-ini] (a **targeted DRF-origin `ignore::` line** only if the verified floor still emits a deprecation under the CI matrix). **No package-version edit** (stays `0.0.12`, [Decision 14](#decision-14--version-bumps-are-owned-by-the-joint-0013-cut)) | the gate is a **precondition**, not a test deliverable: confirm a DRF release imports + runs warning-free across the [`django.yml`][django-workflow] matrix (Python 3.10→3.14 × Django 5.2→6.0/`latest`) under `-W error`, and record the exact pinned floor before converter code | `+5 / 0` (manifest + lock) |
-| 1 — serializer-field converter + reverse map + the two serializer-derived inputs | [`rest_framework/serializer_converter.py`][rf-converter] (new; `convert_serializer_field` fail-loud MRO dispatch + the `input_attr → (serializer_field_name, source, kind)` reverse map, renamed-field `source` resolution + id-like-suffix rule), [`rest_framework/inputs.py`][rf-inputs] (new; `<Serializer>Input` + `<Serializer>PartialInput` from the `get_serializer_for_schema()` field set, `SerializerInputShape` descriptor identity, `guard_create_required_serializer_fields`, `read_only` / `optional_fields` handling, narrowing fail-loud), [`rest_framework/__init__.py`][rf-init] (new; DRF soft-import guard), **+ the DRY promotions** ([DRY obligations](#cross-flavor-reuse-and-dry-obligations)): `utils/converters.py` (new; shared dispatch skeleton, **P1.4**) + [`utils/inputs.py`][utils-inputs] (`InputFieldSpec` / `make_input_namespace` / `make_shape_build_cache`, **P2.1** / **P2.2** / **P1.3**) with [`forms/converter.py`][forms-converter] + [`forms/inputs.py`][forms-inputs] re-pointed | [`tests/rest_framework/test_converter.py`][test-rest-framework] + [`tests/rest_framework/test_inputs.py`][test-rest-framework] (~40 — every serializer-field class, id mapping, `Upload`, the reverse-map + `kind` flag, renamed-`source` + id-like-suffix + dotted-`source` raise, custom-field raise, schema-hook (kwargs-serializer reject + override), `read_only` dropped, `optional_fields` (+ `"__all__"` reject), descriptor identity (optional_fields / hook-vary → distinct names), create-required-guard (+ waiver, per-declaration), collision/dedupe, `Meta.fields`/`exclude` fail-loud + empty-set) | `+500 / 0` |
+| 1 — serializer-field converter + reverse map + the two serializer-derived inputs | [`rest_framework/serializer_converter.py`][rf-converter] (new; `convert_serializer_field` fail-loud MRO dispatch + the `input_attr → (serializer_field_name, source, kind)` reverse map, renamed-field `source` resolution + id-like-suffix rule), [`rest_framework/inputs.py`][rf-inputs] (new; `<Serializer>Input` + `<Serializer>PartialInput` from the `get_serializer_for_schema()` field set, `SerializerInputShape` descriptor identity, `guard_create_required_serializer_fields`, `read_only` / `optional_fields` handling, narrowing fail-loud), [`rest_framework/__init__.py`][rf-init] (new; DRF soft-import guard), **+ the DRY promotions** ([DRY obligations](#cross-flavor-reuse-and-dry-obligations)): `utils/converters.py` (new; shared dispatch skeleton, **P1.4**) + [`utils/inputs.py`][utils-inputs] (`InputFieldSpec` / `make_input_namespace` / `make_shape_build_cache`, **P2.1** / **P2.2** / **P1.3**) with [`forms/converter.py`][forms-converter] + [`forms/inputs.py`][forms-inputs] re-pointed | [`tests/rest_framework/test_converter.py`][test-rest-framework] + [`tests/rest_framework/test_inputs.py`][test-rest-framework] (~40 — every serializer-field class, id mapping, `Upload`, the reverse-map + `kind` flag, renamed-`source` + id-like-suffix + dotted-`source` raise, custom-field raise, schema-hook (kwargs-serializer reject + override), `read_only` dropped, `optional_fields` (+ `"__all__"` reject), descriptor identity (optional_fields / hook-vary → distinct names), create-required guard (explicit-injection subtraction, per-declaration), collision/dedupe, `Meta.fields`/`exclude` fail-loud + empty-set) | `+500 / 0` |
 | 2 — the base class + `Meta` validation + the bind + the export guard | [`rest_framework/sets.py`][rf-sets] (new; `SerializerMutation` subclassing `DjangoMutation`, the `_validate_meta` / `_resolve_model` / `build_input` / `input_type_name` / `input_module_path` / `resolve_*` overrides), [`rest_framework/inputs.py`][rf-inputs] (`clear_serializer_input_namespace()`), the serializer input ledger is cleared from **both** the [`types/finalizer.py`][types-finalizer] pre-bind reset block (retry-idempotence — no new bind, rides `bind_mutations()`) and [`registry.py`][registry]'s `TypeRegistry.clear()`, but **via the mandatory `register_subsystem_clear` seam (P1.6, M4), not two hand-edits** — one canonical list of static `(module_path, attr)` string rows that both sites iterate through `_clear_if_importable` (so DRF is never imported while absent, and the soft-dep asymmetry / import-timing edge both vanish, **F10**); [`__init__.py`][init] (guarded `SerializerMutation` export via root `__getattr__`), **+ the DRY promotions** ([DRY obligations](#cross-flavor-reuse-and-dry-obligations)): [`mutations/sets.py`][mutations-sets] (`NON_DELETE_WRITE_OPERATIONS` / `reject_unknown_meta_keys` / `cached_build_input` + `build_and_stash_input` / generalized `_hook_overridden` — **P1.2** / **P2.7** / **P1.7** / **P2.6**) with [`forms/sets.py`][forms-sets] re-pointed | [`tests/rest_framework/test_sets.py`][test-rest-framework] (~18 — `Meta` matrix incl. `delete`-rejected + plain-`Serializer`-rejected + no-model + `permission_classes` kept, both bind, retry-idempotence, no-primary error, model-flavor seam defaults unchanged) | `+340 / -10` |
 | 3 — resolver pipeline **+ products live surface (one commit)** | [`rest_framework/resolvers.py`][rf-resolvers] (new; visibility-on-every-branch relation decoder + `partial=True` update + value-preserving save + sync/async pipeline reusing the `036`/`038` promoted helpers), [`examples/fakeshop/apps/products/serializers.py`][products-serializers] (new; `ItemSerializer` + the `Upload`/`Item.attachment` + request-context branches), [`products/schema.py`][products-schema] (serializer mutations), `config/settings.py` (`rest_framework` in `INSTALLED_APPS` if needed), [`mutations/resolvers.py`][mutations-resolvers] + [`utils/querysets.py`][utils-querysets] + [`forms/resolvers.py`][forms-resolvers] (the **P1.1** / **P1.5** promotions — `run_write_pipeline_sync` skeleton + `_visible_related_object` promoted, `forms/` re-pointed; [DRY obligations](#cross-flavor-reuse-and-dry-obligations)) | **Primary: [`test_products_api.py`][test-products-api]** (~16 live `/graphql/` — create/update, field + `"__all__"` envelopes, `categoryId` reverse-map write, partial-update + unique-together, hidden update row, write-auth, hidden-relation `FieldError`, authorize-before-decode, multipart `Upload`, request-context, G2 query shape). **Internals-only: [`tests/rest_framework/test_resolvers.py`][test-rest-framework]** (~13 — recursive-flattener shapes, raw-pk/non-Relay + many-relation decode, call-once save, write-time `IntegrityError` + save-time `ValidationError`, sync/async + `SyncMisuseError`, hermetic kwargs seams) + [`tests/mutations/test_fields.py`][test-mutations] factory-generalization verification | `+560 / 0` |
 | 4 — docs + card wrap (no version bump; dep wiring already done in the gate) | [`docs/GLOSSARY.md`][glossary], [`docs/README.md`][docs-readme], [`README.md`][readme], [`GOAL.md`][goal], [`TODAY.md`][today], [`docs/TREE.md`][tree], [`CHANGELOG.md`][changelog], [`KANBAN.md`][kanban] — **implemented-on-main docs land now; the public "shipped (0.0.13)" / "Shipped today" / release-changelog wording defers to the joint cut** (**F8**) | 0 (doc only) | `+110 / -40` |
@@ -3038,8 +3117,10 @@ file being `utils/converters.py`. The above per-slice deltas fold these in; trea
   hook is a separate seam and does not affect schema shape
   ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
 - **`get_serializer_kwargs` cannot swap the request actor (H3).** A
-  `get_serializer_kwargs(...)` override may add or replace constructor kwargs and merge its
-  own `context` keys, but it **cannot change the request actor**: the framework sets
+  `get_serializer_kwargs(...)` override may add or replace NON-RESERVED constructor kwargs
+  and merge its own `context` keys (the 2026-07-15 hardening revision made `data`,
+  `instance`, `partial`, `context["request"]`, and `context["write_alias"]`
+  framework-owned), and it **cannot change the request actor**: the framework sets
   `context["request"] = request_from_info(info, …)` after merging — the **same** object the
   inherited write-auth seam already authorized — so the serializer's request-aware
   validators see the same user / tenant the permission check saw. An override that supplies a
@@ -3150,8 +3231,8 @@ file being `utils/converters.py`. The above per-slice deltas fold these in; trea
   that omits a writeable `field.required`-with-no-default field on a **create** mutation
   is a bind-time [`ConfigurationError`][glossary-configurationerror]
   (`guard_create_required_serializer_fields`, run per declaration) — the schema would
-  otherwise finalize but never validate. `read_only` / `HiddenField` are exempt;
-  overriding `get_serializer_kwargs` to inject the values waives the guard. Update
+  otherwise finalize but never validate. `read_only` / `HiddenField` are outside the
+  writable basis; `Meta.injected_fields` is the only field-level subtraction. Update
   (`partial=True`) inputs are unaffected.
 - **No `DjangoType` `Meta` key added.** [`DEFERRED_META_KEYS`][types-base] /
   `ALLOWED_META_KEYS` are byte-unchanged.
@@ -3256,8 +3337,8 @@ dev-group dependency** so the test env has it
     collision, identical descriptors dedupe; **the create-required narrowing guard** —
     excluding a required scalar / serializer-only / relation field raises
     [`ConfigurationError`][glossary-configurationerror], `read_only` / `HiddenField`
-    exclusions do not, the `get_serializer_kwargs` waiver suppresses it, and the guard
-    fires **per declaration** (waiving-first does not suppress a later non-waiving
+    exclusions do not, and the guard
+    fires **per declaration** (injecting-first does not suppress a later non-injecting
     mutation on the same shape); the distinct-shapes-collide
     [`ConfigurationError`][glossary-configurationerror]; an empty effective field set →
     `ConfigurationError`; **nullability and defaults (M2)** — `allow_null=True` yields a
@@ -3594,7 +3675,7 @@ tests), 7 (live HTTP for a `ModelSerializer`) — plus the export / soft-dep wir
    silent reuse), with canonical / descriptor-derived names, dedupe, and a finalize-time
    collision [`ConfigurationError`][glossary-configurationerror]; the **create-required
    narrowing guard** (`guard_create_required_serializer_fields`) runs per declaration
-   before the descriptor cache lookup (waived by a `get_serializer_kwargs` override);
+   before the descriptor cache lookup; `Meta.injected_fields` is its only subtraction;
    `Meta.fields` / `Meta.exclude` / `Meta.optional_fields` are normalized + fail-loud (a
    bare string including `"__all__"` rejected); all materialized as module globals
    ([Decision 7](#decision-7--serializer-field--strawberry-input-mapping-the-serializer-is-the-input-source-of-truth)).
@@ -3908,8 +3989,10 @@ resolver calls it INSIDE the value-preserving `save()` closure - `saved =
 serializer.save(**save_kwargs)` - so the transaction boundary, `ValidationError` /
 `IntegrityError` mapping, and optimizer re-fetch are all preserved (unlike graphene-django's
 `perform_mutate`, which bypasses framework-owned behavior). `_assert_save_kwargs_no_shadow`
-rejects a save kwarg whose name matches a serializer INPUT field (it would silently override the
-client's value; save kwargs are for server-side data not in the input). Default `{}`. Live-tested
+rejects a save kwarg whose name matches a top-level `serializer.validated_data` key (renamed
+`source=` inputs, `Meta.injected_fields` injections, serializer defaults, and `HiddenField`s
+alike — the 2026-07-15 hardening revision widened this from input-spec names to the actual
+validated keys; a collision would silently override the validated value). Default `{}`. Live-tested
 (`createShelfWithSaveKwargs` stamps a server-side `topic` at save); package-tested (shadow raises,
 non-shadow allowed).
 
@@ -3936,22 +4019,21 @@ visible branches, a hidden branch is a `altBranches` relation error over `/graph
 
 ### rev6 #2 — Explicit injection contract (`Meta.injected_fields`)
 
-The old rule "overriding `get_serializer_kwargs` waives the create-required guard entirely" was
-too broad — it waived required-field coverage even when the override did not supply the dropped
-fields. `Meta.injected_fields = (...)` is the auditable, per-field replacement (a new serializer
+`Meta.injected_fields = (...)` is the auditable, per-field server-data contract (a serializer
 `Meta` key, normalized like `optional_fields`, stored on the snapshot): the create-required
-guard SUBTRACTS only the declared injected fields (a dropped required field NOT declared injected
-STILL raises). Each injected name is validated at CLASS creation against the schema-time field
-map (a typo fails loud), and its schema-time spec is stashed (`_injected_field_specs`). At
-runtime `_assert_injected_fields_supplied` proves RUNTIME ACCEPTANCE, not mere presence (**rev2
-P1**): each injected field must pass the SAME present / writable / source / kind / relation-model
-agreement check an input field gets (so the runtime serializer cannot silently drop or ignore it)
-AND have reached the serializer's `initial_data` — either failure is a clear `ConfigurationError`.
-The old blanket waiver survives ONLY as an explicitly-named unsafe legacy escape hatch
-(`legacy_waiver` in `build_input`): it fully skips the guard, but ONLY when `injected_fields` is
-NOT declared — declaring `injected_fields` opts into the precise mechanism. Live-tested
-(`createShelfWithInjectedTopic` narrows away a required `topic` and injects it); package-tested
-(subtract / still-raise / class-validation / runtime agreement + presence).
+guard always runs and subtracts only the declared injected fields, so a dropped required field
+not declared injected still raises. Each injected name is validated at class creation against
+the same writable schema-time field basis as generated input: typos, `read_only` fields, and
+`HiddenField` instances fail loud. The schema-time spec is stashed in
+`_injected_field_specs`.
+
+The framework builds serializer `data` itself from decoded client data plus the values supplied
+exclusively by `get_serializer_injected_data(info, *, data, instance=None)`, whose keys must
+exactly match `Meta.injected_fields`. Runtime acceptance is proven by
+`_assert_injected_field_agreement`, which applies the same present / writable / source / kind /
+relation-model checks an input field receives. Live-tested (`createShelfWithInjectedTopic`
+narrows away a required `topic` and injects it); package-tested (subtraction / still-raise /
+writable class validation / exact keys / runtime agreement).
 
 ### rev6 #10 — Fingerprint `get_serializer_for_schema()` for determinism
 

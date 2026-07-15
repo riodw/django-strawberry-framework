@@ -20,6 +20,7 @@ model's ``unique_shelf_code_per_branch`` constraint surfaces through DRF's
 """
 
 from rest_framework import serializers
+from rest_framework.validators import UniqueValidator
 
 # The serializer-field converter-registry surface (spec-039 rev6 #11) is resolved by
 # NAME through the root ``__getattr__`` (the DRF soft-dependency guard), like
@@ -390,10 +391,11 @@ class OwnerStampShelfSerializer(serializers.ModelSerializer):
     ``topic`` is declared ``required=True`` (the ``Shelf.topic`` column is ``blank=True,
     default=""``, so DRF would otherwise make it optional). A ``SerializerMutation`` can then
     narrow the input to ``("code", "branch")`` - dropping the required ``topic`` - and declare
-    ``Meta.injected_fields = ("topic",)`` + a ``get_serializer_kwargs`` override that supplies
-    ``topic`` into ``data``. The create-required guard SUBTRACTS the declared injected field
-    (so the narrowing does not raise), and the resolver VERIFIES the override actually supplied
-    it - the auditable, per-field replacement for the old blanket waiver.
+    ``Meta.injected_fields = ("topic",)`` + a ``get_serializer_injected_data`` override that
+    supplies ``topic``; the framework merges it into the serializer data itself. The
+    create-required guard SUBTRACTS the declared injected field (so the narrowing does not
+    raise), and the resolver enforces the hook's keys exactly match the declaration - the
+    auditable, per-field replacement for the removed blanket waiver.
     """
 
     topic = serializers.CharField(required=True)
@@ -433,6 +435,35 @@ class BookSerializer(serializers.ModelSerializer):
     class Meta:
         model = Book
         fields = ("title", "subtitle", "circulation_status")
+
+
+class BookGenresSerializer(serializers.ModelSerializer):
+    """A ``Book`` serializer exposing the ``genres`` M2M for the update list-relation matrix (hardening).
+
+    Backs the live proofs that a serializer UPDATE's list relation follows the
+    replace-on-provide / unchanged-on-omit contract: DRF's own ``ModelSerializer.update``
+    ``set()``s a provided ``genres`` list atomically inside the pipeline transaction, and an
+    omitted ``genres`` (``partial=True``) leaves the stored set untouched. ``genres`` targets
+    the Relay-Node ``GenreType`` primary, so the generated input carries a ``GlobalID`` list.
+    """
+
+    class Meta:
+        model = Book
+        fields = ("title", "genres")
+
+
+class AliasValidatedBookSerializer(serializers.ModelSerializer):
+    """A ``Book`` serializer whose title validator performs a queryset lookup."""
+
+    title = serializers.CharField(
+        validators=[
+            UniqueValidator(queryset=Book.objects.all()),
+        ],
+    )
+
+    class Meta:
+        model = Book
+        fields = ("title",)
 
 
 class NestedShelfSerializer(serializers.ModelSerializer):

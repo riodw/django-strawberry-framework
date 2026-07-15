@@ -166,6 +166,16 @@ def _channels_request_adapter(context: Any) -> ChannelsRequestAdapter | None:
     return ChannelsRequestAdapter(request, scope)
 
 
+def _request_from_context(context: Any) -> Any | None:
+    """Resolve every supported Django or Channels request context shape."""
+    request = getattr(context, "request", None)
+    if request is not None:
+        return request
+    if isinstance(context, HttpRequest):
+        return context
+    return _channels_request_adapter(context)
+
+
 def request_from_info(info: Any, *, family_label: str) -> Any:
     """Resolve the Django request from ``info.context``.
 
@@ -188,14 +198,9 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
         raise ConfigurationError(
             f"{family_label} requires `info.context`; received `info` without a context.",
         )
-    request = getattr(context, "request", None)
+    request = _request_from_context(context)
     if request is not None:
         return request
-    if isinstance(context, HttpRequest):
-        return context
-    channels_request = _channels_request_adapter(context)
-    if channels_request is not None:
-        return channels_request
     raise ConfigurationError(
         f"{family_label} could not resolve a Django HttpRequest from `info.context` "
         f"(got {type(context).__name__}). Expected `info.context.request`, a bare "

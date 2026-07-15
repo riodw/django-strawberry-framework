@@ -6488,7 +6488,10 @@ def test_serializer_save_kwargs_rejects_renamed_source_shadow_over_http():
     payload = response.json()
     assert payload["data"] is None
     assert payload["errors"][0]["path"] == ["createShelfWithRenamedSaveKwargsCollision"]
-    assert "'code' (input 'shelfCode')" in payload["errors"][0]["message"]
+    # The hardened check compares against the ACTUAL validated_data keys (the resolved
+    # `source="code"` key), not a reconstruction from the input specs.
+    assert "['code']" in payload["errors"][0]["message"]
+    assert "validated_data" in payload["errors"][0]["message"]
     assert not models.Shelf.objects.filter(
         code__in=("client-value", "server-shadow"),
         branch=branch,
@@ -6524,6 +6527,177 @@ def test_serializer_update_with_select_for_update_over_http():
     assert result["node"]["title"] == "AfterLock"
     book.refresh_from_db()
     assert book.title == "AfterLock"
+
+
+@pytest.mark.django_db
+def test_serializer_update_provided_genres_list_replaces_complete_set_over_http():
+    """A PROVIDED list relation on a serializer update replaces the complete stored set.
+
+    ``UpdateBookGenresViaSerializer`` exposes the ``genres`` M2M; DRF's own ``update``
+    ``set()``s the provided list inside the pipeline transaction, so the stored set after the
+    write is EXACTLY the provided membership - prior members not in the list are detached.
+    """
+    from apps.library.schema import BookType, GenreType
+
+    shelf = _seed_shelf()
+    old_genre = models.Genre.objects.create(name="ReplaceOld")
+    new_genre = models.Genre.objects.create(name="ReplaceNew")
+    book = models.Book.objects.create(title="GenreSwap", shelf=shelf)
+    book.genres.set([old_genre])
+
+    response = _post_graphql(
+        "mutation($id: ID!, $d: BookGenresSerializerPartialInput!) { "
+        "updateBookGenresViaSerializer(id: $id, data: $d) { "
+        "node { title } errors { field messages } } }",
+        variables={
+            "id": global_id_for(BookType, book.pk),
+            "d": {"genres": [global_id_for(GenreType, new_genre.pk)]},
+        },
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["updateBookGenresViaSerializer"]["errors"] == []
+    assert list(book.genres.values_list("name", flat=True)) == ["ReplaceNew"]
+
+
+@pytest.mark.django_db
+def test_serializer_update_omitted_genres_leaves_relation_unchanged_over_http():
+    """An OMITTED list relation on a serializer update leaves the stored set untouched (hardening).
+
+    The partial-update contract: updating only ``title`` (no ``genres`` key in the input)
+    must not clear or rewrite the M2M - ``partial=True`` means unsent fields keep their
+    stored values.
+    """
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    kept = models.Genre.objects.create(name="KeptGenre")
+    book = models.Book.objects.create(title="KeepGenres", shelf=shelf)
+    book.genres.set([kept])
+
+    response = _post_graphql(
+        "mutation($id: ID!, $d: BookGenresSerializerPartialInput!) { "
+        "updateBookGenresViaSerializer(id: $id, data: $d) { "
+        "node { title } errors { field messages } } }",
+        variables={"id": global_id_for(BookType, book.pk), "d": {"title": "TitleOnly"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    assert payload["data"]["updateBookGenresViaSerializer"]["node"]["title"] == "TitleOnly"
+    # The omitted M2M is unchanged.
+    assert list(book.genres.values_list("name", flat=True)) == ["KeptGenre"]
+
+
+@pytest.mark.django_db
+def test_serializer_update_genres_empty_and_duplicates_have_set_semantics_over_http():
+    """Duplicate members normalize to one relation and an explicit empty list clears it."""
+    from apps.library.schema import BookType, GenreType
+
+    shelf = _seed_shelf()
+    genre = models.Genre.objects.create(name="SetSemanticsGenre")
+    book = models.Book.objects.create(title="SetSemanticsBook", shelf=shelf)
+    mutation = (
+        "mutation($id: ID!, $d: BookGenresSerializerPartialInput!) { "
+        "updateBookGenresViaSerializer(id: $id, data: $d) { "
+        "node { title } errors { field messages } } }"
+    )
+    book_id = global_id_for(BookType, book.pk)
+    genre_id = global_id_for(GenreType, genre.pk)
+
+    duplicate_response = _post_graphql(
+        mutation,
+        variables={"id": book_id, "d": {"genres": [genre_id, genre_id]}},
+    )
+    duplicate_payload = duplicate_response.json()
+    assert "errors" not in duplicate_payload, duplicate_payload
+    assert duplicate_payload["data"]["updateBookGenresViaSerializer"]["errors"] == []
+    assert list(book.genres.values_list("pk", flat=True)) == [genre.pk]
+
+    clear_response = _post_graphql(
+        mutation,
+        variables={"id": book_id, "d": {"genres": []}},
+    )
+    clear_payload = clear_response.json()
+    assert "errors" not in clear_payload, clear_payload
+    assert clear_payload["data"]["updateBookGenresViaSerializer"]["errors"] == []
+    assert not book.genres.exists()
+
+
+@pytest.mark.django_db
+def test_serializer_update_invalid_or_hidden_genre_preserves_prior_set_over_http(monkeypatch):
+    """Invalid and visibility-hidden members fail before M2M mutation, preserving the prior set."""
+    from apps.library.schema import BookType, GenreType
+
+    shelf = _seed_shelf()
+    kept = models.Genre.objects.create(name="FailureKeptGenre")
+    hidden = models.Genre.objects.create(name="FailureHiddenGenre")
+    book = models.Book.objects.create(title="FailurePreservesGenres", shelf=shelf)
+    book.genres.set([kept])
+    mutation = (
+        "mutation($id: ID!, $d: BookGenresSerializerPartialInput!) { "
+        "updateBookGenresViaSerializer(id: $id, data: $d) { "
+        "node { title } errors { field messages codes } } }"
+    )
+    book_id = global_id_for(BookType, book.pk)
+
+    invalid_response = _post_graphql(
+        mutation,
+        variables={
+            "id": book_id,
+            "d": {"genres": [global_id_for(GenreType, hidden.pk + 100_000)]},
+        },
+    )
+    invalid_result = invalid_response.json()["data"]["updateBookGenresViaSerializer"]
+    assert invalid_result["node"] is None
+    assert invalid_result["errors"][0]["field"] == "genres"
+    assert list(book.genres.values_list("pk", flat=True)) == [kept.pk]
+
+    def _hide_genre(cls, queryset, info):
+        del cls, info
+        return queryset.exclude(pk=hidden.pk)
+
+    monkeypatch.setattr(GenreType, "get_queryset", classmethod(_hide_genre))
+    hidden_response = _post_graphql(
+        mutation,
+        variables={"id": book_id, "d": {"genres": [global_id_for(GenreType, hidden.pk)]}},
+    )
+    hidden_result = hidden_response.json()["data"]["updateBookGenresViaSerializer"]
+    assert hidden_result["node"] is None
+    assert hidden_result["errors"][0]["field"] == "genres"
+    assert list(book.genres.values_list("pk", flat=True)) == [kept.pk]
+
+
+@pytest.mark.django_db
+def test_serializer_update_substituted_instance_is_rejected_without_writes_over_http():
+    """A hook substituting the located instance is a top-level error and NEITHER row is written (hardening).
+
+    ``UpdateBookSubstitutingInstance.get_serializer_kwargs`` returns a DIFFERENT ``Book``
+    than the located, authorized row - the "row A's authorization writes row B" bypass.
+    ``instance`` is framework-owned, so the substitution is a ``ConfigurationError`` over
+    ``/graphql/`` and no write reaches either row.
+    """
+    from apps.library.schema import BookType
+
+    shelf = _seed_shelf()
+    addressed = models.Book.objects.create(title="AddressedRow", shelf=shelf)
+    victim = models.Book.objects.create(title="VictimRow", shelf=shelf)
+
+    response = _post_graphql(
+        "mutation($id: ID!, $d: BookSerializerPartialInput!) { "
+        "updateBookSubstitutingInstance(id: $id, data: $d) { "
+        "node { title } errors { field messages } } }",
+        variables={"id": global_id_for(BookType, addressed.pk), "d": {"title": "Hijacked"}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "different `instance`" in payload["errors"][0]["message"]
+    addressed.refresh_from_db()
+    victim.refresh_from_db()
+    assert addressed.title == "AddressedRow"
+    assert victim.title == "VictimRow"
 
 
 @pytest.mark.django_db

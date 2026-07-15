@@ -110,6 +110,7 @@ from ..utils.write_transaction import (
     forced_update_conflict_errors,
     not_updated_exceptions,
     pin_write_queryset,
+    pipeline_alias_guard,
     require_managed_write,
     require_write_pipeline,
     write_pipeline,
@@ -229,28 +230,54 @@ def run_write_pipeline_sync(
             # is known cannot be honored mid-pipeline - fail closed before writing.
             check_instance_write_alias(model, using, instance)
 
-        # Authorize exactly once - AFTER the target is located + locked, BEFORE the
-        # flavor decode (the security invariant): the decode issues
-        # visibility-scoped ``get_queryset`` queries, so running it pre-auth would
-        # let an unauthorized caller probe related-object visibility by id.
-        authorize_or_raise(mutation_cls, info, meta.operation, data, instance=instance)
+        # The IMMUTABLE authorization snapshot - captured immediately after the
+        # locate, BEFORE the permission hook (the first consumer-controlled code)
+        # can touch the mutable located instance. Everything downstream that
+        # claims "the authorized row" compares against THIS value, never against
+        # the live ``instance.pk`` a hook could have re-pointed.
+        authorized_pk = None if instance is None else instance.pk
+        require_write_pipeline().authorized_pk = authorized_pk
 
-        decoded = decode_step(instance)
-        if isinstance(decoded, list):
-            return _error_payload(decoded)
+        # The alias guard spans EVERY consumer-reachable phase (permission,
+        # decode, validation, write, re-fetch): any SQL statement on a
+        # non-pinned connection - read or write, signal-ful or signal-less -
+        # raises before it executes, so a hook cannot write (or probe) through
+        # another database and escape the pinned transaction.
+        with pipeline_alias_guard(mutation_cls.__name__, using):
+            # Authorize exactly once - AFTER the target is located + locked, BEFORE
+            # the flavor decode (the security invariant): the decode issues
+            # visibility-scoped ``get_queryset`` queries, so running it pre-auth
+            # would let an unauthorized caller probe related-object visibility by id.
+            authorize_or_raise(mutation_cls, info, meta.operation, data, instance=instance)
 
-        saved = write_step(instance, decoded)
-        if isinstance(saved, list):
-            return _error_payload(saved)
+            decoded = decode_step(instance)
+            if isinstance(decoded, list):
+                return _error_payload(decoded)
 
-        obj = refetch_optimized(primary_type, saved.pk, info, alias=using, force_load=False)
-        if obj is None:
-            # The written row vanished between the save and the pk re-fetch (a
-            # concurrent delete this transaction could not see): a success payload
-            # would lie, so it is the in-band ``conflict`` envelope - which also
-            # rolls this transaction back (the disappearing-row contract).
-            return _error_payload([conflict_error()])
-        return build_payload(payload_cls, slot, obj, [])
+            saved = write_step(instance, decoded)
+            if isinstance(saved, list):
+                return _error_payload(saved)
+
+            # The flavor-independent backstop over the snapshot: whatever the
+            # flavor's own validation concluded, an update result whose pk
+            # drifted from the authorized snapshot is never re-fetched into a
+            # success payload.
+            if is_update and str(saved.pk) != str(authorized_pk):
+                raise ConfigurationError(
+                    f"{mutation_cls.__name__}: the write step returned "
+                    f"{model.__name__} pk={saved.pk!r}, but the located, authorized row is "
+                    f"pk={authorized_pk!r}; an update must write the row that was "
+                    "authorized, never a substituted one.",
+                )
+
+            obj = refetch_optimized(primary_type, saved.pk, info, alias=using, force_load=False)
+            if obj is None:
+                # The written row vanished between the save and the pk re-fetch (a
+                # concurrent delete this transaction could not see): a success payload
+                # would lie, so it is the in-band ``conflict`` envelope - which also
+                # rolls this transaction back (the disappearing-row contract).
+                return _error_payload([conflict_error()])
+            return build_payload(payload_cls, slot, obj, [])
 
 
 def error_payload_builder(payload_cls: type, slot: str, using: str) -> Any:
@@ -1221,15 +1248,40 @@ def _run_delete(
         return _error_payload([not_found_error()])
     check_instance_write_alias(model_for(primary_type), alias, instance)
 
-    authorize_or_raise(mutation_cls, info, "delete", data=None, instance=instance)
+    # The immutable snapshot BEFORE the permission hook (consumer code) can
+    # touch the mutable located instance, mirroring the create/update pipeline.
+    authorized_pk = instance.pk
+    require_write_pipeline().authorized_pk = authorized_pk
 
-    snapshot = refetch_optimized(primary_type, instance.pk, info, alias=alias, force_load=True)
-    delete_errors = _delete_or_field_errors(instance)
-    if delete_errors is not None:
-        # The centralized envelope marks the transaction for rollback, so any
-        # visibility-hook or custom-``delete()`` side effect is discarded with it.
-        return _error_payload(delete_errors)
-    return build_payload(payload_cls, slot, snapshot, [])
+    # The alias guard spans the consumer-reachable phases (permission,
+    # snapshot re-fetch with its visibility hooks, the delete itself): any SQL
+    # statement on a non-pinned connection raises before it executes.
+    with pipeline_alias_guard(mutation_cls.__name__, alias):
+        authorize_or_raise(mutation_cls, info, "delete", data=None, instance=instance)
+
+        # A permission hook that re-pointed ``instance.pk`` would make
+        # ``instance.delete()`` remove a row that was never authorized (and the
+        # payload snapshot describe it); fail closed on any drift.
+        if str(instance.pk) != str(authorized_pk):
+            raise ConfigurationError(
+                f"{mutation_cls.__name__}: the located instance's pk changed from "
+                f"{authorized_pk!r} to {instance.pk!r} during authorization; a delete must "
+                "remove the row that was located and authorized, never a substituted one.",
+            )
+
+        snapshot = refetch_optimized(
+            primary_type,
+            authorized_pk,
+            info,
+            alias=alias,
+            force_load=True,
+        )
+        delete_errors = _delete_or_field_errors(instance)
+        if delete_errors is not None:
+            # The centralized envelope marks the transaction for rollback, so any
+            # visibility-hook or custom-``delete()`` side effect is discarded with it.
+            return _error_payload(delete_errors)
+        return build_payload(payload_cls, slot, snapshot, [])
 
 
 def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:

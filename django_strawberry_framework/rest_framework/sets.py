@@ -45,8 +45,7 @@ resolver module did not exist yet (an inert Slice-2 declaration inherited
 ``DjangoMutation``'s callable pair; Slice 3 lands BOTH the overrides here AND the
 resolver bodies, the same slice/resolver-existence pairing the form flavor used in
 ``forms/sets.py``). The default ``get_serializer_kwargs`` construction hook ships
-here so ``build_input``'s ``_hook_overridden`` waiver has a base to compare against
-(the ``forms/sets.py`` ``get_form_kwargs`` precedent); the Slice-3 resolver consumes
+here as the constructor-only customization seam; the Slice-3 resolver consumes
 ``get_serializer_kwargs`` (the hook the spec D8 step 4 names) and OWNS the framework
 merge / ``partial`` injection / ``context["request"]`` / H3 ``ConfigurationError``
 rules on top of its return, so those framework-owned invariants never live in the
@@ -70,7 +69,6 @@ from ..mutations.sets import (
     NON_DELETE_OPERATION_INPUT_KIND,
     NON_DELETE_WRITE_OPERATIONS,
     DjangoMutation,
-    _hook_overridden,
     _ValidatedMutationMeta,
     build_and_stash_input,
     construction_kwargs,
@@ -96,12 +94,15 @@ from .inputs import (
     resolve_effective_serializer_fields,
     resolve_injected_field_specs,
     resolve_optional_fields,
+    runtime_validated_data_fields,
     serializer_schema_fingerprint,
+    writable_serializer_fields,
+    writable_source_collisions,
 )
 from .inputs import (
     get_serializer_for_schema as _default_serializer_schema_fields,
 )
-from .serializer_converter import is_nested_serializer_field
+from .serializer_converter import is_nested_serializer_field, nested_serializer_child
 
 # The serializer ``Meta``'s allowed-key set (spec-039 Decision 6). Disjoint from
 # ``036``'s ``_ALLOWED_MUTATION_META_KEYS`` and ``038``'s form sets: a serializer
@@ -279,6 +280,52 @@ def _validate_serializer_nested_fields(
             "remove Meta.nested_fields.",
         )
     return normalized
+
+
+def _assert_nested_schema_source_ownership(
+    name: str,
+    field_map: Mapping[str, serializers.Field],
+    nested_fields: Mapping[str, NestedSerializerConfig] | None,
+    *,
+    apply_defaults: bool,
+    path: str = "",
+) -> None:
+    """Recursively reject source collisions in explicitly opted-in nested inputs."""
+    for field_name, config in (nested_fields or {}).items():
+        child_serializer, _many = nested_serializer_child(field_map[field_name])
+        child_fields = dict(child_serializer.fields)
+        effective = resolve_effective_serializer_fields(
+            type(child_serializer),
+            fields=config.fields,
+            exclude=config.exclude,
+            field_map=child_fields,
+        )
+        runtime_fields = runtime_validated_data_fields(
+            child_fields,
+            supplied_fields=set(effective),
+            apply_defaults=apply_defaults,
+        )
+        colliding = writable_source_collisions(
+            {child_name: field.source for child_name, field in runtime_fields.items()},
+        )
+        child_path = f"{path}.{field_name}" if path else field_name
+        if colliding:
+            detail = "; ".join(
+                f"source {source!r} <- fields {owners!r}"
+                for source, owners in sorted(colliding.items())
+            )
+            raise ConfigurationError(
+                f"SerializerMutation {name}: nested serializer path {child_path!r} has multiple "
+                f"writable fields binding one source: {detail}. DRF would silently discard one "
+                "validated value. Give every nested runtime writable field a distinct source.",
+            )
+        _assert_nested_schema_source_ownership(
+            name,
+            child_fields,
+            config.nested_fields,
+            apply_defaults=apply_defaults,
+            path=child_path,
+        )
 
 
 class SerializerMutation(DjangoMutation):
@@ -464,26 +511,65 @@ class SerializerMutation(DjangoMutation):
             flavor="SerializerMutation",
         )
         resolve_optional_fields(serializer_class, optional_fields, tuple(effective))
-        # ``Meta.injected_fields`` (rev6 #2): the auditable, per-field replacement for the
-        # blanket get_serializer_kwargs waiver. Normalized here (bare-string / duplicate
-        # rejected via the shared helper); ``build_input`` subtracts these from the
-        # create-required guard and the resolver verifies they reach the serializer's data.
+        # ``Meta.injected_fields`` (rev6 #2): the auditable, per-field server-data contract.
+        # Normalized here (bare-string / duplicate rejected via the shared helper);
+        # ``build_input`` subtracts these from the create-required guard and the resolver
+        # verifies they reach the serializer's data.
         injected_fields = normalize_field_name_sequence(
             getattr(meta, "injected_fields", None),
             label="injected_fields",
             flavor="SerializerMutation",
         )
-        # rev6 rev2 P1: an injected field must be a real SCHEMA-TIME field (a required field the
-        # input narrowed away), validated at class creation so a typo fails loud here rather than
-        # silently waiving nothing. The runtime resolver then re-checks it against serializer.fields.
+        # rev6 rev2 P1: an injected field must be a real WRITABLE SCHEMA-TIME field (a required
+        # field the input narrowed away), validated at class creation so a typo or non-writable
+        # declaration fails loud here. The runtime resolver then re-checks it against
+        # serializer.fields.
         if injected_fields:
-            unknown_injected = [name for name in injected_fields if name not in field_map]
+            writable = writable_serializer_fields(field_map)
+            unknown_injected = [name for name in injected_fields if name not in writable]
             if unknown_injected:
                 raise ConfigurationError(
-                    f"SerializerMutation {name}.Meta.injected_fields names field(s) not in the "
-                    f"schema-time field map: {sorted(unknown_injected)!r}. Inject only fields the "
-                    "serializer's get_serializer_for_schema() exposes.",
+                    f"SerializerMutation {name}.Meta.injected_fields names field(s) that are "
+                    f"unknown or non-writable at schema time: {sorted(unknown_injected)!r}. "
+                    "Injected fields must use the same writable field basis as generated input "
+                    "fields; read_only and HiddenField entries cannot accept injected data.",
                 )
+            # An injected field is server-supplied by definition: it must be ABSENT from the
+            # generated GraphQL input (narrowed away), or the client's value and the hook's
+            # value would silently compete for one serializer key. Fail loud at class creation.
+            exposed_injected = sorted(set(injected_fields) & set(effective))
+            if exposed_injected:
+                raise ConfigurationError(
+                    f"SerializerMutation {name}.Meta.injected_fields names field(s) "
+                    f"{exposed_injected!r} that are still in the generated GraphQL input; an "
+                    "injected field is server-supplied and must be narrowed out of the input "
+                    "(Meta.fields / Meta.exclude). Remove it from the input or from "
+                    "Meta.injected_fields.",
+                )
+        # A runtime write ``source`` must be UNIQUE across EVERY field that can
+        # contribute to ``validated_data``, not merely the generated input + injected
+        # fields. On creates, ``HiddenField`` and narrowed-out fields with defaults
+        # also contribute and can silently replace client data under the same source.
+        # Fail loud before DRF's last-write-wins behavior can discard either value.
+        runtime_fields = runtime_validated_data_fields(
+            field_map,
+            supplied_fields=set(effective) | set(injected_fields or ()),
+            apply_defaults=operation == CREATE,
+        )
+        colliding = writable_source_collisions(
+            {field_name: field.source for field_name, field in runtime_fields.items()},
+        )
+        if colliding:
+            detail = "; ".join(
+                f"source {src!r} <- fields {owners!r}" for src, owners in sorted(colliding.items())
+            )
+            raise ConfigurationError(
+                f"SerializerMutation {name}: multiple writable fields bind one serializer "
+                f"source: {detail}. DRF resolves a source collision last-write-wins, so one "
+                "field's validated value would silently replace another's (including values "
+                "from HiddenField or narrowed-out field defaults). Give every runtime writable "
+                "field a distinct source.",
+            )
         # ``Meta.select_for_update`` (rev6 #14, expanded by BETA-055): validated by the
         # shared model-backed-flavor validator - default TRUE (locked writes are the
         # safe posture; an explicit ``False`` opts into weaker concurrency), applied as
@@ -500,6 +586,12 @@ class SerializerMutation(DjangoMutation):
             operation,
             field_map,
             getattr(meta, "nested_fields", None),
+        )
+        _assert_nested_schema_source_ownership(
+            name,
+            field_map,
+            nested_fields,
+            apply_defaults=operation == CREATE,
         )
 
         permission_classes = _validate_mutation_permission_classes(
@@ -608,11 +700,10 @@ class SerializerMutation(DjangoMutation):
         (the create-required guard runs in ``_build`` per declaration, before the dedupe).
 
         The create-required-narrowing guard (``guard_create_required_serializer_fields``)
-        runs PER declaration, BEFORE the descriptor dedupe, and is WAIVED when the
-        concrete mutation overrides ``get_serializer_kwargs`` (spec-039 Slice 2 waiver via
-        the promoted ``_hook_overridden``): the override injects whatever fields a
-        narrowing dropped, so the guard trusts it. The Slice-1 reverse-map ``field_specs``
-        are stashed on the mutation (``cls._input_field_specs``) for the Slice-3 decode.
+        runs PER declaration, BEFORE descriptor dedupe. ``Meta.injected_fields`` is its only
+        field-level subtraction; constructor-hook overrides never suppress it. The Slice-1
+        reverse-map ``field_specs`` are stashed on the mutation
+        (``cls._input_field_specs``) for the Slice-3 decode.
         """
         del (
             primary_type
@@ -637,25 +728,19 @@ class SerializerMutation(DjangoMutation):
                 field_map=field_map,
             ),
         )
-        # The create-required guard (spec-039 rev6 #2). ``Meta.injected_fields`` is the
-        # SANCTIONED, auditable path: when declared, the guard RUNS but subtracts those fields
-        # (a dropped required field NOT declared injected still raises), and the resolver
-        # verifies they reach the serializer's data. The old blanket
-        # ``get_serializer_kwargs``-override waiver survives ONLY as an explicitly-named unsafe
-        # legacy escape hatch - it fully skips the guard, but ONLY when ``injected_fields`` is
-        # NOT declared (declaring ``injected_fields`` opts into the precise mechanism). The
-        # partial (update) shape is never create-required guarded (all fields optional).
-        legacy_waiver = (
-            _hook_overridden(cls, SerializerMutation, "get_serializer_kwargs")
-            and not meta.injected_fields
-        )
+        # The create-required guard (spec-039 rev6 #2, hardened): ``Meta.injected_fields`` is
+        # the ONLY sanctioned path for narrowing away a required create field. The guard ALWAYS
+        # runs, subtracting only the declared injected fields (a dropped required field NOT
+        # declared injected raises), and the resolver builds the injection itself from
+        # ``get_serializer_injected_data`` (exact-match keys). The partial (update) shape is
+        # never create-required guarded (all optional).
 
         def _build() -> tuple[type, Any]:
             # The create-required guard runs PER DECLARATION, BEFORE the per-shape
-            # descriptor dedupe (the descriptor cache key excludes the waiver / injection
-            # state), so a waiving mutation that materializes a narrowed shape FIRST cannot
-            # suppress the guard for a later non-waiving mutation reusing the same cached shape.
-            if operation_kind == CREATE and not legacy_waiver:
+            # descriptor dedupe (the descriptor cache key excludes the injection state), so a
+            # mutation that materializes a narrowed shape FIRST cannot suppress the guard for
+            # a later mutation reusing the same cached shape.
+            if operation_kind == CREATE:
                 guard_create_required_serializer_fields(
                     serializer_class,
                     effective_names,
@@ -712,42 +797,58 @@ class SerializerMutation(DjangoMutation):
         data: Any,
         instance: Any = None,
     ) -> dict[str, Any]:
-        """The default serializer-construction kwargs (the Slice-3 resolver consumes this).
+        """The default serializer-construction kwargs - CONSTRUCTOR-ONLY (the Slice-3 resolver consumes this).
 
         The graphene ``get_serializer_kwargs`` parity seam (spec-039 Decision 7 step 4 /
-        Decision 8). The default returns ``{"data": data}`` (create) or ``{"data": data,
-        "instance": instance}`` (update, when ``instance`` is non-``None``). A consumer
-        overrides this to add / replace CONSTRUCTOR kwargs (an extra ``context`` key, a
-        constructor argument like ``tenant``), or to inject a narrowed-away required field's
-        VALUE into ``data``.
+        Decision 8), hardened to a CONSTRUCTOR-ONLY hook: a consumer overrides this to add
+        constructor kwargs (an extra ``context`` key, a constructor argument like ``tenant``) -
+        never to reshape the write itself.
 
-        **Narrowing away a required field: use ``Meta.injected_fields`` (rev6 #2).** The
-        auditable, per-field contract is ``Meta.injected_fields`` - it names the fields this
-        override supplies, so the create-required guard subtracts ONLY those (a dropped required
-        field NOT declared injected still fails loud), and the resolver verifies at runtime that
-        each declared injected field reached the data AND agrees with the runtime serializer
-        (present / writable / source / kind / relation-model). The OLD "overriding this hook
-        waives ALL required-field coverage" behavior survives ONLY as an explicitly-named
-        UNSAFE legacy escape hatch in ``build_input`` (``legacy_waiver``): it fully skips the
-        guard, but ONLY when ``Meta.injected_fields`` is not declared. Prefer
-        ``Meta.injected_fields``.
+        **``data``, ``instance``, ``partial``, ``context["request"]``, and
+        ``context["write_alias"]`` are FRAMEWORK-OWNED.** The resolver's
+        ``_merged_serializer_kwargs`` builds the serializer data itself (decoded client data +
+        the ``get_serializer_injected_data`` injection), passes this hook a COPY, and raises a
+        ``ConfigurationError`` on any conflicting reserved return: a ``data`` that is not the
+        EXACT clone object the hook received (identity via an omission sentinel - an explicit
+        ``data=None`` or a rebuilt-equal copy is rejected too), an ``instance`` other than the
+        located + authorized row (same sentinel discipline, so an explicit ``instance=None``
+        on update is rejected), any ``partial``, a different ``context["request"]`` object, or
+        a conflicting ``context["write_alias"]``. Omission or the identical pass-through (this
+        default's shape) is tolerated. The framework also sets ``context["write_alias"]`` to the
+        pipeline's pinned write alias so custom serializer code routes any extra queries into
+        the SAME transaction.
 
-        **The non-overridable framework invariants are NOT set here.** The Slice-3
-        resolver's ``_merged_serializer_kwargs`` merges this return UNDER ``partial=True``
-        (update only) and ``context["request"]`` (the framework request - the actor the
-        inherited ``check_permission`` seam authorized against), spec-039 H3, so those
-        invariants never live in the consumer-overridable hook (a hook returning
-        ``partial`` itself, or a DIFFERENT ``context["request"]`` object, is a
-        ``ConfigurationError`` there). This default never sets ``partial`` or
-        ``context`` - the framework owns both - and ``build_input``'s legacy-waiver check
-        (``_hook_overridden(cls, SerializerMutation, "get_serializer_kwargs")``) compares
-        against it (the ``forms/sets.py`` ``get_form_kwargs`` precedent).
+        **Narrowing away a required field: use ``Meta.injected_fields`` +
+        ``get_serializer_injected_data``.** Injecting values by rewriting ``data`` here is no
+        longer possible.
         """
         del info  # the default ignores ``info``; an override may consult it.
         # The "add ``instance`` only on update" clause is single-sited in
         # ``mutations/sets.py::construction_kwargs`` (spec-039 Md7), shared with the
         # form ``get_form_kwargs`` default.
         return construction_kwargs(data=data, instance=instance)
+
+    def get_serializer_injected_data(
+        self,
+        info: Any,
+        *,
+        data: Any,
+        instance: Any = None,
+    ) -> dict[str, Any]:
+        """Supply the ``Meta.injected_fields`` values merged into the serializer data (hardening).
+
+        The SANCTIONED injection seam: the resolver builds the final serializer data as
+        decoded client data + THIS hook's return, and the returned keys must EXACTLY match
+        ``Meta.injected_fields`` (a missing declared field or an undeclared extra key is a
+        ``ConfigurationError`` - injection is an auditable, per-field contract, never a
+        blanket rewrite). An injected field must be narrowed OUT of the GraphQL input
+        (enforced at class creation), so the merge can never overwrite a client value.
+        ``data`` is a COPY of the decoded client data (consult it freely; mutating it has no
+        effect); ``instance`` is the located row on update (``None`` on create). The default
+        injects nothing - a mutation declaring ``Meta.injected_fields`` MUST override this.
+        """
+        del info, data, instance  # the default injects nothing; an override may consult them.
+        return {}
 
     def get_serializer_save_kwargs(
         self,
@@ -763,9 +864,13 @@ class SerializerMutation(DjangoMutation):
         The default returns ``{}``; a consumer overrides it to inject save-time attributes. The
         Slice-3 resolver calls it inside the value-preserving ``save()`` closure (so the
         transaction / error-mapping / optimizer re-fetch behavior is preserved) and REJECTS a
-        save kwarg that shadows a serializer input field (it would silently override the client's
-        input). ``data`` is the decoded ``provided_data``; ``instance`` is the located row on
-        update (``None`` on create).
+        save kwarg that shadows ANY top-level ``serializer.validated_data`` key - a renamed
+        input, an injected field, a default, or a ``HiddenField`` alike (DRF merges save kwargs
+        over ``validated_data``, so a collision would silently replace the validated value).
+        ``data`` is a recursive plain-container CLONE of the decoded ``provided_data``
+        (its nested containers can be shared by identity with ``serializer.validated_data``,
+        so mutating the hook's argument must never rewrite a validated value); ``instance``
+        is the located row on update (``None`` on create).
         """
         del info, data, instance  # the default injects nothing; an override may consult them.
         return {}

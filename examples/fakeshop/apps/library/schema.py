@@ -1085,6 +1085,57 @@ class UpdateBookViaSerializerWithLock(SerializerMutation):
         permission_classes = []
 
 
+class UpdateBookGenresViaSerializer(SerializerMutation):
+    """Update a ``Book``'s ``genres`` M2M through a serializer (the list-relation contract, hardened).
+
+    The live tests prove, over ``/graphql/``: a PROVIDED ``genres`` list replaces the stored
+    set atomically (DRF's own ``update`` ``set()``s it inside the pipeline transaction); an
+    OMITTED ``genres`` leaves the relation unchanged (``partial=True``); every provided
+    member is visibility-decoded against ``GenreType`` and re-validated by DRF against the
+    pinned, visibility-scoped relation queryset.
+    """
+
+    class Meta:
+        serializer_class = serializers.BookGenresSerializer
+        operation = "update"
+        permission_classes = []
+
+
+class UpdateBookTitleWithAliasValidator(SerializerMutation):
+    """Exercise a queryset-backed DRF validator inside the pinned write transaction."""
+
+    class Meta:
+        serializer_class = serializers.AliasValidatedBookSerializer
+        operation = "update"
+        permission_classes = []
+
+
+class UpdateBookSubstitutingInstance(SerializerMutation):
+    """A DELIBERATELY-misconfigured update whose hook substitutes the located instance (hardening).
+
+    ``get_serializer_kwargs`` returns a DIFFERENT ``Book`` than the located, authorized row -
+    the exact "row A's authorization writes row B" bypass the hardening pass closes.
+    ``instance`` is framework-owned, so the live test proves the substitution is a top-level
+    ``ConfigurationError`` over ``/graphql/`` and NEITHER row is written.
+    """
+
+    class Meta:
+        serializer_class = serializers.BookSerializer
+        operation = "update"
+        permission_classes = []
+
+    def get_serializer_kwargs(
+        self,
+        info,
+        *,
+        data,
+        instance=None,
+    ):
+        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        kwargs["instance"] = models.Book.objects.exclude(pk=instance.pk).first()
+        return kwargs
+
+
 class CreateShelfWithSaveKwargs(SerializerMutation):
     """Create a ``Shelf`` injecting server-side data at ``serializer.save(**kwargs)`` (spec-039 rev6 #12).
 
@@ -1149,14 +1200,15 @@ class CreateShelfViaAltBranchesSerializer(SerializerMutation):
 
 
 class CreateShelfWithInjectedTopic(SerializerMutation):
-    """Create a ``Shelf`` narrowing away a REQUIRED ``topic`` and INJECTING it via ``Meta.injected_fields`` (spec-039 rev6 #2).
+    """Create a ``Shelf`` narrowing away a REQUIRED ``topic`` and INJECTING it via ``Meta.injected_fields`` (spec-039 rev6 #2, hardened).
 
     ``OwnerStampShelfSerializer`` declares ``topic`` ``required=True``; this mutation narrows
-    the input to ``("code", "branch")`` (dropping ``topic``) and declares
-    ``Meta.injected_fields = ("topic",)`` + a ``get_serializer_kwargs`` override that supplies
-    ``topic`` into ``data``. The create-required guard SUBTRACTS the declared injected field
-    (so the narrowing does not raise), and the resolver VERIFIES the override supplied it - the
-    auditable, per-field replacement for the old blanket ``get_serializer_kwargs`` waiver. The
+    the input to ``("code", "branch")`` (dropping ``topic``), declares
+    ``Meta.injected_fields = ("topic",)``, and supplies the value from the SANCTIONED
+    ``get_serializer_injected_data`` hook - the framework merges it into the serializer data
+    itself (a ``get_serializer_kwargs`` override can no longer rewrite ``data``). The
+    create-required guard SUBTRACTS the declared injected field (so the narrowing does not
+    raise), and the resolver enforces the hook's keys EXACTLY match the declaration. The
     live test posts ``{code, branchId}`` (no ``topic`` input) and reads the injected
     ``topic`` back off the written ``Shelf``.
     """
@@ -1168,18 +1220,16 @@ class CreateShelfWithInjectedTopic(SerializerMutation):
         injected_fields = ("topic",)
         permission_classes = []
 
-    def get_serializer_kwargs(
+    def get_serializer_injected_data(
         self,
         info,
         *,
         data,
         instance=None,
     ):
-        # Supply the narrowed-away required ``topic`` into the serializer data (the injection
-        # contract Meta.injected_fields declares).
-        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
-        kwargs["data"] = {**kwargs["data"], "topic": "stamped-by-injection"}
-        return kwargs
+        # Supply the narrowed-away required ``topic`` (the injection contract
+        # Meta.injected_fields declares - keys must match it exactly).
+        return {"topic": "stamped-by-injection"}
 
 
 class CreateBranchWithNestedShelves(SerializerMutation):
@@ -1306,6 +1356,11 @@ class Mutation:
     create_shelf_with_renamed_save_kwargs_collision = DjangoMutationField(
         CreateShelfWithRenamedSaveKwargsCollision,
     )
+    update_book_genres_via_serializer = DjangoMutationField(UpdateBookGenresViaSerializer)
+    update_book_title_with_alias_validator = DjangoMutationField(
+        UpdateBookTitleWithAliasValidator,
+    )
+    update_book_substituting_instance = DjangoMutationField(UpdateBookSubstitutingInstance)
     update_book_via_serializer_with_lock = DjangoMutationField(
         UpdateBookViaSerializerWithLock,
     )

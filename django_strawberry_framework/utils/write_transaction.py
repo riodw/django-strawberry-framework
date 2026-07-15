@@ -36,11 +36,13 @@ discipline instead of three drifting copies:
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+import threading
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from typing import Any
 
-from django.db import DEFAULT_DB_ALIAS, DatabaseError, router, transaction
+from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, router, transaction
+from django.db.models.signals import pre_save
 
 from ..exceptions import ConfigurationError
 from ..utils.errors import field_error
@@ -80,13 +82,22 @@ _UNMANAGED_SCHEMA_MESSAGE = (
 
 
 class WriteAliasContext:
-    """The pinned ``(alias, lock)`` pair one write operation runs under."""
+    """The pinned ``(alias, lock)`` pair one write operation runs under.
 
-    __slots__ = ("alias", "lock")
+    ``authorized_pk`` is the IMMUTABLE authorization snapshot the pipeline
+    captures immediately after the update locate - BEFORE the permission hook
+    or any other consumer-controlled code can touch the (mutable) located
+    instance. ``None`` for create (no located row). The write flavors compare
+    their saved result against THIS value, never against the live
+    ``instance.pk`` a hook could have re-pointed.
+    """
+
+    __slots__ = ("alias", "authorized_pk", "lock")
 
     def __init__(self, alias: str, *, lock: bool) -> None:
         self.alias = alias
         self.lock = lock
+        self.authorized_pk: Any = None
 
 
 def resolve_write_alias(model: type | None) -> str:
@@ -143,6 +154,75 @@ def write_pipeline(alias: str, *, lock: bool) -> Any:
         yield
     finally:
         _WRITE_PIPELINE.reset(token)
+
+
+@contextmanager
+def pipeline_alias_guard(owner: str, alias: str) -> Any:
+    """Reject EVERY SQL statement on a non-pinned connection for the guarded phase (fail closed).
+
+    Installed by the pipeline skeletons around the consumer-reachable phases
+    (permission hook, decode, validation, write, re-fetch), so consumer code
+    anywhere in the pipeline - not just inside ``serializer.save()`` - cannot
+    write through another database alias and escape the pinned transaction.
+
+    The guard deliberately does NOT classify statements as reads vs writes: a
+    lexical keyword test is not a reliable write boundary (leading SQL comments
+    defeat a prefix match, PostgreSQL ``EXPLAIN ANALYZE UPDATE`` executes the
+    write while starting with ``EXPLAIN``, and write-capable functions are
+    invoked through ``SELECT``). The defensible single-alias contract is that
+    the guarded phase talks to ONE database: every statement on a non-pinned
+    connection raises ``ConfigurationError`` before it executes. Django
+    connections are thread-local, so the ``execute_wrapper`` net polices only
+    this request's thread; the ``pre_save`` receiver (a global signal) is
+    thread-scoped explicitly, and exists only to give the ``Model.save()`` path
+    a clearer, earlier error - before Django even opens the cross-alias
+    connection.
+    """
+    guard_thread = threading.get_ident()
+
+    def _reject_statements(other: str) -> Any:
+        def _reject(
+            execute: Any,
+            sql: Any,
+            params: Any,
+            many: Any,
+            context: Any,
+        ) -> Any:
+            del execute, sql, params, many, context
+            raise ConfigurationError(
+                f"{owner}: a SQL statement was issued on database alias {other!r} during the "
+                f"mutation pipeline, but the mutation's transaction is pinned to {alias!r}. "
+                "The pipeline does not classify statements as reads or writes (comments, "
+                "EXPLAIN ANALYZE, and write-capable functions defeat lexical classification), "
+                "so EVERY statement on a non-pinned alias is rejected during the guarded "
+                "phase. Route all queries through the pinned write alias.",
+            )
+
+        return _reject
+
+    def _block_cross_alias_save(sender: Any, using: Any, **kwargs: Any) -> None:
+        del kwargs
+        if threading.get_ident() != guard_thread:
+            return
+        if using != alias:
+            raise ConfigurationError(
+                f"{owner}: the mutation pipeline attempted to save a {sender.__name__} row on "
+                f"database alias {using!r}, but the mutation's transaction is pinned to "
+                f"{alias!r}; a write outside the pinned alias would escape the transaction "
+                "(it could not be rolled back with the mutation). Route the custom save "
+                "through the pinned write alias.",
+            )
+
+    with ExitStack() as stack:
+        for other in connections:
+            if other == alias:
+                continue
+            stack.enter_context(connections[other].execute_wrapper(_reject_statements(other)))
+        pre_save.connect(_block_cross_alias_save, weak=False)
+        try:
+            yield
+        finally:
+            pre_save.disconnect(_block_cross_alias_save)
 
 
 def current_write_pipeline() -> WriteAliasContext | None:

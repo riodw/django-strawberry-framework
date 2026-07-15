@@ -22,6 +22,7 @@ from apps.glossary import models as glossary_models
 from apps.kanban import models
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import assert_graphql_success as _graphql_data
+from graphql_client import post_graphql
 from strawberry import relay
 
 
@@ -430,6 +431,39 @@ def test_filter_cards_by_self_referential_dependency():
             ],
         },
     )
+
+
+def _nested_dependency_filter(depth: int) -> str:
+    """Build a ``dependencies``-nested filter literal ``depth`` levels deep."""
+    body = "number: { exact: 21 }"
+    for _ in range(depth):
+        body = f"dependencies: {{ {body} }}"
+    return body
+
+
+@pytest.mark.django_db
+def test_deeply_nested_self_referential_dependency_filter_is_capped():
+    """A pathologically deep self-referential ``dependencies`` filter raises a
+    typed depth-cap error, not a raw ``RecursionError`` (report Defect 5).
+
+    ``CardFilter.dependencies`` is a real self-referential ``RelatedFilter``, so a
+    client can nest the same branch arbitrarily deep. Before the fix the
+    input-driven visibility derivation recursed once per level and blew the
+    Python stack (a 500). The shared traversal budget now caps it at
+    ``_MAX_LOGIC_DEPTH`` and surfaces a catchable ``ConfigurationError``.
+    """
+    _seed_board()
+    query = "query { allCards(filter: { " + _nested_dependency_filter(10) + " }) { title } }"
+    response = post_graphql(query)
+    # A typed cap error is a normal GraphQL error (HTTP 200 + ``errors``), never a
+    # 500 stack overflow.
+    assert response.status_code == 200
+    payload = response.json()
+    # A top-level resolver error nulls ``data`` and reports under ``errors``.
+    assert payload["data"] is None
+    messages = " ".join(error["message"] for error in payload["errors"]).lower()
+    assert "recursion" not in messages
+    assert "nesting" in messages or "depth" in messages
 
 
 @pytest.mark.django_db

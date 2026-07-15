@@ -1,4 +1,4 @@
-"""FilterSet tests for Meta collection, validation, sync/async apply, and tree overrides.
+"""FilterSet tests for Meta validation, relations, Relay fields, permissions, visibility, and logic trees.
 
 Covers the metaclass (`FilterSetMetaclass`), `FilterSet`'s class-creation
 behavior (cycle-safe `get_filters` expansion + `_get_fields` narrowing),
@@ -14,6 +14,8 @@ from typing import Any
 
 import pytest
 import strawberry
+from apps.kanban import filters as kanban_filters
+from apps.kanban import models as kanban_models
 from apps.library import models as library_models
 from apps.products.models import Category, Item
 from django.http import HttpRequest
@@ -1726,6 +1728,41 @@ def test_evaluate_logic_tree_caps_recursion_depth():
     assert "_MAX_LOGIC_DEPTH" in str(excinfo.value)
 
 
+@pytest.mark.django_db
+def test_evaluate_logic_tree_skips_inactive_or_arms():
+    """``or: [real, None|UNSET]`` must equal ``or: [real]``, not widen to all rows.
+
+    ``_collect_nested_visibility_querysets_async`` already skips inactive
+    children; ``_evaluate_logic_tree`` must do the same. An inactive arm under
+    ``or`` previously materialized as ``pk__in=<full qs>`` (match-all) and
+    silently defeated every real sibling arm. GraphQL rejects null list
+    elements (``[BranchFilterInputType!]``), so this is an ``apply_*`` dict /
+    direct-call contract pin rather than a live ``/graphql`` case.
+    """
+    Category.objects.create(name="alpha")
+    Category.objects.create(name="beta")
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact", "icontains"]}
+
+    baseline = CategoryFilter.apply_sync(
+        {"or_": [{"name": {"exact": "alpha"}}]},
+        Category.objects.all(),
+        _make_info(),
+    )
+    assert sorted(baseline.values_list("name", flat=True)) == ["alpha"]
+
+    for inactive in (None, strawberry.UNSET):
+        mixed = CategoryFilter.apply_sync(
+            {"or_": [{"name": {"exact": "alpha"}}, inactive]},
+            Category.objects.all(),
+            _make_info(),
+        )
+        assert sorted(mixed.values_list("name", flat=True)) == ["alpha"], inactive
+
+
 def test_collect_nested_visibility_querysets_async_caps_recursion_depth():
     """``_collect_nested_visibility_querysets_async`` raises past ``_MAX_LOGIC_DEPTH``.
 
@@ -2608,3 +2645,266 @@ def test_collect_related_declarations_honors_base_tombstone():
     )
 
     assert collected == OrderedDict()
+
+
+# ---------------------------------------------------------------------------
+# Report Defect 3: related-visibility derivation preserves the parent DB alias
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_iter_visibility_steps_threads_parent_db_alias():
+    """The child visibility base is pinned to the parent request's DB alias.
+
+    The cascade-permission path builds its base with
+    ``._default_manager.using(queryset.db).all()``; the related-visibility path
+    must match so an alias-sensitive ``get_queryset`` hook runs against the
+    parent's shard rather than the default alias (report Defect 3).
+    """
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    input_value = {"shelves": {"code": {"exact": "AAA"}}}
+    aliased = list(BranchFilter._iter_visibility_steps(input_value, "shard_b"))
+    assert aliased and aliased[0][4].db == "shard_b"
+    # No alias threaded -> the router default stays in place (single-DB case).
+    default = list(BranchFilter._iter_visibility_steps(input_value))
+    assert default and default[0][4].db == "default"
+
+
+@pytest.mark.django_db
+def test_related_visibility_hook_receives_parent_db_alias():
+    """The child ``get_queryset`` visibility hook runs against the parent's alias."""
+    seen: list[str] = []
+
+    class ShelfType(DjangoType):
+        class Meta:
+            model = library_models.Shelf
+            fields = ("id", "code")
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            seen.append(queryset.db)
+            return queryset
+
+    class ShelfFilter(FilterSet):
+        class Meta:
+            model = library_models.Shelf
+            fields = {"code": ["exact"]}
+
+    class BranchFilter(FilterSet):
+        shelves = RelatedFilter(ShelfFilter, field_name="shelves")
+
+        class Meta:
+            model = library_models.Branch
+            fields = {"name": ["exact"]}
+
+    BranchFilter._derive_related_visibility_querysets_sync(
+        {"shelves": {"code": {"exact": "AAA"}}},
+        _make_info(),
+        parent_db="shard_b",
+    )
+    assert seen == ["shard_b"]
+
+
+# ---------------------------------------------------------------------------
+# Report Defect 5: shared traversal budget caps related-derive recursion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_apply_sync_caps_related_recursion_depth():
+    """``apply_sync`` raises a typed error past the shared depth budget (Defect 5).
+
+    The visibility derivation re-enters ``apply_sync`` once per related hop, so a
+    self-referential ``RelatedFilter`` would recurse input-deep; the ``_depth``
+    guard converts the runaway into a ``ConfigurationError`` at the source.
+    """
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        CategoryFilter.apply_sync(
+            {"name": "x"},
+            Category.objects.all(),
+            _make_info(),
+            _depth=CategoryFilter._MAX_LOGIC_DEPTH + 1,
+        )
+    assert "_MAX_LOGIC_DEPTH" in str(excinfo.value)
+
+
+@pytest.mark.django_db
+def test_apply_async_caps_related_recursion_depth():
+    """Async sibling of ``test_apply_sync_caps_related_recursion_depth``."""
+    import asyncio
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        asyncio.run(
+            CategoryFilter.apply_async(
+                {"name": "x"},
+                Category.objects.all(),
+                _make_info(),
+                _depth=CategoryFilter._MAX_LOGIC_DEPTH + 1,
+            ),
+        )
+    assert "_MAX_LOGIC_DEPTH" in str(excinfo.value)
+
+
+@pytest.mark.django_db
+def test_apply_async_caps_related_recursion_nested_under_logical_branches():
+    """The async nested pre-walk shares the related-recursion depth budget.
+
+    A logical branch wrapped around the real self-referential
+    ``CardFilter.dependencies`` relation re-enters ``apply_async`` from the
+    pre-walk. The caller's depth must reach each nested pre-walk so this mixed
+    shape raises the typed cap error instead of overflowing Python's stack.
+    """
+    import asyncio
+
+    class CardType(DjangoType):
+        class Meta:
+            model = kanban_models.Card
+            fields = ("id", "number")
+
+    deep: dict[str, Any] = {"number": {"exact": 21}}
+    for _ in range(kanban_filters.CardFilter._MAX_LOGIC_DEPTH + 2):
+        deep = {"or_": [{"dependencies": deep}]}
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        asyncio.run(
+            kanban_filters.CardFilter.apply_async(
+                deep,
+                kanban_models.Card.objects.all(),
+                _make_info(),
+            ),
+        )
+    assert "_MAX_LOGIC_DEPTH" in str(excinfo.value)
+    assert CardType is not None
+
+
+# ---------------------------------------------------------------------------
+# Report Defect 4: malformed logical containers fail loud (no silent identity)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_normalize_input_rejects_malformed_logical_containers():
+    """``and`` / ``or`` demand a list; ``not`` demands a single input (Defect 4).
+
+    A mapping supplied where a list is expected is otherwise iterated as its
+    string KEYS: the nested clause is never seen, dropping both its gate and its
+    predicate (a silent identity-query bypass through the raw ``apply_*`` API).
+    """
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    with pytest.raises(ConfigurationError, match="list of filter inputs"):
+        CategoryFilter._normalize_input({"or_": {"name": {"exact": "x"}}})
+    with pytest.raises(ConfigurationError, match="single filter input"):
+        CategoryFilter._normalize_input({"not_": [{"name": {"exact": "x"}}]})
+
+
+@pytest.mark.django_db
+def test_evaluate_logic_tree_rejects_malformed_direct_construction():
+    """A directly-constructed malformed logical tree fails loud at query build."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    fs = CategoryFilter(
+        data={"or": {"name": {"exact": "x"}}},
+        queryset=Category.objects.all(),
+    )
+    with pytest.raises(ConfigurationError, match="list of filter inputs"):
+        _read_qs(fs)
+
+
+def test_validate_logic_branch_shape_accepts_inactive_value():
+    """An inactive (``None``) logical value is a no-op, not a shape error (Defect 4)."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    # No raise: ``None`` is filtered as inactive everywhere the branch is read.
+    CategoryFilter._validate_logic_branch_shape("and", None)
+    CategoryFilter._validate_logic_branch_shape("not", None)
+
+
+def test_normalize_input_rejects_scalar_logical_elements():
+    """A scalar where a filter input belongs is rejected at normalize (Defect 4).
+
+    ``not: "name"``, ``or: ["name"]``, ``and: [42]`` all have the RIGHT container
+    but the WRONG element -- a scalar that ``iter_input_items`` cannot walk. Left
+    unchecked the branch drops its predicate AND never traverses its ``check_*``
+    gate, the same permission + filter bypass as a wrong container one level up.
+    """
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    with pytest.raises(ConfigurationError, match="must be a mapping or filter-input"):
+        CategoryFilter._normalize_input({"not_": "name"})
+    with pytest.raises(ConfigurationError, match="must be a mapping or filter-input"):
+        CategoryFilter._normalize_input({"or_": ["name"]})
+    with pytest.raises(ConfigurationError, match="must be a mapping or filter-input"):
+        CategoryFilter._normalize_input({"and_": [42]})
+
+
+@pytest.mark.django_db
+def test_evaluate_logic_tree_rejects_scalar_logical_elements():
+    """Scalar logical elements fail loud at query build too (Defect 4, second seam)."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    for tree in ({"not": "name"}, {"or": ["name"]}, {"and": [42]}):
+        fs = CategoryFilter(data=tree, queryset=Category.objects.all())
+        with pytest.raises(ConfigurationError, match="must be a mapping or filter-input"):
+            _read_qs(fs)
+
+
+def test_validate_logic_branch_shape_accepts_inactive_list_element():
+    """An inactive (``None``) element inside an ``and`` / ``or`` list is a no-op arm."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    # No raise: ``None`` list arms are skipped downstream, not shape errors.
+    CategoryFilter._validate_logic_branch_shape("or", [None, {"name": {"exact": "x"}}])
+    CategoryFilter._validate_logic_branch_shape("and", [{"name": {"exact": "x"}}, None])

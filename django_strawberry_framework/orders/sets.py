@@ -354,6 +354,7 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         *,
         _fired: dict[type, set[str]] | None = None,
         _bare: Any = None,
+        _depth: int = 0,
     ) -> None:
         """Fire ``check_<field>_permission(request)`` for fields in the input.
 
@@ -365,10 +366,12 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
 
         The order side has NO ``and`` / ``or`` / ``not`` operator-bag
         recursion -- spec-028 Decision 8 line 686 ("no operator-bag, no
-        form validation"). The filter side's depth-counter recursion
-        cap has no analogue here either: only the related-branch
-        recursion remains, and it terminates naturally at the depth of
-        the consumer's declared ``RelatedOrder`` chain.
+        form validation"). It DOES share the filter side's related-branch
+        recursion cap, however: a consumer who declares a self-referential
+        ``RelatedOrder`` lets a client nest the same branch to arbitrary
+        depth, so the shared ``run_active_input_permission_checks`` caps the
+        related recursion (via the ``_depth`` budget threaded here) and raises
+        a typed ``ConfigurationError`` instead of a raw ``RecursionError``.
 
         Permission methods are called via a bare instance allocated
         with ``object.__new__(cls)``; this matches the cookbook
@@ -400,8 +403,8 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         # loop, the active-related-branch loop (recurse into the child orderset's
         # own ``_run_permission_checks`` then fire the parent's per-branch gate),
         # and the per-class ``_fired`` dedup. The order side has no logical
-        # ``and`` / ``or`` / ``not`` recursion (spec-028 Decision 8) and no depth
-        # cap, so this is the whole body.
+        # ``and`` / ``or`` / ``not`` recursion (spec-028 Decision 8); the
+        # ``_depth`` budget threaded below caps only the related-branch recursion.
         run_active_input_permission_checks(
             cls,
             input_value,
@@ -409,6 +412,8 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
             fired=_fired,
             bare=bare,
             target_attr="orderset",
+            related_attr="related_orders",
+            depth=_depth,
         )
 
     @classmethod

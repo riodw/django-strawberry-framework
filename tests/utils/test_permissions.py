@@ -1,4 +1,4 @@
-"""Tests for the shared active-input permission substrate (``utils/permissions.py``).
+"""Tests for input permissions, relation-path gates, and Django/Channels request decoding.
 
 The 0.0.9 DRY pass single-sited the active-input permission traversal that the
 filter and order families had grown as parallel copies (``docs/feedback.md``
@@ -15,6 +15,7 @@ from django.http import HttpRequest
 
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.utils.permissions import (
+    _fire_flat_relation_path_gates,
     active_permission_field_paths,
     active_related_branches,
     extract_branch_value,
@@ -23,6 +24,7 @@ from django_strawberry_framework.utils.permissions import (
     request_from_info,
     run_active_input_permission_checks,
 )
+from django_strawberry_framework.utils.querysets import SyncMisuseError
 
 # ---------------------------------------------------------------------------
 # request_from_info -- family-labelled, shape-tolerant
@@ -249,6 +251,276 @@ def test_invoke_permission_method_fires_once_and_dedupes():
     assert calls == ["name"]
 
 
+def test_invoke_permission_method_rejects_an_async_gate_instead_of_silently_allowing():
+    """An ``async def check_<field>_permission`` is a loud ``SyncMisuseError``, not a silent allow.
+
+    A filter / order permission gate is fired synchronously (on the async surface it
+    runs on the single ``sync_to_async`` worker ``_apply_common_finalize`` wraps), so
+    it can never be awaited. An ``async def`` gate returns a truthy, un-awaited
+    coroutine whose ``raise`` never executes -- so an intended DENIAL would silently
+    become a no-op, an authorization BYPASS. This gate is now guarded the same way
+    every sibling authorization seam already is (mutation ``has_permission`` /
+    ``check_permission``, the ``get_queryset`` visibility hook), so the async gate is
+    rejected loudly rather than passed through as an allow.
+    """
+    denied: list[str] = []
+
+    class _Bare:
+        async def check_name_permission(self, request):
+            # Would DENY, but as an ``async def`` it can never run under the sync
+            # permission pass; the guard must reject the coroutine, not treat it as
+            # a truthy success.
+            denied.append("should-not-fire-but-must-not-be-silently-allowed")
+            raise AssertionError("async gate body reached in a sync context")
+
+    with pytest.raises(SyncMisuseError, match="check_name_permission returned a coroutine"):
+        invoke_permission_method(_Bare(), "name", HttpRequest())
+
+    # The coroutine was closed by the guard, never awaited, and its body never ran.
+    assert denied == []
+
+
+def test_invoke_permission_method_passes_a_normal_sync_return_through():
+    """A plain sync gate returning ``None`` (the documented shape) is unaffected by the guard."""
+    fired: set[str] = set()
+
+    class _Bare:
+        def check_name_permission(self, request):
+            return None
+
+    # No raise, and the fire is recorded for the dedup set.
+    invoke_permission_method(_Bare(), "name", HttpRequest(), fired=fired)
+    assert "check_name_permission" in fired
+
+
+# ---------------------------------------------------------------------------
+# _fire_flat_relation_path_gates -- flat traversal leaves are gated like their
+# nested twins (the shared representational-bypass fix, both families).
+# ---------------------------------------------------------------------------
+
+
+class _Rel:
+    """Duck-typed RelatedFilter/RelatedOrder: an ORM ``field_name`` + a target set."""
+
+    def __init__(
+        self,
+        field_name,
+        target,
+        *,
+        target_attr,
+    ):
+        self.field_name = field_name
+        setattr(self, target_attr, target)
+
+
+def _record_gate(store, label):
+    def _check(self, request):
+        store.append(label)
+
+    return _check
+
+
+def test_fire_flat_relation_path_gates_fires_the_deep_target_chain():
+    """A deep flat path fires each parent relation gate plus the terminal field gate.
+
+    ``entries__property__category__name`` fires the SAME gates the nested twin
+    (``entries: {property: {category: {name}}}``) would: the branch gate on each
+    intermediate set and ``check_name_permission`` on the terminal target set.
+    """
+    calls: list[str] = []
+
+    class Category:
+        check_name_permission = _record_gate(calls, "Category.name")
+
+    class Property:
+        related_filters = {"category": _Rel("category", Category, target_attr="filterset")}
+        check_category_permission = _record_gate(calls, "Property.category")
+
+    class Entry:
+        related_filters = {"property": _Rel("property", Property, target_attr="filterset")}
+        check_property_permission = _record_gate(calls, "Entry.property")
+
+    class Item:
+        related_filters = {"entries": _Rel("entries", Entry, target_attr="filterset")}
+        check_entries_permission = _record_gate(calls, "Item.entries")
+
+    _fire_flat_relation_path_gates(
+        Item,
+        "entries__property__category__name",
+        HttpRequest(),
+        fired={},
+        related_attr="related_filters",
+        target_attr="filterset",
+    )
+    assert calls == [
+        "Item.entries",
+        "Entry.property",
+        "Property.category",
+        "Category.name",
+    ]
+
+
+def test_fire_flat_relation_path_gates_resolves_a_renamed_branch_by_field_name():
+    """A hop is matched on ``field_name`` (ORM accessor), not the public attr name.
+
+    ``visible_shelves = RelatedFilter(ShelfFilter, field_name="shelves")`` has a
+    public attr (``visible_shelves``) that differs from its ORM ``field_name``
+    (``shelves``). The flat source path uses the ORM name (``shelves__code``); the
+    hop still resolves, and the branch gate fired is keyed on the PUBLIC attr so it
+    matches the gate the nested form fires.
+    """
+    calls: list[str] = []
+
+    class Shelf:
+        check_code_permission = _record_gate(calls, "Shelf.code")
+
+    class Book:
+        related_filters = {
+            "visible_shelves": _Rel("shelves", Shelf, target_attr="filterset"),
+        }
+        check_visible_shelves_permission = _record_gate(calls, "Book.visible_shelves")
+
+    _fire_flat_relation_path_gates(
+        Book,
+        "shelves__code",
+        HttpRequest(),
+        fired={},
+        related_attr="related_filters",
+        target_attr="filterset",
+    )
+    assert calls == ["Book.visible_shelves", "Shelf.code"]
+
+
+def test_fire_flat_relation_path_gates_stops_at_an_unresolved_hop():
+    """A relation hop with no declared RelatedFilter stops the walk (no guessing)."""
+    calls: list[str] = []
+
+    class Item:
+        related_filters: dict = {}  # no ``author`` RelatedFilter declared
+        check_author_permission = _record_gate(calls, "Item.author")
+
+    _fire_flat_relation_path_gates(
+        Item,
+        "author__name",
+        HttpRequest(),
+        fired={},
+        related_attr="related_filters",
+        target_attr="filterset",
+    )
+    # No declared related object for ``author`` -> no target gate is fired and no
+    # FilterSet is guessed. The owner's flat-path gate (fired by the caller,
+    # not here) remains the authorization point.
+    assert calls == []
+
+
+def test_fire_flat_relation_path_gates_dedupes_against_the_nested_twin():
+    """Flat and nested twins share the per-class ``fired`` map: each gate fires once."""
+    calls: list[str] = []
+
+    class Category:
+        check_name_permission = _record_gate(calls, "Category.name")
+
+    class Item:
+        related_filters = {"category": _Rel("category", Category, target_attr="filterset")}
+        check_category_permission = _record_gate(calls, "Item.category")
+
+    fired: dict[type, set[str]] = {}
+    # First the flat leaf...
+    _fire_flat_relation_path_gates(
+        Item,
+        "category__name",
+        HttpRequest(),
+        fired=fired,
+        related_attr="related_filters",
+        target_attr="filterset",
+    )
+    # ...then the same path again (as the nested twin would, sharing ``fired``).
+    _fire_flat_relation_path_gates(
+        Item,
+        "category__name",
+        HttpRequest(),
+        fired=fired,
+        related_attr="related_filters",
+        target_attr="filterset",
+    )
+    assert calls == ["Item.category", "Category.name"]
+
+
+def test_fire_flat_relation_path_gates_works_for_the_order_family():
+    """The shared fix covers the order family (``related_orders`` / ``orderset``).
+
+    The order side exposes flat relation-traversal order fields via the
+    ``Meta.fields = ["category__name"]`` shorthand; the same representational
+    bypass is closed by the same shared walk with the order-family config.
+    """
+    calls: list[str] = []
+
+    class CategoryOrder:
+        check_name_permission = _record_gate(calls, "CategoryOrder.name")
+
+    class ItemOrder:
+        related_orders = {"category": _Rel("category", CategoryOrder, target_attr="orderset")}
+        check_category_permission = _record_gate(calls, "ItemOrder.category")
+
+    _fire_flat_relation_path_gates(
+        ItemOrder,
+        "category__name",
+        HttpRequest(),
+        fired={},
+        related_attr="related_orders",
+        target_attr="orderset",
+    )
+    assert calls == ["ItemOrder.category", "CategoryOrder.name"]
+
+
+def test_fire_flat_relation_path_gates_stops_when_a_mid_chain_target_is_unresolved():
+    """A hop whose related object's target set resolves to ``None`` stops the walk.
+
+    A ``RelatedFilter``/``RelatedOrder`` whose lazy target has not resolved (or is
+    unresolvable) exposes ``None`` at ``target_attr``; the branch gate on the
+    current set still fires, but the walk stops rather than descending into
+    ``None`` (so no terminal gate is fired on a phantom target).
+    """
+    calls: list[str] = []
+
+    class Item:
+        # ``category`` matches the hop but its target filterset is unresolved.
+        related_filters = {"category": _Rel("category", None, target_attr="filterset")}
+        check_category_permission = _record_gate(calls, "Item.category")
+
+    _fire_flat_relation_path_gates(
+        Item,
+        "category__name",
+        HttpRequest(),
+        fired={},
+        related_attr="related_filters",
+        target_attr="filterset",
+    )
+    # The parent branch gate fired; the walk then stopped at the unresolved target.
+    assert calls == ["Item.category"]
+
+
+def test_fire_flat_relation_path_gates_is_a_noop_for_a_non_traversal_leaf():
+    """A single-segment source path (no relation hop) fires nothing here."""
+    calls: list[str] = []
+
+    class Item:
+        related_filters: dict = {}
+        check_name_permission = _record_gate(calls, "Item.name")
+
+    _fire_flat_relation_path_gates(
+        Item,
+        "name",
+        HttpRequest(),
+        fired={},
+        related_attr="related_filters",
+        target_attr="filterset",
+    )
+    # The owner's own field gate is fired by the caller's normal leaf loop, not
+    # by the relation-chain walk.
+    assert calls == []
+
+
 # ---------------------------------------------------------------------------
 # run_active_input_permission_checks -- core dispatch + per-class dedup
 # ---------------------------------------------------------------------------
@@ -266,9 +538,10 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
             request,
             *,
             _fired=None,
+            _depth=0,
         ):
             (_fired if _fired is not None else {}).setdefault(cls, set())
-            calls.append("child._run")
+            calls.append(f"child._run@{_depth}")
 
     related_obj = type("Rel", (), {"orderset": _Child})()
 
@@ -305,12 +578,14 @@ def test_run_active_input_permission_checks_double_dispatch_and_dedup():
         fired=fired,
         bare=bare,
         target_attr="orderset",
+        related_attr="related_orders",
     )
     # ``name`` gate fires ONCE despite the repeated path; the parent's per-branch
-    # ``child`` gate fires once AND the child class recurses once.
+    # ``child`` gate fires once AND the child class recurses once. The shared core
+    # threads the depth budget, so the child re-enters at ``_depth=1``.
     assert calls.count("parent.name") == 1
     assert calls.count("parent.child") == 1
-    assert calls.count("child._run") == 1
+    assert calls.count("child._run@1") == 1
 
 
 def test_active_related_branches_empty_when_no_related_collection():
@@ -318,6 +593,60 @@ def test_active_related_branches_empty_when_no_related_collection():
         pass
 
     assert active_related_branches(_NoRel, {"a": 1}, related_attr="related_orders") == []
+
+
+def test_run_active_input_permission_checks_caps_related_recursion():
+    """A self-referential related branch is capped with a typed error (report Defect 5).
+
+    The shared core threads a depth budget and refuses to recurse past the set's
+    cap (``_MAX_LOGIC_DEPTH`` when defined, ``_MAX_RELATED_RECURSION_DEPTH``
+    otherwise), converting an otherwise input-deep ``RecursionError`` into a
+    catchable ``ConfigurationError`` at the source.
+    """
+
+    class _SelfRef:
+        _MAX_LOGIC_DEPTH = 2
+
+        @classmethod
+        def _active_permission_targets(cls, input_value):
+            # Always yields a related branch pointing back at THIS class -- the
+            # runtime shape of ``CardFilter.dependencies`` -> ``CardFilter``.
+            return [], [("child", _rel, {"x": 1})]
+
+        @staticmethod
+        def _invoke_permission_method(
+            bare,
+            field_path,
+            request,
+            *,
+            fired=None,
+        ):
+            pass
+
+        @classmethod
+        def _run_permission_checks(
+            cls,
+            input_value,
+            request,
+            *,
+            _fired=None,
+            _depth=0,
+        ):
+            run_active_input_permission_checks(
+                cls,
+                input_value,
+                request,
+                fired=_fired if _fired is not None else {},
+                bare=object.__new__(cls),
+                target_attr="child_set",
+                related_attr="related",
+                depth=_depth,
+            )
+
+    _rel = type("Rel", (), {"child_set": _SelfRef})()
+
+    with pytest.raises(ConfigurationError, match="nesting exceeded"):
+        _SelfRef._run_permission_checks({"child": {"x": 1}}, HttpRequest())
 
 
 def test_active_permission_field_paths_excludes_logic_and_related_keys():

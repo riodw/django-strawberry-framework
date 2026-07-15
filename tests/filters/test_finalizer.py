@@ -205,6 +205,107 @@ def test_phase_2_5_rejects_multi_owner_with_diverging_pk_identity():
     assert "PlainBookType" in msg
 
 
+def test_phase_2_5_rejects_multi_owner_with_diverging_get_queryset():
+    """Two owners of one filterset with divergent ``get_queryset`` are rejected end-to-end.
+
+    ``get_queryset`` visibility is a second genuinely owner-dependent axis (beyond
+    own-PK Relay identity): when the shared filterset is a ``RelatedFilter``
+    target, ``FilterSet._target_type_for_related_filter`` scopes the related
+    branch through the BOUND owner's ``get_queryset``, but only the FIRST binding
+    is stored. Two owners with different ``get_queryset`` hooks would therefore
+    scope the branch by whichever owner finalized first - a silent, registration-
+    order-dependent row-visibility leak. ``finalize_django_types()`` must reject
+    the second binding via ``_check_filterset_owner_get_queryset_safety`` rather
+    than silently pinning the first owner's visibility.
+
+    Both owners are plain (non-Relay) so the own-PK axis agrees and this test
+    isolates the ``get_queryset`` axis; they diverge only on ``get_queryset``.
+    """
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    class PermissiveBookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            primary = True
+            filterset_class = BookFilter
+
+    class RestrictiveBookType(DjangoType):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            filterset_class = BookFilter
+
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            # A distinct visibility hook: excludes a subset the permissive owner shows.
+            return queryset.exclude(title="secret")
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert "get_queryset visibility" in msg
+    assert "BookFilter" in msg
+    assert "PermissiveBookType" in msg
+    assert "RestrictiveBookType" in msg
+
+
+def test_phase_2_5_rejects_multi_owner_sharing_one_custom_get_queryset():
+    """Two owners sharing ONE custom ``get_queryset`` (via a common base) are rejected.
+
+    Function identity is NOT visibility equivalence. Both owners inherit the SAME
+    ``get_queryset`` function object from ``_VisibleBooksBase``, so a coarse
+    ``__func__`` identity compare would call the pairing safe - but the classmethod
+    runs with each owner's own ``cls``. A ``cls``-parameterized hook
+    (``queryset.filter(kind=cls.KIND)``) would then yield different rows per owner
+    while sharing one function, reintroducing the registration-order row-leak the
+    axis exists to close. Finalize must fail CLOSED on any custom ``get_queryset``
+    rather than infer behavioral equivalence from function identity (report Defect
+    2: "function identity is not visibility equivalence").
+    """
+
+    class BookFilter(FilterSet):
+        class Meta:
+            model = Book
+            fields = {"title": ["exact"]}
+
+    class _VisibleBooksBase(DjangoType):
+        # A DjangoType base WITHOUT ``Meta`` is an abstract, unregistered base
+        # (``__init_subclass__`` early-returns on ``meta is None``); both concrete
+        # owners inherit this one ``get_queryset`` function.
+        @classmethod
+        def get_queryset(cls, queryset, info):
+            # cls-parameterized in spirit: the hook body can branch on ``cls`` even
+            # when the function object is shared, so the shared filterset's
+            # related-branch visibility is owner-dependent despite the identity.
+            return queryset.exclude(title="secret")
+
+    class PrimaryBookType(_VisibleBooksBase):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            primary = True
+            filterset_class = BookFilter
+
+    class SecondaryBookType(_VisibleBooksBase):
+        class Meta:
+            model = Book
+            fields = ("id", "title")
+            filterset_class = BookFilter
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert "get_queryset visibility" in msg
+    assert "BookFilter" in msg
+    assert "PrimaryBookType" in msg
+    assert "SecondaryBookType" in msg
+
+
 def test_phase_2_5_accepts_multi_owner_with_identical_target():
     """Two distinct owner definitions sharing one ``FilterSet`` succeed when targets match.
 
@@ -940,6 +1041,10 @@ def _owner_definition_stub(name):
     class _Stub:
         origin = type(name, (), {})
         model = None  # real owner definitions always carry a Django model
+        # Real ``DjangoTypeDefinition`` carries this flag; default owners use the
+        # identity hook, so the get_queryset-safety axis stays a no-op here and
+        # these tests isolate the target-resolution branches they exercise.
+        has_custom_get_queryset = False
 
         def __init__(self, resolver=None):
             self._resolver = resolver

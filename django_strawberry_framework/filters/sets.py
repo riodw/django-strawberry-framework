@@ -735,6 +735,80 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         return iter_input_items(input_value)
 
     @classmethod
+    def _validate_logic_branch_shape(cls, wire_key: str, value: Any) -> None:
+        """Reject a malformed logical container before it silently no-ops.
+
+        ``and`` / ``or`` carry a LIST of filter inputs; ``not`` carries a
+        SINGLE filter input. GraphQL input coercion guarantees these shapes,
+        but the public ``apply_sync`` / ``apply_async`` raw-dict API accepts
+        anything a consumer hands it. Two malformations are rejected:
+
+        * **Wrong CONTAINER.** A mapping supplied where a list is expected --
+          ``{"or": {"name": {"exact": "x"}}}`` -- would otherwise be iterated
+          as its string KEYS: the nested clause is never seen, so its
+          ``check_*`` gate never fires AND its predicate is dropped, silently
+          widening the branch to an identity query.
+        * **Wrong ELEMENT.** ``not: "name"``, ``or: ["name"]``, ``and: [42]`` --
+          a scalar where a filter input belongs. ``_q_for_branch`` normalizes
+          each element through ``iter_input_items``, which returns ``None`` for
+          a non-mapping / non-dataclass; the branch then contributes an empty
+          ``Q()`` (match-all under ``not``) and, critically, ``check_*`` gates
+          never traverse into it -- the SAME permission + filter bypass one
+          level down.
+
+        Both are a permission + filter bypass, so fail loud with a typed
+        ``ConfigurationError`` instead. A filter input is a mapping or a
+        Strawberry-input dataclass -- exactly ``iter_input_items(x) is not None``.
+
+        An inactive value (``None`` / ``UNSET``) is a no-op branch everywhere it
+        is read (``tree_data.get(key) or []`` / ``if not_branch is not None``, and
+        the per-element inactive skip in ``_evaluate_logic_tree``), so it is
+        accepted here -- both as the whole branch value and as a list element --
+        rather than treated as a shape error.
+        """
+        if is_inactive_value(value, unset_sentinel=UNSET):
+            return
+        is_sequence = isinstance(value, (list, tuple))
+        if wire_key == "not":
+            if is_sequence:
+                raise ConfigurationError(
+                    f"FilterSet {cls.__qualname__}: logical branch 'not' takes a "
+                    f"single filter input, got a {type(value).__name__}. Wrap the "
+                    "clause as 'not: {{...}}', not a list.",
+                )
+            cls._validate_logic_element_shape(wire_key, value)
+            return
+        if not is_sequence:
+            raise ConfigurationError(
+                f"FilterSet {cls.__qualname__}: logical branch {wire_key!r} takes a "
+                f"list of filter inputs, got a {type(value).__name__}. Wrap the "
+                f"clauses as '{wire_key}: [{{...}}]'.",
+            )
+        for element in value:
+            cls._validate_logic_element_shape(wire_key, element)
+
+    @classmethod
+    def _validate_logic_element_shape(cls, wire_key: str, element: Any) -> None:
+        """Reject a non-filter-input element of a logical branch (report Defect 4).
+
+        A filter input is a mapping or a Strawberry-input dataclass --
+        ``iter_input_items`` returns a walkable pair list for those and ``None``
+        for anything else (a scalar, a bare string). An inactive element
+        (``None`` / ``UNSET``) is a legitimate no-op arm skipped downstream, so it
+        is accepted. Anything else -- ``"name"``, ``42`` -- is a malformed clause
+        that would silently drop its predicate AND skip its ``check_*`` gate, so it
+        raises a typed ``ConfigurationError``.
+        """
+        if is_inactive_value(element, unset_sentinel=UNSET):
+            return
+        if iter_input_items(element) is None:
+            raise ConfigurationError(
+                f"FilterSet {cls.__qualname__}: logical branch {wire_key!r} takes "
+                f"filter inputs, got a {type(element).__name__} ({element!r}). Each "
+                "clause must be a mapping or filter-input object, not a scalar.",
+            )
+
+    @classmethod
     def _normalize_input(cls, input_value: Any) -> dict[str, Any]:
         """Translate a Strawberry input dataclass into `django-filter` form data.
 
@@ -782,7 +856,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         data: dict[str, Any] = {}
         for field in iter_active_fields(cls, input_value, _NORMALIZE_TRAVERSAL):
             if field.kind == LOGIC:
-                data[_LOGIC_WIRE_BY_PYTHON_ATTR[field.python_attr]] = field.raw_value
+                wire_key = _LOGIC_WIRE_BY_PYTHON_ATTR[field.python_attr]
+                cls._validate_logic_branch_shape(wire_key, field.raw_value)
+                data[wire_key] = field.raw_value
                 continue
             if field.kind == RELATED:
                 # Related branches travel through `_apply_related_constraints`,
@@ -992,6 +1068,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
     def _iter_visibility_steps(
         cls,
         input_value: Any,
+        parent_db: str | None = None,
     ) -> Iterator[tuple[str, Any, type[FilterSet], Any, models.QuerySet]]:
         """Yield the pre-await state each visibility derive method needs.
 
@@ -1009,6 +1086,17 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         Composes with ``_iter_active_related_branches`` (per-branch yield
         shape) so the two iterators chain naturally without materializing
         intermediate lists.
+
+        ``child_base`` is pinned to ``parent_db`` (the alias of the parent
+        queryset being filtered) via ``.using(...)`` so the child's
+        ``get_queryset`` visibility hook sees the SAME database as the parent
+        request -- matching the cascade-permission path
+        (``permissions.py`` builds its base with
+        ``._default_manager.using(queryset.db).all()``). Without it a sharded
+        parent (e.g. ``shard_b``) would run the child hook against the default
+        alias, so an alias-sensitive hook applies the wrong shard's policy
+        (report Defect 3). ``None`` leaves the router default in place for the
+        single-database case and for direct callers who do not thread an alias.
         """
         for field_name, related_filter, child_input in cls._iter_active_related_branches(
             input_value,
@@ -1032,7 +1120,12 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                     "the target model or remove the RelatedFilter.",
                 )
             child_model = child_filterset._meta.model
-            child_base = child_model._default_manager.all()
+            child_manager = child_model._default_manager
+            child_base = (
+                child_manager.using(parent_db).all()
+                if parent_db is not None
+                else child_manager.all()
+            )
             yield field_name, target_type, child_filterset, child_input, child_base
 
     @classmethod
@@ -1040,6 +1133,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         cls,
         input_value: Any,
         info: Any,
+        *,
+        parent_db: str | None = None,
+        _depth: int = 0,
     ) -> dict[str, models.QuerySet]:
         """Run each active branch's target ``get_queryset(...)`` then recurse.
 
@@ -1067,6 +1163,12 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         permission checks" contract. Permission methods never mutate the
         queryset, so skipping them here leaves the derived queryset
         identical.
+
+        ``parent_db`` pins each child base to the parent request's database
+        alias (report Defect 3); ``_depth`` is the shared traversal budget --
+        the child ``apply_sync`` re-enters at ``_depth + 1`` so a
+        self-referential ``RelatedFilter`` is capped with a typed error rather
+        than recursing into a ``RecursionError`` (report Defect 5).
         """
         result: dict[str, models.QuerySet] = {}
         for (
@@ -1075,13 +1177,14 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             child_filterset,
             child_input,
             child_base,
-        ) in cls._iter_visibility_steps(input_value):
+        ) in cls._iter_visibility_steps(input_value, parent_db):
             scoped = apply_type_visibility_sync(target_type, child_base, info)
             result[field_name] = child_filterset.apply_sync(
                 child_input,
                 scoped,
                 info,
                 run_permissions=False,
+                _depth=_depth + 1,
             )
         return result
 
@@ -1090,13 +1193,17 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         cls,
         input_value: Any,
         info: Any,
+        *,
+        parent_db: str | None = None,
+        _depth: int = 0,
     ) -> dict[str, models.QuerySet]:
         """Async sibling of `_derive_related_visibility_querysets_sync`.
 
         Runs the child ``apply_async`` with ``run_permissions=False`` for the
         same reason the sync twin passes ``run_permissions=False`` (see there):
         the top-level ``_run_permission_checks`` pass owns every nested gate,
-        so the derivation must not re-fire them.
+        so the derivation must not re-fire them. ``parent_db`` (report Defect 3)
+        and ``_depth`` (report Defect 5) thread exactly as in the sync twin.
         """
         result: dict[str, models.QuerySet] = {}
         for (
@@ -1105,13 +1212,14 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             child_filterset,
             child_input,
             child_base,
-        ) in cls._iter_visibility_steps(input_value):
+        ) in cls._iter_visibility_steps(input_value, parent_db):
             scoped = await apply_type_visibility_async(target_type, child_base, info)
             result[field_name] = await child_filterset.apply_async(
                 child_input,
                 scoped,
                 info,
                 run_permissions=False,
+                _depth=_depth + 1,
             )
         return result
 
@@ -1136,6 +1244,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         input_value: Any,
         info: Any,
         *,
+        parent_db: str | None = None,
         _depth: int = 0,
     ) -> dict[int, dict[str, models.QuerySet]]:
         """Pre-walk logical branches and derive each branch's visibility map.
@@ -1193,12 +1302,15 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 result[id(child_input)] = await cls._derive_related_visibility_querysets_async(
                     child_input,
                     info,
+                    parent_db=parent_db,
+                    _depth=_depth,
                 )
                 # Recurse so deeper nesting (``or: [{or: [...]}]``) also
                 # lands in the stash.
                 nested = await cls._collect_nested_visibility_querysets_async(
                     child_input,
                     info,
+                    parent_db=parent_db,
                     _depth=_depth + 1,
                 )
                 result.update(nested)
@@ -1316,6 +1428,8 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             fired=_fired,
             bare=bare,
             target_attr="filterset",
+            related_attr="related_filters",
+            depth=_depth,
         )
 
         # Recurse into logical branches (and, or, not) to check permissions
@@ -1534,6 +1648,12 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         ``_nested_qs_by_branch_id`` carries the pre-derived async
         visibility maps produced by ``_collect_nested_visibility_querysets_async``
         (None on the sync path).
+
+        Inactive children (``None`` / ``strawberry.UNSET``) inside ``and`` /
+        ``or`` lists -- and an inactive ``not`` value -- are skipped, matching
+        ``_collect_nested_visibility_querysets_async``. Without that skip an
+        inactive ``or`` arm materializes as ``pk__in=<full qs>`` (match-all)
+        and silently widens past every real sibling arm.
         """
         q = models.Q()
         if not isinstance(tree_data, dict) or not tree_data:
@@ -1541,8 +1661,24 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         if _depth > cls._MAX_LOGIC_DEPTH:
             cls._raise_logic_depth_exceeded()
 
+        # Fail loud on a malformed logical container BEFORE query construction
+        # (report Defect 4). ``apply_sync`` / ``apply_async`` normalize through
+        # ``_normalize_input`` (which validates), but a queryset built by
+        # directly constructing ``cls(data={"or": {...}})`` skips that path; a
+        # mapping where a list is expected would otherwise be iterated as its
+        # KEYS and silently collapse the branch to an identity query.
+        for _wire_key in ("and", "or", "not"):
+            if _wire_key in tree_data:
+                cls._validate_logic_branch_shape(_wire_key, tree_data[_wire_key])
+
         and_branches = tree_data.get("and") or []
         for child_input in and_branches:
+            # Mirror ``_collect_nested_visibility_querysets_async``: ``None`` /
+            # ``UNSET`` list elements are inactive, not match-all clauses. An
+            # inactive arm under ``or`` would otherwise OR with the full
+            # parent queryset and silently widen past every real sibling arm.
+            if is_inactive_value(child_input, unset_sentinel=UNSET):
+                continue
             q &= cls._q_for_branch(
                 queryset,
                 child_input,
@@ -1552,7 +1688,11 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 _nested_qs_by_branch_id=_nested_qs_by_branch_id,
             )
 
-        or_branches = tree_data.get("or") or []
+        or_branches = [
+            child_input
+            for child_input in (tree_data.get("or") or [])
+            if not is_inactive_value(child_input, unset_sentinel=UNSET)
+        ]
         if or_branches:
             or_q = models.Q()
             for child_input in or_branches:
@@ -1567,7 +1707,10 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             q &= or_q
 
         not_branch = tree_data.get("not")
-        if not_branch is not None:
+        if not_branch is not None and not is_inactive_value(
+            not_branch,
+            unset_sentinel=UNSET,
+        ):
             q &= ~cls._q_for_branch(
                 queryset,
                 not_branch,
@@ -1636,6 +1779,12 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         means reaching into upstream's per-instance copy semantics. Profile
         before optimizing if a deeply-nested query ever shows up hot.
         """
+        # Defensive identity for direct callers: an inactive child must not
+        # materialize as ``pk__in=<full queryset>`` (match-all). ``_evaluate_logic_tree``
+        # already skips inactive arms; returning empty ``Q()`` here keeps AND/OR
+        # identity if this helper is reached alone.
+        if is_inactive_value(child_input, unset_sentinel=UNSET):
+            return models.Q()
         if _nested_qs_by_branch_id is not None:
             child_qs_by_branch = _nested_qs_by_branch_id.get(id(child_input))
             if child_qs_by_branch is None:
@@ -1647,9 +1796,16 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                 child_qs_by_branch = cls._derive_related_visibility_querysets_sync(
                     child_input,
                     info,
+                    parent_db=queryset.db,
+                    _depth=_depth,
                 )
         else:
-            child_qs_by_branch = cls._derive_related_visibility_querysets_sync(child_input, info)
+            child_qs_by_branch = cls._derive_related_visibility_querysets_sync(
+                child_input,
+                info,
+                parent_db=queryset.db,
+                _depth=_depth,
+            )
         constrained = cls._apply_related_constraints(child_input, queryset, child_qs_by_branch)
         child_data = cls._normalize_input(child_input)
         child_set = cls(data=child_data, queryset=constrained, request=request)
@@ -1814,6 +1970,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         info: Any,
         *,
         run_permissions: bool = True,
+        _depth: int = 0,
     ) -> models.QuerySet:
         """Sync resolver entry point (Decision 8 / H3 of rev8).
 
@@ -1827,8 +1984,24 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         point; the related-visibility derivation passes ``False`` so a nested
         child filterset's gates are fired only by the single top-level
         ``_run_permission_checks`` pass (see ``_apply_common_finalize``).
+
+        ``_depth`` is the internal related-recursion budget: the visibility
+        derivation re-enters this method (``run_permissions=False``) once per
+        related hop, so a self-referential ``RelatedFilter`` is capped here with
+        a typed ``ConfigurationError`` instead of a raw ``RecursionError``
+        (report Defect 5). The derivation runs FIRST, so this is the earliest
+        point the runaway recursion surfaces. The parent queryset's database
+        alias (``queryset.db``) is threaded into the derivation so each child
+        visibility hook sees the parent's shard (report Defect 3).
         """
-        child_qs_by_branch = cls._derive_related_visibility_querysets_sync(input_value, info)
+        if _depth > cls._MAX_LOGIC_DEPTH:
+            cls._raise_logic_depth_exceeded()
+        child_qs_by_branch = cls._derive_related_visibility_querysets_sync(
+            input_value,
+            info,
+            parent_db=queryset.db,
+            _depth=_depth,
+        )
         filterset_instance, request = cls._apply_common_prelude(
             input_value,
             queryset,
@@ -1850,6 +2023,7 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         info: Any,
         *,
         run_permissions: bool = True,
+        _depth: int = 0,
     ) -> models.QuerySet:
         """Async sibling of `apply_sync` awaiting every blocking step.
 
@@ -1879,14 +2053,24 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         the related-visibility derivation passes ``False`` so a nested child
         filterset's gates fire only once, via the top-level pass (see
         ``_apply_common_finalize`` / ``_derive_related_visibility_querysets_sync``).
+
+        ``_depth`` (related-recursion cap, report Defect 5) and the parent
+        ``queryset.db`` alias (report Defect 3) thread through both the
+        top-level derivation and the nested pre-walk exactly as in ``apply_sync``.
         """
+        if _depth > cls._MAX_LOGIC_DEPTH:
+            cls._raise_logic_depth_exceeded()
         child_qs_by_branch = await cls._derive_related_visibility_querysets_async(
             input_value,
             info,
+            parent_db=queryset.db,
+            _depth=_depth,
         )
         nested_qs_by_branch_id = await cls._collect_nested_visibility_querysets_async(
             input_value,
             info,
+            parent_db=queryset.db,
+            _depth=_depth,
         )
         filterset_instance, request = cls._apply_common_prelude(
             input_value,

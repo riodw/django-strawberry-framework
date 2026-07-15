@@ -1,4 +1,4 @@
-"""Active-input permission traversal shared by the FilterSet and OrderSet families.
+"""Shared permission traversal and Django/Channels request-context decoding.
 
 FilterSet and OrderSet independently grew the SAME active-input permission
 contract: resolve the request from ``info``, walk only supplied input fields,
@@ -29,6 +29,7 @@ from collections.abc import Callable, Mapping
 from functools import lru_cache
 from typing import Any
 
+from django.db.models.constants import LOOKUP_SEP
 from django.http import HttpRequest
 
 from ..exceptions import ConfigurationError
@@ -41,7 +42,30 @@ from .input_values import (
     iter_active_fields,
     iter_input_items,
 )
+from .querysets import reject_async_in_sync_context
 from .strings import flatten_lookup_path
+
+# Recourse text shared by every ``check_<field>_permission`` async-guard raise. A
+# filter / order permission gate is fired synchronously (on the async surface it
+# runs on the single ``sync_to_async`` worker that ``_apply_common_finalize``
+# wraps), so it can never await; an ``async def`` gate returns a TRUTHY, orphaned
+# coroutine and a naive call would treat that as a silent success -- an
+# authorization BYPASS. Mirrors ``mutations/permissions.py::_PERMISSION_ASYNC_RECOURSE``.
+_GATE_ASYNC_RECOURSE = (
+    "A FilterSet / OrderSet permission gate runs synchronously, so it cannot await "
+    "an async hook; redefine check_<field>_permission as a sync method (def, not "
+    "async def)."
+)
+
+# Fallback cap on the RELATED-branch recursion when a set defines no
+# ``_MAX_LOGIC_DEPTH`` of its own (``OrderSet`` -- ordering has no logical
+# operator-bag, so it never grew the filter side's cap). A self-referential
+# ``RelatedFilter`` / ``RelatedOrder`` (e.g. ``CardFilter.dependencies`` pointing
+# back at ``CardFilter``) lets a client nest the same branch to arbitrary depth;
+# without a cap the input-driven recursion here bottoms out in a raw
+# ``RecursionError`` (a 500) instead of a typed, catchable ``ConfigurationError``.
+# Mirrors ``FilterSet._MAX_LOGIC_DEPTH`` so the two sides share one budget.
+_MAX_RELATED_RECURSION_DEPTH = 8
 
 
 @lru_cache(maxsize=2048)
@@ -218,13 +242,30 @@ def invoke_permission_method(
     fire and subsequent calls with the same name skip the attribute lookup
     entirely. The dedup is scoped to the supplied set -- the caller passes the
     per-class set keyed out of its shared ``_fired`` map.
+
+    The gate result runs through ``reject_async_in_sync_context``: an
+    ``async def check_<field>_permission`` returns a truthy, un-awaited coroutine
+    whose ``raise`` never executes, so an intended DENIAL would silently become a
+    no-op -- an authorization BYPASS. This is the same guard every sibling
+    authorization seam already applies (``mutations/permissions.py`` /
+    ``mutations/resolvers.py`` write hooks, ``utils/querysets.py`` ``get_queryset``
+    visibility); the filter / order gate is fired the same synchronous way (on the
+    async surface it runs on the ``sync_to_async`` worker ``_apply_common_finalize``
+    wraps), so an async gate is rejected loudly with ``SyncMisuseError`` on both
+    surfaces rather than passed through as a silent allow.
     """
     method_name = _check_method_name(field_path)
     if fired is not None and method_name in fired:
         return
     method = getattr(bare_instance, method_name, None)
     if callable(method):
-        method(request)
+        reject_async_in_sync_context(
+            method(request),
+            owner=type(bare_instance).__name__,
+            method=method_name,
+            context="permission-check",
+            recourse=_GATE_ASYNC_RECOURSE,
+        )
         if fired is not None:
             fired.add(method_name)
 
@@ -383,6 +424,92 @@ def active_permission_field_paths(
     return leaf_paths
 
 
+def _fire_gate_on_class(
+    gate_cls: type,
+    field_path: str,
+    request: Any,
+    *,
+    fired: dict[type, set[str]],
+) -> None:
+    """Fire ``check_<field_path>_permission`` on a fresh bare instance of ``gate_cls``.
+
+    Deduped via the per-class set inside the shared ``fired`` map -- matching the
+    ``object.__new__(cls)`` bare-instance contract the family
+    ``_run_permission_checks`` already uses (the gate is a
+    ``check_X_permission(self, request)`` method that needs no constructed set).
+    """
+    class_fired = fired.setdefault(gate_cls, set())
+    invoke_permission_method(object.__new__(gate_cls), field_path, request, fired=class_fired)
+
+
+def _fire_flat_relation_path_gates(
+    owning_cls: type,
+    source_path: str,
+    request: Any,
+    *,
+    fired: dict[type, set[str]],
+    related_attr: str,
+    target_attr: str,
+) -> None:
+    """Fire the target-set gate chain a flat relation-traversal leaf would otherwise bypass.
+
+    A generated flat leaf (``categoryName`` -> source path ``category__name``, or
+    a deep ``entriesPropertyCategoryName`` -> ``entries__property__category__name``)
+    constrains the SAME column as the equivalent nested branch
+    (``category: {name: ...}``) but its owning-class gate name
+    (``check_category_name_permission`` on the owner) never consults the TARGET
+    filterset's ``check_name_permission``. Left alone, a client bypasses a target
+    gate merely by spelling the predicate flat. This walks the flat path and fires
+    the SAME gates the nested form fires: each parent relation branch gate plus the
+    terminal target set's field gate. The owner's flat-path gate is fired
+    separately by the caller and is preserved.
+
+    Hops are resolved against each set's declared related collection
+    (``related_filters`` / ``related_orders``) by matching a related object's
+    ``field_name`` -- the ORM accessor, NOT its public attribute name -- so a
+    renamed branch (``visible_shelves = RelatedFilter(ShelfFilter,
+    field_name="shelves")``) still resolves; the branch gate fired is keyed on the
+    PUBLIC attr so it matches the gate the nested form fires. If any relation hop
+    has no matching declared related object, the walk stops without firing target
+    gates: the owner's flat-path gate stays the authorization point and no target
+    set is guessed. Dedup rides the shared per-class ``fired`` map, so a flat leaf
+    and its nested twin fire each gate at most once per request.
+    """
+    hops = source_path.split(LOOKUP_SEP)
+    if len(hops) < 2:
+        # Not a relation traversal -- the owner's own field gate is authoritative.
+        return
+    current_cls = owning_cls
+    last_index = len(hops) - 1
+    for index, hop in enumerate(hops):
+        if index == last_index:
+            # Terminal scalar field on the deepest resolved target set -- fire its
+            # field gate (the gate the nested form's child recursion fires).
+            _fire_gate_on_class(current_cls, hop, request, fired=fired)
+            return
+        related = getattr(current_cls, related_attr, {}) or {}
+        match = next(
+            (
+                (declared_attr, related_obj)
+                for declared_attr, related_obj in related.items()
+                if getattr(related_obj, "field_name", None) == hop
+            ),
+            None,
+        )
+        if match is None:
+            # No declared RelatedFilter/RelatedOrder for this hop -- do not guess a
+            # target set; the owner's flat-path gate (fired by the caller) stands.
+            return
+        declared_attr, related_obj = match
+        # Parent relation branch gate on the current set, keyed on the PUBLIC attr
+        # so it matches the ``check_<branch>_permission`` the nested form fires.
+        _fire_gate_on_class(current_cls, declared_attr, request, fired=fired)
+        child_set = getattr(related_obj, target_attr, None)
+        if child_set is None:
+            return
+        current_cls = child_set
+
+
 def run_active_input_permission_checks(
     cls: type,
     input_value: Any,
@@ -391,6 +518,8 @@ def run_active_input_permission_checks(
     fired: dict[type, set[str]],
     bare: Any,
     target_attr: str,
+    related_attr: str,
+    depth: int = 0,
 ) -> None:
     """Fire the per-field and per-branch gates for one input level.
 
@@ -402,10 +531,26 @@ def run_active_input_permission_checks(
     allocation) and -- filter only -- the logical ``and`` / ``or`` / ``not``
     recursion that re-enters with the same ``bare`` and shared ``fired`` map.
 
+    ``depth`` is the shared traversal budget: it counts BOTH the logical and the
+    related recursion (the family wrapper hands its own ``_depth`` in, and the
+    related recursion below re-enters the child's ``_run_permission_checks`` with
+    ``depth + 1``). A self-referential related branch would otherwise recurse
+    input-deep and blow the stack; the cap converts that into a typed
+    ``ConfigurationError`` at the source. The per-set cap is ``_MAX_LOGIC_DEPTH``
+    when the set defines one (``FilterSet``) and ``_MAX_RELATED_RECURSION_DEPTH``
+    otherwise (``OrderSet``), so both sides share one budget.
+
     ``target_attr`` names the attribute on each related object that resolves the
-    child set (``filterset`` / ``orderset``). Both the child-set recursion and
-    the parent branch gate live in DIFFERENT per-class dedup sets, so both fire
-    once -- the intentional parent-vs-child double dispatch.
+    child set (``filterset`` / ``orderset``); ``related_attr`` names each set's
+    declared related collection (``related_filters`` / ``related_orders``). Both
+    the child-set recursion and the parent branch gate live in DIFFERENT per-class
+    dedup sets, so both fire once -- the intentional parent-vs-child double
+    dispatch.
+
+    Flat relation-traversal leaves are gated the same as their nested twins: for
+    each active leaf whose source path crosses a relation (``category__name``),
+    ``_fire_flat_relation_path_gates`` fires the target set's gate chain so a
+    client cannot bypass a target gate by spelling the predicate flat.
     """
     class_fired = fired.setdefault(cls, set())
 
@@ -416,13 +561,41 @@ def run_active_input_permission_checks(
     field_paths, related_branches = cls._active_permission_targets(input_value)
     for field_path in field_paths:
         cls._invoke_permission_method(bare, field_path, request, fired=class_fired)
+        # A flat relation-traversal leaf (``category__name``) must ALSO fire the
+        # target set's gate chain its nested twin (``category: {name}``) fires, or
+        # the flat spelling silently bypasses the target gate.
+        _fire_flat_relation_path_gates(
+            cls,
+            field_path,
+            request,
+            fired=fired,
+            related_attr=related_attr,
+            target_attr=target_attr,
+        )
 
     for field_name, related_obj, child_input in related_branches:
         child_set = getattr(related_obj, target_attr)
         if child_set is not None and hasattr(child_set, "_run_permission_checks"):
             # Child set is (usually) a different class; it keys its own per-class
             # set inside the shared ``fired`` map and allocates its own bare.
-            child_set._run_permission_checks(child_input, request, _fired=fired)
+            # Thread the shared depth budget so a self-referential related branch
+            # (``CardFilter.dependencies`` -> ``CardFilter``) is capped with a
+            # typed error rather than recursing input-deep into a ``RecursionError``.
+            next_depth = depth + 1
+            cap = getattr(child_set, "_MAX_LOGIC_DEPTH", _MAX_RELATED_RECURSION_DEPTH)
+            if next_depth > cap:
+                label = getattr(child_set, "__qualname__", repr(child_set))
+                raise ConfigurationError(
+                    f"{label}: related-branch nesting exceeded the maximum traversal "
+                    f"depth ({cap}). Flatten the related input or split into multiple "
+                    "queries.",
+                )
+            child_set._run_permission_checks(
+                child_input,
+                request,
+                _fired=fired,
+                _depth=next_depth,
+            )
         # Per-branch gate on the parent (e.g. ``check_shelves_permission`` when
         # the ``shelves`` branch is active), deduped against the parent's set.
         cls._invoke_permission_method(bare, field_name, request, fired=class_fired)

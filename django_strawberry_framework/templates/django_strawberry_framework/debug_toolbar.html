@@ -1,6 +1,18 @@
 <script>
   (function (JSON, Response) {
-    const djDebug = document.getElementById("djDebug");
+    // debug-toolbar>=7 defaults USE_SHADOW_DOM=True: #djDebug lives inside
+    // #djDebugRoot's shadow tree. Mirror stock getDebugElement() so panel /
+    // data-request-id updates still reach the handle; light-DOM fallback keeps
+    // USE_SHADOW_DOM=False consumers working.
+    function getDjDebug() {
+      const rootEl = document.getElementById("djDebugRoot");
+      if (rootEl !== null && rootEl.shadowRoot) {
+        return rootEl.shadowRoot.querySelector("#djDebug");
+      }
+      return document.getElementById("djDebug");
+    }
+
+    const djDebug = getDjDebug();
     function update(data) {
       if (
         data === null ||
@@ -38,7 +50,8 @@
           }
         }
         if (panel.subtitle) {
-          const nav = document.getElementById(`djdt-${id}`);
+          // Nav buttons are descendants of #djDebug (same shadow/light tree).
+          const nav = djDebug.querySelector(`#djdt-${id}`);
           if (nav !== null) {
             nav.querySelector("small").textContent = panel.subtitle;
           }

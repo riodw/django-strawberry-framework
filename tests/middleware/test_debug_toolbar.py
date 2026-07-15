@@ -453,6 +453,14 @@ def test_template_port_invariants_and_robustness_divergence():
     # 5. The per-panel title / subtitle DOM updates.
     assert '.querySelector("h3").textContent = panel.title' in template
     assert '.querySelector("small").textContent = panel.subtitle' in template
+    # 5a. debug-toolbar>=7 defaults USE_SHADOW_DOM=True: resolve #djDebug via
+    #     #djDebugRoot's shadowRoot (stock getDebugElement pattern) with a
+    #     light-DOM fallback; nav nodes are queried under djDebug, not document.
+    assert 'getElementById("djDebugRoot")' in template
+    assert "shadowRoot" in template
+    assert 'querySelector("#djDebug")' in template
+    assert "djDebug.querySelector(`#djdt-${id}`)" in template
+    assert "document.getElementById(`djdt-${id}`)" not in template
     # 6. The ``update`` guard's robustness divergence (spec-042 Revision 7): a
     #    membership test that never throws for null-prototype /
     #    ``hasOwnProperty``-shadowing objects, guarded by a non-object bail and a

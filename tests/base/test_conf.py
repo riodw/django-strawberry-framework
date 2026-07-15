@@ -306,3 +306,95 @@ def test_testing_endpoint_setting_carries_pytest_collection_guard():
     the suite fails under ``filterwarnings = error`` at this very import.
     """
     assert testing_endpoint_setting.__test__ is False
+
+
+# ---------------------------------------------------------------------------
+# Live sync when django.conf mutates without setting_changed
+# ---------------------------------------------------------------------------
+
+
+def test_delattr_clears_stale_cache_and_restores_defaults(settings):
+    """``del settings.DJANGO_STRAWBERRY_FRAMEWORK`` must not leave stale overrides.
+
+    pytest-django's ``SettingsWrapper.__delattr__`` deletes the key on a
+    ``UserSettingsHolder`` without emitting ``setting_changed`` for that key.
+    A signal-only cache would keep serving the prior mapping (wrong
+    ``APPLY_UPSTREAM_PATCHES`` / endpoint / strategy / hide-flat values).
+    Django-backed live sync rebuilds from the absent key as empty settings.
+    """
+    from django_strawberry_framework.conf import (
+        hide_flat_filters_setting,
+        nested_connection_strategy_setting,
+        testing_endpoint_setting,
+    )
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {
+        "FILTER_KEY": "x",
+        "APPLY_UPSTREAM_PATCHES": False,
+        "NESTED_CONNECTION_STRATEGY": "eager",
+        "TESTING_ENDPOINT": "/custom/",
+        "HIDE_FLAT_FILTERS": True,
+    }
+    assert conf.settings.FILTER_KEY == "x"
+    assert upstream_patches_enabled("django") is False
+    assert nested_connection_strategy_setting() == "eager"
+    assert testing_endpoint_setting() == "/custom/"
+    assert hide_flat_filters_setting() is True
+
+    del settings.DJANGO_STRAWBERRY_FRAMEWORK
+
+    assert conf.settings.user_settings == {}
+    with pytest.raises(AttributeError, match="Invalid setting: `FILTER_KEY`"):
+        _ = conf.settings.FILTER_KEY
+    assert upstream_patches_enabled("django") is True
+    assert nested_connection_strategy_setting() == "windowed"
+    assert testing_endpoint_setting() == "/graphql/"
+    assert hide_flat_filters_setting() is False
+
+
+def test_django_backed_resync_fails_loud_after_silent_bad_replacement(settings):
+    """A live non-mapping that never reached ``reload`` must fail on next read.
+
+    Covers the gap where ``django.conf.settings`` already holds a rejected
+    shape (signal delivered it, ``reload`` raised before updating the cache,
+    and the harness did not roll the live value back): the next
+    django-backed read must raise ``ConfigurationError`` rather than keep
+    serving the prior good mapping.
+    """
+    from django.conf import settings as django_settings
+    from django.test.signals import setting_changed
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"FILTER_KEY": "good"}
+    assert conf.settings.FILTER_KEY == "good"
+
+    # Commit a bad live value without going through override_settings' rollback,
+    # then deliver the signal the same way a post-commit notifier would.
+    # Prefer the public setattr path so LazySettings' cache bookkeeping stays
+    # consistent (``object.__setattr__`` would shadow on the proxy).
+    django_settings.DJANGO_STRAWBERRY_FRAMEWORK = ["bad"]
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        setting_changed.send(
+            sender=type(django_settings),
+            setting=conf.DJANGO_SETTINGS_KEY,
+            value=["bad"],
+            enter=True,
+        )
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        _ = conf.settings.user_settings
+    # A rejected normalize must not bind the bad live object as a successful
+    # cache key; every subsequent read retries and fails loud again.
+    with pytest.raises(ConfigurationError, match="must be a mapping"):
+        _ = conf.settings.FILTER_KEY
+
+    # Restore a valid mapping so later tests / fixture teardown are clean.
+    django_settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
+    conf.settings.reload({})
+
+
+def test_explicit_settings_instance_ignores_django_delattr(settings):
+    """``Settings(mapping)`` is not django-backed; live django changes must not clobber it."""
+    s = Settings({"OWN": 1})
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"OTHER": 2}
+    del settings.DJANGO_STRAWBERRY_FRAMEWORK
+    assert s.user_settings == {"OWN": 1}
+    assert s.OWN == 1

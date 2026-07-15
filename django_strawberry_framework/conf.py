@@ -12,7 +12,11 @@ Missing keys raise ``AttributeError``.  Whenever Django's
 ``pytest-django``'s ``settings`` fixture), the singleton ``settings``
 instance is mutated in place - the module global is *not* rebound - so
 references bound via ``from .conf import settings`` see the change
-immediately.
+immediately.  The singleton is also live-synced against
+``django.conf.settings``: if the key is deleted or replaced without a
+signal (pytest-django's ``del settings.DJANGO_STRAWBERRY_FRAMEWORK``
+deletes without emitting ``setting_changed``), the next read rebuilds
+from the live value instead of keeping a stale cache.
 
 Defensive ``None`` stance (package-wide). Two top-level
 consumer-input seams coerce ``None`` (and the missing-key case) to an
@@ -95,6 +99,11 @@ HIDE_FLAT_FILTERS_KEY = "HIDE_FLAT_FILTERS"
 RELAY_GLOBALID_STRATEGY_KEY = "RELAY_GLOBALID_STRATEGY"
 
 
+# Sentinel for "no live ``django.conf.settings`` object has been bound yet"
+# (distinct from ``None``, which is a valid live value meaning "no settings").
+_LIVE_UNSET: Any = object()
+
+
 def _normalize_user_settings(value: Any) -> dict[str, Any]:
     """Validate and normalize a ``DJANGO_STRAWBERRY_FRAMEWORK`` candidate.
 
@@ -144,10 +153,23 @@ class Settings:
         ``ConfigurationError`` so malformed configuration fails at
         construction rather than at attribute lookup, matching the
         ``user_settings`` and ``reload`` write sites.
+
+        Explicit mappings are *not* django-backed: they keep the supplied
+        cache regardless of ``django.conf.settings``.  The module singleton
+        (constructed with ``None``) and any instance that later ``reload``s
+        to ``None`` are django-backed and re-sync when the live setting
+        object changes without a ``setting_changed`` notification (notably
+        ``del settings.DJANGO_STRAWBERRY_FRAMEWORK`` via pytest-django,
+        which deletes the key without emitting the signal).
         """
-        self._user_settings = (
-            None if user_settings is None else _normalize_user_settings(user_settings)
-        )
+        if user_settings is None:
+            self._user_settings: dict[str, Any] | None = None
+            self._live_source: Any = _LIVE_UNSET
+            self._django_backed = True
+        else:
+            self._user_settings = _normalize_user_settings(user_settings)
+            self._live_source = _LIVE_UNSET
+            self._django_backed = False
 
     @property
     def user_settings(self) -> dict[str, Any]:
@@ -157,26 +179,61 @@ class Settings:
         empty mapping.  Non-mapping values raise ``ConfigurationError`` so
         malformed configuration fails before attribute lookup.
 
+        Django-backed instances (the module singleton, or any instance after
+        ``reload(None)``) re-check the live ``django.conf.settings`` object
+        on every access.  When it is still the same object the cache was
+        built from, the cached ``dict`` is returned (preserving identity for
+        in-place mutations).  When the live object has been replaced or the
+        key deleted without ``setting_changed`` (pytest-django's ``del
+        settings.DJANGO_STRAWBERRY_FRAMEWORK``), the cache is rebuilt from
+        the live value so readers never keep serving a stale mapping.
+
+        Explicit ``Settings(mapping)`` instances are not django-backed and
+        return their fixed cache.
+
         Not thread-safe; the lazy-load check-and-set and any concurrent
         ``reload_settings`` signal must not race.  Django's
         ``setting_changed`` signal is test-only, so this is satisfied by
         Django's test conventions (single-threaded ``override_settings``
         and ``pytest-django`` ``settings`` fixture usage).
         """
-        if self._user_settings is None:
-            self._user_settings = _normalize_user_settings(
-                getattr(django_settings, DJANGO_SETTINGS_KEY, None),
-            )
+        if not self._django_backed:
+            # Explicit construction / non-``None`` reload on a non-backed
+            # instance always leaves a concrete mapping in the cache.
+            cached = self._user_settings
+            if cached is None:  # pragma: no cover - invariant of non-backed init/reload
+                raise RuntimeError("non-django-backed Settings cache missing")
+            return cached
+
+        live = getattr(django_settings, DJANGO_SETTINGS_KEY, None)
+        if self._user_settings is not None and live is self._live_source:
+            return self._user_settings
+        # Normalize BEFORE binding ``_live_source``: a rejected live shape must
+        # leave the prior pointer intact so the next access retries (and fails
+        # loud again) instead of treating the bad live object as a successful
+        # cache key and returning the stale prior mapping.
+        normalized = _normalize_user_settings(live)
+        self._live_source = live
+        self._user_settings = normalized
         return self._user_settings
 
     def reload(self, value: Mapping[str, Any] | None) -> None:
         """Replace the cached user-settings mapping in place.
 
-        ``None`` restores lazy reload on next attribute access.  Mapping
-        values replace the cached settings; ``dict`` instances are retained,
-        and other mappings are copied into a plain ``dict``.
+        ``None`` restores django-backed lazy reload on next attribute access.
+        Mapping values replace the cached settings; ``dict`` instances are
+        retained, and other mappings are copied into a plain ``dict``.  The
+        live-source pointer tracks ``value`` itself (pre-normalization) so a
+        subsequent django-backed read can keep the cache when
+        ``django.conf.settings`` still holds that same object.
         """
-        self._user_settings = None if value is None else _normalize_user_settings(value)
+        if value is None:
+            self._user_settings = None
+            self._live_source = _LIVE_UNSET
+            self._django_backed = True
+            return
+        self._user_settings = _normalize_user_settings(value)
+        self._live_source = value
 
     def __getattr__(self, name: str) -> Any:
         """Retrieve a setting's value using attribute-style access.
@@ -192,7 +249,12 @@ class Settings:
         probes by design - bad configuration should fail loud rather than
         masquerade as a missing attribute.
         """
-        if name in {"user_settings", "_user_settings"} or name.startswith("__"):
+        if name in {
+            "user_settings",
+            "_user_settings",
+            "_live_source",
+            "_django_backed",
+        } or name.startswith("__"):
             raise AttributeError(name)
         try:
             # ``self.user_settings`` is a descriptor (``@property``), not a

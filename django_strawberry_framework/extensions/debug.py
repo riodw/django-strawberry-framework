@@ -88,6 +88,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from django.db import connections
+from graphql import ExecutionResult as GraphQLExecutionResult
 from graphql import GraphQLError
 from strawberry.extensions import SchemaExtension
 
@@ -397,10 +398,16 @@ class DjangoDebugExtension(SchemaExtension):
     restore, overlap-safe) pre-yield, and at teardown - inside ``finally``,
     so restoration cannot be skipped - slices each database connection's
     query log, serializes the rows and the result's ``original_error``
-    chain, and stashes the payload. ``get_results`` is a pure, idempotent
-    read of that stash: ``{"debug": <payload>}`` once teardown published it,
-    ``{}`` otherwise (the pre-execution paths) - the engine's early-result
-    plus teardown-failure recovery path can call it twice for one operation.
+    chain, and stashes the payload **only when** ``execution_context.result``
+    is a graphql-core ``ExecutionResult`` (GraphQL execution ran). Sync
+    parse/validation early-returns leave ``result`` as ``None``; the async
+    path may assign a strawberry ``PreExecutionError`` before teardown -
+    neither is a graphql-core execution result, so the stash stays absent
+    and ``get_results`` keeps returning ``{}`` even if the engine's
+    early-result plus teardown-failure recovery path calls it a second
+    time after teardown. ``get_results`` is a pure, idempotent read of that
+    stash: ``{"debug": <payload>}`` once teardown published it, ``{}``
+    otherwise.
     """
 
     # The absent-payload sentinel: one immutable class-level default, read
@@ -418,10 +425,11 @@ class DjangoDebugExtension(SchemaExtension):
         query-log snapshot for every configured database connection - and
         unwinds the already-acquired connections if a later acquisition fails
         (setup stays fail-loud; nothing executed yet). Post-yield, inside
-        ``finally``, the payload builder runs (its diagnostic failures
-        degrade, never raise) and the stack releases every token, the last
-        overlapping release restoring each database connection's saved
-        ``force_debug_cursor`` value.
+        ``finally``, the payload builder runs only when
+        ``execution_context.result`` is a graphql-core ``ExecutionResult``
+        (its diagnostic failures degrade, never raise) and the stack
+        releases every token, the last overlapping release restoring each
+        database connection's saved ``force_debug_cursor`` value.
         """
         snapshots: list[_ConnectionSnapshot] = []
         with ExitStack() as stack:
@@ -437,7 +445,17 @@ class DjangoDebugExtension(SchemaExtension):
             try:
                 yield
             finally:
-                self._payload = _build_payload(snapshots, self.execution_context.result)
+                # Publish only when GraphQL execution assigned a graphql-core
+                # ``ExecutionResult``. Parse/validation early-returns leave
+                # ``result`` as ``None`` (sync) or a strawberry
+                # ``PreExecutionError`` (async ``_handle_execution_result``);
+                # stashing an empty payload for those shapes lets the engine's
+                # early-return + teardown-failure recovery path's second
+                # ``get_results`` call publish ``debug`` for an operation that
+                # never executed (the no-``debug``-key contract).
+                result = self.execution_context.result
+                if isinstance(result, GraphQLExecutionResult):
+                    self._payload = _build_payload(snapshots, result)
 
     def get_results(self) -> dict[str, Any]:
         """Return ``{"debug": <payload>}`` once the stash exists, else ``{}``.

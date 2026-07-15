@@ -424,14 +424,17 @@ def test_validation_failure_with_raising_teardown_calls_get_results_twice():
     operation context (call one); a sibling teardown then raises while that
     return unwinds, so the engine's recovery handler builds a replacement
     result and reads the extension results again (call two) - the reason
-    ``get_results`` is pinned idempotent.
+    ``get_results`` is pinned idempotent. Both calls must return ``{}``:
+    teardown must not stash a payload unless ``execution_context.result`` is
+    a graphql-core ``ExecutionResult``, or the second call would falsely
+    publish ``debug``.
     """
     calls = []
 
     class _CountingDebug(DjangoDebugExtension):
         def get_results(self):
-            calls.append(1)
-            return super().get_results()
+            calls.append(super().get_results())
+            return calls[-1]
 
     class _RaisingTeardown(SchemaExtension):
         def on_operation(self):
@@ -445,6 +448,48 @@ def test_validation_failure_with_raising_teardown_calls_get_results_twice():
 
     assert result.errors
     assert len(calls) == 2
+    assert calls == [{}, {}]
+    assert "debug" not in (result.extensions or {})
+
+
+def test_parse_failure_with_raising_teardown_publishes_no_debug_key():
+    """Parse early-return + sibling teardown raise must still omit ``debug``."""
+
+    class _RaisingTeardown(SchemaExtension):
+        def on_operation(self):
+            yield
+            raise RuntimeError("teardown boom")
+
+    schema = strawberry.Schema(
+        query=_OkQuery,
+        extensions=[_RaisingTeardown, DjangoDebugExtension],
+    )
+    result = schema.execute_sync("{ ok")
+
+    assert result.errors
+    assert "debug" not in (result.extensions or {})
+
+
+async def test_async_validation_failure_with_raising_teardown_publishes_no_debug_key():
+    """Async validation sets ``PreExecutionError`` on context before teardown.
+
+    That assignment must not be mistaken for GraphQL execution, or the
+    recovery path's second ``get_results`` would publish ``debug``.
+    """
+
+    class _RaisingTeardown(SchemaExtension):
+        def on_operation(self):
+            yield
+            raise RuntimeError("teardown boom")
+
+    schema = strawberry.Schema(
+        query=_OkQuery,
+        extensions=[_RaisingTeardown, DjangoDebugExtension],
+    )
+    result = await schema.execute("{ definitelyNotAField }")
+
+    assert result.errors
+    assert "debug" not in (result.extensions or {})
 
 
 def test_generic_recovery_alone_calls_get_results_once():

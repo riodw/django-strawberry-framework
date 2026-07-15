@@ -24,6 +24,7 @@ import decimal
 import uuid
 
 import pytest
+import strawberry
 from django import forms
 
 from django_strawberry_framework.exceptions import ConfigurationError
@@ -74,6 +75,18 @@ def test_null_boolean_field_is_optional_bool():
     """``NullBooleanField`` -> ``bool | None`` (it subclasses ``BooleanField`` but widens)."""
     conversion = convert_form_field(forms.NullBooleanField())
     assert conversion.annotation == (bool | None)
+    assert conversion.kind == SCALAR
+
+
+def test_json_field_maps_to_json_scalar_not_charfield_str():
+    """``JSONField`` subclasses ``CharField`` but must resolve to ``JSON``, not ``str``.
+
+    Without an explicit registry row the MRO walk would hit ``CharField`` ->
+    ``str`` and the generated input would reject object / array literals that
+    Django's form field (and the serializer / model scalar tables) accept.
+    """
+    conversion = convert_form_field(forms.JSONField())
+    assert conversion.annotation is strawberry.scalars.JSON
     assert conversion.kind == SCALAR
 
 

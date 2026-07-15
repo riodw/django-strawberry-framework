@@ -257,6 +257,18 @@ def test_plain_form_only_field_included_in_input():
     assert _is_optional(fields["captcha"])
 
 
+def test_json_field_maps_to_json_scalar_in_input():
+    """A plain ``Form`` ``JSONField`` maps to ``strawberry.scalars.JSON``, not ``str``."""
+
+    class PayloadForm(forms.Form):
+        payload = forms.JSONField()
+
+    cre, specs, _, _ = build_form_inputs(PayloadForm, operation_kind=FORM)
+    fields = _field_map(cre)
+    assert _inner_type(fields["payload"]) is strawberry.scalars.JSON
+    assert next(s for s in specs if s.form_field_name == "payload").kind == SCALAR
+
+
 # ---------------------------------------------------------------------------
 # Relation id mapping - Relay vs raw pk, single + multi
 # ---------------------------------------------------------------------------

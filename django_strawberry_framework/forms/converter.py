@@ -47,6 +47,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+import strawberry
 from django import forms
 
 from ..exceptions import ConfigurationError
@@ -135,9 +136,13 @@ class FormFieldConversion(FieldConversionBase):
 # ``types/converters.py::scalar_for_field`` uses on the read side), so the
 # MOST-specific registered class wins regardless of dict insertion order:
 # ``FloatField`` / ``DecimalField`` both subclass ``IntegerField`` and
-# ``UUIDField`` subclasses ``CharField``, so a linear "first ``isinstance`` wins"
-# walk would mis-map them to the parent's scalar. The MRO walk visits the field's
-# own class first, so each resolves to its own entry.
+# ``UUIDField`` / ``JSONField`` subclass ``CharField``, so a linear "first
+# ``isinstance`` wins" walk would mis-map them to the parent's scalar. The MRO
+# walk visits the field's own class first, so each resolves to its own entry.
+# ``JSONField`` must stay an explicit row (``strawberry.scalars.JSON``) - without
+# it the CharField parent would silently type JSON payloads as ``String``,
+# rejecting object / array literals that Django's form field (and the serializer
+# / model scalar tables) accept as structured JSON.
 _SCALAR_FORM_FIELDS: dict[type[forms.Field], Any] = {
     forms.CharField: str,
     forms.ChoiceField: str,
@@ -147,6 +152,7 @@ _SCALAR_FORM_FIELDS: dict[type[forms.Field], Any] = {
     forms.NullBooleanField: bool | None,
     forms.BooleanField: bool,
     forms.UUIDField: uuid.UUID,
+    forms.JSONField: strawberry.scalars.JSON,
     forms.DateTimeField: datetime.datetime,
     forms.DateField: datetime.date,
     forms.TimeField: datetime.time,
@@ -244,9 +250,10 @@ def convert_form_field(field: forms.Field) -> FormFieldConversion:
         return result
     # The scalar registry MRO walk returned a bare annotation (``EmailField`` /
     # ``SlugField`` / ``URLField`` / ``RegexField`` under ``CharField``;
-    # ``NullBooleanField`` -> ``bool | None`` before ``BooleanField``; ``FloatField``
-    # / ``DecimalField`` / ``UUIDField`` before the ``IntegerField`` / ``CharField``
-    # they subclass) - wrap it as a ``SCALAR``-kind conversion.
+    # ``NullBooleanField`` -> ``bool | None`` before ``BooleanField``; ``JSONField``
+    # -> ``JSON`` before ``CharField``; ``FloatField`` / ``DecimalField`` /
+    # ``UUIDField`` before the ``IntegerField`` / ``CharField`` they subclass) -
+    # wrap it as a ``SCALAR``-kind conversion.
     return FormFieldConversion(annotation=result, kind=SCALAR, required=required)
 
 

@@ -734,12 +734,16 @@ def _raw_pk_relation_error(
     This preserves the deliberate ability to attach any existing unexposed row
     while rejecting a nonexistent target before validation / write.
 
-    An explicit ``None`` is NOT a pk to check: on a single FK / OneToOne it is a
-    nullable-relation clear (the decoded attr is set to ``NULL``, validated by
-    ``full_clean`` for a non-nullable column), so it is dropped from the check and
-    passed through. (An M2M never carries a ``None`` element - its list element type
-    is non-null, and an explicit whole-list ``null`` is rejected upstream by
-    ``_decode_relation_id_list``.)
+    An explicit ``None`` no longer reaches this check on the single-relation path:
+    ``_decode_single_relation_id`` resolves a single FK / OneToOne ``None`` first -
+    returned as a nullable-relation clear (``(None, None)``) or, on a ``null=False``
+    relation, rejected there as a field-keyed ``null`` ``FieldError`` before any
+    membership query (so a required FK's explicit null is attributed at decode, not
+    left to surface as a NOT NULL ``IntegrityError``). An M2M never carries a ``None``
+    element (its list element type is non-null) and an explicit whole-list ``null``
+    is rejected upstream by ``_decode_relation_id_list``. The ``real_pks`` filter
+    below stays a defensive guard so a stray ``None`` can never widen the ``pk__in``
+    set.
 
     Each remaining pk is coerced through the target pk field first
     (``_coerce_relation_pk_or_none``), mirroring the ``GlobalID`` branch's

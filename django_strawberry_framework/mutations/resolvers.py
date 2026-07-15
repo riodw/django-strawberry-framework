@@ -73,7 +73,8 @@ import strawberry
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, router, transaction
+from django.db.models import ProtectedError, RestrictedError
 from django.utils import timezone
 from graphql import GraphQLError
 from strawberry import relay
@@ -184,7 +185,9 @@ def run_write_pipeline_sync(
     payload_cls = payload_cls_for(mutation_cls)
     is_update = meta.operation == "update"
 
-    with transaction.atomic():
+    model = model_for(primary_type)
+    using = router.db_for_write(model)
+    with transaction.atomic(using=using):
 
         def _error_payload(errors: list[FieldError]) -> Any:
             """Roll back, then return the null-object error envelope (spec-039 H6).
@@ -200,7 +203,7 @@ def run_write_pipeline_sync(
             failure paths (nothing was written), keeping the invariant uniform: an error
             envelope never commits.
             """
-            transaction.set_rollback(True)
+            transaction.set_rollback(True, using=using)
             return build_payload(payload_cls, slot, None, errors)
 
         instance = None
@@ -494,9 +497,22 @@ def _decode_single_relation_id(
 
     Wraps the single value in a one-element list, delegates to
     ``_decode_relation_id_set`` (type-check + coerce + visibility), and unwraps the
-    single pk. A non-``GlobalID`` value (a raw pk, or an explicit ``None`` clearing
-    a nullable FK) passes through the set decoder unchanged.
+    single pk. A non-``GlobalID`` value (a raw pk) passes through the set decoder
+    unchanged.
+
+    An explicit ``None`` is the clear signal for a **nullable** FK / OneToOne and
+    returns ``(None, None)`` without a membership query. On a ``null=False`` relation
+    the same ``None`` is rejected here as a field-keyed ``null`` ``FieldError``
+    (GraphQL name, e.g. ``categoryId``) - mirroring the scalar
+    ``_explicit_null_error`` guard. Django's ``full_clean`` SKIPS a ``blank=True``
+    empty value, so a ``blank=True, null=False`` FK would otherwise slip to a NOT NULL
+    ``IntegrityError`` and the generic ``"__all__"`` constraint envelope with no field
+    attribution.
     """
+    if value is None:
+        if getattr(relation_field, "null", False):
+            return None, None
+        return None, field_error(field_name, "This field cannot be null.", codes="null")
     pks, error = _decode_relation_id_set(field_name, [value], relation_field, info)
     if error is not None:
         return None, error
@@ -956,7 +972,9 @@ def _run_pipeline_sync(
     if meta.operation == "delete":
         slot = payload_object_slot(primary_type)
         payload_cls = payload_cls_for(mutation_cls)
-        with transaction.atomic():
+        model = model_for(primary_type)
+        using = router.db_for_write(model)
+        with transaction.atomic(using=using):
             return _run_delete(mutation_cls, info, id, primary_type, slot, payload_cls)
 
     model = model_for(primary_type)
@@ -1082,7 +1100,10 @@ def _run_delete(
     ``pk`` / ``id`` intact for the delete payload's cache-eviction contract
     (feedback P1 - the spec promises the deleted id is preserved). ``instance`` is
     the visibility-located row (guaranteed present here); the snapshot is only the
-    optimizer-shaped response object.
+    optimizer-shaped response object. The delete itself is guarded by
+    ``_delete_or_field_errors``: a ``PROTECT`` / ``RESTRICT`` refusal returns the
+    ``FieldError`` envelope (with a ``None`` payload object) instead of leaking a
+    raw top-level ``GraphQLError``.
     """
     node_id, id_error = coerce_lookup_id(id, primary_type)
     if id_error is not None:
@@ -1094,8 +1115,38 @@ def _run_delete(
     authorize_or_raise(mutation_cls, info, "delete", data=None, instance=instance)
 
     snapshot = refetch_optimized(primary_type, instance.pk, info, force_load=True)
-    instance.delete()
+    delete_errors = _delete_or_field_errors(instance)
+    if delete_errors is not None:
+        return build_payload(payload_cls, slot, None, delete_errors)
     return build_payload(payload_cls, slot, snapshot, [])
+
+
+def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:
+    """Run ``instance.delete()``; map a protected-reference refusal to the envelope else ``None``.
+
+    The delete-side counterpart of ``save_or_field_errors``: a row referenced
+    through ``on_delete=PROTECT`` / ``on_delete=RESTRICT`` makes ``delete()``
+    raise ``ProtectedError`` / ``RestrictedError``, and without this catch that
+    surfaced as a raw top-level ``GraphQLError`` carrying Django's internal
+    message (model and relation names - an information leak) instead of the
+    payload's ``FieldError`` envelope. Both exceptions are raised by Django's
+    deletion collector in Python BEFORE any SQL runs, so the enclosing
+    ``transaction.atomic()`` is still healthy and returning the envelope is
+    safe. The message names no models: like ``_integrity_error_field_errors``
+    it keys to the model-level ``""`` (``"__all__"``) bucket, since the refusal
+    is about OTHER rows referencing this one, not about the ``id`` input.
+    """
+    try:
+        instance.delete()
+    except (ProtectedError, RestrictedError):
+        return [
+            field_error(
+                "",
+                "Cannot delete: other rows reference this one and are protected.",
+                codes="protected",
+            ),
+        ]
+    return None
 
 
 def authorize_or_raise(

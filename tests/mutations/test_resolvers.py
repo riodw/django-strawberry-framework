@@ -1627,25 +1627,40 @@ def test_create_raw_pk_relation_visible_members_still_attach():
 
 
 @pytest.mark.django_db
-def test_single_fk_explicit_null_decodes_to_clear_not_relation_error():
-    """An explicit ``null`` on a single FK decodes to ``None`` (a clear), never a relation error (Finding 1).
+def test_single_fk_explicit_null_on_nullable_clears_not_relation_error():
+    """An explicit ``null`` on a nullable FK clears (``None``), never a relation error.
 
-    Refutes ``docs/feedback.md`` Finding 1's claim that a nullable single relation
-    cannot be set to ``null``. ``_decode_single_relation_id`` passes a non-GlobalID
-    ``None`` straight through: the single-relation raw-pk branch drops ``None``
-    before any existence / visibility check (even when, as here, the related model
-    HAS a registered primary type), so the decoded attr is ``None`` - which clears a
-    nullable FK and is caught by ``full_clean`` for a non-nullable one (keyed to the
-    model field), not a decode-level "Invalid id for relation".
+    ``_decode_single_relation_id`` short-circuits ``None`` on a ``null=True`` FK
+    without a membership / visibility query - so a registered primary type on the
+    related model cannot turn a clear into "Invalid id for relation".
     """
-    # Build the schema so ``Category`` HAS a registered primary type - the case
-    # that would wrongly route ``None`` into a visibility check if it were not
-    # dropped first (the regression guard for the Finding 2 fix).
     _build_item_schema()
+    # Item.attachment is a nullable FileField, not an FK. Use Category.is_private's
+    # sibling: monkeypatch a nullable FK field object that mirrors a real relation.
     fk_field = product_models.Item._meta.get_field("category")
-    pk, error = resolvers._decode_single_relation_id("categoryId", None, fk_field, info=None)
+    # Temporarily treat the relation as nullable for the clear-signal branch.
+    with mock.patch.object(fk_field, "null", True):
+        pk, error = resolvers._decode_single_relation_id("categoryId", None, fk_field, info=None)
     assert error is None
     assert pk is None
+
+
+@pytest.mark.django_db
+def test_single_fk_explicit_null_on_required_is_field_keyed_null_error():
+    """Explicit ``null`` on a ``null=False`` FK is a decode-time ``null`` FieldError.
+
+    Rejected before ``full_clean`` / ``save`` so a ``blank=True, null=False`` FK
+    cannot slip past validation into the generic ``__all__`` IntegrityError envelope.
+    """
+    _build_item_schema()
+    fk_field = product_models.Item._meta.get_field("category")
+    assert fk_field.null is False
+    pk, error = resolvers._decode_single_relation_id("categoryId", None, fk_field, info=None)
+    assert pk is None
+    assert error is not None
+    assert error.field == "categoryId"
+    assert error.codes == ["null"]
+    assert error.messages == ["This field cannot be null."]
 
 
 @pytest.mark.django_db
@@ -2198,6 +2213,89 @@ def test_explicit_null_on_non_nullable_file_column_is_field_error(tmp_path):
             schema_editor.delete_model(model)
 
 
+_fk_null_model_counter = itertools.count(1)
+
+
+def _make_blank_true_required_fk_models():
+    """Synthetic ``blank=True, null=False`` FK pair (the IntegrityError slip case)."""
+    suffix = next(_fk_null_model_counter)
+    target_meta = type("Meta", (), {"app_label": "products", "managed": False})
+    target = type(
+        f"MutFkTarget{suffix}",
+        (djmodels.Model,),
+        {"__module__": __name__, "name": djmodels.TextField(), "Meta": target_meta},
+    )
+    source_meta = type("Meta", (), {"app_label": "products", "managed": False})
+    source = type(
+        f"MutFkSource{suffix}",
+        (djmodels.Model,),
+        {
+            "__module__": __name__,
+            "target": djmodels.ForeignKey(
+                target,
+                on_delete=djmodels.CASCADE,
+                blank=True,
+                null=False,
+            ),
+            "Meta": source_meta,
+        },
+    )
+    return target, source
+
+
+@pytest.mark.django_db(transaction=True)
+def test_create_blank_true_null_false_fk_explicit_null_is_field_error():
+    """Explicit ``null`` on a ``blank=True, null=False`` FK is field-keyed, not ``__all__``.
+
+    Django ``full_clean`` skips ``blank=True`` empty values, so without the
+    decode-time FK null guard the write reaches a NOT NULL ``IntegrityError`` and
+    the generic constraint envelope. The client must learn WHICH field failed.
+    """
+    target_model, source_model = _make_blank_true_required_fk_models()
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(target_model)
+        schema_editor.create_model(source_model)
+    try:
+
+        class TargetT(DjangoType, relay.Node):
+            class Meta:
+                model = target_model
+                fields = ("id", "name")
+                primary = True
+
+        class SourceT(DjangoType, relay.Node):
+            class Meta:
+                model = source_model
+                fields = ("id", "target")
+                primary = True
+
+        class CreateSource(DjangoMutation):
+            class Meta:
+                model = source_model
+                operation = "create"
+                permission_classes = [_AllowAll]
+
+        @strawberry.type
+        class Mutation:
+            create_source = DjangoMutationField(CreateSource)
+
+        finalize_django_types()
+        schema = _schema(Mutation)
+        input_name = CreateSource._input_class.__name__
+        res = schema.execute_sync(
+            f"mutation($d: {input_name}!){{ createSource(data:$d){{ "
+            f"node{{ id }} errors{{ field messages codes }} }} }}",
+            variable_values={"d": {"targetId": None}},
+        )
+        payload = assert_mutation_field_error(res, "createSource", "targetId")
+        assert payload["errors"][0]["codes"] == ["null"]
+        assert source_model.objects.count() == 0
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(source_model)
+            schema_editor.delete_model(target_model)
+
+
 def test_explicit_null_error_allows_null_on_nullable_column():
     """``_explicit_null_error`` yields no error for ``null`` on a ``null=True`` column.
 
@@ -2321,3 +2419,142 @@ def test_locate_instance_no_lock_by_default(monkeypatch):
     assert result is sentinel
     visible_qs.select_for_update.assert_not_called()
     visible_qs.get.assert_called_once_with(pk=7)
+
+
+# ---------------------------------------------------------------------------
+# Multi-db atomic boundary (router.db_for_write)
+# ---------------------------------------------------------------------------
+
+
+def test_write_pipeline_opens_atomic_on_router_write_db(monkeypatch):
+    """``run_write_pipeline_sync`` opens ``transaction.atomic(using=db_for_write)``.
+
+    Without ``using=``, a multi-db router write commits on the routed alias while
+    the atomic block (and its rollback) stay on ``default`` - a FieldError /
+    post-save failure then leaves the write persisted (spec-039 H6 gap).
+    """
+    from unittest.mock import MagicMock, patch
+
+    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+
+    mutation_cls = MagicMock()
+    mutation_cls._mutation_meta.operation = "create"
+    mutation_cls._mutation_meta.select_for_update = False
+    mutation_cls._primary_type = object()
+    mutation_cls._payload_type_name = "Unused"
+
+    captured: dict = {}
+
+    class _Atomic:
+        def __init__(self, using=None):
+            captured["using"] = using
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: MagicMock())
+    monkeypatch.setattr(mutation_resolvers, "payload_object_slot", lambda _t: "node")
+    monkeypatch.setattr(mutation_resolvers, "payload_cls_for", lambda _m: MagicMock())
+    monkeypatch.setattr(
+        mutation_resolvers,
+        "authorize_or_raise",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        mutation_resolvers,
+        "refetch_optimized",
+        lambda *a, **k: MagicMock(pk=1),
+    )
+    monkeypatch.setattr(
+        mutation_resolvers,
+        "build_payload",
+        lambda *a, **k: "ok",
+    )
+
+    with (
+        patch.object(mutation_resolvers.router, "db_for_write", return_value="shard_b"),
+        patch.object(mutation_resolvers.transaction, "atomic", side_effect=_Atomic),
+    ):
+        result = mutation_resolvers.run_write_pipeline_sync(
+            mutation_cls,
+            info=None,
+            data=None,
+            id=None,
+            decode_step=lambda _instance: ("decoded",),
+            write_step=lambda _instance, _decoded: MagicMock(pk=7),
+        )
+
+    assert result == "ok"
+    assert captured["using"] == "shard_b"
+
+
+# ---------------------------------------------------------------------------
+# Delete refused by a PROTECT / RESTRICT reference (the protected-delete envelope)
+# ---------------------------------------------------------------------------
+
+_protector_model_counter = itertools.count(1)
+
+
+def _make_protector_model(on_delete):
+    """Return a synthetic ``managed=False`` model holding an ``on_delete``-guarded FK to ``Item``.
+
+    ``app_label="products"`` (an INSTALLED app) so the table can be created with
+    ``schema_editor``; ``related_name="+"`` skips the reverse accessor so the two
+    parametrized flavors cannot clash on ``Item``. The model NAME is uniquified
+    per call so Django's app registry does not warn on re-register.
+    """
+    suffix = next(_protector_model_counter)
+    meta = type("Meta", (), {"app_label": "products", "managed": False})
+    return type(
+        f"MutProtector{suffix}",
+        (djmodels.Model,),
+        {
+            "__module__": __name__,
+            "item": djmodels.ForeignKey(
+                product_models.Item,
+                related_name="+",
+                on_delete=on_delete,
+            ),
+            "Meta": meta,
+        },
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "on_delete",
+    [djmodels.PROTECT, djmodels.RESTRICT],
+    ids=["protect", "restrict"],
+)
+def test_delete_refused_by_protected_reference_is_envelope_not_graphql_error(on_delete):
+    """A PROTECT / RESTRICT-referenced row's delete returns the envelope; the row survives.
+
+    Without the ``_delete_or_field_errors`` guard the deletion collector's
+    ``ProtectedError`` / ``RestrictedError`` escaped ``_run_delete`` as a raw
+    top-level ``GraphQLError`` carrying Django's internal message (model and
+    relation names - an information leak). Both exceptions subclass
+    ``IntegrityError``, so this also pins that the catch is the delete-specific
+    one (the message names the protected-reference refusal, not the generic
+    constraint fallback) and that it leaks no referencing-model name.
+    """
+    model = _make_protector_model(on_delete)
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(model)
+    try:
+        schema, (_CategoryT, ItemT) = _build_item_schema()
+        cat = product_models.Category.objects.create(name=_category_name())
+        item = product_models.Item.objects.create(name="Guarded", category=cat)
+        model.objects.create(item=item)
+        res = schema.execute_sync(_DELETE, variable_values={"id": _item_gid(ItemT, item.pk)})
+        payload = assert_mutation_field_error(res, "deleteItem", NON_FIELD_ERROR_KEY)
+        assert payload["errors"][0]["messages"] == [
+            "Cannot delete: other rows reference this one and are protected.",
+        ]
+        assert model.__name__ not in str(payload["errors"])  # no internal-name leak
+        assert product_models.Item.objects.filter(pk=item.pk).exists()  # refused, not deleted
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(model)

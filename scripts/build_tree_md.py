@@ -12,10 +12,10 @@ import argparse
 import ast
 import re
 import sys
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TypeVar
+from typing import Any, TypeVar
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "docs" / "TREE.md"
@@ -42,19 +42,13 @@ FAKESHOP_APP_NAMES = (
     "products",
     "scalars",
 )
-FAKESHOP_CONFIG_FILES = (
-    "settings.py",
-    "test_settings.py",
-    "schema.py",
-    "urls.py",
-    "wsgi.py",
-)
 TEST_LAYOUT_INTRO = [
     "## Test layout",
     "",
     "Tests live in four deliberate places, each chosen by what the test is proving. "
-    "The root `tests/` tree protects package internals and mirrors "
-    "`django_strawberry_framework/`. `examples/fakeshop/apps/<app>/tests/` protects "
+    "The root `tests/` tree protects package internals and repository tooling; its "
+    "subsystem directories broadly mirror `django_strawberry_framework/`. "
+    "`examples/fakeshop/apps/<app>/tests/` protects "
     "one Django app at a time without live HTTP. `examples/fakeshop/tests/` protects "
     "project-level fakeshop behavior that belongs to no single app. "
     "`examples/fakeshop/test_query/` is the live `/graphql/` acceptance surface.",
@@ -62,9 +56,10 @@ TEST_LAYOUT_INTRO = [
     "**Coverage priority.** If a package line can be covered by a real fakeshop "
     "GraphQL request, put that test in `examples/fakeshop/test_query/`. Use the "
     "non-live fakeshop trees for services, models, admin, commands, URLs, or "
-    "in-process schema execution. Use root `tests/` for package internals, invalid "
-    "configuration, registry/finalizer mechanics, and paths unreachable through a "
-    "realistic GraphQL request. Mock only when the real path is impossible. These "
+    "in-process schema execution. Use root `tests/` for repository tooling, package "
+    "internals, invalid configuration, registry/finalizer mechanics, and paths "
+    "unreachable through a realistic GraphQL request. Mock only when the real path "
+    "is impossible. These "
     "placement rules are pinned in [`AGENTS.md`][agents].",
     "",
     "### Current test trees",
@@ -359,13 +354,14 @@ def iter_tree_positions(items: Sequence[T], prefix: str = "") -> Iterator[tuple[
         yield item, tree_position(prefix, index, count)
 
 
-def sorted_children(path: Path) -> list[Path]:
+def sorted_children(path: Path, *, ignored_dirnames: frozenset[str] = frozenset()) -> list[Path]:
     """Return visible child paths in deterministic tree order."""
+    excluded_dirnames = IGNORED_TREE_DIRNAMES | ignored_dirnames
     children = [
         child
         for child in path.iterdir()
         if (
-            (child.is_dir() and child.name not in IGNORED_TREE_DIRNAMES)
+            (child.is_dir() and child.name not in excluded_dirnames)
             or (child.is_file() and child.name not in IGNORED_TREE_FILENAMES)
         )
         and child.suffix != ".pyc"
@@ -375,10 +371,15 @@ def sorted_children(path: Path) -> list[Path]:
     return files + dirs
 
 
-def render_children(path: Path, prefix: str = "") -> list[str]:
+def render_children(
+    path: Path,
+    prefix: str = "",
+    *,
+    ignored_dirnames: frozenset[str] = frozenset(),
+) -> list[str]:
     """Render children under ``path`` using tree connector glyphs."""
     lines = []
-    children = sorted_children(path)
+    children = sorted_children(path, ignored_dirnames=ignored_dirnames)
     for child, position in iter_tree_positions(children, prefix):
         if child.is_dir():
             lines.append(
@@ -391,6 +392,7 @@ def render_children(path: Path, prefix: str = "") -> list[str]:
                 render_children(
                     child,
                     position.child_prefix,
+                    ignored_dirnames=ignored_dirnames,
                 ),
             )
         else:
@@ -459,11 +461,29 @@ TEST_ROOT_PREFIXES = ("tests/", "examples/fakeshop/test_query/", "examples/fakes
 APP_TESTS_ROOT_RE = re.compile(r"^examples/fakeshop/apps/[^/]+/tests/")
 TEST_ROOT_DESCRIPTIONS = {
     "examples/fakeshop/tests/": (
-        "Example-project tests for fakeshop behavior without live /graphql HTTP."
+        "Project/config-level fakeshop tests that belong to no single app and do not use "
+        "live /graphql HTTP."
     ),
     "examples/fakeshop/test_query/": (
         "Live GraphQL HTTP tests for fakeshop's consumer-visible API."
     ),
+}
+PLANNED_PATH_DESCRIPTIONS = {
+    "django_strawberry_framework/aggregates/": (
+        "Declarative AggregateSet output types with related, permissioned, "
+        "selection-aware sync/async statistics."
+    ),
+    "django_strawberry_framework/fieldset/": (
+        "FieldSet computed fields, resolver overrides, field permissions, and "
+        "optimizer dependencies."
+    ),
+    "django_strawberry_framework/permissions/": (
+        "Cascade-permission package migration plus opt-in node-sentinel redaction "
+        "(``Meta.redaction_mode``)."
+    ),
+}
+TARGET_PATH_REPLACEMENTS = {
+    "django_strawberry_framework/permissions/": ("django_strawberry_framework/permissions.py",),
 }
 
 
@@ -479,7 +499,8 @@ class PlannedPath:
     @property
     def description(self) -> str:
         """Return the tree-comment annotation for this planned entry."""
-        return f"planned by {self.card_id} - {self.card_title}"
+        summary = PLANNED_PATH_DESCRIPTIONS.get(self.path, self.card_title)
+        return f"planned by {self.card_id} - {summary}"
 
 
 @dataclass
@@ -513,8 +534,20 @@ def fetch_planned_paths() -> list[PlannedPath]:
         .order_by("path")
         .prefetch_related("cards__status", "cards__milestone", "cards__target_version")
     )
+    return _planned_paths_from_rows(rows)
+
+
+def _planned_paths_from_rows(rows: Iterable[Any]) -> list[PlannedPath]:
+    """Build planned entries from TrackedPath rows, skipping paths already on disk.
+
+    A row whose path already exists in the working tree has effectively shipped -
+    only its card status lags - so it must not be annotated as a planned entry.
+    The lowest-numbered ``wip``/``todo`` card owns each surviving entry.
+    """
     planned = []
     for row in rows:
+        if (REPO_ROOT / row.path).exists():
+            continue
         owner = min(
             (card for card in row.cards.all() if card.status.key in ("wip", "todo")),
             key=lambda card: card.number,
@@ -579,6 +612,24 @@ def insert_planned_path(root_node: TargetNode, root_prefix: str, planned: Planne
         node = child
 
 
+def remove_target_replacements(
+    root_node: TargetNode,
+    root_prefix: str,
+    planned: PlannedPath,
+) -> None:
+    """Remove current paths explicitly superseded by one planned target path."""
+    for replaced_path in TARGET_PATH_REPLACEMENTS.get(planned.path, ()):
+        segments = replaced_path.removeprefix(root_prefix).rstrip("/").split("/")
+        node = root_node
+        for segment in segments[:-1]:
+            child = node.children.get(f"{segment}/")
+            if child is None:
+                break
+            node = child
+        else:
+            node.children.pop(segments[-1], None)
+
+
 def render_target_children(node: TargetNode, prefix: str = "") -> list[str]:
     """Render merged-tree children using the same connector glyphs as render_children."""
     files = sorted(
@@ -619,6 +670,7 @@ def render_target_tree(
     description = folder_description(root_dir) if root_description is None else root_description
     root_node = filesystem_target_node(root_dir, label=root_prefix, description=description)
     for planned in planned_paths:
+        remove_target_replacements(root_node, root_prefix, planned)
         insert_planned_path(root_node, root_prefix, planned)
     return [
         comment_line("", root_node.name, root_node.description, align_comment=False),
@@ -750,6 +802,11 @@ def render_fakeshop_project_tree(project_dir: Path) -> list[str]:
 
     config_dir = project_dir / "config"
     apps_dir = project_dir / "apps"
+    root_files = [
+        child
+        for child in sorted_children(project_dir)
+        if child.is_file() and child.suffix == ".py"
+    ]
     tree_lines = [
         directory_entry(
             "",
@@ -757,29 +814,20 @@ def render_fakeshop_project_tree(project_dir: Path) -> list[str]:
             label="examples/fakeshop/",
             description=first_non_python_sentence(project_dir / "README.md"),
         ),
-        file_entry(
-            TREE_BRANCH,
-            project_dir / "manage.py",
-        ),
-        directory_entry(
-            TREE_BRANCH,
-            config_dir,
-        ),
     ]
-
-    for filename, position in iter_tree_positions(FAKESHOP_CONFIG_FILES, TREE_PIPE):
-        tree_lines.append(
-            file_entry(
-                position.line_prefix,
-                config_dir / filename,
+    tree_lines.extend(file_entry(TREE_BRANCH, root_file) for root_file in root_files)
+    tree_lines.extend(
+        [
+            directory_entry(
+                TREE_BRANCH,
+                config_dir,
             ),
-        )
-
-    tree_lines.append(
-        directory_entry(
-            TREE_LAST,
-            apps_dir,
-        ),
+            *render_children(config_dir, TREE_PIPE),
+            directory_entry(
+                TREE_LAST,
+                apps_dir,
+            ),
+        ],
     )
 
     app_entries = FAKESHOP_APP_NAMES
@@ -790,13 +838,13 @@ def render_fakeshop_project_tree(project_dir: Path) -> list[str]:
                 apps_dir / entry,
             ),
         )
-        if entry == "products":
-            tree_lines.extend(
-                render_children(
-                    apps_dir / entry,
-                    position.child_prefix,
-                ),
-            )
+        tree_lines.extend(
+            render_children(
+                apps_dir / entry,
+                position.child_prefix,
+                ignored_dirnames=frozenset({"tests"}),
+            ),
+        )
 
     return tree_lines
 

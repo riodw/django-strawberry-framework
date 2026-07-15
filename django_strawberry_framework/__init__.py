@@ -31,6 +31,7 @@ from .permissions import (  # noqa: E402
 )
 from .relay import DjangoNodeField, DjangoNodesField  # noqa: E402
 from .scalars import BigInt, Upload, strawberry_config  # noqa: E402
+from .schema import DjangoMutationExecutionContext, DjangoSchema  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 from .types.converters import DjangoFileType, DjangoImageType  # noqa: E402
 
@@ -107,10 +108,12 @@ __all__ = (
     "DjangoModelFormMutation",
     "DjangoModelPermission",
     "DjangoMutation",
+    "DjangoMutationExecutionContext",
     "DjangoMutationField",
     "DjangoNodeField",
     "DjangoNodesField",
     "DjangoOptimizerExtension",
+    "DjangoSchema",
     "DjangoType",
     "FieldError",
     "OptimizerHint",

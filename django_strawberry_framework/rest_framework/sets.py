@@ -80,6 +80,7 @@ from ..mutations.sets import (
     resolve_backed_model_or_raise,
     resolve_meta_model,
     resolver_seams,
+    validate_select_for_update,
 )
 from ..mutations.sets import (
     _validate_permission_classes as _validate_mutation_permission_classes,
@@ -483,16 +484,12 @@ class SerializerMutation(DjangoMutation):
                     f"schema-time field map: {sorted(unknown_injected)!r}. Inject only fields the "
                     "serializer's get_serializer_for_schema() exposes.",
                 )
-        # ``Meta.select_for_update`` (rev6 #14): opt-in row lock on the UPDATE locate. A bool
-        # only (the shared locate applies ``.select_for_update()`` when True); a non-bool is a
-        # clear class-creation error. On a backend without ``FOR UPDATE`` (e.g. sqlite) Django
-        # silently skips the clause, so it is safe to declare regardless of backend.
-        select_for_update = getattr(meta, "select_for_update", False)
-        if not isinstance(select_for_update, bool):
-            raise ConfigurationError(
-                f"SerializerMutation {name}.Meta.select_for_update must be a bool; got "
-                f"{select_for_update!r}.",
-            )
+        # ``Meta.select_for_update`` (rev6 #14, expanded by BETA-055): validated by the
+        # shared model-backed-flavor validator - default TRUE (locked writes are the
+        # safe posture; an explicit ``False`` opts into weaker concurrency), applied as
+        # a base-manager ``FOR UPDATE`` constrained by the visibility pk subquery on the
+        # locate and every relation-target check.
+        select_for_update = validate_select_for_update("SerializerMutation", name, meta)
         # ``Meta.nested_fields`` (rev6 #17): the explicit opt-in for nested serializer writes.
         # Validated at class creation - each key must name a nested serializer field the schema
         # map exposes, and the serializer MUST override the operation's write method (create /

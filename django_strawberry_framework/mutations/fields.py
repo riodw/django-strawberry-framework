@@ -60,6 +60,12 @@ from strawberry.utils.inspect import in_async_context
 from ..exceptions import ConfigurationError
 from .inputs import INPUTS_MODULE_PATH
 
+# The attribute name ``DjangoMutationField`` stamps its synthesized resolver with,
+# pointing at the bound mutation class. ``schema.py::DjangoMutationExecutionContext``
+# reads it back (through Strawberry's field extension) to recognize a generated
+# top-level mutation field and open its completion-spanning transaction (BETA-055).
+MUTATION_CLASS_MARKER = "_django_mutation_cls"
+
 
 def _validate_mutation_target(mutation_cls: Any) -> None:
     """Reject a bad ``DjangoMutationField`` target at the construction line (spec-036 / spec-038 Decision 5).
@@ -288,6 +294,10 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
     signature, annotations = _synthesized_mutation_signature(mutation_cls)
     _resolve.__signature__ = signature
     _resolve.__annotations__ = annotations
+    # The BETA-055 marker: ``DjangoMutationExecutionContext`` finds this through the
+    # built field's ``strawberry-definition`` extension and wraps the field's
+    # execution in the completion-spanning transaction.
+    setattr(_resolve, MUTATION_CLASS_MARKER, mutation_cls)
     return strawberry.field(
         resolver=_resolve,
         description=description,

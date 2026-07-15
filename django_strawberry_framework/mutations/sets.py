@@ -42,9 +42,10 @@ declared in this slice is inert: registered + bound at finalize, never resolved.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NamedTuple, get_origin
+from typing import Any, NamedTuple, get_origin
 
 import strawberry
+from django.db import models
 from strawberry import relay
 from strawberry.types.base import StrawberryList
 
@@ -68,9 +69,6 @@ from .inputs import (
 )
 from .permissions import DjangoModelPermission, run_permission_classes
 
-if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
-    from django.db import models
-
 # The mutation ``Meta``'s own allowed-key set (spec-036 Slice 2 line 53 +
 # Decision 12). Disjoint from ``types/base.py::ALLOWED_META_KEYS``: a mutation
 # ``Meta`` is the mutation class's own namespace, so this set is defined here and
@@ -84,6 +82,7 @@ _ALLOWED_MUTATION_META_KEYS: frozenset[str] = frozenset(
         "fields",
         "exclude",
         "permission_classes",
+        "select_for_update",
     },
 )
 
@@ -638,9 +637,14 @@ class _ValidatedMutationMeta:
         # subtracted from the create-required guard AND verified present at runtime. The model +
         # form flavors leave it ``None``.
         self.injected_fields = injected_fields
-        # The serializer-flavor ``Meta.select_for_update`` (spec-039 rev6 #14): an opt-in
-        # ``SELECT ... FOR UPDATE`` row lock on the UPDATE locate query (inside the existing
-        # transaction, after visibility filtering). The model + form flavors leave it ``False``.
+        # ``Meta.select_for_update`` (spec-039 rev6 #14, expanded by BETA-055): the
+        # base-manager ``SELECT ... FOR UPDATE`` row lock on the update / delete
+        # locate AND every relation-target check, constrained by the visibility pk
+        # subquery inside the write transaction. Every model-backed flavor (model /
+        # ``ModelForm`` / serializer) validates it via ``validate_select_for_update``
+        # (default ``True``; an explicit ``False`` opts into weaker concurrency).
+        # Only the model-less plain form leaves the constructor default (``False`` -
+        # it locates no row).
         self.select_for_update = select_for_update
         # The serializer-flavor ``Meta.nested_fields`` (spec-039 rev6 #17): the explicit opt-in
         # ``{field_name: NestedSerializerConfig}`` map naming the nested serializer fields the
@@ -703,6 +707,30 @@ def _validate_permission_classes(
                 "has_permission(info, mutation, operation, data, instance) method.",
             )
     return classes
+
+
+def validate_select_for_update(flavor: str, mutation_name: str, meta: Any) -> bool:
+    """Validate ``Meta.select_for_update`` for a model-backed flavor (default True - BETA-055).
+
+    Every model-backed write flavor (model / ``ModelForm`` / serializer) shares
+    this ONE validator so the key's contract cannot drift: the update / delete
+    locate and every relation-target check acquire a base-manager ``SELECT ...
+    FOR UPDATE`` (constrained by the visibility pk subquery) inside the write
+    transaction. The default is ``True`` - locked writes are the safe posture;
+    an explicit ``False`` opts into weaker concurrency (a row located this
+    transaction may be concurrently modified, surfacing as the in-band
+    ``conflict`` envelope instead of waiting on the lock). On a backend without
+    ``FOR UPDATE`` (sqlite) Django skips the clause silently, so ``True`` is
+    safe to leave in place regardless of backend. A non-bool is a clear
+    class-creation error.
+    """
+    select_for_update = getattr(meta, "select_for_update", True)
+    if not isinstance(select_for_update, bool):
+        raise ConfigurationError(
+            f"{flavor} {mutation_name}.Meta.select_for_update must be a bool; got "
+            f"{select_for_update!r}.",
+        )
+    return select_for_update
 
 
 class DjangoMutationMetaclass(type):
@@ -796,9 +824,16 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         - **no resolvable model** - ``cls._resolve_model(meta)`` returns ``None``
           (in 0.0.11 a missing ``Meta.model``; the seam lets the 0.0.12 / 0.0.13
           flavors supply it differently).
+        - **resolved model is not a Django model class** - a string name, a model
+          instance, or any non-``models.Model`` type (mirrors
+          ``types/base.py::_validate_meta``; without this the bind crashes with a
+          raw ``AttributeError`` / ``TypeError``).
         - **bad ``operation``** - missing or not in
           ``{"create", "update", "delete"}``.
         - **``fields`` + ``exclude`` both supplied** - mutual exclusion.
+        - **unknown / empty ``fields`` / ``exclude`` on create/update** - the
+          ``editable_input_fields`` walk the bind uses, so a typo'd name or an
+          empty narrowing fails at class creation (not deferred to finalize).
         - **inapplicable consumer input override** - ``input_class`` on anything
           other than create, or ``partial_input_class`` on anything other than
           update; delete accepts neither because it has no input.
@@ -821,6 +856,16 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         if model is None:
             raise ConfigurationError(
                 f"DjangoMutation {name}.Meta declares no resolvable model; set Meta.model.",
+            )
+        # Mirror ``types/base.py::_validate_meta``: a non-model value (a string name,
+        # a model *instance*, an unrelated class) must fail at class creation as
+        # ``ConfigurationError``. Without this gate the bad value is snapshotted and
+        # the phase-2.5 bind crashes with a raw ``AttributeError`` / ``TypeError``
+        # (``model.__name__`` / unhashable instance) instead of a typed config error.
+        if not isinstance(model, type) or not issubclass(model, models.Model):
+            raise ConfigurationError(
+                f"DjangoMutation {name} resolved model must be a Django model class; "
+                f"got {model!r}.",
             )
 
         operation = getattr(meta, "operation", None)
@@ -861,6 +906,22 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
                 f"DjangoMutation {name}.Meta.operation is 'delete', which is id-only and "
                 "takes no input; remove the inapplicable Meta.fields / Meta.exclude.",
             )
+
+        # Create / update materialize an input from the editable column set. Run the
+        # SAME ``editable_input_fields`` walk the bind / generator use NOW so an
+        # unknown / non-editable name and an empty narrowing fail at class creation
+        # (the form flavor's posture via ``resolve_effective_form_fields``), not as a
+        # deferred finalize-time ``ConfigurationError`` after the class already
+        # registered. Delete is excluded above (it takes no input).
+        if operation != "delete":
+            selected = editable_input_fields(model, fields=fields, exclude=exclude)
+            if not selected:
+                raise ConfigurationError(
+                    f"DjangoMutation {name}.Meta.fields / Meta.exclude narrowed the "
+                    f"editable column set to empty (or {model.__name__} declares no "
+                    f"editable columns). A {operation} mutation input must define at "
+                    "least one field.",
+                )
 
         # Reject consumer input overrides that the declared operation cannot use.
         # Delete has no input; create and update each read only their matching
@@ -910,6 +971,7 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
             fields=fields,
             exclude=exclude,
             permission_classes=permission_classes,
+            select_for_update=validate_select_for_update("DjangoMutation", name, meta),
         )
 
     # Module path the generated input class is materialized into - the

@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for the products catalog API surface.
+"""Live GraphQL HTTP tests for products reads, mutations, permissions, optimization, and request parsing.
 
 Mirrors ``test_library_api.py``'s harness. Exercises the products schema
 wired in ``apps.products.schema`` end to end:
@@ -793,6 +793,37 @@ def test_create_item_relation_id_for_hidden_category_is_field_error():
 
 
 @pytest.mark.django_db(transaction=True)
+def test_update_item_explicit_null_category_id_is_field_error():
+    """Explicit ``categoryId: null`` is a field-keyed null error, not an IntegrityError leak.
+
+    Live ``/graphql`` acceptance for the FK decode null guard. Create ``ItemInput``
+    declares ``categoryId: ID!`` (GraphQL rejects null before the resolver), so this
+    exercises the optional ``ItemPartialInput.categoryId`` on ``updateItem`` - the
+    wire path that can deliver an explicit ``null`` for a ``null=False`` FK.
+    """
+    create_users(1)
+    seed_data(1)
+    category = models.Category.objects.first()
+    item = models.Item.objects.create(name="HasCategory", category=category)
+    client = _login_with_perm("staff_1", "change_item")
+
+    response = _post_graphql(
+        _UPDATE_ITEM,
+        client=client,
+        variables={"id": _global_id("products.item", item.pk), "d": {"categoryId": None}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    result = payload["data"]["updateItem"]
+    assert result["node"] is None
+    assert len(result["errors"]) == 1
+    assert result["errors"][0]["field"] == "categoryId"
+    item.refresh_from_db()
+    assert item.category_id == category.pk
+
+
+@pytest.mark.django_db(transaction=True)
 def test_update_item_malformed_id_is_field_error_no_coercion_crash():
     """feedback #1: a malformed / raw-pk ``id:`` on `updateItem` -> `FieldError` on `id`, no crash.
 
@@ -1035,9 +1066,12 @@ def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     # The relation renders WITHOUT an error (planned, not a broken / lazy FK).
     assert result["node"] == {"name": "G2Widget", "category": {"name": category.name}}
 
-    # Bounded count = 12, derived from a real run (stable across runs):
-    #   BEGIN + COMMIT                                    = 2 (the resolver's one
-    #                                                         transaction.atomic())
+    # Bounded count = 14, derived from a real run (stable across runs):
+    #   BEGIN + COMMIT                                    = 2 (the DjangoSchema
+    #                                                         completion-spanning
+    #                                                         transaction - BETA-055)
+    #   SAVEPOINT + RELEASE                               = 2 (the pipeline's inner
+    #                                                         atomic, now nested)
     #   session + auth_user + user_perms + group_perms    = 4 (authorized-caller
     #                                                         machinery)
     #   relation-id visibility decode: products_category  = 1 (feedback P1: the
@@ -1050,7 +1084,7 @@ def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     #   the `category` relation:  products_category       = 1 (select_related/prefetch;
     #                                                         no N+1, no lazy refetch)
     sql = [query["sql"] for query in captured]
-    assert len(captured) == 12, sql
+    assert len(captured) == 14, sql
     # G2 load-bearing property: the re-fetch reads the item once and the relation
     # once - a deferred-field lazy refetch or an N+1 would add EXTRA products SELECTs.
     item_selects = [
@@ -1467,6 +1501,78 @@ def test_products_items_related_category_name_permission_fires_for_anonymous():
     payload = response.json()
     assert "errors" in payload, payload
     assert "staff user" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
+def test_products_items_flat_category_name_permission_fires_for_anonymous():
+    """The FLAT twin ``categoryName`` fires the same target gate as ``category: { name }``.
+
+    ``ItemFilter`` exposes both the nested ``category`` branch and a generated
+    flat traversal leaf ``categoryName`` (source path ``category__name``) that
+    constrain the same column. Both must be equally gated: spelling the predicate
+    flat must not bypass ``CategoryFilter.check_name_permission``. Before the flat-
+    leaf gating fix this returned rows anonymously (a silent authorization
+    bypass); it is now denied identically to the nested form.
+    """
+    seed_data(1)
+    category = models.Category.objects.order_by("id").first()
+    response = _post_graphql(
+        f"query {{ allItems(filter: {{ categoryName: {{ exact: {json.dumps(category.name)} }} }}) "
+        "{ edges { node { name } } } }",
+    )
+    payload = response.json()
+    assert "errors" in payload, payload
+    assert "staff user" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
+def test_products_items_deep_flat_category_name_permission_fires_for_anonymous():
+    """A DEEP flat twin fires the full target gate chain the nested form fires.
+
+    ``entriesPropertyCategoryName`` (source path
+    ``entries__property__category__name``) is generated by ``RelatedFilter``
+    expansion across ``Item -> entries (EntryFilter) -> property (PropertyFilter)
+    -> category (CategoryFilter) -> name``. The flat-leaf gating walks that
+    declared chain and fires the terminal ``CategoryFilter.check_name_permission``,
+    so the deep flat spelling is denied for an anonymous user exactly like
+    ``entries: { property: { category: { name: ... } } }``.
+    """
+    seed_data(1)
+    category = models.Category.objects.order_by("id").first()
+    response = _post_graphql(
+        "query { allItems(filter: { entriesPropertyCategoryName: "
+        f"{{ exact: {json.dumps(category.name)} }} }}) "
+        "{ edges { node { name } } } }",
+    )
+    payload = response.json()
+    assert "errors" in payload, payload
+    assert "staff user" in payload["errors"][0]["message"]
+
+
+@pytest.mark.django_db
+def test_products_items_flat_category_name_as_staff():
+    """A staff user clears the flat-twin gate too - the fix denies, it does not over-block.
+
+    Permission-equivalence cuts both ways: once the target gate is satisfied
+    (staff), the flat ``categoryName`` filter runs and returns exactly the items
+    under that category (the same rows the nested staff form would return).
+    """
+    seed_data(1)
+    item = models.Item.objects.select_related("category").order_by("id").first()
+    category_name = item.category.name
+    expected_edges = [
+        {"node": {"name": it.name, "category": {"name": it.category.name}}}
+        for it in models.Item.objects.select_related("category")
+        .filter(category__name=category_name)
+        .order_by("pk")
+    ]
+    _assert_graphql_data(
+        "query { allItems(filter: { categoryName: "
+        f"{{ exact: {json.dumps(category_name)} }} }}) "
+        "{ edges { node { name category { name } } } } }",
+        {"allItems": {"edges": expected_edges}},
+        client=_staff_client(),
+    )
 
 
 @pytest.mark.django_db
@@ -3672,12 +3778,15 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
     assert result["errors"] == []
     assert result["node"] == {"name": "SerG2Widget", "category": {"name": category.name}}
 
-    # Bounded count = 12, DERIVED from a real run (BUILD.md forbids guessing it;
-    # the serializer flavor differs from the model flavor's 12 by composition - no
+    # Bounded count = 14, DERIVED from a real run (BUILD.md forbids guessing it;
+    # the serializer flavor differs from the model flavor's 14 by composition - no
     # `full_clean`, instead DRF's `is_valid()` runs the FK re-fetch + the unique
     # validator). Per-query breakdown:
-    #   BEGIN + COMMIT                                       = 2 (the resolver's one
-    #                                                            transaction.atomic())
+    #   BEGIN + COMMIT                                       = 2 (the DjangoSchema
+    #                                                            completion-spanning
+    #                                                            transaction - BETA-055)
+    #   SAVEPOINT + RELEASE                                  = 2 (the pipeline's inner
+    #                                                            atomic, now nested)
     #   session + auth_user + user_perms + group_perms       = 4 (authorized-caller
     #                                                            machinery)
     #   relation-id visibility decode: products_category     = 1 (the resolver
@@ -3694,7 +3803,7 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
     #                                                            prefetch; no N+1, no
     #                                                            lazy refetch)
     sql = [query["sql"] for query in captured]
-    assert len(captured) == 12, sql
+    assert len(captured) == 14, sql
     # G2 load-bearing property (NOT a column-exact snapshot - that is the package
     # mirror's job): the re-fetch reads the item once (the `SELECT 1` EXISTS is the
     # unique validator, not a row read) and the relation through select_related /

@@ -763,7 +763,8 @@ def test_model_flavor_base_unregressed():
     from django_strawberry_framework import DjangoMutation
     from django_strawberry_framework.mutations.sets import _ALLOWED_MUTATION_META_KEYS
 
-    # The model allowed-key set is byte-unchanged (no serializer keys leaked in).
+    # The model allowed-key set gained only the shared ``select_for_update``
+    # (BETA-055); no serializer-only keys leaked in.
     assert (
         frozenset(
             {
@@ -774,6 +775,7 @@ def test_model_flavor_base_unregressed():
                 "fields",
                 "exclude",
                 "permission_classes",
+                "select_for_update",
             },
         )
         == _ALLOWED_MUTATION_META_KEYS
@@ -920,8 +922,13 @@ def test_meta_select_for_update_stored_on_snapshot():
     assert LockMut._mutation_meta.select_for_update is True
 
 
-def test_meta_select_for_update_defaults_false():
-    """``Meta.select_for_update`` defaults to ``False`` when unset (rev6 #14)."""
+def test_meta_select_for_update_defaults_true():
+    """``Meta.select_for_update`` defaults to ``True`` when unset (BETA-055: locked writes).
+
+    The default flipped from opt-in (rev6 #14) to opt-out: the update/delete
+    locate and relation-target checks lock through the base manager unless the
+    consumer explicitly opts into weaker concurrency with ``False``.
+    """
 
     class PlainMut(SerializerMutation):
         class Meta:
@@ -929,7 +936,20 @@ def test_meta_select_for_update_defaults_false():
             operation = "update"
             permission_classes = []
 
-    assert PlainMut._mutation_meta.select_for_update is False
+    assert PlainMut._mutation_meta.select_for_update is True
+
+
+def test_meta_select_for_update_explicit_false_opts_out():
+    """An explicit ``Meta.select_for_update = False`` opts into unlocked writes (BETA-055)."""
+
+    class UnlockedMut(SerializerMutation):
+        class Meta:
+            serializer_class = _item_serializer()
+            operation = "update"
+            permission_classes = []
+            select_for_update = False
+
+    assert UnlockedMut._mutation_meta.select_for_update is False
 
 
 def test_meta_select_for_update_non_bool_raises():

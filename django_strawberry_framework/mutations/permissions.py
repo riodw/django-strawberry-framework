@@ -1,4 +1,4 @@
-"""``DjangoModelPermission`` - the DRF-shaped default write-authorization class (spec-036).
+"""Shared mutation authorization: permission execution, model permissions, and model-less deny-by-default.
 
 The write side's default permission class (spec-036 Decision 15 / AR-H3). It is a
 **first-class, separate contract from row visibility** (``get_queryset`` +
@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..exceptions import ConfigurationError
 from ..utils.permissions import request_from_info
 from ..utils.querysets import reject_async_in_sync_context
 
@@ -53,7 +54,7 @@ _OPERATION_PERMISSION_ACTION: dict[str, str] = {
 _PERMISSION_ASYNC_RECOURSE = (
     "A DjangoMutation runs its permission check synchronously, so it cannot await "
     "an async permission hook; redefine has_permission / check_permission as a sync "
-    "method returning a bool."
+    "method returning a bool, and ensure user.has_perm / auth backends return a bool."
 )
 
 
@@ -94,6 +95,14 @@ def run_permission_classes(
             context="mutation",
             recourse=_PERMISSION_ASYNC_RECOURSE,
         )
+        # An ACTUAL bool is required (BETA-055): a truthy non-bool return (an
+        # object, a string, a forgotten method reference) would silently read as
+        # "allow" - the same bypass class the async-coroutine rejection closes.
+        if not isinstance(allowed, bool):
+            raise ConfigurationError(
+                f"{permission_class.__name__}.has_permission must return a bool; got "
+                f"{allowed!r}. Authorization results are never coerced from truthiness.",
+            )
         if not allowed:
             return False
     return True
@@ -141,7 +150,25 @@ class DjangoModelPermission:
         model = mutation._resolve_model(mutation.Meta)
         action = _OPERATION_PERMISSION_ACTION[operation]
         codename = f"{model._meta.app_label}.{action}_{model._meta.model_name}"
-        return bool(user.has_perm(codename))
+        # ``user.has_perm`` is sync Django auth; an awaitable return (a buggy
+        # custom user / backend) is truthy, so ``bool(coroutine)`` would silently
+        # ALLOW - the same authorization-bypass class ``run_permission_classes``
+        # closes for async ``has_permission``. And a truthy NON-bool (a custom
+        # user / backend returning an object) is the same bypass in sync form
+        # (BETA-055), so the result must be an actual bool - never coerced.
+        allowed = reject_async_in_sync_context(
+            user.has_perm(codename),
+            owner=type(user).__name__,
+            method="has_perm",
+            context="mutation",
+            recourse=_PERMISSION_ASYNC_RECOURSE,
+        )
+        if not isinstance(allowed, bool):
+            raise ConfigurationError(
+                f"{type(user).__name__}.has_perm must return a bool; got {allowed!r}. "
+                "Authorization results are never coerced from truthiness.",
+            )
+        return allowed
 
 
 class DenyAll:

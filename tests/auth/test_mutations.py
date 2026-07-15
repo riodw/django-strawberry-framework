@@ -1,4 +1,4 @@
-"""Package-internal tests for ``django_strawberry_framework/auth/mutations.py`` (spec-040).
+"""Auth mutation tests for declaration and bind lifecycles, operations, registration, and permissions.
 
 Only the residue a realistic fakeshop ``/graphql/`` request cannot drive lives
 here (the AGENTS.md placement rule; the live consumer surface is
@@ -28,7 +28,7 @@ from django.db import models as djmodels
 from django.test import RequestFactory
 from strawberry import relay
 
-from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework import DjangoSchema, DjangoType, finalize_django_types
 from django_strawberry_framework.auth import login_mutation, logout_mutation, register_mutation
 from django_strawberry_framework.auth.mutations import (
     _auth_declarations,
@@ -127,7 +127,7 @@ def _session_request(user=None):
 
 def _finalize_schema(mutation_type: type, *, query_type: type = _Query) -> strawberry.Schema:
     finalize_django_types()
-    return strawberry.Schema(query=query_type, mutation=mutation_type)
+    return DjangoSchema(query=query_type, mutation=mutation_type)
 
 
 def _login_logout_schema(**login_kwargs):

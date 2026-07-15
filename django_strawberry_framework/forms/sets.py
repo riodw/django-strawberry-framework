@@ -69,6 +69,7 @@ from ..mutations.sets import (
     resolve_backed_model_or_raise,
     resolve_meta_model,
     resolver_seams,
+    validate_select_for_update,
 )
 from ..registry import register_subsystem_clear
 from ..utils.inputs import make_shape_build_cache
@@ -99,6 +100,7 @@ _ALLOWED_MODELFORM_META_KEYS: frozenset[str] = frozenset(
         "fields",
         "exclude",
         "permission_classes",
+        "select_for_update",
     },
 )
 _ALLOWED_PLAIN_FORM_META_KEYS: frozenset[str] = frozenset(
@@ -494,6 +496,11 @@ class DjangoModelFormMutation(DjangoMutation):
             exclude=exclude,
             permission_classes=permission_classes,
             form_class=form_class,
+            select_for_update=validate_select_for_update(
+                "DjangoModelFormMutation",
+                name,
+                meta,
+            ),
         )
 
     # The form-input namespace (``forms.inputs``), overriding the ``036`` model
@@ -676,14 +683,23 @@ class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):
         # Reject it by KEY PRESENCE, not value, so an explicit ``operation = None``
         # is rejected too - the fixed ``"form"`` sentinel must not accept ANY copied
         # ``Meta.operation`` key (spec-038 Decision 10; a value check let
-        # ``None`` slip through as if absent). Reject it FIRST with a targeted
-        # message naming the reason, so a consumer who copied a
-        # ``DjangoModelFormMutation`` ``Meta`` sees "operation is not supported"
-        # rather than a generic "unknown keys: ['operation']" - then run the
-        # promoted typo guard over the genuinely-unknown remainder (``operation`` is
-        # added to the allowed set passed there so a stray ``operation`` cannot
-        # double-report; it is already rejected above by the key-presence check).
-        if "operation" in vars(meta):
+        # ``None`` slip through as if absent). Presence MUST follow normal attribute
+        # lookup (``hasattr``), NOT ``vars(meta)`` own-keys-only: ``form_class`` /
+        # ``permission_classes`` / ``fields`` / ``exclude`` are resolved via
+        # ``getattr`` (MRO-visible), and the ModelForm flavor honors an inherited
+        # ``operation`` the same way - so a shared ``Meta`` parent that carries
+        # ``operation`` (the common "copy a ModelForm Meta / share a base Meta"
+        # pattern) must be rejected here too. ``vars(meta)`` alone let
+        # ``class Meta(Shared): pass`` with ``Shared.operation = ...`` finalize as
+        # if absent while ``Submit.Meta.operation`` still resolved to the inherited
+        # value. Reject it FIRST with a targeted message naming the reason, so a
+        # consumer who copied a ``DjangoModelFormMutation`` ``Meta`` sees
+        # "operation is not supported" rather than a generic
+        # "unknown keys: ['operation']" - then run the promoted typo guard over the
+        # genuinely-unknown remainder (``operation`` is added to the allowed set
+        # passed there so a stray own-key ``operation`` cannot double-report; it is
+        # already rejected above by the key-presence check).
+        if hasattr(meta, "operation"):
             raise ConfigurationError(
                 f"DjangoFormMutation {name}.Meta.operation is not supported; a model-less form "
                 "mutation has no model operation (Decision 10). Remove Meta.operation.",

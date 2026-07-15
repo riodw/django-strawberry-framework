@@ -32,7 +32,7 @@ from django.urls import path
 from strawberry import relay
 from strawberry.django.views import GraphQLView
 
-from django_strawberry_framework import DjangoOptimizerExtension
+from django_strawberry_framework import DjangoOptimizerExtension, DjangoSchema
 from django_strawberry_framework.extensions import DjangoDebugExtension
 from django_strawberry_framework.testing import TestClient
 
@@ -103,7 +103,9 @@ def install_probe_schema(_reload_project_schema_for_acceptance_tests):
 
     def _install(extensions):
         finalize_django_types()
-        _current["schema"] = strawberry.Schema(
+        # DjangoSchema: the probe mounts the generated products write surface,
+        # whose pipeline requires the completion-spanning transaction (BETA-055).
+        _current["schema"] = DjangoSchema(
             query=Query,
             mutation=Mutation,
             config=strawberry_config(),

@@ -21,6 +21,7 @@ these tests pin the *resolver*, not the write-auth seam (that is
 from __future__ import annotations
 
 import itertools
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest import mock
 
@@ -32,7 +33,7 @@ from apps.scalars import models as scalars_models
 from asgiref.sync import sync_to_async
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.db import connection as db_connection
 from django.db import models as djmodels
 from django.test import override_settings
@@ -43,6 +44,7 @@ from django_strawberry_framework import (
     DjangoMutation,
     DjangoMutationField,
     DjangoOptimizerExtension,
+    DjangoSchema,
     DjangoType,
     finalize_django_types,
 )
@@ -51,6 +53,7 @@ from django_strawberry_framework.mutations.inputs import NON_FIELD_ERROR_KEY
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.utils.querysets import SyncMisuseError
+from django_strawberry_framework.utils.write_transaction import managed_write_transaction
 
 
 @pytest.fixture(autouse=True)
@@ -98,7 +101,7 @@ class _Query:
 
 def _schema(mutation_type: type) -> strawberry.Schema:
     """Build a finalized schema with the optimizer extension installed."""
-    return strawberry.Schema(
+    return DjangoSchema(
         query=_Query,
         mutation=mutation_type,
         extensions=[DjangoOptimizerExtension],
@@ -782,8 +785,14 @@ def test_sync_misuse_async_get_queryset_from_sync_path():
     finalize_django_types()
     cat = product_models.Category.objects.create(name=_category_name())
     item = product_models.Item.objects.create(name="X", category=cat)
-    # Drive the sync pipeline directly (the locate path runs get_queryset).
-    with pytest.raises(SyncMisuseError):
+    # Drive the sync pipeline directly (the locate path runs get_queryset); the
+    # managed-transaction context stands in for the DjangoSchema execution the
+    # direct call bypasses.
+    with (
+        managed_write_transaction("default"),
+        transaction.atomic(),
+        pytest.raises(SyncMisuseError),
+    ):
         resolvers.resolve_mutation_sync(
             UpdateItem,
             info=None,
@@ -928,7 +937,7 @@ async def test_async_mutation_does_not_leak_into_later_read_optimizer_execution(
         create_item = DjangoMutationField(CreateItem)
 
     finalize_django_types()
-    schema = strawberry.Schema(
+    schema = DjangoSchema(
         query=Query,
         mutation=Mutation,
         extensions=[DjangoOptimizerExtension],
@@ -2367,21 +2376,53 @@ def test_validation_error_to_field_errors_non_dict_root_has_empty_path():
 
 
 # ---------------------------------------------------------------------------
-# Optional row locking on the update locate (spec-039 rev6 #14)
+# Row locking on the update/delete locate (spec-039 rev6 #14, expanded by BETA-055)
 # ---------------------------------------------------------------------------
 
 
-def test_locate_instance_applies_select_for_update_when_requested(monkeypatch):
-    """``locate_instance(..., select_for_update=True)`` wraps the visible queryset in ``.select_for_update()`` (#14)."""
+@pytest.mark.django_db
+def test_locate_instance_locks_through_base_manager_subquery_by_default():
+    """The default locate acquires a base-manager ``FOR UPDATE`` constrained by the visibility pk subquery (BETA-055).
+
+    The lock query must NOT be the consumer's visibility queryset with
+    ``.select_for_update()`` attached (joins / unions / annotations cannot legally
+    carry ``FOR UPDATE``); it is the model's base manager filtered by
+    ``pk__in=<visible pks>``. The located row still respects visibility (a row
+    outside the subquery is not found).
+    """
+    from django.db import transaction
+
+    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+
+    _schema_and_types = _build_item_schema()
+    ItemT = _schema_and_types[1][1]
+    cat = product_models.Category.objects.create(name=_category_name())
+    item = product_models.Item.objects.create(name="Lockable", category=cat)
+
+    with transaction.atomic():
+        located = mutation_resolvers.locate_instance(ItemT, item.pk, None, alias="default")
+    assert located is not None
+    assert located.pk == item.pk
+    # The locked read comes from the BASE manager (a plain Item row), and the
+    # visibility subquery still gates it: a missing pk is None, not an error.
+    with transaction.atomic():
+        assert (
+            mutation_resolvers.locate_instance(ItemT, item.pk + 999, None, alias="default") is None
+        )
+
+
+def test_locate_instance_opt_out_skips_the_lock(monkeypatch):
+    """``select_for_update=False`` locates through the (pinned) visibility queryset, unlocked."""
     from unittest.mock import MagicMock
 
     from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 
     sentinel = object()
     visible_qs = MagicMock(name="visible_qs")
-    locked_qs = MagicMock(name="locked_qs")
-    visible_qs.select_for_update.return_value = locked_qs
-    locked_qs.get.return_value = sentinel
+    visible_qs._db = None
+    pinned_qs = MagicMock(name="pinned_qs")
+    visible_qs.using.return_value = pinned_qs
+    pinned_qs.get.return_value = sentinel
 
     monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: MagicMock())
     monkeypatch.setattr(mutation_resolvers, "initial_queryset", lambda _t: None)
@@ -2391,51 +2432,37 @@ def test_locate_instance_applies_select_for_update_when_requested(monkeypatch):
         lambda *a, **k: visible_qs,
     )
 
-    result = mutation_resolvers.locate_instance(object(), 7, None, select_for_update=True)
-    assert result is sentinel
-    visible_qs.select_for_update.assert_called_once_with()
-    locked_qs.get.assert_called_once_with(pk=7)
-
-
-def test_locate_instance_no_lock_by_default(monkeypatch):
-    """``locate_instance`` does NOT lock unless asked (the default is an unlocked visibility lookup) (#14)."""
-    from unittest.mock import MagicMock
-
-    from django_strawberry_framework.mutations import resolvers as mutation_resolvers
-
-    sentinel = object()
-    visible_qs = MagicMock(name="visible_qs")
-    visible_qs.get.return_value = sentinel
-
-    monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: MagicMock())
-    monkeypatch.setattr(mutation_resolvers, "initial_queryset", lambda _t: None)
-    monkeypatch.setattr(
-        mutation_resolvers,
-        "apply_type_visibility_sync",
-        lambda *a, **k: visible_qs,
+    result = mutation_resolvers.locate_instance(
+        object(),
+        7,
+        None,
+        alias="default",
+        select_for_update=False,
     )
-
-    result = mutation_resolvers.locate_instance(object(), 7, None)
     assert result is sentinel
-    visible_qs.select_for_update.assert_not_called()
-    visible_qs.get.assert_called_once_with(pk=7)
+    visible_qs.using.assert_called_once_with("default")
+    pinned_qs.select_for_update.assert_not_called()
+    pinned_qs.get.assert_called_once_with(pk=7)
 
 
 # ---------------------------------------------------------------------------
-# Multi-db atomic boundary (router.db_for_write)
+# Multi-db atomic boundary (the managed write alias)
 # ---------------------------------------------------------------------------
 
 
-def test_write_pipeline_opens_atomic_on_router_write_db(monkeypatch):
-    """``run_write_pipeline_sync`` opens ``transaction.atomic(using=db_for_write)``.
+def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch):
+    """``run_write_pipeline_sync`` opens ``transaction.atomic(using=<managed alias>)``.
 
-    Without ``using=``, a multi-db router write commits on the routed alias while
-    the atomic block (and its rollback) stay on ``default`` - a FieldError /
-    post-save failure then leaves the write persisted (spec-039 H6 gap).
+    The alias is resolved ONCE (by the ``DjangoSchema`` execution context, from
+    ``router.db_for_write``) and published through the managed-transaction
+    context; the pipeline's own atomic block - and its rollback - must ride the
+    SAME alias, or a multi-db router write commits on the routed alias while
+    the rollback stays on ``default`` (spec-039 H6 gap).
     """
     from unittest.mock import MagicMock, patch
 
     from django_strawberry_framework.mutations import resolvers as mutation_resolvers
+    from django_strawberry_framework.utils.write_transaction import managed_write_transaction
 
     mutation_cls = MagicMock()
     mutation_cls._mutation_meta.operation = "create"
@@ -2475,8 +2502,8 @@ def test_write_pipeline_opens_atomic_on_router_write_db(monkeypatch):
     )
 
     with (
-        patch.object(mutation_resolvers.router, "db_for_write", return_value="shard_b"),
         patch.object(mutation_resolvers.transaction, "atomic", side_effect=_Atomic),
+        managed_write_transaction("shard_b"),
     ):
         result = mutation_resolvers.run_write_pipeline_sync(
             mutation_cls,
@@ -2498,17 +2525,27 @@ def test_write_pipeline_opens_atomic_on_router_write_db(monkeypatch):
 _protector_model_counter = itertools.count(1)
 
 
-def _make_protector_model(on_delete):
-    """Return a synthetic ``managed=False`` model holding an ``on_delete``-guarded FK to ``Item``.
+@contextmanager
+def _protector_model(on_delete):
+    """One stable protector-model fixture: create, yield, then FULLY retire the model.
 
-    ``app_label="products"`` (an INSTALLED app) so the table can be created with
-    ``schema_editor``; ``related_name="+"`` skips the reverse accessor so the two
-    parametrized flavors cannot clash on ``Item``. The model NAME is uniquified
-    per call so Django's app registry does not warn on re-register.
+    Yields a synthetic ``managed=False`` model holding an ``on_delete``-guarded FK
+    to ``Item`` (``app_label="products"`` - an INSTALLED app - so the table can be
+    created with ``schema_editor``; ``related_name="+"`` skips the reverse
+    accessor; the NAME is uniquified per call so re-register never warns).
+
+    The load-bearing part is the TEARDOWN: dropping only the TABLE used to leave
+    the model class registered in Django's app registry, so every later
+    ``Item.delete()`` anywhere in the process - including the sibling
+    parametrized run - had its deletion collector query the now-missing table
+    ("no such table", order-/worker-sensitive). Retiring the model means popping
+    it from ``apps.all_models`` AND clearing the registry's caches (which rebuilds
+    ``Item._meta.related_objects``), so each run is self-contained regardless of
+    ordering.
     """
     suffix = next(_protector_model_counter)
     meta = type("Meta", (), {"app_label": "products", "managed": False})
-    return type(
+    model = type(
         f"MutProtector{suffix}",
         (djmodels.Model,),
         {
@@ -2521,6 +2558,16 @@ def _make_protector_model(on_delete):
             "Meta": meta,
         },
     )
+    with db_connection.schema_editor() as schema_editor:
+        schema_editor.create_model(model)
+    try:
+        yield model
+    finally:
+        with db_connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(model)
+        apps_registry = model._meta.apps
+        apps_registry.all_models["products"].pop(model._meta.model_name, None)
+        apps_registry.clear_cache()
 
 
 @pytest.mark.django_db(transaction=True)
@@ -2540,10 +2587,7 @@ def test_delete_refused_by_protected_reference_is_envelope_not_graphql_error(on_
     one (the message names the protected-reference refusal, not the generic
     constraint fallback) and that it leaks no referencing-model name.
     """
-    model = _make_protector_model(on_delete)
-    with db_connection.schema_editor() as schema_editor:
-        schema_editor.create_model(model)
-    try:
+    with _protector_model(on_delete) as model:
         schema, (_CategoryT, ItemT) = _build_item_schema()
         cat = product_models.Category.objects.create(name=_category_name())
         item = product_models.Item.objects.create(name="Guarded", category=cat)
@@ -2555,6 +2599,15 @@ def test_delete_refused_by_protected_reference_is_envelope_not_graphql_error(on_
         ]
         assert model.__name__ not in str(payload["errors"])  # no internal-name leak
         assert product_models.Item.objects.filter(pk=item.pk).exists()  # refused, not deleted
-    finally:
-        with db_connection.schema_editor() as schema_editor:
-            schema_editor.delete_model(model)
+
+
+def test_raw_pk_relation_check_skips_an_all_none_set_without_querying():
+    """An all-``None`` raw-pk set is a nullable-relation clear: no check, no query.
+
+    ``_raw_pk_relation_error``'s explicit-``None`` contract (see its docstring):
+    a ``None`` is not a pk to verify - it decodes to a NULL assignment validated
+    by ``full_clean`` - so a set with no real pks returns clean before any
+    registry resolve or visibility query (``info`` is never touched).
+    """
+    error = resolvers._raw_pk_relation_error("branchId", [None], product_models.Category, None)
+    assert error is None

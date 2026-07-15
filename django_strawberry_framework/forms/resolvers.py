@@ -110,6 +110,7 @@ from ..mutations.resolvers import (
     save_or_field_errors,
 )
 from ..utils.querysets import sync_pipeline_recourse
+from ..utils.write_transaction import require_managed_write, write_pipeline
 from ..utils.write_values import (
     decode_provided_fields,
     decode_scalar_leaf,
@@ -518,8 +519,14 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
     the same ``save_or_field_errors`` ``IntegrityError`` mapper.
     """
     payload_cls = payload_cls_for(mutation_cls)
+    meta = mutation_cls._mutation_meta
+    # The managed-transaction gate + pinned alias (BETA-055): the model-less
+    # plain form routes to ``DEFAULT_DB_ALIAS`` (``resolve_write_alias(None)``);
+    # the completion-spanning ``DjangoSchema`` transaction must already be open,
+    # so a plain ``strawberry.Schema`` execution fails here, before any DB work.
+    using = require_managed_write(mutation_cls)
 
-    with transaction.atomic():
+    with transaction.atomic(using=using), write_pipeline(using, lock=meta.select_for_update):
 
         def _error_payload(errors: list[Any]) -> Any:
             """Roll back, then return the ``{ ok: false }`` envelope (spec-039 H6).
@@ -541,7 +548,7 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
             was written); ``payload_cls(...)`` runs no ORM query, so it is safe after
             ``set_rollback``.
             """
-            transaction.set_rollback(True)
+            transaction.set_rollback(True, using=using)
             return payload_cls(ok=False, errors=errors)
 
         # Authorize BEFORE decoding (see the ModelForm body): a plain form with a

@@ -45,6 +45,7 @@ from strawberry import relay
 
 from django_strawberry_framework import (
     DjangoMutationField,
+    DjangoSchema,
     DjangoType,
     SerializerMutation,
     finalize_django_types,
@@ -60,6 +61,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
 )
 from django_strawberry_framework.testing.relay import global_id_for
 from django_strawberry_framework.utils.querysets import SyncMisuseError
+from django_strawberry_framework.utils.write_transaction import managed_write_transaction
 
 
 @pytest.fixture(autouse=True)
@@ -405,7 +407,7 @@ def _bind_item_serializer_mutation(serializer_cls, *, operation="create"):
         write_item = DjangoMutationField(WriteItem)
 
     finalize_django_types()
-    strawberry.Schema(query=Query, mutation=Mutation)
+    DjangoSchema(query=Query, mutation=Mutation)
     del CategoryT, ItemT
     return WriteItem
 
@@ -559,12 +561,15 @@ def test_save_time_validation_after_partial_write_is_rolled_back():
     info = SimpleNamespace(context=SimpleNamespace(request=request))
     data = mutation_cls._input_class(name="NewCat")
 
-    result = serializer_resolvers.resolve_serializer_sync(
-        mutation_cls,
-        info,
-        data=data,
-        id=strawberry.UNSET,
-    )
+    # The managed-transaction context stands in for the DjangoSchema execution
+    # the direct resolver call bypasses.
+    with managed_write_transaction("default"):
+        result = serializer_resolvers.resolve_serializer_sync(
+            mutation_cls,
+            info,
+            data=data,
+            id=strawberry.UNSET,
+        )
 
     # The mutation returns the error envelope (null object + the field error)...
     assert [fe.field for fe in result.errors] == ["name"]
@@ -673,7 +678,7 @@ def test_merged_kwargs_merges_override_context_keys_keeping_framework_request():
         write_item = DjangoMutationField(OverridingMutation)
 
     finalize_django_types()
-    strawberry.Schema(query=Query, mutation=Mutation)
+    DjangoSchema(query=Query, mutation=Mutation)
     del CategoryT, ItemT
 
     request = HttpRequest()
@@ -732,7 +737,7 @@ def test_merged_kwargs_override_returning_partial_is_configuration_error():
         write_item = DjangoMutationField(PartialReturningMutation)
 
     finalize_django_types()
-    strawberry.Schema(query=Query, mutation=Mutation)
+    DjangoSchema(query=Query, mutation=Mutation)
     del CategoryT, ItemT
 
     request = HttpRequest()
@@ -790,7 +795,7 @@ def test_merged_kwargs_override_different_request_object_is_configuration_error(
         write_item = DjangoMutationField(WrongRequestMutation)
 
     finalize_django_types()
-    strawberry.Schema(query=Query, mutation=Mutation)
+    DjangoSchema(query=Query, mutation=Mutation)
     del CategoryT, ItemT
 
     request = HttpRequest()
@@ -966,7 +971,7 @@ async def test_async_serializer_resolver_runs_sync_body_under_sync_to_async():
         write_item = DjangoMutationField(CreateItemAsync)
 
     finalize_django_types()
-    strawberry.Schema(query=Query, mutation=Mutation)
+    DjangoSchema(query=Query, mutation=Mutation)
     del CategoryT, ItemT
 
     from asgiref.sync import sync_to_async
@@ -984,7 +989,10 @@ async def test_async_serializer_resolver_runs_sync_body_under_sync_to_async():
     info = SimpleNamespace(context=SimpleNamespace(request=request))
     data = _Data(name="AsyncItem", category_id=gid)
 
-    payload = await CreateItemAsync.resolve_async(info, data=data, id=None)
+    # The managed-transaction context stands in for the DjangoSchema execution the
+    # direct seam call bypasses (it propagates into the sync_to_async worker).
+    with managed_write_transaction("default"):
+        payload = await CreateItemAsync.resolve_async(info, data=data, id=None)
     assert payload.errors == []
     assert payload.node is not None
     assert payload.node.name == "AsyncItem"

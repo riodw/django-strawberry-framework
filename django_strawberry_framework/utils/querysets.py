@@ -1,4 +1,4 @@
-"""Query-source + ``DjangoType.get_queryset`` visibility contract, single-sited.
+"""Shared query-source, field-coercion, sync/async hook, and visibility contracts.
 
 The neutral query-source mechanics every resolver surface shares: coerce a
 ``Manager`` to a ``QuerySet`` exactly once, decide whether a value is a
@@ -9,6 +9,12 @@ fields, connection fields, the optimizer middleware, the Relay node defaults,
 and the filter related-visibility derive all reach ONE implementation of the
 contract -- ``get_queryset`` is the visibility hook, and a visibility-hook
 mistake is a data-leak bug, so the routing must not be re-decided per surface.
+
+``coerce_field_value_or_none`` (0.0.13 DRY pass) is the sibling neutral
+primitive for the "raw literal -> Django field value, or nothing" safety
+wrapper the Relay id decode, the raw relation-pk decode, and the ``__in``
+filter member decode each need against a DIFFERENT field - single-sourcing the
+coercion mechanics while leaving the field selection to each caller.
 
 Caller-specific tails stay with their caller: the connection field keeps its
 GraphQL non-queryset error (it calls ``normalize_query_source`` then guards),
@@ -28,9 +34,11 @@ import asyncio
 import inspect
 from typing import Any
 
+from django.core.exceptions import ValidationError
 from django.db import models
 
 from ..exceptions import ConfigurationError
+from .write_transaction import base_locked_queryset, current_write_pipeline, pin_write_queryset
 
 
 class SyncMisuseError(ConfigurationError, RuntimeError):
@@ -146,6 +154,41 @@ def normalize_query_source(source: Any) -> tuple[Any, bool]:
     if isinstance(source, models.Manager):
         source = source.all()
     return source, isinstance(source, models.QuerySet)
+
+
+def coerce_field_value_or_none(field: models.Field, value: Any) -> Any:
+    """Coerce ``value`` through ``field``'s ``to_python`` + ``run_validators``; ``None`` if invalid.
+
+    The single "raw literal -> Django field value, or nothing" safety wrapper
+    three independent call sites each grew their own copy of: the Relay
+    ``GlobalID`` id-attr coercion (``relay.py::_coerce_pk_or_none``), the raw
+    relation-pk coercion (``utils/write_values.py::coerce_relation_pk_or_none``),
+    and the ``__in`` filter member coercion
+    (``filters/base.py::_coerce_int_in_members``). ``to_python`` is a pure type
+    cast that does NOT range-check, so a syntactically-valid but out-of-range
+    literal (e.g. a pk past a backend's signed-64-bit column range) would
+    otherwise reach a ``pk__in`` / ``filter`` call and raise a raw backend
+    ``OverflowError`` (``Python int too large to convert to SQLite INTEGER``);
+    the field's own validators (``integer_field_range`` Min/MaxValueValidators,
+    etc.) reject it here as a ``ValidationError`` instead, and a non-numeric
+    literal fails ``to_python`` itself. Every Django core field wraps its
+    ``to_python`` failure in ``ValidationError`` already; ``TypeError`` /
+    ``ValueError`` are caught too as a defensive superset for a field whose
+    ``to_python`` raises one of those directly.
+
+    Every caller treats ``None`` the same way - "identifies no row": dropped
+    from a query, or mapped to a not-found / invalid sentinel - never a raw
+    crash. WHICH field to coerce against is a genuine per-caller decision (a
+    Relay type's resolved id field, a related model's pk, an arbitrary filtered
+    column) and stays at each call site; only the coercion mechanics are
+    single-sourced here.
+    """
+    try:
+        coerced = field.to_python(value)
+        field.run_validators(coerced)
+    except (TypeError, ValueError, ValidationError):
+        return None
+    return coerced
 
 
 _RELAY_ASYNC_RECOURSE = (
@@ -304,7 +347,21 @@ def stringified_pks_present(queryset: models.QuerySet, query_pks: Any) -> set[st
     each pk for a type-agnostic membership compare (an int pk and its ``"3"`` string
     form compare equal). Single-sites the query + the str-coercion so the
     no-existence-leak comparison basis cannot drift.
+
+    Inside an active write pipeline (``utils/write_transaction.py``) the query is
+    pinned to the operation's write alias - a hook-re-routed queryset fails
+    closed - and, when the operation locks (``Meta.select_for_update``), the
+    membership read doubles as the relation-target row lock: a base-manager
+    ``SELECT ... FOR UPDATE`` constrained by the (pinned) queryset's pk subquery,
+    so an FK / M2M target confirmed visible here cannot be deleted out from under
+    the write before the transaction commits. Read surfaces run with no pipeline
+    context and are byte-unchanged.
     """
+    pipeline = current_write_pipeline()
+    if pipeline is not None:
+        queryset = pin_write_queryset(queryset, pipeline.alias)
+        if pipeline.lock:
+            queryset = base_locked_queryset(queryset.model, pipeline.alias, queryset)
     return _stringified(queryset.filter(pk__in=list(query_pks)).values_list("pk", flat=True))
 
 
@@ -357,8 +414,17 @@ def visible_related_object(
     raw pk and a GlobalID (the input exposes one strategy-dependent shape).
     """
     # The visibility-or-default-manager base is single-sited in
-    # ``related_visibility_queryset_or_default`` (DRY review C4).
+    # ``related_visibility_queryset_or_default`` (DRY review C4). Inside an
+    # active write pipeline the read is pinned to the write alias (fail-closed on
+    # a hook alias switch) and - when the operation locks - acquired as a
+    # base-manager ``FOR UPDATE`` constrained by the visibility pk subquery, the
+    # same relation-target lock the batched membership check applies.
     queryset = related_visibility_queryset_or_default(related_model, info, async_recourse)
+    pipeline = current_write_pipeline()
+    if pipeline is not None:
+        queryset = pin_write_queryset(queryset, pipeline.alias)
+        if pipeline.lock:
+            queryset = base_locked_queryset(related_model, pipeline.alias, queryset)
     return queryset.filter(pk=pk).first()
 
 

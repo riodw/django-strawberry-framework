@@ -1,12 +1,14 @@
-"""Live GraphQL HTTP tests for sharded fakeshop multi-database cooperation.
+"""Live GraphQL HTTP tests for sharded resolver isolation and multi-database debug capture.
 
 Scope (per spec Goals item 3 + Test plan ``### examples/fakeshop/test_query/test_multi_db.py``):
-two live ``/graphql/`` HTTP tests against the sharded fakeshop layout.
+three live ``/graphql/`` HTTP tests against the sharded fakeshop layout.
 
 - Test 1 - seeding rows on ``shard_b`` and reading them through ``/graphql/``
   via a ``.using("shard_b")`` root resolver returns the seeded rows.
 - Test 2 - cross-shard isolation: a chain seeded on ``default`` is NOT
   visible through a ``using("shard_b")`` resolver.
+- Test 3 - a debug-enabled probe captures SQL from ``shard_b`` with the
+  correct database alias and restores every connection's debug-cursor state.
 
 Critical contract pins (do not violate without an explicit spec revision):
 
@@ -276,3 +278,187 @@ def test_debug_extension_captures_shard_b_alias_rows(_build_debug_test_schema):
     assert payload["exceptions"] == []
     for database_connection in connections.all():
         assert database_connection.force_debug_cursor is prior_flags[database_connection.alias]
+
+
+# ---------------------------------------------------------------------------
+# BETA-055: write-alias pinning for generated mutations (live sharded HTTP)
+# ---------------------------------------------------------------------------
+#
+# The write tests drive the PROJECT schema (config.schema - the real products
+# write surface over DjangoSchema) under a router whose READ and WRITE answers
+# diverge for the products app: reads route to ``default``, writes to
+# ``shard_b``. The pipeline must pin EVERYTHING - locate, relation visibility,
+# the write, the re-fetch, and the envelope rollback - to the ONE write alias,
+# so the shard_b twin of a same-pk row pair is the one affected and the
+# default twin never is.
+
+
+class _ProductsWriteToShardBRouter:
+    """Route products reads to ``default`` and products writes to ``shard_b``.
+
+    Only the products app is routed; auth/session/user machinery stays on
+    ``default`` so login and permissions behave normally.
+    """
+
+    def db_for_read(self, model, **hints):
+        if model._meta.app_label != "products":
+            return None
+        # Honor the instance hint (the standard primary/replica router shape,
+        # per Django's own router conventions): a relation loaded FROM a
+        # shard_b-materialized instance reads beside it. Fresh reads with no
+        # instance context go to the divergent read alias - the divergence the
+        # pipeline's pinning must override.
+        instance = hints.get("instance")
+        instance_db = getattr(getattr(instance, "_state", None), "db", None)
+        if instance_db is not None:
+            return instance_db
+        return "default"
+
+    def db_for_write(self, model, **hints):
+        if model._meta.app_label == "products":
+            return "shard_b"
+        return None
+
+    def allow_relation(self, obj1, obj2, **hints):
+        return True
+
+
+@pytest.fixture
+def _project_schema(_reload_project_schema_for_acceptance_tests):
+    """Serve the freshly-reloaded PROJECT schema (the real write surface)."""
+    from config.schema import schema as project_schema
+
+    _current["schema"] = project_schema
+    yield
+    _current["schema"] = None
+
+
+def _seed_same_pk_item_pair(pk_base: int) -> None:
+    """Seed a same-pk ``Category``/``Item`` pair on BOTH aliases.
+
+    The pk collision is the point: an alias-pinning bug that lets any pipeline
+    step slip to the read alias would still find A row, so only differing
+    per-alias field values can prove which alias each step really used.
+    """
+    from apps.products import models as product_models
+
+    for alias in ("default", "shard_b"):
+        category = product_models.Category.objects.using(alias).create(
+            pk=pk_base,
+            name=f"pin-category-{alias}-{pk_base}",
+        )
+        product_models.Item.objects.using(alias).create(
+            pk=pk_base,
+            name=f"pin-item-{alias}",
+            category=category,
+        )
+
+
+def _login_products_writer(*codenames: str) -> Client:
+    from apps.products.services import create_users
+    from django.contrib.auth import get_user_model
+    from django.contrib.auth.models import Permission
+
+    create_users(1)
+    user = get_user_model().objects.get(username="staff_1")
+    for codename in codenames:
+        user.user_permissions.add(
+            Permission.objects.get(codename=codename, content_type__app_label="products"),
+        )
+    client = Client()
+    client.force_login(get_user_model().objects.get(pk=user.pk))
+    return client
+
+
+_UPDATE_ITEM_MUTATION = """
+mutation($id: ID!, $d: ItemPartialInput!) {
+  updateItem(id: $id, data: $d) {
+    node { name category { name } }
+    errors { field messages }
+  }
+}
+"""
+
+
+def _item_gid(pk: int) -> str:
+    import strawberry.relay as relay_module
+
+    return str(relay_module.GlobalID(type_name="products.item", node_id=str(pk)))
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
+def test_mutation_write_pins_locate_write_and_refetch_to_the_write_alias(_project_schema):
+    """Under a divergent read/write router the WHOLE update pipeline rides ``shard_b``.
+
+    The locate (visibility), the write, and the post-write re-fetch must all use
+    the router's WRITE answer - a step that slipped to the read alias would
+    either miss the row, write the wrong twin, or re-fetch stale data. The
+    response's ``category`` relation also proves the relation ride-along: it
+    renders the SHARD_B category's name.
+    """
+    from apps.products import models as product_models
+
+    _seed_same_pk_item_pair(90001)
+    client = _login_products_writer("change_item", "view_category")
+
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        DATABASE_ROUTERS=[_ProductsWriteToShardBRouter()],
+    ):
+        clear_url_caches()
+        try:
+            res = TestClient(client=client).query(
+                _UPDATE_ITEM_MUTATION,
+                variables={"id": _item_gid(90001), "d": {"name": "pinned-write"}},
+            )
+        finally:
+            clear_url_caches()
+
+    payload = res.data["updateItem"]
+    assert payload["errors"] == []
+    assert payload["node"]["name"] == "pinned-write"
+    # The re-fetch and its relation came from shard_b (the write alias)...
+    assert payload["node"]["category"]["name"] == "pin-category-shard_b-90001"
+    # ...the shard_b twin was written, and the default twin never touched.
+    assert product_models.Item.objects.using("shard_b").get(pk=90001).name == "pinned-write"
+    assert product_models.Item.objects.using("default").get(pk=90001).name == "pin-item-default"
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"], transaction=True)
+def test_mutation_validation_envelope_rolls_back_on_the_write_alias(_project_schema):
+    """A validation-envelope failure rolls back on ``shard_b`` (the pinned alias).
+
+    Two shard_b items share a category; renaming one to the other's name trips
+    ``unique_item_per_category`` as the in-band envelope - and the pinned
+    ``set_rollback`` must discard any partial work on the WRITE alias, leaving
+    both twins untouched on both aliases.
+    """
+    from apps.products import models as product_models
+
+    _seed_same_pk_item_pair(90011)
+    sibling = product_models.Item.objects.using("shard_b").create(
+        name="pin-sibling",
+        category_id=90011,
+    )
+    client = _login_products_writer("change_item", "view_category")
+
+    with override_settings(
+        ROOT_URLCONF=__name__,
+        DATABASE_ROUTERS=[_ProductsWriteToShardBRouter()],
+    ):
+        clear_url_caches()
+        try:
+            res = TestClient(client=client).query(
+                _UPDATE_ITEM_MUTATION,
+                variables={"id": _item_gid(sibling.pk), "d": {"name": "pin-item-shard_b"}},
+                assert_no_errors=False,
+            )
+        finally:
+            clear_url_caches()
+
+    payload = res.data["updateItem"]
+    assert payload["node"] is None
+    assert payload["errors"], payload
+    # Nothing changed on either alias.
+    assert product_models.Item.objects.using("shard_b").get(pk=sibling.pk).name == "pin-sibling"
+    assert product_models.Item.objects.using("default").get(pk=90011).name == "pin-item-default"

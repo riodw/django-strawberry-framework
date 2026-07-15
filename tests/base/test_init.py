@@ -52,7 +52,11 @@ def test_public_api_surface_is_pinned():
     # auth-mutations card) owns the ``0.0.13`` cut (Decision 12) jointly with the
     # spec-039 serializer flavor, so ``test_version`` is asserted at ``0.0.13``
     # above; the auth surface adds NO package-root exports (submodule-only per
-    # Decision 3), so ``__all__`` is unchanged.
+    # Decision 3). BETA-055 adds the two schema symbols: ``DjangoSchema`` (the
+    # REQUIRED schema class for generated mutations - its execution context holds
+    # each mutation's transaction open through response completion) and
+    # ``DjangoMutationExecutionContext`` (the subclassing seam for consumers with
+    # their own execution context).
     assert django_strawberry_framework.__all__ == (
         "BigInt",
         "DjangoConnection",
@@ -64,10 +68,12 @@ def test_public_api_surface_is_pinned():
         "DjangoModelFormMutation",
         "DjangoModelPermission",
         "DjangoMutation",
+        "DjangoMutationExecutionContext",
         "DjangoMutationField",
         "DjangoNodeField",
         "DjangoNodesField",
         "DjangoOptimizerExtension",
+        "DjangoSchema",
         "DjangoType",
         "FieldError",
         "OptimizerHint",

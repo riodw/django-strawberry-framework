@@ -31,6 +31,7 @@ from django_strawberry_framework import (
     DjangoModelPermission,
     DjangoMutation,
     DjangoMutationField,
+    DjangoSchema,
     DjangoType,
     SyncMisuseError,
     finalize_django_types,
@@ -191,7 +192,7 @@ def _build_auth_schema(*, create_permission_classes=None):
         delete_item = DjangoMutationField(DeleteItem)
 
     finalize_django_types()
-    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
     return schema, (CategoryT, ItemT)
 
 
@@ -311,7 +312,7 @@ def test_hidden_row_is_not_found_before_auth_signal_no_existence_leak():
         update_item = DjangoMutationField(UpdateItem)
 
     finalize_django_types()
-    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
 
     cat = product_models.Category.objects.create(name="Cat-hidden")
     hidden = product_models.Item.objects.create(name="Secret", category=cat, is_private=True)
@@ -498,7 +499,7 @@ def test_async_check_permission_override_is_rejected_not_bypassed():
         create_item = DjangoMutationField(AsyncCheckCreateItem)
 
     finalize_django_types()
-    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
     cat = product_models.Category.objects.create(name="Cat-asynccheck")
     res = _execute(
         schema,
@@ -509,6 +510,32 @@ def test_async_check_permission_override_is_rejected_not_bypassed():
     assert res.errors is not None
     assert "coroutine" in res.errors[0].message.lower()
     assert not product_models.Item.objects.filter(name="AsyncCheckBlocked").exists()
+
+
+@pytest.mark.django_db
+def test_awaitable_has_perm_is_rejected_not_bypassed():
+    """An awaitable ``user.has_perm`` raises SyncMisuseError, never a silent allow.
+
+    ``bool(coroutine)`` is True, so a naive ``return bool(user.has_perm(...))``
+    would treat an async / buggy auth-backend result as ALLOW - the same
+    authorization-bypass class closed for async ``has_permission``. Unreachable
+    from stock Django ``User.has_perm`` (always sync bool); earned here with a
+    stub user whose ``has_perm`` returns a coroutine.
+    """
+
+    class _AwaitablePermUser:
+        is_authenticated = True
+
+        def has_perm(self, codename):
+            async def _deny():
+                return False
+
+            return _deny()
+
+    mutation = _create_item_mutation()
+    info = _info_for(_AwaitablePermUser())
+    with pytest.raises(SyncMisuseError, match="has_perm"):
+        DjangoModelPermission().has_permission(info, mutation, "create", data=None)
 
 
 def test_request_without_user_attribute_is_denied():

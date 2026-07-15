@@ -18,6 +18,7 @@ from strawberry import relay
 from django_strawberry_framework import (
     DjangoMutation,
     DjangoMutationField,
+    DjangoSchema,
     DjangoType,
     finalize_django_types,
 )
@@ -115,7 +116,7 @@ def test_per_operation_argument_signatures():
         delete_item = DjangoMutationField(DeleteItem)
 
     finalize_django_types()
-    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
 
     create_args = _field_arg_map(schema, "createItem")
     assert create_args == {"data": "ItemInput!"}
@@ -144,7 +145,7 @@ def test_no_class_attribute_annotation_builds_and_types_payload():
         create_item = DjangoMutationField(CreateItem)
 
     finalize_django_types()
-    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
     mutation_type = schema._schema.mutation_type
     assert str(mutation_type.fields["createItem"].type) == "CreateItemPayload!"
 
@@ -163,7 +164,7 @@ def test_payload_lazy_ref_resolves_to_materialized_payload_after_bind():
     # ``mutations.inputs``; building the schema resolves the lazy ref to it.
     inputs_module = sys.modules[INPUTS_MODULE_PATH]
     assert hasattr(inputs_module, "CreateItemPayload")
-    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
     # The schema's CreateItemPayload type is the one bound to the materialized class.
     payload_type = schema._schema.type_map["CreateItemPayload"]
     assert payload_type is not None
@@ -180,7 +181,7 @@ def test_sync_and_async_resolver_selection():
         create_item = DjangoMutationField(CreateItem)
 
     finalize_django_types()
-    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
 
     query = "mutation($d: ItemInput!){ createItem(data:$d){ node{ name } errors{ field } } }"
     cat = product_models.Category.objects.create(name="Cat-sync")
@@ -213,7 +214,7 @@ async def test_async_resolver_selection_works():
         create_item = DjangoMutationField(CreateItem)
 
     finalize_django_types()
-    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
 
     query = "mutation($d: ItemInput!){ createItem(data:$d){ node{ name } errors{ field } } }"
     cat = await product_models.Category.objects.acreate(name="Cat-async")
@@ -370,7 +371,7 @@ def test_model_flavor_dispatch_unchanged():
         delete_item = DjangoMutationField(DeleteItem)
 
     finalize_django_types()
-    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
 
     # The model ``data:`` input materializes in ``mutations.inputs`` (NOT
     # ``forms.inputs``); the field args are the unchanged per-operation shape.
@@ -423,7 +424,7 @@ def test_django_mutation_field_generalizes_to_serializer_mutation():
         create_item_via_serializer = DjangoMutationField(CreateItemViaSerializer)
 
     finalize_django_types()
-    schema = strawberry.Schema(query=_Query, mutation=Mutation)
+    schema = DjangoSchema(query=_Query, mutation=Mutation)
 
     # The serializer `data:` input materializes in `rest_framework.inputs` (NOT
     # `mutations.inputs`); the generated create argument is the serializer input.

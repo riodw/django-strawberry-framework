@@ -73,12 +73,13 @@ import strawberry
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import IntegrityError, router, transaction
+from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError, RestrictedError
 from django.utils import timezone
 from graphql import GraphQLError
 from strawberry import relay
 
+from ..exceptions import ConfigurationError
 from ..optimizer.extension import (
     apply_connection_optimization,
     mutation_payload_child_selections,
@@ -102,6 +103,17 @@ from ..utils.querysets import (
 )
 from ..utils.relations import is_forward_many_to_many
 from ..utils.strings import graphql_camel_name
+from ..utils.write_transaction import (
+    base_locked_queryset,
+    check_instance_write_alias,
+    conflict_error,
+    forced_update_conflict_errors,
+    not_updated_exceptions,
+    pin_write_queryset,
+    require_managed_write,
+    require_write_pipeline,
+    write_pipeline,
+)
 
 # Moved to utils/write_values.py (docs DRY review P1.2 / P1.4); re-exported for
 # compatibility.
@@ -186,46 +198,41 @@ def run_write_pipeline_sync(
     is_update = meta.operation == "update"
 
     model = model_for(primary_type)
-    using = router.db_for_write(model)
-    with transaction.atomic(using=using):
-
-        def _error_payload(errors: list[FieldError]) -> Any:
-            """Roll back, then return the null-object error envelope (spec-039 H6).
-
-            A ``FieldError`` envelope means the mutation did NOT succeed, so nothing it
-            wrote may persist. A flavor ``write_step`` whose write made a partial change
-            and THEN raised a validation error - the custom ``serializer.save()`` that
-            inserts a row then raises ``serializers.ValidationError``, mapped to the
-            envelope inside this atomic block - would otherwise COMMIT on the normal
-            return. Mark the transaction for rollback BEFORE building the payload so the
-            partial write is discarded (``build_payload`` runs no ORM query, so it is
-            safe after ``set_rollback``). Harmless on the read-only locate / decode
-            failure paths (nothing was written), keeping the invariant uniform: an error
-            envelope never commits.
-            """
-            transaction.set_rollback(True, using=using)
-            return build_payload(payload_cls, slot, None, errors)
+    # The managed-transaction gate + the pinned write alias (BETA-055): the
+    # completion-spanning ``DjangoSchema`` transaction must already be open on the
+    # router's ONE write alias - a plain ``strawberry.Schema`` execution fails
+    # HERE, before any database work. Every query below (locate, relation
+    # visibility, re-fetch) and the rollback marking are pinned to this alias via
+    # the ``write_pipeline`` context the shared queryset helpers consult.
+    using = require_managed_write(mutation_cls)
+    with transaction.atomic(using=using), write_pipeline(using, lock=meta.select_for_update):
+        _error_payload = error_payload_builder(payload_cls, slot, using)
 
         instance = None
         if is_update:
             node_id, id_error = coerce_lookup_id(id, primary_type)
             if id_error is not None:
                 return _error_payload([id_error])
-            # rev6 #14: an opt-in ``SELECT ... FOR UPDATE`` row lock on the update locate,
-            # acquired after visibility filtering and inside this ``transaction.atomic()``
-            # boundary. ``meta.select_for_update`` is ``False`` for the model / form flavors.
+            # ``Meta.select_for_update`` (default True since BETA-055): a base-manager
+            # ``SELECT ... FOR UPDATE`` on the update locate, constrained by the
+            # visibility queryset's pk subquery, inside this transaction.
             instance = locate_instance(
                 primary_type,
                 node_id,
                 info,
+                alias=using,
                 select_for_update=meta.select_for_update,
             )
             if instance is None:
                 return _error_payload([not_found_error()])
+            # An instance-sensitive router answering differently now that the row
+            # is known cannot be honored mid-pipeline - fail closed before writing.
+            check_instance_write_alias(model, using, instance)
 
-        # Authorize BEFORE the flavor decode (the security invariant): the decode
-        # issues visibility-scoped ``get_queryset`` queries, so running it pre-auth
-        # would let an unauthorized caller probe related-object visibility by id.
+        # Authorize exactly once - AFTER the target is located + locked, BEFORE the
+        # flavor decode (the security invariant): the decode issues
+        # visibility-scoped ``get_queryset`` queries, so running it pre-auth would
+        # let an unauthorized caller probe related-object visibility by id.
         authorize_or_raise(mutation_cls, info, meta.operation, data, instance=instance)
 
         decoded = decode_step(instance)
@@ -236,8 +243,39 @@ def run_write_pipeline_sync(
         if isinstance(saved, list):
             return _error_payload(saved)
 
-        obj = refetch_optimized(primary_type, saved.pk, info, force_load=False)
+        obj = refetch_optimized(primary_type, saved.pk, info, alias=using, force_load=False)
+        if obj is None:
+            # The written row vanished between the save and the pk re-fetch (a
+            # concurrent delete this transaction could not see): a success payload
+            # would lie, so it is the in-band ``conflict`` envelope - which also
+            # rolls this transaction back (the disappearing-row contract).
+            return _error_payload([conflict_error()])
         return build_payload(payload_cls, slot, obj, [])
+
+
+def error_payload_builder(payload_cls: type, slot: str, using: str) -> Any:
+    """Build the roll-back-then-envelope closure every model-backed error path returns through.
+
+    The single error-envelope constructor (spec-039 H6, centralized for BETA-055):
+    a ``FieldError`` envelope means the mutation did NOT succeed, so nothing it
+    wrote may persist. A flavor ``write_step`` whose write made a partial change
+    and THEN raised a validation error - the custom ``serializer.save()`` that
+    inserts a row then raises ``serializers.ValidationError``, mapped to the
+    envelope inside the pipeline's atomic block - would otherwise COMMIT on the
+    normal return. ``set_rollback(True, using=...)`` runs BEFORE the payload build
+    on EVERY envelope path (create, update, and delete alike), so the partial
+    write - or a delete's visibility-hook / custom-``delete()`` side effects - is
+    discarded; ``build_payload`` runs no ORM query, so it is safe after
+    ``set_rollback``. Harmless on the read-only locate / decode failure paths
+    (nothing was written), keeping the invariant uniform: an error envelope never
+    commits.
+    """
+
+    def _error_payload(errors: list[FieldError]) -> Any:
+        transaction.set_rollback(True, using=using)
+        return build_payload(payload_cls, slot, None, errors)
+
+    return _error_payload
 
 
 def _decode_relations(
@@ -734,33 +772,40 @@ def locate_instance(
     node_id: Any,
     info: Any,
     *,
-    select_for_update: bool = False,
+    alias: str,
+    select_for_update: bool = True,
 ) -> Any | None:
     """Locate an update / delete row through the visibility ``get_queryset`` (spec-036 Decision 10).
 
-    ``apply_type_visibility_sync(target_type, initial_queryset(target_type),
-    info).get(pk=node_id)`` - the same visibility queryset every read surface
-    uses (and the ``_resolve_node_default`` locate shape). A miss
-    (``DoesNotExist``) returns ``None``; the caller maps it to a not-found
-    ``FieldError`` on ``id``, indistinguishable from a hidden row (no existence
-    leak). An ``async def get_queryset`` met here raises ``SyncMisuseError``
-    (``apply_type_visibility_sync`` closes the coroutine first).
+    The same visibility hook every read surface uses (and the
+    ``_resolve_node_default`` locate shape), pinned to the pipeline's write
+    ``alias`` - a hook that explicitly re-routed to a different alias fails
+    closed (``pin_write_queryset``). A miss (``DoesNotExist``) returns ``None``;
+    the caller maps it to a not-found ``FieldError`` on ``id``, indistinguishable
+    from a hidden row (no existence leak). An ``async def get_queryset`` met here
+    raises ``SyncMisuseError`` (``apply_type_visibility_sync`` closes the
+    coroutine first).
 
-    **Optional row lock (spec-039 rev6 #14).** When ``select_for_update`` is True the visible
-    queryset is wrapped in ``.select_for_update()`` BEFORE the ``.get(pk=...)`` - so the lock is
-    acquired AFTER visibility filtering, inside the pipeline's existing ``transaction.atomic()``
-    boundary (the caller runs within it). On a backend without ``SELECT ... FOR UPDATE`` support
-    (e.g. sqlite) Django silently skips the clause, so this is safe regardless of backend.
+    **Row lock (``Meta.select_for_update``, default True since BETA-055).** The lock is a
+    base-manager ``SELECT ... FOR UPDATE`` constrained by the visibility queryset reduced to a
+    pk subquery (``base_locked_queryset``) - never ``select_for_update()`` attached to the
+    consumer's own queryset, whose joins / unions / annotations a ``FOR UPDATE`` cannot legally
+    carry. Visibility is still enforced (a hidden row is absent from the subquery: not locked,
+    not found), and the lock is acquired inside the pipeline's transaction. On a backend without
+    ``SELECT ... FOR UPDATE`` support (e.g. sqlite) Django silently skips the clause, so this is
+    safe regardless of backend; ``Meta.select_for_update = False`` opts into weaker concurrency.
     """
     model = model_for(target_type)
-    queryset = apply_type_visibility_sync(
-        target_type,
-        initial_queryset(target_type),
-        info,
-        _MUTATION_ASYNC_RECOURSE,
+    visible = pin_write_queryset(
+        apply_type_visibility_sync(
+            target_type,
+            initial_queryset(target_type),
+            info,
+            _MUTATION_ASYNC_RECOURSE,
+        ),
+        alias,
     )
-    if select_for_update:
-        queryset = queryset.select_for_update()
+    queryset = base_locked_queryset(model, alias, visible) if select_for_update else visible
     try:
         return queryset.get(pk=node_id)
     except model.DoesNotExist:
@@ -892,6 +937,7 @@ def refetch_optimized(
     pk: Any,
     info: Any,
     *,
+    alias: str,
     force_load: bool,
 ) -> Any | None:
     """Re-fetch the written row by pk + optimizer plan (spec-036 Decision 9 / Medium-1).
@@ -916,9 +962,13 @@ def refetch_optimized(
     ``mutation_payload_child_selections(slot)`` rather than the connection
     ``edges { node }`` navigator - so the walker plans ``select_related`` /
     ``prefetch_related`` for the actual response shape.
+
+    ``alias`` pins the re-fetch to the pipeline's write alias (BETA-055): the row
+    was just written inside the transaction on that alias, so reading it anywhere
+    else would miss the uncommitted write.
     """
     slot = payload_object_slot(target_type)
-    queryset = initial_queryset(target_type).filter(pk=pk)
+    queryset = initial_queryset(target_type).using(alias).filter(pk=pk)
     queryset = apply_connection_optimization(
         target_type,
         queryset,
@@ -972,10 +1022,17 @@ def _run_pipeline_sync(
     if meta.operation == "delete":
         slot = payload_object_slot(primary_type)
         payload_cls = payload_cls_for(mutation_cls)
-        model = model_for(primary_type)
-        using = router.db_for_write(model)
-        with transaction.atomic(using=using):
-            return _run_delete(mutation_cls, info, id, primary_type, slot, payload_cls)
+        using = require_managed_write(mutation_cls)
+        with transaction.atomic(using=using), write_pipeline(using, lock=meta.select_for_update):
+            return _run_delete(
+                mutation_cls,
+                info,
+                id,
+                primary_type,
+                slot,
+                payload_cls,
+                alias=using,
+            )
 
     model = model_for(primary_type)
     return run_write_pipeline_sync(
@@ -1059,23 +1116,60 @@ def _model_write_step(
     the envelope, ``save()`` (race ``IntegrityError`` into the envelope), then the
     M2M ``.set(...)`` assignment. Returns the saved instance (the skeleton's
     ``refetch_optimized`` re-fetches it by pk under the G2 plan) or a
-    ``list[FieldError]`` on a validation / write failure. ``instance`` is the located
-    update row (ignored - the constructed target rides in ``decoded`` so create's
-    fresh instance is used), kept in the signature for the skeleton's
-    ``write_step(instance, decoded)`` contract.
+    ``list[FieldError]`` on a validation / write failure. ``instance`` (the located
+    update row, ``None`` for create) selects the save mode: a create saves the
+    ``decoded`` target normally, an update saves it with ``force_update=True``
+    (the BETA-055 disappearing-row contract via ``forced_save_or_field_errors``).
     """
-    del instance  # the constructed / mutated target is ``decoded[0]``.
     target, m2m_assignments, exclude = decoded
 
     clean_errors = _full_clean_or_field_errors(target, exclude=exclude)
     if clean_errors is not None:
         return clean_errors
 
-    write_error = save_or_field_errors(target.save)
+    if instance is None:
+        write_error = save_or_field_errors(target.save)
+    else:
+        # A direct model UPDATE saves with ``force_update=True`` (BETA-055): a
+        # located row a concurrent transaction deleted would otherwise be
+        # silently re-INSERTed by ``save()``'s update-else-insert fallback,
+        # reporting success for a write the deleter never sees. The zero-row
+        # forced update maps to the in-band ``conflict`` envelope.
+        write_error = forced_save_or_field_errors(target)
     if write_error is not None:
         return write_error
     _assign_m2m(target, m2m_assignments)
     return target
+
+
+def forced_save_or_field_errors(target: Any) -> list[FieldError] | None:
+    """Run ``target.save(force_update=True)``; map races to the envelope else ``None`` (BETA-055).
+
+    The update-side counterpart of ``save_or_field_errors``, with the
+    disappearing-row contract on top: a constraint race is the ``"__all__"``
+    ``IntegrityError`` envelope (the standing Major-2 mapping, checked FIRST -
+    ``IntegrityError`` is itself a ``DatabaseError``, so the order matters under
+    the Django 5.2 untyped catch); a zero-row forced update runs through the
+    version-compat conflict disambiguation (``forced_update_conflict_errors``:
+    usable transaction + demonstrably absent row -> ``conflict`` envelope, any
+    other database error propagates and rolls back). Django 6.0 raises the typed
+    ``Model.NotUpdated``; 5.2 a bare ``DatabaseError`` (``not_updated_exceptions``).
+    """
+    alias = require_write_pipeline().alias
+    try:
+        # The save gets its OWN savepoint: Django's ``save_base`` wraps the write
+        # in ``atomic(savepoint=False)``, so the zero-row exception escaping it
+        # flags ``needs_rollback`` on the PIPELINE transaction - which would both
+        # poison the absence probe (queries refuse to run) and misread as "the
+        # transaction is unusable". Containing the failure to a savepoint keeps
+        # the outer transaction healthy for the disambiguation below.
+        with transaction.atomic(using=alias):
+            target.save(force_update=True)
+    except IntegrityError:
+        return _integrity_error_field_errors()
+    except not_updated_exceptions(type(target)) as exc:
+        return forced_update_conflict_errors(target, alias, exc)
+    return None
 
 
 def _run_delete(
@@ -1085,6 +1179,8 @@ def _run_delete(
     primary_type: type,
     slot: str,
     payload_cls: type,
+    *,
+    alias: str,
 ) -> Any:
     """The ``delete`` branch: locate -> authorize -> snapshot-before-delete -> delete -> payload.
 
@@ -1105,19 +1201,30 @@ def _run_delete(
     ``FieldError`` envelope (with a ``None`` payload object) instead of leaking a
     raw top-level ``GraphQLError``.
     """
+    meta = mutation_cls._mutation_meta
+    _error_payload = error_payload_builder(payload_cls, slot, alias)
     node_id, id_error = coerce_lookup_id(id, primary_type)
     if id_error is not None:
-        return build_payload(payload_cls, slot, None, [id_error])
-    instance = locate_instance(primary_type, node_id, info)
+        return _error_payload([id_error])
+    instance = locate_instance(
+        primary_type,
+        node_id,
+        info,
+        alias=alias,
+        select_for_update=meta.select_for_update,
+    )
     if instance is None:
-        return build_payload(payload_cls, slot, None, [not_found_error()])
+        return _error_payload([not_found_error()])
+    check_instance_write_alias(model_for(primary_type), alias, instance)
 
     authorize_or_raise(mutation_cls, info, "delete", data=None, instance=instance)
 
-    snapshot = refetch_optimized(primary_type, instance.pk, info, force_load=True)
+    snapshot = refetch_optimized(primary_type, instance.pk, info, alias=alias, force_load=True)
     delete_errors = _delete_or_field_errors(instance)
     if delete_errors is not None:
-        return build_payload(payload_cls, slot, None, delete_errors)
+        # The centralized envelope marks the transaction for rollback, so any
+        # visibility-hook or custom-``delete()`` side effect is discarded with it.
+        return _error_payload(delete_errors)
     return build_payload(payload_cls, slot, snapshot, [])
 
 
@@ -1135,9 +1242,18 @@ def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:
     safe. The message names no models: like ``_integrity_error_field_errors``
     it keys to the model-level ``""`` (``"__all__"``) bucket, since the refusal
     is about OTHER rows referencing this one, not about the ``id`` input.
+
+    **Zero-target-row delete is a ``conflict`` (BETA-055).** ``Model.delete()``
+    reports how many rows each model lost; the TARGET model's own count being
+    zero means a concurrent transaction removed the row between the locate and
+    the ``DELETE`` (unreachable while the default locate lock holds, reachable
+    under ``Meta.select_for_update = False`` or a lockless backend). A success
+    payload would claim a deletion that did not happen, so it is the in-band
+    ``conflict`` envelope instead - which the caller's centralized envelope
+    also rolls back.
     """
     try:
-        instance.delete()
+        _total, per_model = instance.delete()
     except (ProtectedError, RestrictedError):
         return [
             field_error(
@@ -1146,6 +1262,8 @@ def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:
                 codes="protected",
             ),
         ]
+    if per_model.get(instance._meta.label, 0) == 0:
+        return [conflict_error()]
     return None
 
 
@@ -1181,6 +1299,16 @@ def authorize_or_raise(
         context="mutation",
         recourse=_PERMISSION_ASYNC_RECOURSE,
     )
+    # Authorization demands an ACTUAL bool (BETA-055): a truthy non-bool - a
+    # permissions object, a string, an accidental method reference - reads as
+    # "allow" under a truthiness test even when the override never decided
+    # anything. A custom ``check_permission`` that does not return ``True`` /
+    # ``False`` is a configuration bug, surfaced loudly rather than coerced.
+    if not isinstance(allowed, bool):
+        raise ConfigurationError(
+            f"{mutation_cls.__name__}.check_permission must return a bool; got {allowed!r}. "
+            "Authorization results are never coerced from truthiness.",
+        )
     if not allowed:
         # The model / ``ModelForm`` flavor names its target model
         # (``_primary_type.__name__``); a plain ``DjangoFormMutation`` carries

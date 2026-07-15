@@ -1,18 +1,14 @@
-"""Project-level GraphQL schema that composes every fakeshop app query.
+"""Project GraphQL schema composing every app query and mutation with finalization and optimization.
 
-The module imports the per-app ``Query`` types, finalizes all collected
+The module imports the per-app ``Query`` and ``Mutation`` types, finalizes all collected
 ``DjangoType`` classes, and exposes the top-level ``schema`` served by
 ``config.urls``.
 
 This mirrors the ``cookbook/schema.py`` layout from the
-``django-graphene-filters`` example, adapted to Strawberry.  The
-graphene-only ``DjangoDebug`` field has no direct Strawberry analogue
-and is left out for now.
+``django-graphene-filters`` example, adapted to Strawberry. The response-side
+``DjangoDebugExtension`` is opt-in and deliberately omitted from this aggregate
+schema; live coverage mounts it through a probe URLconf.
 """
-# TODO(spec-044 Slice 2): Once DjangoDebugExtension is implemented, rewrite
-# the stale "no direct Strawberry analogue" sentence above. Name the
-# response-extensions opt-in and state that fakeshop deliberately leaves it
-# disabled in the shipped aggregate schema; live coverage uses a probe URLconf.
 
 import strawberry
 from apps.accounts.schema import Mutation as AccountsMutation
@@ -28,6 +24,7 @@ from apps.scalars.schema import Query as ScalarsQuery
 
 from django_strawberry_framework import (
     DjangoOptimizerExtension,
+    DjangoSchema,
     finalize_django_types,
     strawberry_config,
 )
@@ -67,7 +64,10 @@ finalize_django_types()
 # instance-bound plan cache is preserved, and because the entry is a callable
 # (not an instance) ``Schema.__init__`` emits no deprecation warning.
 _optimizer = DjangoOptimizerExtension()
-schema = strawberry.Schema(
+# ``DjangoSchema`` (not plain ``strawberry.Schema``): the schema carries generated
+# mutations, whose write transactions must span GraphQL response completion
+# (BETA-055) - the write pipeline refuses to run under a plain Schema.
+schema = DjangoSchema(
     query=Query,
     mutation=Mutation,
     config=strawberry_config(),

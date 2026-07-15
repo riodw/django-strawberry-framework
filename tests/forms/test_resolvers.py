@@ -43,6 +43,7 @@ from django_strawberry_framework import (
     DjangoModelFormMutation,
     DjangoMutationField,
     DjangoOptimizerExtension,
+    DjangoSchema,
     DjangoType,
     finalize_django_types,
 )
@@ -104,7 +105,7 @@ class _Query:
 
 
 def _schema(mutation_type: type) -> strawberry.Schema:
-    return strawberry.Schema(
+    return DjangoSchema(
         query=_Query,
         mutation=mutation_type,
         extensions=[DjangoOptimizerExtension],

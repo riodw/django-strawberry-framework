@@ -1,4 +1,4 @@
-"""Package-internal tests for ``django_strawberry_framework/auth/queries.py`` (spec-040).
+"""Current-user query tests for alias binding, visibility, permission gates, and sync/async resolution.
 
 The ``current_user`` residue a live fakeshop request cannot drive: the
 ``CurrentUserAlias`` namespace lifecycle (the ``make_input_namespace`` trio +
@@ -23,7 +23,7 @@ from django.test import RequestFactory
 from django.utils.functional import SimpleLazyObject
 from strawberry import relay
 
-from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework import DjangoSchema, DjangoType, finalize_django_types
 from django_strawberry_framework.auth import current_user, login_mutation
 from django_strawberry_framework.auth import queries as auth_queries
 from django_strawberry_framework.auth.queries import (
@@ -91,7 +91,7 @@ def _me_schema(**current_user_kwargs) -> strawberry.Schema:
         me = current_user(**current_user_kwargs)
 
     finalize_django_types()
-    return strawberry.Schema(query=Query)
+    return DjangoSchema(query=Query)
 
 
 class _FakeConsumer:
@@ -304,7 +304,7 @@ def test_me_composes_with_login_in_one_schema_without_visibility_rerun():
         login = login_mutation()
 
     finalize_django_types()
-    schema = strawberry.Schema(query=Query, mutation=Mutation)
+    schema = DjangoSchema(query=Query, mutation=Mutation)
 
     User.objects.create_user(username="hidden_actor", password="pw-9x-strong")
     request = _session_request()

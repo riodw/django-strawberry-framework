@@ -55,7 +55,7 @@ from django_strawberry_framework.management.commands._imports import (
     import_string_or_command_error,
 )
 from django_strawberry_framework.registry import registry
-from django_strawberry_framework.scalars import BigInt
+from django_strawberry_framework.scalars import _PACKAGE_SCALAR_MAP
 from django_strawberry_framework.types.base import DjangoType
 from django_strawberry_framework.types.converters import SCALAR_MAP, _field_output_type_for
 from django_strawberry_framework.utils.strings import snake_case
@@ -81,8 +81,14 @@ _UNFINALIZED_HINT = (
 )
 
 # Python / Strawberry scalar -> GraphQL scalar name, mirroring the names
-# Strawberry prints in the SDL. Strawberry-defined objects, enums, and custom
-# scalar wrappers carry their authoritative names on their definitions instead.
+# Strawberry prints in the SDL. True GraphQL built-ins are fixed spec constants
+# hardcoded below; package-defined scalars (currently just ``BigInt``) are
+# merged in from ``scalars._PACKAGE_SCALAR_MAP`` instead of a second hardcoded
+# literal, so this cold-path (no ``--schema``) fallback always matches the name
+# ``strawberry_config()`` registers - a hand-copied "BigInt" here would
+# silently drift if the scalar's public name ever changed in ``scalars.py``.
+# Strawberry-defined objects, enums, and custom scalar wrappers carry their
+# authoritative names on their definitions instead.
 _GRAPHQL_SCALAR_NAMES: dict[object, str] = {
     int: "Int",
     str: "String",
@@ -94,7 +100,7 @@ _GRAPHQL_SCALAR_NAMES: dict[object, str] = {
     datetime.datetime: "DateTime",
     datetime.time: "Time",
     strawberry.scalars.JSON: "JSON",
-    BigInt: "BigInt",
+    **{scalar: definition.name for scalar, definition in _PACKAGE_SCALAR_MAP.items()},
 }
 
 

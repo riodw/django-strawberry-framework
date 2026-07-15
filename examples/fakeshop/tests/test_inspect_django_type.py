@@ -241,6 +241,26 @@ def test_inspect_consumer_authored_scalar_override_matrix(reload_inspect_schema)
     assert "consumer" not in note_row
 
 
+def test_inspect_bigint_field_rows_use_package_scalar_name(reload_inspect_schema):
+    """Cold path (no ``--schema``) names the ``BigInt`` scalar from ``scalars.py``.
+
+    Without ``--schema``, ``scalar_namer`` gets no live schema ``scalar_map``, so
+    the command falls back to its own ``_GRAPHQL_SCALAR_NAMES`` table for
+    ``BigIntegerField`` / ``PositiveBigIntegerField`` columns. That table merges in
+    ``django_strawberry_framework.scalars._PACKAGE_SCALAR_MAP`` rather than
+    hardcoding a second "BigInt" literal, so this pins the fallback against the
+    real ``ScalarSpecimen`` model end-to-end - if the two literals ever drifted
+    apart, one of these two columns would report the stale name.
+    """
+    out = StringIO()
+    call_command("inspect_django_type", "ScalarSpecimenType", stdout=out)
+    text = out.getvalue()
+    signed_row = _field_row(text, "signed_big")
+    assert "BigInt!" in signed_row
+    unsigned_row = _field_row(text, "unsigned_big")
+    assert "BigInt!" in unsigned_row
+
+
 def test_inspect_relay_node_pk_row(reload_inspect_schema):
     """GenreType declares ``interfaces = (relay.Node,)`` - its pk is suppressed.
 

@@ -1,4 +1,4 @@
-"""Request-impossible mechanics for ``DjangoDebugExtension`` (spec-044 Decision 11).
+"""DjangoDebugExtension tests for payload serialization, SQL capture, errors, and execution isolation.
 
 Everything here is what a live ``/graphql/`` request cannot isolate: the two
 wire serializers and the nested ``original_error`` chain handling, the

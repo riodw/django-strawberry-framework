@@ -1,4 +1,4 @@
-"""AdvancedFieldSet declarations for computed and permission-gated products fields."""
+"""Dormant cookbook-shaped FieldSet examples staged for the planned products fieldset surface."""
 
 import strawberry
 from graphql import GraphQLError

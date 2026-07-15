@@ -1,4 +1,4 @@
-"""OrderArgumentsFactory tests for BFS input generation.
+"""OrderArgumentsFactory tests for BFS generation, annotations, caching, idempotency, and validation.
 
 Covers ``OrderArgumentsFactory``'s BFS walk, per-class collision check,
 idempotency, subclass rejection, and the leaf / related-branch

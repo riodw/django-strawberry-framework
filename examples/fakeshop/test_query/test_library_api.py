@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for library relations, optimizer behavior, and Relay fields."""
+"""Live GraphQL HTTP tests for the library app's read/write, Relay, keyset, and optimizer surface."""
 
 import base64
 

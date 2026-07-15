@@ -1,4 +1,4 @@
-"""Scalar tests for BigInt and the framework StrawberryConfig helper.
+"""Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 
 Covers the ``BigInt`` scalar's strict parser, strict serializer, public
 top-level import surface, and the import-time deprecation-suppression

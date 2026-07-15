@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for the spec-042 ``DebugToolbarMiddleware``.
+"""Live HTTP tests for ``DebugToolbarMiddleware`` across GraphQL, panel, and pass-through routes.
 
 Since ``0.0.14`` fakeshop's shipped settings wire the debug-toolbar (the
 ``debug_toolbar`` app, the package middleware near the front of ``MIDDLEWARE``,

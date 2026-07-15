@@ -1,4 +1,4 @@
-"""Converter tests for scalar mapping, choice enums, and relation annotations.
+"""Converter tests for scalars, enums, relations, PostgreSQL containers, and file/image output objects.
 
 Fakeshop has no choice columns, so the test surface is built around a
 session-scoped ``ChoiceFixture`` Django model that lives under a synthetic

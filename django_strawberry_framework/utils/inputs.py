@@ -1,4 +1,4 @@
-"""Generated-input substrate shared by the filter and order set families.
+"""Generated-input construction and lifecycle primitives shared by set and write families.
 
 The filter and order subsystems each build real Strawberry input classes as
 module globals (``strawberry.lazy(...)`` resolves through ``module.__dict__``),

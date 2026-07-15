@@ -1,4 +1,4 @@
-"""Live GraphQL HTTP tests for scalar conversion and wire-format coverage.
+"""Live GraphQL HTTP tests for scalar wire formats, filtering, relations, and optimizer behavior.
 
 Each test pins the wire format of one entry in
 ``django_strawberry_framework/types/converters.py::SCALAR_MAP`` against a

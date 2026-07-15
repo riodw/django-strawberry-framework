@@ -1,1 +1,1 @@
-"""Package tests for optimizer planning and DjangoOptimizerExtension."""
+"""Package tests for optimizer plans, application, extensions, selections, and nested-fetch strategies."""

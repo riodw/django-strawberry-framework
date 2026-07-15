@@ -1,4 +1,4 @@
-"""GraphQL schema for library acceptance coverage."""
+"""Library GraphQL relation, optimizer, Relay/keyset, and model/form/serializer mutation surface."""
 
 from typing import Any
 

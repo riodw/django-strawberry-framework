@@ -1,4 +1,4 @@
-"""Type-unwrapping helpers for Strawberry / Python / GraphQL types.
+"""Async-callable detection and type-unwrapping helpers for Strawberry, Python, and GraphQL types.
 
 Strawberry exposes list-shaped return types in two distinct forms across
 versions: native ``typing.list[T]`` (the modern path) and an internal

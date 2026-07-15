@@ -1,4 +1,4 @@
-"""Scalars model tests for __str__ output and nullable specimen relationships.
+"""Scalars model tests for string rendering, relation traversal, and tag-label uniqueness.
 
 Mirrors the other apps' model tests: __str__ rendering (including the nullable
 fallback), self-referential + FK relation traversal, and a uniqueness rule.

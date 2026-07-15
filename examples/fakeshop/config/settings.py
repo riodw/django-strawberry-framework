@@ -1,4 +1,4 @@
-"""Django settings for fakeshop and its single-database or sharded test modes."""
+"""Django settings for fakeshop's SQLite, sharded-SQLite, and Postgres modes."""
 
 import os
 from pathlib import Path

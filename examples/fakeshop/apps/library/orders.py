@@ -1,4 +1,4 @@
-"""OrderSet declarations for the library acceptance app (Slice 4).
+"""OrderSet declarations for library relation-graph and keyset-cursor acceptance coverage.
 
 Five ordersets mirror the relation shape ``apps.library.schema`` exposes
 through the live ``/graphql/`` endpoint. Inter-orderset references use

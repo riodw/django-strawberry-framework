@@ -1,4 +1,4 @@
-"""The DRF soft-dependency guard shared by every serializer-mutation module (spec-039 Decision 12).
+"""DRF serializer mutations: generated inputs, conversion, binding, and execution behind an import guard.
 
 ``djangorestframework`` is a SOFT dependency: ``import django_strawberry_framework``
 must succeed without it, and ``from django_strawberry_framework import *`` must stay

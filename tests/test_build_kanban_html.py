@@ -1,4 +1,4 @@
-"""Focused tests for the shared KANBAN export helpers."""
+"""Tests for KANBAN version-tuple parsing edge cases."""
 
 from scripts.build_kanban_html import version_tuple
 

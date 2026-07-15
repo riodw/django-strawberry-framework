@@ -1,4 +1,4 @@
-"""Keyset-connection resolve-side tests: mode routing, slicer guards, order state.
+"""Keyset connection tests for resolve routing, slicer guards, order state, and nested-planner helpers.
 
 The live acceptance surface (round-trips, stability, nested windows,
 permission-aware decode) runs in

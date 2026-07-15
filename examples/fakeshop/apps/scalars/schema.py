@@ -1,4 +1,4 @@
-"""GraphQL schema for end-to-end scalar conversion coverage.
+"""GraphQL schema for scalar conversion, overrides, optimizer visibility, and file/image uploads.
 
 Exposes ``ScalarSpecimen`` and its all-nullable counterpart
 ``NullableScalarSpecimen`` with every concrete scalar field selected so a

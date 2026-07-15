@@ -1,4 +1,4 @@
-"""End-to-end coverage models for the package's scalar converter table.
+"""Models for scalar conversion, optimizer visibility, consumer overrides, and file/image uploads.
 
 Each field on ``ScalarSpecimen`` exercises a single entry from
 ``django_strawberry_framework/types/converters.py::SCALAR_MAP`` against a live

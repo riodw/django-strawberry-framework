@@ -1,4 +1,4 @@
-"""Optional-import handling for best-effort subsystem lookups (feedback P1.5 owner).
+"""Import helpers for best-effort, loaded-only, strict, and guarded optional-dependency lookups.
 
 The single owner for the package's "reach into a module that may not be
 importable / may not be loaded" patterns. Three call sites shared this

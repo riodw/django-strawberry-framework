@@ -1,4 +1,4 @@
-"""Package-tier tests for ``testing/client.py`` - DB-free mechanics only (spec-043).
+"""DB-free test-client tests for endpoints, multipart bodies, responses, mixin assertions, and exports.
 
 Placement per spec-043 Decision 11 and the feedback's live-first split: every
 case that drives a real ``/graphql/`` request (the sync raising direction on a

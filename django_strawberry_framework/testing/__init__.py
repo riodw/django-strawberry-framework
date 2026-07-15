@@ -1,4 +1,4 @@
-"""Consumer-facing test utilities - the GraphQL test-client family + connection-method wrapping.
+"""Consumer test utilities for GraphQL clients, connection wrapping, and Relay GlobalID helpers.
 
 Currently exports
 -----------------

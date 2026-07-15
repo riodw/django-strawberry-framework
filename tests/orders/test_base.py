@@ -1,4 +1,4 @@
-"""RelatedOrder tests for nested ordering paths and lazy related-class handling.
+"""RelatedOrder binding and lazy-resolution tests plus Meta.orderset_class promotion and validation.
 
 Covers the ``RelatedOrder`` primitive: class / absolute-import / unqualified
 target resolution through the shared ``LazyRelatedClassMixin``, the

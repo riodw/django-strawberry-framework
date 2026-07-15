@@ -1,4 +1,4 @@
-"""Type registry for ``DjangoType`` metadata, pending relations, and choice enums.
+"""Registry for ``DjangoType`` metadata, pending relations, choice enums, and subsystem lifecycles.
 
 Maps Django models to their generated ``DjangoType`` and ``(model,
 field_name)`` to generated ``Enum`` classes. Used by:

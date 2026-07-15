@@ -1,4 +1,4 @@
-"""GraphQL schema for the fakeshop products app.
+"""Products Relay connections and permissioned model-, form-, and serializer-backed mutations.
 
 A bidirectional graph over `Category` / `Item` / `Property` / `Entry`
 using the shipped `DjangoType` surface, with connections-only root fields

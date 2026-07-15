@@ -1,4 +1,4 @@
-"""DRF serializers for the library serializer-mutation surface (spec-039 schema-hook + subclass live matrix).
+"""DRF serializers for library mutation hooks, input shapes, visibility, locking, and nested writes.
 
 Plain DRF ``ModelSerializer``s declared the standard DRF way (no package imports);
 ``apps/library/schema.py`` wraps them in the shipped ``SerializerMutation`` base so the

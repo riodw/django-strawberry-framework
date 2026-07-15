@@ -1,4 +1,4 @@
-"""Relation-as-Connection tests for cursor conformance and Relay field upgrades.
+"""Relation-as-Connection tests for synthesis, pagination, optimized windows, fallbacks, and cleanup.
 
 Covers the ``Meta.relation_shapes`` Phase-2.5 synthesis surface
 (``docs/spec-032-full_relay-0_0_9.md`` Decisions 6/7; Decision 11 pins the

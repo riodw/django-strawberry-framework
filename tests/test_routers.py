@@ -1,4 +1,4 @@
-"""Tests for ``django_strawberry_framework.routers`` (spec-041).
+"""Channels router tests for HTTP/WebSocket routing, wrappers, lazy imports, and request context.
 
 Both dependency states are exercised (spec-041 Decision 8):
 

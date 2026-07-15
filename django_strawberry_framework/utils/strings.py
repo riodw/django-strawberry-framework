@@ -1,4 +1,4 @@
-"""String-case helpers for the GraphQL <-> Django name boundary.
+"""GraphQL/Django naming helpers for case conversion and lookup-path flattening.
 
 Both directions are needed at the GraphQL/Django boundary:
 

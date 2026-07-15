@@ -1,4 +1,4 @@
-"""Management command tests for export_schema SDL output and failure modes."""
+"""Management command tests for export_schema selector errors, schema validation, and CLI contracts."""
 
 import sys
 import types

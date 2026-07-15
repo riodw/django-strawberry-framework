@@ -1,4 +1,4 @@
-"""Admin registrations and shortcuts for inspecting and resetting products fixtures."""
+"""Admin registrations and shortcuts for inspecting, seeding, and deleting catalog data and test users."""
 
 from django.contrib import admin, messages
 from django.contrib.auth import get_user_model

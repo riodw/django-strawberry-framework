@@ -1,4 +1,4 @@
-"""A relational rendering of this repository's own ``KANBAN.md`` board.
+"""Relational source of truth for this repository's ``KANBAN.md`` and ``KANBAN.html`` exports.
 
 The app dogfoods the framework: every value that can recur across cards is its
 own lookup model (no inline ``choices``/enums), so the board can be queried from

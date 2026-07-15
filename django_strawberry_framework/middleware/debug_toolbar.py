@@ -1,4 +1,4 @@
-"""Debug-toolbar middleware: the django-debug-toolbar SQL-panel window into ``/graphql/`` requests.
+"""Debug-toolbar middleware exposing panels for Strawberry Django GraphQL views.
 
 ``DebugToolbarMiddleware`` subclasses the stock
 ``debug_toolbar.middleware.DebugToolbarMiddleware`` and contributes exactly the

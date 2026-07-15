@@ -1,4 +1,4 @@
-"""Typing utility tests for Strawberry, Python, and GraphQL type unwrapping."""
+"""Typing utility tests for async-callable detection and Strawberry, Python, and GraphQL unwrapping."""
 
 import functools
 import typing

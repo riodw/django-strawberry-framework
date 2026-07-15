@@ -1,4 +1,4 @@
-"""The spec-042 ``DebugToolbarMiddleware`` suite - the paths no live request reaches.
+"""DebugToolbarMiddleware tests for import guards, payload injection, response rewriting, and templates.
 
 Placement (spec-042 Decision 9, honoring the ``test_query/README.md`` coverage
 rule): since ``0.0.14`` fakeshop's shipped settings wire the toolbar (the

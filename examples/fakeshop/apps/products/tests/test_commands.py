@@ -1,4 +1,4 @@
-"""Products command tests for service-backed seed and delete management commands."""
+"""Products command tests for catalog/user lifecycle and shard seeding."""
 
 from io import StringIO
 

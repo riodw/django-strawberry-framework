@@ -1,4 +1,4 @@
-"""Relation utility tests for relation_kind classification and package re-exports."""
+"""Relation utility tests for kinds, many-side detection, instance accessors, and package re-exports."""
 
 from types import SimpleNamespace
 

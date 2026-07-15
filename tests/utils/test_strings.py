@@ -1,4 +1,4 @@
-"""String utility tests for snake_case, camelCase, and PascalCase conversion."""
+"""String utility tests for snake/camel/Pascal case conversion and Django lookup-path flattening."""
 
 import pytest
 

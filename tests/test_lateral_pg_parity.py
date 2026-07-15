@@ -1,4 +1,4 @@
-"""Live Postgres byte-parity tests for the lateral fetch strategy (the pg tier).
+"""Postgres lateral-fetch tests for parity, SQL shape, cleanup, custom joins, adaptation, and index seeks.
 
 The lateral backend's correctness bar (``optimizer/lateral_fetch.py``): for
 every pagination shape, the SAME GraphQL document executed under

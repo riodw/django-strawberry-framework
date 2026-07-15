@@ -1,4 +1,4 @@
-"""Kanban service tests for structured card creation and rollback behavior."""
+"""Kanban service tests for card resolution, creation, tracked paths, validation, and rollback."""
 
 import pytest
 from django.core.exceptions import ValidationError

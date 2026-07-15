@@ -1,4 +1,4 @@
-"""Connection planner/resolver shared contracts: window bounds + sidecar kwargs.
+"""Shared connection contracts for sidecars, fetch modes, offset/keyset windows, and pagination bounds.
 
 A cycle-safe home for two correctness contracts that the optimizer planner
 (``optimizer/walker.py``) and the Relay resolver (``connection.py``) must spell

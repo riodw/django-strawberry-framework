@@ -1,4 +1,4 @@
-"""OptimizationPlan tests for plan structure, keys, paths, and select/prefetch state.
+"""OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
 
 The plan is a simple dataclass, so the test surface is small and focused
 on the ``is_empty`` property and the ``apply`` method. The walker tests

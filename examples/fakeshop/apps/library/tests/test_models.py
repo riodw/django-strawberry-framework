@@ -1,4 +1,4 @@
-"""Library model tests for __str__ output and computed field behavior.
+"""Library model tests for string rendering, relation traversal, and per-shelf title uniqueness.
 
 Mirrors the products model tests so the library app carries its own coverage:
 __str__ rendering, forward/reverse relation traversal, and a uniqueness rule.

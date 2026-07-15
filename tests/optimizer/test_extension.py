@@ -1,4 +1,4 @@
-"""DjangoOptimizerExtension tests for root-gated planning and queryset optimization.
+"""DjangoOptimizerExtension tests for gating, caching, strictness, schema audit, context, and querysets.
 
 Covers, by topic code:
 

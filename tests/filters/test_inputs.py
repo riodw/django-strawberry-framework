@@ -1,4 +1,4 @@
-"""Filter input tests for lookup naming, annotation conversion, and value normalization.
+"""Filter input-generation tests for lookup naming, field construction, normalization, references, and reset.
 
 Covers the lookup-name table, the `_build_logic_fields` /
 `_build_input_fields` operator-bag builders, `construct_search`,

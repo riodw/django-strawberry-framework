@@ -1,4 +1,4 @@
-"""URL routing for fakeshop's index, admin, auth, and GraphQL endpoints."""
+"""Fakeshop routes for index, admin, auth, multipart GraphQL/CSRF, and debug-toolbar endpoints."""
 
 from debug_toolbar.toolbar import debug_toolbar_urls
 from django.contrib import admin

@@ -1,1 +1,1 @@
-"""Package tests for the forms subsystem (form-derived inputs + the converter, spec-038)."""
+"""Package tests for form conversion, generated inputs, and form-backed mutation behavior (spec-038)."""

@@ -1,4 +1,4 @@
-"""TypeRegistry unit tests for model/type lookup, primary types, and registry reset.
+"""TypeRegistry and finalization tests for lookups, primaries, lifecycle callbacks, retries, and reset.
 
 The integration-flavored registry tests (collision raised by ``DjangoType``
 subclassing, enum-caching observed through ``convert_choices_to_enum``)

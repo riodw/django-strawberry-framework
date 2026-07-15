@@ -1,4 +1,4 @@
-"""Relation-field resolvers for ``DjangoType`` relation annotations.
+"""Generated relation and file-field resolvers for finalized ``DjangoType`` classes.
 
 Strawberry's default resolver for an annotated class attribute does
 ``getattr(source, name)``. For Django relations that returns a

@@ -1,1 +1,1 @@
-"""Frozen base tests for package configuration and version sanity."""
+"""Frozen base tests for settings, initialization, version, logging, and public exports."""

@@ -1,1 +1,1 @@
-"""Package-internal tests for django_strawberry_framework."""
+"""Package, integration, and repository-tool tests for django_strawberry_framework."""

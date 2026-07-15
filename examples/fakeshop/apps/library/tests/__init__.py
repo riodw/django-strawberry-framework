@@ -1,1 +1,1 @@
-"""Non-live app tests for library models and in-process schema execution."""
+"""Non-live app tests for library models, schema exposure, and declaration-order invariants."""

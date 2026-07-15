@@ -1,7 +1,10 @@
-"""Dynamic data seeding service using Faker providers.
+"""Faker catalog seeding, user lifecycle, cascade fixtures, and catalog cleanup services.
 
 Discovers ALL Faker providers and their generator methods at runtime.
 No hardcoded provider names or method lists - fully dynamic.
+
+The module also creates and deletes permission-shaped test users, deletes catalog
+subsets or whole fixtures, and builds deterministic cascade-visibility data.
 
 Quick check - print the number of detected providers and methods:
 

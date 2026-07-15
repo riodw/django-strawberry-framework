@@ -1,4 +1,4 @@
-"""Mixins and lifecycle machinery shared across the FilterSet / OrderSet / AggregateSet family.
+"""Mixins and lifecycle machinery shared by the ``FilterSet`` and ``OrderSet`` families.
 
 Ported from ``django_graphene_filters/mixins.py`` and refactored to this
 package's structure (Strawberry, not Graphene) and dependencies. This module

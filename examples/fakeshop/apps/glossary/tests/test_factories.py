@@ -1,4 +1,4 @@
-"""Glossary factory tests for default values, aliases, categories, and spec mentions."""
+"""Glossary factory tests for canonical reuse, unique identities, overrides, and relationships."""
 
 import pytest
 

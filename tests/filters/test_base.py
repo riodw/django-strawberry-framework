@@ -345,12 +345,48 @@ def test_global_id_multiple_choice_filter_empty_in_matches_nothing_like_list_fil
     assert list_filter.filter(qs, []) == "none-sentinel"
 
 
+def test_global_id_multiple_choice_filter_empty_exact_matches_nothing_like_list_filter():
+    """Empty membership is match-nothing for non-``in`` lookups too.
+
+    Many-side Relay relations resolve to ``GlobalIDMultipleChoiceFilter`` with
+    ``lookup_expr="exact"`` (django-filter's default). Upstream
+    ``MultipleChoiceFilter.filter`` short-circuits ``if not value: return qs``,
+    which would silently widen ``exact: []`` to no constraint. The empty-set
+    contract must not be ``in``-only.
+    """
+
+    class _Qs:
+        def none(self):
+            return "none-sentinel"
+
+    qs = _Qs()
+    # Default lookup_expr is ``exact`` (settings.DEFAULT_LOOKUP_EXPR).
+    global_ids = GlobalIDMultipleChoiceFilter(field_name="genres")
+    list_filter = ListFilter(field_name="genres", lookup_expr="exact")
+
+    assert global_ids.lookup_expr == "exact"
+    assert global_ids.filter(qs, []) == "none-sentinel"
+    assert list_filter.filter(qs, []) == "none-sentinel"
+
+
 def test_global_id_multiple_choice_filter_empty_excluded_in_matches_everything():
     class _Qs:
         pass
 
     qs = _Qs()
     f = GlobalIDMultipleChoiceFilter(field_name="id", lookup_expr="in", exclude=True)
+
+    assert f.filter(qs, []) is qs
+
+
+def test_global_id_multiple_choice_filter_empty_excluded_exact_matches_everything():
+    """Exclude + empty membership is the complement of match-nothing: every row."""
+
+    class _Qs:
+        pass
+
+    qs = _Qs()
+    f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="exact", exclude=True)
 
     assert f.filter(qs, []) is qs
 

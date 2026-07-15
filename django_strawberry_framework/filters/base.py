@@ -533,15 +533,25 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
     `MultipleChoiceField` would); decode + type validation run in
     `filter` instead.
 
-    An explicit empty list is a real membership predicate: it matches no
-    rows (or every row when ``exclude=True``), matching ``ListFilter``'s
-    empty-set semantics rather than django-filter's no-value pass-through.
+    An explicit empty list is a real membership predicate for every list-shaped
+    lookup (``in``, many-side ``exact``, etc.): it matches no rows (or every row
+    when ``exclude=True``), matching ``ListFilter``'s empty-set semantics rather
+    than upstream ``MultipleChoiceFilter``'s ``if not value: return qs`` skip.
+    Omission (``None``, preserved by ``_GlobalIDMultipleChoiceField``) remains
+    the no-constraint path.
     """
 
     field_class = _GlobalIDMultipleChoiceField
 
     def filter(self, qs: Any, value: Any) -> Any:
         """Decode + validate every GlobalID; apply the lookup-shaped predicate.
+
+        Empty-list handling runs BEFORE decode and BEFORE the ``in`` /
+        non-``in`` split: upstream ``MultipleChoiceFilter.filter`` treats any
+        empty value as a no-op (``return qs``), which would silently widen a
+        restrictive membership predicate for many-side ``exact`` the same way
+        it used to for ``in``. ``ListFilter`` empty-set semantics apply to
+        every list-shaped lookup on this filter.
 
         The ``in`` lookup consumes the WHOLE decoded list in one predicate.
         Upstream ``MultipleChoiceFilter.filter`` instead ORs one predicate
@@ -552,17 +562,18 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         ever produces; the first Postgres run surfaced it the moment a
         sequence (which never rewinds across rolled-back tests) passed 9.
         Non-``in`` lookups (per-element semantics, e.g. a multi-valued
-        relation's ``exact``) keep the upstream OR delegation.
+        relation's ``exact``) keep the upstream OR delegation for non-empty
+        lists only.
         """
         if value is None:
             return super().filter(qs, None)
+        if len(value) == 0:
+            return qs if self.exclude else qs.none()
         node_ids = [
             _decode_and_validate_global_id(item, self, index=idx) for idx, item in enumerate(value)
         ]
         if self.lookup_expr != "in":
             return super().filter(qs, node_ids)
-        if not node_ids:
-            return qs if self.exclude else qs.none()
         return _apply_lookup_predicate(self, qs, node_ids)
 
 

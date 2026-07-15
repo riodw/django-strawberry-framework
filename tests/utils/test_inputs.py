@@ -24,6 +24,7 @@ from django_strawberry_framework.utils.inputs import (
     make_input_namespace,
     make_shape_build_cache,
     materialize_generated_input_class,
+    pascalize_token,
 )
 
 # ---------------------------------------------------------------------------
@@ -344,6 +345,21 @@ def test_make_shape_build_cache_returns_dict_and_clear():
     assert len(cache) == 1
     clear()
     assert cache == {}
+
+
+def test_pascalize_token_keeps_letter_collapse_and_digit_boundary():
+    """Letter underscores collapse (no interior capital); digit boundaries stay distinct.
+
+    Load-bearing for narrowed mutation / form input type-name suffixes: ``is_private``
+    must stay ``Isprivate`` (not ``IsPrivate``) so bare concatenation remains
+    decomposable, while ``field_2`` / ``field2`` must NOT both become ``Field2``.
+    """
+    assert pascalize_token("is_private") == "Isprivate"
+    assert pascalize_token("category") == "Category"
+    assert pascalize_token("a_b") == "Ab"
+    assert pascalize_token("field2") == "Field2"
+    assert pascalize_token("field_2") == "Field_2"
+    assert pascalize_token("field_2") != pascalize_token("field2")
 
 
 def test_optional_field_kwargs_defaults_none_and_aliases_only_on_divergence():

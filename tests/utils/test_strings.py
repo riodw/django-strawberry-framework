@@ -55,6 +55,9 @@ def test_pascal_case_handles_snake_case_inputs():
     assert pascal_case("http_server") == "HttpServer"
     assert pascal_case("http2_server") == "Http2Server"
     assert pascal_case("field2") == "Field2"
+    # Underscore-before-digit is retained so ``field_2`` / ``field2`` stay distinct
+    # GraphQL type-name stems (operator bags, range inputs, choice enums).
+    assert pascal_case("field_2") == "Field_2"
     assert pascal_case("my_HTTP_response") == "MyHttpResponse"
     # Adjacent / leading / trailing underscores collapse to nothing.
     assert pascal_case("_leading") == "Leading"

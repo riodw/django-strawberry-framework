@@ -383,30 +383,43 @@ def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
 
 
 def pascalize_token(name: str) -> str:
-    """Encode one field name as a single ``[A-Z][a-z0-9]*`` token for an input-name suffix.
+    """Encode one field name as a single leading-capital token for an input-name suffix.
 
-    A single leading capital with a fully-lowercased tail and underscores removed
-    (``is_private`` -> ``Isprivate``, ``category`` -> ``Category``). This shape is
-    load-bearing for the bare-concatenation suffix the three generated-input
+    A single leading capital with a fully-lowercased letter tail
+    (``is_private`` -> ``Isprivate``, ``category`` -> ``Category``). Letter-to-letter
+    underscores are removed so the bare-concatenation suffix the three generated-input
     type-name derivers use (``mutation_input_type_name`` / ``form_input_type_name`` /
-    ``serializer_input_type_name``): because each token has NO interior capital and
-    NO underscore, the concatenation of tokens is uniquely decomposable at uppercase
-    boundaries, so distinct field sets never collide on one generated name.
+    ``serializer_input_type_name``) stays uniquely decomposable at uppercase
+    boundaries: each token has NO interior capital, so distinct field sets never
+    collide on one generated name (``("a_b", "c")`` -> ``AbC`` vs ``("a", "b_c")`` ->
+    ``ABc``, distinct).
 
-    Deliberately NOT ``pascal_case`` (which collapses underscores across the whole
-    name and per-segment-capitalizes) - an interior capital would make ``IsPrivate``
-    ambiguously re-decompose as the two fields ``is`` + ``private``, the exact
-    collision this guards against (``("a_b", "c")`` -> ``AbC`` vs ``("a", "b_c")`` ->
-    ``ABc``, distinct). It also stays underscore-free so Strawberry's GraphQL name
-    converter leaves a PascalCase class name unchanged (an underscore would be
-    mangled into a lowercased segment tail in the GraphQL type name).
+    A separator before a digit-leading segment is retained (``field_2`` -> ``Field_2``,
+    not ``Field2``) because capitalization cannot encode that boundary - the same
+    injectivity rule ``pascal_case`` / ``graphql_camel_name`` already enforce. Without
+    it, ``field_2`` and ``field2`` both become ``Field2``, so two Meta.fields
+    narrowings that differ only by an underscore-adjacent digit claim one GraphQL
+    input type name and trip the AR-M6 distinct-shape raise (or mislabel a single
+    narrowing). Retained underscores are safe on the wire because
+    ``build_strawberry_input_class`` pins ``strawberry.input(name=...)``; Strawberry's
+    converter never rewrites the type stem.
+
+    Deliberately NOT ``pascal_case`` (which per-segment-capitalizes): an interior
+    capital would make ``IsPrivate`` ambiguously re-decompose as the two fields
+    ``is`` + ``private``, the letter-boundary collision this helper exists to prevent.
 
     Promoted here from ``mutations/inputs.py`` (spec-039 P2.3 kept it sited there at
     two consumers; at three - model + form + serializer - it graduates to the shared
     input-name machinery, kept visibly distinct from ``pascal_case``). The old
     ``mutations/inputs.py::_pascalize_token`` name remains as an import alias.
     """
-    return name.replace("_", "").capitalize()
+    parts = [part for part in name.split("_") if part]
+    if not parts:
+        return ""
+    head, *rest = parts
+    return head.capitalize() + "".join(
+        f"_{part}" if part[0].isdigit() else part.lower() for part in rest
+    )
 
 
 def generated_input_type_name(
@@ -631,6 +644,14 @@ def build_strawberry_input_class(
     lost). Setting the ``strawberry.field`` as a class-level attribute
     alongside ``__annotations__`` preserves the metadata through the
     ``@strawberry.input`` decoration.
+
+    The GraphQL **type** name is likewise pinned to ``name`` via
+    ``strawberry.input(name=...)``. Strawberry's default type-name converter
+    rewrites underscore-digit stems (``...Field_2FilterInputType`` ->
+    ``...Field2filterinputtype``), which would again collide with a sibling
+    ``...Field2FilterInputType`` after ``pascal_case`` has already kept the
+    Python class names distinct. Pinning keeps the package's injective type
+    stem on the wire.
     """
     namespace: dict[str, Any] = {"__annotations__": {}}
     seen_graphql_names: dict[str, str] = {}
@@ -673,7 +694,7 @@ def build_strawberry_input_class(
             else strawberry.field(**strawberry_field_kwargs)
         )
     cls = type(name, (), namespace)
-    return strawberry.input(cls)
+    return strawberry.input(cls, name=name)
 
 
 def materialize_generated_input_class(

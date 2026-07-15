@@ -71,6 +71,13 @@ def pascal_case(name: str) -> str:
     keeps generated GraphQL type names stable when consumers use names
     like ``_legacy_id`` or ``status_``.
 
+    A separator before a digit-leading segment is retained (``"field_2"``
+    -> ``"Field_2"``, not ``"Field2"``) because capitalization cannot encode
+    that boundary. This is the Pascal dual of ``graphql_camel_name``'s
+    injectivity rule: without it, ``field_2`` and ``field2`` both become
+    ``Field2``, so per-field operator-bag / range / enum type names silently
+    collide and Strawberry keeps whichever class registers first.
+
     Strict ``snake_case`` only - acronyms inside a segment are *not*
     preserved.  Per-segment ``str.capitalize()`` upper-cases the first
     character and lower-cases every interior upper-case character, so
@@ -85,10 +92,18 @@ def pascal_case(name: str) -> str:
         ``"is_active"`` -> ``"IsActive"``;
         ``"status"`` -> ``"Status"``;
         ``"payment_method"`` -> ``"PaymentMethod"``;
+        ``"field_2"`` -> ``"Field_2"``;
+        ``"field2"`` -> ``"Field2"``;
         ``"_leading"`` -> ``"Leading"``;
         ``"double__underscore"`` -> ``"DoubleUnderscore"``.
     """
-    return "".join(part.capitalize() for part in name.split("_") if part)
+    parts = [part for part in name.split("_") if part]
+    if not parts:
+        return ""
+    head, *rest = parts
+    return head.capitalize() + "".join(
+        f"_{part}" if part[0].isdigit() else part.capitalize() for part in rest
+    )
 
 
 def pascal_case_or_raise(name: str, *, make_error: Callable[[str], Exception]) -> str:

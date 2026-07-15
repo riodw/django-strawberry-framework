@@ -32,6 +32,7 @@ import itertools
 import sys
 
 import pytest
+import strawberry
 from apps.products import models as product_models
 from django import forms
 from django.db import models
@@ -690,6 +691,43 @@ def test_camel_case_graphql_name_collision_is_fail_loud():
     message = str(exc.value)
     assert "fooBar" in message
     assert "collide" in message
+
+
+def test_digit_boundary_form_fields_survive_distinct_in_sdl():
+    """``field_2`` / ``field2`` both appear on the generated form input (shared pin path).
+
+    Package ``graphql_camel_name`` keeps them distinct; ``build_strawberry_input_class``
+    pins every wire name so Strawberry's converter cannot collapse ``field_2`` onto
+    ``field2``. Forms route through that shared builder - this locks the form flavor.
+    """
+
+    class DigitForm(forms.Form):
+        field_2 = forms.IntegerField()
+        field2 = forms.IntegerField()
+
+    cre, specs = build_form_input_class(DigitForm, operation_kind=FORM)
+    assert {(s.input_attr, s.graphql_name) for s in specs} == {
+        ("field_2", "field_2"),
+        ("field2", "field2"),
+    }
+
+    def _probe(inp) -> int:
+        return 1
+
+    _probe.__annotations__ = {"inp": cre, "return": int}
+
+    @strawberry.type
+    class Query:
+        probe: int = strawberry.field(resolver=_probe)
+
+    from django_strawberry_framework.scalars import strawberry_config
+
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
+    sdl = schema.as_str()
+    block = sdl[sdl.index("input DigitFormInput") :]
+    block = block[: block.index("}")]
+    assert "field_2:" in block
+    assert "field2:" in block
 
 
 def test_model_choice_field_with_none_queryset_is_fail_loud():

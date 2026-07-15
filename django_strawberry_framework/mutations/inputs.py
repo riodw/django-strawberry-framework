@@ -376,16 +376,18 @@ def mutation_input_type_name(
 
     Identity is ``(model, operation_kind, frozenset(effective_field_names))``.
     The narrowed-shape suffix is the sorted-field-name tokens concatenated, each
-    token a single-leading-capital ``[A-Z][a-z0-9]*`` form (``_pascalize_token``).
-    That token shape makes the bare concatenation INJECTIVE per field set: with no
-    interior capital and no underscore in any token, the concatenation decomposes
-    uniquely at uppercase boundaries, so ``("a_b", "c")`` -> ``AbC`` and
-    ``("a", "b_c")`` -> ``ABc`` produce DISTINCT names (the per-segment-capitalize
-    form would collapse both onto ``ABC``, colliding on the generated GraphQL type
-    name and tripping the AR-M6 distinct-shape raise at materialize). The full shape
-    is detected by comparing the effective set against ``full_field_names`` (the
-    complete editable set for the model), so a ``Meta.fields`` that happens to
-    name every editable column still resolves to the canonical name.
+    token a single-leading-capital form from ``_pascalize_token`` (letter
+    underscores collapsed, underscore-before-digit retained). That token shape
+    makes the bare concatenation INJECTIVE per field set: with no interior capital,
+    the concatenation decomposes uniquely at uppercase boundaries, so
+    ``("a_b", "c")`` -> ``AbC`` and ``("a", "b_c")`` -> ``ABc`` produce DISTINCT
+    names (the per-segment-capitalize form would collapse both onto ``ABC``), and
+    ``("field_2",)`` -> ``Field_2`` stays distinct from ``("field2",)`` -> ``Field2``
+    (a blanket underscore strip would collide both onto ``Field2`` and trip the
+    AR-M6 distinct-shape raise at materialize). The full shape is detected by
+    comparing the effective set against ``full_field_names`` (the complete editable
+    set for the model), so a ``Meta.fields`` that happens to name every editable
+    column still resolves to the canonical name.
 
     The ``PartialInput`` / ``Input`` suffix rule + the full-vs-narrowed branching are
     single-sited in ``utils/inputs.py::generated_input_type_name`` (spec-039 M6); this

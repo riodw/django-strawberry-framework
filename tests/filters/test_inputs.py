@@ -1160,6 +1160,96 @@ def test_build_input_fields_keeps_non_relatedfilter_flat_traversal_visible_when_
 
 
 # ---------------------------------------------------------------------------
+# Digit-boundary operator-bag / range type names
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_build_input_fields_keeps_digit_boundary_operator_bags_distinct():
+    """``field_2`` / ``field2`` mint DISTINCT operator-bag GraphQL type names.
+
+    ``ClassBasedTypeNameMixin.type_name_for`` routes through ``pascal_case``. A
+    non-injective Pascal collapse (``field_2`` / ``field2`` both -> ``Field2``)
+    made both bags claim ``<FilterSet>Field2FilterInputType``. Those nested
+    classes are embedded in annotations (not the Decision-9 ledger), so
+    Strawberry silently kept one bag and dropped the other -- wrong lookups on
+    the wire. Top-level field attrs stay distinct via ``graphql_camel_name``;
+    the type-name stem must preserve the same digit boundary.
+    """
+    import re
+
+    from django_filters import CharFilter
+
+    class DigitBoundaryFilter(FilterSet):
+        field_2 = CharFilter(field_name="name", lookup_expr="exact")
+        field2 = CharFilter(field_name="name", lookup_expr="icontains")
+
+        class Meta:
+            model = library_models.Branch
+            fields = []
+
+    assert DigitBoundaryFilter.type_name_for("field_2") == (
+        "DigitBoundaryFilterField_2FilterInputType"
+    )
+    assert DigitBoundaryFilter.type_name_for("field2") == (
+        "DigitBoundaryFilterField2FilterInputType"
+    )
+
+    triples = _build_input_fields(DigitBoundaryFilter)
+    by_attr = {python_attr: annotation for python_attr, annotation, _kwargs in triples}
+
+    def _bag(attr: str):
+        return next(arg for arg in get_args(by_attr[attr]) if arg is not type(None))
+
+    bag_underscore = _bag("field_2")
+    bag_plain = _bag("field2")
+    assert bag_underscore.__name__ == "DigitBoundaryFilterField_2FilterInputType"
+    assert bag_plain.__name__ == "DigitBoundaryFilterField2FilterInputType"
+    assert bag_underscore is not bag_plain
+    assert "exact" in bag_underscore.__annotations__
+    assert "i_contains" in bag_plain.__annotations__
+
+    @strawberry.type
+    class Query:
+        ok: int
+
+    # Register the bags directly (same pattern as the scoped-range collision pin);
+    # a root input with ``strawberry.lazy`` self-refs needs Decision-9 materialization.
+    sdl = str(strawberry.Schema(query=Query, types=[bag_underscore, bag_plain]))
+    bag_defs = set(re.findall(r"input (DigitBoundaryFilterField_?2FilterInputType)", sdl))
+    assert bag_defs == {
+        "DigitBoundaryFilterField_2FilterInputType",
+        "DigitBoundaryFilterField2FilterInputType",
+    }
+
+
+@pytest.mark.django_db
+def test_range_input_type_name_preserves_digit_boundary_in_field_name():
+    """Range sub-input names keep ``price_2`` distinct from ``price2``."""
+    from apps.scalars import models as scalar_models
+
+    class PriceDigitFilter(FilterSet):
+        price_2 = RangeFilter(field_name="price_2")
+        price2 = RangeFilter(field_name="price2")
+
+        class Meta:
+            model = scalar_models.ScalarSpecimen
+            fields = []
+
+    # field_name drives ``_pascal_case`` inside ``_build_range_input_class``.
+    underscored = RangeFilter(field_name="price_2")
+    plain = RangeFilter(field_name="price2")
+    assert (
+        _build_range_input_class(underscored, int, PriceDigitFilter).__name__
+        == "PriceDigitFilterPrice_2RangeInputType"
+    )
+    assert (
+        _build_range_input_class(plain, int, PriceDigitFilter).__name__
+        == "PriceDigitFilterPrice2RangeInputType"
+    )
+
+
+# ---------------------------------------------------------------------------
 # clear_filter_input_namespace - cycle-safe import guards
 # ---------------------------------------------------------------------------
 

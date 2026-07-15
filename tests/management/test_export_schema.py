@@ -2,10 +2,12 @@
 
 import sys
 import types
+from io import StringIO
 
 import pytest
 import strawberry
 from django.core.management import CommandError, call_command
+from strawberry.printer import print_schema
 
 from django_strawberry_framework.management.commands.export_schema import Command
 
@@ -87,6 +89,31 @@ def test_export_schema_path_help_documents_destructive_utf8_write():
     path_action = next(action for action in parser._actions if "--path" in action.option_strings)
 
     assert path_action.help == "Write UTF-8 SDL to this file, overwriting it without prompting"
+
+
+def test_export_schema_stdout_matches_path_file_and_print_schema(monkeypatch, tmp_path):
+    """Stdout, ``--path``, and ``print_schema`` must emit identical SDL bytes."""
+    schema = _make_schema()
+    _make_test_module(monkeypatch, schema=schema)
+    out = StringIO()
+    call_command("export_schema", "test_module:schema", stdout=out)
+    path = tmp_path / "schema.graphql"
+    call_command(
+        "export_schema",
+        "test_module:schema",
+        "--path",
+        str(path),
+        stdout=StringIO(),
+    )
+    expected = print_schema(schema)
+    assert out.getvalue() == expected
+    assert path.read_text(encoding="utf-8") == expected
+
+
+def test_export_schema_raises_command_error_when_path_flag_is_whitespace_only(monkeypatch):
+    _make_test_module(monkeypatch, schema=_make_schema())
+    with pytest.raises(CommandError, match="--path requires a non-empty value"):
+        call_command("export_schema", "test_module:schema", "--path", "   ")
 
 
 # The ``--path`` directory-missing and empty-string failure branches moved to

@@ -29,11 +29,13 @@ class Command(BaseCommand):
         """Resolve the dotted-path schema symbol and emit SDL.
 
         Routes through three branches: ``--path`` omitted prints SDL to
-        stdout; ``--path ""`` (empty-string value) raises ``CommandError``
-        with "--path requires a non-empty value"; ``--path <file>`` writes
-        UTF-8 SDL to the named path. A bare ``--path`` with no following
-        value is rejected earlier by argparse, before ``handle`` runs. A
-        non-empty target is encoded as UTF-8 and replaced without prompting.
+        stdout (byte-identical to ``print_schema`` / ``--path`` file bytes,
+        with Django's default trailing newline suppressed); ``--path`` with
+        an empty or whitespace-only value raises ``CommandError`` with
+        "--path requires a non-empty value"; ``--path <file>`` writes UTF-8
+        SDL to the named path. A bare ``--path`` with no following value is
+        rejected earlier by argparse, before ``handle`` runs. A non-empty
+        target is encoded as UTF-8 and replaced without prompting.
         """
         schema_symbol = import_module_symbol_or_command_error(
             options["schema"],
@@ -46,9 +48,12 @@ class Command(BaseCommand):
         schema_output = print_schema(schema_symbol)
         path = options.get("path")
         if path is None:
-            self.stdout.write(schema_output)
+            # Match ``Path.write_text`` / ``print_schema`` bytes exactly: Django's
+            # OutputWrapper defaults ``ending="\n"``, which would diverge stdout
+            # from ``--path`` by a trailing newline and break redirect-vs-file diffs.
+            self.stdout.write(schema_output, ending="")
             return
-        if not path:
+        if not isinstance(path, str) or not path.strip():
             raise CommandError("--path requires a non-empty value")
         try:
             pathlib.Path(path).write_text(schema_output, encoding="utf-8")

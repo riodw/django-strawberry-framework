@@ -146,8 +146,8 @@ When the review finds genuine duplication, insert `### DRY analysis` before `## 
 top-level bullet per duplication finding already described above. Omit the heading when there is no
 DRY finding; never emit a `- None.` finding for downstream tooling to collect.
 
-Worker 2 appends `## Implementation (Worker 2)` when implementation begins. Worker 3 appends
-`## Independent verification (Worker 3)` when verification begins. Later passes append
+Worker 1 appends `## Implementation (Worker 1)` when implementation begins. Worker 2 appends
+`## Independent verification (Worker 2)` when verification begins. Later passes append
 `## Iterations`. Do not create empty placeholders or erase the prior audit trail.
 
 Use source references permitted by `AGENTS.md`. Keep excerpts short. Do not inflate the artifact
@@ -158,12 +158,12 @@ command.
 
 Each item uses fresh workers so the implementer never approves their own work:
 
-1. Worker 1 investigates and writes the artifact with `Status: under-review`.
-2. If no tracked change is needed, Worker 1 records that proof and sets `fix-implemented`.
-   Otherwise Worker 2 implements all accepted findings and sets `fix-implemented`.
-3. Worker 3 independently re-traces the affected behavior and tries to break the result. It sets
+1. Worker 1 investigates, writes the artifact, implements all accepted findings with permanent
+   tests, and sets `fix-implemented`. If no tracked change is needed, Worker 1 records that proof
+   before setting the same status.
+2. Worker 2 independently re-traces the affected behavior and tries to break the result. It sets
    `verified` and checks the plan item, or sets `revision-needed` with concrete feedback.
-4. A revision returns to Worker 2, except an inadequate review returns to Worker 1.
+3. A revision returns to Worker 1.
 
 Worker 0 coordinates but does not review, implement, or approve. The artifact and scoped diff are
 the shared record; private worker memory is optional scratch, never required evidence.
@@ -173,7 +173,7 @@ back to `HEAD` when no baseline exists. A cross-file edit is allowed when the ta
 requires it; name the expanded ownership in the artifact. Otherwise forward a finding to the folder
 or project pass that owns it.
 
-After an edit, Worker 2 runs `uv run ruff format .` and `uv run ruff check --fix .` as required by
+After an edit, Worker 1 runs `uv run ruff format .` and `uv run ruff check --fix .` as required by
 `AGENTS.md`. Zero-edit cycles do not run them. Changelog changes require explicit maintainer
 authorization; otherwise record only whether the completed change deserves a release note.
 

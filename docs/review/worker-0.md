@@ -19,15 +19,15 @@ Worker 0 keeps the review moving. It does not perform reviews, implement fixes, 
 1. Capture `CYCLE_BASELINE=$(git stash create)`. An empty value means workers compare with `HEAD`.
 2. Spawn a fresh Worker 1 with the target, artifact, plan, baseline, and required reading.
 3. Dispatch by artifact status:
-   - `under-review` with changes needed → fresh Worker 2
-   - `fix-implemented` → fresh Worker 3
-   - `revision-needed` → Worker 2, or Worker 1 when the review itself is deficient
+   - `under-review` → Worker 1
+   - `fix-implemented` → fresh Worker 2
+   - `revision-needed` → Worker 1
    - `verified` → advance
 4. Let the artifact carry the evidence. Do not transmit one worker's private reasoning to another.
 5. Preserve unrelated dirty paths. Escalate a revision loop after two unsuccessful implementation
    re-passes.
 
-Worker 3 marks ordinary plan items complete. For a zero-edit cycle, it must confirm the scoped diff
+Worker 2 marks ordinary plan items complete. For a zero-edit cycle, it must confirm the scoped diff
 is empty. For an edited cycle, it must independently verify behavior rather than approve the diff by
 inspection alone.
 

@@ -19,6 +19,7 @@ import pytest
 from django_strawberry_framework.utils import imports as imports_module
 from django_strawberry_framework.utils.imports import (
     import_attr_if_importable,
+    loaded_attr,
     require_optional_module,
 )
 
@@ -82,3 +83,11 @@ def test_import_attr_if_importable_raises_when_importable_module_lacks_the_attr(
     monkeypatch.setitem(sys.modules, "dsf_fake_module_without_attr", fake)
     with pytest.raises(AttributeError):
         import_attr_if_importable("dsf_fake_module_without_attr", "Missing")
+
+
+def test_loaded_attr_returns_none_without_importing_absent_module():
+    module_path = "dsf_module_that_must_remain_unloaded"
+    sys.modules.pop(module_path, None)
+
+    assert loaded_attr(module_path, "Anything") is None
+    assert module_path not in sys.modules

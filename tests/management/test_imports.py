@@ -131,6 +131,11 @@ def test_import_string_or_command_error_resolves_valid_path(monkeypatch):
     assert import_string_or_command_error("imports_probe_module.schema") is module.schema
 
 
+def test_import_string_or_command_error_requires_module_path():
+    with pytest.raises(CommandError, match="a module path is required"):
+        import_string_or_command_error("schema")
+
+
 @pytest.mark.parametrize("dotted_path", [".schema", ".relative.schema"])
 def test_import_string_or_command_error_rejects_malformed_module_path(dotted_path):
     with pytest.raises(CommandError, match="module path is empty|relative module paths"):

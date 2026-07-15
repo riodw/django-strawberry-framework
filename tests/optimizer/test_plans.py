@@ -217,6 +217,16 @@ class TestOptimizationPlanMerge:
         with pytest.raises(RuntimeError, match="construction-time"):
             OptimizationPlan().finalize().merge_from(OptimizationPlan())
 
+    def test_merge_inventory_guard_reports_stale_classification(self, monkeypatch):
+        monkeypatch.setattr(
+            OptimizationPlan,
+            "_FULL_MERGE_FIELDS",
+            OptimizationPlan._FULL_MERGE_FIELDS | {"removed_field"},
+        )
+
+        with pytest.raises(RuntimeError, match=r"stale=\['removed_field'\]"):
+            OptimizationPlan._assert_merge_field_inventory()
+
 
 class TestOptimizationPlanFinalize:
     """``finalize`` swaps mutable list fields for tuples so post-handoff mutation raises."""

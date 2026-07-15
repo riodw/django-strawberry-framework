@@ -399,6 +399,11 @@ def test_register_subsystem_clear_rejects_string_references():
         )
 
 
+def test_register_subsystem_clear_rejects_empty_owner():
+    with pytest.raises(ValueError, match="non-empty owner"):
+        register_subsystem_clear(lambda: None, owner="")
+
+
 def test_iter_types_yields_registered_pairs(fresh_registry):
     """``iter_types()`` yields ``(model, type_cls)`` for each registration."""
 

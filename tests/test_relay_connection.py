@@ -20,6 +20,8 @@ count; the optimizer-less behavior tests still pin rows / pagination /
 argument presence on the per-parent fallback.
 """
 
+from types import SimpleNamespace
+
 import pytest
 import strawberry
 from apps.library.models import Book, Branch, Genre, Loan, Shelf
@@ -47,6 +49,7 @@ from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import FilterSet, filter_input_type
 from django_strawberry_framework.orders import OrderSet
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types.finalizer import _register_relation_connection_teardown
 
 
 def _path(*keys):
@@ -603,6 +606,36 @@ def test_registry_clear_preserves_replacement_for_synthesized_connection():
     registry.clear()
 
     assert category_type.items_connection is replacement
+
+
+def test_relation_connection_teardown_restores_owned_annotations_in_place():
+    """Teardown preserves the annotation-dict identity held by consumer tooling."""
+    annotations = {"items": list[Item]}
+
+    class CategoryType:
+        __annotations__ = annotations
+
+    field_obj = strawberry.field(resolver=lambda: None)
+    CategoryType.items_connection = field_obj
+    definition = SimpleNamespace(relation_connections={"items_connection": "items"})
+    registry.register(Category, CategoryType)
+    _register_relation_connection_teardown(
+        CategoryType,
+        definition,
+        generated="items_connection",
+        field_obj=field_obj,
+        relation_name="items",
+        shape="both",
+        annotations=annotations,
+        annotations_snapshot={"items": list[Item]},
+        list_resolver=object(),
+    )
+
+    registry.unregister(CategoryType)
+
+    assert CategoryType.__annotations__ is annotations
+    assert CategoryType.__annotations__ == {"items": list[Item]}
+    assert definition.relation_connections is None
 
 
 def test_registry_clear_removes_synthesized_state_before_different_shape_rebuild():

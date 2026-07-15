@@ -698,6 +698,14 @@ def test_filter_model_strategy_accepts_model_label():
     assert _decode_and_validate_global_id(encoded, f) == "42"
 
 
+def test_filter_model_strategy_accepts_predecoded_global_id():
+    """The filter accepts Strawberry's already-coerced ``GlobalID`` value unchanged."""
+    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy="model")
+    f = _global_id_filter_with_owner("id", owner)
+
+    assert _decode_and_validate_global_id(relay.GlobalID("owner.ownermodel", "42"), f) == "42"
+
+
 def test_filter_model_strategy_rejects_type_name():
     """Under `model`, the old bare GraphQL type name is rejected."""
     owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy="model")

@@ -30,11 +30,14 @@ from django_strawberry_framework.optimizer.plans import OptimizationPlan
 from django_strawberry_framework.optimizer.walker import (
     _apply_hint,
     _ensure_connector_only_fields,
+    _field_by_graphql_name,
+    _graphql_names_by_python_name,
     _has_custom_id_resolver,
     _is_fragment,
     _merge_aliased_selections,
     _merge_runtime_prefixes,
     _prefetch_hint_for_path,
+    _resolve_selection_target,
     _selected_scalar_names,
     _should_include,
     plan_optimizations,
@@ -478,6 +481,30 @@ def test_plan_uses_exact_graphql_names_for_explicitly_named_fields():
         assert plan.only_fields == ("address_2", "postal_code")
     finally:
         registry.clear()
+
+
+def test_name_resolution_defensively_skips_unusable_metadata():
+    """Malformed Strawberry/Django metadata is skipped while generated names still resolve."""
+    type_cls = SimpleNamespace(
+        __strawberry_definition__=SimpleNamespace(
+            fields=(SimpleNamespace(python_name=None),),
+        ),
+    )
+    assert _graphql_names_by_python_name(type_cls, None) == {}
+    assert (
+        _field_by_graphql_name(
+            "missing",
+            {"broken": SimpleNamespace(name=None)},
+        )
+        is None
+    )
+    assert _resolve_selection_target(
+        "line2Connection",
+        {},
+        {"line_2_connection": "line_2"},
+        type_cls=None,
+        info=None,
+    ) == ("connection", "line_2", None)
 
 
 def test_plan_empty_selections_produces_empty_plan():

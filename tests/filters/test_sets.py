@@ -30,6 +30,7 @@ from django_strawberry_framework.filters import (
 )
 from django_strawberry_framework.filters.sets import _lookups_for_field, _read_qs
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.sets_mixins import collect_related_declarations
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
 
 
@@ -2578,3 +2579,32 @@ def test_q_for_branch_falls_back_to_sync_derive_on_stash_miss():
         _nested_qs_by_branch_id={},  # present but empty -> stash miss -> sync fallback
     )
     assert isinstance(q, Q)
+
+
+def test_collect_related_declarations_honors_base_tombstone():
+    """A direct base's non-related declaration removes a later inherited candidate."""
+
+    class Declaration:
+        def _bind_owner(self, owner):
+            raise AssertionError(f"removed declaration was bound to {owner.__name__}")
+
+    declaration = Declaration()
+
+    class Base:
+        related_declarations = OrderedDict(probe=declaration)
+        all_declarations = {"probe": object()}
+
+    class Child(Base):
+        pass
+
+    collected = collect_related_declarations(
+        Child,
+        (Base,),
+        own_items=(),
+        declaration_type=Declaration,
+        collection_attr="related_declarations",
+        inherit_from_bases=True,
+        base_declarations_attr="all_declarations",
+    )
+
+    assert collected == OrderedDict()

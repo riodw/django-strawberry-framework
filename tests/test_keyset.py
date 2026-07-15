@@ -82,6 +82,11 @@ def test_split_order_ref_rejects_bare_dash():
         split_order_ref("-")
 
 
+def test_split_order_ref_rejects_non_string_entry():
+    with pytest.raises(ConfigurationError, match="must be a string"):
+        split_order_ref(7)  # type: ignore[arg-type]
+
+
 def test_cursor_columns_for_resolves_pk_alias():
     (column,) = cursor_columns_for(Issue, ("pk",))
     assert column.name == "pk"

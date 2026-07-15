@@ -27,6 +27,7 @@ from django_strawberry_framework.filters.factories import (
     _dynamic_filterset_cache,
     _make_cache_key,
     _make_hashable,
+    _normalize_meta_for_factory,
     get_filterset_class,
 )
 from django_strawberry_framework.filters.inputs import _field_specs
@@ -521,6 +522,72 @@ def test_get_filterset_class_strips_reserved_kwargs():
         filterset_base_class=FilterSet,
     )
     assert issubclass(cls, FilterSet)
+
+
+@pytest.mark.django_db
+def test_get_filterset_class_collapses_filter_fields_alias():
+    """``filter_fields`` is the metaclass synonym for ``fields``; cache must share a slot.
+
+    Without normalizing the alias before keying, ``filter_fields=`` and
+    ``fields=`` mint two ``<Model>AutoFilter`` classes with the same
+    ``__name__``, and ``FilterArgumentsFactory`` raises on the second BFS.
+    """
+    via_alias = get_filterset_class(
+        None,
+        model=Category,
+        filter_fields={"name": ["exact"]},
+    )
+    via_fields = get_filterset_class(
+        None,
+        model=Category,
+        fields={"name": ["exact"]},
+    )
+    assert via_alias is via_fields
+    _ = FilterArgumentsFactory(via_alias).arguments
+    _ = FilterArgumentsFactory(via_fields).arguments  # must not raise
+
+
+@pytest.mark.django_db
+def test_get_filterset_class_collapses_set_and_frozenset_fields():
+    """Top-level set/frozenset Meta.fields must share a canonical cache slot.
+
+    ``frozenset`` previously fell through to the raw key branch while ``set``
+    took seq without sorting, so equivalent unordered declarations minted
+    distinct AutoFilter classes and collided in the BFS registry.
+    """
+    via_set = get_filterset_class(None, model=Category, fields={"name", "is_private"})
+    via_fs = get_filterset_class(
+        None,
+        model=Category,
+        fields=frozenset({"is_private", "name"}),
+    )
+    assert via_set is via_fs
+    # Canonical order matches a repr-sorted list of the same members.
+    via_sorted = get_filterset_class(
+        None,
+        model=Category,
+        fields=sorted(["name", "is_private"], key=repr),
+    )
+    assert via_set is via_sorted
+
+
+def test_make_cache_key_dict_fields_mixed_key_types_sort_by_repr():
+    """Dict-shaped fields with mixed key types must not TypeError on sort."""
+    key = _make_cache_key({"model": Category, "fields": {"name": ["exact"], 0: ["exact"]}})
+    assert key[1][0] == "dict"
+
+
+def test_normalize_meta_promotes_filter_fields_and_canonicalizes_sets():
+    normalized = _normalize_meta_for_factory(
+        {
+            "model": Category,
+            "filter_fields": {"name", "is_private"},
+            "filterset_base_class": FilterSet,
+        },
+    )
+    assert "filter_fields" not in normalized
+    assert "filterset_base_class" not in normalized
+    assert normalized["fields"] == sorted(["name", "is_private"], key=repr)
 
 
 def test_get_filterset_class_requires_model_when_dynamic():

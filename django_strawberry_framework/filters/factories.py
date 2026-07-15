@@ -141,6 +141,42 @@ def _make_hashable(v: Any) -> Any:
     return v
 
 
+def _normalize_meta_for_factory(meta: dict[str, Any]) -> dict[str, Any]:
+    """Normalize Meta kwargs before cache keying and dynamic class creation.
+
+    Two equivalences must collapse onto one cache slot (and one generated
+    ``FilterSet`` class) or the BFS factory's duplicate-``__name__`` check
+    fires against two ``<Model>AutoFilter`` classes that are the same
+    declaration arrived via different surface shapes:
+
+    - ``filter_fields`` is the ``FilterSetMetaclass`` synonym for ``fields``;
+      promote it (or drop it when ``fields`` is already present) so the alias
+      is not an extras discriminator.
+    - Top-level ``set`` / ``frozenset`` ``fields`` (and set-valued lookup
+      bags under a dict-shaped ``fields``) are unordered; canonicalize them to
+      ``repr``-sorted lists so cache keys and generated filter order are stable
+      across ``PYTHONHASHSEED``. Ordered ``list`` / ``tuple`` ``fields`` keep
+      their declaration order.
+    """
+    safe_meta = {k: v for k, v in meta.items() if k not in _RESERVED_FACTORY_KEYS}
+    if "filter_fields" in safe_meta:
+        if "fields" not in safe_meta:
+            safe_meta["fields"] = safe_meta.pop("filter_fields")
+        else:
+            # ``fields`` wins (metaclass alias rule); drop the synonym so it
+            # cannot split an otherwise-identical cache slot via extras.
+            safe_meta.pop("filter_fields")
+    fields = safe_meta.get("fields")
+    if isinstance(fields, (set, frozenset)):
+        safe_meta["fields"] = sorted(fields, key=repr)
+    elif isinstance(fields, dict):
+        safe_meta["fields"] = {
+            key: (sorted(value, key=repr) if isinstance(value, (set, frozenset)) else value)
+            for key, value in fields.items()
+        }
+    return safe_meta
+
+
 def _make_cache_key(safe_meta: dict[str, Any]) -> tuple:
     """Build a hashable cache key from a ``Meta``-shaped dict.
 
@@ -148,35 +184,30 @@ def _make_cache_key(safe_meta: dict[str, Any]) -> tuple:
     ``"__all__"``, a list of field names, or a dict mapping field ->
     list of lookups -- all serialised into a hashable form so identical
     declarations share a class. Any extra meta keys are included
-    verbatim. Verbatim port of the cookbook's same-named helper.
+    via ``_make_hashable``. Callers should pass meta already run through
+    ``_normalize_meta_for_factory`` so ``filter_fields`` and unordered
+    ``set`` / ``frozenset`` shapes have been canonicalized; the branches
+    below still accept those shapes directly as defense in depth.
 
-    Caveat: ``set`` / ``frozenset`` values nested under a dict-shaped
-    ``fields`` (e.g. set-valued lookups) are sorted into a canonical form by
-    ``_make_hashable``, so structurally-equal declarations share a class. A
-    *top-level* ``set``-shaped ``fields`` still keys off the set's iteration
-    order (the ``"seq"`` branch below iterates it directly) - stable within a
-    process but order-randomized across processes (``PYTHONHASHSEED``), which
-    also governs the generated *filter order*. Prefer ``list`` / ``tuple`` for
-    ``Meta.fields`` when filter order matters.
+    ``set`` / ``frozenset`` (top-level or nested under dict-shaped
+    ``fields``) are sorted into a canonical form by ``_make_hashable`` /
+    ``_normalize_meta_for_factory``. Ordered ``list`` / ``tuple``
+    ``fields`` preserve declaration order -- prefer those when filter
+    order matters. Dict-shaped ``fields`` keys sort via ``key=repr`` so
+    mixed, mutually-unorderable key types cannot ``TypeError`` the key.
     """
     model = safe_meta.get("model")
     fields = safe_meta.get("fields")
     if isinstance(fields, dict):
-        fields_key: tuple = (
-            "dict",
-            tuple(sorted((k, _make_hashable(v)) for k, v in fields.items())),
-        )
-    elif isinstance(
-        fields,
-        (list, tuple, set),
-    ):
+        fields_key: tuple = ("dict", _make_hashable(fields))
+    elif isinstance(fields, (list, tuple)):
         fields_key = ("seq", tuple(_make_hashable(item) for item in fields))
+    elif isinstance(fields, (set, frozenset)):
+        fields_key = ("seq", tuple(sorted((_make_hashable(item) for item in fields), key=repr)))
     else:
         fields_key = ("raw", fields)
-    extra = tuple(
-        sorted(
-            (k, _make_hashable(v)) for k, v in safe_meta.items() if k not in {"model", "fields"}
-        ),
+    extra = _make_hashable(
+        {k: v for k, v in safe_meta.items() if k not in {"model", "fields"}},
     )
     return (model, fields_key, extra)
 
@@ -222,7 +253,8 @@ def get_filterset_class(filterset_class: type[FilterSet] | None, **meta: Any) ->
             When provided, returned unchanged.
         **meta: ``Meta``-shaped keys (``model``, ``fields``, ``exclude``,
             ...) for the synthetic ``FilterSet`` subclass. Required when
-            ``filterset_class is None``.
+            ``filterset_class is None``. ``filter_fields`` is accepted as the
+            metaclass synonym for ``fields`` and normalized before caching.
 
     Returns:
         A ``FilterSet`` class. The dynamic-cache path collapses
@@ -236,7 +268,7 @@ def get_filterset_class(filterset_class: type[FilterSet] | None, **meta: Any) ->
     """
     if filterset_class is not None:
         return filterset_class
-    safe_meta = {k: v for k, v in meta.items() if k not in _RESERVED_FACTORY_KEYS}
+    safe_meta = _normalize_meta_for_factory(meta)
     cache_key = _make_cache_key(safe_meta)
     cached = _dynamic_filterset_cache.get(cache_key)
     if cached is not None:

@@ -20,6 +20,7 @@ from graphql.language.ast import FragmentDefinitionNode
 from django_strawberry_framework.optimizer.selections import (
     ast_child_selections,
     connection_count_required,
+    connection_node_children,
     direct_child_selected,
     directive_variable_names,
     included_field_selections,
@@ -88,6 +89,30 @@ def test_resolve_unvisited_fragment_resolves_once_then_dedups():
     assert resolve_unvisited_fragment(field, fragments, set()) is None
     # A spread for an undefined fragment -> None (defensive).
     assert resolve_unvisited_fragment(spread, {}, set()) is None
+
+
+def test_resolve_unvisited_fragment_depth_keys_visits_per_spread_site():
+    """With ``depth=``, the visit key is ``(name, depth)`` so each depth resolves once.
+
+    The cache-relevant-variable walk needs this: a fragment spread at root depth
+    must not suppress a later nested spread of the same fragment (Decision 7
+    nested pagination variables). Name-only visits stay independent of depth
+    keys - the two keying modes do not share a visited set in production, but
+    the pin here proves the depth axis is ``(name, depth)`` not name alone.
+    """
+    doc = parse("query { ...F } fragment F on T { x }")
+    operation, fragment_def = doc.definitions
+    spread = operation.selection_set.selections[0]
+    fragments = {"F": fragment_def}
+    visited: set[tuple[str, int]] = set()
+
+    assert resolve_unvisited_fragment(spread, fragments, visited, depth=0) is fragment_def
+    assert visited == {("F", 0)}
+    # Same depth again -> suppressed.
+    assert resolve_unvisited_fragment(spread, fragments, visited, depth=0) is None
+    # Different depth -> resolves again (nested spread site).
+    assert resolve_unvisited_fragment(spread, fragments, visited, depth=1) is fragment_def
+    assert visited == {("F", 0), ("F", 1)}
 
 
 def test_directive_variable_names_collects_skip_include_vars_only():
@@ -174,6 +199,54 @@ def test_node_children_with_runtime_prefix_clones_with_prefix():
     children = node_children_with_runtime_prefix(node, runtime_prefixes=(("booksConnection",),))
     assert {c.name for c in children} == {"title", "author"}
     assert all(c._optimizer_runtime_prefixes == [("booksConnection",)] for c in children)
+
+
+def test_connection_node_children_unwraps_edges_node_with_prefixes():
+    """``connection_node_children`` owns the edges->node composition + prefix walk."""
+    connection = _field(
+        "booksConnection",
+        selections=[
+            _field(
+                "edges",
+                selections=[
+                    _field("node", selections=[_field("title"), _field("author")]),
+                ],
+            ),
+            _field("totalCount"),
+            _fragment(
+                selections=[
+                    _field(
+                        "edges",
+                        alias="more",
+                        selections=[
+                            _field("node", selections=[_field("isbn")]),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+    children = connection_node_children(
+        connection,
+        runtime_prefixes=(("booksConnection",),),
+    )
+    by_name = {c.name: c for c in children}
+    assert set(by_name) == {"title", "author", "isbn"}
+    assert by_name["title"]._optimizer_runtime_prefixes == [
+        ("booksConnection", "edges", "node"),
+    ]
+    assert by_name["isbn"]._optimizer_runtime_prefixes == [
+        ("booksConnection", "more", "node"),
+    ]
+
+
+def test_connection_node_children_empty_without_edges_node():
+    """Scalar-only connection selections yield no node children."""
+    connection = _field(
+        "booksConnection",
+        selections=[_field("totalCount"), _field("pageInfo")],
+    )
+    assert connection_node_children(connection, runtime_prefixes=(("booksConnection",),)) == []
 
 
 # ---------------------------------------------------------------------------

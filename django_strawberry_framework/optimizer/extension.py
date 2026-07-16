@@ -38,7 +38,6 @@ from typing import Any, NamedTuple
 from django.db import models
 from graphql.language.ast import (
     FieldNode,
-    FragmentSpreadNode,
     VariableNode,
 )
 from graphql.language.printer import print_ast
@@ -85,6 +84,7 @@ from .plans import (
 from .selections import (
     ast_child_selections,
     ast_to_converted_selections,
+    connection_node_children,
     converted_selections_cache,
     directive_variable_names,
     named_children,
@@ -205,17 +205,16 @@ def _walk_cache_relevant_vars(
             directive_names,
             pagination_names,
         )
-        # Resolve the fragment spread depth-aware: the generic name-only
-        # ``resolve_unvisited_fragment`` guard would suppress a second spread of
-        # the same fragment regardless of depth, dropping nested pagination
-        # variables when an earlier root-depth spread visited the fragment first.
-        # Key the visited set on ``(name, child_depth)`` so the same fragment is
-        # walked once per distinct spread-site depth.
-        frag_def = _unvisited_fragment_at_depth(
+        # Resolve the fragment spread depth-aware: pass ``depth=child_depth`` so
+        # the shared AST-adapter guard keys ``visited_fragments`` on
+        # ``(name, depth)`` rather than name alone. A name-only key would drop
+        # nested pagination variables when an earlier root-depth spread visited
+        # the fragment first (Decision 7).
+        frag_def = resolve_unvisited_fragment(
             child,
             fragments,
             visited_fragments,
-            child_depth,
+            depth=child_depth,
         )
         if frag_def is not None:
             _walk_cache_relevant_vars(
@@ -226,34 +225,6 @@ def _walk_cache_relevant_vars(
                 directive_names,
                 pagination_names,
             )
-
-
-def _unvisited_fragment_at_depth(
-    node: Any,
-    fragments: dict[str, Any],
-    visited_fragments: set[tuple[str, int]],
-    depth: int,
-) -> Any | None:
-    """Resolve a ``FragmentSpreadNode`` to its definition, once per ``(name, depth)``.
-
-    The depth-aware sibling of ``selections.resolve_unvisited_fragment``: it dedupes
-    on ``(fragment_name, spread-site depth)`` instead of name alone so the
-    depth-sensitive pagination-variable walk can revisit a fragment spread at a
-    different response-path depth. Returns ``None`` when ``node`` is not a fragment
-    spread, has no name, names an undefined fragment, or has already been visited at
-    this depth; mutates ``visited_fragments`` on success.
-    """
-    if not isinstance(node, FragmentSpreadNode):
-        return None
-    frag_name = node.name.value if node.name else None
-    key = (frag_name, depth)
-    if frag_name is None or key in visited_fragments:
-        return None
-    frag_def = fragments.get(frag_name)
-    if frag_def is None:
-        return None
-    visited_fragments.add(key)
-    return frag_def
 
 
 def _collect_cache_var_families(node: Any, fragments: dict[str, Any]) -> tuple[set[str], set[str]]:
@@ -560,21 +531,19 @@ def _connection_node_child_selections(selections: list[Any], info: Any) -> list[
     must see the same child selection list it would receive for a list field over
     the node type. The GraphQL runtime path still includes ``edges`` and
     ``node``, though, so node children carry selection-specific prefixes for
-    strictness and FK-id-elision resolver keys.
+    strictness and FK-id-elision resolver keys. The edges->node composition itself
+    lives in ``selections.connection_node_children`` (shared with nested planning);
+    this extractor only supplies the root response path from ``info``.
     """
     node_children: list[Any] = []
     root_path = runtime_path_from_info(info)
     for connection_selection in selections:
-        for edge_selection in _named_children(connection_selection, "edges"):
-            edge_path = (*root_path, _response_key(edge_selection))
-            for node_selection in _named_children(edge_selection, "node"):
-                node_path = (*edge_path, _response_key(node_selection))
-                node_children.extend(
-                    _node_children_with_runtime_prefix(
-                        node_selection,
-                        runtime_prefixes=(node_path,),
-                    ),
-                )
+        node_children.extend(
+            connection_node_children(
+                connection_selection,
+                runtime_prefixes=(root_path,),
+            ),
+        )
     return node_children
 
 
@@ -616,21 +585,17 @@ class CacheInfo(NamedTuple):
     size: int
 
 
-_optimizer_active: ContextVar[bool] = ContextVar(
-    "django_strawberry_framework_optimizer_active",
-    default=False,
-)
-
-
 # The active ``DjangoOptimizerExtension`` instance for the operation's
 # lifetime, published by ``on_execute`` so the connection field's
 # ``apply_connection_optimization`` helper can discover it and SHARE the
 # instance-bound plan cache (Decision 11). ``None`` (the default) means
 # either no optimizer is installed for this execution or the helper is being
-# called outside an ``on_execute`` lifecycle; the helper then falls back to a
-# cache-less plan build + apply, which is correctness-safe (the plan cache is
-# a hit-rate optimization, not a correctness requirement - see
-# ``DjangoOptimizerExtension.cache_info``).
+# called outside an ``on_execute`` lifecycle; the helper then short-circuits
+# and returns the queryset unoptimized (the connection field follows the same
+# opt-in contract as the middleware path - see ``apply_connection_optimization``).
+# Presence of a non-``None`` instance is also the sole "optimizer is active"
+# signal for this execution; a parallel boolean ContextVar was removed once
+# this handle carried the same lifecycle.
 _active_optimizer: "ContextVar[DjangoOptimizerExtension | None]" = ContextVar(
     "django_strawberry_framework_active_optimizer",
     default=None,
@@ -942,7 +907,6 @@ class DjangoOptimizerExtension(SchemaExtension):
         # extension entry).
         execution_context = getattr(self, "execution_context", None)
         _clear_optimizer_context(getattr(execution_context, "context", None))
-        active_token = _optimizer_active.set(True)
         # Publish this instance so ``apply_connection_optimization`` can
         # discover it and share the instance-bound plan cache (Decision 11).
         instance_token = _active_optimizer.set(self)
@@ -961,7 +925,6 @@ class DjangoOptimizerExtension(SchemaExtension):
             _cache_key_parts_cache.reset(key_parts_token)
             _active_nested_strategy.reset(strategy_token)
             _active_optimizer.reset(instance_token)
-            _optimizer_active.reset(active_token)
 
     def resolve(
         self,

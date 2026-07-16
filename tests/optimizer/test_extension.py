@@ -52,9 +52,9 @@ from django_strawberry_framework import (
 )
 from django_strawberry_framework.optimizer import logger as optimizer_logger
 from django_strawberry_framework.optimizer.extension import (
+    _active_optimizer,
     _named_children,
     _node_children_with_runtime_prefix,
-    _optimizer_active,
     _resolve_model_from_return_type,
 )
 from django_strawberry_framework.registry import registry
@@ -954,15 +954,15 @@ def test_optimize_returns_original_queryset_for_empty_plan(monkeypatch):
 
 
 def test_on_execute_sets_and_resets_context_var():
-    """on_execute sets _optimizer_active to True, then resets on exit."""
+    """on_execute publishes ``_active_optimizer`` for the operation, then resets."""
     ext = DjangoOptimizerExtension()
-    assert _optimizer_active.get() is False
+    assert _active_optimizer.get() is None
     gen = ext.on_execute()
     next(gen)  # enter
-    assert _optimizer_active.get() is True
+    assert _active_optimizer.get() is ext
     with contextlib.suppress(StopIteration):
         next(gen)
-    assert _optimizer_active.get() is False
+    assert _active_optimizer.get() is None
 
 
 # ---------------------------------------------------------------------------

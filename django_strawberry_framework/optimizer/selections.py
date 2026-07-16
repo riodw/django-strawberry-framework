@@ -20,16 +20,21 @@ policies so the contracts cannot drift"):
 
 - **AST adapter** (``ast_child_selections`` / ``resolve_unvisited_fragment`` /
   ``directive_variable_names``) - operates on graphql-core AST nodes for
-  ``optimizer/extension.py``.
+  ``optimizer/extension.py``. ``resolve_unvisited_fragment`` accepts optional
+  ``depth`` so the reachable-fragment walk (name key) and the
+  cache-relevant-variable walk (``(name, depth)`` key) share one resolve
+  guard.
 - **Converted-selection adapter** (``should_include`` / ``is_fragment`` /
   ``response_key`` / ``response_keys`` / ``included_field_selections`` /
   ``named_children`` / ``with_runtime_prefix`` /
-  ``node_children_with_runtime_prefix`` / ``direct_child_selected``) - operates
-  on Strawberry converted selections (and the ``SimpleNamespace`` shapes the
-  walker synthesizes) for three consumers: ``optimizer/walker.py`` (nested
-  connection windows), ``optimizer/extension.py``'s root-connection seam (the
-  ``edges { node }`` unwrap), and ``connection.py``'s ``totalCount`` detection
-  (``direct_child_selected`` only).
+  ``node_children_with_runtime_prefix`` / ``connection_node_children`` /
+  ``direct_child_selected``) - operates on Strawberry converted selections
+  (and the ``SimpleNamespace`` shapes the walker synthesizes) for three
+  consumers: ``optimizer/walker.py`` / ``nested_planner.py`` (nested
+  connection windows), ``optimizer/extension.py``'s root-connection seam
+  (both call ``connection_node_children`` for the ``edges { node }`` unwrap),
+  and ``connection.py``'s ``totalCount`` detection (``direct_child_selected``
+  only).
 
 Cycle-safe: ``walker.py`` and ``extension.py`` both import from here; this
 module imports neither (it previously lived split between them, with
@@ -159,7 +164,7 @@ def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
                     InlineFragment(
                         type_condition=(condition.name.value if condition is not None else None),
                         directives=convert_directives(info, node.directives),
-                        selections=_convert(getattr(node.selection_set, "selections", [])),
+                        selections=_convert(ast_child_selections(node)),
                     ),
                 )
             elif isinstance(node, FragmentSpreadNode):
@@ -169,9 +174,7 @@ def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
                         name=node.name.value,
                         type_condition=fragment.type_condition.name.value,
                         directives=convert_directives(info, node.directives),
-                        selections=_convert(
-                            getattr(fragment.selection_set, "selections", []),
-                        ),
+                        selections=_convert(ast_child_selections(fragment)),
                     ),
                 )
             else:
@@ -181,7 +184,7 @@ def ast_to_converted_selections(info: Any, field_nodes: Any) -> list[Any]:
                         alias=getattr(node.alias, "value", None),
                         directives=convert_directives(info, node.directives),
                         arguments=convert_arguments(info, node.arguments),
-                        selections=_convert(getattr(node.selection_set, "selections", [])),
+                        selections=_convert(ast_child_selections(node)),
                     ),
                 )
         return out
@@ -259,30 +262,38 @@ def ast_child_selections(node: Any) -> tuple[Any, ...]:
 def resolve_unvisited_fragment(
     node: Any,
     fragments: dict[str, Any],
-    visited_fragments: set[str],
+    visited_fragments: set[Any],
+    *,
+    depth: int | None = None,
 ) -> Any | None:
-    """Resolve a ``FragmentSpreadNode`` to its definition, once.
+    """Resolve a ``FragmentSpreadNode`` to its definition, once per visit key.
 
-    Returns the matching ``FragmentDefinitionNode`` and marks the
-    fragment name as visited so a sibling or cyclic spread of the same
-    fragment in the same walk is a no-op. Returns ``None`` when
-    ``node`` is not a fragment spread, when the spread has no name,
-    when the fragment name is already visited, or when the document
-    does not define the named fragment (defensive - graphql-core's
-    validation would normally reject the operation before the optimizer
-    sees it). Mutates ``visited_fragments`` on success so callers share
-    the same cycle-detection set across recursive descents in both the
-    cache-relevant-variable walk and the reachable-fragment walk.
+    Returns the matching ``FragmentDefinitionNode`` and marks the visit key
+    so a sibling or cyclic spread in the same walk is a no-op. The visit key
+    is the fragment name when ``depth`` is omitted (reachable-fragment
+    collection for the plan-cache document key) and ``(name, depth)`` when
+    ``depth`` is supplied (depth-sensitive cache-relevant-variable walk: the
+    same fragment spread at two response-path depths must be walked once per
+    depth so nested pagination variables are not dropped). Returns ``None``
+    when ``node`` is not a fragment spread, when the spread has no name, when
+    the visit key is already present, or when the document does not define
+    the named fragment (defensive - graphql-core's validation would normally
+    reject the operation before the optimizer sees it). Mutates
+    ``visited_fragments`` on success so callers share one cycle-detection set
+    across recursive descents.
     """
     if not isinstance(node, FragmentSpreadNode):
         return None
     frag_name = node.name.value if node.name else None
-    if frag_name is None or frag_name in visited_fragments:
+    if frag_name is None:
+        return None
+    visit_key: Any = frag_name if depth is None else (frag_name, depth)
+    if visit_key in visited_fragments:
         return None
     frag_def = fragments.get(frag_name)
     if frag_def is None:
         return None
-    visited_fragments.add(frag_name)
+    visited_fragments.add(visit_key)
     return frag_def
 
 
@@ -472,6 +483,36 @@ def node_children_with_runtime_prefix(
             continue
         children.append(with_runtime_prefix(child, runtime_prefixes))
     return children
+
+
+def connection_node_children(
+    selection: Any,
+    *,
+    runtime_prefixes: tuple[tuple[str, ...], ...],
+) -> list[Any]:
+    """Unwrap a Relay connection's ``edges { node { ... } }`` child selections.
+
+    Single owner of the edges->node composition that accumulates response-key
+    prefixes and clones node children for the walker. Shared by the root
+    connection apply seam (``extension.py``) and nested-connection planning
+    (``nested_planner.py``) so fragment / directive / prefix semantics cannot
+    drift between those call sites. Returns an empty list when the selection
+    has no ``edges { node }`` (e.g. ``pageInfo`` / ``totalCount`` only).
+    """
+    node_children: list[Any] = []
+    for edge_selection in named_children(selection, "edges"):
+        edge_path_prefixes = tuple((*rp, response_key(edge_selection)) for rp in runtime_prefixes)
+        for node_selection in named_children(edge_selection, "node"):
+            node_path_prefixes = tuple(
+                (*ep, response_key(node_selection)) for ep in edge_path_prefixes
+            )
+            node_children.extend(
+                node_children_with_runtime_prefix(
+                    node_selection,
+                    runtime_prefixes=node_path_prefixes,
+                ),
+            )
+    return node_children
 
 
 def direct_child_selected(selection_roots: Any, name: str) -> bool:

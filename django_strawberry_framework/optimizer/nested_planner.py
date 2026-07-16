@@ -51,16 +51,8 @@ from .plans import (
 )
 from .selections import (
     connection_has_next_page_selected,
+    connection_node_children,
     connection_total_count_selected,
-)
-from .selections import (
-    named_children as _named_children,
-)
-from .selections import (
-    node_children_with_runtime_prefix as _node_children_with_runtime_prefix,
-)
-from .selections import (
-    response_key as _response_key,
 )
 from .selections import (
     response_keys as _response_keys,
@@ -247,28 +239,15 @@ def _relation_connection_to_attr_for_key(relation_field_name: str, response_key:
 def _connection_node_selections(sel: Any, runtime_paths: tuple[tuple[str, ...], ...]) -> list[Any]:
     """Unwrap a nested connection's ``edges { node { ... } }`` child selections.
 
-    Reuses the consolidated ``edges { node }`` helpers (Decision 9) so the
-    nested-connection unwrap matches the root seam's fragment-aware,
-    directive-aware, runtime-prefix-carrying semantics. Returns the node-level
-    child selections carrying the connection-aware runtime prefixes; an empty
-    list for a scalar-only (``pageInfo`` / ``totalCount``) selection with no
-    ``edges { node }`` - those are still PLANNED with a connector/ordering-only
-    projection (Decision 6), not a fallback.
+    Thin adapter over ``selections.connection_node_children`` (Decision 9) so the
+    nested-connection unwrap shares one edges->node composition with the root
+    apply seam. Returns the node-level child selections carrying the
+    connection-aware runtime prefixes; an empty list for a scalar-only
+    (``pageInfo`` / ``totalCount``) selection with no ``edges { node }`` - those
+    are still PLANNED with a connector/ordering-only projection (Decision 6),
+    not a fallback.
     """
-    node_children: list[Any] = []
-    for edge_selection in _named_children(sel, "edges"):
-        edge_path_prefixes = tuple((*rp, _response_key(edge_selection)) for rp in runtime_paths)
-        for node_selection in _named_children(edge_selection, "node"):
-            node_path_prefixes = tuple(
-                (*ep, _response_key(node_selection)) for ep in edge_path_prefixes
-            )
-            node_children.extend(
-                _node_children_with_runtime_prefix(
-                    node_selection,
-                    runtime_prefixes=node_path_prefixes,
-                ),
-            )
-    return node_children
+    return connection_node_children(sel, runtime_prefixes=runtime_paths)
 
 
 def _relay_max_results_from_info(info: Any) -> int | None:

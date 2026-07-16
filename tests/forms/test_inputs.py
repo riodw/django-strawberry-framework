@@ -257,6 +257,70 @@ def test_plain_form_only_field_included_in_input():
     assert _is_optional(fields["captcha"])
 
 
+def test_null_boolean_field_is_optional_even_when_django_required():
+    """Default ``NullBooleanField(required=True)`` is still optional + UNSET in the input.
+
+    Converter forces ``required=False`` (Django validate is a no-op; GraphQL cannot
+    express required-nullable). The build site must honor ``conversion.required``
+    so omitting the field does not TypeError after GraphQL validation allows it.
+    """
+
+    class FlagForm(forms.Form):
+        flag = forms.NullBooleanField()  # Django default required=True
+        name = forms.CharField()
+
+    cre, _, _, _ = build_form_inputs(FlagForm, operation_kind=FORM)
+    fields = _field_map(cre)
+    assert _is_optional(fields["flag"])
+    assert fields["flag"].default is UNSET
+    assert not _is_optional(fields["name"])
+
+
+def test_column_backed_null_boolean_is_optional():
+    """A ``NullBooleanField`` backed by a nullable model column is optional too.
+
+    The requiredness rule must apply on EVERY conversion path, not just the
+    model-less one: a ``ModelForm`` field whose backing column resolves still
+    routes through the shared ``form_field_required`` helper, so a Django
+    ``required=True`` ``NullBooleanField`` over a column widens to ``| None`` +
+    ``UNSET`` rather than compiling a required field (the pre-fix column-backed
+    path used raw ``field.required`` and emitted it required).
+    """
+
+    class Flags(models.Model):
+        flag = models.BooleanField(null=True)
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class FlagsForm(forms.ModelForm):
+        flag = forms.NullBooleanField()  # Django default required=True
+
+        class Meta:
+            model = Flags
+            fields = ("flag",)
+
+    cre, _, _, _ = build_form_inputs(FlagsForm, operation_kind=CREATE)
+    fields = _field_map(cre)
+    assert _is_optional(fields["flag"])
+    assert fields["flag"].default is UNSET
+
+
+def test_create_guard_ignores_django_required_null_boolean():
+    """A Django-``required=True`` ``NullBooleanField`` is not create-required.
+
+    Narrowing it out of the input must NOT trip the create-required guard - the
+    field is optional in the schema and a bound form validates without it.
+    """
+
+    class FlagForm(forms.Form):
+        flag = forms.NullBooleanField()  # Django default required=True
+        name = forms.CharField()
+
+    cre, _, _, _ = build_form_inputs(FlagForm, operation_kind=FORM, fields=("name",))
+    assert set(_field_map(cre)) == {"name"}
+
+
 def test_json_field_maps_to_json_scalar_in_input():
     """A plain ``Form`` ``JSONField`` maps to ``strawberry.scalars.JSON``, not ``str``."""
 
@@ -552,6 +616,27 @@ def test_exclude_naming_unknown_field_raises():
             operation_kind=CREATE,
             exclude=("definitely_not_a_field",),
         )
+
+
+def test_excluded_unsupported_field_is_never_converted():
+    """An unsupported custom field excluded via ``Meta.fields`` is never converted.
+
+    Required-field discovery walks the FULL declared set, so it must decide
+    requiredness as a pure attribute read (``form_field_required``) and never
+    call ``convert_form_field`` on a field the mutation excluded - otherwise the
+    converter's raising fallthrough for an unsupported type would crash the build
+    for a field the consumer deliberately kept out of the schema.
+    """
+
+    class Unsupported(forms.Field):
+        """A custom field type the converter has no mapping for."""
+
+    class WeirdForm(forms.Form):
+        name = forms.CharField()
+        weird = Unsupported(required=False)
+
+    cre, _, _, _ = build_form_inputs(WeirdForm, operation_kind=FORM, fields=("name",))
+    assert set(_field_map(cre)) == {"name"}
 
 
 # ---------------------------------------------------------------------------

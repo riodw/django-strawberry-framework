@@ -72,10 +72,21 @@ def test_scalar_field_annotations(field, expected):
 
 
 def test_null_boolean_field_is_optional_bool():
-    """``NullBooleanField`` -> ``bool | None`` (it subclasses ``BooleanField`` but widens)."""
+    """``NullBooleanField`` -> ``bool | None``, always optional (graphene parity).
+
+    Django's ``NullBooleanField.validate`` is a no-op, so ``field.required`` is
+    meaningless for form validation. GraphQL also cannot express a required
+    nullable input; baking ``bool | None`` with ``required=True`` (Django's
+    default) produced SDL ``Boolean`` without a default, so clients could omit
+    the field per the schema and then hit a Strawberry ``TypeError``. Force
+    ``required=False`` regardless of ``field.required``.
+    """
     conversion = convert_form_field(forms.NullBooleanField())
     assert conversion.annotation == (bool | None)
     assert conversion.kind == SCALAR
+    assert conversion.required is False
+    assert convert_form_field(forms.NullBooleanField(required=True)).required is False
+    assert convert_form_field(forms.NullBooleanField(required=False)).required is False
 
 
 def test_json_field_maps_to_json_scalar_not_charfield_str():
@@ -91,7 +102,7 @@ def test_json_field_maps_to_json_scalar_not_charfield_str():
 
 
 def test_required_ness_reflects_field_required():
-    """``required`` mirrors ``field.required`` for both states."""
+    """``required`` mirrors ``field.required`` for both states (non-NullBoolean)."""
     assert convert_form_field(forms.CharField(required=True)).required is True
     assert convert_form_field(forms.CharField(required=False)).required is False
 

@@ -77,6 +77,7 @@ from .converter import (
     SCALAR,
     FormInputFieldSpec,
     convert_form_field,
+    form_field_required,
 )
 
 # Module path the ``strawberry.lazy(...)`` marker references for the FORM input
@@ -362,8 +363,8 @@ def _field_triple_and_spec(
     column: Any,
     type_name: str,
     form_class: type[forms.BaseForm],
-) -> tuple[str, Any, FormInputFieldSpec]:
-    """Resolve one form field to its ``(python_attr, base_annotation, FormInputFieldSpec)``.
+) -> tuple[str, Any, FormInputFieldSpec, bool]:
+    """Resolve one form field to its ``(python_attr, base_annotation, FormInputFieldSpec, required)``.
 
     A ``ModelForm`` field with a backing column routes through the read-side
     converters (keyed on the resolved ``models.Field``): a relation column ->
@@ -377,16 +378,24 @@ def _field_triple_and_spec(
     model-less relation id-type are known).
 
     Returns the BASE (non-optional) annotation; the create/partial requiredness
-    widening is applied by the caller. The returned ``FormInputFieldSpec`` records
-    the reverse map the Slice 3 resolver consults - ``form_field_name`` is always
-    the form's declared name, never the ``<name>_id`` relation attr, because a
-    bound Django form is keyed by form-field name. A relation field also records
-    ``related_model`` from the SAME basis the generated id type uses (the backing
-    column's ``related_model``, else the form field's ``queryset.model``) so the
-    Slice-3 decode never re-derives it from the class-level ``base_fields`` field
-    (whose ``queryset`` is ``None`` under the request-scoped-choices idiom).
+    widening is applied by the caller. The returned ``required`` is the shared
+    ``converter.form_field_required`` decision for BOTH the column-backed and
+    column-less paths (so ``NullBooleanField`` is forced optional on either
+    basis, and the two paths cannot drift). The returned ``FormInputFieldSpec``
+    records the reverse map the Slice 3 resolver
+    consults - ``form_field_name`` is always the form's declared name, never the
+    ``<name>_id`` relation attr, because a bound Django form is keyed by
+    form-field name. A relation field also records ``related_model`` from the SAME
+    basis the generated id type uses (the backing column's ``related_model``, else
+    the form field's ``queryset.model``) so the Slice-3 decode never re-derives it
+    from the class-level ``base_fields`` field (whose ``queryset`` is ``None`` under
+    the request-scoped-choices idiom).
     """
     related_model: Any = None
+    # ONE requiredness decision for both the column-backed and column-less paths
+    # (so a NullBooleanField backed by a nullable model column is forced optional
+    # too, not just the model-less one) - see ``converter.form_field_required``.
+    field_required = form_field_required(field)
     if column is not None:
         # ModelForm field with a backing model column: route the ``models.Field``
         # through the read-side converters so the wire contract is symmetric with
@@ -411,7 +420,8 @@ def _field_triple_and_spec(
             )
     else:
         # Column-less form field: the model-less ``convert_form_field`` table owns
-        # the kind; relation / file annotations are finalized here.
+        # the kind; relation / file annotations are finalized here. Requiredness
+        # was already decided above via ``form_field_required``.
         conversion = convert_form_field(field)
         if conversion.kind == FILE:
             python_attr, graphql_name, annotation, kind = _simple_triple(name, Upload, FILE)
@@ -437,7 +447,7 @@ def _field_triple_and_spec(
         kind=kind,
         related_model=related_model,
     )
-    return python_attr, annotation, spec
+    return python_attr, annotation, spec, field_required
 
 
 def _guard_input_attr_collisions(
@@ -513,7 +523,7 @@ def build_form_input_class(
     field_specs: list[FormInputFieldSpec] = []
     for name, field in effective.items():
         column = _model_column_for(form_class, name)
-        python_attr, annotation, spec = _field_triple_and_spec(
+        python_attr, annotation, spec, field_required = _field_triple_and_spec(
             name,
             field,
             column,
@@ -522,12 +532,12 @@ def build_form_input_class(
         )
         field_specs.append(spec)
 
-        # Requiredness: the create input honors ``field.required``; the partial
-        # input forces a model-backed field optional but a column-less extra
-        # field keeps its declared ``field.required`` (P2). The widening tail
+        # Requiredness: the create input honors the converter/form required flag;
+        # the partial input forces a model-backed field optional but a column-less
+        # extra field keeps its converted ``required`` (P2). The widening tail
         # (``T | None`` + ``UNSET`` default + ``name=`` alias) is single-sited
         # in ``utils/inputs.py::optional_input_field`` (DRY review A10).
-        required = False if (is_partial and column is not None) else field.required
+        required = False if (is_partial and column is not None) else field_required
         annotation, field_kwargs = optional_input_field(
             annotation,
             python_attr=python_attr,
@@ -542,8 +552,18 @@ def build_form_input_class(
 
 
 def _required_form_field_names(form_class: type[forms.BaseForm]) -> set[str]:
-    """Return the names of every declared form field whose ``field.required`` is True."""
-    return {name for name, field in get_form_fields(form_class).items() if field.required}
+    """Return the names of every declared form field that must appear in a create input.
+
+    Uses the shared ``converter.form_field_required`` (so ``NullBooleanField`` is
+    never treated as create-required, matching the build site) as a pure
+    attribute + ``isinstance`` read - it never calls ``convert_form_field``, so
+    discovery over the FULL declared set never raises on a field the mutation
+    later excludes via ``Meta.fields`` / ``Meta.exclude`` (an unsupported custom
+    field is only converted if it actually reaches the input at the build site).
+    """
+    return {
+        name for name, field in get_form_fields(form_class).items() if form_field_required(field)
+    }
 
 
 def guard_create_required_fields(

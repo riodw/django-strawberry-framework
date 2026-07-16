@@ -822,6 +822,48 @@ def test_plain_form_perform_mutate_integrity_error_maps_to_envelope():
     assert payload["errors"][0]["field"] == NON_FIELD_ERROR_KEY
 
 
+@pytest.mark.django_db
+def test_null_boolean_field_omitted_in_mutation_uses_unset_default():
+    """Omitting a ``NullBooleanField`` in the input succeeds at RUNTIME (the UNSET default).
+
+    The motivating regression this commit fixes: baking ``bool | None`` while
+    leaving the input field required produced SDL that let GraphQL validation
+    accept the omit, then Strawberry raised ``TypeError: missing 1 required
+    keyword-only argument`` when constructing the input object. With the field
+    widened to ``| None`` + ``UNSET`` the omit reaches the bound form as an
+    absent value, and ``NullBooleanField`` resolves it to ``None``. A pure-SDL
+    test cannot catch this - only executing the mutation with the field omitted.
+    """
+    captured = {}
+
+    class NullFlagForm(forms.Form):
+        flag = forms.NullBooleanField()  # Django default required=True
+        name = forms.CharField()
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = NullFlagForm
+            permission_classes = []
+
+        def perform_mutate(self, form, info):
+            captured["flag"] = form.cleaned_data["flag"]
+
+    @strawberry.type
+    class Mutation:
+        submit = DjangoMutationField(Submit)
+
+    finalize_django_types()
+    schema = _schema(Mutation)
+    # ``flag`` is OMITTED entirely - only ``name`` is supplied.
+    res = schema.execute_sync(
+        "mutation($d: NullFlagFormInput!){ submit(data:$d){ ok errors{ field messages } } }",
+        variable_values={"d": {"name": "hi"}},
+    )
+    assert res.errors is None, res.errors
+    assert res.data["submit"]["ok"] is True
+    assert captured["flag"] is None
+
+
 # ---------------------------------------------------------------------------
 # get_form_kwargs / get_form hooks (P2)
 # ---------------------------------------------------------------------------

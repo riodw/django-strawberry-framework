@@ -108,14 +108,17 @@ class FormInputFieldSpec:
 class FormFieldConversion(FieldConversionBase):
     """The model-less annotation + decode kind ``convert_form_field`` returns.
 
-    ``required`` is the form field's own ``field.required``. ``annotation`` is
-    the resolved Strawberry annotation for a SCALAR field; for a relation / file
-    field the annotation is finalized at the ``forms/inputs.py`` build site
-    (where the backing column - if any - and the related primary ``DjangoType``
-    are known, so the Relay-``GlobalID``-vs-raw-pk id type can be resolved), so
-    those kinds carry ``annotation=None`` here and only the ``kind`` is
-    authoritative. The ``(annotation, kind, required)`` value-object shape is
-    the shared ``utils/inputs.py::FieldConversionBase`` (DRY review A7).
+    ``required`` is the form field's own ``field.required``, except
+    ``NullBooleanField`` which is always optional (Django's ``validate`` is a
+    no-op and GraphQL cannot express required-nullable inputs - graphene-django
+    parity). ``annotation`` is the resolved Strawberry annotation for a SCALAR
+    field; for a relation / file field the annotation is finalized at the
+    ``forms/inputs.py`` build site (where the backing column - if any - and the
+    related primary ``DjangoType`` are known, so the Relay-``GlobalID``-vs-raw-pk
+    id type can be resolved), so those kinds carry ``annotation=None`` here and
+    only the ``kind`` is authoritative. The ``(annotation, kind, required)``
+    value-object shape is the shared ``utils/inputs.py::FieldConversionBase``
+    (DRY review A7).
     """
 
     __slots__ = ()
@@ -159,12 +162,36 @@ _SCALAR_FORM_FIELDS: dict[type[forms.Field], Any] = {
 }
 
 
+def form_field_required(field: forms.Field) -> bool:
+    """The effective GraphQL-input requiredness of any form field (the one rule).
+
+    ``NullBooleanField.validate`` is a no-op, so Django's ``field.required`` is
+    meaningless for form validation (omit / ``None`` always succeed). GraphQL
+    input fields also cannot be "required but nullable" (a nullable input is
+    always omittable). Baking ``bool | None`` into the annotation while leaving
+    ``required=True`` (Django's default) produced SDL ``flag: Boolean`` with NO
+    class default - GraphQL validation allowed the omit, then Strawberry crashed
+    with ``TypeError: ... missing 1 required keyword-only argument``. So a
+    ``NullBooleanField`` is always optional (graphene-django parity); every other
+    field keeps its declared ``field.required``.
+
+    This is the SINGLE requiredness decision, shared by ``convert_form_field``
+    (the annotation path) and ``forms/inputs.py``'s build site + create/partial
+    required-field discovery, so the column-backed and column-less paths cannot
+    drift. It is a pure attribute + ``isinstance`` read - it never converts - so
+    required-field discovery over the full declared field set never raises on an
+    excluded unsupported field.
+    """
+    return False if isinstance(field, forms.NullBooleanField) else field.required
+
+
 def convert_form_field(field: forms.Field) -> FormFieldConversion:
     """Map a model-less ``forms.Field`` to its Strawberry annotation + decode kind.
 
     Returns a ``FormFieldConversion`` carrying the resolved scalar
     ``annotation`` (``None`` for the relation / file kinds, finalized at the
-    build site), the decode ``kind``, and ``required`` from ``field.required``.
+    build site), the decode ``kind``, and ``required`` from ``field.required``
+    (forced ``False`` for ``NullBooleanField`` - see ``FormFieldConversion``).
 
     Dispatch is a ``type(field).__mro__`` walk over an individually-registered
     registry with a **raising fallthrough**, NOT a ``functools.singledispatch``
@@ -191,7 +218,10 @@ def convert_form_field(field: forms.Field) -> FormFieldConversion:
     all subclass ``ChoiceField`` (which the scalar table maps to ``str``), so the
     more-specific kind must win.
     """
-    required = field.required
+    # The one requiredness rule (NullBooleanField forced optional) lives in
+    # ``form_field_required`` so this annotation path and the build site cannot
+    # drift - see that helper and ``FormFieldConversion``.
+    required = form_field_required(field)
 
     # Delegate the ordered-precheck -> MRO-walk -> raise control flow to the
     # shared ``utils/converters.py::convert_with_mro`` skeleton (spec-039 P1.4) so

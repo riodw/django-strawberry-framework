@@ -33,7 +33,6 @@ from django_strawberry_framework.forms.converter import (
     RELATION_MULTI,
     RELATION_SINGLE,
     SCALAR,
-    FormInputFieldSpec,
     convert_form_field,
 )
 
@@ -200,24 +199,3 @@ def test_unknown_custom_field_subclass_raises():
 
     with pytest.raises(ConfigurationError, match="Unsupported form field type 'CustomField'"):
         convert_form_field(CustomField())
-
-
-# ---------------------------------------------------------------------------
-# FormInputFieldSpec - the per-input-field reverse-map record
-# ---------------------------------------------------------------------------
-
-
-def test_form_input_field_spec_is_frozen_record():
-    """The reverse-map record carries input_attr / graphql_name / form_field_name / kind."""
-    spec = FormInputFieldSpec(
-        input_attr="category_id",
-        graphql_name="categoryId",
-        form_field_name="category",
-        kind=RELATION_SINGLE,
-    )
-    assert spec.input_attr == "category_id"
-    assert spec.graphql_name == "categoryId"
-    assert spec.form_field_name == "category"
-    assert spec.kind == RELATION_SINGLE
-    with pytest.raises((AttributeError, TypeError)):
-        spec.kind = SCALAR  # frozen

@@ -60,6 +60,7 @@ from ..scalars import Upload
 from ..types.converters import convert_scalar, scalar_for_field
 from ..types.relay import implements_relay_node
 from ..utils.inputs import (
+    InputFieldSpec,
     build_strawberry_input_class,
     generated_input_type_name,
     guard_dropped_required,
@@ -75,7 +76,6 @@ from .converter import (
     RELATION_MULTI,
     RELATION_SINGLE,
     SCALAR,
-    FormInputFieldSpec,
     convert_form_field,
     form_field_required,
 )
@@ -363,8 +363,8 @@ def _field_triple_and_spec(
     column: Any,
     type_name: str,
     form_class: type[forms.BaseForm],
-) -> tuple[str, Any, FormInputFieldSpec, bool]:
-    """Resolve one form field to its ``(python_attr, base_annotation, FormInputFieldSpec, required)``.
+) -> tuple[str, Any, InputFieldSpec, bool]:
+    """Resolve one form field to its ``(python_attr, base_annotation, InputFieldSpec, required)``.
 
     A ``ModelForm`` field with a backing column routes through the read-side
     converters (keyed on the resolved ``models.Field``): a relation column ->
@@ -381,15 +381,15 @@ def _field_triple_and_spec(
     widening is applied by the caller. The returned ``required`` is the shared
     ``converter.form_field_required`` decision for BOTH the column-backed and
     column-less paths (so ``NullBooleanField`` is forced optional on either
-    basis, and the two paths cannot drift). The returned ``FormInputFieldSpec``
-    records the reverse map the Slice 3 resolver
-    consults - ``form_field_name`` is always the form's declared name, never the
-    ``<name>_id`` relation attr, because a bound Django form is keyed by
-    form-field name. A relation field also records ``related_model`` from the SAME
-    basis the generated id type uses (the backing column's ``related_model``, else
-    the form field's ``queryset.model``) so the Slice-3 decode never re-derives it
-    from the class-level ``base_fields`` field (whose ``queryset`` is ``None`` under
-    the request-scoped-choices idiom).
+    basis, and the two paths cannot drift). The returned ``InputFieldSpec``
+    records the reverse map the Slice 3 resolver consults - ``target_name`` is
+    always the form's declared name, never the ``<name>_id`` relation attr,
+    because a bound Django form is keyed by form-field name. A relation field
+    also records ``related_model`` from the SAME basis the generated id type uses
+    (the backing column's ``related_model``, else the form field's
+    ``queryset.model``) so the Slice-3 decode never re-derives it from the
+    class-level ``base_fields`` field (whose ``queryset`` is ``None`` under the
+    request-scoped-choices idiom).
     """
     related_model: Any = None
     # ONE requiredness decision for both the column-backed and column-less paths
@@ -440,10 +440,10 @@ def _field_triple_and_spec(
                 conversion.kind,
             )
 
-    spec = FormInputFieldSpec(
+    spec = InputFieldSpec(
         input_attr=python_attr,
         graphql_name=graphql_name,
-        form_field_name=name,
+        target_name=name,
         kind=kind,
         related_model=related_model,
     )
@@ -452,7 +452,7 @@ def _field_triple_and_spec(
 
 def _guard_input_attr_collisions(
     form_class: type[forms.BaseForm],
-    field_specs: list[FormInputFieldSpec],
+    field_specs: list[InputFieldSpec],
 ) -> None:
     """Raise if two form fields collide on the generated input attr OR GraphQL name.
 
@@ -481,7 +481,7 @@ def _guard_input_attr_collisions(
         subject=f"Form {form_class.__name__!r}",
         field_noun="form fields",
         rename_clause="Rename one of the form fields,",
-        name_of=lambda spec: spec.form_field_name,
+        name_of=lambda spec: spec.target_name,
     ):
         raise ConfigurationError(message)
 
@@ -492,7 +492,7 @@ def build_form_input_class(
     operation_kind: str,
     fields: Any = None,
     exclude: Any = None,
-) -> tuple[type, list[FormInputFieldSpec]]:
+) -> tuple[type, list[InputFieldSpec]]:
     """Build ONE ``@strawberry.input`` class from a form's declared fields.
 
     ``operation_kind`` is ``CREATE`` / ``FORM`` (the create-shaped input - each
@@ -520,7 +520,7 @@ def build_form_input_class(
     is_partial = operation_kind == PARTIAL
 
     triples: list[tuple[str, Any, dict[str, Any]]] = []
-    field_specs: list[FormInputFieldSpec] = []
+    field_specs: list[InputFieldSpec] = []
     for name, field in effective.items():
         column = _model_column_for(form_class, name)
         python_attr, annotation, spec, field_required = _field_triple_and_spec(
@@ -623,25 +623,31 @@ def guard_partial_required_column_less_fields(
     fails its required validation on EVERY request while the schema still finalizes
     cleanly. Reject that at bind, naming the field(s).
 
-    Scoping to ``_model_column_for(...) is None`` is load-bearing: a blanket reuse of
-    ``guard_create_required_fields`` here would wrongly reject reconstructable
-    model-backed required fields that the partial path legitimately drops. The
-    ``get_form_kwargs`` / ``get_form`` waiver (``guard_required=False``) suppresses
-    this the same way it suppresses the create guard.
+    Scoping the required set to ``_model_column_for(...) is None`` is load-bearing:
+    a blanket reuse of ``guard_create_required_fields`` here would wrongly reject
+    reconstructable model-backed required fields that the partial path
+    legitimately drops. Drop detection itself is
+    ``utils/inputs.py::guard_dropped_required`` (same spine as the create guard);
+    only the required-set filter is form-partial-specific. The ``get_form_kwargs`` /
+    ``get_form`` waiver (``guard_required=False``) suppresses this the same way it
+    suppresses the create guard.
     """
-    dropped = sorted(
+    column_less_required = {
         name
         for name in _required_form_field_names(form_class)
-        if name not in set(effective_field_names) and _model_column_for(form_class, name) is None
-    )
-    if dropped:
-        raise ConfigurationError(
+        if _model_column_for(form_class, name) is None
+    }
+    guard_dropped_required(
+        column_less_required,
+        effective_field_names,
+        make_error=lambda dropped: ConfigurationError(
             f"DjangoModelFormMutation update input for {form_class.__name__} drops required "
             f"column-less form field(s) {dropped!r} via Meta.fields / Meta.exclude; they cannot "
             "be reconstructed from the row, so a bound form can never validate without them. Keep "
             "them in the input, or override get_form_kwargs / get_form to supply them (which "
             "waives this guard).",
-        )
+        ),
+    )
 
 
 def build_form_inputs(
@@ -651,7 +657,7 @@ def build_form_inputs(
     fields: Any = None,
     exclude: Any = None,
     guard_required: bool = True,
-) -> tuple[type, list[FormInputFieldSpec], type, list[FormInputFieldSpec]]:
+) -> tuple[type, list[InputFieldSpec], type, list[InputFieldSpec]]:
     """Build BOTH the create + partial inputs for a form, with the create-required guard.
 
     Single entry point producing ``(<FormClass>Input, create_specs,

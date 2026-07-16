@@ -33,10 +33,11 @@ cross-flavor ``036`` convention (a ``ModelChoiceField`` named ``category`` emits
 ``categoryId`` / python attr ``category_id``), but a bound Django form is keyed
 by FORM-field name (``ItemModelForm(data={"category": pk})``, never
 ``{"category_id": pk}``). So ``forms/inputs.py`` retains, per generated input
-field, a ``FormInputFieldSpec(input_attr, graphql_name, form_field_name, kind)``
-record that ``forms/resolvers.py`` (Slice 3) consults at decode to produce a
+field, a ``utils/inputs.py::InputFieldSpec`` (``target_name`` = form field name)
+that ``forms/resolvers.py`` (Slice 3) consults at decode to produce a
 form-field-keyed payload, where ``kind`` is one of the four module constants
-below.
+below. This module owns only the kind constants + ``convert_form_field``; the
+reverse-map record type is single-sited on ``InputFieldSpec``.
 """
 
 from __future__ import annotations
@@ -44,7 +45,6 @@ from __future__ import annotations
 import datetime
 import decimal
 import uuid
-from dataclasses import dataclass
 from typing import Any
 
 import strawberry
@@ -63,46 +63,6 @@ from ..utils.inputs import RELATION_MULTI as RELATION_MULTI
 from ..utils.inputs import RELATION_SINGLE as RELATION_SINGLE
 from ..utils.inputs import SCALAR as SCALAR
 from ..utils.inputs import FieldConversionBase
-
-
-@dataclass(frozen=True)
-class FormInputFieldSpec:
-    """Per-generated-input-field metadata for the form-field-keyed decode (spec-038 P1).
-
-    Sibling of ``utils/inputs.py::GeneratedInputFieldSpec`` but carries a
-    ``form_field_name`` + a ``kind`` flag instead of a ``django_source_path``:
-    the form decode needs the FORM-field key (not an ORM lookup path) and the
-    decode kind (``scalar`` / ``relation_single`` / ``relation_multi`` /
-    ``file``), because a bound Django form validates by form-field name and the
-    relation / file kinds drive distinct decode paths in ``forms/resolvers.py``.
-
-    - ``input_attr`` - the generated Strawberry dataclass attr (``category_id``
-      for an FK relation, ``name`` for a scalar).
-    - ``graphql_name`` - the camel-cased GraphQL wire name (``categoryId``).
-    - ``form_field_name`` - the form's own declared field name (``category``),
-      the key the bound form validates under.
-    - ``kind`` - one of ``SCALAR`` / ``RELATION_SINGLE`` / ``RELATION_MULTI`` /
-      ``FILE``.
-    - ``related_model`` - the Django target model a relation field decodes its
-      id(s) against (``Category`` for a ``category`` / ``category_id`` relation),
-      recorded at BUILD time from the SAME basis the generated id type uses (the
-      backing ``models.Field.related_model`` for a ``ModelForm`` column, else the
-      form field's ``queryset.model``) so the Slice-3 decode never re-derives it
-      from the class-level (uninstantiated) ``base_fields`` form field. That
-      re-derivation was fragile: a ``ModelForm`` FK declared with ``queryset=None``
-      (the request-scoped-choices idiom that assigns the queryset in ``__init__``)
-      has ``queryset is None`` in ``base_fields``, so a ``queryset.model`` decode
-      crashed with a bare ``AttributeError``; and a form field whose ``queryset``
-      points at a different model than its backing column diverged from the id
-      basis. Mirrors ``utils/inputs.py::InputFieldSpec.related_model`` (spec-039
-      H4). ``None`` for a non-relation (``scalar`` / ``file``) field.
-    """
-
-    input_attr: str
-    graphql_name: str
-    form_field_name: str
-    kind: str
-    related_model: type | None = None
 
 
 class FormFieldConversion(FieldConversionBase):

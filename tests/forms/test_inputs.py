@@ -62,6 +62,7 @@ from django_strawberry_framework.forms.inputs import (
     resolve_effective_form_fields,
 )
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.utils.inputs import InputFieldSpec
 
 
 @pytest.fixture(autouse=True)
@@ -358,7 +359,7 @@ def test_json_field_maps_to_json_scalar_in_input():
     cre, specs, _, _ = build_form_inputs(PayloadForm, operation_kind=FORM)
     fields = _field_map(cre)
     assert _inner_type(fields["payload"]) is strawberry.scalars.JSON
-    assert next(s for s in specs if s.form_field_name == "payload").kind == SCALAR
+    assert next(s for s in specs if s.target_name == "payload").kind == SCALAR
 
 
 # ---------------------------------------------------------------------------
@@ -372,11 +373,14 @@ def test_fk_to_non_relay_products_target_uses_raw_pk_id():
     fields = _field_map(cre)
     # CategoryType is non-Relay, so the id is the raw pk scalar (int), not GlobalID.
     assert _inner_type(fields["category_id"]) is int
-    # Reverse map: input attr -> form field name + kind.
-    cat_spec = next(s for s in specs if s.form_field_name == "category")
+    # Reverse map: input attr -> form field name + kind (unified InputFieldSpec).
+    cat_spec = next(s for s in specs if s.target_name == "category")
+    assert isinstance(cat_spec, InputFieldSpec)
     assert cat_spec.input_attr == "category_id"
     assert cat_spec.graphql_name == "categoryId"
     assert cat_spec.kind == RELATION_SINGLE
+    assert cat_spec.source is None
+    assert cat_spec.nested_specs is None
 
 
 def test_model_choice_field_to_relay_target_uses_globalid():
@@ -389,7 +393,7 @@ def test_model_choice_field_to_relay_target_uses_globalid():
     cre, specs, _, _ = build_form_inputs(PickForm, operation_kind=FORM)
     fields = _field_map(cre)
     assert _inner_type(fields["target_id"]) is relay.GlobalID
-    spec = next(s for s in specs if s.form_field_name == "target")
+    spec = next(s for s in specs if s.target_name == "target")
     assert spec.input_attr == "target_id"
     assert spec.kind == RELATION_SINGLE
 
@@ -417,7 +421,7 @@ def test_model_multiple_choice_field_to_relay_target_is_list_of_globalid():
     fields = _field_map(cre)
     inner = _inner_type(fields["targets"])
     assert inner == list[relay.GlobalID]
-    spec = next(s for s in specs if s.form_field_name == "targets")
+    spec = next(s for s in specs if s.target_name == "targets")
     assert spec.input_attr == "targets"
     assert spec.kind == RELATION_MULTI
 
@@ -449,7 +453,7 @@ def test_file_field_maps_to_upload():
     cre, specs, _, _ = build_form_inputs(AvatarForm, operation_kind=FORM)
     fields = _field_map(cre)
     assert _inner_type(fields["avatar"]) is Upload
-    spec = next(s for s in specs if s.form_field_name == "avatar")
+    spec = next(s for s in specs if s.target_name == "avatar")
     assert spec.kind == FILE
 
 
@@ -764,7 +768,7 @@ def test_materialized_input_is_module_global():
 def test_scalar_reverse_map_is_identity():
     """A plain scalar field's reverse map is identity (``name`` -> ``name``, kind scalar)."""
     _, specs, _, _ = build_form_inputs(_item_model_form(), operation_kind=CREATE)
-    name_spec = next(s for s in specs if s.form_field_name == "name")
+    name_spec = next(s for s in specs if s.target_name == "name")
     assert name_spec.input_attr == "name"
     assert name_spec.graphql_name == "name"
     assert name_spec.kind == SCALAR
@@ -839,7 +843,7 @@ def test_extra_field_shadowing_reverse_relation_stays_scalar():
             fields = ("name", "items")
 
     cre, specs = build_form_input_class(CategoryForm, operation_kind=CREATE)
-    items_spec = next(s for s in specs if s.form_field_name == "items")
+    items_spec = next(s for s in specs if s.target_name == "items")
     assert items_spec.input_attr == "items"
     assert items_spec.graphql_name == "items"
     assert items_spec.kind == SCALAR

@@ -250,45 +250,41 @@ class FieldConversionBase:
 class InputFieldSpec:
     """Unified per-generated-input-field reverse-map record (spec-039 P2.1).
 
-    The ``038`` ``forms/converter.py::FormInputFieldSpec`` generalized with the
-    serializer-only ``source`` axis. Where ``FormInputFieldSpec`` carried a
-    ``form_field_name`` (the bound form's own key), this carries the neutral
-    ``target_name`` - the per-flavor write-back key the Slice 3 resolver decodes
-    the generated GraphQL field back to:
+    One reverse-map record for every write flavor that decodes a generated GraphQL
+    input back to a framework write target. ``target_name`` is the neutral
+    decode key (the bound form field name on the form path; the declared
+    serializer field name on the DRF path). Serializer-only axes stay optional
+    defaults so the form path never carries unused mode flags:
 
     - ``input_attr`` - the generated Strawberry dataclass attr (``category_id``
       for an FK relation, ``name`` for a scalar).
     - ``graphql_name`` - the camel-cased GraphQL wire name (``categoryId``).
-    - ``target_name`` - the per-flavor decode key. For the serializer flavor this
-      is the DECLARED serializer field name (``category_pk``), which the framework
+    - ``target_name`` - the per-flavor decode key. For the form flavor this is the
+      form's declared field name (``category``); for the serializer flavor this is
+      the DECLARED serializer field name (``category_pk``), which the framework
       supplies in the serializer's input ``data`` before DRF maps it through
-      ``source`` into ``validated_data``; for a form it would be the form field name.
-      Never the ``<name>_id`` relation attr.
+      ``source`` into ``validated_data``. Never the ``<name>_id`` relation attr.
     - ``kind`` - one of the flavor's decode kinds (``scalar`` /
-      ``relation_single`` / ``relation_multi`` / ``file``).
+      ``relation_single`` / ``relation_multi`` / ``file``; serializer also uses
+      nested kinds).
     - ``source`` - the serializer-only extra axis: the one-segment ``source`` the
       backing ``models.Field`` was resolved through (``category`` for a
-      ``category_pk`` field declared ``source="category"``). ``None`` for a flavor
-      with no ``source`` concept (forms) or a serializer field whose ``source``
-      equals its declared name.
+      ``category_pk`` field declared ``source="category"``). ``None`` for forms and
+      for a serializer field whose ``source`` equals its declared name.
     - ``related_model`` - the Django target model a relation field decodes its
       id(s) against (``Category`` for a ``category`` / ``category_pk`` relation),
-      recorded at BIND time so the Slice-3 decode never re-discovers the
-      serializer's schema-time field set per request (spec-039 H4). ``None`` for a
-      non-relation (``scalar`` / ``file``) field.
+      recorded at BUILD/BIND time so the Slice-3 decode never re-discovers the
+      related model per request (spec-039 H4). ``None`` for a non-relation
+      (``scalar`` / ``file``) field.
     - ``nested_specs`` - the serializer-only nested-serializer axis (spec-039 rev6
       #17): the ordered reverse-map ``InputFieldSpec`` tuple of the NESTED input's
       OWN fields, recorded for a ``nested_single`` / ``nested_multi`` field so the
       Slice-3 decode recurses into the nested input dataclass with the SAME
       per-field machinery (scalar / relation / file / deeper-nested) the top level
-      uses. ``None`` for every non-nested field. A tuple of frozen
-      ``InputFieldSpec`` is hashable, so it participates in the frozen descriptor
-      identity + the per-shape build cache key like any other axis.
-
-    The form flavor keeps its own ``FormInputFieldSpec`` (no ``source`` /
-    ``nested`` axis, its suite stays byte-equivalent); the serializer reverse-map
-    uses this directly (spec-039 D1 - the minimal-blast-radius unification: site
-    the serializer spec here, leave the form spec untouched).
+      uses. ``None`` for every non-nested field (including every form field). A
+      tuple of frozen ``InputFieldSpec`` is hashable, so it participates in the
+      frozen descriptor identity + the per-shape build cache key like any other
+      axis.
     """
 
     input_attr: str
@@ -356,10 +352,10 @@ def make_input_namespace(
 def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
     """Return the ``(cache, clear_fn)`` pair for a per-shape build cache (spec-039 P1.3).
 
-    The promoted plumbing the mutation + form (Slice 2) + serializer (Slice 2)
-    bind caches share: ``mutations/sets.py::_shape_build_cache`` and
-    ``forms/sets.py::_form_shape_build_cache`` hand-mirror a module-level cache
-    dict plus a ``clear`` that empties it. This single-sites that pair:
+    The promoted plumbing the mutation + form + serializer bind caches share:
+    each consuming slice calls this factory for a fresh ``(cache, clear_fn)``
+    pair and registers ``clear_fn`` into ``registry.clear()``. This single-sites
+    that pair:
 
     - ``cache`` - a fresh dict the bind keys on its shape identity
       (``(declaration_class, operation_kind, effective field set)`` for the
@@ -809,7 +805,8 @@ def iter_input_field_collisions(
     ``"SerializerMutation for 'X'"``), ``field_noun`` (``"form fields"`` /
     ``"serializer fields"``), ``rename_clause``, and the serializer's
     ``camel_case_note`` (the id-like-suffix parenthetical). ``name_of`` reads the
-    flavor's display name off a spec (``form_field_name`` / ``target_name``).
+    flavor's display name off a spec (``target_name`` for form / serializer
+    write inputs; ``model_field_name`` for the model mutation naming record).
 
     ``source_of`` enables the serializer-only third arm (two WRITABLE fields
     sharing one one-segment ``source`` would double-write one model attr); forms

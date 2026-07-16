@@ -20,7 +20,7 @@ and the form-specific invariants this module owns:
   field name (``ItemModelForm(data={"category": pk})``, never ``{"category_id":
   pk}``) and reads uploads from ``files=``, never ``data=``. The Slice-1 reverse
   map (``mutation_cls._input_field_specs``, a list of
-  ``converter.FormInputFieldSpec``) routes each provided input attr to its form
+  ``utils/inputs.py::InputFieldSpec``) routes each provided input attr to its form
   field name + decode ``kind`` (``SCALAR`` / ``RELATION_SINGLE`` /
   ``RELATION_MULTI`` / ``FILE``).
 
@@ -164,7 +164,7 @@ def _decode_form_relation_single(
     / uncoercible id is the uniform field-keyed ``FieldError``, closing the
     raw-pk visibility gap) -> the form-key projection via ``to_field_name``
     (``_to_form_key_value``). The ``related_model`` is the target the Slice-1
-    build recorded on the reverse-map spec (``FormInputFieldSpec.related_model``),
+    build recorded on the reverse-map spec (``InputFieldSpec.related_model``),
     from the SAME basis the generated id type used (the backing column's
     ``related_model`` for a ``ModelForm`` column, else the form field's
     ``queryset.model``). It is NOT re-derived from ``form_field.queryset.model``
@@ -253,12 +253,12 @@ def _decode_form_data(
     keyed by input attr), routes each value by ``kind`` to the right FORM-keyed
     place:
 
-    - ``SCALAR`` -> ``provided_data[form_field_name]``, through the shared
+    - ``SCALAR`` -> ``provided_data[target_name]``, through the shared
       scalar leaf ``decode_scalar_leaf`` (invalid-Unicode preflight +
       choice-enum unwrap).
     - ``RELATION_SINGLE`` / ``RELATION_MULTI`` -> the visibility-checked,
-      ``to_field_name``-converted relation value(s) under ``form_field_name``.
-    - ``FILE`` -> ``provided_files[form_field_name]`` (NEVER ``data=`` - a bound
+      ``to_field_name``-converted relation value(s) under ``target_name``.
+    - ``FILE`` -> ``provided_files[target_name]`` (NEVER ``data=`` - a bound
       Django form reads uploads from ``files=``).
 
     A relation decode ``FieldError`` short-circuits. The reverse-map build + the
@@ -282,17 +282,17 @@ def _decode_form_data(
             value,
             graphql_name=spec.graphql_name,
             related_model=spec.related_model,
-            form_field=form_fields[spec.form_field_name],
+            form_field=form_fields[spec.target_name],
             info=info,
         )
         if error is not None:
             return error
-        provided_data[spec.form_field_name] = decoded
+        provided_data[spec.target_name] = decoded
         return None
 
     def _file(spec: Any, value: Any) -> None:
         # NEVER ``data=``: a bound Django form reads uploads from ``files=``.
-        provided_files[spec.form_field_name] = value
+        provided_files[spec.target_name] = value
         return None
 
     def _scalar(spec: Any, value: Any) -> Any | None:
@@ -304,7 +304,7 @@ def _decode_form_data(
         decoded, text_error = decode_scalar_leaf(spec.graphql_name, value)
         if text_error is not None:
             return text_error
-        provided_data[spec.form_field_name] = decoded
+        provided_data[spec.target_name] = decoded
         return None
 
     error = decode_provided_fields(

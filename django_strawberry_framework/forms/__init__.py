@@ -6,9 +6,9 @@ mirror it per spec-038 Decision 4):
 - ``converter.py`` (Slice 1) - ``convert_form_field(field)``, the
   ``forms.Field``-keyed -> Strawberry annotation + required-ness registry for
   the model-less case (the graphene-django ``convert_form_field`` parity shape),
-  plus the per-generated-input-field reverse-map record
-  (``input_attr`` -> ``(form_field_name, kind)``) the Slice 3 resolver consults
-  to build a form-field-keyed payload.
+  plus the decode-kind constants the Slice 3 resolver consults. The
+  reverse-map record itself is ``utils/inputs.py::InputFieldSpec``
+  (``target_name`` = form field name), built by ``forms/inputs.py``.
 - ``inputs.py`` (Slice 1) - generated ``<FormClass>Input`` /
   ``<FormClass>PartialInput`` ``@strawberry.input`` classes built from a form's
   declared ``base_fields``, reusing the ``utils/inputs.py`` materialize / build

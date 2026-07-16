@@ -508,7 +508,7 @@ class DjangoModelFormMutation(DjangoMutation):
     # ref resolves the form-derived input, not a model-column input.
     input_module_path: str = FORMS_INPUTS_MODULE_PATH
 
-    # The Slice-1 reverse-map records (``converter.FormInputFieldSpec`` per input
+    # The Slice-1 reverse-map records (``utils/inputs.py::InputFieldSpec`` per input
     # field), stashed at bind so the Slice-3 decode reaches the form-field-keyed
     # reverse map. ``None`` until bind (mirrors ``_input_class``).
     _input_field_specs: list | None = None

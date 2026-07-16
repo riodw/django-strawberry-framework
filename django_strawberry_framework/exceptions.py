@@ -5,7 +5,17 @@ internal package imports - so the exception hierarchy can be raised from
 anywhere without circulars.
 """
 
+from __future__ import annotations
+
 __all__ = ("ConfigurationError", "DjangoStrawberryFrameworkError", "OptimizerError")
+
+
+def _safe_arg_repr(value: object) -> str:
+    """``repr(value)`` if it succeeds, else a placeholder naming the arg type."""
+    try:
+        return repr(value)
+    except BaseException:
+        return f"<unprintable {type(value).__name__}>"
 
 
 class DjangoStrawberryFrameworkError(Exception):
@@ -14,19 +24,74 @@ class DjangoStrawberryFrameworkError(Exception):
     Consumers can catch this to handle any framework-raised error in a
     single ``except``. Specific subclasses below distinguish causes when
     granular handling is needed.
+
+    Rendering safety: the ORIGINAL message args are kept in ``self.args``
+    (identity is authoritative - programmatic ``.args`` access sees the real
+    objects), and ``str`` / ``repr`` are made safe at CALL TIME instead of
+    sanitizing at construction. GraphQL-core's ``located_error`` wraps a
+    non-``GraphQLError`` by calling ``str(original_error)``; if that raised, the
+    typed framework exception would be replaced by a raw error on the wire and
+    ``except ConfigurationError`` / ``except OptimizerError`` catchability would
+    be destroyed. Overriding ``__str__`` / ``__repr__`` to render safely means:
+
+    - a message arg whose ``__str__`` / ``__repr__`` fails only LATER (stateful)
+      is still handled - the guard is at the render call, not at construction;
+    - side effects of an expensive/side-effecting arg render happen at most
+      once (the result is cached), never the construction-probe-plus-wire
+      double-render the eager approach incurred;
+    - a ``BaseException`` (not just ``Exception``) raised by a hostile dunder is
+      swallowed too - a display operation must never propagate ``SystemExit`` /
+      ``KeyboardInterrupt`` and break wire identity.
     """
+
+    def __str__(self) -> str:
+        """Render ``str`` safely (see class docstring); never raises, cached."""
+        cached = self.__dict__.get("_dsf_str")
+        if cached is not None:
+            return cached
+        try:
+            rendered = super().__str__()
+        except BaseException:
+            rendered = (
+                f"<unprintable {type(self.args[0]).__name__}>"
+                if len(self.args) == 1
+                else "(" + ", ".join(_safe_arg_repr(a) for a in self.args) + ")"
+            )
+        self.__dict__["_dsf_str"] = rendered
+        return rendered
+
+    def __repr__(self) -> str:
+        """Render ``repr`` safely (see class docstring); never raises, cached."""
+        cached = self.__dict__.get("_dsf_repr")
+        if cached is not None:
+            return cached
+        try:
+            rendered = super().__repr__()
+        except BaseException:
+            args = ", ".join(_safe_arg_repr(a) for a in self.args)
+            rendered = f"{type(self).__name__}({args})"
+        self.__dict__["_dsf_repr"] = rendered
+        return rendered
 
 
 class ConfigurationError(DjangoStrawberryFrameworkError):
-    """Raised when a ``DjangoType.Meta`` is malformed.
+    """Raised when consumer configuration is invalid or inconsistent.
 
-    Examples:
+    Covers type-creation / finalization Meta validation, settings reads,
+    registry collisions, filter/order/mutation set wiring, and other
+    configuration-time failures. Examples:
+
         - Missing ``Meta.model``.
         - ``fields`` and ``exclude`` declared together.
         - A deferred-surface key (``aggregate_class``, ``fields_class``,
           ``search_fields``) declared before the spec that owns it has
           shipped.
         - Two ``DjangoType`` subclasses registering against the same model.
+        - A non-mapping ``DJANGO_STRAWBERRY_FRAMEWORK`` settings value.
+
+    ``SyncMisuseError`` (defined in ``utils/querysets.py``, re-exported at
+    the package root) multiple-inherits this class and ``RuntimeError`` for
+    async-hook-from-sync misuse.
     """
 
 
@@ -34,6 +99,7 @@ class OptimizerError(DjangoStrawberryFrameworkError):
     """Raised when ``DjangoOptimizerExtension`` cannot plan a relation traversal.
 
     Raise sites:
+
         - Typed input-guard at construction: ``FieldMeta.from_django_field``
           rejects an input that is not a Django field descriptor (missing
           ``name`` / ``is_relation``), converting an otherwise late
@@ -50,4 +116,6 @@ class OptimizerError(DjangoStrawberryFrameworkError):
           count-free ``hasNextPage`` probe while also annotating the partition
           count (a planner/strategy bug that would otherwise pass the n+1
           sentinel through as a real edge).
+        - Window bounds: ``utils/connections.py::window_range_plan`` rejects
+          a negative offset or limit on a direct window request.
     """

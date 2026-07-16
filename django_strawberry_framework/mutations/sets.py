@@ -11,6 +11,8 @@ spec-036 Decision 3 / START.md). This module owns four concerns:
 - ``DjangoMutationMetaclass`` - collects + validates ``Meta`` at class creation
   and registers the concrete subclass (the abstract base carries no ``Meta`` and
   is skipped, the same in-flight-base-class guard the set metaclasses rely on).
+  Built by ``make_meta_validating_metaclass(register)`` beside
+  ``make_declaration_registry`` so the plain-form flavor shares the lifecycle.
 - the declaration registry (``register_mutation`` / ``clear_mutation_registry`` /
   ``iter_mutations``) the finalizer bind drains. ``register_mutation`` rejects a
   late declaration after ``registry.mark_finalized()`` (spec-036 Edge cases).
@@ -52,7 +54,7 @@ from strawberry.types.base import StrawberryList
 from ..exceptions import ConfigurationError
 from ..registry import register_subsystem_clear, registry
 from ..utils.imports import import_attr
-from ..utils.inputs import normalize_field_name_sequence
+from ..utils.inputs import make_shape_build_cache, normalize_field_name_sequence
 from ..utils.typing import unwrap_return_type
 from .inputs import (
     CREATE,
@@ -63,7 +65,6 @@ from .inputs import (
     editable_input_fields,
     materialize_mutation_input_class,
     mutation_input_shape,
-    mutation_input_type_name,
     payload_object_slot,
     relation_input_annotation,
 )
@@ -86,14 +87,6 @@ _ALLOWED_MUTATION_META_KEYS: frozenset[str] = frozenset(
     },
 )
 
-# The three valid ``Meta.operation`` values (spec-036 Decision 5). Single source
-# of truth for THIS module's membership check only
-# (``_validate_mutation_meta #"if operation not in _VALID_OPERATIONS"``): the
-# resolver dispatches on the verb literals directly (``== "create"`` / ``"update"``
-# in ``mutations/resolvers.py``) rather than testing this set, so it does not
-# import the constant.
-_VALID_OPERATIONS: frozenset[str] = frozenset({"create", "update", "delete"})
-
 # ``operation`` -> input-generator kind. ``create`` builds the required-aware
 # ``<Model>Input`` (``CREATE``); ``update`` builds the all-optional
 # ``<Model>PartialInput`` (``PARTIAL``); ``delete`` is ``id:``-only and needs no
@@ -102,7 +95,10 @@ _VALID_OPERATIONS: frozenset[str] = frozenset({"create", "update", "delete"})
 # (spec-039 Mn2): the model reads it via ``.get(...)`` (``delete`` -> ``None``), the
 # form + serializer flavors via ``[...]`` (both reject ``delete``, so every key is
 # present). Replaces the byte-identical ``_SERIALIZER_OPERATION_INPUT_KIND`` +
-# ``_modelform_operation_kind`` copies.
+# ``_modelform_operation_kind`` copies. Also the root of the create/update
+# vocabulary below - ``NON_DELETE_WRITE_OPERATIONS`` / ``_VALID_OPERATIONS`` derive
+# from its keys so the Meta allow-lists cannot spell a non-delete verb the
+# generator-kind map does not know.
 NON_DELETE_OPERATION_INPUT_KIND: dict[str, str] = {"create": CREATE, "update": PARTIAL}
 
 # The consumer override each non-delete operation honors. This is deliberately
@@ -115,13 +111,23 @@ _OPERATION_INPUT_OVERRIDE_ATTR: dict[str, str] = {
 }
 
 # The create/update-only write operations the form + serializer flavors share
-# (spec-039 P1.2). A ``DjangoModelFormMutation`` and a ``SerializerMutation`` both
-# reject ``"delete"`` (a form has no delete pipeline; DRF serializers do not
-# delete - spec-039 Decision 10), so the create/update set is promoted here and
-# BOTH flavors import it rather than each defining a byte-identical
-# ``_VALID_*_OPERATIONS`` local. The ``036`` model flavor keeps the broader
-# ``_VALID_OPERATIONS`` (it DOES accept ``delete``), so the two sets coexist.
-NON_DELETE_WRITE_OPERATIONS: frozenset[str] = frozenset({"create", "update"})
+# (spec-039 P1.2). Derived from ``NON_DELETE_OPERATION_INPUT_KIND``'s keys (the
+# ops that materialize an input) so the Meta allow-list and the generator-kind
+# map cannot drift. A ``DjangoModelFormMutation`` and a ``SerializerMutation``
+# both reject ``"delete"`` (a form has no delete pipeline; DRF serializers do not
+# delete - spec-039 Decision 10). The ``036`` model flavor keeps the broader
+# ``_VALID_OPERATIONS`` (it DOES accept ``delete``).
+NON_DELETE_WRITE_OPERATIONS: frozenset[str] = frozenset(NON_DELETE_OPERATION_INPUT_KIND)
+
+# The three valid model-flavor ``Meta.operation`` values (spec-036 Decision 5).
+# Non-delete verbs come from ``NON_DELETE_WRITE_OPERATIONS``; ``delete`` is the
+# model-only id-only op. Single source for THIS module's membership check only
+# (``_validate_meta #"if operation not in _VALID_OPERATIONS"``): the resolver
+# dispatches on the verb literals directly (``== "create"`` / ``"update"`` in
+# ``mutations/resolvers.py``) rather than testing this set, so it does not
+# import the constant. Not a package-wide OPERATIONS table - permissions /
+# resolvers / fields keep their own change axes (see fields / permissions DRY).
+_VALID_OPERATIONS: frozenset[str] = NON_DELETE_WRITE_OPERATIONS | frozenset({"delete"})
 
 
 def non_delete_operation_error(base_label: str, name: str, got: Any) -> ConfigurationError:
@@ -394,13 +400,20 @@ def resolver_seams(
 # ``fields=("name",)`` vs the complementary ``exclude=(<the rest>)``, or a
 # ``fields`` list naming the full editable set vs an un-narrowed create) must
 # dedupe to one type (spec-036 Edge cases line 509). Keying on the effective set
-# mirrors ``mutations.inputs.mutation_input_type_name``'s identity tuple and its
-# name derivation, so the cache key, the generated name, and the spec identity are
-# single-sourced and cannot drift - two mutations with the same effective shape
-# reuse one class object so the materialize ledger dedupes idempotently instead of
-# seeing two distinct same-named classes. ``bind_mutations`` clears it at the start
-# of each pass so a stale class from a prior (failed or re-run) finalize never leaks.
-_shape_build_cache: dict[tuple, type] = {}
+# mirrors ``mutations.inputs.mutation_input_shape``'s identity tuple (cache_key /
+# type_name), so the cache key, the generated name, the field name seam, and the
+# spec identity are single-sourced and cannot drift - two mutations with the same
+# effective shape reuse one class object so the materialize ledger dedupes
+# idempotently instead of seeing two distinct same-named classes.
+#
+# The ``(cache, clear)`` pair rides ``utils/inputs.py::make_shape_build_cache``
+# (spec-039 P1.3), the same factory forms + serializer use, so the three write
+# flavors share one dict-plus-clear shape while staying disjoint. Cleared at the
+# start of ``bind_mutations()`` AND co-cleared from ``registry.clear()`` so a
+# stale class from a prior (failed or re-run) finalize never leaks across a
+# clear that does not itself re-bind.
+_shape_build_cache, clear_mutation_shape_build_cache = make_shape_build_cache()
+register_subsystem_clear(clear_mutation_shape_build_cache, owner="mutations.shape_cache")
 
 
 class DeclarationRegistry(NamedTuple):
@@ -461,6 +474,62 @@ def make_declaration_registry(label: str) -> DeclarationRegistry:
         return tuple(store)
 
     return DeclarationRegistry(register=register, clear=clear, iter_=iter_, store=store)
+
+
+def make_meta_validating_metaclass(
+    register: Callable[[type], None],
+    *,
+    name: str,
+    module: str,
+) -> type:
+    """Build a metaclass that validates ``Meta`` and registers the concrete subclass.
+
+    The Decision-13 twin of ``make_declaration_registry``: given a ``register``
+    callable bound over a disjoint declaration ledger, return a ``type`` subclass
+    whose ``__new__`` -
+
+    - builds the class via ``super().__new__``;
+    - skips when ``attrs`` has no nested ``Meta`` (the abstract / intermediate
+      base guard the set metaclasses rely on);
+    - else runs ``new_class._validate_meta(meta)``, stashes ``_mutation_meta``,
+      and calls ``register(new_class)``.
+
+    ``DjangoMutationMetaclass`` and ``DjangoFormMutationMetaclass`` are the two
+    consumers (model ledger vs plain-form ledger). ``SerializerMutation`` /
+    ``DjangoModelFormMutation`` ride the model metaclass via inheritance - no
+    third Meta-validating twin. FilterSet / OrderSet metaclasses collect related
+    declarations and are a different contract.
+
+    ``name`` / ``module`` pin the returned class's identity to its public
+    binding site: without them every produced metaclass would share the
+    function-local ``make_meta_validating_metaclass.<locals>.MetaValidatingMetaclass``
+    ``__qualname__`` (and a ``MetaValidatingMetaclass`` ``__name__``), which
+    breaks module addressability, ``repr``/introspection, and reference-based
+    pickling of the public metaclasses. Each consumer passes its own public
+    symbol name and ``module=__name__`` so ``module + __qualname__`` resolves
+    back to the bound object (the contract ``pickle`` requires for a class).
+    """
+
+    class MetaValidatingMetaclass(type):
+        def __new__(
+            cls: type,
+            name: str,
+            bases: tuple,
+            attrs: dict,
+        ) -> type:
+            """Build the class; for a concrete subclass, validate ``Meta`` and register it."""
+            new_class = super().__new__(cls, name, bases, attrs)
+            meta = attrs.get("Meta")
+            if meta is None:
+                return new_class
+            new_class._mutation_meta = new_class._validate_meta(meta)
+            register(new_class)
+            return new_class
+
+    MetaValidatingMetaclass.__name__ = name
+    MetaValidatingMetaclass.__qualname__ = name
+    MetaValidatingMetaclass.__module__ = module
+    return MetaValidatingMetaclass
 
 
 # The model-flavor declaration registry: every concrete ``DjangoMutation`` records
@@ -733,34 +802,15 @@ def validate_select_for_update(flavor: str, mutation_name: str, meta: Any) -> bo
     return select_for_update
 
 
-class DjangoMutationMetaclass(type):
-    """Collect + validate a concrete ``DjangoMutation``'s ``Meta`` and register it.
-
-    Mirrors ``OrderSetMetaclass.__new__`` in shape (build the class via
-    ``super().__new__``, then read the class body), but the body is ``Meta``
-    validation + declaration registration rather than related-declaration
-    collection. The abstract base ``DjangoMutation`` (no ``Meta``) is skipped -
-    the same in-flight-base-class guard the set metaclasses rely on - so only
-    concrete subclasses validate + register.
-    """
-
-    def __new__(
-        cls: type[DjangoMutationMetaclass],
-        name: str,
-        bases: tuple,
-        attrs: dict,
-    ) -> DjangoMutationMetaclass:
-        """Build the class; for a concrete subclass, validate ``Meta`` and register it."""
-        new_class = super().__new__(cls, name, bases, attrs)
-        meta = attrs.get("Meta")
-        if meta is None:
-            # The abstract base ``DjangoMutation`` (or an intermediate base) with
-            # no nested ``Meta`` is not a concrete mutation: skip validation /
-            # registration, exactly as the set metaclasses skip their bases.
-            return new_class
-        new_class._mutation_meta = new_class._validate_meta(meta)
-        register_mutation(new_class)
-        return new_class
+# Model-flavor metaclass: validate ``Meta`` + register onto the model declaration
+# ledger. Built by ``make_meta_validating_metaclass`` (the Decision-13 twin of
+# ``make_declaration_registry``) so the plain-form flavor instantiates the SAME
+# validate-then-register lifecycle over ``register_form_mutation``.
+DjangoMutationMetaclass = make_meta_validating_metaclass(
+    register_mutation,
+    name="DjangoMutationMetaclass",
+    module=__name__,
+)
 
 
 class DjangoMutation(metaclass=DjangoMutationMetaclass):
@@ -1000,33 +1050,24 @@ class DjangoMutation(metaclass=DjangoMutationMetaclass):
         """Return the generated input class name for a create / update mutation (the name seam).
 
         The overridable input-name seam Slice 3's ``mutations/fields.py`` consults
-        to synthesize the lazy ``data:`` forward-ref. The **model default** is the
-        canonical-shape name ``mutation_input_type_name(...)`` (the
-        ``<Model>Input`` / ``<Model>PartialInput`` for the full shape, or a
-        deterministic shape-derived name for a narrowing) - single-sourced with the
-        bind's name choice via ``mutation_input_shape``. The form flavors override
-        it with ``forms/inputs.py::form_input_type_name``.
+        to synthesize the lazy ``data:`` forward-ref. The **model default** reads
+        ``mutation_input_shape(...).type_name`` - the SAME descriptor the bind /
+        ``build_mutation_input`` path uses for the materialize name and the shape
+        cache key (DRY-1), so the field's lazy ``data:`` ref can never disagree
+        with the class the bind pins. The form flavors override it with
+        ``forms/inputs.py::form_input_type_name``.
 
         Spec-038 Slice 3 rewired ``mutations/fields.py::_synthesized_mutation_signature``
         to consult this seam (deleting the transient ``_input_type_name`` twin), so
         this is now the single source for the model ``data:`` lazy-ref name.
         """
         operation_kind = NON_DELETE_OPERATION_INPUT_KIND[meta.operation]
-        effective_field_names = tuple(
-            field.name
-            for field in editable_input_fields(
-                meta.model,
-                fields=meta.fields,
-                exclude=meta.exclude,
-            )
-        )
-        full_field_names = tuple(field.name for field in editable_input_fields(meta.model))
-        return mutation_input_type_name(
+        return mutation_input_shape(
             meta.model,
             operation_kind,
-            effective_field_names,
-            full_field_names=full_field_names,
-        )
+            fields=meta.fields,
+            exclude=meta.exclude,
+        ).type_name
 
     # The overridable sync / async resolver-dispatch seams
     # (``mutations/fields.py::_resolve`` calls them). The **model default** delegates

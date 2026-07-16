@@ -13,8 +13,9 @@ The form-mutation write surface, riding the ``036`` mutation seams
   (``node`` / ``result`` slot) through the SAME phase-2.5 path as the ``036``
   model mutation.
 - ``DjangoFormMutation`` - the model-LESS sibling (a plain ``forms.Form``, no
-  model, no ``DjangoType`` object slot). Its OWN metaclass + declaration registry
-  (via ``make_declaration_registry``) + ``bind_form_mutations()``: the bind
+  model, no ``DjangoType`` object slot). Its OWN metaclass (via
+  ``make_meta_validating_metaclass``) + declaration registry (via
+  ``make_declaration_registry``) + ``bind_form_mutations()``: the bind
   materializes its form-derived input + the pinned ``{ ok errors }`` payload
   (Decision 6 - no object slot).
 
@@ -63,6 +64,7 @@ from ..mutations.sets import (
     cached_build_input,
     construction_kwargs,
     make_declaration_registry,
+    make_meta_validating_metaclass,
     non_delete_operation_error,
     reject_unknown_meta_keys,
     require_backing_class,
@@ -573,35 +575,17 @@ class DjangoModelFormMutation(DjangoMutation):
     )
 
 
-class DjangoFormMutationMetaclass(type):
-    """Collect + validate a concrete ``DjangoFormMutation``'s ``Meta`` and register it.
-
-    Mirrors ``DjangoMutationMetaclass.__new__`` but over the DISJOINT plain-form
-    declaration registry (``register_form_mutation``): build the class, skip the
-    abstract base (no ``Meta``), else validate via the class's ``_validate_meta``
-    and record it for the ``bind_form_mutations()`` phase-2.5 bind. A separate
-    metaclass (not ``DjangoMutationMetaclass``) because ``DjangoFormMutation`` is
-    model-less - it is NOT a ``DjangoMutation`` subclass and does not ride the
-    model declaration registry or ``bind_mutations()``.
-    """
-
-    def __new__(
-        cls: type[DjangoFormMutationMetaclass],
-        name: str,
-        bases: tuple,
-        attrs: dict,
-    ) -> DjangoFormMutationMetaclass:
-        """Build the class; for a concrete subclass, validate ``Meta`` and register it."""
-        new_class = super().__new__(cls, name, bases, attrs)
-        meta = attrs.get("Meta")
-        if meta is None:
-            # The abstract base ``DjangoFormMutation`` (no nested ``Meta``) is not a
-            # concrete mutation: skip validation / registration (the same
-            # in-flight-base-class guard the model metaclass uses).
-            return new_class
-        new_class._mutation_meta = new_class._validate_meta(meta)
-        register_form_mutation(new_class)
-        return new_class
+# Plain-form metaclass: same validate-then-register lifecycle as
+# ``DjangoMutationMetaclass``, bound over the DISJOINT plain-form ledger
+# (``register_form_mutation``). A separate metaclass instance (not
+# ``DjangoMutationMetaclass``) because ``DjangoFormMutation`` is model-less - it
+# is NOT a ``DjangoMutation`` subclass and does not ride the model declaration
+# registry or ``bind_mutations()``.
+DjangoFormMutationMetaclass = make_meta_validating_metaclass(
+    register_form_mutation,
+    name="DjangoFormMutationMetaclass",
+    module=__name__,
+)
 
 
 class DjangoFormMutation(metaclass=DjangoFormMutationMetaclass):

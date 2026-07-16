@@ -55,6 +55,8 @@ from django_strawberry_framework.mutations import (
 from django_strawberry_framework.mutations.inputs import INPUTS_MODULE_PATH
 from django_strawberry_framework.mutations.sets import (
     _mutation_registry,
+    _shape_build_cache,
+    clear_mutation_shape_build_cache,
     iter_mutations,
 )
 from django_strawberry_framework.registry import registry
@@ -62,12 +64,12 @@ from django_strawberry_framework.registry import registry
 
 @pytest.fixture(autouse=True)
 def _isolate_registry():
-    """Reset the registry (now co-clearing the mutation ledger + declaration registry).
+    """Reset the registry (co-clearing mutation ledgers + the shape build cache).
 
-    ``registry.clear()`` is wired in this slice to co-clear
-    ``clear_mutation_input_namespace`` (input + payload globals ledger) and
-    ``clear_mutation_registry`` (the declaration registry), so a single
-    ``registry.clear()`` resets every mutation-side ledger. The products
+    ``registry.clear()`` co-clears ``clear_mutation_input_namespace`` (input +
+    payload globals ledger), ``clear_mutation_registry`` (declaration registry),
+    and ``clear_mutation_shape_build_cache`` (per-pass input build cache), so a
+    single ``registry.clear()`` resets every mutation-side ledger. The products
     ``DjangoType``s register on import, so the clear is needed before/after.
     """
     registry.clear()
@@ -1392,8 +1394,11 @@ def test_model_flavor_input_seams_produce_today_defaults():
     name - the exact 036 behavior, just reached through the overridable seam.
     """
     from django_strawberry_framework.mutations.inputs import (
+        CREATE,
+        PARTIAL,
         _materialized_names,
         editable_input_fields,
+        mutation_input_shape,
     )
 
     _declare_products_primaries()
@@ -1403,10 +1408,40 @@ def test_model_flavor_input_seams_produce_today_defaults():
             model = product_models.Item
             operation = "create"
 
+    class UpdateItemName(DjangoMutation):
+        class Meta:
+            model = product_models.Item
+            operation = "update"
+            fields = ("name",)
+
     # input_module_path defaults to the mutations.inputs namespace.
     assert CreateItem.input_module_path == INPUTS_MODULE_PATH
     # input_type_name returns the canonical model-input name (full shape).
     assert CreateItem.input_type_name(CreateItem._mutation_meta) == "ItemInput"
+    # DRY-1: the seam reads mutation_input_shape(...).type_name - full AND narrowed
+    # must match the descriptor the bind / build_mutation_input path uses, so the
+    # field's lazy data: ref can never disagree with the materialized class name.
+    create_meta = CreateItem._mutation_meta
+    assert (
+        CreateItem.input_type_name(create_meta)
+        == mutation_input_shape(
+            create_meta.model,
+            CREATE,
+            fields=create_meta.fields,
+            exclude=create_meta.exclude,
+        ).type_name
+    )
+    update_meta = UpdateItemName._mutation_meta
+    assert (
+        UpdateItemName.input_type_name(update_meta)
+        == mutation_input_shape(
+            update_meta.model,
+            PARTIAL,
+            fields=update_meta.fields,
+            exclude=update_meta.exclude,
+        ).type_name
+    )
+    assert UpdateItemName.input_type_name(update_meta) != "ItemPartialInput"
 
     finalize_django_types()
 
@@ -1470,3 +1505,122 @@ def test_make_declaration_registry_dedupes_and_rejects_post_finalize():
     finalize_django_types()
     with pytest.raises(ConfigurationError, match="ProbeFlavor .* after finalization"):
         reg.register(Probe)
+
+
+def test_make_meta_validating_metaclass_validates_registers_and_skips_abstract():
+    """The metaclass factory single-sources validate-then-register over a register callback.
+
+    ``make_meta_validating_metaclass`` is the Decision-13 twin of
+    ``make_declaration_registry``: a fresh metaclass over a probe register still
+    skips a no-``Meta`` base, validates + registers a concrete subclass, and keeps
+    ledgers disjoint when two metaclasses close over different registers.
+    """
+    from django_strawberry_framework.mutations.sets import make_meta_validating_metaclass
+
+    ledger_a: list[type] = []
+    ledger_b: list[type] = []
+    MetaA = make_meta_validating_metaclass(ledger_a.append, name="MetaA", module=__name__)
+    MetaB = make_meta_validating_metaclass(ledger_b.append, name="MetaB", module=__name__)
+
+    # The factory pins the produced class's identity to the caller-supplied
+    # name/module rather than leaking the function-local ``MetaValidatingMetaclass``
+    # ``__qualname__``.
+    assert (MetaA.__name__, MetaA.__qualname__, MetaA.__module__) == ("MetaA", "MetaA", __name__)
+    assert (MetaB.__name__, MetaB.__qualname__, MetaB.__module__) == ("MetaB", "MetaB", __name__)
+
+    class BaseA(metaclass=MetaA):
+        _mutation_meta = None
+
+        @classmethod
+        def _validate_meta(cls, meta: type) -> str:
+            return f"a:{cls.__name__}"
+
+    class BaseB(metaclass=MetaB):
+        _mutation_meta = None
+
+        @classmethod
+        def _validate_meta(cls, meta: type) -> str:
+            return f"b:{cls.__name__}"
+
+    class AbstractA(BaseA):
+        pass
+
+    assert AbstractA._mutation_meta is None
+    assert ledger_a == []
+
+    class ConcreteA(BaseA):
+        class Meta:
+            pass
+
+    class ConcreteB(BaseB):
+        class Meta:
+            pass
+
+    assert ConcreteA._mutation_meta == "a:ConcreteA"
+    assert ConcreteB._mutation_meta == "b:ConcreteB"
+    assert ledger_a == [ConcreteA]
+    assert ledger_b == [ConcreteB]
+
+
+def test_mutation_shape_build_cache_clears_via_registry_and_direct_clear():
+    """The model shape cache uses ``make_shape_build_cache`` and co-clears on ``registry.clear()``.
+
+    Forms and serializer already rode the factory + ``register_subsystem_clear``;
+    the model flavor kept a hand-rolled dict cleared only inside ``bind_mutations``.
+    A ``registry.clear()`` without a following bind then left stale shape entries.
+    Direct ``clear_mutation_shape_build_cache`` and ``registry.clear()`` both empty
+    the same dict.
+    """
+    probe_key = ("probe", "create", frozenset({"name"}))
+    _shape_build_cache[probe_key] = object
+    assert probe_key in _shape_build_cache
+
+    clear_mutation_shape_build_cache()
+    assert _shape_build_cache == {}
+
+    _shape_build_cache[probe_key] = object
+    registry.clear()
+    assert _shape_build_cache == {}
+
+
+def test_public_metaclasses_pin_public_identity_and_pickle():
+    """Both factory-built public metaclasses carry their own public identity.
+
+    ``make_meta_validating_metaclass`` builds a function-local class; left
+    unpinned, ``DjangoMutationMetaclass`` and ``DjangoFormMutationMetaclass``
+    would both report ``__name__ == "MetaValidatingMetaclass"`` and a
+    ``<locals>`` ``__qualname__``, breaking module addressability, introspection,
+    and reference-based pickling. Each is pinned to its own public symbol +
+    defining module so ``module + __qualname__`` resolves back to the object,
+    which is exactly what ``pickle`` requires to round-trip a class by reference.
+    """
+    import importlib
+    import pickle
+
+    from django_strawberry_framework.forms.sets import DjangoFormMutationMetaclass
+    from django_strawberry_framework.mutations.sets import DjangoMutationMetaclass
+
+    cases = [
+        (
+            DjangoMutationMetaclass,
+            "DjangoMutationMetaclass",
+            "django_strawberry_framework.mutations.sets",
+        ),
+        (
+            DjangoFormMutationMetaclass,
+            "DjangoFormMutationMetaclass",
+            "django_strawberry_framework.forms.sets",
+        ),
+    ]
+    for metaclass, name, module in cases:
+        assert metaclass.__name__ == name
+        assert metaclass.__qualname__ == name
+        assert metaclass.__module__ == module
+        # Module addressability: the metaclass is reachable at module.name.
+        assert getattr(importlib.import_module(module), name) is metaclass
+        # Reference pickling round-trips to the very same class object.
+        assert pickle.loads(pickle.dumps(metaclass)) is metaclass
+
+    # The two consumers are distinct class objects over disjoint ledgers, not one
+    # shared function-local metaclass reused under two names.
+    assert DjangoMutationMetaclass is not DjangoFormMutationMetaclass

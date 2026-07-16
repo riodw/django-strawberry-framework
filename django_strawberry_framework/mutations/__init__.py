@@ -1,21 +1,22 @@
 """Mutations subsystem - the write side (spec-036).
 
-A four-module subpackage in the spirit of ``filters/`` / ``orders/`` (the
-module names differ per spec-036 Decision 4):
+A five-module subpackage in the spirit of ``filters/`` / ``orders/`` (Decision 4's
+``inputs`` / ``sets`` / ``resolvers`` / ``fields`` quartet plus ``permissions.py``
+for Decision 15 write-auth):
 
-- ``inputs.py`` (Slice 1) - generated ``<Model>Input`` / ``<Model>PartialInput``
-  classes, the public ``FieldError`` envelope, and the ``<Name>Payload`` wrapper.
-- ``sets.py`` (Slice 2) - the ``DjangoMutation`` base, its metaclass ``Meta``
-  validation, and the finalizer phase-2.5 bind.
-- ``permissions.py`` (Slice 2) - ``DjangoModelPermission``, the DRF-shaped default
+- ``inputs.py`` - generated ``<Model>Input`` / ``<Model>PartialInput`` classes,
+  the public ``FieldError`` envelope, and the ``<Name>Payload`` wrapper.
+- ``sets.py`` - the ``DjangoMutation`` base, its metaclass ``Meta`` validation,
+  and the finalizer phase-2.5 bind.
+- ``permissions.py`` - ``DjangoModelPermission``, the DRF-shaped default
   write-authorization class.
-- ``resolvers.py`` (Slice 3) - the sync + async create / update / delete pipeline.
-- ``fields.py`` (Slice 3) - the ``DjangoMutationField`` factory.
+- ``resolvers.py`` - the sync + async create / update / delete pipeline.
+- ``fields.py`` - the ``DjangoMutationField`` factory.
 
-This slice re-exports ``FieldError`` (Slice 1), ``DjangoMutation`` +
-``DjangoModelPermission`` (Slice 2), and now ``DjangoMutationField`` (Slice 3) -
-the four-symbol mutation public surface is complete. Mirrors the
-``filters/__init__.py`` / ``orders/__init__.py`` re-export idiom.
+Re-exports ``FieldError``, ``DjangoMutation``, ``DjangoModelPermission``, and
+``DjangoMutationField`` - the four-symbol mutation public surface. Eager
+re-export + typed ``__all__`` matches the ``forms/__init__.py`` package-marker
+shape (filters / orders add Decision-11 helpers this file does not need).
 """
 
 from __future__ import annotations

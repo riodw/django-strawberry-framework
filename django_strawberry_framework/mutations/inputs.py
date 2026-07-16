@@ -446,8 +446,9 @@ def mutation_input_shape(
     ``type_name`` (via ``mutation_input_type_name``), and the
     ``_shape_build_cache`` key. ``build_mutation_input`` calls this for its
     selected fields + name; ``mutations/sets.py``'s bind calls it for the cache key
-    and the merged-input name - so the name, the key, and the spec identity tuple
-    can never drift apart.
+    and the merged-input name; ``DjangoMutation.input_type_name`` returns
+    ``.type_name`` for the field's lazy ``data:`` ref - so the name, the key, the
+    seam, and the spec identity tuple can never drift apart.
     """
     selected = tuple(editable_input_fields(model, fields=fields, exclude=exclude))
     full_field_names = tuple(field.name for field in editable_input_fields(model))

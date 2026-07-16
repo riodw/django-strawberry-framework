@@ -1,4 +1,4 @@
-# Spec: Boundary hardening + system-wide DRY squeeze — enforce the optimizer/core seams inside one distribution, then compress ~1,250–1,550 duplicated lines across four verified axes
+# Spec: Boundary hardening + system-wide DRY squeeze — enforce the optimizer/core seams inside one distribution, then compress ~1,100–1,300 duplicated lines across four verified axes
 
 Planned for `0.0.15` (card `TODO-ALPHA-045-0.0.15`); **this card is the only
 card at `0.0.15` and owns the version bump**
@@ -26,7 +26,7 @@ doing two things in sequence:
    advertised as pip extras.
 2. **A system-wide DRY squeeze.** Four parallel audits (the sets family, the
    inputs/converters family, the resolvers family, root+optimizer+utils)
-   produced **26 verified consolidation candidates totaling ~1,250–1,550
+   produced **32 verified consolidation candidates totaling ~1,100–1,300
    source lines**, phased mechanical → structural → contract-level, plus a
    recorded do-not-touch ledger of deliberate duplication so future passes
    do not re-litigate
@@ -216,7 +216,7 @@ duplication that makes every cross-cutting change cost more than it should.
   skeleton (`mutations/resolvers.py::run_write_pipeline_sync`, spec-039
   P-series), the input-assembly substrate (`utils/inputs.py`), the query-side
   permission core (`utils/permissions.py` + `sets_mixins.py`), and the
-  selection-walking home (`optimizer/selections.py`). The 26 candidates in
+  selection-walking home (`optimizer/selections.py`). The 32 candidates in
   this spec are what four fresh audits found still duplicated **after** those
   passes — plus the audits' verified-and-rejected ledger.
 - The per-file DRY review cycle (`docs/dry/dry-0_0_13.md`, workflow
@@ -233,7 +233,7 @@ duplication that makes every cross-cutting change cost more than it should.
   CI — the split question becomes moot because the boundary is real.
 - Consumers can `pip install django-strawberry-framework[drf]` (etc.) and get
   the soft-dependency floor pinned for them.
-- ~1,250–1,550 duplicated source lines removed across the four audited axes,
+- ~1,100–1,300 duplicated source lines removed across the four audited axes,
   with every consolidation either provably behavior-preserving or explicitly
   decision-pinned as a behavior change.
 - Two invariants strengthened as side effects: the delete and plain-form

@@ -104,12 +104,10 @@ families) to check for a third independent implementation of the same rule:
   rather than hiding one. Both call sites (`filters/sets.py`, `orders/sets.py`)
   pass a literal, and the shared tail (own-items override + diamond-tombstone
   reconciliation against direct-base precedence) is identical either way.
-- Confirmed the target diff against `ITEM_BASELINE` (`87d227cd2afb3c8c1a54434bf6364c303968d00d`)
-  is empty (`git diff <baseline> -- sets_mixins.py` produces no output); the
-  file was dirty at dispatch only because that baseline snapshot itself
-  carries an uncommitted docstring edit (module summary line, HEAD..baseline
-  diff is exactly one line) from concurrent work, not drift introduced after
-  dispatch. No overwrite risk for this review.
+- Confirmed the target diff against `ITEM_BASELINE`
+  (`87d227cd2afb3c8c1a54434bf6364c303968d00d`) contained only documentation
+  drift. The three stale future-`OrderSet` claims recorded below were corrected
+  after verification; no runtime behavior changed.
 
 ## Opportunities
 
@@ -124,43 +122,29 @@ product of the package's `0.0.9` DRY pass (`docs/feedback.md` Major 3) plus
 later single-sitings (DRY review A8, A9, D1); a fresh trace of every consumer
 found no new fork and no new duplication that has crept back in since.
 
-One documentation-accuracy note, out of DRY's scope to fix here: the module
-docstring's title line has already been fixed to say "shared by the
-`FilterSet` and `OrderSet` families" (present tense) -- that edit is now
-committed to HEAD and the file is git-clean, so there is no concurrent
-working-tree edit left to collide with. What remains stale is the
-"future ``orders`` / ``aggregates`` / ``fieldsets``" wording still carried at
-three sites -- the module docstring body (`sets_mixins.py #"the future"`), the
-`ClassBasedTypeNameMixin` docstring
-(`sets_mixins.py::ClassBasedTypeNameMixin #"reuse the exact same naming rule"`),
-and the `type_name_for` docstring
-(`sets_mixins.py::ClassBasedTypeNameMixin.type_name_for #"per-field naming"`) --
-because `orders` has shipped and is now a live consumer (confirmed by
-`orders/base.py` / `orders/sets.py` above), not a future subpackage. This is a
-genuine source-doc staleness finding the DRY review records, but it is a
-docstring-wording correction rather than a duplication finding, so it is left
-for the file's next maintainer edit rather than folded into this DRY pass
-(which makes no source change).
+One documentation-accuracy finding sat outside the duplication judgment: three
+docstring sites still described `OrderSet` / `orders` as future work even
+though `orders/base.py` and `orders/sets.py` are live consumers. Those claims
+now use present tense while `AggregateSet` / `aggregates` / `fieldsets` remain
+future work.
 
 ## Judgment
 
-Zero-edit. `sets_mixins.py` is the correctly-scoped single owner for the
+No implementation edit. `sets_mixins.py` is the correctly-scoped single owner for the
 naming, lazy-target-resolution, and declaration-lifecycle rules the
 `FilterSet` / `OrderSet` families share; no new duplication was found either
-inside the two set families or against any other subsystem. No tracked
-change is needed; the item-scoped diff against `ITEM_BASELINE` remains empty
-(no edits made this pass).
+inside the two set families or against any other subsystem. The only tracked
+source change is the documentation-only present-tense correction above.
 
 ## Implementation (Worker 1)
 
-No changes. Every candidate considered above was verified disjoint from the
+No implementation changes. Every candidate considered above was verified disjoint from the
 target's owned responsibilities (different contract, different owner, or
-already single-sited at a different, correct location). The
-docstring-title fix is now committed to HEAD and the file is git-clean, so
-there is no concurrent working-tree edit to preserve or collide with; this
-review adds no edits to the file.
+already single-sited at a different, correct location). The verified
+documentation correction updates three stale future-`OrderSet` claims.
 
-- **Paths edited:** none (this artifact only).
+- **Paths edited:** `django_strawberry_framework/sets_mixins.py`
+  (documentation only).
 - **Strongest rejected candidates:** the `forms/sets.py` mutation/payload
   naming helpers (disjoint responsibility from `type_name_for`); the CLI
   `import_string_or_command_error` / `utils/imports.py` best-effort-import
@@ -169,22 +153,15 @@ review adds no edits to the file.
   `SetLifecycleAttrs`); `collect_related_declarations`'s `inherit_from_bases`
   parameter (a genuine-variation parameterization, not a duplication-hiding
   mode flag).
-- **Changelog:** not warranted (zero-edit).
-- Ran no formatting/lint commands -- no source edits were made.
+- **Changelog:** not warranted (documentation-only correction).
 
 ## Independent verification (Worker 2)
 
 Re-traced independently rather than reviewing only the artifact's claims.
 
-- **Scoped diff.** `git diff 87d227cd2afb3c8c1a54434bf6364c303968d00d -- \`
-  `django_strawberry_framework/sets_mixins.py` is empty -- confirmed. The
-  one-line module-docstring title change ("shared across the FilterSet /
-  OrderSet / AggregateSet family" -> "shared by the `FilterSet` and
-  `OrderSet` families") is now committed to HEAD, so `git diff HEAD --
-  sets_mixins.py` is also empty and the file is git-clean -- there is no
-  concurrent working-tree edit left to reconcile or collide with, and the
-  earlier "concurrent dirty = baseline" framing no longer applies. No edit was
-  made or needed to reconcile it.
+- **Scoped diff.** The baseline comparison showed documentation-only drift.
+  Re-verification confirmed the shipped `OrderSet` wording was stale, so the
+  three recorded claims were corrected without changing behavior.
 - **Naming.** Re-grepped every `type_name_for(` call site
   (`filters/inputs.py`, `orders/inputs.py`, `utils/inputs.py`) -- all three
   route through the mixin as claimed. Independently checked the one
@@ -253,7 +230,7 @@ Re-traced independently rather than reviewing only the artifact's claims.
   three-attribute per-set-class tuple. All three rejections hold.
 
 No missed consolidation opportunity found; every consumer traced matches
-the artifact's account exactly, the scoped diff is empty, and the
-zero-edit judgment is independently reproducible.
+the artifact's account exactly, and the no-implementation-change judgment is
+independently reproducible.
 
 **Status: verified**

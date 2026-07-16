@@ -2,10 +2,9 @@
 
 Ported from ``django_graphene_filters/mixins.py`` and refactored to this
 package's structure (Strawberry, not Graphene) and dependencies. This module
-lives at the package root so the ``filters`` subpackage -- and the future
-``orders`` / ``aggregates`` / ``fieldsets`` subpackages (``WIP-ALPHA-028-0.0.8``
-and later) -- all import shared set-machinery from one neutral home rather
-than from each other.
+lives at the package root so the shipped ``filters`` / ``orders`` subpackages
+and future ``aggregates`` / ``fieldsets`` subpackages all import shared
+set-machinery from one neutral home rather than from each other.
 
 The two foundational mixins the shipped ``FilterSet`` / ``OrderSet`` use:
 
@@ -61,8 +60,8 @@ class ClassBasedTypeNameMixin:
 
     A single implementation handles both the root name (``field_path is None``)
     and a ``LOOKUP_SEP``-separated nested path. Centralising it here means the
-    future ``OrderSet`` / ``AggregateSet`` reuse the exact same naming rule with
-    their own suffixes instead of re-deriving the convention inline.
+    shipped ``OrderSet`` and future ``AggregateSet`` reuse the exact same naming
+    rule with their own suffixes instead of re-deriving the convention inline.
 
     Port of ``django_graphene_filters/mixins.py::ClassBasedTypeNameMixin``,
     using this package's ``utils.strings.pascal_case_or_raise`` in place of
@@ -88,7 +87,8 @@ class ClassBasedTypeNameMixin:
         boundary PascalCases each path segment exactly as the previous
         per-segment split did. Raising here surfaces the real cause at the
         call site for every consumer (``_build_input_fields`` operator-bag
-        naming, future ``OrderSet`` / ``AggregateSet`` per-field naming).
+        naming, shipped ``OrderSet`` and future ``AggregateSet`` per-field
+        naming).
         """
         if field_path is None:
             return f"{cls.__name__}{cls._root_type_suffix}"

@@ -254,6 +254,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
 ├── rest_framework/    # DRF serializer mutations: generated inputs, conversion, binding, and execution behind an import guard.
+│   ├── hook_context.py           # The frozen serializer-hook context + upload metadata (the hardening pass).
 │   ├── inputs.py                 # DRF-serializer-derived ``@strawberry.input`` generation substrate (spec-039 Slice 1).
 │   ├── resolvers.py              # The sync + async serializer-mutation resolver pipeline (spec-039 Slice 3).
 │   ├── serializer_converter.py   # DRF serializer-field -> Strawberry input conversion + the per-input-field reverse map (spec-039).
@@ -313,13 +314,13 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── schema.py                     # ``DjangoSchema`` - the schema whose mutation transactions span response completion.
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared by the ``FilterSet`` and ``OrderSet`` families.
-├── aggregates/    # planned by TODO-BETA-049-0.1.3 - Declarative AggregateSet output types with related, permissioned, selection-aware sync/async statistics.
+├── aggregates/    # planned by TODO-BETA-050-0.1.3 - Declarative AggregateSet output types with related, permissioned, selection-aware sync/async statistics.
 ├── auth/    # Opt-in session-auth field factories (spec-040).
 │   ├── mutations.py              # Session-auth mutation factories + the phase-2.5 auth bind (spec-040).
 │   └── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
 ├── extensions/    # Strawberry schema extensions supplied by django-strawberry-framework.
 │   └── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
-├── fieldset/    # planned by TODO-BETA-046-0.1.1 - FieldSet computed fields, resolver overrides, field permissions, and optimizer dependencies.
+├── fieldset/    # planned by TODO-BETA-047-0.1.1 - FieldSet computed fields, resolver overrides, field permissions, and optimizer dependencies.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 │   ├── base.py                   # Filter primitives + ``RelatedFilter``.
 │   ├── factories.py              # Filter input-class BFS factory + the (currently unconsumed) dynamic-FilterSet cache.
@@ -360,8 +361,9 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
-├── permissions/    # planned by TODO-BETA-051-0.1.4 - Cascade-permission package migration plus opt-in node-sentinel redaction (``Meta.redaction_mode``).
+├── permissions/    # planned by TODO-BETA-052-0.1.4 - Cascade-permission package migration plus opt-in node-sentinel redaction (``Meta.redaction_mode``).
 ├── rest_framework/    # DRF serializer mutations: generated inputs, conversion, binding, and execution behind an import guard.
+│   ├── hook_context.py           # The frozen serializer-hook context + upload metadata (the hardening pass).
 │   ├── inputs.py                 # DRF-serializer-derived ``@strawberry.input`` generation substrate (spec-039 Slice 1).
 │   ├── resolvers.py              # The sync + async serializer-mutation resolver pipeline (spec-039 Slice 3).
 │   ├── serializer_converter.py   # DRF serializer-field -> Strawberry input conversion + the per-input-field reverse map (spec-039).
@@ -420,6 +422,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
+├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
 ├── test_export_dry_review.py     # Focused tests for the standalone DRY review toolkit.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
 ├── test_keyset_connection.py     # Keyset connection tests for resolve routing, slicer guards, order state, and nested-planner helpers.
@@ -609,6 +612,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_connection.py            # DjangoConnection tests for generated types, fields, resolvers, sidecars, optimization, and pagination.
 ├── test_cross_web_patches.py     # Tests for the ``cross_web`` non-UTF-8 request-body patch.
 ├── test_django_patches.py        # Django patch tests for DB connection wrapping and multi-database safety.
+├── test_exceptions.py            # Exception hierarchy: inheritance, GraphQL translation, hostile message args.
 ├── test_export_dry_review.py     # Focused tests for the standalone DRY review toolkit.
 ├── test_keyset.py                # Package-side keyset-cursor tests: codec, bounds, window shapes, lateral seek.
 ├── test_keyset_connection.py     # Keyset connection tests for resolve routing, slicer guards, order state, and nested-planner helpers.
@@ -634,8 +638,8 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation and dynamic FilterSet caching.
 │   ├── test_finalizer.py         # Finalizer tests for filter binding, owner-aware materialization, and orphan validation.
 │   ├── test_inputs.py            # Filter input-generation tests for lookup naming, field construction, normalization, references, and reset.
-│   ├── test_pg_full_text.py      # planned by TODO-BETA-048-0.1.2 - Postgres full-text search filter primitives
-│   ├── test_search_fields.py     # planned by TODO-BETA-047-0.1.2 - `Meta.search_fields` support
+│   ├── test_pg_full_text.py      # planned by TODO-BETA-049-0.1.2 - Postgres full-text search filter primitives
+│   ├── test_search_fields.py     # planned by TODO-BETA-048-0.1.2 - `Meta.search_fields` support
 │   ├── test_sets.py              # FilterSet tests for Meta validation, relations, Relay fields, permissions, visibility, and logic trees.
 │   └── fixtures/    # Fixture modules for filter lazy resolution and cyclic input-generation tests.
 │       └── filtersets.py         # Fixture FilterSet declarations for cross-module lazy resolution and self-referential cycle handling.

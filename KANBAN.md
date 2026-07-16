@@ -266,7 +266,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 - The maintainer's pain point: the package (~47.3k lines, ~19.7k code) has grown to the point of alignment fatigue. A pip-package split was investigated and rejected on evidence (the optimizer is bidirectionally fused to the type system; ecosystem precedent is uniformly against standalone framework-coupled optimizers).
 - The split instinct pointed at real work: the optimizer/core boundary exists only by convention (private `optimizer._context` is imported from two subsystems; nothing enforces any seam), and four subsystem axes carry verified duplication.
-- Four parallel audits (sets family, inputs/converters, resolvers, root+optimizer+utils) produced 26 verified consolidation candidates totaling ~1,250-1,550 lines, plus a do-not-touch ledger of deliberate duplication so future passes don't re-litigate.
+- Four parallel audits (sets family, inputs/converters, resolvers, root+optimizer+utils) produced 32 verified consolidation candidates totaling ~1,100-1,300 lines, plus a do-not-touch ledger of deliberate duplication so future passes don't re-litigate.
 
 #### Dependencies
 

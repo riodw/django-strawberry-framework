@@ -1,241 +1,591 @@
-# Spec-044 implementation review — `DjangoDebugExtension` (commit `cd82627a`)
+# Dirty-tree commit plan
 
-Reviewed: the full 10-file diff of `cd82627a` ("Finish spec-044-debug_extension-0_0_14.md")
-against `docs/spec-044-debug_extension-0_0_14.md` (Revision 8) and `AGENTS.md`, with every
-load-bearing engine claim re-verified against the installed `strawberry-graphql==0.316.0`,
-Django, and repo sources. Per the AGENTS.md workflow rule ("Do not run pytest after edits;
-run only when explicitly asked") **no test suite was executed for this review** — everything
-below is source-level verification; the run-level gates (full suite, `fail_under = 100`,
-the sharded tier, the floor node) remain yours to execute.
+## Problem statement
 
-## Verdict
+The working tree contains 129 dirty files: 69 tracked modifications and 60 untracked DRY reports.
+The tracked diff is approximately 1,946 insertions and 1,383 deletions across shared utilities,
+filters, orders, forms, mutations, authentication, DRF serializers, optimizer planning,
+management commands, generated documentation, and the fakeshop database. These changes must be
+committed as dependency-ordered, reviewable units rather than one DRY mega-commit.
 
-Slice 1 is a faithful, decision-complete implementation of the Revision-8 spec — every
-Slice-1 row of the Implementation plan landed, every Test-plan scenario (1–21) has an
-implemented owner in the correct tier, the DRY obligations (D1–D6, D-N1–D-N8) are honored
-to the letter, and all mechanical gates I can run without pytest pass. **One P0 defect
-ships in the diff: the new CI Strawberry-floor step calls `strawberry.__version__`, which
-does not exist in 0.316.0, so the minimum-support CI nodes fail deterministically on every
-push/PR.** Beyond that: the commit message overstates ("Finish") — Slices 2 and 3 are
-still open by the spec's own plan — plus a short list of minor polish items.
+## Global commit rules
 
----
+- Stay on the current branch. Do not create or switch branches.
+- Stage explicit paths and, where noted, explicit hunks. Never use `git add -A`; the checkout is
+  shared with concurrent work.
+- Before every commit, inspect `git diff --cached --stat` and `git diff --cached`, run
+  `git diff --cached --check`, and verify no unrelated path entered the index.
+- After any corrective edit, run `uv run ruff format .` and `uv run ruff check --fix .`, then run
+  `uv run python scripts/check_trailing_commas.py --check` and the repository pre-commit hooks
+  before committing.
+- Do not run pytest unless the maintainer explicitly authorizes it. The focused pytest commands
+  below are the suites that should be authorized for each commit; the final authorized gate must
+  preserve 100% package coverage.
+- Use hunk staging for `django_strawberry_framework/auth/mutations.py`,
+  `django_strawberry_framework/filters/sets.py`,
+  `django_strawberry_framework/forms/resolvers.py`,
+  `django_strawberry_framework/forms/sets.py`,
+  `django_strawberry_framework/mutations/resolvers.py`,
+  `django_strawberry_framework/optimizer/extension.py`,
+  `django_strawberry_framework/optimizer/nested_planner.py`,
+  `django_strawberry_framework/optimizer/walker.py`,
+  `django_strawberry_framework/orders/sets.py`,
+  `django_strawberry_framework/rest_framework/inputs.py`,
+  `django_strawberry_framework/rest_framework/resolvers.py`, and
+  `django_strawberry_framework/rest_framework/sets.py`, because those files contain changes
+  belonging to more than one commit.
 
-## F1 (P0) — CI floor-verification step crashes: `strawberry.__version__` does not exist
+## Blocking findings to resolve first
 
-`.github/workflows/django.yml`, the new "Install Strawberry (minimum supported floor)"
-step ends with:
+1. `make_meta_validating_metaclass()` currently returns a function-local class named
+   `MetaValidatingMetaclass`; this changes the runtime `__name__`, `__qualname__`, module
+   addressability, and pickling/introspection behavior of the public mutation/form metaclasses.
+   Fix the identity contract at the owner before Commit 4.
+2. `filters/inputs.py` now delegates model-field traversal to django-filter's `get_model_field`,
+   which may raise `RuntimeError` for unresolved lazy relations where the previous implementation
+   returned `None`. Decide and test the intended contract before Commit 6.
+3. `optimizer/nested_planner.py` is dirty while its planned report
+   `docs/dry/dry-file-optimizer__nested_planner.md` does not exist and the cycle item remains open.
+   Complete and independently verify that report before Commits 9-10.
+4. `docs/dry/dry-file-auth__mutations.md`, `dry-file-forms__resolvers.md`,
+   `dry-folder-auth.md`, `dry-folder-forms.md`, and `dry-folder-mutations.md` contain reopened or
+   stale verification language. Reconcile each against the final source diff before its owning
+   commit.
+5. `docs/dry/dry-file-forms__sets.md` and `dry-folder-forms.md` still describe the metaclass
+   factory as deferred although source implements it. Correct the reports only after the metaclass
+   identity issue is fixed.
+6. `docs/dry/dry-file-management__commands____init__.md` ends with a stray `)`. Correct it before
+   Commit 14.
+7. `docs/dry/dry-file-testing___wrap.md` is `fix-implemented` while its plan item remains open. It
+   cannot enter a verified-audit commit until independent verification closes it.
+8. `docs/feedback.md` was a zero-byte truncation of a 241-line review. The explicit request to
+   replace it with this plan resolves the empty-placeholder problem, but the old Spec-044 finding
+   must already be preserved/resolved elsewhere before the replacement is committed.
+9. `uv run python scripts/check_trailing_commas.py --check` currently fails on five over-expanded
+   constructs and two non-ASCII em dashes. Resolve the layout failures in
+   `django_strawberry_framework/mutations/permissions.py`,
+   `django_strawberry_framework/optimizer/join_taxonomy.py`,
+   `tests/optimizer/test_join_taxonomy.py`, and two locations in
+   `tests/rest_framework/test_resolvers.py`; replace the two em dashes in
+   `django_strawberry_framework/management/commands/inspect_django_type.py` with ASCII punctuation.
+   Re-run the checker after the owning Commits 2, 12, 13, and 14 are prepared.
 
-```
-uv run --no-sync python -c "import strawberry; print('strawberry-graphql', strawberry.__version__)"
-```
+## Commit sequence
 
-Verified against the installed 0.316.0 (the exact version the step force-installs):
-`strawberry` exposes **no `__version__` attribute** — `hasattr(strawberry, "__version__")`
-is `False`, `dir()` has no version-shaped name, and `strawberry/__init__.py` defines
-nothing of the sort (no lazy `__getattr__` fallback either; `hasattr` would have
-triggered it). The line raises `AttributeError`, the step exits non-zero, and **every
-push/PR fails on the minimum-support node** (plus both dispatch-tier min nodes). The
-spec's requirement — "recording the resolved version makes the exercised floor auditable
-in the log" — is exactly the half that's broken; the
-`uv pip install "strawberry-graphql==0.316.0"` half is fine.
+### 1. Centralize the thread-sensitive sync boundary
 
-Root-cause fix (AGENTS.md #"highest standard" — not `|| true`, not deleting the audit
-line): read the distribution version, which is the thing actually being pinned:
+**Commit title:** `refactor(async): centralize the thread-sensitive sync boundary`
 
-```
-uv run --no-sync python -c "import importlib.metadata as m; print('strawberry-graphql', m.version('strawberry-graphql'))"
-```
+**Files and hunks:**
 
-Until this lands, the DoD's "the floor is durably exercised by a CI node" item is not
-met — the node exists but can never go green.
+- `django_strawberry_framework/utils/querysets.py`
+- `tests/utils/test_querysets.py`
+- `django_strawberry_framework/schema.py`
+- Sync-boundary/import hunks only from `django_strawberry_framework/auth/mutations.py`
+- Sync-boundary hunks only from `django_strawberry_framework/filters/sets.py`
+- Sync-boundary hunks only from `django_strawberry_framework/orders/sets.py`
+- Compatibility re-export and async-call hunks only from
+  `django_strawberry_framework/mutations/resolvers.py`
+- Off-event-loop assertions only from `tests/filters/test_sets.py`
+- `docs/dry/dry-file-auth__mutations.md`
+- `docs/dry/dry-file-mutations__resolvers.md`
 
-## F2 (P1) — "Finish spec-044" overstates: Slices 2 and 3 are open, and correctly so
+**Why these belong together:** `utils/querysets.py` becomes the cycle-safe owner of the one
+`sync_to_async(thread_sensitive=True)` hop. Every dirty consumer must migrate atomically, while
+`mutations.resolvers` preserves historical import identity.
 
-What landed is exactly the spec's **Slice-1** file map (all ten rows present and
-verified: `extensions/__init__.py`, `extensions/debug.py`, both test modules,
-`tests/extensions/__init__.py`, the pyproject/uv.lock floor raise, the workflow node, the
-`optimizer/extension.py::DjangoOptimizerExtension.__init__` comment correction, and the
-scenario-16 addition to `test_multi_db.py`). Still open, per the spec's own Slice
-checklist and confirmed by the live `TODO(spec-044 Slice N)` anchors:
+**Review before commit:** Confirm there is exactly one function definition; confirm the mutation
+re-export is the same object; make sure no queryset, permission hook, or auth operation evaluates
+before entering the worker; reconcile both DRY reports and obtain independent verification.
 
-- **Slice 2** — GLOSSARY entry body via the glossary **DB + re-render** (never a
-  hand-edit), `docs/TREE.md` regen after the `TrackedPath.is_current` flips, the
-  `examples/fakeshop/apps/kanban/constants.py` tracked-path registrations, the
-  `config/schema.py` stale "no direct Strawberry analogue" docstring rewrite (its
-  `TODO(spec-044 Slice 2)` anchor is still live and is now *actionable* — the sentence it
-  guards is now false), and the `GOAL.md` criterion-7 scoping sentence.
-- **Slice 3** — the version quintet (anchors in place at `pyproject.toml`,
-  `django_strawberry_framework/__init__.py`, `tests/base/test_init.py::test_version`;
-  package version correctly still `0.0.13` everywhere including uv.lock), the GLOSSARY
-  status flips from the companion `docs/spec-044-debug_extension-0_0_14-terms.csv`,
-  README / docs/README / TODAY wording, CHANGELOG under the Slice-3 grant, and the
-  ordered DB-mutations-first → Done flip → `import_spec_terms` → renders → `--check`
-  card wrap. The card is correctly still `WIP-ALPHA-044-0.0.14` in KANBAN.md.
+**Probable checks:** Grep for duplicate definitions and old local `sync_to_async` wrappers; inspect
+import cycles; authorize `tests/utils/test_querysets.py`, the async FilterSet/OrderSet tests, schema
+mutation execution tests, and auth async tests.
 
-None of this is a defect — the staging follows AGENTS.md #design-docs-and-TODO-anchors
-exactly (Slice-1 anchors were removed in the shipping change; Slice-2/3 anchors remain).
-The finding is only that "Finish" reads as spec-complete when it is Slice-1-complete;
-the release is not cut and the docs surface still describes the extension as absent.
+### 2. Harden authorization and plain-form phase boundaries
 
-## F3 (P2) — DoD's isolated-floor run: command recorded, outcome not
+**Commit title:** `fix(permissions): enforce strict authorization and write-phase boundaries`
 
-The DoD requires the concurrent sync isolation scenario to pass "at that exact floor in
-an isolated throwaway venv … the command/outcome are recorded". The command is recorded
-twice (the node-id block in `tests/extensions/test_debug.py` above
-`test_concurrent_sync_operations_use_isolated_instances`, and the spec Test plan), but I
-find no recorded **outcome** in the repo. Mitigating: `uv.lock` currently resolves
-`strawberry-graphql` to exactly `0.316.0`, so the ordinary full-suite run *is* a floor
-run today, and once F1 is fixed CI exercises it durably. Suggest recording the isolated
-run's outcome (or noting where it was recorded) when you run the suite.
+**Files and hunks:**
 
----
+- `django_strawberry_framework/utils/permissions.py`
+- `tests/utils/test_permissions.py`
+- `django_strawberry_framework/mutations/permissions.py`
+- Authorization/auth-alias hunks only from
+  `django_strawberry_framework/mutations/resolvers.py`
+- Permission, alias-guard, validation-phase, and write-window hunks only from
+  `django_strawberry_framework/forms/resolvers.py`
+- Phase-boundary tests only from `tests/forms/test_resolvers.py`
+- `docs/dry/dry-file-mutations__permissions.md`
+- `docs/dry/dry-file-forms__resolvers.md`
+- `docs/dry/dry-folder-forms.md`
 
-## Verified sound — the engine and repo claims the design stands on
+**Why these belong together:** This is one security contract: permission methods must return real
+booleans, permissionless surfaces must not gain auth-alias access, read-only phases must remain
+read-only, and only `perform_mutate` receives the pinned write window.
 
-Each of these was checked against sources for this review, not taken from the spec:
+**Review before commit:** Reject awaitables and truthy non-bools consistently for permission
+classes, mutation hooks, and `user.has_perm`; verify `permission_classes=[]` neither resolves the
+lazy user nor opens auth aliases; confirm the new form restriction is intentional for consumer
+validators that previously wrote during validation. Review the pre-existing per-element
+`_decode_form_relation_multi` query behavior for N+1 risk even though this diff does not worsen it.
 
-- **Per-operation instantiation at the floor.** Installed 0.316.0
-  `Schema.get_extensions` instantiates class/factory entries with **zero arguments** per
-  operation, passes deprecated pre-built instances through as-is (warning at
-  `Schema.__init__`), and no `_sync_extensions` cache exists anywhere in `schema.py`.
-  `SchemaExtension.__init__(self, *, execution_context=None)` — so both the engine's
-  `ext()` call and the tests' bare `DjangoDebugExtension()` are valid, and the corrected
-  `optimizer/extension.py` comment ("Strawberry itself never passes this keyword" at the
-  floor) is accurate.
-- **One sync generator hook, both colors.** `strawberry/extensions/context.py` handles
-  `isgeneratorfunction` and `isasyncgenfunction` hooks on both execution paths —
-  Decision 7's single-generator shape is supported.
-- **Scenario 7's envelope assertion.** `strawberry.http.process_result` includes
-  `"extensions"` only when truthy; `DjangoOptimizerExtension` defines no `get_results`
-  (base returns `{}`), so `set(res.response.json()) == {"data"}` is sound.
-- **Coverage plumbing.** `[tool.coverage.report].exclude_lines` **replaces** coverage
-  defaults, so the `# pragma: no cover` on the `TYPE_CHECKING` import is required, and it
-  guards a genuinely unreachable line (AGENTS.md #pragma rule satisfied). My static walk
-  maps every executable line of `debug.py` to a named owner test (both serializers, both
-  collector guards, all four coordinator transitions, the clamp/rollover, both
-  `get_results` directions, the pre-yield unwind, both degrade catches) — the 100% gate
-  looks satisfiable, subject to the actual run.
-- **Test-plan conformance, 1–21 complete.** Scenarios 1–7 live in
-  `test_debug_extension_api.py` over real probe-URLconf HTTP; 8–15 and 17–21 in
-  `tests/extensions/test_debug.py`; 16 in `test_multi_db.py` behind `FAKESHOP_SHARDED=1`.
-  Markers match the plan exactly (1–2 `django_db`, 3 and 19 `transaction=True`,
-  DB-touching mechanics marked, attribute-only tests unmarked). The Revision-8 additions
-  are all present: the two-phase degrade (17), both cursor-boundary directions (18),
-  transaction inclusion/exclusion (19), sibling-hook ordering in both list orders (20),
-  and the hop policy incl. the 64-hop ceiling asserted as an independent literal (21).
-  Scenario 13 correctly proves *instance* isolation (distinct thread-local wrappers, no
-  ORM in executor threads) and defers same-wrapper refcounting to scenario 9, as
-  respecified.
-- **Fixture/precedent fidelity.** `seed_data` category privacy alternates by sorted
-  index (deterministic), so `Category.objects.filter(is_private=False)…first()` can
-  never return `None` — the deterministic post-seed `Item.objects.create` rows follow
-  the established `test_products_api.py` precedent (AGENTS.md #seed-first satisfied:
-  seeds are the first domain-setup action; scenario 3's `create_users(1)` →
-  `seed_data(1)` ordering is DRY D3's sanctioned auth-first shape). The
-  `GlobalID(type_name="products.category")` spelling matches `test_client_api.py`; the
-  permitted-writer build (non-staff `view_item_1`, single `add_item` grant, re-fetch)
-  matches its precedent; `categoryId` is required because `Item.category` is a non-null
-  FK — all as respecified in Revision 8.
-- **Scenario 2's two-query assertion** matches the shipped visibility contract (the
-  `CategoryType.get_queryset` hook forces the `Prefetch` downgrade) and the precedent
-  proof pins the same shape, including no COUNT — the "exactly 2 SELECTs" pin is sound.
-- **DRY D1–D6 / D-N1–D-N8 all honored.** Module-level serializers with the six wire keys
-  as literals and `isSlow`/`isSelect` derived inside; the explicit three-argument
-  `traceback.format_exception` (post-`except` ambient state is gone — correct and
-  documented); one `None`-guarded collector owning order-preservation and no-dedup; the
-  two-seam lock-protected coordinator keyed by **wrapper object identity**, the only
-  toucher of the flag; immutable snapshot records read back at serialization (never a
-  second `connections.all()`); one log-slice helper owning the clamp; one payload builder
-  owning the shape with fresh containers; **no `__init__`**; the 64-hop ceiling
-  re-spelled locally with the extraction deferral recorded — precisely D6's instruction;
-  zero `utils/` imports; nothing raised (D-N7). The `extensions/__init__.py`
-  eager-export shape mirrors `utils`/`testing`.
-- **Two-phase failure policy** implemented as the Error-shapes section specifies:
-  pre-yield fail-loud with `ExitStack` unwind (pinned by the one sanctioned fake at the
-  private acquisition boundary — never a runner mock), post-execution catches
-  `Exception` (never `BaseException`), logs through the package logger, degrades the
-  payload, never touches the result; flag restoration rides `ExitStack.callback` inside
-  the `with`, separately protected from the diagnostic catch. The stash-absent
-  `get_results() == {}` no-key contract and the real-engine conditional double call are
-  both pinned by tests against real Strawberry execution.
-- **Mechanical gates** (all run for this review, read-only): `uv run ruff format
-  --check .` clean, `uv run ruff check .` clean, `check_trailing_commas.py --check`
-  clean, all six changed/new `.py` files ASCII-only, no `path:NN` references in code or
-  spec, no leftover `TODO(spec-044 Slice 1)` anchors, no orphan imports of the deleted
-  planning-stub guard (the F21 deletion happened, correctly paired with the
-  already-standing `raise NotImplementedError` coverage exclusion). `-n auto --dist
-  loadscope` keeps each module's tests in one worker, so the shared-`queries_log`
-  manipulation in the degrade test and the module-level probe holder are xdist-safe.
+**Probable checks:** Grep for direct `resolve_auth_aliases()` conditionals; authorize permission,
+write-transaction, form resolver, divergent-router authorization, and live mutation security
+tests.
 
-## Minor observations (polish; none block)
+### 3. Unify generated input-field metadata
 
-- **M1 — stale section label in `tests/extensions/test_debug.py`.** The coordinator
-  block header reads "Scenarios 4-7 of the mechanics anchors" — numbering from the
-  deleted TODO-anchor pseudocode, which no longer exists anywhere. Those tests are spec
-  **scenario 8**'s components (restore contract / distinct wrappers / partial unwind /
-  log slicing). Every other section header uses spec Test-plan numbers; this one should
-  too, or a future reader will hunt for scenarios 4–7 in the wrong tier.
-- **M2 — scenario 16's URLconf plumbing** uses the per-test
-  `override_settings(ROOT_URLCONF=…)`/`clear_url_caches()` block, copying
-  `test_multi_db.py`'s own established boilerplate rather than the new module's
-  `pytest.mark.urls` idiom. DRY D3 explicitly scopes the single-siting rule to the new
-  module and names this module's repetition as the precedent, so this is in-spec —
-  worth a cleanup card only if that module grows again.
-- **M3 — CI comment drift-in-waiting.** "The other nodes run the uv.lock-resolved
-  (latest compatible) strawberry-graphql" — the lock currently resolves to exactly
-  `0.316.0`, so floor and latest coincide until a newer strawberry is released and the
-  lock re-resolved. Fine; just don't read the matrix as currently proving a version
-  spread.
-- **M4 — `test_off_by_default_publishes_no_debug_key`** is the only live scenario whose
-  strongest assertion (`{"data"}` envelope) depends on *every* configured extension
-  returning empty results; if a future extension ever publishes always-on results the
-  test fails loudly and correctly, but the failure will point here rather than at the
-  new extension. The docstring's "honest claim" framing covers it; nothing to change.
+**Commit title:** `refactor(inputs): unify generated input field metadata`
 
-## AGENTS.md compliance ledger
+**Files and hunks:**
 
-- **#3 DRF-first**: no consumer decorator surface; the opt-in is engine `extensions=`
-  configuration, with the GOAL.md criterion-7 scoping deferred to Slice 2 as planned. ✓
-- **#4 highest standard**: Django-native debug cursor over a cursor-wrap port, fail-loud
-  setup, spec'd degrade policy; F1's fix must stay root-cause (importlib.metadata). ✓/⚠ F1
-- **#5/#6 placement**: package code in `django_strawberry_framework/extensions/`;
-  mechanics in `tests/extensions/` (package with `__init__.py`, no helper exports); live
-  HTTP in `examples/fakeshop/test_query/`; sharded proof gated in `test_multi_db.py`. ✓
-- **#7 seed-first / no hand-rolled rows**: `create_users`/`seed_data` open every
-  catalog/auth test; the two deterministic post-seed `Item.objects.create` rows follow
-  the `test_products_api.py` precedent. ✓
-- **#9 live-first**: everything request-reachable is earned over live `/graphql/`
-  (scenarios 1–7); the package tier holds only request-impossible mechanics per
-  Decision 11; serializer units are pure-function tests, the sanctioned coexistence. ✓
-- **#10–#12 coverage**: source unchanged; the one new pragma is genuinely unreachable;
-  gate confirmation requires the run (see commands below). ✓ (pending run)
-- **#13**: tests in the same change; orphan sweep clean after the stub-guard removal. ✓
-- **#14**: no pytest run in this review, per rule. ✓
-- **#15–#17**: ruff format/check and the trailing-comma checker pass post-commit. ✓
-- **#20**: no settings key added (the extension has no configuration). ✓
-- **#21**: CHANGELOG untouched; the Slice-3 grant is not yet exercised. ✓
-- **#26 TODO anchors**: Slice-1 anchors removed in the shipping change; Slice-2/3
-  anchors staged at their seams. ✓
-- **#27 references**: symbol-qualified refs throughout; no raw line numbers in code or
-  the spec. ✓
-- **#31 version**: `0.0.13` everywhere, quintet TODOs in place for Slice 3. ✓
-- **#32/#33**: nothing committed or branched by this review; feedback only. ✓
+- `django_strawberry_framework/utils/inputs.py`
+- `django_strawberry_framework/forms/__init__.py`
+- `django_strawberry_framework/forms/converter.py`
+- Input metadata/decode hunks from `django_strawberry_framework/forms/inputs.py`
+- Target-name/decode hunks from `django_strawberry_framework/forms/resolvers.py`
+- InputFieldSpec documentation hunk from `django_strawberry_framework/forms/sets.py`
+- `tests/forms/test_converter.py`
+- Input-metadata hunks from `tests/forms/test_inputs.py`
+- `docs/dry/dry-file-forms____init__.md`
+- `docs/dry/dry-file-forms__converter.md`
+- `docs/dry/dry-file-forms__inputs.md`
 
-## Commands for the maintainer (recorded, not run)
+**Why these belong together:** The form-only `FormInputFieldSpec` is replaced by the neutral
+`InputFieldSpec.target_name` owner, while shared required-field and collision mechanics remain in
+`utils/inputs.py`.
 
-- Full gate: `uv run pytest`
-- Targeted: `uv run pytest -o addopts="-v -n0" tests/extensions/test_debug.py`
-  and `uv run pytest -o addopts="-v -n0" examples/fakeshop/test_query/test_debug_extension_api.py`
-- Sharded scenario 16: `FAKESHOP_SHARDED=1 uv run pytest -o addopts="-v -n0" examples/fakeshop/test_query/test_multi_db.py`
-- Floor isolation (isolated venv, per DoD):
-  `uv run pytest -o addopts="-v -n0" "tests/extensions/test_debug.py::test_concurrent_sync_operations_use_isolated_instances"`
+**Review before commit:** Grep for remaining `FormInputFieldSpec` and `.form_field_name` use;
+verify model, form, and serializer meanings of `target_name`, `source`, and nested specs remain
+distinct; fix the doubled whitespace in the collision-helper docstring; confirm relation discovery
+stays build-time and introduces no request-time ORM work.
 
-## Bottom line
+**Probable checks:** Authorize form converter/input tests plus mutation and serializer
+input-generation regressions that consume the shared dataclass.
 
-Fix F1 before the next push (one-line CI change), then run the suite. With CI green,
-Slice 1 is done to spec and the remaining work is the Slice-2 doc pass and the Slice-3
-joint cut — both already staged with correct anchors. The production module itself is
-the strongest artifact in the diff: every documented boundary in the spec's Edge-cases
-section is either enforced in code or pinned by a named test, and I found no
-correctness defect in `extensions/debug.py`.
+### 4. Unify mutation declaration and input-shape lifecycle
+
+**Commit title:** `refactor(mutations): unify declaration and input-shape lifecycle`
+
+**Files and hunks:**
+
+- `django_strawberry_framework/mutations/__init__.py`
+- `django_strawberry_framework/mutations/inputs.py`
+- `django_strawberry_framework/mutations/sets.py`
+- Metaclass-consumer hunk from `django_strawberry_framework/forms/sets.py`
+- `tests/mutations/test_sets.py`
+- `docs/dry/dry-file-forms__sets.md`
+- `docs/dry/dry-file-mutations____init__.md`
+- `docs/dry/dry-file-mutations__fields.md`
+- `docs/dry/dry-file-mutations__inputs.md`
+- `docs/dry/dry-file-mutations__sets.md`
+- `docs/dry/dry-folder-mutations.md`
+
+**Why these belong together:** Operation vocabulary, generated input names, declaration
+registries, shape-cache clearing, and the shared validating-metaclass lifecycle must change
+atomically across model and plain-form mutation families.
+
+**Review before commit:** Resolve the metaclass identity blocker first. Verify model and form
+declaration registries remain disjoint, registry clears invalidate every generated shape,
+post-finalization registration still fails, and operation/name derivation has one owner. Reconcile
+the folder reports against the final implementation rather than their older item baselines.
+
+**Probable checks:** Add/pin metaclass `__name__`, `__qualname__`, `__module__`, import
+addressability, and pickling expectations as appropriate; authorize `tests/mutations/test_sets.py`
+and form set/metaclass tests.
+
+### 5. Single-source authenticated actor classification
+
+**Commit title:** `refactor(auth): single-source authenticated actor classification`
+
+**Files and hunks:**
+
+- Actor-helper/logout hunks from `django_strawberry_framework/auth/mutations.py`
+- `django_strawberry_framework/auth/queries.py`
+- `docs/dry/dry-file-auth__queries.md`
+- `docs/dry/dry-folder-auth.md`
+
+**Why these belong together:** Logout and current-user must use the same definition of missing or
+anonymous actors without coupling that rule to model-permission policy.
+
+**Review before commit:** Confirm lazy `request.user` is forced once inside the worker boundary,
+anonymous and missing-user behavior remains indistinguishable, and session mutations preserve
+their existing payloads. Reconcile the reopened folder report and obtain independent verification.
+
+**Probable checks:** Authorize auth query/mutation tests and live HTTP session-auth tests for
+anonymous, inactive, authenticated, login, and logout paths.
+
+### 6. Consolidate filter predicate and input ownership
+
+**Commit title:** `refactor(filters): consolidate predicate and input ownership`
+
+**Files and hunks:**
+
+- `django_strawberry_framework/filters/__init__.py`
+- `django_strawberry_framework/filters/base.py`
+- `django_strawberry_framework/filters/inputs.py`
+- Remaining non-boundary hunks from `django_strawberry_framework/filters/sets.py`
+- `tests/filters/test_inputs.py`
+- Remaining non-boundary hunks from `tests/filters/test_sets.py`
+- `docs/dry/dry-file-filters____init__.md`
+- `docs/dry/dry-file-filters__base.md`
+- `docs/dry/dry-file-filters__factories.md`
+- `docs/dry/dry-file-filters__inputs.md`
+- `docs/dry/dry-file-filters__sets.md`
+- `docs/dry/dry-folder-filters.md`
+
+**Why these belong together:** Empty-list semantics, distinct-plus-lookup application, logic-field
+naming, model-field path resolution, lifecycle prose, and FilterSet normalization are one
+filter-family consolidation.
+
+**Review before commit:** Resolve the lazy/unresolved relation behavior change. Verify empty
+restrictive membership matches no rows, excluded empty membership matches all rows, invalid
+integer members cannot widen a filter, `distinct()` still prevents duplicate parent rows, and
+logic-key arity cannot drift from `_LOGIC_KEYS`. Check permission hooks for bounded query counts
+and N+1 behavior.
+
+**Probable checks:** Authorize filter base/input/set tests and live GraphQL filter tests; add a
+lazy relation regression if that model state is supported.
+
+### 7. Single-source ordering direction and lifecycle rules
+
+**Commit title:** `refactor(orders): single-source direction and lifecycle rules`
+
+**Files and hunks:**
+
+- `django_strawberry_framework/orders/__init__.py`
+- `django_strawberry_framework/orders/inputs.py`
+- Remaining non-boundary hunks from `django_strawberry_framework/orders/sets.py`
+- `tests/orders/test_inputs.py`
+- `docs/dry/dry-file-orders____init__.md`
+- `docs/dry/dry-file-orders__base.md`
+- `docs/dry/dry-file-orders__factories.md`
+- `docs/dry/dry-file-orders__inputs.md`
+- `docs/dry/dry-file-orders__sets.md`
+- `docs/dry/dry-folder-orders.md`
+
+**Why these belong together:** Direction classification, Min/Max selection for to-many paths,
+concrete-field import ownership, and namespace-clear documentation are one order-family contract.
+
+**Review before commit:** Prefer a precise `self.name.startswith("ASC")` rule over substring
+membership; verify all six enum values, null-position variants, to-many Min/Max choice, and
+multiple to-many order terms. Inspect generated SQL for join multiplication and assert constant
+query counts.
+
+**Probable checks:** Authorize order input/set tests and live ordered connection tests with
+multiple related rows and null positioning.
+
+### 8. Unify ORM and lateral keyset seek planning
+
+**Commit title:** `refactor(keyset): unify ORM and lateral seek planning`
+
+**Files and hunks:**
+
+- `django_strawberry_framework/keyset.py`
+- `tests/test_keyset.py`
+- `django_strawberry_framework/optimizer/lateral_fetch.py`
+- `docs/dry/dry-file-optimizer__lateral_fetch.md`
+- `docs/dry/dry-file-optimizer__nested_fetch.md`
+
+**Why these belong together:** `KeysetSeek` is the dialect-neutral plan; ORM `Q` and parameterized
+PostgreSQL SQL are renderers of that same plan. `lateral_fetch.py` cannot compile independently
+from the new keyset API.
+
+**Review before commit:** Treat this as high SQL-correctness risk. Verify after/before, ASC/DESC,
+mixed and uniform directions, duplicate leading values, scalar/UUID/date/decimal/string
+preparation, row-value versus OR expansion, counted-keyset downgrade, and cross-strategy cursor
+replay. Confirm non-null cursor enforcement and collation semantics. No per-parent query loop
+should appear.
+
+**Probable checks:** Authorize keyset, lateral-fetch, PostgreSQL parity, and live connection tests;
+compare result PK sequences from ORM and lateral renderers, not just SQL strings; use PostgreSQL
+`EXPLAIN (ANALYZE, BUFFERS)` for composite-index behavior.
+
+### 9. Centralize Strawberry schema/config access
+
+**Commit title:** `refactor(optimizer): centralize Strawberry schema config access`
+
+**Files and hunks:**
+
+- `django_strawberry_framework/utils/__init__.py`
+- `django_strawberry_framework/utils/typing.py`
+- `django_strawberry_framework/utils/connections.py`
+- `tests/utils/test_typing.py`
+- Schema/config hunks from `django_strawberry_framework/optimizer/extension.py`
+- Schema/config hunks from `django_strawberry_framework/optimizer/nested_planner.py`
+- Schema/config hunks from `django_strawberry_framework/optimizer/walker.py`
+- `docs/dry/dry-folder-optimizer.md`
+- The new, independently verified `docs/dry/dry-file-optimizer__nested_planner.md`
+
+**Why these belong together:** Brittle `_strawberry_schema` and `.config` traversal receives one
+utility owner while planner `None` and resolver default-100 behavior remain distinct.
+
+**Review before commit:** Complete the missing nested-planner report. Add a contract test for an
+explicitly present `_strawberry_schema=None`; confirm wrapped schema precedence, direct config
+fallback, and caller choice between `strawberry_schema_from_info()` and
+`schema_config_from_info()`. Grep so raw private-attribute traversal remains only in the utility
+owner.
+
+**Probable checks:** Authorize utility typing/connections and optimizer
+extension/nested-planner/walker tests, including Relay max-results resolution.
+
+### 10. Consolidate optimizer selection traversal and lifecycle state
+
+**Commit title:** `refactor(optimizer): consolidate selection traversal and lifecycle state`
+
+**Files and hunks:**
+
+- `django_strawberry_framework/optimizer/__init__.py`
+- Remaining selection/lifecycle hunks from `django_strawberry_framework/optimizer/extension.py`
+- Remaining selection hunks from `django_strawberry_framework/optimizer/nested_planner.py`
+- `django_strawberry_framework/optimizer/selections.py`
+- `tests/optimizer/test_extension.py`
+- `tests/optimizer/test_selections.py`
+- `docs/dry/dry-file-optimizer____init__.md`
+- `docs/dry/dry-file-optimizer___context.md`
+- `docs/dry/dry-file-optimizer__extension.md`
+- `docs/dry/dry-file-optimizer__selections.md`
+
+**Why these belong together:** Relay `edges -> node` composition, fragment resolution, AST child
+iteration, and active-optimizer lifecycle state must have one owner.
+
+**Review before commit:** Exercise the same named fragment at multiple depths with aliases,
+directives, pagination variables, and cyclic-fragment validation. Verify runtime prefixes preserve
+strictness/FK-id ledger keys and that removing the obsolete lifecycle ContextVar does not affect
+concurrent executions. Query-count live tests are required to catch masked N+1 regressions.
+
+**Probable checks:** Authorize extension/selections/nested connection tests plus live root and
+nested connection query-count coverage.
+
+### 11. Centralize optimizer field metadata and path ledgers
+
+**Commit title:** `refactor(optimizer): centralize field metadata and path ledgers`
+
+**Files and hunks:**
+
+- `django_strawberry_framework/optimizer/field_meta.py`
+- Remaining metadata/ledger hunks from `django_strawberry_framework/optimizer/walker.py`
+- `tests/optimizer/test_field_meta.py`
+- `tests/optimizer/test_walker.py`
+- `docs/dry/dry-file-optimizer__field_meta.md`
+- `docs/dry/dry-file-optimizer__walker.md`
+
+**Why these belong together:** `FieldMeta` becomes authoritative for FK-elision and target-PK
+values, including stamped `None`, while select/prefetch resolver-key ledgers share append-unique
+semantics.
+
+**Review before commit:** Confirm a stamped `None` never falls through to raw Django metadata;
+verify MTI parent links, custom primary keys, fabricated metadata, resolver-key deduplication, and
+strictness attribution. A wrong ledger can mark an unplanned relation as planned and hide an N+1.
+
+**Probable checks:** Authorize field-meta/walker tests and live custom-PK/FK-id-elision query-count
+tests.
+
+### 12. Share optimizer hint and windowability invariants
+
+**Commit title:** `refactor(optimizer): share hint and windowability invariants`
+
+**Files and hunks:**
+
+- `django_strawberry_framework/optimizer/hints.py`
+- `django_strawberry_framework/optimizer/join_taxonomy.py`
+- `django_strawberry_framework/optimizer/plans.py`
+- `tests/optimizer/test_join_taxonomy.py`
+- `docs/dry/dry-file-optimizer__hints.md`
+- `docs/dry/dry-file-optimizer__join_taxonomy.md`
+- `docs/dry/dry-file-optimizer__plans.md`
+
+**Why these belong together:** Prefetch validation and the set of windowable relation kinds are
+shared planning invariants, not caller-owned vocabularies.
+
+**Review before commit:** Verify custom `Prefetch` lookup/`to_attr`, conflicting hint flags, every
+relation taxonomy member, window partition ownership, and unchanged behavior in the clean
+hint/plan test modules.
+
+**Probable checks:** Authorize optimizer hint, join-taxonomy, plans, and nested-window tests.
+
+### 13. Unify DRF writable-source ownership
+
+**Commit title:** `refactor(drf): unify writable-source ownership and write-surface verification`
+
+**Files and hunks:**
+
+- `django_strawberry_framework/rest_framework/inputs.py`
+- `django_strawberry_framework/rest_framework/resolvers.py`
+- `django_strawberry_framework/rest_framework/serializer_converter.py`
+- `django_strawberry_framework/rest_framework/sets.py`
+- `tests/rest_framework/test_converter.py`
+- `tests/rest_framework/test_inputs.py`
+- `tests/rest_framework/test_resolvers.py`
+- `docs/dry/dry-file-rest_framework____init__.md`
+- `docs/dry/dry-file-rest_framework__inputs.md`
+- `docs/dry/dry-file-rest_framework__resolvers.md`
+- `docs/dry/dry-file-rest_framework__serializer_converter.md`
+- `docs/dry/dry-file-rest_framework__sets.md`
+- `docs/dry/dry-folder-rest_framework.md`
+
+**Why these belong together:** Root/nested source ownership, `source="*"` rejection, collision
+diagnostics, injected fields, runtime agreement, intent instrumentation, serializer construction,
+and write-surface attestation form one security boundary.
+
+**Review before commit:** Confirm `_write_surface_specs()` cannot turn a private pre-bind caller
+into a raw `AttributeError`; if the lifecycle precondition is real, fail with a package
+`ConfigurationError`. Grep exact diagnostic pins. Verify injected fields participate in
+schema/runtime agreement and relation attestation without broadening writable input. Review
+relation scoping for bounded queries and N+1 behavior.
+
+**Probable checks:** Authorize all three dirty DRF test modules plus serializer mutation live
+GraphQL tests, nested serializer tests, relation visibility, source collision, write witness, and
+attestation suites.
+
+### 14. Align inspect_django_type with canonical Relay metadata
+
+**Commit title:** `fix(command): align inspect_django_type with canonical Relay metadata`
+
+**Files and hunks:**
+
+- `django_strawberry_framework/management/commands/inspect_django_type.py`
+- `tests/management/test_inspect_django_type.py`
+- `docs/dry/dry-file-management____init__.md`
+- `docs/dry/dry-file-management__commands____init__.md`
+- `docs/dry/dry-file-management__commands___imports.md`
+- `docs/dry/dry-file-management__commands__export_schema.md`
+- `docs/dry/dry-file-management__commands__inspect_django_type.md`
+- `docs/dry/dry-folder-management.md`
+- `docs/dry/dry-folder-management__commands.md`
+
+**Why these belong together:** The command must use the same Relay-shape predicate that suppressed
+the model primary key during type synthesis; the management audit reports document the
+consolidation and rejected alternatives.
+
+**Review before commit:** Remove the stray `)` from the command-package report. Verify direct
+`DjangoType, relay.Node` inheritance, `Meta.interfaces`, custom Node subclasses, registry fixture
+isolation, and the private-helper rename boundary.
+
+**Probable checks:** Authorize package and fakeshop inspect-command tests, including cold
+`--schema` imports and connection-only relation shapes.
+
+### 15. Reconcile glossary source and rendered output
+
+**Commit title:** `docs(glossary): reconcile command and cascade permission entries`
+
+**Files and hunks:**
+
+- `examples/fakeshop/db.sqlite3`
+- `docs/GLOSSARY.md`
+
+**Why these belong together:** The SQLite source and rendered glossary are currently split in
+opposite directions: the database's sole changed row is the `apply_cascade_permissions` body from
+the recent cascade hardening, while the rendered Markdown adds the current `inspect_django_type`
+SDL-name contract. They must land atomically so source and render return to parity.
+
+**Review before commit:** Confirm the database diff remains exactly one existing row
+(`glossary_glossaryterm` rowid 440) with only `body` and `updated_date` changed; no users, sessions,
+products, kanban rows, schema, migrations, or row counts may change. Confirm the glossary command
+entry matches active `NameConverter`, `Meta.name`, Python-name fallback, and ambiguity behavior.
+
+**Probable checks:** Run the glossary renderer/checker in check mode, `PRAGMA integrity_check`,
+`PRAGMA foreign_key_check`, row-count and row-level diff scripts, and the Markdown link/spec
+checker. Authorize inspect-command tests if not already run for Commit 14.
+
+### 16. Align the DRY workflow with test authorization
+
+**Commit title:** `docs(dry): align review workflow with test authorization`
+
+**Files and hunks:**
+
+- `docs/dry/DRY.md`
+
+**Why these belong together:** This is a process-policy correction independent of runtime changes:
+workers may suggest or defer pytest, but may run it only with explicit maintainer authorization.
+
+**Review before commit:** Ensure formatting and Ruff remain mandatory after edits, final coverage
+remains 100% once pytest is authorized, and the wording does not imply that artifact authors ran
+checks they only recorded.
+
+**Probable checks:** Run Markdown/source-layout and link-definition checks; no pytest is relevant.
+
+### 17. Record verified DRY audit progress
+
+**Commit title:** `docs(dry): record verified audit progress`
+
+**Files and hunks:**
+
+- `docs/dry/dry-0_0_13.md`
+- `docs/dry/dry-file-exceptions.md`
+- `docs/dry/dry-file-extensions____init__.md`
+- `docs/dry/dry-file-extensions__debug.md`
+- `docs/dry/dry-folder-extensions.md`
+- `docs/dry/dry-file-middleware____init__.md`
+- `docs/dry/dry-file-middleware__debug_toolbar.md`
+- `docs/dry/dry-folder-middleware.md`
+- `docs/dry/dry-file-testing____init__.md`
+- `docs/dry/dry-file-testing___wrap.md`
+
+**Why these belong together:** These are cycle-level progress or zero-edit audit artifacts with no
+dirty production source to accompany. They should land only after source commits and after every
+status reflects final source.
+
+**Review before commit:** Do not present the cycle as complete: schema, nested planner, hook
+context, write transaction, and later project passes remain open. Close `testing/_wrap.py`
+independently before checking it. Verify every `[x]` points to a `Status: verified` artifact whose
+recorded source hash matches final source; every pending or `fix-implemented` item remains
+unchecked. Confirm the exception report's recompute-from-current-`.args` narrative matches
+production and tests.
+
+**Probable checks:** Run the DRY exporter's check mode, Markdown/source-layout/link checks, and
+source-hash validation. Authorize focused exception and testing-wrap tests only if needed to close
+their reports.
+
+### 18. Record the dirty-tree commit plan
+
+**Commit title:** `docs(review): record the dirty-tree commit plan`
+
+**Files and hunks:**
+
+- `docs/feedback.md`
+
+**Why these belong together:** The file is intentionally repurposed from the truncated Spec-044
+review into this maintainer-requested commit decomposition. Keeping it isolated makes the planning
+record easy to retain, revise, or remove without coupling it to runtime behavior.
+
+**Review before commit:** Confirm the old Spec-044 P0 CI finding and unrun-check record were
+resolved or preserved elsewhere. Update this plan if corrective edits change any path ownership or
+commit boundary. Ensure every one of the other 128 dirty paths is named exactly once, except
+explicitly hunk-split files named in multiple commits.
+
+**Probable checks:** Run Markdown/source-layout/link checks and a script comparing
+`git status --porcelain` paths against paths listed in this document; no pytest is relevant.
+
+## Final integration gate
+
+After Commit 17 is ready and only with explicit pytest authorization, run the repository's
+documented complete test/coverage pipeline and require 100% package coverage. Then run all
+pre-commit hooks, the trailing-comma checker, generated glossary/tree/kanban checks that apply, and
+`git status --short`. Review the complete commit range to confirm dependency order, no accidental
+binary churn, no orphaned imports, no stale DRY status claims, and no N+1 regression in
+filter/order permissions, serializer relation scoping, optimizer selection prefixes, or keyset
+pagination.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

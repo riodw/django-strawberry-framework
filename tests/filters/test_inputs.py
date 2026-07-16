@@ -34,6 +34,7 @@ from django_strawberry_framework.filters import (
     filter_input_type,
 )
 from django_strawberry_framework.filters.inputs import (
+    _LOGIC_KEYS,
     INPUTS_MODULE_PATH,
     LOOKUP_NAME_MAP,
     _build_input_fields,
@@ -155,6 +156,19 @@ def test_build_logic_fields_emits_strawberry_field_name_for_python_keywords():
     assert by_attr["and_"] == {"name": "and", "default": None}
     assert by_attr["or_"] == {"name": "or", "default": None}
     assert by_attr["not_"] == {"name": "not", "default": None}
+
+
+def test_build_logic_fields_tracks_logic_keys():
+    """Emission order and ``(python_attr, wire_name)`` pairs must match ``_LOGIC_KEYS``.
+
+    ``FilterSet._normalize_input`` maps the same constant onto django-filter
+    wire keys; re-spelling the pairs in ``_build_logic_fields`` would let the
+    input surface and the runtime normalizer diverge.
+    """
+    triples = _build_logic_fields("X")
+    assert [(python_attr, kwargs["name"]) for python_attr, _, kwargs in triples] == list(
+        _LOGIC_KEYS,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -998,15 +1012,24 @@ def test_model_field_for_filter_returns_none_without_field_name():
 def test_model_field_for_filter_returns_none_for_unknown_field_name():
     """A typo in ``Filter(field_name=...)`` surfaces as ``None``, not a crash.
 
-    The narrowed ``except FieldDoesNotExist`` catches Django's documented
-    "unknown name" signal at ``_meta.get_field`` so any other failure
-    surfaces loudly. Previously the broad ``except Exception`` (with a
-    ``# pragma: no cover``) masked the same reachable path.
+    Path resolution is ``django_filters.utils.get_model_field`` (shared with
+    ``filters/base.py`` / ``filters/sets.py``); an unknown hop returns ``None``.
     """
     from tests.filters.fixtures.filtersets import ShelfFilter
 
     f = GlobalIDFilter(field_name="nonexistent_field")
     assert _model_field_for_filter(ShelfFilter, f) is None
+
+
+def test_model_field_for_filter_walks_related_path():
+    """A ``__``-separated ``field_name`` resolves to the terminal model field."""
+    from apps.library import models as library_models
+
+    from tests.filters.fixtures.filtersets import ShelfFilter
+
+    f = GlobalIDFilter(field_name="branch__name")
+    field = _model_field_for_filter(ShelfFilter, f)
+    assert field is library_models.Branch._meta.get_field("name")
 
 
 # ---------------------------------------------------------------------------

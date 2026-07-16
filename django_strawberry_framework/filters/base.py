@@ -85,6 +85,37 @@ class _EmptyListAwareFilterMethod(FilterMethod):
         return self.method(qs, self.f.field_name, value)
 
 
+def _install_empty_list_aware_method(
+    filter_instance: TypedFilter,
+    value: Any,
+    method_cls: type[FilterMethod],
+) -> None:
+    """Install ``method_cls`` when a consumer ``method=`` is set.
+
+    Single owner of the ArrayFilter / ListFilter ``method`` setter body: both
+    ports must swap django-filter's default ``FilterMethod`` (which treats ``[]``
+    as EMPTY) for an empty-list-aware wrapper. The named ``*FilterMethod``
+    subclass remains a per-filter type identity (graphene-parity public names);
+    only the install sequence is shared.
+    """
+    TypedFilter.method.fset(filter_instance, value)
+    if value is not None:
+        filter_instance.filter = method_cls(filter_instance)
+
+
+def _apply_lookups(filter_instance: Any, qs: Any, lookups: dict[str, Any]) -> Any:
+    """Apply ``distinct`` (when flagged) then ``get_method(qs)(**lookups)``.
+
+    Owns the "honor ``distinct`` then bind the lookup kwargs in ONE
+    ``filter``/``exclude`` call" seam used by whole-value list predicates and
+    the integer ``__range`` decomposition. Callers choose the lookup dict;
+    this helper never splits a list-shaped value into per-element OR clauses.
+    """
+    if filter_instance.distinct:
+        qs = qs.distinct()
+    return filter_instance.get_method(qs)(**lookups)
+
+
 def _apply_lookup_predicate(filter_instance: Any, qs: Any, value: Any) -> Any:
     """Apply ``distinct`` + ONE ``<field>__<lookup>`` predicate carrying ``value``.
 
@@ -95,10 +126,19 @@ def _apply_lookup_predicate(filter_instance: Any, qs: Any, value: Any) -> Any:
     (``pk__in="26"`` -> ``IN ('2','6')``). Shared so the two call sites - and
     any future list-lookup filter - cannot drift back to per-element form.
     """
-    if filter_instance.distinct:
-        qs = qs.distinct()
     lookup = f"{filter_instance.field_name}__{filter_instance.lookup_expr}"
-    return filter_instance.get_method(qs)(**{lookup: value})
+    return _apply_lookups(filter_instance, qs, {lookup: value})
+
+
+def _match_none_queryset(filter_instance: Any, qs: Any) -> Any:
+    """Match nothing, or every row when ``exclude=True``.
+
+    The restrictive-empty membership result shared by ``ListFilter``,
+    ``GlobalIDMultipleChoiceFilter``, and ``IntegerInFilter``'s fully-dropped
+    coerce path. Must never degrade to django-filter's empty-value skip (which
+    would silently widen a restrictive predicate to no constraint).
+    """
+    return qs if filter_instance.exclude else qs.none()
 
 
 class ArrayFilterMethod(_EmptyListAwareFilterMethod):
@@ -136,9 +176,7 @@ class ArrayFilter(TypedFilter):
     @TypedFilter.method.setter
     def method(self, value: Any) -> None:
         """Swap in `ArrayFilterMethod` when a consumer `method=` is set."""
-        TypedFilter.method.fset(self, value)
-        if value is not None:
-            self.filter = ArrayFilterMethod(self)
+        _install_empty_list_aware_method(self, value, ArrayFilterMethod)
 
     def filter(self, qs: Any, value: Any) -> Any:
         """Apply the lookup; `[]` is a real value (not `EMPTY_VALUES`-ish)."""
@@ -190,14 +228,12 @@ class ListFilter(TypedFilter):
     @TypedFilter.method.setter
     def method(self, value: Any) -> None:
         """Swap in `ListFilterMethod` when a consumer `method=` is set."""
-        TypedFilter.method.fset(self, value)
-        if value is not None:
-            self.filter = ListFilterMethod(self)
+        _install_empty_list_aware_method(self, value, ListFilterMethod)
 
     def filter(self, qs: Any, value: Any) -> Any:
         """Short-circuit empty-list inputs to `qs.none()` (or `qs` when excluding)."""
         if value is not None and len(value) == 0:
-            return qs if self.exclude else qs.none()
+            return _match_none_queryset(self, qs)
         return super().filter(qs, value)
 
 
@@ -256,7 +292,7 @@ class IntegerInFilter(BaseInFilter, NumberFilter):
         if not kept:
             # A non-empty membership list whose every value is out of range matches
             # no row; never the empty-value skip that would return all rows.
-            return qs if self.exclude else qs.none()
+            return _match_none_queryset(self, qs)
         return super().filter(qs, kept)
 
 
@@ -291,10 +327,8 @@ class IntegerRangeFilter(BaseRangeFilter, NumberFilter):
         # ``BaseRangeField`` validates length == 2 before we run, and the generated
         # ``list[BigInt!]`` input carries non-null elements, so both bounds are present.
         start, end = value
-        if self.distinct:
-            qs = qs.distinct()
         lookups = {f"{self.field_name}__gte": start, f"{self.field_name}__lte": end}
-        return self.get_method(qs)(**lookups)
+        return _apply_lookups(self, qs, lookups)
 
 
 def _target_definition_for(filter_instance: Filter) -> DjangoTypeDefinition | None:
@@ -569,7 +603,7 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         if value is None:
             return super().filter(qs, None)
         if len(value) == 0:
-            return qs if self.exclude else qs.none()
+            return _match_none_queryset(self, qs)
         node_ids = [
             _decode_and_validate_global_id(item, self, index=idx) for idx, item in enumerate(value)
         ]

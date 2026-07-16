@@ -29,6 +29,7 @@ import strawberry
 from django_filters import ChoiceFilter, Filter, TypedChoiceFilter
 from django_filters import RangeFilter as _DjangoRangeFilter
 from django_filters.filters import BaseCSVFilter
+from django_filters.utils import get_model_field
 from strawberry import UNSET, relay
 
 from ..conf import hide_flat_filters_setting
@@ -126,10 +127,9 @@ LOOKUP_NAME_MAP: dict[str, tuple[str, str]] = {
 # source of truth for the ``and_`` / ``or_`` / ``not_`` Python-attr <->
 # ``and`` / ``or`` / ``not`` GraphQL-name pairing. ``sets.py`` imports
 # this tuple for ``FilterSet._normalize_input`` (mapping the Python attrs
-# onto the form-data keys ``django-filter`` recognizes); ``inputs.py``
-# consumes it locally via ``_build_logic_fields`` to emit the
-# self-referential ``and_`` / ``or_`` / ``not_`` fields whose GraphQL
-# surface names land through ``strawberry.field(name=...)`` because
+# onto the form-data keys ``django-filter`` recognizes); ``_build_logic_fields``
+# iterates the same pairs to emit the self-referential input fields whose
+# GraphQL surface names land through ``optional_field_kwargs`` because
 # ``and`` / ``or`` / ``not`` cannot be dataclass field names.
 _LOGIC_KEYS: tuple[tuple[str, str], ...] = (("and_", "and"), ("or_", "or"), ("not_", "not"))
 
@@ -147,11 +147,12 @@ _field_specs: dict[tuple[type[FilterSet], str], FieldSpec] = {}
 
 # Ledger of materialized input class names per spec-027 Decision 9.
 # ``materialize_input_class`` writes a ``name -> input_class`` entry;
-# ``clear_filter_input_namespace`` walks the snapshot keys to ``delattr``
-# the matching module global and reset the ledger. The stored value is
-# the materialized input class (NOT the FilterSet) so the clear path can
-# call ``delattr`` against the module's global by the same name without
-# an extra lookup.
+# ``clear_filter_input_namespace`` clears this ledger (forcing re-emit on
+# the next finalize) but intentionally leaves the class objects parked in
+# ``filters.inputs.__dict__`` -- ``setattr`` on the next materialize
+# replaces them in place. Stripping via ``delattr`` would break
+# ``strawberry.lazy(...)`` holders whose autouse reload did not also
+# reload the consumer module (see ``clear_filter_input_namespace``).
 _materialized_names: dict[str, type] = {}
 
 
@@ -635,23 +636,28 @@ def _owner_type_name(owner_definition: DjangoTypeDefinition | None) -> str | Non
 def _build_logic_fields(type_name: str) -> list[tuple[str, Any, dict[str, Any]]]:
     """Return ``(python_attr, annotation, field_kwargs)`` triples for ``and_`` / ``or_`` / ``not_``.
 
-    The annotations follow the H2-of-rev4 INSIDE-list shape: the
-    ``Annotated[...]`` wraps the forward-reference string directly, and
-    the ``list[...]`` (for ``and_`` / ``or_``) wraps the
-    ``Annotated[...]`` -- NOT the other way around. The GraphQL surface
-    names (``and`` / ``or`` / ``not``) come through
-    ``strawberry.field(name=...)`` because the underlying tokens are
-    Python keywords and cannot be dataclass field names.
+    Names come from ``_LOGIC_KEYS`` (the same pairing ``FilterSet._normalize_input``
+    consumes) so a new logical operator cannot land in the runtime map without
+    also being emitted on the generated input. The annotations follow the
+    H2-of-rev4 INSIDE-list shape: the ``Annotated[...]`` wraps the
+    forward-reference string directly, and the ``list[...]`` (for ``and_`` /
+    ``or_``) wraps the ``Annotated[...]`` -- NOT the other way around.
+    ``not_`` is a single self-ref. GraphQL surface names ride through
+    ``optional_field_kwargs`` -> ``strawberry.field(name=...)`` because the
+    wire tokens are Python keywords and cannot be dataclass field names.
     """
     self_ref = Annotated[type_name, strawberry.lazy(INPUTS_MODULE_PATH)]
     list_ref = list[self_ref]
-    # The logic operators are optional; pass ``default=None`` explicitly so
-    # ``build_input_class`` keeps them omittable (omitting ``default`` now means
-    # required -- ``utils/inputs.py`` / ``docs/feedback.md`` Finding 2).
+    # ``and_`` / ``or_`` take a list of filter inputs; ``not_`` takes one. Arity
+    # is the only per-key divergence from ``_LOGIC_KEYS``'s name pairing.
+    list_attrs = frozenset({"and_", "or_"})
     return [
-        ("and_", list_ref | None, {"name": "and", "default": None}),
-        ("or_", list_ref | None, {"name": "or", "default": None}),
-        ("not_", self_ref | None, {"name": "not", "default": None}),
+        (
+            python_attr,
+            (list_ref if python_attr in list_attrs else self_ref) | None,
+            optional_field_kwargs(python_attr, wire_name),
+        )
+        for python_attr, wire_name in _LOGIC_KEYS
     ]
 
 
@@ -795,38 +801,34 @@ def _build_input_fields(
 
 
 def _model_field_for_filter(filterset_cls: type[FilterSet], filter_instance: Filter) -> Any:
-    """Resolve the Django model field a filter targets (or ``None``)."""
-    from django.core.exceptions import FieldDoesNotExist
+    """Resolve the Django model field a filter targets (or ``None``).
 
+    Folder-owned path walk: delegates to ``django_filters.utils.get_model_field``
+    -- the same ``__``-separated relation traversal ``filters/base.py``
+    (``IntegerInFilter``) and ``filters/sets.py`` (``get_fields`` ``"__all__"``
+    expansion) already use -- so a typo / missing hop returns ``None`` and a
+    nested path (e.g. ``galaxy__name``) yields the terminal field under one
+    rule. The filterset / ``field_name`` guards stay here because the converter
+    receives a filter instance, not a bare ``(model, path)`` pair.
+
+    Contract note (``docs/feedback.md`` Finding 2): ``get_model_field`` raises
+    ``RuntimeError`` when a relation hop is still an *unresolved* lazy string
+    (``field.remote_field.model`` has no ``_meta``) -- i.e. Django's app
+    registry is not populated. That state is unreachable here: this helper runs
+    only under ``_build_input_fields`` during ``finalize_django_types()``, which
+    Django guarantees runs after ``apps.populate()`` has resolved every FK. A
+    raise therefore signals a genuine "``FilterSet`` loaded before Django setup"
+    misconfiguration and MUST surface loudly rather than degrade to ``None``
+    (which would silently treat a real relation as an unknown field). The
+    reachable ``None`` path -- typo / missing hop -- is preserved unchanged.
+    """
     model = getattr(getattr(filterset_cls, "_meta", None), "model", None)
     if model is None:
         return None
     field_name = getattr(filter_instance, "field_name", None)
     if not field_name:
         return None
-    # ``field_name`` may carry ``__``-separated relation traversals; walk
-    # one ``_meta.get_field`` at a time so the final hop's model field is
-    # returned (e.g. ``galaxy__name`` resolves through ``galaxy`` to
-    # ``Galaxy.name``).
-    parts = field_name.split("__")
-    cursor_model = model
-    field = None
-    for part in parts:
-        try:
-            field = cursor_model._meta.get_field(part)
-        except FieldDoesNotExist:
-            # A typo in a declared ``Filter(field_name=...)`` reaches here;
-            # the broader ``except Exception`` previously masked unrelated
-            # ``_meta.get_field`` failures. ``FieldDoesNotExist`` matches
-            # Django's documented contract for unknown names; any other
-            # failure now surfaces loudly instead of degrading to ``None``.
-            return None
-        if (
-            getattr(field, "is_relation", False)
-            and getattr(field, "related_model", None) is not None
-        ):
-            cursor_model = field.related_model
-    return field
+    return get_model_field(model, field_name)
 
 
 def construct_search(all_filters: dict[str, Any]) -> dict[str, str]:

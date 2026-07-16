@@ -37,11 +37,14 @@ from .inputs import INPUTS_MODULE_PATH, _input_type_name_for
 from .sets import FilterSet, FilterSetMetaclass
 
 # Ledger of `FilterSet`s referenced through the Decision-11
-# `filter_input_type(...)` consumer helper. `registry.clear()` clears
-# this set via a cycle-safe local import per spec-027 Decision 9.
-# The finalizer's phase 2.5 subpass 4 compares this set against the
-# set of `Meta.filterset_class`-wired filtersets and raises
-# `ConfigurationError` for orphans.
+# `filter_input_type(...)` consumer helper. Cleared via the
+# `register_subsystem_clear` row below (owner
+# ``filters.helper_references``) so ``registry.clear()`` replays
+# the callback -- not via a cycle-safe local import inside
+# ``TypeRegistry.clear`` (that shape predates the registration
+# seam). The finalizer's phase 2.5 subpass 4 compares this set
+# against the set of `Meta.filterset_class`-wired filtersets and
+# raises `ConfigurationError` for orphans.
 _helper_referenced_filtersets: set[type[FilterSet]] = set()
 
 

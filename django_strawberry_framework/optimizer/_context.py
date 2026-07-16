@@ -37,6 +37,18 @@ DST_OPTIMIZER_PLANNED = "dst_optimizer_planned"
 DST_OPTIMIZER_LOOKUP_PATHS = "dst_optimizer_lookup_paths"
 DST_OPTIMIZER_STRICTNESS = "dst_optimizer_strictness"
 
+# Every key ``stash_on_context`` / ``_publish_plan_to_context`` may leave on a
+# request context. ``clear_optimizer_context`` removes exactly this set at the
+# start of each ``on_execute`` so a reused ``context_value`` cannot carry
+# FK-id elisions or planned-resolver sentinels into a later operation.
+DST_OPTIMIZER_KEYS: tuple[str, ...] = (
+    DST_OPTIMIZER_PLAN,
+    DST_OPTIMIZER_FK_ID_ELISIONS,
+    DST_OPTIMIZER_PLANNED,
+    DST_OPTIMIZER_LOOKUP_PATHS,
+    DST_OPTIMIZER_STRICTNESS,
+)
+
 _MISSING: Any = object()
 """Sentinel for ``get_context_value`` to distinguish a missing attribute
 from an attribute that was explicitly stashed as ``None``."""
@@ -157,4 +169,58 @@ def stash_on_context(context: Any, key: str, value: Any) -> None:
         # are NOT swallowed - a real ``dict`` never raises ``KeyError``
         # on assignment, and a custom mapping signalling a guarded write
         # should surface rather than silently lose the stash.
+        return
+
+
+def clear_optimizer_context(context: Any) -> None:
+    """Remove every optimizer stash key from ``context`` (start-of-execution reset).
+
+    ``DjangoOptimizerExtension.on_execute`` calls this before the operation
+    runs so sequential ``execute`` / ``execute_sync`` calls that reuse the
+    same ``context_value`` object cannot leak correctness sentinels:
+
+    - ``DST_OPTIMIZER_FK_ID_ELISIONS`` retained across executions makes a later
+      full-object selection (``category { id name }``) hit the FK-id stub path
+      and return empty scalars for fields the stub never loaded.
+    - ``DST_OPTIMIZER_PLANNED`` retained across executions masks real N+1s under
+      ``strictness="warn"|"raise"`` (keys planned for a prior operation still
+      short-circuit ``_check_n1``).
+
+    Intra-execution ``_stash_union`` (parent + nested connection publishes)
+    stays correct: the clear runs once at ``on_execute`` entry, then unions
+    accumulate only within that operation.
+
+    Dispatch mirrors ``stash_on_context`` exactly: the ``dict``-vs-object
+    decision is a guard *around* the ``delattr`` block (skipped for ``dict``
+    instances) that falls through to one shared mapping-delete tail, rather
+    than a separate unguarded ``dict`` fast-path. A locked ``QueryDict`` is a
+    ``dict`` subclass whose mutation raises ``AttributeError``, so a
+    ``.pop()``-based fast-path would raise uncaught; routing every mapping
+    through the guarded ``del context[key]`` tail keeps the same
+    defensive-coerce posture as the write helper. Missing keys and read-only
+    contexts are silently skipped.
+    """
+    if context is None:
+        return
+    for key in DST_OPTIMIZER_KEYS:
+        _clear_context_key(context, key)
+
+
+def _clear_context_key(context: Any, key: str) -> None:
+    """Delete ``key`` from ``context`` via the same access mode ``stash_on_context`` uses."""
+    if not isinstance(context, dict):
+        try:
+            delattr(context, key)
+            return
+        except (AttributeError, TypeError):
+            # Chain into the mapping-delete path for ``__slots__`` / bridged
+            # contexts where the stash landed via ``__setitem__`` (counterpart
+            # to ``stash_on_context``'s setattr-fail -> dict-write chain).
+            pass
+    try:
+        del context[key]
+    except (TypeError, AttributeError, KeyError):
+        # Absent key, frozen mapping, or locked QueryDict (a ``dict`` subclass
+        # whose ``__delitem__`` raises ``AttributeError`` when immutable) -
+        # nothing to clear. Unexpected exceptions still surface.
         return

@@ -3543,6 +3543,183 @@ def test_stash_does_not_swallow_unexpected_exceptions_from_setitem():
         stash_on_context(ctx, "dst_optimizer_plan", object())
 
 
+def test_clear_optimizer_context_removes_all_keys_from_object_and_dict():
+    """Start-of-execution clear drops every DST_OPTIMIZER_* key on object and dict contexts."""
+    from django_strawberry_framework.optimizer._context import (
+        DST_OPTIMIZER_FK_ID_ELISIONS,
+        DST_OPTIMIZER_LOOKUP_PATHS,
+        DST_OPTIMIZER_PLAN,
+        DST_OPTIMIZER_PLANNED,
+        DST_OPTIMIZER_STRICTNESS,
+        clear_optimizer_context,
+        get_context_value,
+        stash_on_context,
+    )
+
+    for ctx in (SimpleNamespace(), {}):
+        stash_on_context(ctx, DST_OPTIMIZER_PLAN, object())
+        stash_on_context(ctx, DST_OPTIMIZER_FK_ID_ELISIONS, frozenset({"k"}))
+        stash_on_context(ctx, DST_OPTIMIZER_PLANNED, frozenset({"k"}))
+        stash_on_context(ctx, DST_OPTIMIZER_LOOKUP_PATHS, frozenset({"p"}))
+        stash_on_context(ctx, DST_OPTIMIZER_STRICTNESS, "warn")
+        clear_optimizer_context(ctx)
+        assert get_context_value(ctx, DST_OPTIMIZER_PLAN) is None
+        assert get_context_value(ctx, DST_OPTIMIZER_FK_ID_ELISIONS) is None
+        assert get_context_value(ctx, DST_OPTIMIZER_PLANNED) is None
+        assert get_context_value(ctx, DST_OPTIMIZER_LOOKUP_PATHS) is None
+        assert get_context_value(ctx, DST_OPTIMIZER_STRICTNESS) is None
+
+
+def test_clear_optimizer_context_clears_slots_mapping_via_item_delete():
+    """``__slots__`` mapping stash (setattr fails -> ``__setitem__``) clears via ``del``."""
+    from django_strawberry_framework.optimizer._context import (
+        DST_OPTIMIZER_PLAN,
+        clear_optimizer_context,
+        get_context_value,
+        stash_on_context,
+    )
+
+    class SlotsMapping:
+        __slots__ = ("_data",)
+
+        def __init__(self) -> None:
+            object.__setattr__(self, "_data", {})
+
+        def __getitem__(self, key: str) -> object:
+            return self._data[key]
+
+        def __setitem__(self, key: str, value: object) -> None:
+            self._data[key] = value
+
+        def __delitem__(self, key: str) -> None:
+            del self._data[key]
+
+    ctx = SlotsMapping()
+    plan = object()
+    stash_on_context(ctx, DST_OPTIMIZER_PLAN, plan)
+    assert get_context_value(ctx, DST_OPTIMIZER_PLAN) is plan
+    clear_optimizer_context(ctx)
+    assert get_context_value(ctx, DST_OPTIMIZER_PLAN) is None
+
+
+def test_clear_optimizer_context_none_and_frozen_are_noops():
+    """``None`` and frozen mappings skip clear without raising."""
+    from types import MappingProxyType
+
+    from django_strawberry_framework.optimizer._context import clear_optimizer_context
+
+    clear_optimizer_context(None)
+    clear_optimizer_context(MappingProxyType({"dst_optimizer_plan": object()}))
+
+
+def test_clear_optimizer_context_locked_querydict_is_noop():
+    """A locked ``QueryDict`` (immutable ``dict`` subclass) clears without raising.
+
+    ``QueryDict`` subclasses ``dict``, so a ``.pop()``-based dict fast-path
+    would satisfy ``isinstance(ctx, dict)`` and raise the immutable
+    ``AttributeError`` uncaught. The guarded mapping-delete tail must swallow
+    it - matching how ``stash_on_context`` tolerates the same object on write.
+    """
+    from django.http import QueryDict
+
+    from django_strawberry_framework.optimizer._context import clear_optimizer_context
+
+    locked = QueryDict("dst_optimizer_plan=x")  # immutable by default
+    assert not locked._mutable
+    clear_optimizer_context(locked)  # must not raise
+    assert "dst_optimizer_plan" in locked  # untouched (read-only)
+
+
+@pytest.mark.django_db
+def test_on_execute_clears_reused_context_fk_elisions_before_full_selection():
+    """Reused ``context_value``: id-only elisions must not survive into a full selection.
+
+    Without the ``on_execute`` clear, ``_stash_union`` retains the prior
+    execution's FK-id elision key; the forward resolver then returns id-stubs
+    and ``category.name`` resolves empty. Pinned end-to-end via real execute.
+    """
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    finalize_django_types()
+    ext = DjangoOptimizerExtension()
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
+    shared = SimpleNamespace()
+
+    r1 = schema.execute_sync(
+        "{ allItems { name category { id } } }",
+        context_value=shared,
+    )
+    assert r1.errors is None
+    assert "ItemType.category@allItems.category" in shared.dst_optimizer_fk_id_elisions
+
+    r2 = schema.execute_sync(
+        "{ allItems { name category { id name } } }",
+        context_value=shared,
+    )
+    assert r2.errors is None
+    assert "ItemType.category@allItems.category" not in shared.dst_optimizer_fk_id_elisions
+    names = [it["category"]["name"] for it in r2.data["allItems"]]
+    assert all(n for n in names)
+
+
+@pytest.mark.django_db
+def test_on_execute_clears_reused_context_planned_keys_across_executions():
+    """Reused ``context_value``: planned-resolver keys must not leak into a later op."""
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def all_items(self) -> list[ItemType]:
+            return Item.objects.all()
+
+    finalize_django_types()
+    ext = DjangoOptimizerExtension(strictness="raise")
+    schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
+    shared = SimpleNamespace()
+
+    r1 = schema.execute_sync(
+        "{ allItems { name category { name } } }",
+        context_value=shared,
+    )
+    assert r1.errors is None
+    assert "ItemType.category@allItems.category" in shared.dst_optimizer_planned
+
+    r2 = schema.execute_sync(
+        "{ allItems { name } }",
+        context_value=shared,
+    )
+    assert r2.errors is None
+    planned = getattr(shared, "dst_optimizer_planned", frozenset())
+    assert "ItemType.category@allItems.category" not in planned
+
+
 @pytest.mark.django_db
 def test_empty_plan_still_stashed():
     """B5/O5: even when no relations are selected, the scalar-only plan is stashed."""

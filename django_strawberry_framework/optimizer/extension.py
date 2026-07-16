@@ -57,6 +57,9 @@ from ._context import (
     DST_OPTIMIZER_STRICTNESS,
 )
 from ._context import (
+    clear_optimizer_context as _clear_optimizer_context,
+)
+from ._context import (
     get_context_value as _get_context_value,
 )
 from ._context import (
@@ -916,6 +919,20 @@ class DjangoOptimizerExtension(SchemaExtension):
 
     def on_execute(self) -> Any:  # type: ignore[override]
         """Mark the optimizer as active and seed the per-execution AST memo."""
+        # Drop any optimizer stashes left on a reused ``context_value`` before
+        # this operation publishes. ``_stash_union`` is intentionally
+        # accumulative *within* one execution (parent + nested connection);
+        # without a start-of-execution clear, sequential ``execute_sync``
+        # calls sharing one context object leak FK-id elisions (wrong stub
+        # data) and planned-resolver keys (masked N+1 under strictness).
+        # ``execution_context.context`` is the same object resolvers see as
+        # ``info.context`` (Strawberry wires both to ``context_value``).
+        # ``getattr(self, "execution_context", None)`` covers direct/test
+        # callers that invoke ``on_execute`` before Strawberry assigns the
+        # execution context (the engine sets it after constructing the
+        # extension entry).
+        execution_context = getattr(self, "execution_context", None)
+        _clear_optimizer_context(getattr(execution_context, "context", None))
         active_token = _optimizer_active.set(True)
         # Publish this instance so ``apply_connection_optimization`` can
         # discover it and share the instance-bound plan cache (Decision 11).

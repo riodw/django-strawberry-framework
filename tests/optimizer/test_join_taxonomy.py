@@ -16,10 +16,25 @@ from apps.library.models import Book, Genre
 from apps.products.models import Category, Item
 
 from django_strawberry_framework.optimizer.join_taxonomy import (
+    WINDOWABLE_RELATION_KINDS,
     LateralJoinShape,
     RelationJoinDescriptor,
     classify_relation_join,
 )
+
+
+def test_windowable_relation_kinds_is_classifier_membership_set():
+    """The exported kind set is the classifier's sole windowable-kind vocabulary.
+
+    ``plans.py::window_partition_for_prefetch`` imports this same frozenset so
+    its dual raise messages (wrong kind vs unresolved partition) cannot drift
+    from ``classify_relation_join``'s membership test.
+    """
+    assert (
+        frozenset({"many", "reverse_many_to_one", "reverse_one_to_one"})
+        == WINDOWABLE_RELATION_KINDS
+    )
+    assert "forward_single" not in WINDOWABLE_RELATION_KINDS
 
 
 def test_reverse_fk_classifies_direct_fk():

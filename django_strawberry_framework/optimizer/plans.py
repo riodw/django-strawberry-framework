@@ -42,7 +42,7 @@ from django.db.models.functions import RowNumber
 
 from ..exceptions import OptimizerError
 from ..utils.connections import assert_window_fetch_mode, window_range_plan
-from .join_taxonomy import classify_relation_join
+from .join_taxonomy import WINDOWABLE_RELATION_KINDS, classify_relation_join
 
 
 def _lookup_path(entry: Any) -> str:
@@ -866,7 +866,7 @@ def window_partition_for_prefetch(field: Any) -> str:
     pins are unchanged.
     """
     descriptor = classify_relation_join(field)
-    if descriptor.kind not in ("many", "reverse_many_to_one", "reverse_one_to_one"):
+    if descriptor.kind not in WINDOWABLE_RELATION_KINDS:
         raise OptimizerError(
             f"window_partition_for_prefetch: relation {getattr(field, 'name', field)!r} "
             f"has kind {descriptor.kind!r}, which has no windowable parent partition; "

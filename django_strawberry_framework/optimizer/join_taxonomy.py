@@ -60,7 +60,10 @@ class LateralJoinShape(enum.Enum):
 # The relation kinds a windowed prefetch can partition: every many-valued
 # shape plus the reverse one-to-one (whose child row also carries the parent
 # id). Single-valued FORWARD relations have no windowable parent partition.
-_WINDOWABLE_KINDS: frozenset[str] = frozenset(
+# Public so the historical raise-contract shim
+# (``plans.py::window_partition_for_prefetch``) can distinguish "wrong kind"
+# from "kind OK, partition unresolved" without re-listing the set.
+WINDOWABLE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
     {"many", "reverse_many_to_one", "reverse_one_to_one"},
 )
 
@@ -181,7 +184,7 @@ def classify_relation_join(field: Any) -> RelationJoinDescriptor:
     """
     kind = relation_kind(field)
     is_m2m = bool(getattr(field, "many_to_many", False))
-    windowable = kind in _WINDOWABLE_KINDS
+    windowable = kind in WINDOWABLE_RELATION_KINDS
     partition = _partition_expr(field) if windowable else None
     parent_link_field = None
     through_child_field = None

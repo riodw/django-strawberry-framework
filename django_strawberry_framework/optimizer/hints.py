@@ -31,10 +31,28 @@ from django.db.models import Prefetch
 from ..exceptions import ConfigurationError
 
 # ``Prefetch`` is imported at runtime (not under ``TYPE_CHECKING``) because
-# ``__post_init__`` performs an ``isinstance(..., Prefetch)`` validation;
+# ``_require_prefetch`` performs an ``isinstance(..., Prefetch)`` validation;
 # the field annotation ``Prefetch | None`` is also string-deferred by
 # ``from __future__ import annotations``, but the runtime check is the
 # load-bearing surface here.
+
+
+def _require_prefetch(obj: object) -> Prefetch:
+    """Return ``obj`` when it is a ``Prefetch``; else raise ``ConfigurationError``.
+
+    Single owner for the Prefetch-type invariant shared by
+    ``OptimizerHint.prefetch`` (factory argument) and ``__post_init__``
+    (direct ``prefetch_obj=`` construction). The factory must call this
+    before ``cls(prefetch_obj=...)`` because ``None`` is the dataclass's
+    legitimate "no prefetch object" default - without a factory-side
+    check, ``prefetch(None)`` would become a silent no-op.
+    """
+    if not isinstance(obj, Prefetch):
+        raise ConfigurationError(
+            "OptimizerHint.prefetch(obj) requires a django.db.models.Prefetch "
+            f"instance; got {type(obj).__name__}.",
+        )
+    return obj
 
 
 @dataclass(frozen=True)
@@ -101,16 +119,13 @@ class OptimizerHint:
                 "OptimizerHint cannot set both force_select and force_prefetch "
                 "(use either select_related() or prefetch_related(), not both).",
             )
-        if self.prefetch_obj is not None and not isinstance(self.prefetch_obj, Prefetch):
-            raise ConfigurationError(
-                "OptimizerHint.prefetch(obj) requires a django.db.models.Prefetch "
-                f"instance; got {type(self.prefetch_obj).__name__}.",
-            )
-        if self.prefetch_obj is not None and (self.force_select or self.force_prefetch):
-            raise ConfigurationError(
-                "OptimizerHint.prefetch(obj) (prefetch_obj=...) cannot be combined "
-                "with select_related() or prefetch_related().",
-            )
+        if self.prefetch_obj is not None:
+            _require_prefetch(self.prefetch_obj)
+            if self.force_select or self.force_prefetch:
+                raise ConfigurationError(
+                    "OptimizerHint.prefetch(obj) (prefetch_obj=...) cannot be combined "
+                    "with select_related() or prefetch_related().",
+                )
 
     # ------------------------------------------------------------------
     # Factory classmethods
@@ -134,17 +149,11 @@ class OptimizerHint:
         source of truth, and nested selections under this field are not
         walked by the optimizer.
 
-        The factory validates ``obj`` because ``None`` is the dataclass's
-        legitimate "no prefetch object" default. Leaving validation solely
-        to ``__post_init__`` would turn ``prefetch(None)`` into a silent
-        no-op instead of rejecting the invalid factory argument.
+        Type-and-message ownership lives in ``_require_prefetch``; the
+        factory must invoke it before construction so ``None`` cannot
+        collapse into the empty no-op hint (see that helper's docstring).
         """
-        if not isinstance(obj, Prefetch):
-            raise ConfigurationError(
-                "OptimizerHint.prefetch(obj) requires a django.db.models.Prefetch "
-                f"instance; got {type(obj).__name__}.",
-            )
-        return cls(prefetch_obj=obj)
+        return cls(prefetch_obj=_require_prefetch(obj))
 
 
 def hint_is_skip(hint: OptimizerHint | None) -> bool:

@@ -40,6 +40,12 @@ Contract highlights (each enforced in this module or at finalization):
   per-parent fallback pipeline, and root connections all mint and decode
   through THIS module, so a cursor minted by any path replays on every
   other (the cross-strategy byte-parity invariant).
+- **One seek plan, two renderers.** ``build_keyset_seek_plan`` owns the
+  dialect-agnostic predicate (directions + values); ``keyset_seek_q`` and
+  ``keyset_seek_sql`` are the ORM and raw-SQL renderers. The backends stay
+  separate - portable ``Q`` for the windowed floor, parameterized SQL for
+  the lateral branch - but they cannot disagree on which side of a cursor
+  they select.
 - **Order fingerprint.** The encrypted payload embeds the effective order the
   cursor was minted under; decode rejects replay under a different order
   (a root ``orderBy:`` change between pages) rather than seeking against
@@ -69,6 +75,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache, lru_cache
 from types import SimpleNamespace
@@ -145,6 +152,19 @@ class KeysetSeek:
     def q(self) -> models.Q:
         """The ORM seek predicate (``keyset_seek_q`` over this carrier)."""
         return keyset_seek_q(self.columns, self.cursor, flip=self.flip)
+
+    def plan(self, values: Sequence[Any] | None = None) -> KeysetSeekPlan:
+        """The dialect-agnostic seek plan (optionally over already-adapted ``values``).
+
+        Default values are the decoded cursor payload. SQL renderers that bind
+        through ``Field.get_db_prep_value`` pass the prepared sequence so the
+        plan's parameter list matches the dialect's bind adapters.
+        """
+        return build_keyset_seek_plan(
+            [column.descending for column in self.columns],
+            self.cursor.values if values is None else values,
+            flip=self.flip,
+        )
 
 
 def order_fingerprint(order_refs: tuple[str, ...]) -> str:
@@ -486,15 +506,72 @@ def keyset_seek_greater(descending: bool, *, flip: bool) -> bool:
     The single direction rule every seek dialect renders from: an ascending
     column seeks greater values going forward (``flip=False``, the
     ``after:`` seek); a descending column flips it; a ``before:`` seek
-    (``flip=True``) inverts again. Shared by the ORM ``keyset_seek_q``
-    below and the raw-SQL lateral renderer
-    (``optimizer/lateral_fetch.py::build_lateral_sql`` /
-    ``_keyset_seek_quals_match``), so the two dialects can never seek
-    opposite sides of the same cursor - the module's cross-strategy
-    byte-parity invariant applies to the seek DIRECTION, not only the
-    minted cursor bytes.
+    (``flip=True``) inverts again. Shared by ``build_keyset_seek_plan`` (and
+    therefore both ``keyset_seek_q`` and ``keyset_seek_sql``) plus the
+    lateral fetch-time structural verifier
+    (``optimizer/lateral_fetch.py::_keyset_seek_quals_match``), so the two
+    dialects can never seek opposite sides of the same cursor - the
+    module's cross-strategy byte-parity invariant applies to the seek
+    DIRECTION, not only the minted cursor bytes.
     """
     return descending if flip else not descending
+
+
+@dataclass(frozen=True)
+class KeysetSeekPlan:
+    """Dialect-agnostic seek predicate: per-column directions + bind values.
+
+    ``greater[i]`` is whether column ``i`` compares strictly greater in the
+    total order (from ``keyset_seek_greater``). The canonical portable shape
+    both dialects render is the redundant leading inclusive bound on column
+    0 plus the OR-expansion of strict-comparison arms (one arm per column).
+    ``uniform`` is True when every column shares that direction - the SQL
+    dialect may emit a native row-value comparison as a rendering
+    optimization; that is the same predicate, not a second rule.
+    """
+
+    greater: tuple[bool, ...]
+    values: tuple[Any, ...]
+
+    def __post_init__(self) -> None:
+        """Reject empty or arity-mismatched seek plans at construction."""
+        if not self.greater:
+            raise ValueError("keyset seek requires at least one column")
+        if len(self.greater) != len(self.values):
+            raise ValueError(
+                f"keyset seek arity mismatch: {len(self.greater)} directions "
+                f"vs {len(self.values)} values",
+            )
+
+    @property
+    def uniform(self) -> bool:
+        """Whether every column shares one comparison direction."""
+        return len(set(self.greater)) == 1
+
+    @property
+    def lead_greater(self) -> bool:
+        """Whether the leading inclusive bound is ``>=`` (else ``<=``)."""
+        return self.greater[0]
+
+
+def build_keyset_seek_plan(
+    descending: Sequence[bool],
+    values: Sequence[Any],
+    *,
+    flip: bool = False,
+) -> KeysetSeekPlan:
+    """Build the shared seek plan from per-column descending flags and values.
+
+    The single owner of the seek STRUCTURE every dialect renders: direction
+    bits via ``keyset_seek_greater``, arity checks, and the ``uniform`` /
+    ``lead_greater`` derived facts the SQL renderer uses for its row-value
+    shortcut. Callers supply already-adapted values when the dialect binds
+    through field adapters.
+    """
+    return KeysetSeekPlan(
+        greater=tuple(keyset_seek_greater(flag, flip=flip) for flag in descending),
+        values=tuple(values),
+    )
 
 
 def keyset_seek_q(
@@ -521,15 +598,57 @@ def keyset_seek_q(
     to the cursor position (the use-the-index-luke lesson upstream's
     comparator omits). Columns are non-nullable by contract, so no
     ``isnull`` arms exist.
+
+    Renders ``build_keyset_seek_plan`` as ORM ``Q`` objects; the raw-SQL
+    twin is ``keyset_seek_sql``.
     """
+    plan = build_keyset_seek_plan(
+        [column.descending for column in columns],
+        cursor.values,
+        flip=flip,
+    )
     seek = models.Q()
     equal_prefix = models.Q()
-    for column, value in zip(columns, cursor.values, strict=True):
-        greater = keyset_seek_greater(column.descending, flip=flip)
-        op = "gt" if greater else "lt"
-        seek |= equal_prefix & models.Q(**{f"{column.name}__{op}": value})
-        equal_prefix &= models.Q(**{column.name: value})
-    first, first_value = columns[0], cursor.values[0]
-    first_greater = keyset_seek_greater(first.descending, flip=flip)
-    bound_op = "gte" if first_greater else "lte"
-    return models.Q(**{f"{first.name}__{bound_op}": first_value}) & seek
+    for index, column in enumerate(columns):
+        op = "gt" if plan.greater[index] else "lt"
+        seek |= equal_prefix & models.Q(**{f"{column.name}__{op}": plan.values[index]})
+        equal_prefix &= models.Q(**{column.name: plan.values[index]})
+    bound_op = "gte" if plan.lead_greater else "lte"
+    return models.Q(**{f"{columns[0].name}__{bound_op}": plan.values[0]}) & seek
+
+
+def keyset_seek_sql(column_refs: Sequence[str], plan: KeysetSeekPlan) -> tuple[str, list]:
+    """Render ``plan`` as a parameterized SQL seek predicate over ``column_refs``.
+
+    The raw-SQL twin of ``keyset_seek_q``. Uniform directions emit the native
+    row-value comparison ``(a, b) > (%s, %s)`` - the exact index-seek form
+    Postgres optimizes best; mixed ASC/DESC directions (which row-value SQL
+    cannot express) emit the same redundant-leading-bound OR-expansion the
+    ORM ``Q``-builder renders, so the two dialects seek the identical row
+    set. ``column_refs`` are already-quoted SQL column references
+    (``child."number"``); values ride as bind parameters from ``plan.values``.
+    """
+    if len(column_refs) != len(plan.greater):
+        raise ValueError(
+            f"keyset seek arity mismatch: {len(column_refs)} column refs "
+            f"vs {len(plan.greater)} directions",
+        )
+    values = list(plan.values)
+    if plan.uniform:
+        op = ">" if plan.greater[0] else "<"
+        if len(column_refs) == 1:
+            return f"{column_refs[0]} {op} %s", values
+        placeholders = ", ".join(["%s"] * len(column_refs))
+        return f"({', '.join(column_refs)}) {op} ({placeholders})", values
+    params: list = [values[0]]
+    lead = f"{column_refs[0]} {'>=' if plan.lead_greater else '<='} %s"
+    or_parts: list[str] = []
+    for index in range(len(column_refs)):
+        arm_sql: list[str] = []
+        for j in range(index):
+            arm_sql.append(f"{column_refs[j]} = %s")
+            params.append(values[j])
+        arm_sql.append(f"{column_refs[index]} {'>' if plan.greater[index] else '<'} %s")
+        params.append(values[index])
+        or_parts.append(f"({' AND '.join(arm_sql)})" if len(arm_sql) > 1 else arm_sql[0])
+    return f"{lead} AND ({' OR '.join(or_parts)})", params

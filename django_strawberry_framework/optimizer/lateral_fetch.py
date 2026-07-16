@@ -69,7 +69,7 @@ from django.db.models import QuerySet
 from django.db.models.expressions import Window
 from django.db.models.query import ModelIterable
 
-from ..keyset import keyset_seek_greater
+from ..keyset import keyset_seek_sql
 from ..utils.connections import assert_window_fetch_mode_for, window_range_plan
 from .join_taxonomy import LateralJoinShape
 from .nested_fetch import (
@@ -301,7 +301,9 @@ def build_lateral_sql(
         # position and stops each branch after the page. Values are bound as
         # query parameters prepared through each cursor column's Django field
         # adapter (JSONField and custom fields cannot rely on the driver's
-        # native Python adaptation); nothing is interpolated.
+        # native Python adaptation); nothing is interpolated. The SQL text
+        # itself is ``keyset.keyset_seek_sql`` - the raw-SQL twin of
+        # ``keyset_seek_q`` - so the dialects cannot drift.
         seek_sql, seek_params = _keyset_seek_sql(
             spec,
             qn,
@@ -372,13 +374,11 @@ def _keyset_seek_sql(
     *,
     prepare_value: Any | None,
 ) -> tuple[str, list]:
-    """Render the in-branch keyset seek for ``spec`` as ``(sql, params)``.
+    """Bind ``spec``'s keyset seek into quoted child-column refs for ``keyset_seek_sql``.
 
-    Uniform directions emit the native row-value comparison
-    ``(a, b) > (%s, %s)`` - the exact index-seek form Postgres optimizes
-    best; mixed ASC/DESC directions (which row-value SQL cannot express)
-    emit the same redundant-leading-bound OR-expansion the ORM Q-builder
-    renders, so the two dialects seek the identical row set. The seek
+    Lateral-specific adapter only: prepares values through each cursor
+    column's Django field, quotes the child-table column refs, and hands
+    the shared ``KeysetSeekPlan`` to ``keyset.keyset_seek_sql``. The seek
     columns ARE ``spec.order_columns`` (the ``cursor_field`` is the window
     order), aligned index-for-index with the decoded cursor values -
     ``_build_lateral_spec`` guarantees the arity.
@@ -388,27 +388,9 @@ def _keyset_seek_sql(
         prepare_value(column.field, value) if prepare_value is not None else value
         for column, value in zip(seek.columns, seek.cursor.values, strict=True)
     ]
-    columns = spec.order_columns
-    refs = [f"{child}.{qn(column)}" for column, _ in columns]
-    greater = [keyset_seek_greater(descending, flip=seek.flip) for _, descending in columns]
-    if len(set(greater)) == 1:
-        op = ">" if greater[0] else "<"
-        if len(refs) == 1:
-            return f"{refs[0]} {op} %s", values
-        placeholders = ", ".join(["%s"] * len(refs))
-        return f"({', '.join(refs)}) {op} ({placeholders})", list(values)
-    params: list = [values[0]]
-    lead = f"{refs[0]} {'>=' if greater[0] else '<='} %s"
-    or_parts: list[str] = []
-    for index in range(len(columns)):
-        arm_sql: list[str] = []
-        for j in range(index):
-            arm_sql.append(f"{refs[j]} = %s")
-            params.append(values[j])
-        arm_sql.append(f"{refs[index]} {'>' if greater[index] else '<'} %s")
-        params.append(values[index])
-        or_parts.append(f"({' AND '.join(arm_sql)})" if len(arm_sql) > 1 else arm_sql[0])
-    return f"{lead} AND ({' OR '.join(or_parts)})", params
+    plan = seek.plan(values)
+    refs = [f"{child}.{qn(column.field.column)}" for column in seek.columns]
+    return keyset_seek_sql(refs, plan)
 
 
 class LateralQuerySet(QuerySet):
@@ -601,43 +583,42 @@ def _keyset_seek_quals_match(nodes: list[Any], spec: LateralWindowSpec) -> bool:
     leading bound plus the OR-expansion - which Django's same-connector
     squash splices into the root AND as TWO children (one child for a
     single-column cursor, where the "expansion" is a bare comparison).
-    This verifies that exact shape against the spec's columns, directions,
-    and decoded values, so the lateral SQL never silently drops a filter
-    that is NOT the seek (which would return wrong rows) and never
-    double-applies one that is.
+    This verifies that exact shape against the shared ``KeysetSeekPlan``
+    (columns, directions, decoded values), so the lateral SQL never
+    silently drops a filter that is NOT the seek (which would return wrong
+    rows) and never double-applies one that is.
     """
     seek = spec.keyset_seek
-    columns = spec.order_columns
-    values = list(seek.cursor.values)
-    if len(nodes) != 2 or len(columns) != len(values):
+    plan = seek.plan()
+    column_names = [column.field.column for column in seek.columns]
+    if len(nodes) != 2 or len(column_names) != len(plan.values):
         return False
-    greater = [keyset_seek_greater(descending, flip=seek.flip) for _, descending in columns]
 
     def is_lookup(node: Any, lookup_name: str, index: int) -> bool:
         if getattr(node, "lookup_name", None) != lookup_name:
             return False
         target = getattr(getattr(node, "lhs", None), "target", None)
-        if target is None or getattr(target, "column", None) != columns[index][0]:
+        if target is None or getattr(target, "column", None) != column_names[index]:
             return False
         if target.model._meta.db_table != spec.db_table:
             return False
         rhs = node.rhs
-        return not hasattr(rhs, "resolve_expression") and rhs == values[index]
+        return not hasattr(rhs, "resolve_expression") and rhs == plan.values[index]
 
     def is_cmp(node: Any, index: int) -> bool:
-        return is_lookup(node, "gt" if greater[index] else "lt", index)
+        return is_lookup(node, "gt" if plan.greater[index] else "lt", index)
 
     lead, expansion = nodes
-    if not is_lookup(lead, "gte" if greater[0] else "lte", 0):
+    if not is_lookup(lead, "gte" if plan.lead_greater else "lte", 0):
         return False
-    if len(columns) == 1:
+    if len(column_names) == 1:
         return is_cmp(expansion, 0)
     arms = getattr(expansion, "children", None)
     if (
         arms is None
         or expansion.negated
         or expansion.connector != "OR"
-        or len(arms) != len(columns)
+        or len(arms) != len(column_names)
     ):
         return False
     for index, arm in enumerate(arms):

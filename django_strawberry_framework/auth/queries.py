@@ -29,6 +29,7 @@ from ..utils.inputs import make_input_namespace
 from ..utils.permissions import request_from_info
 from .mutations import (
     _AUTH_FAMILY_LABEL,
+    _authenticated_actor_or_none,
     _declare_fixed_auth_surface,
     _make_auth_field,
 )
@@ -80,9 +81,9 @@ def _current_user_resolve_body(holder_cls: type, info: Any) -> Any:
     request = request_from_info(info, family_label=_AUTH_FAMILY_LABEL)
     # The Channels adapter returns ``None`` when its scope has no auth middleware;
     # a bare HttpRequest without AuthenticationMiddleware has no ``user`` attribute.
-    # Both are anonymous under this field's nullable-return contract.
-    user = getattr(request, "user", None)
-    actor = user if (user is not None and user.is_authenticated) else None
+    # Both are anonymous under this field's nullable-return contract - owned by
+    # ``_authenticated_actor_or_none`` (shared with ``logout``'s ``ok`` capture).
+    actor = _authenticated_actor_or_none(request)
     resolvers.authorize_or_raise(holder_cls, info, "current_user", None, instance=actor)
     return actor
 

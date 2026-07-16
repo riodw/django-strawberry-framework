@@ -334,6 +334,24 @@ def _make_auth_field(
     )
 
 
+def _authenticated_actor_or_none(request: Any) -> Any:
+    """Return the request's authenticated actor, or ``None`` when anonymous.
+
+    The ONE anonymity definition the session-auth surfaces share (spec-040
+    Decision 5 / Decision 7): a request with no ``user`` attribute
+    (SessionMiddleware without AuthenticationMiddleware, or a Channels adapter
+    whose scope carries no auth-middleware user) and a request whose ``user`` is
+    not authenticated both classify as anonymous. ``logout``'s ``ok`` flag and
+    ``current_user``'s nullable return both derive from this result
+    (``actor is not None`` / the actor itself) so the classification cannot drift
+    between the two fields.
+    """
+    user = getattr(request, "user", None)
+    if user is not None and user.is_authenticated:
+        return user
+    return None
+
+
 def _login_resolve_body(
     holder_cls: type,
     info: Any,
@@ -399,21 +417,22 @@ def _logout_resolve_body(holder_cls: type, info: Any) -> Any:
 
     Gate first (denial target reads the holder ``__name__`` - the pinned
     ``"Not authorized to logout Session."`` string), then the upstream-borrowed
-    semantics: capture whether the request has an authenticated actor, then call
-    Django's ``logout`` unconditionally. A request with SessionMiddleware but no
-    AuthenticationMiddleware has no ``user`` attribute, so the capture treats that
-    shape as anonymous. Teardown still runs because an anonymous request can carry
-    session data that logout must flush. Session-mutating auth continues to require
-    Django's session transport; Channels auth mutations remain outside the verified
-    read-path-only adapter contract. Returns the pinned model-less
-    ``{ ok, errors }`` payload with empty ``errors``.
+    semantics: capture whether the request has an authenticated actor via
+    ``_authenticated_actor_or_none`` (the ONE anonymity definition shared with
+    ``current_user``), then call Django's ``logout`` unconditionally. A request
+    with SessionMiddleware but no AuthenticationMiddleware has no ``user``
+    attribute, so the capture treats that shape as anonymous. Teardown still runs
+    because an anonymous request can carry session data that logout must flush.
+    Session-mutating auth continues to require Django's session transport;
+    Channels auth mutations remain outside the verified read-path-only adapter
+    contract. Returns the pinned model-less ``{ ok, errors }`` payload with empty
+    ``errors``.
     """
     from ..mutations import resolvers
 
     request = request_from_info(info, family_label=_AUTH_FAMILY_LABEL)
     resolvers.authorize_or_raise(holder_cls, info, "logout", None, instance=None)
-    user = getattr(request, "user", None)
-    ok = bool(user is not None and user.is_authenticated)
+    ok = _authenticated_actor_or_none(request) is not None
     auth.logout(request)
     payload_cls = resolvers.payload_cls_for(holder_cls)
     return payload_cls(ok=ok, errors=[])

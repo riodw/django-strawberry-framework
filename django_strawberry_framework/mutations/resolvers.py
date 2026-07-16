@@ -70,7 +70,6 @@ import datetime
 from typing import Any
 
 import strawberry
-from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
@@ -98,6 +97,7 @@ from ..utils.querysets import (
     pks_all_present,
     reject_async_in_sync_context,
     related_visibility_queryset,
+    run_in_one_sync_boundary,
     stringified_pks_present,
     sync_pipeline_recourse,
     visibility_scoped_related_queryset,
@@ -1559,19 +1559,10 @@ async def run_pipeline_async(
     return await run_in_one_sync_boundary(sync_body, mutation_cls, info, data, id)
 
 
-async def run_in_one_sync_boundary(fn: Any, *args: Any, **kwargs: Any) -> Any:
-    """Run ``fn(*args, **kwargs)`` in ONE ``sync_to_async(thread_sensitive=True)`` worker.
-
-    The generic one-boundary primitive (spec-040 D17 / P3): the mutation entry
-    (``run_pipeline_async`` above, which keeps its mutation-shaped signature and
-    the pinned AR-M4 contract) and the auth fixed-field async dispatchers
-    (``auth/mutations.py`` - gate-then-session-work in one worker) share this one
-    ``sync_to_async`` call, so the boundary discipline (one worker per resolution,
-    ``thread_sensitive=True``, never per-step hops) cannot drift between flavors.
-    A ``sync_to_async`` worker is itself a sync context, so the standing
-    ``SyncMisuseError`` guards still fire inside ``fn``.
-    """
-    return await sync_to_async(fn, thread_sensitive=True)(*args, **kwargs)
+# ``run_in_one_sync_boundary`` is imported from ``utils/querysets`` above and
+# remains importable from this module for compatibility with historical
+# importers. Package-internal callers import the canonical utils owner directly,
+# avoiding a mutations-subpackage dependency.
 
 
 def make_resolver_entries(sync_body: Any) -> tuple[Any, Any]:

@@ -51,7 +51,7 @@ from graphql.execution.execute import ExecutionContext
 from strawberry.utils.inspect import in_async_context
 
 from .mutations.fields import MUTATION_CLASS_MARKER
-from .mutations.resolvers import run_in_one_sync_boundary
+from .utils.querysets import run_in_one_sync_boundary
 from .utils.write_transaction import managed_write_transaction, resolve_write_alias
 
 

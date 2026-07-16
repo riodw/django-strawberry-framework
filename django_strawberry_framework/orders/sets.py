@@ -45,6 +45,7 @@ from ..utils.permissions import (
     run_active_input_permission_checks,
     verbatim_path,
 )
+from ..utils.querysets import run_in_one_sync_boundary
 from ..utils.relations import path_traverses_to_many as _path_traverses_to_many
 from ..utils.strings import flatten_lookup_path
 from .base import RelatedOrder
@@ -584,13 +585,12 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
     ) -> models.QuerySet:
         """Async sibling of ``apply_sync`` per spec-028 Decision 8 sync/async-split.
 
-        Wraps ``_run_permission_checks`` in
-        ``sync_to_async(thread_sensitive=True)`` so a consumer's
-        ``check_*_permission`` hook that performs a blocking ORM read
-        does not block the event loop. ``get_flat_orders`` and
-        ``queryset.order_by(...)`` are NOT wrapped -- they are
-        pure-Python parsing + a queryset-method call that does no I/O
-        (per spec-028 Decision 8 step 7 + N7 of rev1).
+        Wraps ``_run_permission_checks`` in ``run_in_one_sync_boundary``
+        so a consumer's ``check_*_permission`` hook that performs a
+        blocking ORM read does not block the event loop.
+        ``get_flat_orders`` and ``queryset.order_by(...)`` are NOT
+        wrapped -- they are pure-Python parsing + a queryset-method call
+        that does no I/O (per spec-028 Decision 8 step 7 + N7 of rev1).
 
         The order side has NO equivalent of the filter side's
         ``_derive_related_visibility_querysets_async`` /
@@ -599,11 +599,6 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         flat ``order_by`` clause already references the relation paths
         directly via Django's ORM walker.
         """
-        from asgiref.sync import sync_to_async
-
         request = cls._request_from_info(info)
-        await sync_to_async(cls._run_permission_checks, thread_sensitive=True)(
-            input_value,
-            request,
-        )
+        await run_in_one_sync_boundary(cls._run_permission_checks, input_value, request)
         return cls._apply_orderings(input_value, queryset)

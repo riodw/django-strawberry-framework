@@ -27,6 +27,7 @@ from django.db import models
 
 from django_strawberry_framework import DjangoType
 from django_strawberry_framework.exceptions import ConfigurationError
+from django_strawberry_framework.mutations import resolvers as mutation_resolvers
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.utils.querysets import (
     SyncMisuseError,
@@ -37,6 +38,7 @@ from django_strawberry_framework.utils.querysets import (
     normalize_query_source,
     post_process_queryset_result_async,
     post_process_queryset_result_sync,
+    run_in_one_sync_boundary,
     visible_related_objects,
 )
 
@@ -216,3 +218,38 @@ async def test_post_process_async_passes_python_list_through():
     payload = [object()]
     result = await post_process_queryset_result_async(_AsyncType, payload, info=None)
     assert result is payload
+
+
+# ---------------------------------------------------------------------------
+# run_in_one_sync_boundary -- the shared off-event-loop worker primitive
+# ---------------------------------------------------------------------------
+
+
+def test_run_in_one_sync_boundary_is_single_sourced_from_utils():
+    """Mutations re-exports the utils owner; sites must not re-inline the wrapper.
+
+    The 0.0.13 DRY pass promoted the byte-identical
+    ``sync_to_async(fn, thread_sensitive=True)(*args, **kwargs)`` shape out of
+    ``mutations/resolvers.py`` into this module so filters / orders /
+    permissions / auth share one boundary. Pin the re-export identity so a
+    future split cannot silently fork a second definition.
+    """
+    assert mutation_resolvers.run_in_one_sync_boundary is run_in_one_sync_boundary
+
+
+async def test_run_in_one_sync_boundary_runs_callable_off_event_loop():
+    """The primitive executes ``fn`` on a worker thread, not the event-loop thread."""
+    import threading
+
+    captured: dict[str, int] = {}
+
+    def _body() -> str:
+        captured["worker"] = threading.get_ident()
+        return "ok"
+
+    async def _run() -> str:
+        captured["loop"] = threading.get_ident()
+        return await run_in_one_sync_boundary(_body)
+
+    assert await _run() == "ok"
+    assert captured["worker"] != captured["loop"]

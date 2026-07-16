@@ -31,7 +31,7 @@ from django_strawberry_framework.filters import (
     GlobalIDMultipleChoiceFilter,
     RelatedFilter,
 )
-from django_strawberry_framework.filters.sets import _lookups_for_field, _read_qs
+from django_strawberry_framework.filters.sets import _lookups_for_field
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.sets_mixins import collect_related_declarations
 from django_strawberry_framework.types.relay import SyncMisuseError, apply_interfaces
@@ -2313,8 +2313,9 @@ def test_apply_async_nested_or_branch_with_async_get_queryset_does_not_raise_syn
 
 @pytest.mark.django_db
 def test_apply_async_runs_permission_checks_off_event_loop_thread():
-    """``apply_async`` routes ``_run_permission_checks`` through ``sync_to_async``
-    so a blocking ``check_*_permission`` hook does not block the event loop.
+    """``apply_async`` routes finalize (incl. permission checks) through
+    ``run_in_one_sync_boundary`` so a blocking ``check_*_permission`` hook
+    does not block the event loop.
 
     Asserts the permission method observed a thread ident DIFFERENT from
     the event-loop thread ident -- which is what
@@ -2522,36 +2523,14 @@ def test_iter_input_items_returns_none_for_non_walkable_shapes():
 
 
 # ---------------------------------------------------------------------------
-# Async-path coverage. These four branches live in the apply_async pipeline
-# (the sync_to_async qs read, the nested-visibility pre-walk, and the
-# _q_for_branch stash-miss fallback). The fakeshop live HTTP suites drive
-# Django's SYNC test Client -> sync views -> apply_sync, so per
+# Async-path coverage. These branches live in the apply_async pipeline
+# (the nested-visibility pre-walk and the _q_for_branch stash-miss
+# fallback). The fakeshop live HTTP suites drive Django's SYNC test
+# Client -> sync views -> apply_sync, so per
 # examples/fakeshop/test_query/README.md these lines are genuinely
 # unreachable from a live /graphql/ request and are earned here as unit
 # tests (the README's documented fallback for live-unreachable code).
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.django_db
-def test_read_qs_returns_filterset_qs():
-    """``_read_qs`` returns the instance's ``.qs`` (the ``sync_to_async`` callable wrapper).
-
-    ``apply_async`` routes the synchronous ``.qs`` read through
-    ``sync_to_async(_read_qs)`` to keep the ORM work off the event-loop
-    thread; the wrapper exists only because ``sync_to_async`` wants a
-    callable rather than an attribute read. The threaded call site is not
-    reachable from the sync live HTTP Client, so it is covered directly here.
-    """
-
-    class BranchFilter(FilterSet):
-        class Meta:
-            model = library_models.Branch
-            fields = {"name": ["exact"]}
-
-    fs = BranchFilter(data={}, queryset=library_models.Branch.objects.all())
-    # ``.qs`` is a cached_property, so the helper's read returns the same
-    # object the direct attribute read does.
-    assert _read_qs(fs) is fs.qs
 
 
 def test_collect_nested_visibility_querysets_async_returns_empty_for_none_input():
@@ -2858,7 +2837,7 @@ def test_evaluate_logic_tree_rejects_malformed_direct_construction():
         queryset=Category.objects.all(),
     )
     with pytest.raises(ConfigurationError, match="list of filter inputs"):
-        _read_qs(fs)
+        _ = fs.qs
 
 
 def test_validate_logic_branch_shape_accepts_inactive_value():
@@ -2908,7 +2887,7 @@ def test_evaluate_logic_tree_rejects_scalar_logical_elements():
     for tree in ({"not": "name"}, {"or": ["name"]}, {"and": [42]}):
         fs = CategoryFilter(data=tree, queryset=Category.objects.all())
         with pytest.raises(ConfigurationError, match="must be a mapping or filter-input"):
-            _read_qs(fs)
+            _ = fs.qs
 
 
 def test_validate_logic_branch_shape_accepts_inactive_list_element():

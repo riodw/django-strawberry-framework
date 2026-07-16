@@ -65,6 +65,7 @@ from ..mutations.sets import (
 )
 from ..registry import register_subsystem_clear, registry
 from ..utils.permissions import request_from_info
+from ..utils.querysets import run_in_one_sync_boundary
 
 # The one family label every auth surface resolves its request under (the
 # spec-040 D1 reuse directive): a single module-level constant, never a per-field
@@ -291,8 +292,6 @@ async def _resolve_auth_async(resolve_body: Any, info: Any, kwargs: dict[str, An
     discipline is unaffected: the worker is itself a sync context, so an ``async
     def has_permission`` is still rejected there, never silently allowed.
     """
-    from ..mutations.resolvers import run_in_one_sync_boundary
-
     return await run_in_one_sync_boundary(resolve_body, info, **kwargs)
 
 
@@ -690,8 +689,6 @@ def _synthesize_register_rider(permission_classes: list[Any]) -> type:
         ) -> Any:
             """The async twin: the SAME sync body in one ``sync_to_async`` boundary."""
             del id  # create-only: the field dispatcher always passes UNSET.
-            from ..mutations.resolvers import run_in_one_sync_boundary
-
             return await run_in_one_sync_boundary(_run_register_pipeline_sync, cls, info, data)
 
     return Register

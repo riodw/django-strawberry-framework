@@ -1,6 +1,9 @@
 # DRY review: `django_strawberry_framework/auth/mutations.py`
 
-Status: verified
+Status: fix-implemented
+
+Iteration 2026-07-16: internal sync-boundary imports now target the canonical
+`utils/querysets.py` owner directly. Independent verification is pending.
 
 ## System trace
 
@@ -232,4 +235,8 @@ No challenge to any rejected or deferred candidate survives re-inspection, no mi
 was found against `mutations/` package helpers, the `queries.py` actor idiom, or password handling,
 and the item-scoped diff is independently confirmed empty.
 
-Status: verified.
+Status: fix-implemented. The Worker-2 pass above verified the zero-edit responsibility analysis
+against a baseline where `run_in_one_sync_boundary` was still defined in `mutations/resolvers.py`
+(its trace names that location). The 2026-07-16 sync-boundary iteration centralized the primitive
+into `utils/querysets.py::run_in_one_sync_boundary` and repointed this file's import to it directly;
+that iteration reopens the artifact for independent re-verification.

@@ -16,16 +16,23 @@ wrapper the Relay id decode, the raw relation-pk decode, and the ``__in``
 filter member decode each need against a DIFFERENT field - single-sourcing the
 coercion mechanics while leaving the field selection to each caller.
 
+``run_in_one_sync_boundary`` (0.0.13 DRY pass) is the sibling neutral
+primitive for "run a sync callable in exactly one
+``sync_to_async(thread_sensitive=True)`` worker" - shared by filters /
+orders / cascade permissions / mutation-form pipelines / session auth so
+the off-event-loop boundary cannot drift.
+
 Caller-specific tails stay with their caller: the connection field keeps its
 GraphQL non-queryset error (it calls ``normalize_query_source`` then guards),
 the Relay node defaults keep their id filter, the optimizer keeps plan
 building, and the filter related derive keeps its per-branch recursion. This
 module owns only the source normalization + the colored visibility calls.
 
-Cycle-safe by construction: it depends on nothing but ``django`` and
-``..exceptions``, so ``types/relay.py`` (imported at module top by
-``types/base.py``) can import from here without closing a load cycle, and it
-never imports back into the package.
+Cycle-safe by construction: it depends on ``django``, ``asgiref``,
+``..exceptions``, and the write-transaction ContextVar helpers, so
+``types/relay.py`` (imported at module top by ``types/base.py``) can import
+from here without closing a load cycle, and it never imports back into
+filters / orders / mutations / permissions.
 """
 
 from __future__ import annotations
@@ -34,6 +41,7 @@ import asyncio
 import inspect
 from typing import Any
 
+from asgiref.sync import sync_to_async
 from django.core.exceptions import ValidationError
 from django.db import models
 
@@ -217,6 +225,25 @@ def sync_pipeline_recourse(flavor_noun: str) -> str:
         "call on the async surface), so it cannot await an async get_queryset hook; "
         "redefine the target type's get_queryset as a sync method."
     )
+
+
+async def run_in_one_sync_boundary(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Run ``fn(*args, **kwargs)`` in ONE ``sync_to_async(thread_sensitive=True)`` worker.
+
+    The generic one-boundary primitive (spec-040 D17 / P3): every async surface
+    that must keep a consumer-overridable sync hook (permission check, form
+    filter body, cascade walk, mutation/form write pipeline, session auth) off
+    the event loop shares this call, so the boundary discipline (one worker per
+    resolution, ``thread_sensitive=True``, never per-step hops) cannot drift.
+    A ``sync_to_async`` worker is itself a sync context, so the standing
+    ``SyncMisuseError`` guards still fire inside ``fn``.
+
+    Neutral home: lives here with the sibling ``reject_async_in_sync_context``
+    primitive (cycle-safe utils substrate) rather than under ``mutations/``, so
+    read-side modules (``filters/``, ``orders/``, root ``permissions.py``) can
+    reuse it without a root-into-subpackage import.
+    """
+    return await sync_to_async(fn, thread_sensitive=True)(*args, **kwargs)
 
 
 def apply_type_visibility_sync(

@@ -20,7 +20,6 @@ from collections import OrderedDict
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, ClassVar, NoReturn
 
-from asgiref.sync import sync_to_async
 from django.db import models
 from django_filters import filterset
 from django_filters.utils import get_model_field
@@ -57,6 +56,7 @@ from ..utils.querysets import (
     SyncMisuseError,
     apply_type_visibility_async,
     apply_type_visibility_sync,
+    run_in_one_sync_boundary,
 )
 from ..utils.relations import (
     is_many_side_relation_kind,
@@ -114,18 +114,6 @@ _NORMALIZE_TRAVERSAL: SetInputTraversal = SetInputTraversal(
     logic_keys=_LOGIC_PYTHON_ATTRS,
     unset_sentinel=UNSET,
 )
-
-
-def _read_qs(filterset_instance: Any) -> models.QuerySet:
-    """Return ``filterset_instance.qs`` (helper for ``sync_to_async``).
-
-    ``BaseFilterSet.qs`` is a cached property whose evaluation triggers
-    ``filter_queryset`` (sync) and may iterate leaf-clause ORM. ``apply_async``
-    routes the read through ``sync_to_async(thread_sensitive=True)`` to keep
-    the synchronous ORM work off the event-loop thread; this tiny wrapper
-    exists because ``sync_to_async`` wants a callable, not an attribute read.
-    """
-    return filterset_instance.qs
 
 
 def _lookups_for_field(model_field: models.Field | None) -> list[str]:
@@ -1942,11 +1930,11 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         """Run the perm check + form validate + ``.qs`` read trailer.
 
         Sync ``apply_sync`` calls this directly; async ``apply_async``
-        wraps the single call in ``sync_to_async(..., thread_sensitive=True)``
-        so a consumer's ``check_*_permission`` hook / custom ``method=``
-        filter body / leaf-clause ORM evaluation does not block the
-        event loop. The thread-sensitive shape mirrors how Django wraps
-        consumer sync hooks on its own async paths.
+        wraps the single call in ``run_in_one_sync_boundary`` (the neutral
+        ``sync_to_async(thread_sensitive=True)`` owner in
+        ``utils/querysets.py``) so a consumer's ``check_*_permission`` hook /
+        custom ``method=`` filter body / leaf-clause ORM evaluation does not
+        block the event loop.
 
         ``run_permissions=False`` skips the ``_run_permission_checks`` pass.
         The related-visibility derivation invokes the child filterset's
@@ -2042,12 +2030,9 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
                with ``apply_sync``) and stash the nested-visibility map
                on the instance - the async-only step with no sync analog.
             4. Route ``_apply_common_finalize`` (perm check + form
-               validate + ``.qs`` read) through a single
-               ``sync_to_async(thread_sensitive=True)`` so a consumer's
-               ``check_*_permission`` hook that performs a blocking ORM
-               read does not block the event loop. The thread-sensitive
-               shape mirrors how Django wraps consumer sync hooks on its
-               own async paths.
+               validate + ``.qs`` read) through ``run_in_one_sync_boundary``
+               so a consumer's ``check_*_permission`` hook that performs a
+               blocking ORM read does not block the event loop.
 
         ``run_permissions`` defaults to ``True`` for consumer entry points;
         the related-visibility derivation passes ``False`` so a nested child
@@ -2079,7 +2064,8 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
             child_qs_by_branch,
         )
         filterset_instance._nested_qs_by_branch_id = nested_qs_by_branch_id
-        return await sync_to_async(cls._apply_common_finalize, thread_sensitive=True)(
+        return await run_in_one_sync_boundary(
+            cls._apply_common_finalize,
             filterset_instance,
             input_value,
             request,

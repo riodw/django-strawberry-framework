@@ -109,8 +109,11 @@ from ..mutations.resolvers import (
     run_write_pipeline_sync,
     save_or_field_errors,
 )
+from ..utils.permissions import auth_aliases_for_permission_classes
 from ..utils.querysets import sync_pipeline_recourse
 from ..utils.write_transaction import (
+    authorization_phase,
+    pipeline_alias_guard,
     pipeline_write_phase,
     require_managed_write,
     write_pipeline,
@@ -525,6 +528,14 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
     directly (NOT via ``build_payload``, which keys on ``slot``). The write is
     ``perform_mutate`` (default ``form.save()`` if present, else no-op), wrapped by
     the same ``save_or_field_errors`` ``IntegrityError`` mapper.
+
+    Orchestration stays local (the model-backed ``run_write_pipeline_sync`` skeleton
+    owns locate / refetch / object-slot payloads and cannot absorb this flavor
+    without a model-less seam), but the BETA-055 alias / auth / write-phase
+    invariants are the SAME shared helpers the model / ``ModelForm`` / serializer /
+    delete paths call: ``pipeline_alias_guard`` spans every consumer-reachable
+    phase, ``authorization_phase`` wraps the single permission evaluation, and
+    ``pipeline_write_phase`` opens only around ``perform_mutate``.
     """
     payload_cls = payload_cls_for(mutation_cls)
     meta = mutation_cls._mutation_meta
@@ -551,40 +562,67 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
             the payload so the partial write is discarded - the same "an error
             envelope never commits" invariant the model / ``ModelForm`` / serializer
             flavors enforce in the shared ``run_write_pipeline_sync`` skeleton, which
-            the plain form does NOT ride (it owns this separate atomic block).
-            Harmless on the read-only authorize / decode / validation paths (nothing
-            was written); ``payload_cls(...)`` runs no ORM query, so it is safe after
+            the plain form does NOT ride (it owns this separate atomic block + the
+            pinned ``{ ok errors }`` payload shape). Harmless on the read-only
+            authorize / decode / validation paths (nothing was written);
+            ``payload_cls(...)`` runs no ORM query, so it is safe after
             ``set_rollback``.
             """
             transaction.set_rollback(True, using=using)
             return payload_cls(ok=False, errors=errors)
 
-        # Authorize BEFORE decoding (see the ModelForm body): a plain form with a
-        # ``ModelChoiceField`` would otherwise let an unauthorized caller probe
-        # relation visibility pre-auth.
-        authorize_or_raise(
-            mutation_cls,
-            info,
-            mutation_cls._mutation_meta.operation,
-            data,
-            instance=None,
-        )
+        # Identify auth aliases so the authorization phase can permit their
+        # read-only queries under a divergent router. Gated exactly like the
+        # model-backed skeleton: ``permission_classes = []`` grants no auth-alias
+        # access at all.
+        auth_aliases = auth_aliases_for_permission_classes(meta.permission_classes)
+        # The alias guard spans EVERY consumer-reachable phase (permission,
+        # decode, validation, write): any SQL on a non-pinned connection raises
+        # before it executes, and pinned-alias writes are rejected outside the
+        # write phase below.
+        with pipeline_alias_guard(mutation_cls.__name__, using):
+            # Authorize BEFORE decoding (see the ModelForm body): a plain form with a
+            # ``ModelChoiceField`` would otherwise let an unauthorized caller probe
+            # relation visibility pre-auth. The authorization phase permits
+            # read-only auth-alias queries for exactly this call, then closes.
+            with authorization_phase(auth_aliases):
+                authorize_or_raise(
+                    mutation_cls,
+                    info,
+                    meta.operation,
+                    data,
+                    instance=None,
+                )
 
-        provided_data, provided_files, decode_error = _decode_form_data(mutation_cls, data, info)
-        if decode_error is not None:
-            return _error_payload([decode_error])
+            provided_data, provided_files, decode_error = _decode_form_data(
+                mutation_cls,
+                data,
+                info,
+            )
+            if decode_error is not None:
+                return _error_payload([decode_error])
 
-        instance = mutation_cls()
-        form = instance.get_form(info, data=provided_data, files=provided_files, instance=None)
+            instance = mutation_cls()
+            form = instance.get_form(
+                info,
+                data=provided_data,
+                files=provided_files,
+                instance=None,
+            )
 
-        if not form.is_valid():
-            return _error_payload(_form_errors_to_field_errors(form))
+            if not form.is_valid():
+                return _error_payload(_form_errors_to_field_errors(form))
 
-        write_error = save_or_field_errors(lambda: instance.perform_mutate(form, info))
-        if write_error is not None:
-            return _error_payload(write_error)
+            # ``perform_mutate`` is the only write window (mirrors ``form.save`` /
+            # ``serializer.save`` / ``instance.delete`` on the other flavors).
+            with pipeline_write_phase():
+                write_error = save_or_field_errors(
+                    lambda: instance.perform_mutate(form, info),
+                )
+            if write_error is not None:
+                return _error_payload(write_error)
 
-        return payload_cls(ok=True, errors=[])
+            return payload_cls(ok=True, errors=[])
 
 
 def _run_form_pipeline_sync(

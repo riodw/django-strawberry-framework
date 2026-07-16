@@ -1423,6 +1423,82 @@ def test_perform_mutate_override_runs_only_on_success():
     assert calls == ["go"]  # the override ran only on the successful path
 
 
+@pytest.mark.django_db
+def test_plain_form_rejects_write_sql_outside_the_write_phase():
+    """A plain-form ``clean_*`` write on the pinned alias fails closed (BETA-055 phase).
+
+    The model-less body now rides ``pipeline_alias_guard`` + ``pipeline_write_phase``
+    like every other write flavor: validation is database-read-only, so an ORM
+    create inside ``clean_message`` raises ``ConfigurationError`` rather than
+    committing a side effect before ``perform_mutate``.
+    """
+
+    class SideEffectForm(forms.Form):
+        message = forms.CharField()
+
+        def clean_message(self):
+            product_models.Category.objects.create(name=_uniq("PhaseLeak"))
+            return self.cleaned_data["message"]
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = SideEffectForm
+            permission_classes = []
+
+    @strawberry.type
+    class Mutation:
+        submit = DjangoMutationField(Submit)
+
+    finalize_django_types()
+    schema = _schema(Mutation)
+    res = schema.execute_sync(
+        "mutation($d: SideEffectFormInput!){ submit(data:$d){ ok errors{ field } } }",
+        variable_values={"d": {"message": "hi"}},
+    )
+    # Strawberry surfaces the fail-closed ``ConfigurationError`` as a top-level
+    # GraphQL error (data nulled) - the same shape a model-flavor phase violation
+    # takes through ``DjangoSchema.execute_sync``.
+    assert res.errors is not None
+    assert "OUTSIDE the mutation's write phase" in str(res.errors[0].message)
+    assert res.data is None or res.data.get("submit") is None
+    assert not product_models.Category.objects.filter(name__startswith="PhaseLeak").exists()
+
+
+@pytest.mark.django_db
+def test_plain_form_perform_mutate_may_write_inside_the_write_phase():
+    """``perform_mutate`` is the open write window: an ORM create there succeeds."""
+
+    created: list[str] = []
+
+    class ContactForm(forms.Form):
+        message = forms.CharField()
+
+    class Submit(DjangoFormMutation):
+        class Meta:
+            form_class = ContactForm
+            permission_classes = []
+
+        def perform_mutate(self, form, info):
+            name = _uniq("PhaseWrite")
+            product_models.Category.objects.create(name=name)
+            created.append(name)
+
+    @strawberry.type
+    class Mutation:
+        submit = DjangoMutationField(Submit)
+
+    finalize_django_types()
+    schema = _schema(Mutation)
+    res = schema.execute_sync(
+        "mutation($d: ContactFormInput!){ submit(data:$d){ ok errors{ field } } }",
+        variable_values={"d": {"message": "hi"}},
+    )
+    assert res.errors is None, res.errors
+    assert res.data["submit"]["ok"] is True
+    assert len(created) == 1
+    assert product_models.Category.objects.filter(name=created[0]).exists()
+
+
 # ---------------------------------------------------------------------------
 # visibility-scoped update locate (P1)
 # ---------------------------------------------------------------------------

@@ -90,6 +90,7 @@ __all__ = [
     "active_permission_field_paths",
     "active_permission_targets",
     "active_related_branches",
+    "auth_aliases_for_permission_classes",
     "extract_branch_value",
     "invoke_permission_method",
     "iter_input_items",
@@ -252,6 +253,18 @@ def resolve_auth_aliases() -> frozenset[str]:
     aliases = {router.db_for_read(model) for model in candidates if model is not None}
     aliases.discard(None)
     return frozenset(aliases)
+
+
+def auth_aliases_for_permission_classes(permission_classes: Any) -> frozenset[str]:
+    """Resolve auth aliases only when a write surface has permission classes.
+
+    An empty ``permission_classes`` declaration is an explicit authorization
+    opt-out: the write pipeline must not resolve a lazy user, touch an auth
+    backend, or grant auth-alias access. Keeping that security gate beside
+    ``resolve_auth_aliases`` prevents model, delete, and plain-form pipelines
+    from spelling the policy independently.
+    """
+    return resolve_auth_aliases() if permission_classes else frozenset()
 
 
 def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: Any = None) -> Any:

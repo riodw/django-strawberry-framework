@@ -48,15 +48,40 @@ _OPERATION_PERMISSION_ACTION: dict[str, str] = {
 # returns a coroutine. Write authorization runs synchronously in the same sync
 # pipeline (spec-036 Decision 15), so an async permission hook can never be
 # awaited - and silently treating its truthy coroutine as "allow" is an
-# authorization BYPASS (feedback - async permission bypass). Shared by both
-# enforcement seams - the resolver's ``authorize_or_raise`` (``check_permission``)
-# and ``DjangoMutation.check_permission`` (each ``has_permission``) - so the
-# wording cannot drift between them.
+# authorization BYPASS (feedback - async permission bypass). Consumed only by
+# ``_require_sync_bool_auth_result``, the single guard the three write-auth
+# result seams share (``has_permission`` / ``check_permission`` /
+# ``user.has_perm``), so the wording cannot drift between them.
 _PERMISSION_ASYNC_RECOURSE = (
     "A DjangoMutation runs its permission check synchronously, so it cannot await "
     "an async permission hook; redefine has_permission / check_permission as a sync "
     "method returning a bool, and ensure user.has_perm / auth backends return a bool."
 )
+
+
+def _require_sync_bool_auth_result(value: Any, *, owner: str, method: str) -> bool:
+    """Return a sync authorization bool; reject awaitables and non-bools (BETA-055).
+
+    The ONE write-authorization result contract the three sync seams share:
+    ``has_permission``, ``check_permission``, and ``user.has_perm``. Each must
+    return an actual ``bool``; a truthy coroutine or any other non-bool would
+    silently read as "allow" under a truthiness test - an authorization bypass.
+    Async rejection reuses ``reject_async_in_sync_context`` with the shared
+    ``_PERMISSION_ASYNC_RECOURSE`` so the wording cannot drift between seams.
+    """
+    allowed = reject_async_in_sync_context(
+        value,
+        owner=owner,
+        method=method,
+        context="mutation",
+        recourse=_PERMISSION_ASYNC_RECOURSE,
+    )
+    if not isinstance(allowed, bool):
+        raise ConfigurationError(
+            f"{owner}.{method} must return a bool; got {allowed!r}. "
+            "Authorization results are never coerced from truthiness.",
+        )
+    return allowed
 
 
 def run_permission_classes(
@@ -74,8 +99,7 @@ def run_permission_classes(
     An authorization-seam fork is the exact "fix one side, miss the other" bug
     class this promotion closes. Each entry's ``has_permission(info, mutation,
     operation, data, instance)`` result runs through
-    ``reject_async_in_sync_context`` with the shared
-    ``_PERMISSION_ASYNC_RECOURSE``: an ``async def has_permission`` returns a
+    ``_require_sync_bool_auth_result``: an ``async def has_permission`` returns a
     TRUTHY coroutine, so a naive bool test would silently treat an async
     deny-check as ALLOW - an authorization bypass; the coroutine is closed and
     raised as a ``SyncMisuseError`` instead. Returns ``False`` on the first
@@ -83,7 +107,7 @@ def run_permission_classes(
     """
     meta = type(mutation_self)._mutation_meta
     for permission_class in meta.permission_classes:
-        allowed = reject_async_in_sync_context(
+        allowed = _require_sync_bool_auth_result(
             permission_class().has_permission(
                 info,
                 type(mutation_self),
@@ -93,17 +117,7 @@ def run_permission_classes(
             ),
             owner=permission_class.__name__,
             method="has_permission",
-            context="mutation",
-            recourse=_PERMISSION_ASYNC_RECOURSE,
         )
-        # An ACTUAL bool is required (BETA-055): a truthy non-bool return (an
-        # object, a string, a forgotten method reference) would silently read as
-        # "allow" - the same bypass class the async-coroutine rejection closes.
-        if not isinstance(allowed, bool):
-            raise ConfigurationError(
-                f"{permission_class.__name__}.has_permission must return a bool; got "
-                f"{allowed!r}. Authorization results are never coerced from truthiness.",
-            )
         if not allowed:
             return False
     return True
@@ -151,25 +165,14 @@ class DjangoModelPermission:
         model = mutation._resolve_model(mutation.Meta)
         action = _OPERATION_PERMISSION_ACTION[operation]
         codename = f"{model._meta.app_label}.{action}_{model._meta.model_name}"
-        # ``user.has_perm`` is sync Django auth; an awaitable return (a buggy
-        # custom user / backend) is truthy, so ``bool(coroutine)`` would silently
-        # ALLOW - the same authorization-bypass class ``run_permission_classes``
-        # closes for async ``has_permission``. And a truthy NON-bool (a custom
-        # user / backend returning an object) is the same bypass in sync form
-        # (BETA-055), so the result must be an actual bool - never coerced.
-        allowed = reject_async_in_sync_context(
+        # ``user.has_perm`` is sync Django auth; an awaitable / non-bool return
+        # is the same authorization-bypass class ``_require_sync_bool_auth_result``
+        # closes for ``has_permission`` / ``check_permission`` (BETA-055).
+        return _require_sync_bool_auth_result(
             user.has_perm(codename),
             owner=type(user).__name__,
             method="has_perm",
-            context="mutation",
-            recourse=_PERMISSION_ASYNC_RECOURSE,
         )
-        if not isinstance(allowed, bool):
-            raise ConfigurationError(
-                f"{type(user).__name__}.has_perm must return a bool; got {allowed!r}. "
-                "Authorization results are never coerced from truthiness.",
-            )
-        return allowed
 
 
 class DenyAll:

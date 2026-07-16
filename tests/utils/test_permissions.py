@@ -18,6 +18,7 @@ from django_strawberry_framework.utils.permissions import (
     _fire_flat_relation_path_gates,
     active_permission_field_paths,
     active_related_branches,
+    auth_aliases_for_permission_classes,
     extract_branch_value,
     invoke_permission_method,
     iter_input_items,
@@ -670,6 +671,25 @@ def test_active_permission_field_paths_excludes_logic_and_related_keys():
 # ---------------------------------------------------------------------------
 # resolve_auth_aliases (the authorization-phase auth-alias identification)
 # ---------------------------------------------------------------------------
+
+
+def test_auth_aliases_for_permission_classes_gates_alias_resolution(monkeypatch):
+    """The explicit no-permissions opt-out grants no auth-alias access."""
+    calls = []
+
+    def _resolve():
+        calls.append(None)
+        return frozenset({"auth"})
+
+    monkeypatch.setattr(
+        "django_strawberry_framework.utils.permissions.resolve_auth_aliases",
+        _resolve,
+    )
+
+    assert auth_aliases_for_permission_classes([]) == frozenset()
+    assert calls == []
+    assert auth_aliases_for_permission_classes([object()]) == frozenset({"auth"})
+    assert calls == [None]
 
 
 @pytest.mark.django_db

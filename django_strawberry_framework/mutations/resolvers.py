@@ -89,13 +89,12 @@ from ..relay import GlobalIDDecode, decode_model_global_id
 # Moved to utils/errors.py (docs DRY review P1.2); re-exported for compatibility.
 from ..utils.errors import field_error, relation_field_error, validation_error_to_field_errors
 from ..utils.inputs import iter_provided_input_fields
-from ..utils.permissions import resolve_auth_aliases
+from ..utils.permissions import auth_aliases_for_permission_classes
 from ..utils.querysets import (
     apply_type_visibility_sync,
     initial_queryset,
     model_for,
     pks_all_present,
-    reject_async_in_sync_context,
     related_visibility_queryset,
     run_in_one_sync_boundary,
     stringified_pks_present,
@@ -129,7 +128,7 @@ from ..utils.write_values import (
     type_check_relation_id,  # noqa: F401 - re-exported for the form / serializer resolvers + tests.
 )
 from .inputs import FieldError, payload_object_slot
-from .permissions import _PERMISSION_ASYNC_RECOURSE
+from .permissions import _require_sync_bool_auth_result
 
 # Compatibility alias preserving the pre-move private name (internal call
 # sites address it; the public owner lives in utils/write_values.py).
@@ -256,7 +255,7 @@ def run_write_pipeline_sync(
         # permission classes - the explicit ``permission_classes = []`` opt-out
         # promises the pipeline never resolves the lazy user or touches an auth
         # backend, so it grants no auth-alias access at all.
-        auth_aliases = resolve_auth_aliases() if meta.permission_classes else frozenset()
+        auth_aliases = auth_aliases_for_permission_classes(meta.permission_classes)
         # The alias guard spans EVERY consumer-reachable phase (permission,
         # decode, validation, write, re-fetch): any SQL statement on a
         # non-pinned connection - read or write, signal-ful or signal-less -
@@ -1292,7 +1291,7 @@ def _run_delete(
     # Identify the auth aliases so the authorization phase can permit their
     # read-only queries under a divergent router. Gated exactly like
     # create/update: ``permission_classes = []`` grants no auth-alias access.
-    auth_aliases = resolve_auth_aliases() if meta.permission_classes else frozenset()
+    auth_aliases = auth_aliases_for_permission_classes(meta.permission_classes)
     # The alias guard spans the consumer-reachable phases (permission,
     # snapshot re-fetch with its visibility hooks, the delete itself): any SQL
     # statement on a non-pinned connection raises before it executes.
@@ -1390,28 +1389,17 @@ def authorize_or_raise(
     A coroutine return - an ``async def check_permission`` override - is NOT
     silently treated as "allow": a coroutine is truthy, so ``if not coroutine``
     would never deny, letting an async deny-check pass (an authorization bypass,
-    feedback). It is closed and raised as a ``SyncMisuseError`` (the async hook
-    can never be awaited in this sync pipeline), mirroring ``get_queryset``'s
-    discipline. The async-``has_permission`` case is rejected one level down, in
+    feedback). It is closed and raised as a ``SyncMisuseError`` via
+    ``_require_sync_bool_auth_result`` (the shared write-auth result contract;
+    the async hook can never be awaited in this sync pipeline). The
+    async-``has_permission`` case is rejected one level down, in
     ``check_permission`` itself.
     """
-    allowed = reject_async_in_sync_context(
+    allowed = _require_sync_bool_auth_result(
         mutation_cls().check_permission(info, operation, data, instance),
         owner=mutation_cls.__name__,
         method="check_permission",
-        context="mutation",
-        recourse=_PERMISSION_ASYNC_RECOURSE,
     )
-    # Authorization demands an ACTUAL bool (BETA-055): a truthy non-bool - a
-    # permissions object, a string, an accidental method reference - reads as
-    # "allow" under a truthiness test even when the override never decided
-    # anything. A custom ``check_permission`` that does not return ``True`` /
-    # ``False`` is a configuration bug, surfaced loudly rather than coerced.
-    if not isinstance(allowed, bool):
-        raise ConfigurationError(
-            f"{mutation_cls.__name__}.check_permission must return a bool; got {allowed!r}. "
-            "Authorization results are never coerced from truthiness.",
-        )
     if not allowed:
         # The model / ``ModelForm`` flavor names its target model
         # (``_primary_type.__name__``); a plain ``DjangoFormMutation`` carries

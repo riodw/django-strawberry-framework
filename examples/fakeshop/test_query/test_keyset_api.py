@@ -167,6 +167,120 @@ def test_root_keyset_last_zero_preserves_bounded_shipped_connection_semantics():
 
 
 @pytest.mark.django_db
+def test_root_keyset_last_zero_with_after_matches_offset_pageinfo():
+    """``last: 0`` + ``after:`` serves the after-tail but keeps Strawberry pageInfo.
+
+    Offset ``ListConnection`` materializes ``nodes[after:]`` then takes
+    ``edges[-0:]`` (the whole tail) and overwrites ``hasPreviousPage`` from
+    "did the ``-last`` trim drop rows?" - always False for ``last == 0``, even
+    though ``after`` advanced the window. Keyset must match that pageInfo while
+    still seeking in the value domain (the after-tail titles), or offset and
+    keyset connections disagree on the same arguments.
+    """
+    _seed_periodicals()
+    first = _root_page(first=2)
+    assert _titles(first) == ["Astro #5", "Astro #4"]
+    page = _root_page(last=0, after=first["pageInfo"]["endCursor"])
+    assert _titles(page) == [
+        "Astro #3",
+        "Bot #3",
+        "Astro #2",
+        "Bot #2",
+        "Astro #1",
+        "Bot #1",
+    ]
+    assert page["totalCount"] == 8
+    assert page["pageInfo"]["hasPreviousPage"] is False
+    assert page["pageInfo"]["hasNextPage"] is False
+
+
+@pytest.mark.django_db
+def test_root_keyset_last_zero_with_after_stays_bounded_by_cap():
+    """``last: 0`` + ``after:`` still caps the served tail at ``relay_max_results``.
+
+    The serve-all quirk must never let ``after`` widen the page past the Relay
+    cap. With an after-tail well over the default cap of 100, the page is
+    trimmed to exactly the cap and ``hasNextPage`` flips True while the quirk
+    keeps ``hasPreviousPage`` False.
+    """
+    astronomy, _botany, _empty = _seed_periodicals()
+    models.Issue.objects.bulk_create(
+        [
+            models.Issue(periodical=astronomy, number=number, title=f"Cap probe #{number}")
+            for number in range(100, 250)
+        ],
+    )
+    # Cursor at the very first row: the after-tail is everything else (157
+    # rows), far past the cap.
+    first = _root_page(first=1)
+    page = _root_page(last=0, after=first["pageInfo"]["endCursor"])
+    assert len(page["edges"]) == 100  # trimmed to the Relay cap, not the 157-row tail
+    assert page["pageInfo"]["hasPreviousPage"] is False  # last:0 serve-all quirk
+    assert page["pageInfo"]["hasNextPage"] is True  # the cap trim leaves rows unserved
+
+
+NESTED_LAST_ZERO_AFTER = """
+query ($after: String) {
+  allLibraryPeriodicalsConnection(first: 10) {
+    edges {
+      node {
+        name
+        issuesConnection(last: 0, after: $after) {
+          totalCount
+          edges { node { title } }
+          pageInfo { hasNextPage hasPreviousPage }
+        }
+      }
+    }
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_nested_keyset_last_zero_with_after_matches_root_pageinfo():
+    """Nested ``last: 0`` + ``after:`` (per-parent keyset slicer) keeps the same pageInfo."""
+    astronomy, _botany, _empty = _seed_periodicals()
+    # Mint a cursor from the nested window's first page, then replay last:0 after it.
+    head = _assert_graphql_success(
+        """
+        query {
+          allLibraryPeriodicalsConnection(first: 10) {
+            edges {
+              node {
+                name
+                issuesConnection(first: 2) {
+                  pageInfo { endCursor }
+                  edges { node { title } }
+                }
+              }
+            }
+          }
+        }
+        """,
+    )
+    astro = next(
+        e["node"]
+        for e in head["allLibraryPeriodicalsConnection"]["edges"]
+        if e["node"]["name"] == astronomy.name
+    )
+    assert [e["node"]["title"] for e in astro["issuesConnection"]["edges"]] == [
+        "Astro #5",
+        "Astro #4",
+    ]
+    after = astro["issuesConnection"]["pageInfo"]["endCursor"]
+    data = _assert_graphql_success(NESTED_LAST_ZERO_AFTER, variables={"after": after})
+    page = next(
+        e["node"]["issuesConnection"]
+        for e in data["allLibraryPeriodicalsConnection"]["edges"]
+        if e["node"]["name"] == astronomy.name
+    )
+    assert [e["node"]["title"] for e in page["edges"]] == ["Astro #3", "Astro #2", "Astro #1"]
+    assert page["totalCount"] == 5
+    assert page["pageInfo"] == {"hasNextPage": False, "hasPreviousPage": False}
+
+
+@pytest.mark.django_db
 def test_root_keyset_first_and_last_guard_still_applies():
     """The package's first+last mutual-exclusivity guard precedes any slicing."""
     _seed_periodicals()
@@ -399,6 +513,59 @@ def test_nested_keyset_backward_falls_back_per_parent_with_same_cursors():
     # against the WINDOWED forward path (same codec, same bytes).
     forward = _nested_by_periodical(first=2, after=astronomy["edges"][0]["cursor"])
     assert _titles(forward["Astronomy Weekly"]) == ["Astro #1"]
+
+
+NESTED_BACKWARD_QUERY = """
+query ($last: Int, $before: String) {
+  allLibraryPeriodicalsConnection(first: 10) {
+    edges { node { name issuesConnection(last: $last, before: $before) {
+      pageInfo { hasPreviousPage hasNextPage }
+      edges { cursor node { title } }
+    } } }
+  }
+}
+"""
+
+
+@pytest.mark.django_db
+def test_nested_keyset_before_pages_backward_per_parent():
+    """Nested ``before:`` (head + interior) rides the per-parent fallback with root parity.
+
+    Nested ``before:`` is unwindowable, so it falls back to the same
+    ``_resolve_keyset_connection`` codec the root uses. Both flags and edges
+    must therefore match the root backward contract per parent.
+    """
+    _seed_periodicals()
+    # Mint cursors from a full forward page: order is newest-first, #5..#1.
+    forward = _nested_by_periodical(first=5)["Astronomy Weekly"]
+    assert _titles(forward) == [
+        "Astro #5",
+        "Astro #4",
+        "Astro #3",
+        "Astro #2",
+        "Astro #1",
+    ]
+    cursors = {edge["node"]["title"]: edge["cursor"] for edge in forward["edges"]}
+
+    def _astro(**variables):
+        data = _assert_graphql_success(NESTED_BACKWARD_QUERY, variables=variables)
+        return next(
+            edge["node"]["issuesConnection"]
+            for edge in data["allLibraryPeriodicalsConnection"]["edges"]
+            if edge["node"]["name"] == "Astronomy Weekly"
+        )
+
+    # Interior cursor: the two rows before #2 are #4, #3 (both flags True).
+    interior = _astro(last=2, before=cursors["Astro #2"])
+    assert _titles(interior) == ["Astro #4", "Astro #3"]
+    assert interior["pageInfo"]["hasPreviousPage"] is True
+    assert interior["pageInfo"]["hasNextPage"] is True
+
+    # Head cursor: only #5 precedes #4, so the head page reports no previous rows.
+    head = _astro(last=2, before=cursors["Astro #4"])
+    assert _titles(head) == ["Astro #5"]
+    assert head["pageInfo"]["hasPreviousPage"] is False
+    assert head["pageInfo"]["hasNextPage"] is True
 
 
 @pytest.mark.django_db

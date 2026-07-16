@@ -873,6 +873,13 @@ class _KeysetPage:
     backward: bool
     after_supplied: bool
     before_supplied: bool
+    # ``last: 0`` mirrors Strawberry's ``edges[-0:]`` serve-all quirk: the
+    # offset ``ListConnection`` path overwrites ``hasPreviousPage`` from
+    # "did ``edges[-last:]`` trim?" which is always False for ``last == 0``.
+    # Without this flag a keyset ``last: 0`` + ``after:`` page would report
+    # ``hasPreviousPage`` from ``after_supplied`` and diverge from the offset
+    # connection on the same arguments.
+    last_zero_quirk: bool = False
 
     @property
     def has_next_page(self) -> bool:
@@ -887,7 +894,14 @@ class _KeysetPage:
 
     @property
     def has_previous_page(self) -> bool:
-        """Relay's ``HasPreviousPage``: the backward overfetch, else "``after`` was supplied"."""
+        """Relay's ``HasPreviousPage``: the backward overfetch, else "``after`` was supplied".
+
+        ``last: 0`` is the exception: Strawberry's serve-all quirk never trims,
+        so ``hasPreviousPage`` stays False even when ``after`` advanced the
+        materialized window (byte parity with offset ``ListConnection``).
+        """
+        if self.last_zero_quirk:
+            return False
         return (self.backward and self.overfetched) or self.after_supplied
 
 
@@ -1032,6 +1046,7 @@ def _resolve_keyset_connection(
             backward=backward,
             after_supplied=after is not None,
             before_supplied=before is not None,
+            last_zero_quirk=last_zero_quirk,
         )
 
     if isinstance(nodes, (AsyncIterator, AsyncIterable)) and in_async_context():

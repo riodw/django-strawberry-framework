@@ -196,13 +196,14 @@ artifact and item-scoped diff are the shared record. Cross-file changes are expe
 reveals a system-owned rule. Unrelated cleanup stays out of scope.
 
 After an edit, Worker 1 runs `uv run ruff format .` and `uv run ruff check --fix .` as required by
-`AGENTS.md`. Focused tests may be used to verify a consolidation; permanent tests belong at the
-strongest reachable tier required by `AGENTS.md`. Changelog edits require explicit maintainer
-authorization.
+`AGENTS.md`. Focused tests may be used only when the maintainer explicitly requests a pytest run;
+otherwise record them as deferred. Permanent tests still belong at the strongest reachable tier
+required by `AGENTS.md`. Changelog edits require explicit maintainer authorization.
 
 ## Final gate and closeout
 
-After all file, folder, and project items are verified, Worker 1 runs `uv run pytest`. The gate
+After all file, folder, and project items are verified, Worker 1 asks the maintainer to authorize
+`uv run pytest` unless that authorization was already given explicitly. Once authorized, the gate
 passes only when the suite passes and configured package coverage remains 100%. Record failures,
 coverage, skips, and xfails, and route each failure back to its owning item.
 

@@ -47,7 +47,15 @@ from strawberry.extensions import SchemaExtension
 
 from ..registry import registry
 from ..utils.querysets import normalize_query_source
-from ..utils.typing import unwrap_graphql_type
+from ..utils.typing import (
+    strawberry_schema_from_info as _strawberry_schema_from_info,
+)
+from ..utils.typing import (
+    strawberry_schema_from_schema as _strawberry_schema_from_schema,
+)
+from ..utils.typing import (
+    unwrap_graphql_type,
+)
 from . import logger
 from ._context import (
     DST_OPTIMIZER_FK_ID_ELISIONS,
@@ -675,26 +683,6 @@ _execution_plan_cache: ContextVar[dict[Any, Any] | None] = ContextVar(
     "django_strawberry_framework_optimizer_execution_plan_cache",
     default=None,
 )
-
-
-def _strawberry_schema_from_schema(schema: Any) -> Any:
-    """Unwrap a Strawberry Schema to its inner schema; return ``schema`` if already unwrapped.
-
-    Centralizes the brittle Strawberry-private ``_strawberry_schema``
-    contract.  Test fixtures sometimes pass the inner schema directly,
-    so the fallback is the input itself.
-    """
-    return getattr(schema, "_strawberry_schema", schema)
-
-
-def _strawberry_schema_from_info(info: Any) -> Any | None:
-    """Walk ``info.schema._strawberry_schema``; return ``None`` if any step is missing.
-
-    Centralizes the brittle Strawberry-private ``_strawberry_schema``
-    contract for the resolver-info path.  Caller treats ``None`` as
-    "no schema available, nothing to look up."
-    """
-    return getattr(getattr(info, "schema", None), "_strawberry_schema", None)
 
 
 def _collect_schema_reachable_types(schema: Any) -> set[type]:

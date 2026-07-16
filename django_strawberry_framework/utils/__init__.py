@@ -8,7 +8,8 @@ concern rather than a single 500-line `utils.py`. Includes, among others:
   (``relation_kind``, ``RelationKind``, ``is_many_side_relation_kind``).
 - ``strings`` - case conversion (``snake_case``, ``pascal_case``).
 - ``typing`` - Strawberry / Python / GraphQL type unwrapping
-  (``unwrap_graphql_type``, ``unwrap_return_type``) plus ``is_async_callable``.
+  (``unwrap_graphql_type``, ``unwrap_return_type``), ``is_async_callable``,
+  and the ``_strawberry_schema`` / config digs (``schema_config_from_info``).
 - ``connections`` - the connection window-bounds / sidecar-kwarg contracts.
 - ``inputs`` / ``permissions`` - the generated-input and active-input
   permission substrates shared by the filter / order families.

@@ -32,6 +32,7 @@ from ..utils.connections import (
     window_range_plan,
 )
 from ..utils.relations import instance_accessor
+from ..utils.typing import schema_config_from_info
 from . import logger
 from .hints import hint_is_skip
 from .join_taxonomy import classify_relation_join
@@ -276,20 +277,14 @@ def _relay_max_results_from_info(info: Any) -> int | None:
     The walker runs at the optimizer extension's middleware layer, where ``info``
     is the raw graphql-core ``GraphQLResolveInfo`` whose ``.schema`` is a bare
     ``GraphQLSchema`` with NO ``.config`` (unlike the resolve-time Strawberry
-    ``Info`` ``SliceMetadata.from_arguments`` expects). The config lives on the
-    Strawberry schema wrapper Strawberry stashes at ``schema._strawberry_schema``
-    (the same brittle-private contract ``extension._strawberry_schema_from_info``
-    centralizes; the walker cannot import that helper without a cycle - extension
-    imports walker). Resolve the cap explicitly here and pass it to
-    ``SliceMetadata.from_arguments`` so the helper never dereferences
-    ``info.schema.config`` itself. Falls back to a ``schema.config`` shape (the
-    ``_fake_info`` test stub) and finally ``None`` (the engine default applies).
+    ``Info`` ``SliceMetadata.from_arguments`` expects). The config dig lives in
+    ``utils/typing.py::schema_config_from_info`` (shared with the walker's name
+    converter and ``resolve_relay_max_results``) so this helper never
+    dereferences ``info.schema.config`` itself. Returns ``None`` when no config
+    is reachable so the engine default applies downstream - deliberately distinct
+    from ``resolve_relay_max_results``'s terminal ``100``.
     """
-    schema = getattr(info, "schema", None)
-    config = getattr(getattr(schema, "_strawberry_schema", None), "config", None)
-    if config is None:
-        config = getattr(schema, "config", None)
-    return getattr(config, "relay_max_results", None)
+    return getattr(schema_config_from_info(info), "relay_max_results", None)
 
 
 def _coerce_pagination_int(value: Any) -> Any:

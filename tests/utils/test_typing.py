@@ -10,6 +10,9 @@ from django_strawberry_framework.utils import unwrap_graphql_type
 from django_strawberry_framework.utils.typing import (
     _MAX_TYPE_WRAPPER_DEPTH,
     is_async_callable,
+    schema_config_from_info,
+    strawberry_schema_from_info,
+    strawberry_schema_from_schema,
     unwrap_container_type,
     unwrap_return_type,
 )
@@ -233,3 +236,57 @@ def test_is_async_callable_sees_through_supported_wrappers(value, expected):
     is not callable, even when its underlying function is async.
     """
     assert is_async_callable(value) is expected
+
+
+def test_strawberry_schema_from_info_and_schema():
+    """Private ``_strawberry_schema`` digs stay on the shared typing helpers."""
+    from types import SimpleNamespace
+
+    inner = object()
+    assert strawberry_schema_from_schema(SimpleNamespace(_strawberry_schema=inner)) is inner
+    assert strawberry_schema_from_schema(inner) is inner
+    wrapped = SimpleNamespace(schema=SimpleNamespace(_strawberry_schema=inner))
+    assert strawberry_schema_from_info(wrapped) is inner
+    assert strawberry_schema_from_info(SimpleNamespace(schema=SimpleNamespace())) is None
+    assert strawberry_schema_from_info(SimpleNamespace()) is None
+
+
+def test_schema_config_from_info_prefers_wrapped_then_direct():
+    """Plan-time ``_strawberry_schema.config`` wins over bare ``schema.config``."""
+    from types import SimpleNamespace
+
+    wrapped = SimpleNamespace(
+        schema=SimpleNamespace(
+            _strawberry_schema=SimpleNamespace(config=SimpleNamespace(relay_max_results=7)),
+            config=SimpleNamespace(relay_max_results=99),
+        ),
+    )
+    assert schema_config_from_info(wrapped).relay_max_results == 7
+    direct = SimpleNamespace(schema=SimpleNamespace(config=SimpleNamespace(name_converter="nc")))
+    assert schema_config_from_info(direct).name_converter == "nc"
+    assert schema_config_from_info(SimpleNamespace(schema=SimpleNamespace())) is None
+    assert schema_config_from_info(SimpleNamespace()) is None
+    assert schema_config_from_info(None) is None
+
+
+def test_schema_config_from_info_explicit_none_wrapped_falls_back_to_direct():
+    """An explicitly present ``_strawberry_schema=None`` falls through to ``schema.config``.
+
+    ``getattr`` cannot distinguish a missing attribute from an attribute whose
+    value is ``None``, so this pins the contract for the value-is-``None`` case:
+    the wrapped dig yields ``None`` and ``schema_config_from_info`` must still
+    reach the bare ``schema.config`` fallback rather than short-circuiting.
+    """
+    from types import SimpleNamespace
+
+    info = SimpleNamespace(
+        schema=SimpleNamespace(
+            _strawberry_schema=None,
+            config=SimpleNamespace(relay_max_results=42),
+        ),
+    )
+    assert strawberry_schema_from_info(info) is None
+    assert schema_config_from_info(info).relay_max_results == 42
+    # And when both the wrapped dig and the direct config are absent, ``None``.
+    no_config = SimpleNamespace(schema=SimpleNamespace(_strawberry_schema=None))
+    assert schema_config_from_info(no_config) is None

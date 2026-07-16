@@ -16,6 +16,7 @@ from ..registry import registry
 from ..utils.querysets import apply_type_visibility_sync
 from ..utils.relations import instance_accessor, is_many_side_relation_kind, relation_kind
 from ..utils.strings import snake_case
+from ..utils.typing import schema_config_from_info
 from . import logger
 from . import nested_planner as _nested_planner
 from .field_meta import FieldMeta
@@ -178,11 +179,7 @@ def _target_has_custom_get_queryset(target_type: type | None) -> bool:
 
 def _schema_name_converter(info: Any | None) -> Any | None:
     """Return the active Strawberry name converter from planner or resolver ``info``."""
-    schema = getattr(info, "schema", None)
-    config = getattr(getattr(schema, "_strawberry_schema", None), "config", None)
-    if config is None:
-        config = getattr(schema, "config", None)
-    return getattr(config, "name_converter", None)
+    return getattr(schema_config_from_info(info), "name_converter", None)
 
 
 def _graphql_names_by_python_name(type_cls: type | None, info: Any | None) -> dict[str, str]:

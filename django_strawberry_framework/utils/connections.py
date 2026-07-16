@@ -36,6 +36,7 @@ from typing import Any
 from strawberry.relay.utils import SliceMetadata
 
 from ..exceptions import OptimizerError
+from .typing import schema_config_from_info
 
 # The connection sidecar argument names, in BOTH vocabularies the shared
 # readers below see. ``CONNECTION_ORDER_KWARG`` is the PYTHON kwarg name (the
@@ -506,22 +507,17 @@ def resolve_relay_max_results(info: Any, max_results: int | None) -> int:
     """Resolve the effective ``relay_max_results`` cap for a keyset window.
 
     Precedence mirrors ``SliceMetadata.from_arguments``: an explicit
-    ``max_results`` wins; otherwise the Strawberry schema config is read off
-    ``info`` - accepting BOTH the resolve-time Strawberry ``Info`` shape
-    (``info.schema.config``) and the plan-time graphql-core shape (config on
-    ``info.schema._strawberry_schema``, the same brittle-private contract
-    ``walker.py::_relay_max_results_from_info`` centralizes for the offset
-    path) - and finally Strawberry's documented default. One resolver for
-    both halves so the plan-time and resolve-time caps are the same number
-    (the cursor-parity invariant's keyset leg).
+    ``max_results`` wins; otherwise the Strawberry schema config is read via
+    ``schema_config_from_info`` (BOTH the resolve-time Strawberry ``Info``
+    shape and the plan-time graphql-core ``_strawberry_schema`` shape) and
+    finally Strawberry's documented default. One config dig shared with the
+    planner's ``_relay_max_results_from_info`` (which returns ``None`` instead
+    of this terminal default) so the plan-time and resolve-time caps read the
+    same attribute path (the cursor-parity invariant's keyset leg).
     """
     if max_results is not None:
         return max_results
-    schema = getattr(info, "schema", None)
-    config = getattr(getattr(schema, "_strawberry_schema", None), "config", None)
-    if config is None:
-        config = getattr(schema, "config", None)
-    cap = getattr(config, "relay_max_results", None)
+    cap = getattr(schema_config_from_info(info), "relay_max_results", None)
     return cap if cap is not None else _RELAY_MAX_RESULTS_DEFAULT
 
 

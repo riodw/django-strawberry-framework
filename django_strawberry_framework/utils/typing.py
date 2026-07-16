@@ -10,11 +10,56 @@ parallel unwrap loops.
 Also home to ``is_async_callable`` -- the partial-aware coroutine-callable
 predicate the public field factories and the GlobalID-callable validator share
 (the 0.0.9 DRY pass, ``docs/feedback.md`` Major 4).
+
+And to the brittle Strawberry-private ``_strawberry_schema`` / ``.config``
+accessors (``strawberry_schema_from_*`` / ``schema_config_from_info``): the
+optimizer middleware, nested planner, and connection window helpers all need
+the same dig from plan-time graphql-core ``info`` and resolve-time Strawberry
+``Info``, so the private attribute name lives in exactly one place.
 """
 
 import functools
 import inspect
 from typing import Any, get_args, get_origin
+
+
+def strawberry_schema_from_schema(schema: Any) -> Any:
+    """Unwrap a Strawberry Schema to its inner schema; return ``schema`` if already unwrapped.
+
+    Centralizes the brittle Strawberry-private ``_strawberry_schema`` contract.
+    Test fixtures sometimes pass the inner schema directly, so the fallback is
+    the input itself.
+    """
+    return getattr(schema, "_strawberry_schema", schema)
+
+
+def strawberry_schema_from_info(info: Any) -> Any | None:
+    """Walk ``info.schema._strawberry_schema``; return ``None`` if any step is missing.
+
+    Centralizes the brittle Strawberry-private ``_strawberry_schema`` contract for
+    the resolver-info path. Caller treats ``None`` as "no schema available,
+    nothing to look up."
+    """
+    return getattr(getattr(info, "schema", None), "_strawberry_schema", None)
+
+
+def schema_config_from_info(info: Any) -> Any | None:
+    """Return StrawberryConfig from plan-time graphql-core or resolve-time Info.
+
+    Prefers ``info.schema._strawberry_schema.config`` (optimizer middleware /
+    nested planner shape, where ``info.schema`` is a bare ``GraphQLSchema``) and
+    falls back to ``info.schema.config`` (Strawberry ``Info`` and test stubs).
+    Returns ``None`` when neither shape carries a config; callers decide whether
+    that means "engine default" (``None`` into ``SliceMetadata``) or a terminal
+    numeric default (``resolve_relay_max_results``).
+    """
+    schema = getattr(info, "schema", None)
+    if schema is None:
+        return None
+    config = getattr(strawberry_schema_from_info(info), "config", None)
+    if config is None:
+        config = getattr(schema, "config", None)
+    return config
 
 
 def is_async_callable(value: Any) -> bool:

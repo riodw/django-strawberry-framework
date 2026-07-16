@@ -49,7 +49,12 @@ from ..utils.querysets import run_in_one_sync_boundary
 from ..utils.relations import path_traverses_to_many as _path_traverses_to_many
 from ..utils.strings import flatten_lookup_path
 from .base import RelatedOrder
-from .inputs import Ordering, _field_specs, normalize_input_value
+from .inputs import (
+    Ordering,
+    _field_specs,
+    _get_concrete_field_names_for_order,
+    normalize_input_value,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from ..types.definition import DjangoTypeDefinition
@@ -214,12 +219,10 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
         if meta_fields is None:
             return fields
         if meta_fields == "__all__":
-            # Local import dodges any circular-import risk between
-            # ``orders/sets.py`` and ``orders/inputs.py`` (the
-            # ``_build_input_fields`` adapter imports ``OrderSet`` from
-            # ``.sets``; this local import keeps the runtime cycle inert).
-            from .inputs import _get_concrete_field_names_for_order
-
+            # ``_get_concrete_field_names_for_order`` is imported at module
+            # level with the other ``.inputs`` symbols; ``inputs.py`` only
+            # TYPE_CHECKING-imports ``OrderSet``, so the runtime cycle stays
+            # inert without a deferred local import.
             model = getattr(meta, "model", None)
             if model is None:
                 raise ConfigurationError(
@@ -506,7 +509,9 @@ class OrderSet(ClassBasedTypeNameMixin, metaclass=OrderSetMetaclass):
                 # ``flatten_lookup_path``: LOOKUP_SEP must never survive into a
                 # generated alias (DRY review A9 - one owner for the mangle).
                 alias = f"_dst_order_{index}_{flatten_lookup_path(field_path)}"
-                aggregate = models.Min if "ASC" in direction.name else models.Max
+                # Ascending vs descending: ``Ordering.is_ascending`` (same rule
+                # ``Ordering.resolve`` uses) picks Min / Max for the aggregate.
+                aggregate = models.Min if direction.is_ascending else models.Max
                 annotations[alias] = aggregate(field_path)
                 expressions.append(direction.resolve(alias))
             else:

@@ -3,13 +3,12 @@
 Re-exports the foundational primitives from ``base.py``, the
 ``OrderSet`` + ``OrderSetMetaclass`` pair from ``sets.py``, the
 ``Ordering`` enum from ``inputs.py``, and the Decision-11 consumer
-helper ``order_input_type``. Slice 3 will wire ``registry.clear()`` to
-clear the namespace via the local-import dance per spec-028 Decision 9
-(two separate steps -- ``clear_order_input_namespace()`` AND
-``_helper_referenced_ordersets.clear()``).
+helper ``order_input_type``. The finalizer's phase 2.5 wires
+the orphan check that compares ``_helper_referenced_ordersets``
+against the set of ``Meta.orderset_class``-wired ordersets.
 
 ``INPUTS_MODULE_PATH`` and ``_input_type_name_for`` are re-exported at
-module scope for Slice 2 / Slice 3 consumers but NOT listed in
+module scope for consumers but NOT listed in
 ``__all__`` -- the leading ``_`` flags them private to consumers.
 Mirrors ``django_strawberry_framework/filters/__init__.py``'s
 convention. ``OrderArgumentsFactory`` is **not** re-exported from this
@@ -31,13 +30,14 @@ from .inputs import INPUTS_MODULE_PATH, Ordering, _input_type_name_for
 from .sets import OrderSet, OrderSetMetaclass
 
 # Ledger of ``OrderSet``s referenced through the Decision-11
-# ``order_input_type(...)`` consumer helper. Per spec-028 Decision 2
-# N-new-2 of rev2 the ledger lives in ``__init__.py`` co-located with
-# its only writer (``order_input_type``). Slice 3's ``registry.clear()``
-# clears this set via a cycle-safe local import per spec-028
-# Decision 9 line 775 -- in a SEPARATE block from
-# ``clear_order_input_namespace()`` so the two-block layout matches
-# the filter side.
+# ``order_input_type(...)`` consumer helper. Cleared via the
+# ``register_subsystem_clear`` row below (owner
+# ``orders.helper_references``) so ``registry.clear()`` replays
+# the callback -- not via a cycle-safe local import inside
+# ``TypeRegistry.clear`` (that shape predates the registration
+# seam). The finalizer's phase 2.5 orphan validation compares
+# this set against the set of ``Meta.orderset_class``-wired
+# ordersets and raises ``ConfigurationError`` for orphans.
 _helper_referenced_ordersets: set[type[OrderSet]] = set()
 
 

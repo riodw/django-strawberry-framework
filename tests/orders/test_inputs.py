@@ -81,6 +81,16 @@ def test_ordering_member_values_are_string_names():
     assert Ordering.DESC_NULLS_LAST.value == "DESC_NULLS_LAST"
 
 
+def test_ordering_is_ascending_classifies_all_six_members():
+    """``is_ascending`` is the single ASC/DESC discriminator (resolve + to-many Min/Max)."""
+    assert Ordering.ASC.is_ascending is True
+    assert Ordering.ASC_NULLS_FIRST.is_ascending is True
+    assert Ordering.ASC_NULLS_LAST.is_ascending is True
+    assert Ordering.DESC.is_ascending is False
+    assert Ordering.DESC_NULLS_FIRST.is_ascending is False
+    assert Ordering.DESC_NULLS_LAST.is_ascending is False
+
+
 def test_ordering_resolve_asc_returns_orderby_with_no_nulls_clause():
     """Bare ``ASC`` leaves both ``nulls_first`` and ``nulls_last`` as ``None``."""
     expr = Ordering.ASC.resolve("name")

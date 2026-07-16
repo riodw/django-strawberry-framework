@@ -4,19 +4,20 @@ Generated order input classes MUST become real globals of this module
 because ``strawberry.lazy("django_strawberry_framework.orders.inputs")``
 resolves through ``module.__dict__`` (spec-028 Decision 9). This module
 pairs the constant (``INPUTS_MODULE_PATH``) and the public direction enum
-(``Ordering``) with the module-global materialization /
-ledger pair (``materialize_input_class`` / ``_materialized_names``), the
-Slice 2 input-data adapters (``_build_input_fields`` /
-``convert_order_field_to_input_annotation`` / ``normalize_input_value`` /
-``build_input_class``), the ``Meta.fields = "__all__"`` helper
-(``_get_concrete_field_names_for_order``), the per-(orderset, attr)
-provenance ledger (``_field_specs``), and the module-global
-materialization / namespace-clear pair (``materialize_input_class`` /
-``clear_order_input_namespace``).
+(``Ordering``) with the module-global materialization / ledger /
+namespace-clear trio (``materialize_input_class`` / ``_materialized_names`` /
+``clear_order_input_namespace``), the input-data adapters
+(``_build_input_fields`` / ``convert_order_field_to_input_annotation`` /
+``normalize_input_value`` / ``build_input_class``), the
+``Meta.fields = "__all__"`` helper (``_get_concrete_field_names_for_order``),
+and the per-(orderset, attr) provenance ledger (``_field_specs``).
 
-Slice 3 wires ``registry.clear()`` to call ``clear_order_input_namespace``
-plus the separate ``_helper_referenced_ordersets.clear()`` block per
-spec-028 Decision 9 line 775.
+``clear_order_input_namespace`` registers into ``registry.clear()`` via
+``register_subsystem_clear`` (owner ``orders.input_namespace``,
+``before_bind=True``). The separate ``_helper_referenced_ordersets`` ledger
+in ``orders/__init__.py`` clears through its own registration (owner
+``orders.helper_references``) per spec-028 Decision 9 -- not via a
+cycle-safe local import inside ``TypeRegistry.clear``.
 """
 
 from __future__ import annotations
@@ -91,6 +92,20 @@ class Ordering(enum.Enum):
     DESC_NULLS_FIRST = "DESC_NULLS_FIRST"
     DESC_NULLS_LAST = "DESC_NULLS_LAST"
 
+    @property
+    def is_ascending(self) -> bool:
+        """Whether this member is an ascending direction (including NULLS variants).
+
+        Single source for the ASC / DESC discrimination that ``resolve`` and
+        ``OrderSet._resolve_order_expressions`` (Min vs Max aggregate for
+        to-many terms) both need. Anchored on the member-name prefix so every
+        ``ASC_*`` variant classifies as ascending while every ``DESC_*``
+        variant classifies as descending, without a parallel membership table.
+        A prefix test (not substring membership) keeps the rule precise if
+        future members embed ``ASC`` elsewhere in the name.
+        """
+        return self.name.startswith("ASC")
+
     def resolve(self, value: str) -> OrderBy:
         """Translate this direction into a Django ``OrderBy`` expression.
 
@@ -104,7 +119,7 @@ class Ordering(enum.Enum):
         """
         nulls_first = True if "NULLS_FIRST" in self.name else None
         nulls_last = True if "NULLS_LAST" in self.name else None
-        if "ASC" in self.name:
+        if self.is_ascending:
             return F(value).asc(nulls_first=nulls_first, nulls_last=nulls_last)
         return F(value).desc(nulls_first=nulls_first, nulls_last=nulls_last)
 
@@ -118,15 +133,17 @@ _field_specs: dict[tuple[type[OrderSet], str], FieldSpec] = {}
 
 
 # Ledger of materialized input class names per spec-028 Decision 9.
-# ``materialize_input_class`` writes a ``name -> input_class`` entry;
-# Slice 3's ``registry.clear()`` will route through
-# ``clear_order_input_namespace`` to reset the ledger (module globals
-# stay parked per the parked-globals lifecycle). The stored value is the
-# materialized input class (NOT the source ``OrderSet``) so the clear
-# path can call ``delattr`` against the module's global by the same name
-# without an extra lookup. Mirrors
-# ``django_strawberry_framework/filters/inputs.py::_materialized_names``
-# but lives in a disjoint per-subsystem namespace per spec-028 Decision 9.
+# ``materialize_input_class`` writes a ``name -> input_class`` entry
+# (value is the materialized input class, NOT the source ``OrderSet``, so
+# collision checks and tests can identity-compare without a second lookup);
+# ``clear_order_input_namespace`` clears this ledger (forcing re-emit on
+# the next finalize) but intentionally leaves the class objects parked in
+# ``orders.inputs.__dict__`` -- ``setattr`` on the next materialize
+# replaces them in place. Stripping via ``delattr`` would break
+# ``strawberry.lazy(...)`` holders whose autouse reload did not also
+# reload the consumer module (see ``clear_order_input_namespace``).
+# Mirrors ``filters/inputs.py::_materialized_names`` but lives in a
+# disjoint per-subsystem namespace per spec-028 Decision 9.
 _materialized_names: dict[str, type] = {}
 
 
@@ -359,11 +376,12 @@ def clear_order_input_namespace() -> None:
     held by a consumer module whose autouse-reload fixture did NOT
     also reload the holder.
 
-    **Does NOT touch ``_helper_referenced_ordersets``.** Per spec-028
-    Decision 9 line 775, the ledger lives in ``orders/__init__.py``
-    co-located with its only writer (``order_input_type``); the clear
-    block in ``registry.clear()`` (Slice 3) carries TWO separate steps
-    -- one for ``clear_order_input_namespace``, one for the ledger.
+    **Does NOT touch ``_helper_referenced_ordersets``.** That ledger lives
+    in ``orders/__init__.py`` co-located with its only writer
+    (``order_input_type``) and clears through its own
+    ``register_subsystem_clear`` row (owner ``orders.helper_references``),
+    so ``registry.clear()`` replays two independent callbacks rather than
+    one combined clear (spec-028 Decision 9).
 
     The helper short-circuits cleanly when the factory / orderset
     modules are not in ``sys.modules`` (e.g., a partial-load

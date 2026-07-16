@@ -1,0 +1,21 @@
+term,anchor,notes
+`DjangoDebugExtension`,djangodebugextension,the extracted feature; moves verbatim (Decision 3)
+Response-extensions debug middleware,response-extensions-debug-middleware,the surface family name the new package inherits
+Debug SQL row,debug-sql-row,wire contract row preserved by the move
+Debug exception row,debug-exception-row,wire contract row preserved by the move
+Django debug-cursor capture,django-debug-cursor-capture,capture mechanism carried to the new README
+Async SQL-capture boundary,async-sql-capture-boundary,documented boundary carried to the new README
+Per-operation extension isolation,per-operation-extension-isolation,why the strawberry floor stays here (Decision 6)
+Strawberry extension lifecycle,strawberry-extension-lifecycle,engine contract the new package's tests keep pinning
+Developer-only debug posture,developer-only-debug-posture,security posture restated verbatim in the new README
+Debug-toolbar middleware,debug-toolbar-middleware,the framework-coupled sibling that does NOT move
+Soft dependency,soft-dependency,the seam class extensions/ joins (Decision 4)
+Hard dependency,hard-dependency,contrast term for the seam discussion
+`require_optional_module`,require_optional_module,the guard for the re-export (Decision 4)
+PEP 562 lazy export,pep-562-lazy-export,shape of the rewritten extensions/__init__.py
+Probe URLconf,probe-urlconf,live-tier scaffold slimmed to one seam proof (Decision 5)
+`TestClient`,testclient,drives the remaining live-tier seam test
+Graphene debug migration,graphene-debug-migration,parity story now routed through the extra
+Joint version cut,joint-version-cut,card 044 owns 0.0.14; this card is lone at 0.0.15
+Live-first coverage mandate,live-first-coverage-mandate,retire-the-stand-in discipline for the moved suite
+`DjangoOptimizerExtension`,djangooptimizerextension,composability partner in the remaining live test

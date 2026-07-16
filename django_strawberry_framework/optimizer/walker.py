@@ -76,18 +76,34 @@ _relation_connection_to_attr_for_key = _nested_planner._relation_connection_to_a
 _relay_max_results_from_info = _nested_planner._relay_max_results_from_info
 
 
+def _record_path_resolver_keys(
+    path_map: dict[str, tuple[str, ...]],
+    lookup_path: str,
+    keys: tuple[str, ...],
+) -> None:
+    """Append unique resolver keys onto one path ledger entry (B8)."""
+    if not keys:
+        return
+    recorded = path_map.get(lookup_path, ())
+    path_map[lookup_path] = recorded + tuple(key for key in keys if key not in recorded)
+
+
 def _record_prefetch_path_keys(
     plan: OptimizationPlan,
     lookup_path: str,
     keys: tuple[str, ...],
 ) -> None:
     """Attribute resolver / FK-id keys to a ``prefetch_related`` lookup path (B8)."""
-    if not keys:
-        return
-    recorded = plan.prefetch_path_resolver_keys.get(lookup_path, ())
-    plan.prefetch_path_resolver_keys[lookup_path] = recorded + tuple(
-        key for key in keys if key not in recorded
-    )
+    _record_path_resolver_keys(plan.prefetch_path_resolver_keys, lookup_path, keys)
+
+
+def _record_select_path_keys(
+    plan: OptimizationPlan,
+    lookup_path: str,
+    keys: tuple[str, ...],
+) -> None:
+    """Attribute resolver / FK-id keys to a ``select_related`` lookup path (B8)."""
+    _record_path_resolver_keys(plan.select_path_resolver_keys, lookup_path, keys)
 
 
 def _enable_only_for_operation(info: Any | None) -> bool:
@@ -717,10 +733,7 @@ def _plan_select_relation(
     # reconciliation later drops this path because a consumer projection
     # cannot traverse it (``plans.py::prune_unsupportable_select_related``),
     # these keys leave ``planned_resolver_keys`` with it.
-    recorded = plan.select_path_resolver_keys.get(full_path, ())
-    plan.select_path_resolver_keys[full_path] = recorded + tuple(
-        key for key in resolver_identities if key not in recorded
-    )
+    _record_select_path_keys(plan, full_path, resolver_identities)
     if django_field.related_model is not None:
         _walk_selections(
             sel.selections,
@@ -1153,29 +1166,21 @@ def _can_elide_fk_id(field: Any) -> bool:
     """Return ``True`` when ``field`` stores the related object's id on the source row.
 
     ``field`` is ``FieldMeta | Any`` per the ``_resolve_field_map`` dual
-    contract. A registered model yields a ``FieldMeta`` carrying the
-    precomputed ``fk_id_elision_eligible`` slot, returned directly. A raw
-    Django field (the unregistered-model fallback) is run through the
-    canonical ``FieldMeta._from_field_shape`` so the walker and ``FieldMeta``
-    share ONE elision predicate - including the composite-PK exclusion (a
-    single-column source ``attname`` cannot satisfy a tuple-shaped target
-    pk, so eliding would surface wrong data) - and cannot drift.
+    contract. Delegates to ``FieldMeta.can_elide_fk_id`` so the walker and
+    the stamp owner share ONE dual-contract reader (and one rebuild path
+    through ``_from_field_shape`` for unstamped raw Django fields).
     """
-    stamped = getattr(field, "fk_id_elision_eligible", None)
-    if stamped is not None:
-        return stamped
-    return FieldMeta._from_field_shape(field, is_relation=True).fk_id_elision_eligible
+    return FieldMeta.can_elide_fk_id(field)
 
 
 def _target_pk_name(field: Any) -> str | None:
-    """Return the related model's concrete primary-key field name."""
-    stamped = getattr(field, "target_pk_name", None)
-    if stamped is not None:
-        return stamped
-    related_model = getattr(field, "related_model", None)
-    if related_model is None:
-        return None
-    return related_model._meta.pk.name
+    """Return the related model's concrete primary-key field name.
+
+    Dual-contract adapter over ``FieldMeta.target_pk_name_of``: trusts a
+    stamped ``FieldMeta.target_pk_name`` including legitimate ``None``, and
+    uses the defensive model helper for raw Django fields.
+    """
+    return FieldMeta.target_pk_name_of(field)
 
 
 def _has_custom_id_resolver(target_type: type | None, target_pk_name: str | None) -> bool:

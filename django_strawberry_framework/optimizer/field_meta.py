@@ -236,6 +236,42 @@ class FieldMeta:
             concrete=bool(getattr(field, "concrete", False)),
         )
 
+    @classmethod
+    def can_elide_fk_id(cls, field: Any) -> bool:
+        """Return whether ``field`` may satisfy an id-only child from the source FK.
+
+        Dual-contract reader for the walker's ``FieldMeta | raw Django field``
+        field_map values: a ``FieldMeta`` returns its stamped
+        ``fk_id_elision_eligible`` bool (never ambiguous - the slot is always
+        a bool), and any other shape rebuilds through ``_from_field_shape`` so
+        the eligibility predicate cannot drift from the stamper.
+        """
+        if isinstance(field, cls):
+            return field.fk_id_elision_eligible
+        stamped = getattr(field, "fk_id_elision_eligible", None)
+        if stamped is not None:
+            return stamped
+        return cls._from_field_shape(field, is_relation=True).fk_id_elision_eligible
+
+    @classmethod
+    def target_pk_name_of(cls, field: Any) -> str | None:
+        """Return the related model's concrete PK field name for ``field``.
+
+        Dual-contract reader paired with ``can_elide_fk_id``. A ``FieldMeta``
+        returns its stamped ``target_pk_name`` *including* a legitimate
+        ``None`` (unresolved / meta-less related model) - ``getattr``-then-
+        rebuild would treat stamped ``None`` as "unstamped" and re-raise on a
+        lightweight related-model stand-in. Raw Django fields (and duck-typed
+        stamps that are not ``FieldMeta``) fall through to the defensive
+        model helper.
+        """
+        if isinstance(field, cls):
+            return field.target_pk_name
+        stamped = getattr(field, "target_pk_name", None)
+        if stamped is not None:
+            return stamped
+        return _target_pk_name(getattr(field, "related_model", None))
+
 
 def _target_pk_name(model: type[models.Model] | None) -> str | None:
     """Return ``model``'s concrete primary-key field name, or ``None``.

@@ -38,6 +38,7 @@ from django_strawberry_framework.optimizer.walker import (
     _merge_runtime_prefixes,
     _prefetch_hint_for_path,
     _record_prefetch_path_keys,
+    _record_select_path_keys,
     _resolve_selection_target,
     _selected_scalar_names,
     _should_include,
@@ -209,6 +210,16 @@ def test_record_prefetch_path_keys_ignores_an_empty_key_set():
     _record_prefetch_path_keys(plan, "items", ())
 
     assert plan.prefetch_path_resolver_keys == {}
+
+
+def test_record_select_path_keys_appends_unique_identities():
+    """Select-path B8 ledger shares the same append-unique discipline as prefetch."""
+    plan = OptimizationPlan()
+    _record_select_path_keys(plan, "category", ("a", "b"))
+    _record_select_path_keys(plan, "category", ("b", "c"))
+    _record_select_path_keys(plan, "category", ())
+
+    assert plan.select_path_resolver_keys == {"category": ("a", "b", "c")}
 
 
 def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):

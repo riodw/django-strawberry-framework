@@ -551,7 +551,12 @@ def _sdl_type_name(type_cls: type, definition: object, name_converter: NameConve
     ``graphql_type_name`` there rather than raising - the bare-name path resolves
     before the finalized check.
     """
-    strawberry_definition = getattr(type_cls, "__strawberry_definition__", None)
+    # A partially finalized subclass may inherit its parent's Strawberry
+    # definition even though it has not received one of its own. Treat only
+    # class-owned metadata as finalized; otherwise use this DjangoType
+    # definition's own GraphQL name so bare-name resolution can still reach the
+    # clean unfinalized-type diagnostic.
+    strawberry_definition = type_cls.__dict__.get("__strawberry_definition__")
     if strawberry_definition is None:
         return definition.graphql_type_name
     return name_converter.from_type(strawberry_definition)

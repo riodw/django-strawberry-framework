@@ -5226,7 +5226,7 @@ _CREATE_SHELF_VIA_FORM = (
     "result{ code } errors{ field messages } } }"
 )
 _CREATE_SHELF_MODEL = (
-    "mutation($d: ShelfAltbranchesBranchCodeInput!){ createShelf(data:$d){ "
+    "mutation($d: ShelfAlt_ubranchesBranchCodeInput!){ createShelf(data:$d){ "
     "result{ code } errors{ field messages } } }"
 )
 

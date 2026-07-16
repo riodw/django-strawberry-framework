@@ -383,43 +383,52 @@ def make_shape_build_cache() -> tuple[dict[Any, Any], Callable[[], None]]:
 
 
 def pascalize_token(name: str) -> str:
-    """Encode one field name as a single leading-capital token for an input-name suffix.
+    """Encode one exact field name as one injective, leading-capital suffix token.
 
-    A single leading capital with a fully-lowercased letter tail
-    (``is_private`` -> ``Isprivate``, ``category`` -> ``Category``). Letter-to-letter
-    underscores are removed so the bare-concatenation suffix the three generated-input
-    type-name derivers use (``mutation_input_type_name`` / ``form_input_type_name`` /
-    ``serializer_input_type_name``) stays uniquely decomposable at uppercase
-    boundaries: each token has NO interior capital, so distinct field sets never
-    collide on one generated name (``("a_b", "c")`` -> ``AbC`` vs ``("a", "b_c")`` ->
-    ``ABc``, distinct).
+    Tokens contain exactly one uppercase character, at their start, so a sorted
+    concatenation remains uniquely separable at uppercase boundaries. Inside a
+    token, lowercase ASCII letters and digits pass through; underscores escape
+    as ``_u`` and uppercase letters as ``_c<lower>``. Leading non-lowercase
+    characters use distinct ``X_*`` escapes. Other Unicode characters use their
+    code point. The escapes are necessary because collapsing underscores or
+    lowercasing capitals maps legal distinct Django names such as ``a_b`` /
+    ``ab``, ``field2_x`` / ``field2x``, and ``fooBar`` / ``foobar`` to one type
+    name.
 
-    A separator before a digit-leading segment is retained (``field_2`` -> ``Field_2``,
-    not ``Field2``) because capitalization cannot encode that boundary - the same
-    injectivity rule ``pascal_case`` / ``graphql_camel_name`` already enforce. Without
-    it, ``field_2`` and ``field2`` both become ``Field2``, so two Meta.fields
-    narrowings that differ only by an underscore-adjacent digit claim one GraphQL
-    input type name and trip the AR-M6 distinct-shape raise (or mislabel a single
-    narrowing). Retained underscores are safe on the wire because
-    ``build_strawberry_input_class`` pins ``strawberry.input(name=...)``; Strawberry's
-    converter never rewrites the type stem.
-
-    Deliberately NOT ``pascal_case`` (which per-segment-capitalizes): an interior
-    capital would make ``IsPrivate`` ambiguously re-decompose as the two fields
-    ``is`` + ``private``, the letter-boundary collision this helper exists to prevent.
+    Examples: ``category`` -> ``Category``, ``is_private`` ->
+    ``Is_uprivate``, ``field_2`` -> ``Field_u2``, and ``fooBar`` ->
+    ``Foo_cbar``. Retained underscores are valid GraphQL name characters, and
+    ``build_strawberry_input_class`` pins the finished name explicitly.
 
     Promoted here from ``mutations/inputs.py`` (spec-039 P2.3 kept it sited there at
     two consumers; at three - model + form + serializer - it graduates to the shared
     input-name machinery, kept visibly distinct from ``pascal_case``). The old
     ``mutations/inputs.py::_pascalize_token`` name remains as an import alias.
     """
-    parts = [part for part in name.split("_") if part]
-    if not parts:
+    if not name:
         return ""
-    head, *rest = parts
-    return head.capitalize() + "".join(
-        f"_{part}" if part[0].isdigit() else part.lower() for part in rest
-    )
+
+    def _tail_char(char: str) -> str:
+        if "a" <= char <= "z" or "0" <= char <= "9":
+            return char
+        if char == "_":
+            return "_u"
+        if "A" <= char <= "Z":
+            return f"_c{char.lower()}"
+        return f"_x{ord(char):x}_"
+
+    first, tail = name[0], name[1:]
+    if "a" <= first <= "z":
+        head = first.upper()
+    elif "A" <= first <= "Z":
+        head = f"X_h{first.lower()}"
+    elif first == "_":
+        head = "X_l"
+    elif "0" <= first <= "9":
+        head = f"X_d{first}"
+    else:
+        head = f"X_z{ord(first):x}_"
+    return head + "".join(_tail_char(char) for char in tail)
 
 
 def generated_input_type_name(

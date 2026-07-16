@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pickle
+
 import strawberry
 
 from django_strawberry_framework.exceptions import (
@@ -43,6 +45,23 @@ class _Counting:
         return "counted"
 
     __repr__ = __str__
+
+
+class _HostileTypeNameMeta(type):
+    """Metaclass that makes even the fallback class-name lookup fail."""
+
+    def __getattribute__(cls, name: str):
+        if name == "__name__":
+            raise RuntimeError("type name failed")
+        return super().__getattribute__(name)
+
+
+class _UnprintableTypeName(metaclass=_HostileTypeNameMeta):
+    def __str__(self) -> str:
+        raise RuntimeError("str failed")
+
+    def __repr__(self) -> str:
+        raise RuntimeError("repr failed")
 
 
 class _Stateful:
@@ -135,14 +154,29 @@ def test_multiple_args_mixed_printable_and_unprintable():
     assert err.args == ("ctx", bad)
 
 
-def test_render_is_lazy_and_cached():
-    """Args are rendered at most once: never at construction, once per str/repr, then cached."""
+def test_render_is_lazy_and_recomputed():
+    """Construction is lazy while later renders reflect current value/context."""
     counter = _Counting()
     err = OptimizerError(counter)
     assert counter.renders == 0  # construction does not render
     assert str(err) == "counted"
     assert str(err) == "counted"
-    assert counter.renders == 1  # first str rendered once; second is cached
+    assert counter.renders == 2
+
+
+def test_args_reassignment_and_pickle_never_leave_stale_render_caches():
+    """Standard mutable-``args`` semantics survive rendering and serialization."""
+    err = ConfigurationError("first")
+    assert str(err) == "first"
+    assert repr(err) == "ConfigurationError('first')"
+
+    err.args = ("second",)
+    restored = pickle.loads(pickle.dumps(err))
+
+    assert str(err) == "second"
+    assert repr(err) == "ConfigurationError('second')"
+    assert str(restored) == "second"
+    assert repr(restored) == "ConfigurationError('second')"
 
 
 def test_delayed_stateful_failure_is_handled():
@@ -159,6 +193,13 @@ def test_base_exception_from_arg_is_swallowed():
     err = ConfigurationError(_UnprintableBase())
     assert str(err) == "<unprintable _UnprintableBase>"
     assert "<unprintable _UnprintableBase>" in repr(err)
+
+
+def test_hostile_metaclass_type_name_is_guarded_too():
+    """Fallback rendering does not trust ``type(arg).__name__``."""
+    err = ConfigurationError(_UnprintableTypeName())
+    assert str(err) == "<unprintable object>"
+    assert repr(err) == "ConfigurationError(<unprintable object>)"
 
 
 def test_syncmisuse_error_renders_safely_and_keeps_identity():

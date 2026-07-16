@@ -376,15 +376,13 @@ def mutation_input_type_name(
 
     Identity is ``(model, operation_kind, frozenset(effective_field_names))``.
     The narrowed-shape suffix is the sorted-field-name tokens concatenated, each
-    token a single-leading-capital form from ``_pascalize_token`` (letter
-    underscores collapsed, underscore-before-digit retained). That token shape
-    makes the bare concatenation INJECTIVE per field set: with no interior capital,
-    the concatenation decomposes uniquely at uppercase boundaries, so
-    ``("a_b", "c")`` -> ``AbC`` and ``("a", "b_c")`` -> ``ABc`` produce DISTINCT
-    names (the per-segment-capitalize form would collapse both onto ``ABC``), and
-    ``("field_2",)`` -> ``Field_2`` stays distinct from ``("field2",)`` -> ``Field2``
-    (a blanket underscore strip would collide both onto ``Field2`` and trip the
-    AR-M6 distinct-shape raise at materialize). The full shape is detected by
+    token an injective single-leading-capital form from ``_pascalize_token``.
+    Escaped underscores and capitals preserve the exact legal field spelling,
+    while the absence of interior capitals makes the concatenation uniquely
+    decomposable at token boundaries. Thus ``("a_b", "c")`` and
+    ``("a", "b_c")``, ``("field_2",)`` and ``("field2",)``, and
+    ``("fooBar",)`` and ``("foobar",)`` all produce distinct names rather than
+    colliding at materialization. The full shape is detected by
     comparing the effective set against ``full_field_names`` (the complete editable
     set for the model), so a ``Meta.fields`` that happens to name every editable
     column still resolves to the canonical name.

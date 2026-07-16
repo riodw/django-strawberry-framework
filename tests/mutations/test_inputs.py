@@ -644,7 +644,7 @@ def test_type_name_token_boundaries_do_not_collide():
         full_field_names=full,
     )
     assert left != right
-    assert left == "ItemAbCInput" and right == "ItemABcInput"
+    assert left == "ItemA_ubCInput" and right == "ItemAB_ucInput"
 
 
 def test_type_name_digit_boundary_narrowings_stay_distinct():
@@ -682,7 +682,7 @@ def test_type_name_digit_boundary_narrowings_stay_distinct():
         ("field2",),
         full_field_names=full,
     )
-    assert left_name == "DigitBoundaryField_2Input"
+    assert left_name == "DigitBoundaryField_u2Input"
     assert right_name == "DigitBoundaryField2Input"
     assert left_name != right_name
 
@@ -712,8 +712,28 @@ def test_type_name_digit_boundary_narrowings_stay_distinct():
 
     schema = strawberry.Schema(query=Query, config=strawberry_config())
     sdl = schema.as_str()
-    assert "input DigitBoundaryField_2Input" in sdl
+    assert "input DigitBoundaryField_u2Input" in sdl
     assert "input DigitBoundaryField2Input" in sdl
+
+
+def test_type_name_other_legal_boundaries_do_not_collide():
+    """Underscores after digits, collapsed letters, and capitals remain injective."""
+    full = ("not_the_narrowed_set",)
+
+    for left_field, right_field in (("a_b", "ab"), ("field2_x", "field2x"), ("fooBar", "foobar")):
+        left = mutation_input_type_name(
+            product_models.Item,
+            CREATE,
+            (left_field,),
+            full_field_names=full,
+        )
+        right = mutation_input_type_name(
+            product_models.Item,
+            CREATE,
+            (right_field,),
+            full_field_names=full,
+        )
+        assert left != right
 
 
 def test_build_empty_field_set_raises_configuration_error():

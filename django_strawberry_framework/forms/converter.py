@@ -162,18 +162,20 @@ _SCALAR_FORM_FIELDS: dict[type[forms.Field], Any] = {
 }
 
 
-def form_field_required(field: forms.Field) -> bool:
+def form_field_required(field: forms.Field, *, column: Any = None) -> bool:
     """The effective GraphQL-input requiredness of any form field (the one rule).
 
-    ``NullBooleanField.validate`` is a no-op, so Django's ``field.required`` is
-    meaningless for form validation (omit / ``None`` always succeed). GraphQL
-    input fields also cannot be "required but nullable" (a nullable input is
-    always omittable). Baking ``bool | None`` into the annotation while leaving
-    ``required=True`` (Django's default) produced SDL ``flag: Boolean`` with NO
-    class default - GraphQL validation allowed the omit, then Strawberry crashed
-    with ``TypeError: ... missing 1 required keyword-only argument``. So a
-    ``NullBooleanField`` is always optional (graphene-django parity); every other
-    field keeps its declared ``field.required``.
+    An exact ``NullBooleanField`` has a no-op ``validate``, so its
+    ``field.required`` is normally meaningless (omit / ``None`` both pass).
+    Two shapes must retain declared requiredness, however:
+
+    - a custom subclass may override validation and genuinely reject omission;
+    - a ModelForm field backed by a non-null model column reaches model
+      validation after the form field's no-op and rejects ``None``.
+
+    GraphQL cannot express "required but nullable", but the non-null column
+    shape has a non-null ``bool`` annotation already, so keeping
+    ``required=True`` accurately rejects omission and null before execution.
 
     This is the SINGLE requiredness decision, shared by ``convert_form_field``
     (the annotation path) and ``forms/inputs.py``'s build site + create/partial
@@ -182,7 +184,11 @@ def form_field_required(field: forms.Field) -> bool:
     required-field discovery over the full declared field set never raises on an
     excluded unsupported field.
     """
-    return False if isinstance(field, forms.NullBooleanField) else field.required
+    if type(field) is not forms.NullBooleanField:
+        return field.required
+    if column is not None and not getattr(column, "null", True):
+        return field.required
+    return False
 
 
 def convert_form_field(field: forms.Field) -> FormFieldConversion:

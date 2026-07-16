@@ -3155,6 +3155,33 @@ def test_runtime_context_field_source_collision_fails_before_validation():
         )
 
 
+def test_runtime_nested_source_ownership_handles_omitted_child_data():
+    """An omitted nested value still audits the child serializer with empty data."""
+
+    class ChildSerializer(serializers.Serializer):
+        name = serializers.CharField(required=False)
+
+    class ParentSerializer(serializers.Serializer):
+        child = ChildSerializer(required=False)
+
+    mutation_cls = SimpleNamespace(
+        __name__="NestedOwnershipMutation",
+        _mutation_meta=SimpleNamespace(operation="update"),
+    )
+    nested_spec = SimpleNamespace(
+        kind=serializer_resolvers.NESTED_SINGLE,
+        target_name="child",
+        nested_specs=(),
+    )
+
+    serializer_resolvers._assert_runtime_write_source_ownership(
+        mutation_cls,
+        ParentSerializer(data={}),
+        {},
+        [nested_spec],
+    )
+
+
 def test_runtime_context_star_source_field_is_rejected_before_validation():
     """A context-dependent ``source="*"`` runtime field is rejected before validation runs.
 

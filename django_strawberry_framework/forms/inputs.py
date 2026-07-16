@@ -395,7 +395,7 @@ def _field_triple_and_spec(
     # ONE requiredness decision for both the column-backed and column-less paths
     # (so a NullBooleanField backed by a nullable model column is forced optional
     # too, not just the model-less one) - see ``converter.form_field_required``.
-    field_required = form_field_required(field)
+    field_required = form_field_required(field, column=column)
     if column is not None:
         # ModelForm field with a backing model column: route the ``models.Field``
         # through the read-side converters so the wire contract is symmetric with
@@ -554,15 +554,16 @@ def build_form_input_class(
 def _required_form_field_names(form_class: type[forms.BaseForm]) -> set[str]:
     """Return the names of every declared form field that must appear in a create input.
 
-    Uses the shared ``converter.form_field_required`` (so ``NullBooleanField`` is
-    never treated as create-required, matching the build site) as a pure
-    attribute + ``isinstance`` read - it never calls ``convert_form_field``, so
-    discovery over the FULL declared set never raises on a field the mutation
-    later excludes via ``Meta.fields`` / ``Meta.exclude`` (an unsupported custom
-    field is only converted if it actually reaches the input at the build site).
+    Uses the shared ``converter.form_field_required`` with each field's backing
+    column, matching the build site: an exact ``NullBooleanField`` is optional
+    unless a non-null model column makes omission invalid. This never calls
+    ``convert_form_field``, so discovery over the FULL declared set cannot raise
+    on an unsupported field later excluded via ``Meta.fields`` / ``Meta.exclude``.
     """
     return {
-        name for name, field in get_form_fields(form_class).items() if form_field_required(field)
+        name
+        for name, field in get_form_fields(form_class).items()
+        if form_field_required(field, column=_model_column_for(form_class, name))
     }
 
 

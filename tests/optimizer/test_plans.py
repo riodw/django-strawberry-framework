@@ -166,6 +166,7 @@ class TestOptimizationPlanMerge:
             fk_id_elisions=["existing-elision"],
             planned_resolver_keys=["existing-key"],
             select_path_resolver_keys={"category": ("existing-key",)},
+            prefetch_path_resolver_keys={"items": ("existing-key",)},
         )
         source = OptimizationPlan(
             select_related=["category", "owner", "owner"],
@@ -174,6 +175,7 @@ class TestOptimizationPlanMerge:
             fk_id_elisions=["existing-elision", "new-elision", "new-elision"],
             planned_resolver_keys=["existing-key", "new-key", "new-key"],
             select_path_resolver_keys={"category": ("existing-key", "new-key", "new-key")},
+            prefetch_path_resolver_keys={"items": ("existing-key", "new-key", "new-key")},
             cacheable=False,
         )
 
@@ -186,6 +188,9 @@ class TestOptimizationPlanMerge:
         assert target.planned_resolver_keys == ["existing-key", "new-key"]
         assert target.select_path_resolver_keys == {
             "category": ("existing-key", "new-key"),
+        }
+        assert target.prefetch_path_resolver_keys == {
+            "items": ("existing-key", "new-key"),
         }
         assert target.cacheable is False
 
@@ -730,6 +735,31 @@ class TestDiffPlanForQueryset:
         assert delta_plan.prefetch_related == ()
         assert delta_qs is qs
         assert delta_qs._prefetch_related_lookups == (consumer_pf,)
+
+    def test_consumer_custom_prefetch_survives_redundant_trailing_string(self):
+        """A duplicate bare lookup never hides the consumer's custom queryset.
+
+        Django accepts ``Prefetch("items", queryset=...)`` followed by the
+        redundant ``"items"`` string and keeps the first custom queryset. The
+        optimizer must inspect both same-path entries rather than collapsing
+        them to the trailing string and replacing a permission filter.
+        """
+        consumer_pf = Prefetch(
+            "items",
+            queryset=Item.objects.filter(is_private=False),
+        )
+        opt_pf = Prefetch(
+            "items",
+            queryset=Item.objects.only("id", "category_id"),
+        )
+        plan = OptimizationPlan(prefetch_related=[opt_pf])
+        qs = Category.objects.prefetch_related(consumer_pf, "items")
+
+        delta_plan, delta_qs = diff_plan_for_queryset(plan, qs)
+
+        assert delta_plan.prefetch_related == ()
+        assert delta_qs is qs
+        assert delta_qs._prefetch_related_lookups == (consumer_pf, "items")
 
 
 def _linked_path(*keys):

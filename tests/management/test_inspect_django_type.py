@@ -54,6 +54,7 @@ from django_strawberry_framework.management.commands.inspect_django_type import 
     _matched_scalar_key,
     _render_annotation,
     _scalar_name,
+    _sdl_type_name,
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.types.converters import DjangoFileType, DjangoImageType
@@ -306,6 +307,22 @@ def test_matched_scalar_key_names_supported_mro_ancestor():
     assert _matched_scalar_key(CustomTextField()) == "TextField"
     # A directly-supported field reports its own class (ancestor == concrete).
     assert _matched_scalar_key(models.CharField()) == "CharField"
+
+
+def test_sdl_type_name_ignores_inherited_strawberry_definition():
+    """A partially finalized child uses its own pending GraphQL name."""
+
+    @strawberry.type
+    class FinalizedParent:
+        value: str
+
+    class PendingChild(FinalizedParent):
+        pass
+
+    definition = types.SimpleNamespace(graphql_type_name="PendingAlias")
+
+    assert "__strawberry_definition__" not in PendingChild.__dict__
+    assert _sdl_type_name(PendingChild, definition, NameConverter()) == "PendingAlias"
 
 
 class _FakeOrigin:

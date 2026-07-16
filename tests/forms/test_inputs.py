@@ -276,6 +276,34 @@ def test_null_boolean_field_is_optional_even_when_django_required():
     assert not _is_optional(fields["name"])
 
 
+def test_non_null_column_backed_null_boolean_stays_required():
+    """Model validation makes a required NullBooleanField over ``null=False`` non-null."""
+
+    class Flags(models.Model):
+        flag = models.BooleanField(null=False)
+        name = models.CharField(max_length=20)
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class FlagsForm(forms.ModelForm):
+        flag = forms.NullBooleanField(required=True)
+
+        class Meta:
+            model = Flags
+            fields = ("flag", "name")
+
+    cre, _, _, _ = build_form_inputs(FlagsForm, operation_kind=CREATE)
+    fields = _field_map(cre)
+    assert not _is_optional(fields["flag"])
+    with pytest.raises(ConfigurationError, match=r"drops required form field.*flag"):
+        build_form_inputs(
+            FlagsForm,
+            operation_kind=CREATE,
+            fields=("name",),
+        )
+
+
 def test_column_backed_null_boolean_is_optional():
     """A ``NullBooleanField`` backed by a nullable model column is optional too.
 

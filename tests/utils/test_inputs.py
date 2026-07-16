@@ -8,6 +8,7 @@ than via a silently drifted second copy (``docs/feedback.md`` Major 1).
 """
 
 import sys
+from types import SimpleNamespace
 
 import pytest
 import strawberry
@@ -20,6 +21,7 @@ from django_strawberry_framework.utils.inputs import (
     build_strawberry_input_class,
     emit_set_input_field_triples,
     graphql_camel_name,
+    iter_input_field_collisions,
     iter_set_subclasses,
     make_input_namespace,
     make_shape_build_cache,
@@ -347,19 +349,58 @@ def test_make_shape_build_cache_returns_dict_and_clear():
     assert cache == {}
 
 
-def test_pascalize_token_keeps_letter_collapse_and_digit_boundary():
-    """Letter underscores collapse (no interior capital); digit boundaries stay distinct.
-
-    Load-bearing for narrowed mutation / form input type-name suffixes: ``is_private``
-    must stay ``Isprivate`` (not ``IsPrivate``) so bare concatenation remains
-    decomposable, while ``field_2`` / ``field2`` must NOT both become ``Field2``.
-    """
-    assert pascalize_token("is_private") == "Isprivate"
+def test_pascalize_token_is_injective_across_legal_field_name_boundaries():
+    """Underscore, digit, and case distinctions survive without interior capitals."""
+    assert pascalize_token("") == ""
+    assert pascalize_token("is_private") == "Is_uprivate"
     assert pascalize_token("category") == "Category"
-    assert pascalize_token("a_b") == "Ab"
+    assert pascalize_token("a_b") == "A_ub"
     assert pascalize_token("field2") == "Field2"
-    assert pascalize_token("field_2") == "Field_2"
-    assert pascalize_token("field_2") != pascalize_token("field2")
+    assert pascalize_token("field_2") == "Field_u2"
+    assert pascalize_token("Foo") == "X_hfoo"
+    assert pascalize_token("2fa") == "X_d2fa"
+    assert pascalize_token("\N{LATIN SMALL LETTER E WITH ACUTE}x") == "X_ze9_x"
+    assert pascalize_token("a\N{LATIN SMALL LETTER E WITH ACUTE}") == "A_xe9_"
+    for left, right in (
+        ("a_b", "ab"),
+        ("field_2", "field2"),
+        ("field2_x", "field2x"),
+        ("fooBar", "foobar"),
+        ("_foo", "x_foo"),
+    ):
+        assert pascalize_token(left) != pascalize_token(right)
+
+
+def test_input_collision_walker_reports_shared_write_sources():
+    """The optional source axis detects two distinct fields writing one attribute."""
+    specs = [
+        SimpleNamespace(
+            input_attr="name",
+            graphql_name="name",
+            target_name="name",
+            source="name",
+        ),
+        SimpleNamespace(
+            input_attr="alias",
+            graphql_name="alias",
+            target_name="alias",
+            source="name",
+        ),
+    ]
+
+    messages = list(
+        iter_input_field_collisions(
+            specs,
+            subject="Probe",
+            field_noun="fields",
+            rename_clause="Rename one",
+            name_of=lambda spec: spec.target_name,
+            source_of=lambda spec: spec.source,
+        ),
+    )
+
+    assert len(messages) == 1
+    assert "'name' and 'alias' sharing one source 'name'" in messages[0]
 
 
 def test_optional_field_kwargs_defaults_none_and_aliases_only_on_divergence():

@@ -89,6 +89,21 @@ def test_null_boolean_field_is_optional_bool():
     assert convert_form_field(forms.NullBooleanField(required=False)).required is False
 
 
+def test_null_boolean_subclass_with_real_validation_stays_required():
+    """A custom subclass is not assumed to retain NullBooleanField's no-op validation."""
+
+    class RequiredNullableBoolean(forms.NullBooleanField):
+        validate = forms.Field.validate
+
+    class ProbeForm(forms.Form):
+        flag = RequiredNullableBoolean(required=True)
+
+    field = ProbeForm.base_fields["flag"]
+    assert convert_form_field(field).required is True
+    assert ProbeForm(data={}).is_valid() is False
+    assert ProbeForm(data={}).errors["flag"] == ["This field is required."]
+
+
 def test_json_field_maps_to_json_scalar_not_charfield_str():
     """``JSONField`` subclasses ``CharField`` but must resolve to ``JSON``, not ``str``.
 

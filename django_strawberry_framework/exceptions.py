@@ -10,12 +10,21 @@ from __future__ import annotations
 __all__ = ("ConfigurationError", "DjangoStrawberryFrameworkError", "OptimizerError")
 
 
+def _safe_type_name(value: object) -> str:
+    """Return ``type(value).__name__`` without trusting hostile metaclass metadata."""
+    try:
+        name = type(value).__name__
+    except BaseException:
+        return "object"
+    return name if isinstance(name, str) else "object"
+
+
 def _safe_arg_repr(value: object) -> str:
     """``repr(value)`` if it succeeds, else a placeholder naming the arg type."""
     try:
         return repr(value)
     except BaseException:
-        return f"<unprintable {type(value).__name__}>"
+        return f"<unprintable {_safe_type_name(value)}>"
 
 
 class DjangoStrawberryFrameworkError(Exception):
@@ -36,41 +45,33 @@ class DjangoStrawberryFrameworkError(Exception):
 
     - a message arg whose ``__str__`` / ``__repr__`` fails only LATER (stateful)
       is still handled - the guard is at the render call, not at construction;
-    - side effects of an expensive/side-effecting arg render happen at most
-      once (the result is cached), never the construction-probe-plus-wire
-      double-render the eager approach incurred;
+    - rendering is recomputed from the current ``args`` on each call, preserving
+      standard exception behavior when callers replace ``args`` and preserving
+      lazy-translation behavior when the active locale changes;
     - a ``BaseException`` (not just ``Exception``) raised by a hostile dunder is
       swallowed too - a display operation must never propagate ``SystemExit`` /
       ``KeyboardInterrupt`` and break wire identity.
     """
 
     def __str__(self) -> str:
-        """Render ``str`` safely (see class docstring); never raises, cached."""
-        cached = self.__dict__.get("_dsf_str")
-        if cached is not None:
-            return cached
+        """Render ``str`` safely from the current args (see class docstring)."""
         try:
             rendered = super().__str__()
         except BaseException:
             rendered = (
-                f"<unprintable {type(self.args[0]).__name__}>"
+                f"<unprintable {_safe_type_name(self.args[0])}>"
                 if len(self.args) == 1
                 else "(" + ", ".join(_safe_arg_repr(a) for a in self.args) + ")"
             )
-        self.__dict__["_dsf_str"] = rendered
         return rendered
 
     def __repr__(self) -> str:
-        """Render ``repr`` safely (see class docstring); never raises, cached."""
-        cached = self.__dict__.get("_dsf_repr")
-        if cached is not None:
-            return cached
+        """Render ``repr`` safely from the current args (see class docstring)."""
         try:
             rendered = super().__repr__()
         except BaseException:
             args = ", ".join(_safe_arg_repr(a) for a in self.args)
-            rendered = f"{type(self).__name__}({args})"
-        self.__dict__["_dsf_repr"] = rendered
+            rendered = f"{_safe_type_name(self)}({args})"
         return rendered
 
 

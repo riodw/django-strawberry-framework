@@ -390,6 +390,11 @@ def test_make_cache_key_normalizes_list_fields_shape():
     assert key[1][1] == ("name", "is_private")
 
 
+def test_make_cache_key_normalizes_set_fields_shape():
+    key = _make_cache_key({"model": Category, "fields": {"is_private", "name"}})
+    assert key[1] == ("seq", ("is_private", "name"))
+
+
 def test_make_cache_key_normalizes_scalar_all_fields_shape():
     key = _make_cache_key({"model": Category, "fields": "__all__"})
     assert key[1] == ("raw", "__all__")
@@ -588,6 +593,14 @@ def test_normalize_meta_promotes_filter_fields_and_canonicalizes_sets():
     assert "filter_fields" not in normalized
     assert "filterset_base_class" not in normalized
     assert normalized["fields"] == sorted(["name", "is_private"], key=repr)
+
+
+def test_normalize_meta_prefers_fields_over_filter_fields_alias():
+    normalized = _normalize_meta_for_factory(
+        {"model": Category, "fields": ["name"], "filter_fields": ["is_private"]},
+    )
+    assert normalized["fields"] == ["name"]
+    assert "filter_fields" not in normalized
 
 
 def test_get_filterset_class_requires_model_when_dynamic():

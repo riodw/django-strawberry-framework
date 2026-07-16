@@ -31,6 +31,7 @@ Every test uses the autouse ``_isolate_registry`` fixture so the
 global ``registry`` is cleared on entry and exit.
 """
 
+import asyncio
 import contextlib
 import warnings
 from collections import OrderedDict
@@ -3628,6 +3629,45 @@ def test_clear_optimizer_context_locked_querydict_is_noop():
     assert not locked._mutable
     clear_optimizer_context(locked)  # must not raise
     assert "dst_optimizer_plan" in locked  # untouched (read-only)
+
+
+@pytest.mark.asyncio
+async def test_shared_singleton_keeps_execution_context_operation_local():
+    """Concurrent operations clear their own reused context on a shared extension.
+
+    Strawberry assigns ``execution_context`` before entering ``on_execute``.
+    The documented ``extensions=[lambda: ext]`` form returns one shared
+    instance, so two tasks can assign before either hook starts. Both contexts
+    must still be cleared; a plain instance attribute leaves only the last
+    assignment visible and clears that context twice.
+    """
+    from django_strawberry_framework.optimizer._context import (
+        DST_OPTIMIZER_PLAN,
+        get_context_value,
+        stash_on_context,
+    )
+
+    ext = DjangoOptimizerExtension()
+    contexts = [SimpleNamespace(), SimpleNamespace()]
+    for context in contexts:
+        stash_on_context(context, DST_OPTIMIZER_PLAN, object())
+    ready = 0
+    release = asyncio.Event()
+
+    async def _enter(context):
+        nonlocal ready
+        ext.execution_context = SimpleNamespace(context=context)
+        ready += 1
+        if ready == 2:
+            release.set()
+        await release.wait()
+        hook = ext.on_execute()
+        next(hook)
+        hook.close()
+
+    await asyncio.gather(*(_enter(context) for context in contexts))
+
+    assert all(get_context_value(context, DST_OPTIMIZER_PLAN) is None for context in contexts)
 
 
 @pytest.mark.django_db

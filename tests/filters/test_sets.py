@@ -18,6 +18,7 @@ from apps.kanban import filters as kanban_filters
 from apps.kanban import models as kanban_models
 from apps.library import models as library_models
 from apps.products.models import Category, Item
+from django.db.models import Q
 from django.http import HttpRequest
 from graphql import GraphQLError
 
@@ -1761,6 +1762,19 @@ def test_evaluate_logic_tree_skips_inactive_or_arms():
             _make_info(),
         )
         assert sorted(mixed.values_list("name", flat=True)) == ["alpha"], inactive
+
+
+def test_evaluate_logic_tree_and_direct_branch_treat_inactive_values_as_identity():
+    """Inactive AND arms and direct branch calls return the identity query."""
+
+    class CategoryFilter(FilterSet):
+        class Meta:
+            model = Category
+            fields = {"name": ["exact"]}
+
+    queryset = Category.objects.all()
+    assert CategoryFilter._evaluate_logic_tree(queryset, {"and": [None]}) == Q()
+    assert CategoryFilter._q_for_branch(queryset, strawberry.UNSET) == Q()
 
 
 def test_collect_nested_visibility_querysets_async_caps_recursion_depth():

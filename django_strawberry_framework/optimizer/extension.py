@@ -869,6 +869,16 @@ class DjangoOptimizerExtension(SchemaExtension):
         execution_context: Any = None,
         nested_connection_strategy: Any = None,
     ) -> None:
+        # Strawberry assigns ``extension.execution_context`` once per
+        # operation. The documented singleton-factory form returns this SAME
+        # extension instance to concurrent operations, so a plain instance
+        # attribute lets one operation overwrite another's context before its
+        # hook starts. Keep that engine-owned value task-local while the plan
+        # cache below remains intentionally instance-shared.
+        self._execution_context_var: ContextVar[Any] = ContextVar(
+            "django_strawberry_framework_optimizer_execution_context",
+            default=None,
+        )
         # ``execution_context`` stays accepted for direct-construction
         # compatibility only: at the ``strawberry-graphql>=0.316.0`` floor the
         # engine invokes class/factory entries in ``extensions=[...]`` with
@@ -878,6 +888,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         # at construction so typos (``strict=True``) surface at the call site
         # rather than being silently absorbed.
         super().__init__(execution_context=execution_context)
+        self.execution_context = execution_context
         if strictness not in ("off", "warn", "raise"):
             msg = f"strictness must be 'off', 'warn', or 'raise', got {strictness!r}"
             raise ValueError(msg)
@@ -898,6 +909,16 @@ class DjangoOptimizerExtension(SchemaExtension):
         ] = OrderedDict()
         self._cache_hits = 0
         self._cache_misses = 0
+
+    @property
+    def execution_context(self) -> Any:
+        """Return the current operation's Strawberry execution context."""
+        return self._execution_context_var.get()
+
+    @execution_context.setter
+    def execution_context(self, value: Any) -> None:
+        """Store Strawberry's assigned execution context in the current task."""
+        self._execution_context_var.set(value)
 
     def cache_info(self) -> CacheInfo:
         """Return plan-cache statistics (hits, misses, current size).

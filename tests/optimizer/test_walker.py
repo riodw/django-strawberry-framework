@@ -37,6 +37,7 @@ from django_strawberry_framework.optimizer.walker import (
     _merge_aliased_selections,
     _merge_runtime_prefixes,
     _prefetch_hint_for_path,
+    _record_prefetch_path_keys,
     _resolve_selection_target,
     _selected_scalar_names,
     _should_include,
@@ -199,6 +200,15 @@ def test_plan_skips_unknown_selections():
     """Selections not on the Django model are silently skipped."""
     plan = plan_optimizations([_sel("bogusField")], Category)
     assert plan.is_empty
+
+
+def test_record_prefetch_path_keys_ignores_an_empty_key_set():
+    """An empty resolver-key tuple leaves the path ledger untouched."""
+    plan = OptimizationPlan()
+
+    _record_prefetch_path_keys(plan, "items", ())
+
+    assert plan.prefetch_path_resolver_keys == {}
 
 
 def test_plan_relay_id_projects_real_pk_attname_when_not_id(monkeypatch):

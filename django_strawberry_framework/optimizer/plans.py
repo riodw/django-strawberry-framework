@@ -701,7 +701,7 @@ def _select_path_traversable(
 def _optimizer_can_absorb(
     opt_entry: Any,
     consumer_paths: Sequence[str],
-    consumer_by_path: dict[str, Any],
+    consumer_by_path: dict[str, list[Any]],
 ) -> bool:
     """Return ``True`` when ``opt_entry`` can losslessly take over the consumer's subtree.
 
@@ -722,7 +722,9 @@ def _optimizer_can_absorb(
     """
     if getattr(opt_entry, "queryset", None) is None:
         return False
-    if not all(isinstance(consumer_by_path[p], str) for p in consumer_paths):
+    if not all(
+        isinstance(entry, str) for path in consumer_paths for entry in consumer_by_path[path]
+    ):
         return False
     opt_covered = _prefetch_lookup_paths([opt_entry])
     return all(path in opt_covered for path in consumer_paths)
@@ -1275,7 +1277,14 @@ def _diff_prefetch_related(
     callers strip the coupled resolver keys for those paths.
     """
     consumer_pf = _consumer_prefetch_lookups(queryset)
-    consumer_by_path: dict[str, Any] = {_lookup_path(entry): entry for entry in consumer_pf}
+    # Preserve EVERY entry on a path. Django accepts a custom ``Prefetch``
+    # followed by a redundant string lookup for the same path, and the custom
+    # queryset remains authoritative. A one-value dict silently kept only the
+    # trailing string, making the optimizer believe the subtree was entirely
+    # absorbable and strip the consumer's filtered Prefetch.
+    consumer_by_path: dict[str, list[Any]] = {}
+    for entry in consumer_pf:
+        consumer_by_path.setdefault(_lookup_path(entry), []).append(entry)
 
     new_prefetch: list[Any] = []
     paths_to_strip: set[str] = set()

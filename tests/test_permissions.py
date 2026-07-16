@@ -1427,6 +1427,13 @@ def test_hook_return_rejections_fail_closed():
         # An ``extra(select=...)`` alias shadowing the edge's target column would
         # make the re-projection select raw SQL, not the model column.
         (lambda cls, qs, info: qs.extra(select={"id": "name"}), "shadows"),
+        # An ``annotate(...)`` alias shadowing the target column is the
+        # security-critical twin: Django blocks a bare ``annotate(id=Value(pk))``
+        # but permits ``values("name").annotate(id=Value(pk))``, which stays
+        # ungrouped (``Value`` is no aggregate) and re-projects to the injected
+        # constant. ``test_annotation_alias_shadow_cannot_bypass_visibility``
+        # proves the real-row leak this rejection closes.
+        (lambda cls, qs, info: qs.values("name").annotate(id=models.Value(1)), "shadows"),
         # ``.using(...)`` off the pinned alias - resolved lazily, so the string
         # comparison rejects it before any connection is attempted.
         (lambda cls, qs, info: qs.using("bogus_alias"), "alias"),
@@ -1436,6 +1443,96 @@ def test_hook_return_rejections_fail_closed():
         parent_type = _register_ct_pair(hook)
         with pytest.raises(ConfigurationError, match=match):
             apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
+        assert _cascade_state.get() is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_annotation_alias_shadow_cannot_bypass_visibility():
+    """A hook annotating the target column to a constant cannot smuggle a hidden pk.
+
+    The security-critical vector: Django rejects a bare ``annotate(id=Value(pk))``
+    (name conflicts with the field), but ``values("name").annotate(id=Value(pk))``
+    is permitted, stays ungrouped (``Value`` is not an aggregate), and would
+    re-project to the injected constant -- composing
+    ``target_id IN (SELECT <hidden_pk> AS id FROM target WHERE visible)`` and
+    letting a parent pointing at a hidden target survive whenever any visible
+    target exists. The guard rejects it at composition; this test also builds
+    the un-guarded predicate by hand to prove the bypass is real, not theoretical.
+    """
+    with _tables(_CtTarget, _CtParent):
+        visible = _CtTarget.objects.create(name="visible")
+        hidden = _CtTarget.objects.create(name="hidden")
+        keeps = _CtParent.objects.create(name="keeps", target=visible)
+        attack = _CtParent.objects.create(name="attack", target=hidden)
+
+        # The malicious hook: hide nothing real, but alias the pk to the hidden
+        # row's id so a naive re-projection would select it.
+        def _shadow_hook(cls, qs, info):
+            return qs.values("name").annotate(id=models.Value(hidden.pk))
+
+        parent_type = _register_ct_pair(_shadow_hook)
+        with pytest.raises(ConfigurationError, match="shadows"):
+            apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
+        assert _cascade_state.get() is None
+
+        # Proof the rejection is load-bearing: the shape the guard blocks, fed
+        # through the old ``.values(attname)`` re-projection by hand, keeps the
+        # attack row (its hidden target's pk is the injected constant) and thus
+        # would have leaked it.
+        leaked_subquery = _shadow_hook(parent_type, _CtTarget.objects.all(), _INFO).values("id")
+        leaked = _CtParent.objects.filter(target__in=leaked_subquery)
+        assert attack in leaked
+        assert keeps in leaked
+
+
+@pytest.mark.django_db(transaction=True)
+def test_annotation_alias_shadow_to_field_cannot_bypass_visibility():
+    """The ``to_field`` twin: annotating the ``to_field`` column to a constant is rejected.
+
+    A ``ForeignKey(to_field="code")`` edge re-projects to ``code``; a hook doing
+    ``values("name").annotate(code=Value(<hidden_code>))`` would smuggle the
+    hidden row's ``code`` exactly as the pk case smuggles its ``id``.
+    """
+
+    class TfShadowTarget(models.Model):
+        code = models.TextField(unique=True)
+        name = models.TextField()
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    class TfShadowParent(models.Model):
+        name = models.TextField()
+        target = models.ForeignKey(
+            TfShadowTarget,
+            to_field="code",
+            on_delete=models.CASCADE,
+            related_name="parents",
+        )
+
+        class Meta:
+            app_label = "products"
+            managed = False
+
+    with _tables(TfShadowTarget, TfShadowParent):
+        visible = TfShadowTarget.objects.create(code="ok", name="visible")
+        hidden = TfShadowTarget.objects.create(code="hx", name="hidden")
+        TfShadowParent.objects.create(name="keeps", target=visible)
+        TfShadowParent.objects.create(name="attack", target=hidden)
+
+        _make_type(
+            "TfShadowTargetType",
+            TfShadowTarget,
+            get_queryset=lambda cls, qs, info: qs.values("name").annotate(
+                code=models.Value(hidden.code),
+            ),
+        )
+        parent_type = _make_type("TfShadowParentType", TfShadowParent, primary=False)
+        finalize_django_types()
+
+        with pytest.raises(ConfigurationError, match="'code'"):
+            apply_cascade_permissions(parent_type, TfShadowParent.objects.all(), _INFO)
         assert _cascade_state.get() is None
 
 

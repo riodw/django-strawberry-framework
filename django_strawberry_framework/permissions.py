@@ -39,9 +39,14 @@ depends on:
   siblings are compatible; unrelated models and MTI child querysets are not),
   unsliced, uncombined (no ``union()`` etc.), ungrouped (no aggregate
   ``annotate`` / ``values()`` grouping), without field-specific
-  ``distinct(...)``, without an ``extra(select=...)`` alias shadowing the
-  target column, and on the root alias -- re-projection is only sound where
-  ``.values(...)`` changes the selected column, not the query's semantics.
+  ``distinct(...)``, and without an ``annotate(...)`` or ``extra(select=...)``
+  alias shadowing the target column, and on the root alias -- re-projection is
+  only sound where ``.values(...)`` changes the selected column, not the
+  query's semantics. The annotation-alias check is security-critical: Django
+  blocks a bare ``annotate(id=Value(pk))`` but permits
+  ``values("x").annotate(id=Value(pk))`` (ungrouped, since ``Value`` is no
+  aggregate), which would otherwise re-project to the injected constant and
+  let a row pointing at a hidden target survive.
   The accepted queryset is re-projected to ``.values(target_field.attname)``
   so the ``__in`` comparison always binds the FK's actual target column --
   a consumer ``.values("name")`` / ``.values_list(...)`` projection (or a
@@ -453,13 +458,25 @@ def _validated_target_subquery(
             f"column.",
         )
     attname = field.target_field.attname
-    if attname in target_qs.query.extra:
+    if attname in target_qs.query.annotations or attname in target_qs.query.extra:
+        # A non-aggregate annotation (or extra-select) aliased to the edge's
+        # target column shadows it on re-projection: ``.values(attname)`` would
+        # emit the alias expression, not the model column. ``annotate`` is the
+        # security-critical vector -- Django blocks a bare
+        # ``annotate(id=Value(pk))`` (name conflicts with the field), but
+        # ``values("name").annotate(id=Value(pk))`` is permitted, stays
+        # ungrouped (``Value`` is not an aggregate, so ``group_by`` is None),
+        # and would otherwise compose ``target_id IN (SELECT <pk> AS id ...)``,
+        # letting a row pointing at a hidden target survive. Fail closed; a
+        # differently-named annotation (never re-projected) is unaffected.
+        source = "annotate(...)" if attname in target_qs.query.annotations else "extra(select=...)"
         raise ConfigurationError(
             f"{target_type.__name__}.get_queryset returned a queryset whose "
-            f"extra(select=...) alias shadows {attname!r} for the cascade "
-            f"subquery on {field.model.__name__}.{field.name}; the cascade "
-            f"must project the model column, not a raw-SQL alias of the same "
-            f"name.",
+            f"{source} alias shadows the {attname!r} column for the cascade "
+            f"subquery on {field.model.__name__}.{field.name}; re-projecting to "
+            f"{attname!r} would select the alias expression, not the model "
+            f"column. Return plain rows and let the cascade project the edge's "
+            f"target column.",
         )
     if target_qs.db != alias:
         raise ConfigurationError(

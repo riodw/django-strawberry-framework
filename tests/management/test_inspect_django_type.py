@@ -188,6 +188,57 @@ def test_schema_option_uses_schema_naming_configuration(monkeypatch):
     assert "description: OpaqueToken!" in sdl
 
 
+def test_bare_name_resolves_converter_applied_sdl_name_and_titles_it(monkeypatch):
+    """A custom ``NameConverter``'s SDL name resolves as a bare name AND titles the table.
+
+    The operator pastes the name they see in the schema (``ApiItemRefType`` under a
+    prefixing converter), not the Python class name, and the table title renders
+    that same converter-applied name. Both require threading the schema's
+    ``NameConverter`` (supplied by ``--schema``) into bare-name resolution and
+    table rendering - the pre-fix code matched/titled only ``graphql_type_name``,
+    which ignores the converter.
+    """
+
+    class PrefixedNames(NameConverter):
+        def from_object(self, definition):
+            return f"Api{super().from_object(definition)}"
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            primary = True
+            fields = ("id", "name")
+
+    class ItemRefType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def item(self) -> ItemRefType:
+            raise NotImplementedError
+
+    schema = strawberry.Schema(
+        query=Query,
+        config=strawberry_config(name_converter=PrefixedNames()),
+    )
+    _make_test_module(monkeypatch, schema=schema)
+    out = StringIO()
+    call_command(
+        "inspect_django_type",
+        "ApiItemRefType",  # the converter-applied SDL name, NOT the Python class name
+        "--schema",
+        "test_module:schema",
+        stdout=out,
+    )
+    title = out.getvalue().splitlines()[0]
+    assert title.startswith("ApiItemRefType  (model:")
+
+
 def test_bad_schema_selector_raises_command_error():
     # A --schema selector that cannot be imported surfaces as CommandError
     # (the import failure is caught before any type resolution runs).
@@ -417,6 +468,54 @@ def test_inspect_uses_sdl_names_for_renamed_relation_and_consumer_enum():
     assert "relation: forward FK" in category_row
     assert "RenamedCategoryType" not in text
     assert "PublishedState!" in _connection_row(text, "name")
+
+
+def test_bare_name_resolves_meta_name_and_title_uses_graphql_name():
+    """Bare lookup + title prefer ``Meta.name`` / ``graphql_type_name`` over ``__name__``."""
+
+    class RenamedCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            name = "Category"
+
+    finalize_django_types()
+    out = StringIO()
+    # Operator pastes the SDL name from the schema, not the Python class name.
+    call_command("inspect_django_type", "Category", stdout=out)
+    text = out.getvalue()
+    assert text.splitlines()[0].startswith(
+        "Category  (model: apps.products.models.Category)",
+    )
+    assert "RenamedCategoryType" not in text
+    # Python class name still resolves (back-compat for call sites / muscle memory).
+    out_cls = StringIO()
+    call_command("inspect_django_type", "RenamedCategoryType", stdout=out_cls)
+    assert out_cls.getvalue().splitlines()[0].startswith("Category  (model:")
+
+
+def test_bare_name_meta_name_collision_with_python_name_is_ambiguous():
+    """``Meta.name`` of one type colliding with another's ``__name__`` is ambiguous."""
+
+    class CategoryView(DjangoType):
+        class Meta:
+            model = Category
+            primary = True
+            fields = ("id", "name")
+            name = "ItemType"
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+
+    finalize_django_types()
+    with pytest.raises(CommandError, match=r"ItemType is ambiguous") as exc_info:
+        call_command("inspect_django_type", "ItemType")
+    message = str(exc_info.value)
+    assert "CategoryView" in message
+    assert "ItemType" in message
+    assert "fully-dotted object paths" in message
 
 
 def test_scalar_name_uses_custom_scalar_definition_name():

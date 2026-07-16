@@ -64,6 +64,24 @@ def reload_inspect_schema():
     _reload_inspect_schema()
 
 
+def test_inspect_by_meta_name(reload_inspect_schema):
+    """Bare lookup honors ``Meta.name`` (``PublicPatron``), not only ``__name__``.
+
+    ``PublicPatronType`` declares ``name = "PublicPatron"`` - the SDL surface an
+    operator sees in introspection. Pasting that GraphQL name into the CLI must
+    resolve the type and title the table with the same authoritative name.
+    """
+    out = StringIO()
+    call_command("inspect_django_type", "PublicPatron", stdout=out)
+    text = out.getvalue()
+    assert text.splitlines()[0].startswith(
+        "PublicPatron  (model: apps.library.models.Patron)",
+    )
+    assert "PublicPatronType" not in text.splitlines()[0]
+    # A kept scalar column still renders (exclude drops email / fines only).
+    assert "name" in text
+
+
 def test_inspect_by_registered_name(reload_inspect_schema):
     out = StringIO()
     call_command("inspect_django_type", "BookType", stdout=out)

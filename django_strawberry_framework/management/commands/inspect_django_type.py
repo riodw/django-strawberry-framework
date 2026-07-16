@@ -23,8 +23,13 @@ authoritative record differs by field origin:
 The positional ``type`` argument dispatches by shape: a dotted object path
 (``apps.library.schema.BookType``) resolves via Django's ``import_string`` and a
 dotted import failure raises ``CommandError`` carrying the original error; a bare
-name (``BookType``) resolves via a unique ``__name__`` registry lookup. The
-optional ``--schema <selector>`` is imported first (via Strawberry's
+name resolves via a unique registry match on either the authoritative SDL type
+name (the active schema ``NameConverter`` applied to the type, which honors both
+a custom converter's renames and ``Meta.name``) or the Python class ``__name__``
+- so an operator can paste the SDL name they see in the schema (``PublicPatron``,
+or ``ApiPublicPatron`` under a prefixing converter) or the class name
+(``PublicPatronType``). The optional
+``--schema <selector>`` is imported first (via Strawberry's
 ``import_module_symbol``, mirroring ``export_schema``) to register and finalize
 every type before resolution and supply the schema's scalar map and name
 converter - required for a cold CLI process and exact schema-specific names.
@@ -132,13 +137,14 @@ class Command(BaseCommand):
             )
 
         config = getattr(schema_object, "config", None)
+        name_converter = getattr(config, "name_converter", _DEFAULT_NAME_CONVERTER)
         scalar_namer = partial(
             _scalar_name,
-            name_converter=getattr(config, "name_converter", _DEFAULT_NAME_CONVERTER),
+            name_converter=name_converter,
             scalar_map=getattr(config, "scalar_map", None),
         )
 
-        target = self._resolve_type(options["type"])
+        target = self._resolve_type(options["type"], name_converter)
         if not (isinstance(target, type) and issubclass(target, DjangoType)):
             raise CommandError(f"{options['type']} is not a DjangoType subclass")
 
@@ -151,20 +157,30 @@ class Command(BaseCommand):
         if definition.finalized is False:
             raise CommandError(_UNFINALIZED_HINT)
 
-        self._print_table(definition, scalar_namer)
+        self._print_table(definition, scalar_namer, name_converter)
 
-    def _resolve_type(self, arg: str) -> object:
+    def _resolve_type(self, arg: str, name_converter: NameConverter) -> object:
         """Resolve the ``type`` argument by shape - dotted path vs bare registered name."""
         if "." in arg:
             return import_string_or_command_error(arg)
-        return self._resolve_bare_name(arg)
+        return self._resolve_bare_name(arg, name_converter)
 
     @staticmethod
-    def _resolve_bare_name(name: str) -> type:
-        """Resolve a bare type name via a unique ``__name__`` match in the registry."""
-        matches = [
-            type_cls for _model, type_cls in registry.iter_types() if type_cls.__name__ == name
-        ]
+    def _resolve_bare_name(name: str, name_converter: NameConverter) -> type:
+        """Resolve a bare type name via a unique SDL / Meta.name / Python name match.
+
+        Matches the converter-applied SDL name (``_sdl_type_name`` - honors both a
+        custom schema ``NameConverter`` and ``Meta.name``) and ``type_cls.__name__``,
+        so an operator can paste either the SDL type name they see in the schema or
+        the Python class name. ``registry.iter_definitions`` visits each type once,
+        so a single type matching on several surfaces still appends once; distinct
+        types that collide on either surface raise the ambiguity ``CommandError``.
+        """
+        matches: list[type] = []
+        for type_cls, definition in registry.iter_definitions():
+            surfaces = (_sdl_type_name(type_cls, definition, name_converter), type_cls.__name__)
+            if name in surfaces:
+                matches.append(type_cls)
         if not matches:
             raise CommandError(
                 f"{name} is not a registered DjangoType. Import the project schema first "
@@ -185,11 +201,19 @@ class Command(BaseCommand):
             )
         return matches[0]
 
-    def _print_table(self, definition: object, scalar_namer: _ScalarNamer) -> None:
+    def _print_table(
+        self,
+        definition: object,
+        scalar_namer: _ScalarNamer,
+        name_converter: NameConverter,
+    ) -> None:
         """Print the header and one row per selected field, in selection order."""
-        origin = definition.origin
         model = definition.model
-        title = f"{origin.__name__}  (model: {model.__module__}.{model.__qualname__})"
+        # Title the authoritative SDL name the schema emits - the converter-applied
+        # name (custom ``NameConverter`` + ``Meta.name``), not the Python class
+        # ``__name__`` - so it matches the schema surface the operator inspects.
+        sdl_name = _sdl_type_name(definition.origin, definition, name_converter)
+        title = f"{sdl_name}  (model: {model.__module__}.{model.__qualname__})"
         self.stdout.write(title)
         header = (
             f"  {'field':<20} {'django field type':<20} "
@@ -509,6 +533,28 @@ def _consumer_converter_label(definition: object, name: str) -> str:
         source = "strawberry.field"
     kind = "relation" if is_relation else "scalar"
     return f"consumer {source} ({kind})"
+
+
+def _sdl_type_name(type_cls: type, definition: object, name_converter: NameConverter) -> str:
+    """Return the SDL type name Strawberry emits, applying the schema NameConverter.
+
+    Runs ``name_converter.from_type`` over the finalized Strawberry object
+    definition - the same metadata-driven rendering ``_scalar_name`` uses for
+    scalar / relation rows - so a custom converter's renames (``ApiCategoryType``
+    from a ``PrefixedNames`` converter) are honored, not just the static
+    ``Meta.name``. With the default converter this equals
+    ``definition.graphql_type_name`` (``from_object`` returns the definition's own
+    name), so a ``Meta.name`` type still renders as ``PublicPatron``.
+
+    A registered-but-unfinalized type has no ``__strawberry_definition__`` yet (it
+    is attached at finalization), so fall back to the converter-independent
+    ``graphql_type_name`` there rather than raising - the bare-name path resolves
+    before the finalized check.
+    """
+    strawberry_definition = getattr(type_cls, "__strawberry_definition__", None)
+    if strawberry_definition is None:
+        return definition.graphql_type_name
+    return name_converter.from_type(strawberry_definition)
 
 
 def _scalar_name(

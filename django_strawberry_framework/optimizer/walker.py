@@ -75,6 +75,20 @@ _relation_connection_to_attr_for_key = _nested_planner._relation_connection_to_a
 _relay_max_results_from_info = _nested_planner._relay_max_results_from_info
 
 
+def _record_prefetch_path_keys(
+    plan: OptimizationPlan,
+    lookup_path: str,
+    keys: tuple[str, ...],
+) -> None:
+    """Attribute resolver / FK-id keys to a ``prefetch_related`` lookup path (B8)."""
+    if not keys:
+        return
+    recorded = plan.prefetch_path_resolver_keys.get(lookup_path, ())
+    plan.prefetch_path_resolver_keys[lookup_path] = recorded + tuple(
+        key for key in keys if key not in recorded
+    )
+
+
 def _enable_only_for_operation(info: Any | None) -> bool:
     """Return whether ``.only(...)`` projection is enabled for ``info``'s operation.
 
@@ -763,9 +777,19 @@ def _plan_prefetch_relation(
     if has_custom_get_queryset:
         plan.cacheable = False
     if django_field.related_model is None:
+        _record_prefetch_path_keys(plan, lookup_path, resolver_identities)
         append_unique(plan.prefetch_related, lookup_path)
         return
 
+    # Snapshot before the child absorb so nested PLANNED keys that land on
+    # the parent are attributed to THIS prefetch lookup (B8 consumer-wins
+    # must strip them with the dropped Prefetch, so strictness re-sees the
+    # now-lazy relation). Nested FK-id elisions are deliberately NOT recorded
+    # here: an elision reads a column already on the parent row (``obj.<fk>_id``)
+    # and adds no query whether or not this prefetch survives, so it must
+    # never be stripped - mirroring the select-related path, whose elision
+    # branch returns before recording into ``select_path_resolver_keys``.
+    prior_planned = frozenset(plan.planned_resolver_keys)
     child_queryset = _build_prefetch_child_queryset(
         sel,
         django_field,
@@ -776,6 +800,8 @@ def _plan_prefetch_relation(
         has_custom_get_queryset=has_custom_get_queryset,
         enable_only=enable_only,
     )
+    nested_keys = tuple(k for k in plan.planned_resolver_keys if k not in prior_planned)
+    _record_prefetch_path_keys(plan, lookup_path, (*resolver_identities, *nested_keys))
     append_prefetch_unique(plan.prefetch_related, Prefetch(lookup_path, queryset=child_queryset))
 
 
@@ -970,6 +996,14 @@ def _apply_hint(
         # the plan non-cacheable so the plan cache cannot serve one
         # request's queryset to the next.
         plan.cacheable = False
+        # B8 coupling: attribute the relation's resolver keys to the rebased
+        # lookup so a later consumer-wins drop strips them from strictness.
+        hinted_lookup = getattr(rebased_prefetch, "prefetch_to", None) or getattr(
+            rebased_prefetch,
+            "prefetch_through",
+            "",
+        )
+        _record_prefetch_path_keys(plan, hinted_lookup, resolver_identities)
         append_prefetch_unique(plan.prefetch_related, rebased_prefetch)
         return True
     if hint.force_select:

@@ -186,6 +186,17 @@ class OptimizationPlan:
     metadata); mutated only during walker construction, matching the
     ``cacheable`` single-writer convention.
     """
+    prefetch_path_resolver_keys: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    """Resolver keys satisfied by each ``prefetch_related`` lookup (directive coupling).
+
+    Written by ``walker.py::_plan_prefetch_relation`` (and the hinted-Prefetch
+    branch) for the lookup path Django consumes. Includes the relation's own
+    resolver identities plus nested keys absorbed from the child plan. B8
+    ``diff_plan_for_queryset`` uses this when a consumer ``Prefetch`` wins and
+    the optimizer entry is dropped: those keys (and matching FK-id elisions)
+    must leave the published strictness / elision sentinels, or nested N+1s
+    under the dropped subtree are masked. Excluded from ``is_empty``.
+    """
 
     _FULL_MERGE_FIELDS: ClassVar[frozenset[str]] = frozenset(
         {
@@ -193,6 +204,7 @@ class OptimizationPlan:
             "prefetch_related",
             "only_fields",
             "select_path_resolver_keys",
+            "prefetch_path_resolver_keys",
         },
     )
     _METADATA_MERGE_FIELDS: ClassVar[frozenset[str]] = frozenset(
@@ -311,6 +323,10 @@ class OptimizationPlan:
             merged = list(self.select_path_resolver_keys.get(path, ()))
             append_unique_many(merged, resolver_keys)
             self.select_path_resolver_keys[path] = tuple(merged)
+        for path, resolver_keys in other.prefetch_path_resolver_keys.items():
+            merged = list(self.prefetch_path_resolver_keys.get(path, ()))
+            append_unique_many(merged, resolver_keys)
+            self.prefetch_path_resolver_keys[path] = tuple(merged)
 
     def merge_metadata_from(self, other: OptimizationPlan) -> None:
         """Merge accepted child-queryset metadata without its query directives.
@@ -1183,23 +1199,49 @@ def diff_plan_for_queryset(plan: OptimizationPlan, queryset: Any) -> tuple[Optim
       not replace.
     """
     new_select = _diff_select_related(plan.select_related, queryset)
-    new_prefetch, new_queryset = _diff_prefetch_related(plan.prefetch_related, queryset)
+    new_prefetch, new_queryset, dropped_prefetch_paths = _diff_prefetch_related(
+        plan.prefetch_related,
+        queryset,
+    )
     drop_only_fields = bool(plan.only_fields) and _consumer_only_fields(queryset) is not None
     new_only_fields: Sequence[str] = () if drop_only_fields else plan.only_fields
+
+    # Consumer-wins (and other) prefetch drops: strip the planned resolver
+    # keys that were only satisfied by the dropped optimizer Prefetch
+    # (including nested planned keys absorbed from its child plan). Without
+    # this, strictness trusts keys for relations that will genuinely
+    # lazy-load. FK-id elisions are intentionally NOT recorded on the
+    # prefetch path (see ``walker._plan_prefetch_relation``), so they never
+    # enter ``dropped_keys`` and survive the drop - an elision reads a column
+    # on the already-materialised parent row and adds no query.
+    dropped_keys: set[str] = set()
+    new_prefetch_path_keys = plan.prefetch_path_resolver_keys
+    if dropped_prefetch_paths:
+        new_prefetch_path_keys = dict(plan.prefetch_path_resolver_keys)
+        for path in dropped_prefetch_paths:
+            dropped_keys.update(new_prefetch_path_keys.pop(path, ()))
 
     if (
         len(new_select) == len(plan.select_related)
         and len(new_prefetch) == len(plan.prefetch_related)
         and new_queryset is queryset
         and not drop_only_fields
+        and not dropped_keys
     ):
         return plan, queryset
+    new_planned = (
+        [k for k in plan.planned_resolver_keys if k not in dropped_keys]
+        if dropped_keys
+        else plan.planned_resolver_keys
+    )
     return (
         replace(
             plan,
             select_related=new_select,
             prefetch_related=new_prefetch,
             only_fields=new_only_fields,
+            planned_resolver_keys=new_planned,
+            prefetch_path_resolver_keys=new_prefetch_path_keys,
         ).finalize(),
         new_queryset,
     )
@@ -1224,17 +1266,20 @@ def _diff_select_related(plan_select_related: Sequence[str], queryset: Any) -> l
 def _diff_prefetch_related(
     plan_prefetch_related: Sequence[Any],
     queryset: Any,
-) -> tuple[list[Any], Any]:
+) -> tuple[list[Any], Any, frozenset[str]]:
     """Reconcile optimizer ``prefetch_related`` against the queryset's existing lookups.
 
-    Returns ``(new_prefetch_list, queryset_to_apply_against)``.  See
-    ``diff_plan_for_queryset`` for the full reconciliation rules.
+    Returns ``(new_prefetch_list, queryset_to_apply_against, dropped_lookup_paths)``.
+    See ``diff_plan_for_queryset`` for the full reconciliation rules. Dropped
+    lookup paths are the optimizer Prefetch entries the consumer won over -
+    callers strip the coupled resolver keys for those paths.
     """
     consumer_pf = _consumer_prefetch_lookups(queryset)
     consumer_by_path: dict[str, Any] = {_lookup_path(entry): entry for entry in consumer_pf}
 
     new_prefetch: list[Any] = []
     paths_to_strip: set[str] = set()
+    dropped_optimizer_paths: set[str] = set()
 
     for opt_entry in plan_prefetch_related:
         opt_path = _lookup_path(opt_entry)
@@ -1250,7 +1295,9 @@ def _diff_prefetch_related(
         if _optimizer_can_absorb(opt_entry, matching_paths, consumer_by_path):
             paths_to_strip.update(matching_paths)
             new_prefetch.append(opt_entry)
-        # else: consumer wins on this subtree; optimizer dropped.
+        else:
+            # Consumer wins on this subtree; optimizer dropped.
+            dropped_optimizer_paths.add(opt_path)
 
     new_queryset = queryset
     if paths_to_strip:
@@ -1263,7 +1310,7 @@ def _diff_prefetch_related(
         if keep:
             new_queryset = new_queryset.prefetch_related(*keep)
 
-    return new_prefetch, new_queryset
+    return new_prefetch, new_queryset, frozenset(dropped_optimizer_paths)
 
 
 def lookup_paths(plan: OptimizationPlan) -> set[str]:

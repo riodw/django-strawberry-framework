@@ -1093,23 +1093,22 @@ class DjangoOptimizerExtension(SchemaExtension):
         # ``.defer`` call on the returned queryset - can make a planned
         # ``select_related`` path Django-invalid (a field cannot be both
         # deferred and traversed). The prune drops those paths AND their
-        # resolver keys BEFORE the sentinels publish, so strictness accounts
-        # for the relation as the per-row fallback it now is. Same-object
-        # return on the common no-projection shape; the cached plan is never
-        # mutated.
+        # resolver keys so strictness accounts for the relation as the
+        # per-row fallback it now is. Same-object return on the common
+        # no-projection shape; the cached plan is never mutated.
         plan = prune_unsupportable_select_related(plan, queryset)
+        # B8: reconcile against consumer queryset optimizations BEFORE
+        # publishing sentinels. Consumer-wins prefetch drops must strip
+        # coupled ``planned_resolver_keys`` / FK-id elisions (via
+        # ``prefetch_path_resolver_keys``) before ``_publish_plan_to_context``;
+        # publishing first left nested N+1s masked under strictness.
+        # Returns a fresh plan and (when an upgrade was applied) a
+        # rewritten queryset; B1's cached plan is never mutated.
+        if not plan.is_empty:
+            plan, queryset = diff_plan_for_queryset(plan, queryset)
         self._publish_plan_to_context(plan, info)
         if plan.is_empty:
             return queryset
-        # B8: reconcile the plan against optimizations the consumer has
-        # already applied to ``queryset``. Drops exact-match entries,
-        # avoids "lookup already seen" errors when the consumer's
-        # prefetch chain descends past the optimizer's path, and
-        # losslessly upgrades a consumer's plain ``"items"`` string to
-        # the optimizer's richer ``Prefetch("items", queryset=...)``.
-        # Returns a fresh plan and (when an upgrade was applied) a
-        # rewritten queryset; B1's cached plan is never mutated.
-        plan, queryset = diff_plan_for_queryset(plan, queryset)
         return plan.apply(queryset)
 
     def _get_or_build_plan(

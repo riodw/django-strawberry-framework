@@ -3761,14 +3761,19 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan():
     finalize_django_types()
     schema = strawberry.Schema(query=Query, extensions=[lambda: ext])
 
-    # First request warms the plan cache. The plan is stashed pre-diff.
+    # First request warms the plan cache. B5 stashes the POST-diff plan
+    # (consumer already applied ``select_related("category")``, so that
+    # directive is empty on the introspection stash) while B1's cache keeps
+    # the pre-diff plan.
     ctx1 = SimpleNamespace()
     result1 = schema.execute_sync(
         "{ allItems { name category { name } } }",
         context_value=ctx1,
     )
     assert result1.errors is None
-    cached_plan = ctx1.dst_optimizer_plan
+    assert ctx1.dst_optimizer_plan.select_related == ()
+    assert len(ext._plan_cache) == 1
+    cached_plan = next(iter(ext._plan_cache.values()))
     assert cached_plan.select_related == ("category",)
     assert ext.cache_info().hits == 0
     assert ext.cache_info().misses == 1
@@ -3781,7 +3786,8 @@ def test_b8_consumer_select_related_does_not_mutate_cached_plan():
         context_value=ctx2,
     )
     assert result2.errors is None
-    assert ctx2.dst_optimizer_plan is cached_plan
+    assert ctx2.dst_optimizer_plan.select_related == ()
+    assert next(iter(ext._plan_cache.values())) is cached_plan
     assert cached_plan.select_related == ("category",)
     assert ext.cache_info().hits == 1
 
@@ -3827,10 +3833,11 @@ def test_b8_consumer_prefetch_object_suppresses_optimizer_entry():
         context_value=ctx,
     )
     assert result.errors is None
-    # Stashed plan still records the optimizer's intended ``items``
-    # entry (B5 stashes the pre-diff plan).
+    # B5 stashes the POST-diff plan (publish runs after B8 reconciliation) so
+    # introspection matches what was actually applied: consumer won, optimizer
+    # ``items`` Prefetch is gone from the stashed directives.
     plan = ctx.dst_optimizer_plan
-    assert [getattr(entry, "prefetch_to", entry) for entry in plan.prefetch_related] == ["items"]
+    assert [getattr(entry, "prefetch_to", entry) for entry in plan.prefetch_related] == []
     # The queryset that came out of ``_optimize`` carries exactly the
     # consumer's ``Prefetch`` - the optimizer entry was diffed away.
     optimized_qs = captured[0]
@@ -4703,3 +4710,112 @@ def test_b8_pruned_select_related_stays_strictness_visible():
         context_value=SimpleNamespace(),
     )
     assert planned.errors is None, planned.errors
+
+
+@pytest.mark.django_db
+def test_b8_consumer_wins_prefetch_nested_keys_stay_strictness_visible():
+    """B8 + B3: consumer-wins Prefetch drop must not mask nested N+1 under raise.
+
+    When the root resolver already carries ``Prefetch("items", queryset=...)``,
+    B8 drops the optimizer's richer nested Prefetch (consumer wins) but must
+    ALSO strip the nested ``entries`` planned-resolver keys before publishing
+    strictness sentinels. Publishing the pre-diff plan left ``entries`` marked
+    planned while every item row lazy-loaded it.
+    """
+    from django.db.models import Prefetch
+
+    services.seed_data(1)
+
+    class EntryType(DjangoType):
+        class Meta:
+            model = Entry
+            fields = ("id", "value")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "entries")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def objs(self) -> list[CategoryType]:
+            return Category.objects.all().prefetch_related(
+                Prefetch("items", queryset=Item.objects.filter(is_private=False)),
+            )
+
+        @strawberry.field
+        def planned_objs(self) -> list[CategoryType]:
+            return Category.objects.all()
+
+    finalize_django_types()
+    schema = strawberry.Schema(
+        query=Query,
+        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+    )
+    consumer_wins = schema.execute_sync(
+        "{ objs { name items { name entries { value } } } }",
+        context_value=SimpleNamespace(),
+    )
+    assert consumer_wins.errors is not None
+    assert any(
+        "Unplanned N+1" in str(error) and "entries" in str(error) for error in consumer_wins.errors
+    )
+
+    planned = schema.execute_sync(
+        "{ plannedObjs { name items { name entries { value } } } }",
+        context_value=SimpleNamespace(),
+    )
+    assert planned.errors is None, planned.errors
+
+
+@pytest.mark.django_db
+def test_b8_consumer_wins_prefetch_preserves_nested_fk_id_elision():
+    """B8 + FK-id elision: a consumer-wins Prefetch drop must PRESERVE nested elisions.
+
+    A nested ``{ category { id } }`` selection under a consumer-won ``items``
+    prefetch is an FK-id elision - it reads ``item.category_id`` off the
+    already-materialised item row and issues no query. It must therefore
+    survive the drop and NOT be reported as an unplanned N+1 under
+    ``strictness="raise"`` (the pre-fix code stripped nested elision keys with
+    the dropped Prefetch, falsely flagging the elided relation).
+    """
+    from django.db.models import Prefetch
+
+    services.seed_data(1)
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name", "category")
+
+    @strawberry.type
+    class Query:
+        @strawberry.field
+        def objs(self) -> list[CategoryType]:
+            return Category.objects.all().prefetch_related(
+                Prefetch("items", queryset=Item.objects.filter(is_private=False)),
+            )
+
+    finalize_django_types()
+    schema = strawberry.Schema(
+        query=Query,
+        extensions=[lambda: DjangoOptimizerExtension(strictness="raise")],
+    )
+    result = schema.execute_sync(
+        "{ objs { name items { name category { id } } } }",
+        context_value=SimpleNamespace(),
+    )
+    assert result.errors is None, result.errors
+    ids = [item["category"]["id"] for obj in result.data["objs"] for item in obj["items"]]
+    assert all(cid for cid in ids)

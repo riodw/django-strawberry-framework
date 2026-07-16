@@ -1,3 +1,5 @@
+"""Django app configuration for the glossary data app."""
+
 from django.apps import AppConfig
 
 

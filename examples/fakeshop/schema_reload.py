@@ -1,7 +1,7 @@
 """Shared complete-reload helper for fakeshop tests that rebuild ``config.schema``.
 
-``config.schema`` aggregates EVERY app's ``Query`` / ``Mutation`` (glossary,
-kanban, library, products, scalars). Package tests under ``../../tests/`` clear
+``config.schema`` aggregates EVERY app's ``Query`` / ``Mutation`` (accounts,
+glossary, kanban, library, products, scalars). Package tests under ``../../tests/`` clear
 the global ``DjangoType`` registry for isolation, so rebuilding ``config.schema``
 after a clear requires re-registering ALL contributing apps - not just the one a
 given test file targets. ``importlib.reload(config.schema)`` does NOT re-execute

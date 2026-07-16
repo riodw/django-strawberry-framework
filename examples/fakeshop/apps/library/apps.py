@@ -1,3 +1,5 @@
+"""Django app configuration for the library acceptance app."""
+
 from django.apps import AppConfig
 
 

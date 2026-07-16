@@ -1,3 +1,5 @@
+"""Django app configuration for the scalar acceptance app."""
+
 from django.apps import AppConfig
 
 

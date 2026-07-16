@@ -1,3 +1,5 @@
+"""Django app configuration for the schema-only accounts surface."""
+
 from django.apps import AppConfig
 
 

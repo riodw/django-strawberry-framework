@@ -1,3 +1,5 @@
+"""Django app configuration that registers kanban consistency signals at startup."""
+
 from django.apps import AppConfig
 
 

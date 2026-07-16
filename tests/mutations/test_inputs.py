@@ -625,10 +625,10 @@ def test_type_name_token_boundaries_do_not_collide():
     concatenation re-decomposes ambiguously: ``("a_b", "c")`` and ``("a", "b_c")``
     both collapse onto ``ABC`` - a generated GraphQL type-name collision that trips
     the AR-M6 distinct-shape raise at materialize. A single-leading-capital token
-    (``[A-Z][a-z0-9]*``, underscores removed) makes the concatenation uniquely
-    decomposable at uppercase boundaries, so the suffix is injective over field-name
-    sets (``AbC`` vs ``ABc``) while staying underscore-free (Strawberry's GraphQL
-    name converter leaves the PascalCase name unchanged).
+    (letter underscores collapsed, no interior capital) makes the concatenation
+    uniquely decomposable at uppercase boundaries, so the suffix is injective over
+    field-name sets (``AbC`` vs ``ABc``). Underscore-before-digit is retained so the
+    type stem stays distinct on the wire under the pinned ``strawberry.input(name=)``.
     """
     full = ("not_the_narrowed_set",)  # any set != either narrowing, so both are "narrowed"
     left = mutation_input_type_name(
@@ -645,6 +645,75 @@ def test_type_name_token_boundaries_do_not_collide():
     )
     assert left != right
     assert left == "ItemAbCInput" and right == "ItemABcInput"
+
+
+def test_type_name_digit_boundary_narrowings_stay_distinct():
+    """``field_2`` / ``field2`` Meta.fields narrowings mint distinct input type names.
+
+    ``pascalize_token`` used to strip every underscore (``field_2`` / ``field2`` both
+    -> ``Field2``), so two legitimate narrowed shapes claimed one GraphQL input type
+    name and the second materialize raised AR-M6. Retaining underscore-before-digit
+    keeps the tokens injective; the shared builder pins ``strawberry.input(name=)``
+    so the underscore survives on the wire.
+    """
+    full = ("not_the_narrowed_set",)
+
+    class DigitBoundary(models.Model):
+        field_2 = models.IntegerField()
+        field2 = models.IntegerField()
+
+        class Meta:
+            app_label = _unique_app_label()
+
+    class DigitBoundaryType(DjangoType, relay.Node):
+        class Meta:
+            model = DigitBoundary
+            fields = ("id",)
+
+    left_name = mutation_input_type_name(
+        DigitBoundary,
+        CREATE,
+        ("field_2",),
+        full_field_names=full,
+    )
+    right_name = mutation_input_type_name(
+        DigitBoundary,
+        CREATE,
+        ("field2",),
+        full_field_names=full,
+    )
+    assert left_name == "DigitBoundaryField_2Input"
+    assert right_name == "DigitBoundaryField2Input"
+    assert left_name != right_name
+
+    left = build_mutation_input(
+        DigitBoundary,
+        operation_kind=CREATE,
+        primary_type=DigitBoundaryType,
+        fields=("field_2",),
+    )
+    right = build_mutation_input(
+        DigitBoundary,
+        operation_kind=CREATE,
+        primary_type=DigitBoundaryType,
+        fields=("field2",),
+    )
+    materialize_mutation_input_class(left.__name__, left)
+    materialize_mutation_input_class(right.__name__, right)  # must not AR-M6-collide
+
+    def _probe(left_inp, right_inp) -> int:
+        return 1
+
+    _probe.__annotations__ = {"left_inp": left, "right_inp": right, "return": int}
+
+    @strawberry.type
+    class Query:
+        probe: int = strawberry.field(resolver=_probe)
+
+    schema = strawberry.Schema(query=Query, config=strawberry_config())
+    sdl = schema.as_str()
+    assert "input DigitBoundaryField_2Input" in sdl
+    assert "input DigitBoundaryField2Input" in sdl
 
 
 def test_build_empty_field_set_raises_configuration_error():

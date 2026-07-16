@@ -409,6 +409,32 @@ def _connection_row(text: str, field_name: str) -> str:
     raise AssertionError(f"no row for field {field_name!r} in:\n{text}")
 
 
+def test_inspect_direct_relay_node_inheritance_suppresses_pk_row():
+    """Direct ``class Foo(DjangoType, relay.Node)`` reports GlobalID! for the pk.
+
+    The inspect command must consume ``types/base.py::_is_relay_shaped`` (both
+    the ``Meta.interfaces`` arm covered by fakeshop ``BookType`` and this
+    direct-inheritance arm), not a Meta-only membership check. A naive
+    ``relay.Node in definition.interfaces`` would miss this spelling and fall
+    through to a scalar / relation row for the pk.
+    """
+
+    class CategoryNode(DjangoType, relay.Node):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    finalize_django_types()
+    out = StringIO()
+    call_command("inspect_django_type", "CategoryNode", stdout=out)
+    text = out.getvalue()
+
+    id_row = _connection_row(text, "id")
+    assert "GlobalID!" in id_row
+    assert "relay.Node id" in id_row
+    assert "SCALAR_MAP" not in id_row
+
+
 def test_inspect_connection_only_relation_shape_renders_row():
     """A ``relation_shapes = {<rel>: "connection"}`` relation renders, never KeyErrors.
 

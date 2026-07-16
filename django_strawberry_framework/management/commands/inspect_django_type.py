@@ -46,7 +46,6 @@ from functools import partial
 import strawberry
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import models
-from strawberry import relay
 from strawberry.schema.name_converter import NameConverter
 from strawberry.types.base import StrawberryList, StrawberryOptional
 from strawberry.types.enum import StrawberryEnumDefinition
@@ -61,7 +60,7 @@ from django_strawberry_framework.management.commands._imports import (
 )
 from django_strawberry_framework.registry import registry
 from django_strawberry_framework.scalars import _PACKAGE_SCALAR_MAP
-from django_strawberry_framework.types.base import DjangoType
+from django_strawberry_framework.types.base import DjangoType, _is_relay_shaped
 from django_strawberry_framework.types.converters import SCALAR_MAP, _field_output_type_for
 from django_strawberry_framework.utils.strings import snake_case
 
@@ -270,13 +269,14 @@ class Command(BaseCommand):
 
         On a Relay-Node-shaped type the pk ``continue``s past ``convert_scalar``
         (the interface supplies ``id: GlobalID!``), so it is absent from
-        ``origin.__annotations__`` and must not be indexed there.
+        ``origin.__annotations__`` and must not be indexed there. Shape uses
+        the shared ``types/base.py::_is_relay_shaped`` predicate - the same
+        gate ``_build_annotations`` used when it suppressed the pk - so a
+        Meta-declared ``relay.Node``, a ``CustomNode(relay.Node)`` interface,
+        and direct ``class Foo(DjangoType, relay.Node)`` inheritance stay in
+        lockstep with synthesis.
         """
-        relay_shaped = any(issubclass(i, relay.Node) for i in definition.interfaces) or issubclass(
-            definition.origin,
-            relay.Node,
-        )
-        if not relay_shaped:
+        if not _is_relay_shaped(definition.origin, definition.interfaces):
             return False
         return field.name == definition.model._meta.pk.name
 

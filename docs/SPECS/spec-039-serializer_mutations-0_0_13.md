@@ -60,24 +60,37 @@ card [`TODO-ALPHA-040-0.0.13`][kanban] (which reuses the same envelope and
 > and the code disagree, the code and [`docs/README.md`][docs-readme]
 > #"Serializer mutation contracts" govern:
 >
-> - `get_serializer_kwargs` is now **constructor-only**. `data`, `instance`,
->   `partial`, `context["request"]`, and `context["write_alias"]` are framework-owned;
->   a conflicting reserved return is a `ConfigurationError`. The framework builds the
->   serializer data itself (decoded client data + declared injection) and passes the
->   hook a copy. The reserved returns are checked by **omission sentinel + object
->   identity**, never deep equality: the returned `data` must be omitted or the exact
->   clone object the hook received, the returned `instance` omitted or the located row
->   itself (an explicit `data=None` / `instance=None` and a rebuilt-equal copy are
->   rejected too — a deep `!=` over two independently cloned structures recurses on
->   deep valid payloads, and a `pop(..., None)` default conflates explicit `None` with
->   omission).
-> - Narrowed-away required fields pair `Meta.injected_fields` with
->   `get_serializer_injected_data(info, *, data, instance=None)` hook, whose returned
+> - `get_serializer_kwargs` is now **constructor-only**, and consumer hooks never
+>   receive the live located instance: every hook (`get_serializer_kwargs`,
+>   `get_serializer_injected_data`, `get_serializer_save_kwargs`) takes a frozen
+>   `SerializerHookContext(operation, write_alias, instance_pk)`
+>   (`rest_framework/hook_context.py`) plus an **immutable data view** — read-only
+>   mapping proxies, lists/tuples as tuples, sets as frozensets, `bytearray` as
+>   `bytes`, and each upload replaced by a frozen `UploadMetadata` descriptor (the
+>   stateful authoritative upload objects reach only the serializer's own
+>   validation). Immutable scalar leaves pass by reference; an opaque, possibly-mutable
+>   leaf with no immutable rendering **fails closed** rather than being aliased.
+>   `data`, `instance`, `partial`,
+>   `context["request"]`, and `context["write_alias"]` are framework-owned; a
+>   conflicting reserved return is a `ConfigurationError`. The framework builds the
+>   serializer data itself (decoded client data + declared injection). The reserved
+>   returns are checked by **omission sentinel + object identity**, never deep
+>   equality: the returned `data` must be omitted or the exact frozen object the
+>   hook received (an explicit `data=None` and a rebuilt-equal copy are rejected
+>   too — a deep `!=` recurses on deep valid payloads, and a `pop(..., None)`
+>   default conflates explicit `None` with omission), and **any** returned
+>   `instance` key is rejected outright — the framework injects the authorized row
+>   itself, and hooks only see its pk via `hook_context.instance_pk`.
+> - Narrowed-away required fields pair `Meta.injected_fields` with the
+>   `get_serializer_injected_data(info, *, data, hook_context)` hook, whose returned
 >   keys must exactly match the declaration; an injected field must be narrowed out of
 >   the GraphQL input (enforced at class creation).
-> - The `get_serializer_save_kwargs` shadow check now compares against the actual
+> - `get_serializer_save_kwargs(info, *, data, hook_context)` may carry **only
+>   non-model custom arguments**: the shadow check compares against the actual
 >   top-level `serializer.validated_data` keys (renamed, injected, defaulted, and
->   hidden fields alike), not a reconstruction from the input specs.
+>   hidden fields alike), and a save kwarg naming **any model field** is rejected —
+>   model-field injection goes exclusively through the audited
+>   `Meta.injected_fields` channel.
 > - Every top-level and nested relation field's queryset is composed as author
 >   queryset ∩ target visibility, pinned to the operation's write alias, and locked
 >   when `Meta.select_for_update` locks; a cross-alias author queryset fails closed.
@@ -92,15 +105,96 @@ card [`TODO-ALPHA-040-0.0.13`][kanban] (which reuses the same envelope and
 >   (post-hoc detection could not roll back an already-escaped cross-alias write), so
 >   the signal-less `QuerySet.update()` / `bulk_create` / raw-cursor paths are covered
 >   by construction; a thread-scoped `pre_save` guard gives the `Model.save()` path an
->   earlier, clearer error. The framework warms the request's auth state (the lazy
->   `request.user` + the backend's per-user permission cache) **before** installing
->   the guard, since the auth models legitimately live on their own router alias.
-> - The **authorized pk is snapshotted by the pipeline skeleton immediately after
->   the update locate** — before the permission hook, the first consumer-controlled
->   code, can touch the mutable located instance — published on the write-pipeline
->   context, and enforced by a flavor-independent backstop: an update result whose pk
->   drifted from the snapshot, or a delete whose instance pk drifts during
->   authorization, fails closed.
+>   earlier, clearer error. The guard grants exactly ONE narrow, phase-scoped
+>   exception: a dedicated **authorization phase**
+>   (`utils/write_transaction.py::authorization_phase`) wraps only the single
+>   permission-evaluation call and permits statements on the explicitly identified
+>   **auth aliases** (`utils/permissions.py::resolve_auth_aliases` — the router's
+>   read answer for the user model, `auth.Permission` / `Group`, and
+>   `contenttypes`), so a divergent read/write router that keeps auth off the write
+>   alias can resolve the user + permission set. Crucially the boundary is
+>   **transactional and database-enforced, not lexical** (a keyword read/write
+>   test cannot safely authorize cross-alias execution): each non-pinned auth
+>   alias runs inside a `transaction.atomic` that is put in a **backend-enforced
+>   read-only mode** (`_enforce_read_only_barrier` — PostgreSQL `SET TRANSACTION
+>   READ ONLY`, SQLite `PRAGMA query_only`, the latter read and restored to its
+>   prior value on exit so a pre-existing setting / an enclosing barrier survives —
+>   stack-safe) **and** unconditionally rolled back when the phase ends. Forced
+>   rollback alone is **not** a portable barrier even against ordinary writes —
+>   non-transactional tables and implicitly-committed DDL can escape it — so an
+>   ordinary write a permission backend attempts is refused by the database itself
+>   and discarded on rollback; a backend that cannot provide the read-only guarantee
+>   **fails closed** (the pipeline raises rather than route auth there), and the
+>   forced rollback stays as additional containment. This is **not** a complete
+>   sandbox against a *hostile* backend: backend read-only mode is a high-level
+>   restriction that still permits side-effecting functions (PostgreSQL
+>   `nextval`/`setval` advance a sequence and are never rolled back; a session-scope
+>   advisory lock outlives the transaction), so the model **trusts permission
+>   backends to read only** — the barrier contains ordinary/accidental writes, not
+>   deliberate volatile side effects, and a deployment that cannot make that trust
+>   assumption must use genuinely capability-restricted credentials for
+>   divergent-router authorization. The exception
+>   closes the instant authorization returns — decode / hooks / validation cannot
+>   reach the auth alias, and evaluating permissions there fills the per-user cache
+>   as a side effect (so no pre-guard warming step is needed). It is gated on the
+>   mutation actually declaring permission classes, so the explicit
+>   `permission_classes = []` opt-out grants no auth-alias access and never resolves
+>   the lazy user.
+> - The pipeline is additionally **phase-separated**: permission checks, decoding,
+>   hooks, validation, and save-kwargs preparation are **database-read-only** — on
+>   the *pinned* connection the guard rejects write-shaped SQL outside the flavor's
+>   write phase (`pipeline_write_phase()`, opened for exactly `serializer.save()` /
+>   `Model.save()` + M2M / `form.save()` / `instance.delete()`). There the
+>   conservative comment-stripped **allow-list** (`is_read_only_sql`) is
+>   phase-ordering enforcement, not the atomicity boundary — a false negative still
+>   executes inside the pinned transaction and rolls back with it. `serializer.save()`
+>   runs inside its own nested-`atomic` **savepoint**, rolled back *before* a caught
+>   DRF/Django `ValidationError` or `IntegrityError` converts into the `FieldError`
+>   envelope, so a custom `save()` that wrote rows then raised leaves no partial
+>   write (the exceptions are caught **outside** the atomic block — an
+>   `IntegrityError` escaping `save_base`'s savepoint-less inner atomic flags
+>   `needs_rollback`, which only the enclosing atomic's own rollback clears).
+> - The **authorized pk and the located row's loaded concrete field values are
+>   snapshotted by the pipeline skeleton immediately after the update locate** —
+>   before the permission hook, the first consumer-controlled code, can touch the
+>   mutable located instance — published on the write-pipeline context
+>   (`WriteAliasContext.authorized_pk` / `.target_state`), and enforced in layers:
+>   a flavor-independent backstop rejects an update result whose pk drifted from the
+>   snapshot (a delete whose instance pk drifts during authorization fails the same
+>   way), and the serializer flavor rejects **in-memory drift** of the located row
+>   immediately before `serializer.save()` (`assert_no_target_drift` — DRF's
+>   `update()` saves the whole instance, so a `setattr` by a permission method /
+>   hook / validator would otherwise ride into the write unvalidated). The snapshot
+>   captures each field **by value**, never by reference: mutable containers
+>   (`JSONField`/`ArrayField`) as iterative structural fingerprints and a `FieldFile`
+>   by its database-relevant `name` string — an in-place mutation on the same object
+>   (`instance.data["x"] = …`, `instance.file.name = …`) is still caught as drift.
+>   Pk equality
+>   everywhere goes through the model pk field's own `to_python`
+>   **canonicalization** (`pks_match`), never `str()` comparison — a `UUID` pk
+>   spells the same row several ways, and a forged pk of the wrong shape must read
+>   as a mismatch.
+> - A **relation-intent ledger** wraps every (top-level and nested) relation
+>   field's `run_validation()` after the queryset scoping and before `is_valid()`:
+>   the exact resolved objects are recorded (one entry per `many=True` list item;
+>   custom `pk_field` implementations stay supported — the ledger records the
+>   relation object DRF finally resolves) and the final `validated_data` must carry
+>   them **by identity** — renamed sources, injected fields, single relations,
+>   lists (length + pairwise identity, so duplicate and explicit-empty-list set
+>   semantics pass through), and nested paths alike. A validator may reject or pop
+>   a relation (popping reverts to omitted semantics), never substitute or inject
+>   one.
+> - After the save, the returned top-level row is **attested against the
+>   database**: every supplied FK/OneToOne column is read back in one `values()`
+>   query and must hold the validated target's pk (canonical comparison through the
+>   related pk field), every supplied M2M must equal the validated pk **set**
+>   (explicit `[]` clears; duplicates collapse per DRF `.set()` semantics), and
+>   every omitted partial-update M2M on the write surface must equal its pre-save
+>   membership snapshot — taken at write-step entry, strictly **after**
+>   authorization (no relation-membership query ever runs pre-auth) and before any
+>   consumer hook. A custom `create()`/`update()` that ignored or replaced
+>   validated relations is a loud `ConfigurationError`; arbitrary same-alias
+>   behavior inside custom write code otherwise remains trusted.
 > - The serializer write phase additionally runs under a thread-scoped **write
 >   witness**: a `post_save` recorder collects the backing model's actual writes
 >   **with a pk snapshot taken at the signal** (the model object is mutable, so
@@ -123,13 +217,20 @@ card [`TODO-ALPHA-040-0.0.13`][kanban] (which reuses the same envelope and
 >   (input fields and `Meta.injected_fields`): two differently-named fields feeding one
 >   model attribute are rejected at class creation (DRF resolves the collision
 >   last-write-wins, so an injected value could silently replace the client's).
-> - Every hook copy of the serializer data (`get_serializer_injected_data`,
->   `get_serializer_kwargs`, `get_serializer_save_kwargs`) is a **recursive**,
->   **iteratively-built** plain-container clone: nested in-place mutations cannot reach
->   the authoritative data or `validated_data`, client-controlled JSON nesting depth
->   cannot crash the pipeline with a `RecursionError`, a hook-constructed **cyclic**
->   container fails loud as a `ConfigurationError` instead of looping forever, and a
->   merely shared (diamond) reference clones once and stays shared.
+> - Every hook data view (`get_serializer_injected_data`, `get_serializer_kwargs`,
+>   `get_serializer_save_kwargs`) is a **recursively frozen**, **iteratively-built**
+>   structure (`_frozen_hook_view`): nested in-place mutation is structurally
+>   impossible — dicts become mapping proxies, lists/tuples tuples, sets frozensets,
+>   `bytearray` `bytes`, and an opaque possibly-mutable leaf with no immutable
+>   rendering **fails closed** (rather than aliasing a value a hook could mutate to
+>   reach the authoritative data). Client-controlled JSON nesting depth cannot crash
+>   the pipeline with a `RecursionError`, a **cyclic** container fails loud as a
+>   `ConfigurationError` instead of looping forever, and a merely shared
+>   (diamond) reference freezes once and stays shared. The DRF error flattener
+>   (`serializer_errors_to_field_errors`) is **iterative, cycle-rejecting, and
+>   budget-capped** the same way — the error structure mirrors client-controlled
+>   input nesting, and pathological fan-out ends in one `"__all__"`-keyed
+>   `truncated` marker instead of unbounded work.
 
 Status: **IMPLEMENTED ON MAIN** — all five slices (Slice 0 + Slices 1-4) are
 final-accepted and on main; the implemented-on-main docs + the card wrap landed in

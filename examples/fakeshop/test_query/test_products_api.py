@@ -3778,10 +3778,11 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
     assert result["errors"] == []
     assert result["node"] == {"name": "SerG2Widget", "category": {"name": category.name}}
 
-    # Bounded count = 14, DERIVED from a real run (BUILD.md forbids guessing it;
-    # the serializer flavor differs from the model flavor's 14 by composition - no
+    # Bounded count = 17, DERIVED from a real run (BUILD.md forbids guessing it;
+    # the serializer flavor differs from the model flavor by composition - no
     # `full_clean`, instead DRF's `is_valid()` runs the FK re-fetch + the unique
-    # validator). Per-query breakdown:
+    # validator - plus the hardening pass's save savepoint and post-save FK
+    # attestation). Per-query breakdown:
     #   BEGIN + COMMIT                                       = 2 (the DjangoSchema
     #                                                            completion-spanning
     #                                                            transaction - BETA-055)
@@ -3797,13 +3798,22 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
     #                                                            DRF validates the pk)
     #   is_valid(): UniqueTogetherValidator                  = 1 (SELECT 1 EXISTS on
     #                                                            products_item)
+    #   save SAVEPOINT + RELEASE                             = 2 (the hardening pass's
+    #                                                            savepoint around
+    #                                                            serializer.save(),
+    #                                                            rolled back before a
+    #                                                            failure converts to
+    #                                                            the FieldError envelope)
     #   INSERT products_item                                 = 1
+    #   post-save FK attestation: products_item values()     = 1 (the DATABASE column
+    #                                                            must hold the
+    #                                                            validated target's pk)
     #   post-write re-fetch: products_item                   = 1 (optimizer-planned)
     #   the `category` relation: products_category           = 1 (select_related /
     #                                                            prefetch; no N+1, no
     #                                                            lazy refetch)
     sql = [query["sql"] for query in captured]
-    assert len(captured) == 14, sql
+    assert len(captured) == 17, sql
     # G2 load-bearing property (NOT a column-exact snapshot - that is the package
     # mirror's job): the re-fetch reads the item once (the `SELECT 1` EXISTS is the
     # unique validator, not a row read) and the relation through select_related /
@@ -3817,9 +3827,10 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
         for s in sql
         if "products_category" in s.lower() and s.strip().upper().startswith("SELECT")
     ]
-    # The re-fetch reads products_item exactly once (the `SELECT 1` unique EXISTS
-    # excluded); no deferred-field lazy refetch fires.
-    assert len([s for s in item_selects if "select 1" not in s.lower()]) == 1, sql
+    # TWO real products_item SELECTs (the `SELECT 1` unique EXISTS excluded): the
+    # post-save FK attestation's single-column ``values()`` read plus the ONE
+    # optimizer-planned re-fetch; no deferred-field lazy refetch fires.
+    assert len([s for s in item_selects if "select 1" not in s.lower()]) == 2, sql
     # THREE real category SELECTs: the relation-id visibility decode, DRF's FK
     # validation re-fetch in is_valid(), and the post-write re-fetch relation -
     # none an N+1 / lazy refetch.

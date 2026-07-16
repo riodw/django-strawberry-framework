@@ -544,7 +544,7 @@ def test_get_serializer_kwargs_override_no_longer_waives_create_required_guard()
             info,
             *,
             data,
-            instance=None,
+            hook_context,
         ):
             return {"context": {"extra": "x"}}
 
@@ -587,7 +587,7 @@ def test_build_input_runs_required_guard_per_declaration():
             info,
             *,
             data,
-            instance=None,
+            hook_context,
         ):
             return {"confirm": "x"}
 
@@ -722,34 +722,30 @@ def test_duplicate_source_across_input_and_injected_raises_at_class_creation():
                 permission_classes = []
 
 
-def test_star_source_fields_are_exempt_from_the_source_collision_guard():
-    """``source="*"`` (whole-object) fields never falsely collide at class creation.
+def test_writable_star_source_field_is_rejected_at_class_creation():
+    """A writable ``source="*"`` field is rejected: it can overwrite any validated_data key.
 
-    ``"*"`` is not a model attribute two fields could compete for; the serializer
-    converter separately rejects a ``source="*"`` model-column field at finalize, so the
-    class-creation guard must not preempt it with a misleading collision error.
+    ``"*"`` is not a single-key collision - DRF merges a whole-object field's returned mapping
+    into root ``validated_data`` (last-write-wins), so it can silently replace client or
+    injected values under ANY key. The model-column converter only rejects an EXPOSED star
+    field; a narrowed-out / hidden / defaulted one never reaches it, so the runtime-field guard
+    rejects every writable star field at class creation instead of treating it as exempt.
     """
 
     class StarSer(serializers.ModelSerializer):
         alpha = serializers.CharField(source="*")
-        beta = serializers.CharField(source="*")
 
         class Meta:
             model = product_models.Item
-            fields = (
-                "name",
-                "category",
-                "alpha",
-                "beta",
-            )
+            fields = ("name", "category", "alpha")
 
-    class StarMut(SerializerMutation):  # no raise: the guard skips "*"
-        class Meta:
-            serializer_class = StarSer
-            operation = "create"
-            permission_classes = []
+    with pytest.raises(ConfigurationError, match="source='\\*'"):
 
-    assert StarMut is not None
+        class StarMut(SerializerMutation):
+            class Meta:
+                serializer_class = StarSer
+                operation = "create"
+                permission_classes = []
 
 
 def test_duplicate_source_between_two_input_fields_raises_at_class_creation():
@@ -1126,7 +1122,7 @@ def test_meta_select_for_update_non_bool_raises():
 
 def test_meta_injected_fields_unknown_name_raises_at_class_creation():
     """``Meta.injected_fields`` naming a field not in the schema map fails loud at class creation (rev6 rev2 P1)."""
-    with pytest.raises(ConfigurationError, match="schema-time field map"):
+    with pytest.raises(ConfigurationError, match="unknown or non-writable at schema time"):
 
         class BadInject(SerializerMutation):
             class Meta:
@@ -1384,6 +1380,36 @@ def test_nested_hidden_field_source_collision_raises_at_class_creation():
     with pytest.raises(ConfigurationError, match="nested serializer path 'items'"):
 
         class CreateCategoryWithCollision(SerializerMutation):
+            class Meta:
+                serializer_class = CategoryWithItems
+                operation = "create"
+                nested_fields = {"items": NestedSerializerConfig()}
+                permission_classes = []
+
+
+def test_nested_star_source_field_raises_at_class_creation():
+    """An opted-in nested serializer cannot smuggle a whole-object ``source="*"`` field."""
+
+    class ItemInline(serializers.ModelSerializer):
+        whole = serializers.DictField(source="*")
+
+        class Meta:
+            model = product_models.Item
+            fields = ("name", "whole")
+
+    class CategoryWithItems(serializers.ModelSerializer):
+        items = ItemInline(many=True)
+
+        class Meta:
+            model = product_models.Category
+            fields = ("name", "items")
+
+        def create(self, validated_data):
+            return None
+
+    with pytest.raises(ConfigurationError, match="nested serializer path 'items'.*source='\\*'"):
+
+        class CreateCategoryWithStar(SerializerMutation):
             class Meta:
                 serializer_class = CategoryWithItems
                 operation = "create"

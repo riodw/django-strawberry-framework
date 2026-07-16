@@ -2468,6 +2468,9 @@ def test_write_pipeline_opens_atomic_on_managed_write_alias(monkeypatch):
     mutation_cls.__name__ = "FakePipelineMutation"  # the alias guard names the mutation
     mutation_cls._mutation_meta.operation = "create"
     mutation_cls._mutation_meta.select_for_update = False
+    # No permission classes: this test is about the managed-alias atomic, not auth,
+    # so the authorization phase (and its rolled-back auth-alias barrier) is a no-op.
+    mutation_cls._mutation_meta.permission_classes = []
     mutation_cls._primary_type = object()
     mutation_cls._payload_type_name = "Unused"
 
@@ -2531,7 +2534,11 @@ def _pipeline_harness(monkeypatch, *, operation="update", authorize=None):
     mutation_cls._mutation_meta.select_for_update = False
     mutation_cls._primary_type = object()
 
-    monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: MagicMock(__name__="Row"))
+    fake_model = MagicMock(__name__="Row")
+    # A REAL identity ``to_python``: the canonical pk comparison must not be fed a
+    # MagicMock whose repeated calls return one shared (always-equal) child mock.
+    fake_model._meta.pk.to_python = lambda value: value
+    monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: fake_model)
     monkeypatch.setattr(mutation_resolvers, "payload_object_slot", lambda _t: "node")
     monkeypatch.setattr(mutation_resolvers, "payload_cls_for", lambda _m: MagicMock())
     monkeypatch.setattr(mutation_resolvers, "coerce_lookup_id", lambda _id, _t: (7, None))
@@ -2559,7 +2566,11 @@ def test_pipeline_snapshots_authorized_pk_before_permission_hook(monkeypatch):
     from django_strawberry_framework.exceptions import ConfigurationError
     from django_strawberry_framework.utils.write_transaction import managed_write_transaction
 
-    located = SimpleNamespace(pk=7)
+    located = SimpleNamespace(
+        pk=7,
+        get_deferred_fields=lambda: set(),
+        _meta=SimpleNamespace(concrete_fields=[]),
+    )
 
     def evil_authorize(*_args, **_kwargs):
         located.pk = 999  # re-point at a hidden row AFTER authorization
@@ -2592,7 +2603,11 @@ def test_pipeline_publishes_authorized_pk_on_write_context(monkeypatch):
         require_write_pipeline,
     )
 
-    located = SimpleNamespace(pk=7)
+    located = SimpleNamespace(
+        pk=7,
+        get_deferred_fields=lambda: set(),
+        _meta=SimpleNamespace(concrete_fields=[]),
+    )
     seen: dict = {}
 
     def probe_authorize(*_args, **_kwargs):
@@ -2630,12 +2645,18 @@ def test_delete_pipeline_rejects_pk_drift_during_authorization(monkeypatch):
     mutation_cls.__name__ = "SnapshotDeleteMutation"
     mutation_cls._mutation_meta.select_for_update = False
 
-    located = SimpleNamespace(pk=7)
+    located = SimpleNamespace(
+        pk=7,
+        get_deferred_fields=lambda: set(),
+        _meta=SimpleNamespace(concrete_fields=[]),
+    )
 
     def evil_authorize(*_args, **_kwargs):
         located.pk = 999
 
-    monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: MagicMock(__name__="Row"))
+    fake_model = MagicMock(__name__="Row")
+    fake_model._meta.pk.to_python = lambda value: value
+    monkeypatch.setattr(mutation_resolvers, "model_for", lambda _t: fake_model)
     monkeypatch.setattr(mutation_resolvers, "coerce_lookup_id", lambda _id, _t: (7, None))
     monkeypatch.setattr(mutation_resolvers, "locate_instance", lambda *a, **k: located)
     monkeypatch.setattr(mutation_resolvers, "check_instance_write_alias", lambda *a, **k: None)

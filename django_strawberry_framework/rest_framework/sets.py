@@ -71,7 +71,6 @@ from ..mutations.sets import (
     DjangoMutation,
     _ValidatedMutationMeta,
     build_and_stash_input,
-    construction_kwargs,
     non_delete_operation_error,
     reject_unknown_meta_keys,
     require_backing_class,
@@ -98,6 +97,7 @@ from .inputs import (
     serializer_schema_fingerprint,
     writable_serializer_fields,
     writable_source_collisions,
+    writable_star_sources,
 )
 from .inputs import (
     get_serializer_for_schema as _default_serializer_schema_fields,
@@ -305,10 +305,20 @@ def _assert_nested_schema_source_ownership(
             supplied_fields=set(effective),
             apply_defaults=apply_defaults,
         )
-        colliding = writable_source_collisions(
-            {child_name: field.source for child_name, field in runtime_fields.items()},
-        )
+        runtime_sources = {
+            child_name: field.source for child_name, field in runtime_fields.items()
+        }
         child_path = f"{path}.{field_name}" if path else field_name
+        star_fields = writable_star_sources(runtime_sources)
+        if star_fields:
+            raise ConfigurationError(
+                f"SerializerMutation {name}: nested serializer path {child_path!r} has writable "
+                f"field(s) {star_fields!r} declaring source='*'. DRF merges a whole-object "
+                "field's returned mapping into validated_data, so it can silently replace other "
+                "validated values under any key. Remove the field, make it read_only, or give "
+                "it a concrete single-column source.",
+            )
+        colliding = writable_source_collisions(runtime_sources)
         if colliding:
             detail = "; ".join(
                 f"source {source!r} <- fields {owners!r}"
@@ -556,9 +566,20 @@ class SerializerMutation(DjangoMutation):
             supplied_fields=set(effective) | set(injected_fields or ()),
             apply_defaults=operation == CREATE,
         )
-        colliding = writable_source_collisions(
-            {field_name: field.source for field_name, field in runtime_fields.items()},
-        )
+        runtime_sources = {
+            field_name: field.source for field_name, field in runtime_fields.items()
+        }
+        star_fields = writable_star_sources(runtime_sources)
+        if star_fields:
+            raise ConfigurationError(
+                f"SerializerMutation {name}: writable field(s) {star_fields!r} declare "
+                "source='*'. DRF merges a whole-object field's returned mapping into "
+                "validated_data, so it can silently replace client or injected values under "
+                "any key (including narrowed-out HiddenField / defaulted runtime fields that "
+                "never reach the column converter). Remove the field, make it read_only, or "
+                "give it a concrete single-column source.",
+            )
+        colliding = writable_source_collisions(runtime_sources)
         if colliding:
             detail = "; ".join(
                 f"source {src!r} <- fields {owners!r}" for src, owners in sorted(colliding.items())
@@ -795,7 +816,7 @@ class SerializerMutation(DjangoMutation):
         info: Any,
         *,
         data: Any,
-        instance: Any = None,
+        hook_context: Any,
     ) -> dict[str, Any]:
         """The default serializer-construction kwargs - CONSTRUCTOR-ONLY (the Slice-3 resolver consumes this).
 
@@ -807,33 +828,35 @@ class SerializerMutation(DjangoMutation):
         **``data``, ``instance``, ``partial``, ``context["request"]``, and
         ``context["write_alias"]`` are FRAMEWORK-OWNED.** The resolver's
         ``_merged_serializer_kwargs`` builds the serializer data itself (decoded client data +
-        the ``get_serializer_injected_data`` injection), passes this hook a COPY, and raises a
+        the ``get_serializer_injected_data`` injection), passes this hook the FROZEN view
+        (immutable containers; uploads as ``UploadMetadata``), and raises a
         ``ConfigurationError`` on any conflicting reserved return: a ``data`` that is not the
-        EXACT clone object the hook received (identity via an omission sentinel - an explicit
-        ``data=None`` or a rebuilt-equal copy is rejected too), an ``instance`` other than the
-        located + authorized row (same sentinel discipline, so an explicit ``instance=None``
-        on update is rejected), any ``partial``, a different ``context["request"]`` object, or
-        a conflicting ``context["write_alias"]``. Omission or the identical pass-through (this
-        default's shape) is tolerated. The framework also sets ``context["write_alias"]`` to the
+        EXACT frozen object the hook received (identity via an omission sentinel - an explicit
+        ``data=None`` or a rebuilt-equal copy is rejected too), ANY ``instance`` key (the live
+        located row never reaches hooks - ``hook_context`` carries its ``instance_pk``
+        snapshot instead, and the framework injects the authorized row itself), any
+        ``partial``, a different ``context["request"]`` object, or a conflicting
+        ``context["write_alias"]``. Omission or the identical pass-through (this default's
+        shape) is tolerated. The framework also sets ``context["write_alias"]`` to the
         pipeline's pinned write alias so custom serializer code routes any extra queries into
         the SAME transaction.
+
+        ``hook_context`` is the frozen ``SerializerHookContext`` (``operation`` /
+        ``write_alias`` / ``instance_pk``).
 
         **Narrowing away a required field: use ``Meta.injected_fields`` +
         ``get_serializer_injected_data``.** Injecting values by rewriting ``data`` here is no
         longer possible.
         """
-        del info  # the default ignores ``info``; an override may consult it.
-        # The "add ``instance`` only on update" clause is single-sited in
-        # ``mutations/sets.py::construction_kwargs`` (spec-039 Md7), shared with the
-        # form ``get_form_kwargs`` default.
-        return construction_kwargs(data=data, instance=instance)
+        del info, hook_context  # the default ignores them; an override may consult them.
+        return {"data": data}
 
     def get_serializer_injected_data(
         self,
         info: Any,
         *,
         data: Any,
-        instance: Any = None,
+        hook_context: Any,
     ) -> dict[str, Any]:
         """Supply the ``Meta.injected_fields`` values merged into the serializer data (hardening).
 
@@ -843,36 +866,41 @@ class SerializerMutation(DjangoMutation):
         ``ConfigurationError`` - injection is an auditable, per-field contract, never a
         blanket rewrite). An injected field must be narrowed OUT of the GraphQL input
         (enforced at class creation), so the merge can never overwrite a client value.
-        ``data`` is a COPY of the decoded client data (consult it freely; mutating it has no
-        effect); ``instance`` is the located row on update (``None`` on create). The default
-        injects nothing - a mutation declaring ``Meta.injected_fields`` MUST override this.
+        ``data`` is the FROZEN view of the decoded client data (consult it freely; mutation
+        is structurally impossible, and uploads appear as ``UploadMetadata``);
+        ``hook_context`` is the frozen ``SerializerHookContext`` - ``instance_pk`` is the
+        authorized target's pk snapshot on update (``None`` on create). The default injects
+        nothing - a mutation declaring ``Meta.injected_fields`` MUST override this.
         """
-        del info, data, instance  # the default injects nothing; an override may consult them.
+        del info, data, hook_context  # the default injects nothing; overrides may consult.
         return {}
 
     def get_serializer_save_kwargs(
         self,
         info: Any,
+        *,
         data: Any,
-        instance: Any = None,
+        hook_context: Any,
     ) -> dict[str, Any]:
         """Return extra kwargs for ``serializer.save(**kwargs)`` (spec-039 rev6 #12).
 
         The DRF-native customization point for request-derived data DRF expects at SAVE time
-        (``serializer.save(owner=request.user)``) rather than in the constructor or by mutating
-        ``data`` - distinct from ``get_serializer_kwargs`` (which shapes CONSTRUCTION / context).
-        The default returns ``{}``; a consumer overrides it to inject save-time attributes. The
-        Slice-3 resolver calls it inside the value-preserving ``save()`` closure (so the
-        transaction / error-mapping / optimizer re-fetch behavior is preserved) and REJECTS a
-        save kwarg that shadows ANY top-level ``serializer.validated_data`` key - a renamed
-        input, an injected field, a default, or a ``HiddenField`` alike (DRF merges save kwargs
-        over ``validated_data``, so a collision would silently replace the validated value).
-        ``data`` is a recursive plain-container CLONE of the decoded ``provided_data``
-        (its nested containers can be shared by identity with ``serializer.validated_data``,
-        so mutating the hook's argument must never rewrite a validated value); ``instance``
-        is the located row on update (``None`` on create).
+        (``serializer.save(notify=True)``) rather than in the constructor or by mutating
+        ``data`` - distinct from ``get_serializer_kwargs`` (which shapes CONSTRUCTION /
+        context). The default returns ``{}``; a consumer overrides it to inject save-time
+        arguments. The Slice-3 resolver calls it inside the value-preserving ``save()``
+        closure (so the transaction / error-mapping / optimizer re-fetch behavior is
+        preserved) and REJECTS a save kwarg that shadows ANY top-level
+        ``serializer.validated_data`` key - a renamed input, an injected field, a default, or
+        a ``HiddenField`` alike (DRF merges save kwargs over ``validated_data``, so a
+        collision would silently replace the validated value) - AND a save kwarg naming ANY
+        model field (model-field injection goes through ``Meta.injected_fields``, the
+        auditable, validated, visibility-checked contract; save kwargs carry only non-model
+        custom arguments). ``data`` is the FROZEN view of the decoded ``provided_data``
+        (immutable; uploads as ``UploadMetadata``); ``hook_context`` is the frozen
+        ``SerializerHookContext``.
         """
-        del info, data, instance  # the default injects nothing; an override may consult them.
+        del info, data, hook_context  # the default injects nothing; overrides may consult.
         return {}
 
     # The sync / async serializer resolver seams (delegate to the Slice-3 serializer

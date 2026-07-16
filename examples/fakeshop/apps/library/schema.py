@@ -796,11 +796,11 @@ class CreateShelfViaSchemaHookSerializer(SerializerMutation):
         info,
         *,
         data,
-        instance=None,
+        hook_context,
     ):
         # Inject the runtime tenant so construction succeeds (and waive the create-required
         # guard - the override is trusted to supply what schema-time discovery cannot).
-        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
         user = getattr(getattr(info.context, "request", None), "user", None)
         kwargs["tenant"] = getattr(user, "username", "") or "anonymous"
         return kwargs
@@ -908,11 +908,11 @@ class CreateShelfViaHookTargetingPatron(SerializerMutation):
         info,
         *,
         data,
-        instance=None,
+        hook_context,
     ):
         # Construct the runtime serializer with the SAME target_model the schema hook used,
         # so the schema-time ``target`` shape and the runtime ``target`` decode agree.
-        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
         kwargs["target_model"] = models.Patron
         return kwargs
 
@@ -945,9 +945,9 @@ class CreateShelfViaHookTargetingLoan(SerializerMutation):
         info,
         *,
         data,
-        instance=None,
+        hook_context,
     ):
-        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
         kwargs["target_model"] = models.Loan
         return kwargs
 
@@ -1009,11 +1009,11 @@ class CreateShelfViaHookNonNullNote(SerializerMutation):
         info,
         *,
         data,
-        instance=None,
+        hook_context,
     ):
         # Construct the runtime serializer with the SAME note_allow_null the schema hook used,
         # so the schema-time ``note`` shape and the runtime ``note`` field agree (rev6 #1).
-        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
         kwargs["note_allow_null"] = False
         return kwargs
 
@@ -1044,9 +1044,9 @@ class CreateShelfViaHookNullableNote(SerializerMutation):
         info,
         *,
         data,
-        instance=None,
+        hook_context,
     ):
-        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
+        kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
         kwargs["note_allow_null"] = True
         return kwargs
 
@@ -1114,9 +1114,11 @@ class UpdateBookSubstitutingInstance(SerializerMutation):
     """A DELIBERATELY-misconfigured update whose hook substitutes the located instance (hardening).
 
     ``get_serializer_kwargs`` returns a DIFFERENT ``Book`` than the located, authorized row -
-    the exact "row A's authorization writes row B" bypass the hardening pass closes.
-    ``instance`` is framework-owned, so the live test proves the substitution is a top-level
-    ``ConfigurationError`` over ``/graphql/`` and NEITHER row is written.
+    the exact "row A's authorization writes row B" bypass the hardening pass closes. Hooks no
+    longer receive the live instance at all (only ``hook_context.instance_pk``), so ANY
+    returned ``instance`` kwarg is framework-owned territory; the live test proves the
+    substitution is a top-level ``ConfigurationError`` over ``/graphql/`` and NEITHER row is
+    written.
     """
 
     class Meta:
@@ -1129,21 +1131,50 @@ class UpdateBookSubstitutingInstance(SerializerMutation):
         info,
         *,
         data,
-        instance=None,
+        hook_context,
     ):
-        kwargs = super().get_serializer_kwargs(info, data=data, instance=instance)
-        kwargs["instance"] = models.Book.objects.exclude(pk=instance.pk).first()
+        kwargs = super().get_serializer_kwargs(info, data=data, hook_context=hook_context)
+        kwargs["instance"] = (
+            models.Book.objects.using(hook_context.write_alias)
+            .exclude(pk=hook_context.instance_pk)
+            .first()
+        )
         return kwargs
 
 
 class CreateShelfWithSaveKwargs(SerializerMutation):
-    """Create a ``Shelf`` injecting server-side data at ``serializer.save(**kwargs)`` (spec-039 rev6 #12).
+    """Create a ``Shelf`` injecting NON-model server-side data at ``serializer.save(**kwargs)``.
 
-    ``ShelfSerializer`` accepts ``code`` + ``branch``; ``get_serializer_save_kwargs`` supplies a
-    server-side ``topic`` at SAVE time (NOT a client input, NOT a constructor kwarg) - the
-    DRF-native ``serializer.save(owner=...)`` pattern. ``topic`` is not a serializer input field,
-    so it does not shadow one. The live test posts ``{code, branchId}`` and reads the
-    save-time-stamped ``topic`` back off the written ``Shelf``.
+    ``SaveKwargsShelfSerializer`` accepts ``code`` + ``branch``; ``get_serializer_save_kwargs``
+    supplies a server-side ``stamp`` at SAVE time (NOT a client input, NOT a constructor
+    kwarg, NOT a model field - model-field injection goes through ``Meta.injected_fields``).
+    The serializer's own ``create()`` consumes ``stamp`` and records it on ``topic``, so the
+    live test posts ``{code, branchId}`` and reads the save-time-stamped ``topic`` back off
+    the written ``Shelf``.
+    """
+
+    class Meta:
+        serializer_class = serializers.SaveKwargsShelfSerializer
+        operation = "create"
+        permission_classes = []
+
+    def get_serializer_save_kwargs(
+        self,
+        info,
+        *,
+        data,
+        hook_context,
+    ):
+        return {"stamp": "stamped-at-save"}
+
+
+class CreateShelfWithModelFieldSaveKwargs(SerializerMutation):
+    """A DELIBERATELY-misconfigured create whose save kwarg names a MODEL field (hardening).
+
+    ``topic`` is a ``Shelf`` column: a save kwarg would write it with no validation and no
+    visibility check - the unaudited injection channel ``Meta.injected_fields`` exists to
+    replace. The live test proves the configuration is a top-level ``ConfigurationError``
+    over ``/graphql/`` and no row is written.
     """
 
     class Meta:
@@ -1154,10 +1185,11 @@ class CreateShelfWithSaveKwargs(SerializerMutation):
     def get_serializer_save_kwargs(
         self,
         info,
+        *,
         data,
-        instance=None,
+        hook_context,
     ):
-        return {"topic": "stamped-at-save"}
+        return {"topic": "smuggled-model-field"}
 
 
 class CreateShelfWithRenamedSaveKwargsCollision(SerializerMutation):
@@ -1176,8 +1208,9 @@ class CreateShelfWithRenamedSaveKwargsCollision(SerializerMutation):
     def get_serializer_save_kwargs(
         self,
         info,
+        *,
         data,
-        instance=None,
+        hook_context,
     ):
         return {"code": "server-shadow"}
 
@@ -1225,7 +1258,7 @@ class CreateShelfWithInjectedTopic(SerializerMutation):
         info,
         *,
         data,
-        instance=None,
+        hook_context,
     ):
         # Supply the narrowed-away required ``topic`` (the injection contract
         # Meta.injected_fields declares - keys must match it exactly).
@@ -1352,6 +1385,9 @@ class Mutation:
     )
     create_shelf_with_save_kwargs = DjangoMutationField(
         CreateShelfWithSaveKwargs,
+    )
+    create_shelf_with_model_field_save_kwargs = DjangoMutationField(
+        CreateShelfWithModelFieldSaveKwargs,
     )
     create_shelf_with_renamed_save_kwargs_collision = DjangoMutationField(
         CreateShelfWithRenamedSaveKwargsCollision,

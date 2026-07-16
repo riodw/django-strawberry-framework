@@ -61,6 +61,7 @@ TRACKED_FILE_PATHS = (
     "django_strawberry_framework/registry.py",
     "django_strawberry_framework/relay.py",
     "django_strawberry_framework/rest_framework/__init__.py",
+    "django_strawberry_framework/rest_framework/hook_context.py",
     "django_strawberry_framework/rest_framework/inputs.py",
     "django_strawberry_framework/rest_framework/resolvers.py",
     "django_strawberry_framework/rest_framework/serializer_converter.py",

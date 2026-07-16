@@ -500,7 +500,13 @@ def runtime_validated_data_fields(
 def writable_source_collisions(
     field_sources: Mapping[str, str | None],
 ) -> dict[str, list[str]]:
-    """Return duplicate writable-source ownership, excluding DRF's whole-object ``"*"``."""
+    """Return duplicate writable-source ownership, excluding DRF's whole-object ``"*"``.
+
+    ``source="*"`` is excluded here because it is not a single-key collision: a
+    star field owns NO declared key - DRF merges the mapping it returns straight
+    into root ``validated_data``, so it can write (or overwrite) any key. That
+    is a distinct, stronger failure mode reported by ``writable_star_sources``.
+    """
     source_owners: dict[str, list[str]] = {}
     for name, source in field_sources.items():
         write_source = source or name
@@ -508,6 +514,20 @@ def writable_source_collisions(
             continue
         source_owners.setdefault(write_source, []).append(name)
     return {source: owners for source, owners in source_owners.items() if len(owners) > 1}
+
+
+def writable_star_sources(field_sources: Mapping[str, str | None]) -> list[str]:
+    """Return the names of writable fields declaring the whole-object ``source="*"``.
+
+    A ``source="*"`` field's ``to_internal_value`` returns a mapping that DRF
+    merges into root ``validated_data`` (last-write-wins), so it can silently
+    replace client-supplied or injected keys regardless of its declared field
+    name. An EXPOSED star field is already rejected by the model-column converter,
+    but a narrowed-out / ``HiddenField`` / defaulted runtime field never reaches
+    the converter yet still contributes during validation - so a runtime-field
+    caller must reject it explicitly rather than treat it as collision-exempt.
+    """
+    return sorted(name for name, source in field_sources.items() if source == "*")
 
 
 def resolve_effective_serializer_fields(

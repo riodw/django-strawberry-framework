@@ -6442,16 +6442,17 @@ def test_serializer_m2m_relation_visibility_over_http():
 
 @pytest.mark.django_db
 def test_serializer_save_kwargs_hook_injects_server_side_data_over_http():
-    """``get_serializer_save_kwargs`` injects server-side data at ``serializer.save()`` (spec-039 rev6 #12).
+    """``get_serializer_save_kwargs`` injects NON-model server-side data at ``serializer.save()``.
 
     ``CreateShelfWithSaveKwargs`` accepts ``code`` + ``branchId`` and stamps a server-side
-    ``topic`` at SAVE time (not a client input). The write succeeds and the ``Shelf`` carries
-    the save-time-stamped ``topic``, proving the DRF-native ``serializer.save(owner=...)`` seam
+    ``stamp`` at SAVE time (not a client input, not a model field); the serializer's own
+    ``create()`` consumes it into ``topic``. The write succeeds and the ``Shelf`` carries the
+    save-time-stamped ``topic``, proving the DRF-native ``serializer.save(stamp=...)`` seam
     runs inside the framework's value-preserving save closure.
     """
     branch = models.Branch.objects.create(name="SaveKwargsBranch", city="Boston")
     response = _post_graphql(
-        "mutation($d: ShelfSerializerInput!) { createShelfWithSaveKwargs(data: $d) { "
+        "mutation($d: SaveKwargsShelfSerializerInput!) { createShelfWithSaveKwargs(data: $d) { "
         "result { code topic } errors { field messages } } }",
         variables={"d": {"code": "SaveKwargsShelf", "branchId": branch.pk}},
     )
@@ -6466,6 +6467,27 @@ def test_serializer_save_kwargs_hook_injects_server_side_data_over_http():
         topic="stamped-at-save",
         branch=branch,
     ).exists()
+
+
+@pytest.mark.django_db
+def test_serializer_save_kwargs_naming_a_model_field_is_rejected_over_http():
+    """A save kwarg naming a MODEL field is a top-level ``ConfigurationError``, no row written.
+
+    ``CreateShelfWithModelFieldSaveKwargs`` returns ``{"topic": ...}`` - a ``Shelf`` column -
+    from ``get_serializer_save_kwargs``; the unaudited model-field injection channel is
+    rejected before ``serializer.save()`` and nothing persists.
+    """
+    branch = models.Branch.objects.create(name="ModelFieldSaveKwargsBranch", city="Boston")
+    response = _post_graphql(
+        "mutation($d: ShelfSerializerInput!) { createShelfWithModelFieldSaveKwargs(data: $d) { "
+        "result { code } errors { field messages } } }",
+        variables={"d": {"code": "ModelFieldSaveKwargsShelf", "branchId": branch.pk}},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"] is None
+    assert "model field" in payload["errors"][0]["message"]
+    assert not models.Shelf.objects.filter(code="ModelFieldSaveKwargsShelf").exists()
 
 
 @pytest.mark.django_db
@@ -6693,7 +6715,7 @@ def test_serializer_update_substituted_instance_is_rejected_without_writes_over_
     assert response.status_code == 200
     payload = response.json()
     assert payload["data"] is None
-    assert "different `instance`" in payload["errors"][0]["message"]
+    assert "`instance` kwarg" in payload["errors"][0]["message"]
     addressed.refresh_from_db()
     victim.refresh_from_db()
     assert addressed.title == "AddressedRow"

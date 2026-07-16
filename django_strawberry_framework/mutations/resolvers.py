@@ -90,6 +90,7 @@ from ..relay import GlobalIDDecode, decode_model_global_id
 # Moved to utils/errors.py (docs DRY review P1.2); re-exported for compatibility.
 from ..utils.errors import field_error, relation_field_error, validation_error_to_field_errors
 from ..utils.inputs import iter_provided_input_fields
+from ..utils.permissions import resolve_auth_aliases
 from ..utils.querysets import (
     apply_type_visibility_sync,
     initial_queryset,
@@ -104,6 +105,7 @@ from ..utils.querysets import (
 from ..utils.relations import is_forward_many_to_many
 from ..utils.strings import graphql_camel_name
 from ..utils.write_transaction import (
+    authorization_phase,
     base_locked_queryset,
     check_instance_write_alias,
     conflict_error,
@@ -111,8 +113,11 @@ from ..utils.write_transaction import (
     not_updated_exceptions,
     pin_write_queryset,
     pipeline_alias_guard,
+    pipeline_write_phase,
+    pks_match,
     require_managed_write,
     require_write_pipeline,
+    snapshot_target_state,
     write_pipeline,
 )
 
@@ -234,10 +239,24 @@ def run_write_pipeline_sync(
         # locate, BEFORE the permission hook (the first consumer-controlled code)
         # can touch the mutable located instance. Everything downstream that
         # claims "the authorized row" compares against THIS value, never against
-        # the live ``instance.pk`` a hook could have re-pointed.
+        # the live ``instance.pk`` a hook could have re-pointed. The companion
+        # ``target_state`` snapshot (the loaded concrete field values) backs the
+        # serializer flavor's pre-save in-memory drift rejection.
         authorized_pk = None if instance is None else instance.pk
-        require_write_pipeline().authorized_pk = authorized_pk
+        pipeline_context = require_write_pipeline()
+        pipeline_context.authorized_pk = authorized_pk
+        pipeline_context.target_state = (
+            None if instance is None else snapshot_target_state(instance)
+        )
 
+        # The auth machinery (lazy user, permission set) may legitimately read a
+        # DIFFERENT alias than the write alias under a divergent read/write
+        # router. Identify those auth aliases so the authorization phase can
+        # permit their READ-ONLY queries. Gated on the mutation actually HAVING
+        # permission classes - the explicit ``permission_classes = []`` opt-out
+        # promises the pipeline never resolves the lazy user or touches an auth
+        # backend, so it grants no auth-alias access at all.
+        auth_aliases = resolve_auth_aliases() if meta.permission_classes else frozenset()
         # The alias guard spans EVERY consumer-reachable phase (permission,
         # decode, validation, write, re-fetch): any SQL statement on a
         # non-pinned connection - read or write, signal-ful or signal-less -
@@ -248,7 +267,18 @@ def run_write_pipeline_sync(
             # the flavor decode (the security invariant): the decode issues
             # visibility-scoped ``get_queryset`` queries, so running it pre-auth
             # would let an unauthorized caller probe related-object visibility by id.
-            authorize_or_raise(mutation_cls, info, meta.operation, data, instance=instance)
+            # The authorization phase permits read-only auth-alias queries for
+            # exactly this call, then closes: decode / hooks / validation cannot
+            # reach the auth alias, and resolving permissions here fills the
+            # per-user cache so later ``has_perm`` reads stay cache-only.
+            with authorization_phase(auth_aliases):
+                authorize_or_raise(
+                    mutation_cls,
+                    info,
+                    meta.operation,
+                    data,
+                    instance=instance,
+                )
 
             decoded = decode_step(instance)
             if isinstance(decoded, list):
@@ -261,8 +291,10 @@ def run_write_pipeline_sync(
             # The flavor-independent backstop over the snapshot: whatever the
             # flavor's own validation concluded, an update result whose pk
             # drifted from the authorized snapshot is never re-fetched into a
-            # success payload.
-            if is_update and str(saved.pk) != str(authorized_pk):
+            # success payload. Equality is CANONICAL through the model pk
+            # field's own ``to_python`` (a UUID pk stringifies in more than one
+            # spelling of the same row), never a ``str()`` comparison.
+            if is_update and not pks_match(model, saved.pk, authorized_pk):
                 raise ConfigurationError(
                     f"{mutation_cls.__name__}: the write step returned "
                     f"{model.__name__} pk={saved.pk!r}, but the located, authorized row is "
@@ -1158,18 +1190,22 @@ def _model_write_step(
     if clean_errors is not None:
         return clean_errors
 
-    if instance is None:
-        write_error = save_or_field_errors(target.save)
-    else:
-        # A direct model UPDATE saves with ``force_update=True`` (BETA-055): a
-        # located row a concurrent transaction deleted would otherwise be
-        # silently re-INSERTed by ``save()``'s update-else-insert fallback,
-        # reporting success for a write the deleter never sees. The zero-row
-        # forced update maps to the in-band ``conflict`` envelope.
-        write_error = forced_save_or_field_errors(target)
-    if write_error is not None:
-        return write_error
-    _assign_m2m(target, m2m_assignments)
+    # The pinned-alias WRITE phase opens for exactly the save + M2M assignment:
+    # everything before this point (full_clean included) is database-read-only
+    # under the pipeline's phased alias guard.
+    with pipeline_write_phase():
+        if instance is None:
+            write_error = save_or_field_errors(target.save)
+        else:
+            # A direct model UPDATE saves with ``force_update=True`` (BETA-055): a
+            # located row a concurrent transaction deleted would otherwise be
+            # silently re-INSERTed by ``save()``'s update-else-insert fallback,
+            # reporting success for a write the deleter never sees. The zero-row
+            # forced update maps to the in-band ``conflict`` envelope.
+            write_error = forced_save_or_field_errors(target)
+        if write_error is not None:
+            return write_error
+        _assign_m2m(target, m2m_assignments)
     return target
 
 
@@ -1253,16 +1289,24 @@ def _run_delete(
     authorized_pk = instance.pk
     require_write_pipeline().authorized_pk = authorized_pk
 
+    # Identify the auth aliases so the authorization phase can permit their
+    # read-only queries under a divergent router. Gated exactly like
+    # create/update: ``permission_classes = []`` grants no auth-alias access.
+    auth_aliases = resolve_auth_aliases() if meta.permission_classes else frozenset()
     # The alias guard spans the consumer-reachable phases (permission,
     # snapshot re-fetch with its visibility hooks, the delete itself): any SQL
     # statement on a non-pinned connection raises before it executes.
     with pipeline_alias_guard(mutation_cls.__name__, alias):
-        authorize_or_raise(mutation_cls, info, "delete", data=None, instance=instance)
+        # The authorization phase permits read-only auth-alias queries for this
+        # single call, then closes (the re-fetch + delete cannot reach it).
+        with authorization_phase(auth_aliases):
+            authorize_or_raise(mutation_cls, info, "delete", data=None, instance=instance)
 
         # A permission hook that re-pointed ``instance.pk`` would make
         # ``instance.delete()`` remove a row that was never authorized (and the
-        # payload snapshot describe it); fail closed on any drift.
-        if str(instance.pk) != str(authorized_pk):
+        # payload snapshot describe it); fail closed on any drift. Canonical
+        # pk-field equality, never a ``str()`` comparison.
+        if not pks_match(model_for(primary_type), instance.pk, authorized_pk):
             raise ConfigurationError(
                 f"{mutation_cls.__name__}: the located instance's pk changed from "
                 f"{authorized_pk!r} to {instance.pk!r} during authorization; a delete must "
@@ -1276,7 +1320,10 @@ def _run_delete(
             alias=alias,
             force_load=True,
         )
-        delete_errors = _delete_or_field_errors(instance)
+        # The DELETE statements run inside the pinned-alias write phase; the
+        # snapshot re-fetch above and the permission phase stay read-only.
+        with pipeline_write_phase():
+            delete_errors = _delete_or_field_errors(instance)
         if delete_errors is not None:
             # The centralized envelope marks the transaction for rollback, so any
             # visibility-hook or custom-``delete()`` side effect is discarded with it.

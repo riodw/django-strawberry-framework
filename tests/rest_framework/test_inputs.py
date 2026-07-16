@@ -796,6 +796,31 @@ def test_camel_case_graphql_name_collision_is_fail_loud():
     assert "collide" in str(exc.value)
 
 
+def test_writable_source_collisions_excludes_star_and_flags_duplicates():
+    """The shared helper skips whole-object ``"*"`` and reports genuine single-key duplicates."""
+    assert serializer_inputs.writable_source_collisions(
+        {
+            "a": "*",
+            "b": "*",
+            "c": "name",
+            "d": "name",
+            "e": None,
+        },
+    ) == {"name": ["c", "d"]}
+
+
+def test_writable_star_sources_lists_every_star_field_sorted():
+    """The star helper names ONLY the whole-object fields, sorted, ignoring concrete sources."""
+    assert serializer_inputs.writable_star_sources(
+        {
+            "zeta": "*",
+            "alpha": "*",
+            "keep": "name",
+            "bare": None,
+        },
+    ) == ["alpha", "zeta"]
+
+
 def test_two_writable_fields_sharing_one_source_raise():
     """Two WRITABLE fields sharing one one-segment ``source`` raise (no double-write)."""
     _register_products_types()

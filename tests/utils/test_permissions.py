@@ -665,3 +665,47 @@ def test_active_permission_field_paths_excludes_logic_and_related_keys():
     # (logic) excluded; ``title`` falls back to the python-attr token since
     # ``field_specs`` has no entry.
     assert paths == ["title"]
+
+
+# ---------------------------------------------------------------------------
+# resolve_auth_aliases (the authorization-phase auth-alias identification)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_resolve_auth_aliases_returns_the_default_alias_by_default():
+    """With no divergent router, every auth model reads ``default``."""
+    from django_strawberry_framework.utils.permissions import resolve_auth_aliases
+
+    assert resolve_auth_aliases() == frozenset({"default"})
+
+
+@pytest.mark.django_db
+def test_resolve_auth_aliases_tracks_a_divergent_router_read_answer(settings):
+    """The auth alias follows the router's read answer for the auth models."""
+    from django.contrib.auth import get_user_model
+
+    from django_strawberry_framework.utils.permissions import resolve_auth_aliases
+
+    auth_app_label = get_user_model()._meta.app_label
+
+    class _AuthToShardRouter:
+        def db_for_read(self, model, **hints):
+            # Route the auth app (and its perm/contenttype companions) to a
+            # non-default alias; everything else keeps the default.
+            if model._meta.app_label in {auth_app_label, "auth", "contenttypes"}:
+                return "shard_b"
+            return None
+
+        def db_for_write(self, model, **hints):
+            return None
+
+    settings.DATABASE_ROUTERS = [_AuthToShardRouter()]
+    assert resolve_auth_aliases() == frozenset({"shard_b"})
+
+
+def test_resolve_auth_aliases_skips_uninstalled_models():
+    """A model the deployment does not install is skipped, never an error."""
+    from django_strawberry_framework.utils.permissions import _safe_get_model
+
+    assert _safe_get_model("nonexistent_app", "Nope") is None

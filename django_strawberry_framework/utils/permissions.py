@@ -210,6 +210,50 @@ def request_from_info(info: Any, *, family_label: str) -> Any:
     )
 
 
+def _safe_get_model(app_label: str, model_name: str) -> type | None:
+    """Return the named model, or ``None`` when the app / model is not installed."""
+    from django.apps import apps
+
+    try:
+        return apps.get_model(app_label, model_name)
+    except LookupError:
+        return None
+
+
+def resolve_auth_aliases() -> frozenset[str]:
+    """The database aliases the auth machinery reads from (for the authorization phase).
+
+    The write pipeline's dedicated authorization phase permits READ-ONLY SQL on
+    exactly these aliases while it resolves the request user + permission set, so
+    a divergent read/write router that keeps auth OFF the write alias is not
+    rejected as a cross-alias read. Derived from the router's own read answer for
+    the auth models actually queried during permission evaluation - the user
+    model, ``auth.Permission`` / ``auth.Group``, and
+    ``contenttypes.ContentType`` - so it tracks whatever alias each deployment
+    routes auth to (``default`` in the common single-database case). A model the
+    deployment does not install is skipped; an empty result grants nothing. This
+    replaces the old pre-guard permission-cache warming: the authorization phase
+    now does its real work on the auth alias directly, which fills the same
+    per-user cache as a side effect, so later ``has_perm`` reads stay cache-only.
+    """
+    from django.conf import settings
+    from django.db import router
+
+    # ``AUTH_USER_MODEL`` is ``"app_label.ModelName"``; resolving it through the
+    # same ``_safe_get_model`` as the other auth models keeps ONE code path (an
+    # uninstalled / misconfigured model is skipped, never an error).
+    user_app_label, _, user_model_name = settings.AUTH_USER_MODEL.partition(".")
+    candidates = [
+        _safe_get_model(user_app_label, user_model_name),
+        _safe_get_model("auth", "Permission"),
+        _safe_get_model("auth", "Group"),
+        _safe_get_model("contenttypes", "ContentType"),
+    ]
+    aliases = {router.db_for_read(model) for model in candidates if model is not None}
+    aliases.discard(None)
+    return frozenset(aliases)
+
+
 def extract_branch_value(input_value: Any, field_name: str, *, unset_sentinel: Any = None) -> Any:
     """Return the value at ``field_name`` on a dataclass-or-dict input.
 

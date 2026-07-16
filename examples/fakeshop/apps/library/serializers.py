@@ -30,7 +30,7 @@ from django_strawberry_framework import (
     register_serializer_field_converter,
 )
 
-from .models import Book, Branch, Shelf
+from .models import Book, Branch, Genre, Shelf
 
 
 class TenantShelfSerializer(serializers.ModelSerializer):
@@ -72,6 +72,27 @@ class ShelfSerializer(serializers.ModelSerializer):
     class Meta:
         model = Shelf
         fields = ("code", "branch")
+
+
+class SaveKwargsShelfSerializer(serializers.ModelSerializer):
+    """A ``Shelf`` serializer whose ``create()`` consumes a NON-model save kwarg (hardening).
+
+    Save kwargs may only carry non-model custom arguments (model-field injection goes
+    through ``Meta.injected_fields``), so the DRF-native ``serializer.save(stamp=...)``
+    pattern is proven with a custom argument the author's ``create()`` consumes: ``stamp``
+    is popped off ``validated_data`` (where DRF merges save kwargs) and recorded on the
+    written row's ``topic`` - observable over HTTP without ever passing a model field
+    through the save-kwargs channel.
+    """
+
+    class Meta:
+        model = Shelf
+        fields = ("code", "branch")
+
+    def create(self, validated_data):
+        stamp = validated_data.pop("stamp")
+        validated_data["topic"] = stamp
+        return super().create(validated_data)
 
 
 class OptionalCodeShelfSerializer(serializers.ModelSerializer):
@@ -441,11 +462,23 @@ class BookGenresSerializer(serializers.ModelSerializer):
     """A ``Book`` serializer exposing the ``genres`` M2M for the update list-relation matrix (hardening).
 
     Backs the live proofs that a serializer UPDATE's list relation follows the
-    replace-on-provide / unchanged-on-omit contract: DRF's own ``ModelSerializer.update``
-    ``set()``s a provided ``genres`` list atomically inside the pipeline transaction, and an
-    omitted ``genres`` (``partial=True``) leaves the stored set untouched. ``genres`` targets
-    the Relay-Node ``GenreType`` primary, so the generated input carries a ``GlobalID`` list.
+    replace-on-provide / clear-on-empty / unchanged-on-omit contract: DRF's own
+    ``ModelSerializer.update`` ``set()``s a provided ``genres`` list atomically inside the
+    pipeline transaction, and an omitted ``genres`` (``partial=True``) leaves the stored set
+    untouched. ``genres`` targets the Relay-Node ``GenreType`` primary, so the generated
+    input carries a ``GlobalID`` list.
+
+    ``genres`` is DECLARED (not auto-built) because the clear-on-empty half of the contract
+    is the serializer author's call in DRF: ``Book.genres`` is ``blank=False``, which
+    ``ModelSerializer`` maps to ``allow_empty=False`` (an explicit ``[]`` would be "This
+    list may not be empty."). ``allow_empty=True`` opts this write surface into clearing.
     """
+
+    genres = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Genre.objects.all(),
+        allow_empty=True,
+    )
 
     class Meta:
         model = Book

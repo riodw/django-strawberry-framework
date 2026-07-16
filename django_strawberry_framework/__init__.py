@@ -63,6 +63,11 @@ _DRF_SOFT_EXPORTS: dict[str, tuple[str, str]] = {
     ),
     "describe_serializer_input": (".rest_framework.inputs", "describe_serializer_input"),
     "NestedSerializerConfig": (".rest_framework.inputs", "NestedSerializerConfig"),
+    # The frozen hook surface (the hardening pass): the context every serializer
+    # consumer hook receives instead of the live located instance, and the frozen
+    # upload descriptor standing in for file values in hook data views.
+    "SerializerHookContext": (".rest_framework.hook_context", "SerializerHookContext"),
+    "UploadMetadata": (".rest_framework.hook_context", "UploadMetadata"),
 }
 
 

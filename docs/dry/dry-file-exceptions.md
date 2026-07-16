@@ -12,9 +12,11 @@ circular. It defines exactly three public names (`__all__`):
   message args in `.args` (identity authoritative) and overrides `__str__` / `__repr__` to render
   safely at CALL TIME: each delegates to `super().__str__()` / `super().__repr__()` and, on ANY
   `BaseException`, substitutes `<unprintable ClassName>` (single arg) or a per-arg
-  `_safe_arg_repr` tuple (multi arg); the rendered string is cached so a side-effecting arg is
-  rendered at most once. (See Reconciliation - this supersedes an earlier construction-time
-  `_sanitize_exc_arg` probe that this cycle replaced.)
+  `_safe_arg_repr` tuple (multi arg). Rendering is recomputed from the current `.args` on each
+  call (standard exception semantics - a caller that reassigns `.args`, or a lazy-translation
+  arg tracking the active locale, both re-render correctly); there is no render cache. (See
+  Reconciliation - this supersedes an earlier construction-time `_sanitize_exc_arg` probe that
+  this cycle replaced.)
 - `ConfigurationError(DjangoStrawberryFrameworkError)` - the configuration-time failure family
   (Meta validation, settings reads, registry collisions, filter/order/mutation-set wiring).
 - `OptimizerError(DjangoStrawberryFrameworkError)` - the optimizer-planning failure family
@@ -207,8 +209,10 @@ The Worker 1 / Worker 2 narrative above describes the earlier construction-time
 placeholder in `.args`). That approach was **replaced** this cycle by call-time safe rendering,
 for reasons the eager probe could not satisfy:
 
-- it rendered `str` AND `repr` at construction and then again on the wire (repeated
-  side-effecting rendering);
+- it rendered `str` AND `repr` eagerly at construction, before any consumer asked for the
+  string (the safe overrides render lazily, only when `str` / `repr` is actually called; both
+  the old probe and the overrides re-render on the wire, so eager-at-construction - not
+  repeated rendering - is the flaw the move fixed);
 - it could not handle a DELAYED/STATEFUL arg whose `str()` succeeds at construction but raises
   later - the probe passed it through, and the wire `str()` call in `located_error` still broke;
 - `except Exception` missed a dunder raising a `BaseException` subclass;
@@ -217,7 +221,9 @@ for reasons the eager probe could not satisfy:
 Final contract (identity authoritative): `DjangoStrawberryFrameworkError` keeps the caller's
 original args in `.args` and overrides `__str__` / `__repr__` to delegate to `super()` and, on any
 `BaseException`, return a `<unprintable ClassName>` (single arg) or per-arg `_safe_arg_repr` tuple
-(multi arg), caching the result so each arg is rendered at most once. The wire-identity guarantee
+(multi arg), recomputing from the current `.args` on each call (standard exception semantics; the
+earlier probe instead cached a sanitized snapshot into `.args`, discarding the caller's original
+objects). The wire-identity guarantee
 (GraphQL-core `located_error` calling `str(original_error)` never raises, so the typed
 `ConfigurationError` / `OptimizerError` / `SyncMisuseError` survives) is preserved and now also
 holds for stateful and `BaseException`-raising args. `SyncMisuseError` (MRO:

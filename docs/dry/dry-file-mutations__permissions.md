@@ -2,6 +2,9 @@
 
 Status: verified
 
+Iteration 2026-07-16: independently re-verified after the strict sync-bool
+authorization contract and permission-class/auth-alias gate were centralized.
+
 ## System trace
 
 `mutations/permissions.py` owns **write authorization** — a first-class contract

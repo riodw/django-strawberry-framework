@@ -1,10 +1,10 @@
 # DRY review: `django_strawberry_framework/mutations/resolvers.py`
 
-Status: fix-implemented
+Status: verified
 
 Iteration 2026-07-16: internal sync-boundary imports now target the canonical
 utils owner directly, and the permission-class/auth-alias gate is single-sited
-in `utils/permissions.py`. Independent verification is pending.
+in `utils/permissions.py`. Independent verification is complete.
 
 ## System trace
 

@@ -4,7 +4,7 @@ Status: verified
 
 Iteration 2026-07-16: re-run after centralizing the permission-class/auth-alias
 gate in `utils/permissions.py::auth_aliases_for_permission_classes`; independent
-folder verification complete (Worker 2 below), disposition verified.
+folder verification is complete (Worker 2 below), disposition verified.
 
 ## System trace
 

@@ -4,7 +4,7 @@ Status: verified
 
 Iteration 2026-07-16: the permission-class/auth-alias gate is now single-sited
 in `utils/permissions.py::auth_aliases_for_permission_classes`. Independent
-verification complete (Worker 2 below).
+verification is complete.
 
 ## System trace
 

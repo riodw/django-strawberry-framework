@@ -172,9 +172,8 @@ from ..utils.write_values import (
 )
 from .hook_context import SerializerHookContext, UploadMetadata
 from .inputs import (
+    raise_writable_source_ownership_errors,
     runtime_validated_data_fields,
-    writable_source_collisions,
-    writable_star_sources,
 )
 from .serializer_converter import (
     FILE,
@@ -961,14 +960,15 @@ def _relation_model_of(field: Any) -> Any:
 
 
 def _assert_schema_runtime_agreement(mutation_cls: type, serializer: Any) -> None:
-    """Raise ``ConfigurationError`` if the runtime serializer disagrees with the schema field map (rev6 #1).
+    """Raise ``ConfigurationError`` if runtime disagrees with the schema write surface (rev6 #1 / #2).
 
     The schema-time field map (the ``get_serializer_for_schema()`` hook) drives the generated
     GraphQL input + the bind-stashed reverse map (``mutation_cls._input_field_specs``); the
     runtime write uses the REAL ``serializer_class``. If they diverge, DRF would silently
     ignore an incoming key the GraphQL schema implied is writable (the exact bug the fakeshop
     fixtures once demonstrated). This turns the hook into a VERIFIED contract: for every
-    schema-time field spec, the runtime ``serializer.fields`` must
+    write-surface field spec (GraphQL input + ``Meta.injected_fields`` - one walk via
+    ``_write_surface_specs``), the runtime ``serializer.fields`` must
 
     - contain ``spec.target_name`` and have it WRITABLE (not ``read_only``);
     - bind the SAME ``source`` the schema-time discovery recorded;
@@ -977,12 +977,16 @@ def _assert_schema_runtime_agreement(mutation_cls: type, serializer: Any) -> Non
     - for a file / scalar, keep a compatible kind (a scalar that moved to a relation or file,
       or vice versa, is a mismatch).
 
+    Injected fields ride the SAME per-field check: presence of an injected value is
+    guaranteed by construction, but the runtime serializer must still declare each injected
+    field writable with the recorded source / kind / relation-model, or DRF drops it.
+
     Runs BEFORE ``is_valid()`` so a schema/runtime mismatch is a framework configuration
     failure (a clear ``ConfigurationError`` at the boundary), never a serializer-validation
     ambiguity. A runtime serializer with EXTRA fields the schema map omits is fine (they are
-    simply never provided); only the schema fields are held to the contract.
+    simply never provided); only the write-surface fields are held to the contract.
     """
-    for spec in mutation_cls._input_field_specs:
+    for spec in _write_surface_specs(mutation_cls):
         _assert_field_agreement(mutation_cls, serializer, spec)
 
 
@@ -1008,28 +1012,11 @@ def _assert_runtime_write_source_ownership(
         apply_defaults=mutation_cls._mutation_meta.operation == "create",
     )
     runtime_sources = {field_name: field.source for field_name, field in runtime_fields.items()}
-    location = path or "<root>"
-    star_fields = writable_star_sources(runtime_sources)
-    if star_fields:
-        raise ConfigurationError(
-            f"SerializerMutation {mutation_cls.__name__}: runtime serializer path "
-            f"{location!r} has writable field(s) {star_fields!r} declaring source='*'. DRF "
-            "merges a whole-object field's returned mapping into validated_data, so it can "
-            "silently replace client or injected values under any key. Remove the field, make "
-            "it read_only, or give it a concrete single-column source.",
-        )
-    colliding = writable_source_collisions(runtime_sources)
-    if colliding:
-        detail = "; ".join(
-            f"source {source!r} <- fields {owners!r}"
-            for source, owners in sorted(colliding.items())
-        )
-        raise ConfigurationError(
-            f"SerializerMutation {mutation_cls.__name__}: runtime serializer path "
-            f"{location!r} has multiple writable fields binding one source: {detail}. DRF "
-            "would silently discard one validated value. Give every runtime writable field a "
-            "distinct source.",
-        )
+    raise_writable_source_ownership_errors(
+        mutation_cls.__name__,
+        runtime_sources,
+        location=f"runtime serializer path {(path or '<root>')!r}",
+    )
 
     for spec in specs:
         if spec.kind not in (NESTED_SINGLE, NESTED_MULTI):
@@ -1055,13 +1042,13 @@ def _assert_runtime_write_source_ownership(
 def _assert_field_agreement(mutation_cls: type, serializer: Any, spec: Any) -> None:
     """Assert ONE schema-time field spec agrees with the runtime serializer (rev6 #1 / rev2 P1).
 
-    The per-field body of ``_assert_schema_runtime_agreement``, factored out so it serves BOTH
-    the input specs (``_input_field_specs``) and the ``Meta.injected_fields`` schema-time specs
-    (``_injected_field_specs``): the runtime ``serializer.fields`` must contain
-    ``spec.target_name``, have it WRITABLE, bind the SAME ``source``, keep a relation as a
-    ``PrimaryKeyRelatedField`` / ``ManyRelatedField(PrimaryKeyRelatedField)`` over the SAME
-    ``related_model``, and keep a file / scalar kind compatible. Any divergence is a framework
-    ``ConfigurationError`` at the boundary.
+    The per-field body of ``_assert_schema_runtime_agreement`` (which walks the one
+    ``_write_surface_specs`` list covering GraphQL input + ``Meta.injected_fields``): the
+    runtime ``serializer.fields`` must contain ``spec.target_name``, have it WRITABLE, bind
+    the SAME ``source``, keep a relation as a ``PrimaryKeyRelatedField`` /
+    ``ManyRelatedField(PrimaryKeyRelatedField)`` over the SAME ``related_model``, and keep a
+    file / scalar kind compatible. Any divergence is a framework ``ConfigurationError`` at
+    the boundary.
     """
     runtime_fields = serializer.fields
     name = type(serializer).__name__
@@ -1342,27 +1329,6 @@ def _scope_specs_over_serializer(specs: list, serializer: Any, info: Any) -> Non
         relation.queryset = scoped
 
 
-def _assert_injected_field_agreement(mutation_cls: type, serializer: Any) -> None:
-    """Verify each ``Meta.injected_fields`` is runtime-ACCEPTED (rev6 #2 / rev2 P1).
-
-    ``Meta.injected_fields`` names the (narrowed-away) required schema-time fields
-    ``get_serializer_injected_data`` supplies. The framework builds the serializer data itself
-    (client data + the exact-match injection), so presence is guaranteed by construction - but
-    the RUNTIME serializer must still declare each injected field, writable, with the same
-    source / kind / relation-model the schema-time field had; otherwise DRF drops or ignores
-    the injected value and the required field is silently missing. So each injected field runs
-    the SAME per-field agreement check input fields get (using the schema-time
-    ``_injected_field_specs`` stashed at bind). A declared-but-unaccepted injected field is a
-    clear ``ConfigurationError``.
-    """
-    if not mutation_cls._mutation_meta.injected_fields:
-        return
-    for spec in mutation_cls._injected_field_specs:
-        # Same present / writable / source / kind / relation-model checks as an input field:
-        # the runtime serializer must actually be able to VALIDATE + SAVE the injected value.
-        _assert_field_agreement(mutation_cls, serializer, spec)
-
-
 def _assert_save_kwargs_no_shadow(
     mutation_cls: type,
     serializer: Any,
@@ -1426,9 +1392,10 @@ def _assert_save_kwargs_not_model_fields(mutation_cls: type, save_kwargs: dict[s
 def _write_surface_specs(mutation_cls: type) -> list:
     """Return the top-level write-surface specs: GraphQL input fields + ``Meta.injected_fields``.
 
-    The one list every top-level per-field discipline walks (queryset scoping, the
-    relation-intent ledger, the M2M snapshot, the post-save attestation): the two spec sets
-    are disjoint by class validation, so concatenation is exact.
+    The one list every top-level per-field discipline walks (schema/runtime agreement,
+    write-source ownership, queryset scoping, the relation-intent ledger, the M2M snapshot,
+    the post-save attestation): the two spec sets are disjoint by class validation, so
+    concatenation is exact.
     """
     return [*mutation_cls._input_field_specs, *(mutation_cls._injected_field_specs or [])]
 
@@ -1533,16 +1500,12 @@ def _instrument_relation_intent(mutation_cls: type, serializer: Any) -> _Relatio
     fields per serializer instance), never to shared class state; a custom
     ``PrimaryKeyRelatedField.pk_field`` stays fully supported - whatever transformation it
     applies, the ledger records the RELATION OBJECT the field finally resolved, which is the
-    identity the intent walk and the attestation verify.
+    identity the intent walk and the attestation verify. Walks the one write-surface spec
+    list (``_write_surface_specs``) so GraphQL-input and ``Meta.injected_fields`` relations
+    cannot drift apart on instrumentation coverage.
     """
     ledger = _RelationIntentLedger()
-    _instrument_intent_specs(mutation_cls._input_field_specs, serializer, ledger, path="")
-    _instrument_intent_specs(
-        mutation_cls._injected_field_specs or [],
-        serializer,
-        ledger,
-        path="",
-    )
+    _instrument_intent_specs(_write_surface_specs(mutation_cls), serializer, ledger, path="")
     return ledger
 
 
@@ -2163,21 +2126,18 @@ def _guarded_serializer_write(
     )
     serializer = serializer_class(**kwargs)
 
-    # rev6 #1: PROVE the schema-time field map and the runtime serializer AGREE before
-    # ``is_valid()`` runs, so a schema hook that exposed a field the runtime serializer does
-    # not actually declare (or declares with a different source / relation target / kind) is a
-    # framework CONFIGURATION failure - a clear ``ConfigurationError`` - not a silent
-    # DRF-ignores-the-unknown-key ambiguity. The schema hook becomes a verified contract.
+    # rev6 #1 / #2: PROVE the schema-time write surface (GraphQL input + Meta.injected_fields)
+    # and the runtime serializer AGREE before ``is_valid()`` runs, so a schema hook that
+    # exposed a field the runtime serializer does not actually declare (or declares with a
+    # different source / relation target / kind) - or a declared-but-unaccepted injected
+    # field - is a framework CONFIGURATION failure, not a silent DRF-ignores-the-unknown-key
+    # ambiguity. One walk over ``_write_surface_specs``.
     _assert_schema_runtime_agreement(mutation_cls, serializer)
-    # rev6 #2: verify the runtime serializer ACCEPTS each ``Meta.injected_fields`` field
-    # (present / writable / same source / kind / relation-model), so a declared-but-unaccepted
-    # injected field is a clear ConfigurationError, not a silent validation failure.
-    _assert_injected_field_agreement(mutation_cls, serializer)
     _assert_runtime_write_source_ownership(
         mutation_cls,
         serializer,
         final_data,
-        [*mutation_cls._input_field_specs, *(mutation_cls._injected_field_specs or [])],
+        _write_surface_specs(mutation_cls),
     )
     # rev6 #3: adapt each relation field's queryset to the SAME visibility-scoped queryset the
     # decode used - pinned to the write alias and locked when the operation locks - so DRF's

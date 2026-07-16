@@ -53,6 +53,7 @@ from django_strawberry_framework.rest_framework.serializer_converter import (
     backing_model_field,
     convert_serializer_field,
     register_serializer_field_converter,
+    require_one_segment_source,
     resolve_serializer_field,
     serializer_field_graphql_name,
     serializer_only_relation_annotation,
@@ -568,6 +569,34 @@ def test_star_source_on_model_column_field_raises():
     field = _bind(serializers.CharField(source="*"), "whole")
     with pytest.raises(ConfigurationError, match="dotted source"):
         backing_model_field(product_models.Item, field)
+
+
+def test_require_one_segment_source_rejects_star_and_dotted():
+    """The shared one-segment source helper rejects ``source='*'`` and dotted sources.
+
+    ``backing_model_field`` and the nested-input walk both call this owner; column /
+    nested nouns stay at the call sites via ``field_label`` / ``must_map_to``.
+    """
+    star = _bind(serializers.CharField(source="*"), "whole")
+    with pytest.raises(ConfigurationError, match="dotted source / source='\\*'"):
+        require_one_segment_source(
+            star,
+            field_label="Serializer field 'whole'",
+            must_map_to="a model-column-backed field must map to a single concrete column",
+        )
+    dotted = _bind(serializers.CharField(source="a.b"), "nm")
+    with pytest.raises(ConfigurationError, match="a nested write must map to a single attribute"):
+        require_one_segment_source(
+            dotted,
+            field_label="Nested serializer field 'nm'",
+            must_map_to="a nested write must map to a single attribute",
+        )
+    # One-segment source is the allowed shape (no raise).
+    require_one_segment_source(
+        _bind(serializers.CharField(source="name"), "nm"),
+        field_label="Serializer field 'nm'",
+        must_map_to="a model-column-backed field must map to a single concrete column",
+    )
 
 
 # ---------------------------------------------------------------------------

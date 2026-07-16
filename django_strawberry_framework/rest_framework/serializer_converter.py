@@ -558,6 +558,32 @@ def serializer_field_description(field: serializers.Field) -> str | None:
     return " ".join(parts) if parts else None
 
 
+def require_one_segment_source(
+    field: serializers.Field,
+    *,
+    field_label: str,
+    must_map_to: str,
+) -> None:
+    """Raise if a bound field's ``source`` is dotted or ``source='*'``.
+
+    Bound DRF fields populate ``source_attrs`` as ``[]`` for ``source="*"`` and a
+    multi-element list for a dotted ``source``. Either has no single write-back
+    attribute, so every schema-time path that needs one segment (model-column
+    resolve and opted-in nested writes) routes through this helper - the one
+    detection of the fail-loud one-segment source policy (spec-039 Decision 7 /
+    rev6 #17). ``field_label`` / ``must_map_to`` keep the diagnostic nouns at
+    each call site (column vs nested write) without a second predicate copy.
+    """
+    source_attrs = getattr(field, "source_attrs", None)
+    if source_attrs is not None and len(source_attrs) != 1:
+        # ``source="*"`` -> ``[]``; dotted ``source="a.b"`` -> ``["a", "b"]``.
+        raise ConfigurationError(
+            f"{field_label} declares a dotted source / source='*' "
+            f"({field.source!r}); {must_map_to} (omit source, or "
+            "use a one-segment source).",
+        )
+
+
 def backing_model_field(model: type[models.Model] | None, field: serializers.Field) -> Any:
     """Return the backing ``models.Field`` for a serializer field via its ``source``, or ``None``.
 
@@ -573,22 +599,18 @@ def backing_model_field(model: type[models.Model] | None, field: serializers.Fie
     yields ``None`` - the caller routes it through the model-less path.
 
     **Dotted ``source`` / ``source="*"`` is rejected** for a model-column-converting
-    field (spec-039 Decision 7 - the renamed-fields rule): a bound serializer field
-    populates ``source_attrs`` as ``[]`` for ``source="*"`` and a multi-element list
-    for a dotted ``source``; either traverses a nested attribute path that has no
-    single backing column, so it fails loud rather than silently resolving the
-    wrong column.
+    field (spec-039 Decision 7 - the renamed-fields rule) via
+    ``require_one_segment_source``: either form traverses a nested attribute path
+    that has no single backing column, so it fails loud rather than silently
+    resolving the wrong column.
     """
     if model is None:
         return None
-    source_attrs = getattr(field, "source_attrs", None)
-    if source_attrs is not None and len(source_attrs) != 1:
-        # ``source="*"`` -> ``[]``; dotted ``source="a.b"`` -> ``["a", "b"]``.
-        raise ConfigurationError(
-            f"Serializer field {field.field_name!r} declares a dotted source / source='*' "
-            f"({field.source!r}); a model-column-backed field must map to a single "
-            "concrete column (omit source, or use a one-segment source).",
-        )
+    require_one_segment_source(
+        field,
+        field_label=f"Serializer field {field.field_name!r}",
+        must_map_to="a model-column-backed field must map to a single concrete column",
+    )
     source = field.source if field.source else field.field_name
     try:
         return model._meta.get_field(source)

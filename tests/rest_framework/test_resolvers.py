@@ -1203,7 +1203,11 @@ def _agreement_specs(**overrides):
         "kind": SCALAR,
     }
     base.update(overrides)
-    return type("FakeMut", (), {"_input_field_specs": [InputFieldSpec(**base)]})
+    return type(
+        "FakeMut",
+        (),
+        {"_input_field_specs": [InputFieldSpec(**base)], "_injected_field_specs": []},
+    )
 
 
 def _shelf_model_serializer():
@@ -1319,6 +1323,7 @@ def test_agreement_guard_passes_when_schema_and_runtime_agree():
                     related_model=library_models.Branch,
                 ),
             ],
+            "_injected_field_specs": [],
         },
     )
     # No raise.
@@ -1358,6 +1363,7 @@ def _injected_topic_mut(specs=None):
         (),
         {
             "_mutation_meta": SimpleNamespace(injected_fields=("topic",)),
+            "_input_field_specs": [],
             "_injected_field_specs": [topic_spec] if specs is None else specs,
         },
     )
@@ -1365,11 +1371,11 @@ def _injected_topic_mut(specs=None):
 
 def test_declared_injected_field_dropped_by_runtime_serializer_raises():
     """An injected field the RUNTIME serializer does not declare fails loud (rev6 rev2 P1 - not just presence)."""
-    # ``_shelf_model_serializer`` has NO ``topic``; the runtime-agreement check catches it even
-    # though the framework-built data would carry the key.
+    # ``_shelf_model_serializer`` has NO ``topic``; the write-surface agreement check catches
+    # it even though the framework-built data would carry the key.
     serializer = _shelf_model_serializer()
     with pytest.raises(ConfigurationError, match="does not declare it"):
-        serializer_resolvers._assert_injected_field_agreement(_injected_topic_mut(), serializer)
+        serializer_resolvers._assert_schema_runtime_agreement(_injected_topic_mut(), serializer)
 
 
 def test_supplied_injected_field_passes_runtime_check():
@@ -1377,15 +1383,14 @@ def test_supplied_injected_field_passes_runtime_check():
     serializer = _topic_shelf_serializer_class()(
         data={"code": "X", "branch": 1, "topic": "supplied"},
     )
-    # No raise: ``topic`` is a writable runtime field.
-    serializer_resolvers._assert_injected_field_agreement(_injected_topic_mut(), serializer)
+    # No raise: ``topic`` is a writable runtime field on the write surface.
+    serializer_resolvers._assert_schema_runtime_agreement(_injected_topic_mut(), serializer)
 
 
-def test_no_injected_fields_is_a_runtime_noop():
-    """A mutation with no ``Meta.injected_fields`` skips the runtime injection check (rev6 #2)."""
-    fake = type("PlainMut", (), {"_mutation_meta": SimpleNamespace(injected_fields=None)})
-    serializer_resolvers._assert_injected_field_agreement(
-        fake,
+def test_write_surface_agreement_with_no_injected_fields_walks_input_only():
+    """A mutation with an empty injected surface still agrees on its GraphQL input specs."""
+    serializer_resolvers._assert_schema_runtime_agreement(
+        _agreement_specs(),
         _shelf_model_serializer(),
     )  # no raise
 
@@ -3397,7 +3402,11 @@ def _nested_agreement_fake(**spec_overrides):
         "nested_specs": child_specs,
     }
     base.update(spec_overrides)
-    return type("FakeMut", (), {"_input_field_specs": [InputFieldSpec(**base)]})
+    return type(
+        "FakeMut",
+        (),
+        {"_input_field_specs": [InputFieldSpec(**base)], "_injected_field_specs": []},
+    )
 
 
 def _child_single_serializer():
@@ -3474,6 +3483,7 @@ def test_agreement_scalar_field_that_became_nested_serializer_raises():
                     kind=SCALAR,
                 ),
             ],
+            "_injected_field_specs": [],
         },
     )
     with pytest.raises(ConfigurationError, match="nested serializer"):

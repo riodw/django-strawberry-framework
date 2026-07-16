@@ -821,6 +821,26 @@ def test_writable_star_sources_lists_every_star_field_sorted():
     ) == ["alpha", "zeta"]
 
 
+def test_raise_writable_source_ownership_errors_star_and_collision():
+    """The one raise path covers star + collision for schema and located surfaces."""
+    with pytest.raises(ConfigurationError, match="source='\\*'"):
+        serializer_inputs.raise_writable_source_ownership_errors(
+            "StarMut",
+            {"alpha": "*", "name": "name"},
+        )
+    with pytest.raises(ConfigurationError, match="bind one serializer source"):
+        serializer_inputs.raise_writable_source_ownership_errors(
+            "DupMut",
+            {"a": "name", "b": "name"},
+        )
+    with pytest.raises(ConfigurationError, match="runtime serializer path '<root>'"):
+        serializer_inputs.raise_writable_source_ownership_errors(
+            "RuntimeMut",
+            {"a": "name", "b": "name"},
+            location="runtime serializer path '<root>'",
+        )
+
+
 def test_two_writable_fields_sharing_one_source_raise():
     """Two WRITABLE fields sharing one one-segment ``source`` raise (no double-write)."""
     _register_products_types()

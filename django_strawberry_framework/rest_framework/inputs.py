@@ -80,6 +80,7 @@ from .serializer_converter import (
     NESTED_SINGLE,
     is_nested_serializer_field,
     nested_serializer_child,
+    require_one_segment_source,
     resolve_serializer_field,
     serializer_field_description,
 )
@@ -379,6 +380,10 @@ def _fingerprint_field_map(
     hook reads still changes the fingerprint (it appears / disappears), so drift is still detected.
     The top-level callers additionally pass the NARROWED effective map, so a nested field narrowed
     away by ``Meta.fields`` / ``Meta.exclude`` is likewise never descended into.
+
+    The writable filter is ``writable_serializer_fields`` (the same basis
+    ``resolve_effective_serializer_fields`` / the create-required guard use) - never a
+    second inlined ``read_only`` / ``HiddenField`` predicate that could drift.
     """
     return tuple(
         (
@@ -394,8 +399,7 @@ def _fingerprint_field_map(
             _fingerprint_converter_extra(field),
             _fingerprint_nested(field, name, seen, nested_configs),
         )
-        for name, field in field_map.items()
-        if not field.read_only and not isinstance(field, serializers.HiddenField)
+        for name, field in writable_serializer_fields(field_map).items()
     )
 
 
@@ -528,6 +532,56 @@ def writable_star_sources(field_sources: Mapping[str, str | None]) -> list[str]:
     caller must reject it explicitly rather than treat it as collision-exempt.
     """
     return sorted(name for name, source in field_sources.items() if source == "*")
+
+
+def raise_writable_source_ownership_errors(
+    mutation_name: str,
+    field_sources: Mapping[str, str | None],
+    *,
+    location: str | None = None,
+) -> None:
+    """Raise ``ConfigurationError`` when writable sources collide or use ``source='*'``.
+
+    The one raise path for schema-time (``rest_framework/sets.py``) and runtime
+    (``rest_framework/resolvers.py``) ownership checks - detection stays in
+    ``writable_star_sources`` / ``writable_source_collisions``; callers only supply
+    the mutation name, the source map, and an optional path phrase (e.g.
+    ``"nested serializer path 'items'"`` or ``"runtime serializer path '<root>'"``).
+    Omit ``location`` for the top-level schema surface.
+    """
+    star_fields = writable_star_sources(field_sources)
+    if star_fields:
+        where = (
+            f"{location} has writable field(s) {star_fields!r} declaring"
+            if location is not None
+            else f"writable field(s) {star_fields!r} declare"
+        )
+        raise ConfigurationError(
+            f"SerializerMutation {mutation_name}: {where} source='*'. DRF merges a "
+            "whole-object field's returned mapping into validated_data, so it can "
+            "silently replace client or injected values under any key (including "
+            "narrowed-out HiddenField / defaulted runtime fields that never reach "
+            "the column converter). Remove the field, make it read_only, or give "
+            "it a concrete single-column source.",
+        )
+    colliding = writable_source_collisions(field_sources)
+    if not colliding:
+        return
+    detail = "; ".join(
+        f"source {source!r} <- fields {owners!r}" for source, owners in sorted(colliding.items())
+    )
+    where = (
+        f"{location} has multiple writable fields that bind one serializer source"
+        if location is not None
+        else "multiple writable fields bind one serializer source"
+    )
+    raise ConfigurationError(
+        f"SerializerMutation {mutation_name}: {where}: {detail}. DRF resolves a "
+        "source collision last-write-wins, so one field's validated value would "
+        "silently replace another's (including values from HiddenField or "
+        "narrowed-out field defaults). Give every runtime writable field a "
+        "distinct source.",
+    )
 
 
 def resolve_effective_serializer_fields(
@@ -1001,7 +1055,12 @@ def _collect_input_attr_collision_messages(
       would double-write one model attr. A ``read_only`` field sharing a ``source``
       with a writable one is fine (read-only is dropped before this is reached), so
       only the writable-vs-writable collision is reported. (The DRF ``source``-collision
-      arm is new - forms have no ``source`` axis.)
+      arm is new - forms have no ``source`` axis.) ``source_of`` uses
+      ``spec.source or spec.target_name`` so a bare declared name (``source is None``)
+      still collides with an alias that names it as ``source`` - the same
+      ``source or name`` rule ``writable_source_collisions`` applies at runtime for
+      sets / resolvers (star sources never reach this schema-time walk; the converter
+      rejects them before a spec is built).
 
     The seen-dict walk + the three collision arms are single-sited in
     ``utils/inputs.py::iter_input_field_collisions`` (DRY review A3); the
@@ -1010,7 +1069,7 @@ def _collect_input_attr_collision_messages(
     serializer nouns (incl. the id-like-suffix ``camel_case_note`` and the
     serializer-only ``source_of`` arm).
     """
-    messages = list(
+    return list(
         iter_input_field_collisions(
             field_specs,
             subject=f"SerializerMutation for {serializer_class.__name__!r}",
@@ -1018,19 +1077,9 @@ def _collect_input_attr_collision_messages(
             rename_clause="Rename one,",
             name_of=lambda spec: spec.target_name,
             camel_case_note=" (or the id-like-suffix rule)",
+            source_of=lambda spec: spec.source or spec.target_name,
         ),
     )
-    collisions = writable_source_collisions(
-        {spec.target_name: spec.source for spec in field_specs},
-    )
-    for source, owners in collisions.items():
-        messages.append(
-            f"SerializerMutation for {serializer_class.__name__!r} has two writable fields "
-            f"{owners[0]!r} and {owners[1]!r} sharing one source {source!r}; they would "
-            "double-write one model attribute. Give each a distinct source, or drop one via "
-            "Meta.fields / Meta.exclude.",
-        )
-    return messages
 
 
 def _aggregate_field_problems(
@@ -1264,20 +1313,19 @@ def _resolve_nested_field(
     ChildSerializer(source="actual")`` -> ``source="actual"``), so the runtime schema/runtime
     agreement guard's source comparison matches instead of failing every invocation. A dotted
     source / ``source="*"`` has no single write-back attribute for a nested write, so it fails
-    loud here (the same fail-loud source policy the model-column path applies).
+    loud via ``require_one_segment_source`` (the same detection the model-column path uses).
     """
     child_serializer, many = nested_serializer_child(field)
     nested_class = type(child_serializer)
     _guard_nested_recursion(nested_class, nested_path, field_name)
-    # rev6 #17 review P1: the source axis. A dotted / star source (source_attrs != 1 segment) has
-    # no single write-back attribute for the nested write; reject it (the model-column-path policy).
-    source_attrs = getattr(field, "source_attrs", None)
-    if source_attrs is not None and len(source_attrs) != 1:
-        raise ConfigurationError(
-            f"Nested serializer field {field_name!r} declares a dotted source / source='*' "
-            f"({field.source!r}); a nested write must map to a single attribute (omit source, or "
-            "use a one-segment source).",
-        )
+    # rev6 #17 review P1: the source axis. A dotted / star source has no single write-back
+    # attribute for the nested write; reject via the shared one-segment policy (the same
+    # detection ``backing_model_field`` uses for model-column resolve).
+    require_one_segment_source(
+        field,
+        field_label=f"Nested serializer field {field_name!r}",
+        must_map_to="a nested write must map to a single attribute",
+    )
     source = field.source if (field.source and field.source != field_name) else None
     nested_field_map = dict(child_serializer.fields)
     nested_cls, nested_shape = build_serializer_input_class(

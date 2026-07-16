@@ -71,6 +71,7 @@ from ..mutations.sets import (
     DjangoMutation,
     _ValidatedMutationMeta,
     build_and_stash_input,
+    construction_kwargs,
     non_delete_operation_error,
     reject_unknown_meta_keys,
     require_backing_class,
@@ -90,14 +91,13 @@ from .inputs import (
     build_serializer_input_class,
     guard_create_required_serializer_fields,
     materialize_serializer_input_class,
+    raise_writable_source_ownership_errors,
     resolve_effective_serializer_fields,
     resolve_injected_field_specs,
     resolve_optional_fields,
     runtime_validated_data_fields,
     serializer_schema_fingerprint,
     writable_serializer_fields,
-    writable_source_collisions,
-    writable_star_sources,
 )
 from .inputs import (
     get_serializer_for_schema as _default_serializer_schema_fields,
@@ -282,15 +282,31 @@ def _validate_serializer_nested_fields(
     return normalized
 
 
-def _assert_nested_schema_source_ownership(
+def _assert_schema_source_ownership(
     name: str,
     field_map: Mapping[str, serializers.Field],
-    nested_fields: Mapping[str, NestedSerializerConfig] | None,
     *,
+    supplied_fields: set[str],
     apply_defaults: bool,
+    nested_fields: Mapping[str, NestedSerializerConfig] | None = None,
     path: str = "",
 ) -> None:
-    """Recursively reject source collisions in explicitly opted-in nested inputs."""
+    """Reject star / colliding writable sources at schema time (root + nested).
+
+    One recursive walker for the class-creation ownership check: the root surface
+    (effective input + injected) and every explicitly opted-in nested config share
+    the same ``runtime_validated_data_fields`` ->
+    ``raise_writable_source_ownership_errors`` path so root vs nested wording cannot
+    drift apart from independent raise copies.
+    """
+    runtime_fields = runtime_validated_data_fields(
+        field_map,
+        supplied_fields=supplied_fields,
+        apply_defaults=apply_defaults,
+    )
+    runtime_sources = {field_name: field.source for field_name, field in runtime_fields.items()}
+    location = f"nested serializer path {path!r}" if path else None
+    raise_writable_source_ownership_errors(name, runtime_sources, location=location)
     for field_name, config in (nested_fields or {}).items():
         child_serializer, _many = nested_serializer_child(field_map[field_name])
         child_fields = dict(child_serializer.fields)
@@ -300,40 +316,13 @@ def _assert_nested_schema_source_ownership(
             exclude=config.exclude,
             field_map=child_fields,
         )
-        runtime_fields = runtime_validated_data_fields(
+        child_path = f"{path}.{field_name}" if path else field_name
+        _assert_schema_source_ownership(
+            name,
             child_fields,
             supplied_fields=set(effective),
             apply_defaults=apply_defaults,
-        )
-        runtime_sources = {
-            child_name: field.source for child_name, field in runtime_fields.items()
-        }
-        child_path = f"{path}.{field_name}" if path else field_name
-        star_fields = writable_star_sources(runtime_sources)
-        if star_fields:
-            raise ConfigurationError(
-                f"SerializerMutation {name}: nested serializer path {child_path!r} has writable "
-                f"field(s) {star_fields!r} declaring source='*'. DRF merges a whole-object "
-                "field's returned mapping into validated_data, so it can silently replace other "
-                "validated values under any key. Remove the field, make it read_only, or give "
-                "it a concrete single-column source.",
-            )
-        colliding = writable_source_collisions(runtime_sources)
-        if colliding:
-            detail = "; ".join(
-                f"source {source!r} <- fields {owners!r}"
-                for source, owners in sorted(colliding.items())
-            )
-            raise ConfigurationError(
-                f"SerializerMutation {name}: nested serializer path {child_path!r} has multiple "
-                f"writable fields binding one source: {detail}. DRF would silently discard one "
-                "validated value. Give every nested runtime writable field a distinct source.",
-            )
-        _assert_nested_schema_source_ownership(
-            name,
-            child_fields,
-            config.nested_fields,
-            apply_defaults=apply_defaults,
+            nested_fields=config.nested_fields,
             path=child_path,
         )
 
@@ -556,41 +545,6 @@ class SerializerMutation(DjangoMutation):
                     "(Meta.fields / Meta.exclude). Remove it from the input or from "
                     "Meta.injected_fields.",
                 )
-        # A runtime write ``source`` must be UNIQUE across EVERY field that can
-        # contribute to ``validated_data``, not merely the generated input + injected
-        # fields. On creates, ``HiddenField`` and narrowed-out fields with defaults
-        # also contribute and can silently replace client data under the same source.
-        # Fail loud before DRF's last-write-wins behavior can discard either value.
-        runtime_fields = runtime_validated_data_fields(
-            field_map,
-            supplied_fields=set(effective) | set(injected_fields or ()),
-            apply_defaults=operation == CREATE,
-        )
-        runtime_sources = {
-            field_name: field.source for field_name, field in runtime_fields.items()
-        }
-        star_fields = writable_star_sources(runtime_sources)
-        if star_fields:
-            raise ConfigurationError(
-                f"SerializerMutation {name}: writable field(s) {star_fields!r} declare "
-                "source='*'. DRF merges a whole-object field's returned mapping into "
-                "validated_data, so it can silently replace client or injected values under "
-                "any key (including narrowed-out HiddenField / defaulted runtime fields that "
-                "never reach the column converter). Remove the field, make it read_only, or "
-                "give it a concrete single-column source.",
-            )
-        colliding = writable_source_collisions(runtime_sources)
-        if colliding:
-            detail = "; ".join(
-                f"source {src!r} <- fields {owners!r}" for src, owners in sorted(colliding.items())
-            )
-            raise ConfigurationError(
-                f"SerializerMutation {name}: multiple writable fields bind one serializer "
-                f"source: {detail}. DRF resolves a source collision last-write-wins, so one "
-                "field's validated value would silently replace another's (including values "
-                "from HiddenField or narrowed-out field defaults). Give every runtime writable "
-                "field a distinct source.",
-            )
         # ``Meta.select_for_update`` (rev6 #14, expanded by BETA-055): validated by the
         # shared model-backed-flavor validator - default TRUE (locked writes are the
         # safe posture; an explicit ``False`` opts into weaker concurrency), applied as
@@ -608,11 +562,17 @@ class SerializerMutation(DjangoMutation):
             field_map,
             getattr(meta, "nested_fields", None),
         )
-        _assert_nested_schema_source_ownership(
+        # A runtime write ``source`` must be UNIQUE across EVERY field that can
+        # contribute to ``validated_data``, not merely the generated input + injected
+        # fields. On creates, ``HiddenField`` and narrowed-out fields with defaults
+        # also contribute and can silently replace client data under the same source.
+        # Root + nested share one walker (``_assert_schema_source_ownership``).
+        _assert_schema_source_ownership(
             name,
             field_map,
-            nested_fields,
+            supplied_fields=set(effective) | set(injected_fields or ()),
             apply_defaults=operation == CREATE,
+            nested_fields=nested_fields,
         )
 
         permission_classes = _validate_mutation_permission_classes(
@@ -849,7 +809,10 @@ class SerializerMutation(DjangoMutation):
         longer possible.
         """
         del info, hook_context  # the default ignores them; an override may consult them.
-        return {"data": data}
+        # Shared with the form default via ``mutations/sets.py::construction_kwargs``
+        # (spec-039 Md7): create has no ``instance`` key; update injects it from the
+        # framework merge, never from this constructor-only hook.
+        return construction_kwargs(data=data)
 
     def get_serializer_injected_data(
         self,

@@ -1465,10 +1465,10 @@ def test_annotation_alias_shadow_cannot_bypass_visibility():
         keeps = _CtParent.objects.create(name="keeps", target=visible)
         attack = _CtParent.objects.create(name="attack", target=hidden)
 
-        # The malicious hook: hide nothing real, but alias the pk to the hidden
-        # row's id so a naive re-projection would select it.
+        # The malicious hook: narrow to the nominally visible target, but alias
+        # the pk to the hidden row's id so a naive re-projection would select it.
         def _shadow_hook(cls, qs, info):
-            return qs.values("name").annotate(id=models.Value(hidden.pk))
+            return qs.filter(name="visible").values("name").annotate(id=models.Value(hidden.pk))
 
         parent_type = _register_ct_pair(_shadow_hook)
         with pytest.raises(ConfigurationError, match="shadows"):
@@ -1476,13 +1476,13 @@ def test_annotation_alias_shadow_cannot_bypass_visibility():
         assert _cascade_state.get() is None
 
         # Proof the rejection is load-bearing: the shape the guard blocks, fed
-        # through the old ``.values(attname)`` re-projection by hand, keeps the
-        # attack row (its hidden target's pk is the injected constant) and thus
-        # would have leaked it.
+        # through the old ``.values(attname)`` re-projection by hand, selects
+        # ONLY the injected constant (the hidden target's pk) -- so exactly the
+        # attack row survives, and the row pointing at the visible target is
+        # collateral damage. The bypass is real, not theoretical.
         leaked_subquery = _shadow_hook(parent_type, _CtTarget.objects.all(), _INFO).values("id")
         leaked = _CtParent.objects.filter(target__in=leaked_subquery)
-        assert attack in leaked
-        assert keeps in leaked
+        assert list(leaked.values_list("name", flat=True)) == ["attack"]
 
 
 @pytest.mark.django_db(transaction=True)

@@ -22,7 +22,7 @@ own through-schema coverage lives in the same surface suites plus
 from types import SimpleNamespace
 
 import pytest
-from apps.products.models import Category
+from apps.products.models import Category, Item
 from django.db import models
 
 from django_strawberry_framework import DjangoType
@@ -41,6 +41,47 @@ from django_strawberry_framework.utils.querysets import (
     run_in_one_sync_boundary,
     visible_related_objects,
 )
+from django_strawberry_framework.utils.write_transaction import write_pipeline
+
+
+class _QsBoundaryBase(models.Model):
+    """Boundary-contract fixture base (proxy / MTI table checks; no table needed)."""
+
+    name = models.TextField()
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+class _QsBoundaryChild(_QsBoundaryBase):
+    """MTI child of the fixture base - an INCOMPATIBLE concrete table."""
+
+    extra = models.TextField()
+
+    class Meta:
+        app_label = "products"
+        managed = False
+
+
+class _QsBoundaryProxy(_QsBoundaryBase):
+    """Proxy sibling of the fixture base - a COMPATIBLE concrete table."""
+
+    class Meta:
+        app_label = "products"
+        proxy = True
+
+
+def _stub_type(model, hook):
+    """Build a duck-typed ``DjangoType`` stub over ``model`` with ``hook`` as its visibility hook."""
+    return type(
+        "_StubType",
+        (),
+        {
+            "__django_strawberry_definition__": SimpleNamespace(model=model),
+            "get_queryset": classmethod(hook),
+        },
+    )
 
 
 class _SyncType:
@@ -253,3 +294,362 @@ async def test_run_in_one_sync_boundary_runs_callable_off_event_loop():
 
     assert await _run() == "ok"
     assert captured["worker"] != captured["loop"]
+
+
+# ---------------------------------------------------------------------------
+# The hardened visibility boundary -- source preparation
+# (the get_queryset-visibility-boundary decision)
+# ---------------------------------------------------------------------------
+
+
+def test_visibility_source_must_be_a_queryset():
+    """A non-queryset source fails closed BEFORE the hook runs (fires no consumer code)."""
+
+    def _boom(cls, queryset, info):  # pragma: no cover - must never run
+        raise AssertionError("hook ran on an invalid source")
+
+    with pytest.raises(ConfigurationError, match="requires a QuerySet of Category rows"):
+        apply_type_visibility_sync(_stub_type(Category, _boom), [1, 2], info=None)
+
+
+def test_visibility_source_must_use_registered_concrete_table():
+    """A source over the wrong model fails closed - the hook would narrow the wrong table."""
+    with pytest.raises(ConfigurationError, match="concrete table"):
+        apply_type_visibility_sync(_SyncType, Item.objects.all(), info=None)
+
+
+@pytest.mark.django_db
+def test_evaluated_source_is_refreshed_before_hook(django_assert_num_queries):
+    """An evaluated source is ``.all()``-refreshed before consumer code sees it - zero SQL.
+
+    Cached rows must never reach (or bypass) the hook: the hook receives a
+    fresh unevaluated clone, and the refresh itself composes lazily (the
+    security carve-out from the optimizer's G1 same-instance guarantee).
+    """
+    seen: dict[str, object] = {}
+
+    def _capture(cls, queryset, info):
+        seen["qs"] = queryset
+        return queryset
+
+    evaluated = Category.objects.all()
+    list(evaluated)  # materialize the cache
+    with django_assert_num_queries(0):
+        result = apply_type_visibility_sync(_stub_type(Category, _capture), evaluated, info=None)
+    assert seen["qs"] is not evaluated
+    assert seen["qs"]._result_cache is None
+    assert result._result_cache is None
+
+
+def test_active_write_pipeline_pins_source_and_repins_result():
+    """Under an active write pipeline the source is pre-pinned and an unpinned result repinned."""
+    hook = _stub_type(Category, lambda cls, qs, info: Category.objects.filter(name="x"))
+    with write_pipeline("default", lock=False):
+        result = apply_type_visibility_sync(hook, Category.objects.all(), info=None)
+    assert result._db == "default"
+
+
+def test_active_write_pipeline_rejects_divergent_source_alias():
+    """An explicitly divergent SOURCE alias under a write pipeline fails closed (pre-pin)."""
+    with (
+        write_pipeline("default", lock=False),
+        pytest.raises(ConfigurationError, match="routed to alias 'other'"),
+    ):
+        apply_type_visibility_sync(_SyncType, Category.objects.using("other"), info=None)
+
+
+def test_hostile_source_refresh_fails_closed():
+    """A source whose ``.all()`` preserves its cache cannot smuggle rows past the refresh."""
+
+    class _StickySource(models.QuerySet):
+        def all(self):
+            return self
+
+    sticky = _StickySource(model=Category)
+    sticky._result_cache = []
+    with pytest.raises(ConfigurationError, match="preserved cached rows"):
+        apply_type_visibility_sync(_SyncType, sticky, info=None)
+
+
+# ---------------------------------------------------------------------------
+# The hardened visibility boundary -- hook-result normalization
+# ---------------------------------------------------------------------------
+
+
+def _sync_hook_type(result):
+    """A Category stub type whose hook returns ``result`` verbatim."""
+    return _stub_type(Category, lambda cls, qs, info: result)
+
+
+def test_hook_manager_result_is_coerced_sync():
+    """A ``Manager`` hook return is coerced exactly once through ``.all()`` (sync path)."""
+    result = apply_type_visibility_sync(
+        _sync_hook_type(Category.objects),
+        Category.objects.all(),
+        info=None,
+    )
+    assert isinstance(result, models.QuerySet)
+    assert result.model is Category
+
+
+async def test_hook_manager_result_is_coerced_async():
+    """An async-path ``Manager`` return is coerced too - previously it flowed through verbatim."""
+
+    class _ManagerAsyncType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+        @classmethod
+        async def get_queryset(cls, queryset, info):
+            return Category.objects
+
+    result = await apply_type_visibility_async(
+        _ManagerAsyncType,
+        Category.objects.all(),
+        info=None,
+    )
+    assert isinstance(result, models.QuerySet)
+
+
+def _async_generator_result():
+    async def _agen():
+        yield 1  # pragma: no cover - never iterated
+
+    return _agen()
+
+
+@pytest.mark.parametrize(
+    ("bad", "detail"),
+    [
+        (None, "NoneType"),
+        ([], "list"),
+        ((n for n in ()), "generator"),
+        (_async_generator_result(), "async_generator"),
+        (object(), "object"),
+    ],
+)
+def test_invalid_hook_results_fail_closed(bad, detail):
+    """``None`` / list / generator / async-generator / custom-iterable returns fail closed."""
+    with pytest.raises(
+        ConfigurationError,
+        match=f"must return a QuerySet or Manager.*got {detail}",
+    ):
+        apply_type_visibility_sync(_sync_hook_type(bad), Category.objects.all(), info=None)
+
+
+def test_wrong_model_hook_result_fails_closed():
+    """A queryset over an unrelated model fails closed (wrong concrete table)."""
+    with pytest.raises(ConfigurationError, match="concrete table"):
+        apply_type_visibility_sync(
+            _sync_hook_type(Item.objects.all()),
+            Category.objects.all(),
+            info=None,
+        )
+
+
+def test_mti_child_hook_result_fails_closed():
+    """An MTI-child queryset lives on ITS OWN concrete table - incompatible."""
+    hook = _stub_type(_QsBoundaryBase, lambda cls, qs, info: _QsBoundaryChild.objects.all())
+    with pytest.raises(ConfigurationError, match="concrete table"):
+        apply_type_visibility_sync(hook, _QsBoundaryBase.objects.all(), info=None)
+
+
+def test_proxy_hook_result_is_accepted():
+    """A proxy-sibling queryset shares the concrete table and passes the boundary."""
+    hook = _stub_type(_QsBoundaryBase, lambda cls, qs, info: _QsBoundaryProxy.objects.all())
+    result = apply_type_visibility_sync(hook, _QsBoundaryBase.objects.all(), info=None)
+    assert result.model is _QsBoundaryProxy
+
+
+def test_unpinned_result_is_repinned_to_explicit_source_alias():
+    """A routed source's alias is required: an unpinned hook result is normalized onto it.
+
+    Alias-state only - the alias never resolves a connection, so no secondary
+    database is needed.
+    """
+    hook = _stub_type(Category, lambda cls, qs, info: Category.objects.filter(name="x"))
+    result = apply_type_visibility_sync(hook, Category.objects.using("other"), info=None)
+    assert result._db == "other"
+
+
+def test_matching_explicit_result_alias_is_accepted():
+    """A hook result explicitly routed to the required alias passes through."""
+    result = apply_type_visibility_sync(
+        _SyncType,
+        Category.objects.using("other").all(),
+        info=None,
+    )
+    assert result._db == "other"
+
+
+def test_divergent_explicit_result_alias_fails_closed():
+    """A hook result explicitly routed OFF the required alias fails closed."""
+    hook = _stub_type(Category, lambda cls, qs, info: Category.objects.using("elsewhere"))
+    with pytest.raises(
+        ConfigurationError,
+        match="routed to alias 'elsewhere'.*pinned to alias 'other'",
+    ):
+        apply_type_visibility_sync(hook, Category.objects.using("other"), info=None)
+
+
+def test_unpinned_read_hook_keeps_documented_alias_routing():
+    """With no required alias, an unpinned read hook may still choose ``.using(alias)`` itself."""
+    hook = _stub_type(Category, lambda cls, qs, info: qs.using("other"))
+    result = apply_type_visibility_sync(hook, Category.objects.all(), info=None)
+    assert result._db == "other"
+
+
+@pytest.mark.django_db
+def test_evaluated_hook_result_is_refreshed(django_assert_num_queries):
+    """An evaluated hook result is re-cloned so cached rows never survive the boundary."""
+    evaluated = Category.objects.all()
+    list(evaluated)
+    with django_assert_num_queries(0):
+        result = apply_type_visibility_sync(
+            _sync_hook_type(evaluated),
+            Category.objects.all(),
+            info=None,
+        )
+    assert result is not evaluated
+    assert result._result_cache is None
+
+
+def test_normalization_preserves_lazy_query_state():
+    """Normalization composes lazily: filters / annotations / ordering / subclass survive."""
+
+    class _CustomQuerySet(models.QuerySet):
+        pass
+
+    shaped = (
+        _CustomQuerySet(model=Category)
+        .filter(name__startswith="a")
+        .annotate(flag=models.Value(1))
+        .order_by("-name")
+    )
+    result = apply_type_visibility_sync(_sync_hook_type(shaped), Category.objects.all(), info=None)
+    assert result is shaped  # no clone needed: unevaluated, unrouted requirement, right table
+    assert "flag" in result.query.annotations
+
+
+def test_hostile_result_clone_preserving_cache_fails_closed():
+    """A hostile subclass whose ``.all()`` returns its evaluated self fails closed."""
+
+    class _StickyResult(models.QuerySet):
+        def all(self):
+            return self
+
+    sticky = _StickyResult(model=Category)
+    sticky._result_cache = []
+    with pytest.raises(ConfigurationError, match="preserved cached rows"):
+        apply_type_visibility_sync(_sync_hook_type(sticky), Category.objects.all(), info=None)
+
+
+def test_hostile_result_clone_dodging_repin_fails_closed():
+    """A hostile subclass whose ``.using()`` returns its unrouted self fails closed."""
+
+    class _PinDodger(models.QuerySet):
+        def using(self, alias):
+            return self
+
+    hook = _stub_type(Category, lambda cls, qs, info: _PinDodger(model=Category))
+    with pytest.raises(ConfigurationError, match="pinned to alias 'other'"):
+        apply_type_visibility_sync(hook, Category.objects.using("other"), info=None)
+
+
+def test_hostile_result_clone_returning_non_queryset_fails_closed():
+    """A hostile subclass whose ``.using()`` returns a non-queryset fails closed."""
+
+    class _GarbageCloner(models.QuerySet):
+        def using(self, alias):
+            return object()
+
+    hook = _stub_type(Category, lambda cls, qs, info: _GarbageCloner(model=Category))
+    with pytest.raises(ConfigurationError, match="must return a QuerySet or Manager.*got object"):
+        apply_type_visibility_sync(hook, Category.objects.using("other"), info=None)
+
+
+def test_hook_exception_propagates_unchanged():
+    """An exception raised INSIDE the hook propagates as-is - the boundary never masks it."""
+
+    class _BoomError(RuntimeError):
+        pass
+
+    def _raise(cls, queryset, info):
+        raise _BoomError("consumer bug")
+
+    with pytest.raises(_BoomError, match="consumer bug"):
+        apply_type_visibility_sync(_stub_type(Category, _raise), Category.objects.all(), info=None)
+
+
+# ---------------------------------------------------------------------------
+# The hardened visibility boundary -- awaitable discipline
+# ---------------------------------------------------------------------------
+
+
+class _AwaitableOf:
+    """A custom (non-coroutine) awaitable resolving to a fixed value."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __await__(self):
+        return self.value
+        yield  # pragma: no cover - marks this as a generator function
+
+
+def test_sync_boundary_rejects_custom_awaitable_hook():
+    """A custom awaitable at the sync boundary raises ``SyncMisuseError`` (not a coroutine)."""
+    hook = _stub_type(Category, lambda cls, qs, info: _AwaitableOf(qs))
+    with pytest.raises(SyncMisuseError, match="returned an awaitable in a sync"):
+        apply_type_visibility_sync(hook, Category.objects.all(), info=None)
+
+
+async def test_async_custom_awaitable_hook_is_awaited_once():
+    """The async runner awaits a custom awaitable hook return to its queryset."""
+    hook = _stub_type(Category, lambda cls, qs, info: _AwaitableOf(qs))
+    result = await apply_type_visibility_async(hook, Category.objects.all(), info=None)
+    assert isinstance(result, models.QuerySet)
+
+
+async def test_async_nested_awaitable_fails_closed():
+    """An async hook resolving to ANOTHER awaitable fails closed after exactly one await."""
+
+    class _NestedType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+        @classmethod
+        async def get_queryset(cls, queryset, info):
+            async def _inner():
+                return queryset  # pragma: no cover - disposed, never awaited
+
+            return _inner()
+
+    with pytest.raises(ConfigurationError, match="nested awaitable"):
+        await apply_type_visibility_async(_NestedType, Category.objects.all(), info=None)
+
+
+async def test_async_generator_hook_result_fails_closed():
+    """An async hook resolving to an async generator is not awaitable - a type rejection."""
+
+    class _AgenType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
+        @classmethod
+        async def get_queryset(cls, queryset, info):
+            return _async_generator_result()
+
+    with pytest.raises(ConfigurationError, match="got async_generator"):
+        await apply_type_visibility_async(_AgenType, Category.objects.all(), info=None)
+
+
+async def test_post_process_async_rejects_residual_awaitable():
+    """An already-awaited async consumer resolver resolving to another awaitable fails closed.
+
+    This closes the shape where the residual awaitable would otherwise pass
+    the non-queryset branch and skip visibility entirely.
+    """
+
+    async def _residual():
+        return Category.objects.all()  # pragma: no cover - disposed, never awaited
+
+    with pytest.raises(ConfigurationError, match="resolved to another awaitable"):
+        await post_process_queryset_result_async(_SyncType, _residual(), info=None)

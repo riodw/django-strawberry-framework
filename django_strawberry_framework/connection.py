@@ -109,6 +109,7 @@ from .utils.querysets import (
     model_for,
     normalize_query_source,
     reject_awaitable_sync_source,
+    reject_residual_async_source,
 )
 from .utils.relations import relation_kind
 from .utils.typing import is_async_callable, unwrap_container_type
@@ -1729,8 +1730,18 @@ async def _pipeline_async(
     filter_input: Any,
     order_by_input: Any,
 ) -> Any:
-    """Async sibling of ``_pipeline_sync`` - awaits the colored visibility / filter / order steps."""
+    """Async sibling of ``_pipeline_sync`` - awaits the colored visibility / filter / order steps.
+
+    The consumer ``resolver=`` return was already awaited once by
+    ``_build_connection_resolver``'s async branch, so a value that is STILL
+    awaitable here is a nested async resolver whose inner awaitable would
+    otherwise pass the non-queryset sidecar guard and skip visibility entirely.
+    The shared ``reject_residual_async_source`` guard (the same one the list
+    field's ``post_process_queryset_result_async`` applies) fails it closed
+    before ``_prepare_pipeline_source`` can treat it as a plain iterable.
+    """
     definition = target_type.__django_strawberry_definition__
+    reject_residual_async_source(source, target_type)
     source, is_queryset = _prepare_pipeline_source(
         source,
         filter_input=filter_input,

@@ -1398,7 +1398,13 @@ def test_hook_return_rejections_fail_closed():
     Every shape that would compose a wrong or wrong-database membership predicate
     is a loud ``ConfigurationError`` at composition time - never a silent
     mis-narrowing or a backend-dependent evaluation error. Pure composition: the
-    raise fires before any SQL, so no tables are needed. The combined / grouped /
+    raise fires before any SQL, so no tables are needed. The shape /
+    concrete-table / explicit-alias rejections come from the SHARED visibility
+    boundary (``utils/querysets.py``), rendered through the cascade's per-edge
+    error seam, so the path-rich prose asserted here survives the move; the
+    SQL-composability rejections stay cascade-local. A ``Manager`` return is no
+    longer in this battery - the boundary coerces it
+    (``test_hook_manager_return_is_coerced``). The combined / grouped /
     extra-shadow shapes are the ones where re-projecting to the target column
     would change SEMANTICS, not just the selected column: ``.values(...)`` on a
     union only rewrites the outer projection (each branch keeps its original
@@ -1410,7 +1416,6 @@ def test_hook_return_rejections_fail_closed():
         # A materialized list (built without evaluating - the raise must fire at
         # composition, not depend on table state).
         (lambda cls, qs, info: [], "must return a QuerySet"),
-        (lambda cls, qs, info: _CtTarget.objects, "must return a QuerySet"),
         (lambda cls, qs, info: _CtOther.objects.using(qs.db).all(), "concrete table"),
         # An MTI child queryset lives on ITS OWN concrete table - incompatible.
         (lambda cls, qs, info: _CtTargetChild.objects.using(qs.db).all(), "concrete table"),
@@ -1444,6 +1449,72 @@ def test_hook_return_rejections_fail_closed():
         with pytest.raises(ConfigurationError, match=match):
             apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
         assert _cascade_state.get() is None
+
+
+def test_hook_manager_return_is_coerced():
+    """A ``Manager`` hook return is coerced through ``.all()``, not rejected.
+
+    The shared visibility boundary's canonical-Manager contract (the
+    get_queryset-visibility-boundary decision): a hook returning
+    ``Model.objects`` composes exactly like ``Model.objects.all()`` - the
+    prior contract rejected it. Pure composition, so no tables are needed.
+    """
+    registry.clear()
+    parent_type = _register_ct_pair(lambda cls, qs, info: _CtTarget.objects)
+    result = apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
+    assert "IN (SELECT" in str(result.query).upper()
+    assert _cascade_state.get() is None
+
+
+def test_unpinned_hook_return_is_repinned_to_root_alias():
+    """An UNROUTED hook return is repinned onto the cascade's root alias.
+
+    The shared boundary's alias contract replaces the old reject-on-``.db``
+    check: a hook that builds a fresh queryset (``Model.objects.filter(...)``,
+    ``_db`` unset) no longer trips a cross-database rejection when the root
+    runs on a non-default alias - the result is normalized onto the root
+    alias with ``.using(...)``. Only an EXPLICITLY divergent ``.using(...)``
+    fails closed (the ``"alias"`` row in the rejection battery). Alias-state
+    only - the alias never resolves a connection, so no secondary database
+    (and no table) is needed.
+    """
+    registry.clear()
+    parent_type = _register_ct_pair(
+        lambda cls, qs, info: _CtTarget.objects.filter(name="visible"),
+    )
+    result = apply_cascade_permissions(
+        parent_type,
+        _CtParent.objects.all().using("bogus_alias"),
+        _INFO,
+    )
+    assert result.db == "bogus_alias"
+    assert _cascade_state.get() is None
+
+
+def test_hostile_hook_queryset_clone_fails_closed_with_cascade_prose():
+    """A hostile queryset subclass whose ``.all()`` preserves cached rows fails closed.
+
+    The boundary refreshes an evaluated hook return with ``.all()`` and then
+    REVALIDATES the clone (a consumer-overridable method just ran); a subclass
+    that returns itself with its cache intact would otherwise serve rows
+    cached before the visibility boundary. The error routes through the
+    cascade's per-edge renderer, so the prose stays path-rich.
+    """
+
+    class _StickyQuerySet(models.QuerySet):
+        def all(self):
+            return self
+
+    def _hostile_hook(cls, qs, info):
+        sticky = _StickyQuerySet(model=_CtTarget, using=qs.db)
+        sticky._result_cache = []
+        return sticky
+
+    registry.clear()
+    parent_type = _register_ct_pair(_hostile_hook)
+    with pytest.raises(ConfigurationError, match="preserved cached rows for the cascade subquery"):
+        apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
+    assert _cascade_state.get() is None
 
 
 @pytest.mark.django_db(transaction=True)

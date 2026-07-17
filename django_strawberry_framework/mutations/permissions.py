@@ -48,10 +48,10 @@ _OPERATION_PERMISSION_ACTION: dict[str, str] = {
 # returns a coroutine. Write authorization runs synchronously in the same sync
 # pipeline (spec-036 Decision 15), so an async permission hook can never be
 # awaited - and silently treating its truthy coroutine as "allow" is an
-# authorization BYPASS (feedback - async permission bypass). Consumed only by
-# ``_require_sync_bool_auth_result``, the single guard the three write-auth
-# result seams share (``has_permission`` / ``check_permission`` /
-# ``user.has_perm``), so the wording cannot drift between them.
+# authorization BYPASS (feedback - async permission bypass). Shared by both
+# enforcement seams - the resolver's ``authorize_or_raise`` (``check_permission``)
+# and ``DjangoMutation.check_permission`` (each ``has_permission``) - so the
+# wording cannot drift between them.
 _PERMISSION_ASYNC_RECOURSE = (
     "A DjangoMutation runs its permission check synchronously, so it cannot await "
     "an async permission hook; redefine has_permission / check_permission as a sync "
@@ -59,7 +59,12 @@ _PERMISSION_ASYNC_RECOURSE = (
 )
 
 
-def _require_sync_bool_auth_result(value: Any, *, owner: str, method: str) -> bool:
+def _require_sync_bool_auth_result(
+    value: Any,
+    *,
+    owner: str,
+    method: str,
+) -> bool:
     """Return a sync authorization bool; reject awaitables and non-bools (BETA-055).
 
     The ONE write-authorization result contract the three sync seams share:

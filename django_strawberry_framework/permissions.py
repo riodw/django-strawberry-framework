@@ -113,7 +113,12 @@ from .utils.querysets import SyncMisuseError as SyncMisuseError
 # ``apply_type_visibility_sync`` runs a target's ``get_queryset`` and rejects an
 # async hook with ``SyncMisuseError`` (the coroutine closed first); the cascade
 # reuses it as the per-edge probe so the package keeps ONE sync-misuse site
-# (Decision 10).
+# (Decision 10). The runner is also the shared hardened visibility boundary:
+# it owns the hook-result shape / concrete-table / alias contract (Manager
+# coercion, unrouted-result repinning onto the pinned base alias, explicit
+# cross-alias rejection, evaluated refresh), rendered through the cascade's
+# per-edge error seam (``_edge_error_renderer``); only the SQL-composability
+# battery around the ``.values(...)`` re-projection stays cascade-local.
 from .utils.querysets import apply_type_visibility_sync, model_for, run_in_one_sync_boundary
 
 _ASYNC_RECOURSE = (
@@ -310,15 +315,18 @@ def _validate_fields(model: type[models.Model], fields: Any) -> set[str] | None:
 
 
 def _structural_defect(queryset: Any, model: type[models.Model]) -> tuple[str, str] | None:
-    """Return the first structural defect shared by root and hook-return validation.
+    """Return the first structural defect in a direct root/nested queryset.
 
-    Both validation sites reject the same four composability-breaking shapes --
-    non-``QuerySet``, wrong concrete table, sliced, combined -- but with
-    site-specific error prose. Single-sourcing the *checks* here (each site owns
-    only its messages) keeps the two batteries from drifting apart; the missing
-    sliced/combined root checks in the first cut were exactly that drift.
-    Returns ``(code, detail)`` -- ``code`` in ``{"type", "table", "sliced",
-    "combined"}`` -- or ``None`` when the queryset is structurally composable.
+    Rejects the four composability-breaking root shapes -- non-``QuerySet``,
+    wrong concrete table, sliced, combined -- ahead of the walk. Hook RETURNS
+    no longer come through here: the shared visibility boundary
+    (``utils/querysets.py::_normalized_visibility_result``) owns their shape /
+    concrete-table / alias contract, and ``_validated_target_subquery`` keeps
+    only the cascade-local SQL-composability battery. This checker stays for
+    the root because ``apply_cascade_permissions`` is invoked directly from
+    inside consumer hooks, not through the boundary. Returns ``(code,
+    detail)`` -- ``code`` in ``{"type", "table", "sliced", "combined"}`` -- or
+    ``None`` when the queryset is structurally composable.
     """
     if not isinstance(queryset, models.QuerySet):
         return ("type", type(queryset).__name__)
@@ -378,22 +386,77 @@ def _validate_root_queryset(cls: type, queryset: Any, model: type[models.Model])
     )
 
 
+def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
+    """Build the cascade's error renderer for the shared visibility boundary.
+
+    The boundary owns the hook-result shape / concrete-table / alias checks
+    (``utils/querysets.py::_normalized_visibility_result``); this seam keeps
+    the cascade's path-rich per-edge prose on those failures. The ``type`` /
+    ``table`` / ``alias`` wordings are the cascade's established strings;
+    ``evaluated`` (a hostile queryset subclass whose ``.all()`` preserved
+    cached rows through the boundary's refresh) is boundary-new and gets
+    cascade-flavored prose of its own.
+    """
+
+    def _render(code: str, detail: str) -> str:
+        if code == "type":
+            return (
+                f"{target_type.__name__}.get_queryset must return a QuerySet for "
+                f"the cascade subquery on {field.model.__name__}.{field.name}; "
+                f"got {detail}."
+            )
+        if code == "table":
+            return (
+                f"{target_type.__name__}.get_queryset returned a {detail} "
+                f"queryset for the cascade subquery on "
+                f"{field.model.__name__}.{field.name}, which targets "
+                f"{field.related_model.__name__}; the subquery must stay on the "
+                f"target's concrete table (proxy siblings are compatible, MTI "
+                f"children are not)."
+            )
+        if code == "alias":
+            return (
+                f"{target_type.__name__}.get_queryset returned a queryset on alias "
+                f"{detail!r} for the cascade subquery on "
+                f"{field.model.__name__}.{field.name}, but the cascade is pinned to "
+                f"{alias!r}; a cascade cannot compose cross-database subqueries."
+            )
+        # ``code == "evaluated"`` -- the only remaining boundary code; an
+        # unhandled future code would fall through silently, so this last
+        # branch is unconditional.
+        return (
+            f"{target_type.__name__}.get_queryset returned a {detail} whose .all() "
+            f"preserved cached rows for the cascade subquery on "
+            f"{field.model.__name__}.{field.name}; the cascade composes lazy "
+            f"subqueries only, and rows cached before the visibility boundary "
+            f"must never survive it."
+        )
+
+    return _render
+
+
 def _validated_target_subquery(
     target_type: type,
-    target_qs: Any,
+    target_qs: models.QuerySet,
     field: Any,
-    alias: str,
 ) -> models.QuerySet:
-    """Validate a target hook's return and normalize it to the edge's target column.
+    """Validate a hook return's SQL composability and normalize it to the edge's target column.
 
     The hook return becomes the RHS of ``Q(<edge>__in=...)`` -- a row-visibility
-    predicate -- so every shape that would compare the wrong column or the
-    wrong database fails closed here, before composition. The accepted
-    queryset is re-projected to ``.values(field.target_field.attname)`` so the
-    membership test always binds the FK's actual target column: a consumer
-    ``.values(...)`` / ``.values_list(...)`` projection is overridden rather
-    than trusted, and a ``ForeignKey(to_field=...)`` edge compares its
-    ``to_field`` column, never a stray pk projection.
+    predicate -- so every shape that would compare the wrong column fails
+    closed here, before composition. The shared visibility boundary
+    (``utils/querysets.py::_normalized_visibility_result``, reached through
+    ``apply_type_visibility_sync`` with the cascade's error renderer) already
+    owns the shape / concrete-table / alias contract: by the time a return
+    reaches this function it is a real ``QuerySet`` on the target's concrete
+    table, pinned to the root alias. What stays cascade-local is everything
+    with no boundary analogue -- the SQL-composability battery around the
+    ``.values(...)`` re-projection. The accepted queryset is re-projected to
+    ``.values(field.target_field.attname)`` so the membership test always
+    binds the FK's actual target column: a consumer ``.values(...)`` /
+    ``.values_list(...)`` projection is overridden rather than trusted, and a
+    ``ForeignKey(to_field=...)`` edge compares its ``to_field`` column, never
+    a stray pk projection.
 
     Re-projection is only sound where ``.values(...)`` merely changes the
     selected column. Shapes where it changes *semantics* are rejected instead
@@ -404,36 +467,18 @@ def _validated_target_subquery(
     an ``extra(select={...})`` alias shadowing the target column would make
     ``.values(...)`` select the raw-SQL expression, not the model column.
     """
-    defect = _structural_defect(target_qs, field.related_model)
-    if defect is not None:
-        code, detail = defect
-        if code == "type":
-            raise ConfigurationError(
-                f"{target_type.__name__}.get_queryset must return a QuerySet for "
-                f"the cascade subquery on {field.model.__name__}.{field.name}; "
-                f"got {detail}.",
-            )
-        if code == "table":
-            raise ConfigurationError(
-                f"{target_type.__name__}.get_queryset returned a {detail} "
-                f"queryset for the cascade subquery on "
-                f"{field.model.__name__}.{field.name}, which targets "
-                f"{field.related_model.__name__}; the subquery must stay on the "
-                f"target's concrete table (proxy siblings are compatible, MTI "
-                f"children are not).",
-            )
-        if code == "sliced":
-            raise ConfigurationError(
-                f"{target_type.__name__}.get_queryset returned a sliced queryset "
-                f"for the cascade subquery on "
-                f"{field.model.__name__}.{field.name}; a LIMIT/OFFSET visibility "
-                f"predicate is row-order-dependent and cannot compose as an __in "
-                f"subquery.",
-            )
-        # ``code == "combined"`` (see _validate_root_queryset for the
-        # fall-through rationale).
+    if target_qs.query.is_sliced:
         raise ConfigurationError(
-            f"{target_type.__name__}.get_queryset returned a {detail}() combined "
+            f"{target_type.__name__}.get_queryset returned a sliced queryset "
+            f"for the cascade subquery on "
+            f"{field.model.__name__}.{field.name}; a LIMIT/OFFSET visibility "
+            f"predicate is row-order-dependent and cannot compose as an __in "
+            f"subquery.",
+        )
+    if target_qs.query.combinator:
+        raise ConfigurationError(
+            f"{target_type.__name__}.get_queryset returned a "
+            f"{target_qs.query.combinator}() combined "
             f"queryset for the cascade subquery on "
             f"{field.model.__name__}.{field.name}; re-projecting a combined "
             f"queryset only rewrites the outer projection while each branch "
@@ -477,13 +522,6 @@ def _validated_target_subquery(
             f"{attname!r} would select the alias expression, not the model "
             f"column. Return plain rows and let the cascade project the edge's "
             f"target column.",
-        )
-    if target_qs.db != alias:
-        raise ConfigurationError(
-            f"{target_type.__name__}.get_queryset returned a queryset on alias "
-            f"{target_qs.db!r} for the cascade subquery on "
-            f"{field.model.__name__}.{field.name}, but the cascade is pinned to "
-            f"{alias!r}; a cascade cannot compose cross-database subqueries.",
         )
     return target_qs.values(attname)
 
@@ -539,10 +577,12 @@ def apply_cascade_permissions(
             relation; a full walk over a model carrying an unsupported forward
             relation (``GenericForeignKey`` / composite -- preflighted before
             any hook runs); a cascade cycle (fail-closed, path-rich); a nested
-            application or hook return that leaves the root DB alias; a hook
-            return that is not an unsliced, uncombined, ungrouped,
-            non-``distinct(...)``, non-column-shadowing queryset over the edge
-            target's concrete table.
+            application or a hook return EXPLICITLY routed off the root DB
+            alias (an unrouted hook return is repinned onto it -- the shared
+            visibility boundary's alias contract); a hook return that is not
+            an unsliced, uncombined, ungrouped, non-``distinct(...)``,
+            non-column-shadowing queryset (a ``Manager`` is coerced through
+            ``.all()``) over the edge target's concrete table.
         SyncMisuseError: a target type's ``get_queryset`` is ``async def``. The
             async twin ``aapply_cascade_permissions`` wraps this same sync walk, so
             it raises identically -- the recourse is to make the target hook sync,
@@ -629,10 +669,11 @@ def _walk(
                 base,
                 info,
                 async_recourse=_ASYNC_RECOURSE,
+                render_error=_edge_error_renderer(target_type, field, state.alias),
             )
         finally:
             _cascade_state.reset(edge_token)
-        subquery = _validated_target_subquery(target_type, target_qs, field, state.alias)
+        subquery = _validated_target_subquery(target_type, target_qs, field)
         condition = Q(**{f"{field.name}__in": subquery})
         if field.null:
             condition |= Q(**{f"{field.name}__isnull": True})

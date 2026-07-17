@@ -22,6 +22,15 @@ primitive for "run a sync callable in exactly one
 orders / cascade permissions / mutation-form pipelines / session auth so
 the off-event-loop boundary cannot drift.
 
+The two colored visibility runners are the package's hardened ``get_queryset``
+security boundary (the get_queryset-visibility-boundary decision): every
+framework-owned invocation of the hook routes through them, so source
+preparation (queryset shape, concrete-table, required-alias resolution,
+write-pipeline pinning, evaluated refresh) and result normalization (Manager
+coercion, fail-closed shape rejection, alias normalization, evaluated
+refresh, hostile-clone revalidation) live in exactly one place rather than
+per surface.
+
 Caller-specific tails stay with their caller: the connection field keeps its
 GraphQL non-queryset error (it calls ``normalize_query_source`` then guards),
 the Relay node defaults keep their id filter, the optimizer keeps plan
@@ -108,7 +117,14 @@ def reject_async_in_sync_context(
 
 
 def _dispose_sync_awaitable(value: Any) -> None:
-    """Release an awaitable rejected at a synchronous boundary when possible."""
+    """Release a rejected awaitable without awaiting it, when possible.
+
+    Native coroutines are closed and futures cancelled; other awaitables have
+    no standard cleanup protocol. Used by every boundary that refuses an
+    awaitable - the sync misuse guards AND the async runners' nested /
+    residual awaitable rejections (those must not recursively await an
+    unbounded chain, so disposal is the only safe handling there too).
+    """
     if inspect.iscoroutine(value):
         value.close()
     elif asyncio.isfuture(value):
@@ -246,11 +262,270 @@ async def run_in_one_sync_boundary(fn: Any, *args: Any, **kwargs: Any) -> Any:
     return await sync_to_async(fn, thread_sensitive=True)(*args, **kwargs)
 
 
+def _combined_query_table_defect(query: Any, model: type[models.Model]) -> str | None:
+    """Return the name of the first branch model reading a table other than ``model``'s.
+
+    Validating only ``QuerySet.model`` is not sufficient to prove which model
+    tables can contribute result rows. Django lets a combined queryset
+    (``.union()`` / ``.intersection()`` / ``.difference()``) report the outer
+    model on ``QuerySet.model`` while a branch ``Query`` reads another model's
+    table; with compatible projections (``.only(...)``/``.values(...)``) the
+    branch rows materialize as the outer model, so another table's rows would
+    cross the boundary. The public ``QuerySet.model`` is also mutable and can
+    disagree with the SQL-bearing ``QuerySet.query.model``. Validate the
+    ``Query.model`` and recurse through every ``query.combined_queries`` branch
+    that can contribute result rows; returns the first offending model name (or
+    ``None`` when every contributing table is ``model``'s concrete table).
+    """
+    concrete = model._meta.concrete_model
+    query_model = getattr(query, "model", None)
+    if query_model is not None and query_model._meta.concrete_model is not concrete:
+        return query_model.__name__
+    for branch in getattr(query, "combined_queries", ()) or ():
+        defect = _combined_query_table_defect(branch, model)
+        if defect is not None:
+            return defect
+    return None
+
+
+def _visibility_defect(
+    value: Any,
+    model: type[models.Model],
+    required_alias: str | None,
+    *,
+    strict: bool = False,
+) -> tuple[str, str] | None:
+    """Return the first visibility-boundary defect in ``value``, or ``None``.
+
+    The shared shape check behind both boundary validation sites (the source
+    preparation and the hook-result normalization): a real ``QuerySet`` whose
+    every contributing table is the registered type's concrete table (proxy
+    siblings share the table and are compatible; unrelated models, MTI
+    children, and cross-model combined-query branches are not), routed
+    consistently with the resolution's required alias. The table check spans
+    the public ``QuerySet.model``, the SQL-bearing ``QuerySet.query.model``,
+    and every ``combined_queries`` branch, so a union that reads another
+    model's table (or a queryset whose public model disagrees with its query
+    model) cannot slip rows past the boundary.
+
+    Non-strict mode is the pre-normalization check: an UNROUTED value
+    (``_db is None``) is not a defect - normalization repins it, and with no
+    concrete required alias the hook may route itself. Strict mode is the
+    post-clone revalidation (a consumer-overridable ``.all()`` / ``.using()``
+    just ran, so a hostile ``QuerySet`` subclass may have lied): ``value._db``
+    must equal ``required_alias`` EXACTLY - a plain ``None`` here means "the
+    effective alias captured before the clone was unrouted, so the clone must
+    stay unrouted", distinct from the non-strict "no requirement yet" - and
+    the value must be unevaluated (cached rows surviving the boundary would
+    serve rows no hook filtered). Returns ``(code, detail)`` with ``code`` in
+    ``{"type", "table", "alias", "evaluated"}``.
+    """
+    if not isinstance(value, models.QuerySet):
+        return ("type", type(value).__name__)
+    if value.model._meta.concrete_model is not model._meta.concrete_model:
+        return ("table", value.model.__name__)
+    branch_defect = _combined_query_table_defect(value.query, model)
+    if branch_defect is not None:
+        return ("table", branch_defect)
+    if strict:
+        if value._db != required_alias:
+            return ("alias", str(value._db))
+    elif required_alias is not None and value._db is not None and value._db != required_alias:
+        return ("alias", str(value._db))
+    if strict and value._result_cache is not None:
+        return ("evaluated", type(value).__name__)
+    return None
+
+
+def _visibility_result_error(
+    type_cls: type,
+    model: type[models.Model],
+    required_alias: str | None,
+    defect: tuple[str, str],
+    render_error: Any,
+) -> ConfigurationError:
+    """Build the fail-closed error for a defective ``get_queryset`` result.
+
+    ``render_error`` is the caller-supplied error-rendering seam: a
+    ``(code, detail) -> str`` callable whose message replaces the default
+    wording wholesale. The cascade passes one so its path-rich per-edge
+    prose (``"... for the cascade subquery on Model.field ..."``) survives
+    the checks moving into this shared boundary; surfaces without bespoke
+    prose take the defaults below.
+    """
+    code, detail = defect
+    if render_error is not None:
+        return ConfigurationError(render_error(code, detail))
+    if code == "type":
+        return ConfigurationError(
+            f"{type_cls.__name__}.get_queryset must return a QuerySet or Manager of "
+            f"{model.__name__} rows; got {detail}. A list / generator / iterable has no "
+            f"lazy query for the surface to compose into, and None discards the "
+            f"visibility contract entirely.",
+        )
+    if code == "table":
+        return ConfigurationError(
+            f"{type_cls.__name__}.get_queryset returned a {detail} queryset; the "
+            f"visibility contract composes over {model.__name__}'s concrete table "
+            f"(proxy siblings are compatible, MTI children and unrelated models are not).",
+        )
+    if code == "alias":
+        return ConfigurationError(
+            f"{type_cls.__name__}.get_queryset returned a queryset routed to alias "
+            f"{detail!r}, but this resolution is pinned to alias {required_alias!r}; "
+            f"a visibility hook cannot re-route a pinned resolution. Remove the "
+            f".using(...) call.",
+        )
+    # ``code == "evaluated"`` -- the only remaining defect the shared checker
+    # emits; an unhandled future code would fall through silently, so this
+    # last branch is unconditional.
+    return ConfigurationError(
+        f"{type_cls.__name__}.get_queryset normalization required a fresh clone, but "
+        f"{detail}.all() preserved cached rows instead of returning an unevaluated "
+        f"queryset; rows cached before the visibility boundary must never survive it.",
+    )
+
+
+def _revalidated_visibility_clone(
+    value: Any,
+    type_cls: type,
+    model: type[models.Model],
+    required_alias: str | None,
+    render_error: Any,
+) -> models.QuerySet:
+    """Fail closed unless a just-cloned value still satisfies the boundary invariants.
+
+    Runs after every consumer-overridable clone operation (``Manager.all()``,
+    ``QuerySet.all()``, ``QuerySet.using()``): a hostile ``QuerySet`` subclass
+    that returns itself, returns a non-queryset, changes model or alias, or
+    preserves cached rows must not slip normalized-looking state past the
+    boundary. Strict mode: the clone must be routed to the required alias
+    exactly and must be unevaluated.
+    """
+    defect = _visibility_defect(value, model, required_alias, strict=True)
+    if defect is not None:
+        raise _visibility_result_error(type_cls, model, required_alias, defect, render_error)
+    return value
+
+
+def _prepared_visibility_source(
+    type_cls: type,
+    queryset: Any,
+) -> tuple[models.QuerySet, str | None]:
+    """Validate and prepare the source queryset before the visibility hook runs.
+
+    Returns ``(queryset, required_alias)``. The source must already be a real
+    ``QuerySet`` over the registered type's concrete table (resolver-source
+    ``Manager`` coercion stays in ``normalize_query_source``; framework-created
+    seeds are querysets by construction) - anything else fails closed before
+    consumer code runs. The required alias is resolved in priority order:
+
+    1. An active write pipeline's alias - the source is pre-pinned through
+       ``pin_write_queryset``, which fail-closes an explicitly divergent
+       source alias rather than silently overwriting it.
+    2. The source's own explicit ``queryset._db`` (a caller that routed with
+       ``.using(...)`` keeps that routing through the hook).
+    3. ``None`` - no required alias; an unpinned read hook keeps its
+       documented ability to choose ``.using(alias)`` itself.
+
+    An already-evaluated source is refreshed with ``.all()`` so cached rows
+    never reach (or bypass) the hook, then strictly revalidated - the refresh
+    calls a consumer-overridable clone method. Preparation composes lazy
+    query state only; it executes zero SQL.
+    """
+    model = model_for(type_cls)
+    defect = _visibility_defect(queryset, model, None)
+    if defect is not None:
+        code, detail = defect
+        if code == "type":
+            raise ConfigurationError(
+                f"apply_type_visibility requires a QuerySet of {model.__name__} rows "
+                f"for {type_cls.__name__}; got {detail}. Coerce a Manager with .all(); "
+                f"a list has no lazy query for the hook to narrow.",
+            )
+        # ``code == "table"`` -- the only other defect reachable with no
+        # required alias on an unevaluated non-strict check.
+        raise ConfigurationError(
+            f"apply_type_visibility for {type_cls.__name__} requires a QuerySet over "
+            f"{model.__name__}'s concrete table; got a {detail} queryset (proxy "
+            f"siblings are compatible, MTI children and unrelated models are not).",
+        )
+    pipeline = current_write_pipeline()
+    if pipeline is not None:
+        queryset = pin_write_queryset(
+            queryset,
+            pipeline.alias,
+            owner=f"The {type_cls.__name__} visibility source",
+        )
+        required_alias = pipeline.alias
+    else:
+        required_alias = queryset._db
+    if queryset._result_cache is not None:
+        queryset = queryset.all()
+    return (
+        _revalidated_visibility_clone(queryset, type_cls, model, required_alias, None),
+        required_alias,
+    )
+
+
+def _normalized_visibility_result(
+    type_cls: type,
+    result: Any,
+    required_alias: str | None,
+    render_error: Any = None,
+) -> models.QuerySet:
+    """Normalize a ``get_queryset`` hook result into a composable, correctly-routed queryset.
+
+    The shared result contract both colored visibility runners apply (the
+    hardened boundary): a ``Manager`` is coerced exactly once through
+    ``.all()``; anything that is not then a ``QuerySet`` whose every
+    contributing table is the registered type's concrete table (``None``,
+    lists, generators, async generators, custom iterables, unrelated /
+    MTI-child models, cross-model unions) fails closed. Alias handling honors
+    the prepared requirement: an unpinned result is normalized onto the
+    required alias with ``.using(required_alias)``, an explicitly matching
+    result is accepted, an explicitly divergent one is rejected; with no
+    required alias the hook keeps its documented ability to route reads
+    itself.
+
+    The alias the result must ultimately carry - the ``effective_alias`` - is
+    captured HERE, after coercion and repin but before any refresh clone: the
+    required alias when one was pinned, else the hook's own explicit
+    ``_db`` choice (a concrete alias it selected, or ``None`` for an
+    unrouted read). An evaluated result is then re-cloned with ``.all()`` so
+    cached rows never survive the boundary, and every consumer-overridable
+    clone is strictly revalidated against ``effective_alias`` (hostile-subclass
+    containment) - so a hostile ``.all()`` cannot silently move the read to a
+    different database after the hook chose its alias. Normalization composes
+    lazy query state only - filters, annotations, projections, ordering, and
+    queryset subclasses pass through - and executes zero SQL.
+    """
+    model = model_for(type_cls)
+    if isinstance(result, models.Manager):
+        result = result.all()
+    defect = _visibility_defect(result, model, required_alias)
+    if defect is not None:
+        raise _visibility_result_error(type_cls, model, required_alias, defect, render_error)
+    if required_alias is not None and result._db is None:
+        result = result.using(required_alias)
+    # ``result._db`` is only read for the no-required-alias branch, where the
+    # defect check above proved ``result`` is a QuerySet; the ``.using(...)``
+    # repin (required alias present) is a consumer-overridable clone that a
+    # hostile subclass could turn into a non-queryset, so the evaluated-refresh
+    # guard stays ``isinstance``-gated and the final revalidation fails it closed.
+    effective_alias = required_alias if required_alias is not None else result._db
+    if isinstance(result, models.QuerySet) and result._result_cache is not None:
+        result = result.all()
+    return _revalidated_visibility_clone(result, type_cls, model, effective_alias, render_error)
+
+
 def apply_type_visibility_sync(
     type_cls: type,
     queryset: models.QuerySet,
     info: Any,
     async_recourse: str = _RELAY_ASYNC_RECOURSE,
+    *,
+    render_error: Any = None,
 ) -> models.QuerySet:
     """Run ``type_cls.get_queryset`` in a sync context; reject async hooks loudly.
 
@@ -263,21 +538,35 @@ def apply_type_visibility_sync(
     inherits ``RuntimeError``) that points the consumer at the correct
     recourse for the surface that called in.
 
+    The source is prepared and the result normalized through the shared
+    hardened boundary (``_prepared_visibility_source`` /
+    ``_normalized_visibility_result``): source shape validation, required-
+    alias resolution (write pipeline > explicit source ``.using`` > none),
+    evaluated-cache refresh on both sides, Manager coercion, fail-closed
+    rejection of every other result shape, and hostile-clone revalidation.
+    ``SyncMisuseError`` stays reserved for this sync boundary; every other
+    defect is a plain ``ConfigurationError``.
+
     ``async_recourse`` is the surface-specific guidance appended to the
     error. It defaults to the Relay node-defaults wording; callers whose
     recourse differs pass their own (the cascade, for instance, has no
     async-native walk -- its twin wraps this same sync walk -- so it tells
     the consumer to make the target hook sync or scope ``fields=`` rather
     than reach for an async resolver that cannot help, feedback M1).
+    ``render_error`` is the result-normalization error seam
+    (``_visibility_result_error``): the cascade supplies its path-rich
+    per-edge prose; other surfaces take the shared defaults.
     """
+    queryset, required_alias = _prepared_visibility_source(type_cls, queryset)
     result = type_cls.get_queryset(queryset, info)
-    return reject_async_in_sync_context(
+    result = reject_async_in_sync_context(
         result,
         owner=type_cls.__name__,
         method="get_queryset",
         context="resolver",
         recourse=async_recourse,
     )
+    return _normalized_visibility_result(type_cls, result, required_alias, render_error)
 
 
 def visibility_scoped_related_queryset(
@@ -492,11 +781,29 @@ async def apply_type_visibility_async(
     here before the caller's tail runs - the Decision 9 contract that an
     earlier implementation broke (it called the hook synchronously then
     invoked ``.filter`` on a coroutine).
+
+    The hook is invoked once and AT MOST ONE returned awaitable is awaited;
+    a second-level awaitable after that await is malformed (an ``async def``
+    returning another coroutine / future) and fails closed - never a
+    recursive await over an unbounded chain. The source and result then run
+    the same shared hardened boundary as the sync runner
+    (``_prepared_visibility_source`` / ``_normalized_visibility_result``),
+    so the two colored paths cannot drift. ``SyncMisuseError`` stays
+    reserved for sync boundaries: every defect here is a plain
+    ``ConfigurationError``.
     """
+    queryset, required_alias = _prepared_visibility_source(type_cls, queryset)
     result = type_cls.get_queryset(queryset, info)
     if inspect.isawaitable(result):
         result = await result
-    return result
+        if inspect.isawaitable(result):
+            _dispose_sync_awaitable(result)
+            raise ConfigurationError(
+                f"{type_cls.__name__}.get_queryset resolved to a nested awaitable; an "
+                f"async get_queryset must resolve to a QuerySet (or Manager) after ONE "
+                f"await, and an unbounded awaitable chain is never consumed.",
+            )
+    return _normalized_visibility_result(type_cls, result, required_alias)
 
 
 def reject_awaitable_sync_source(source: Any, type_cls: type) -> None:
@@ -516,6 +823,36 @@ def reject_awaitable_sync_source(source: Any, type_cls: type) -> None:
         "field awaits it and applies the get_queryset visibility hook; a plain "
         "`def` resolver that returns an awaitable is committed to the sync path "
         "and passing it through would silently skip get_queryset.",
+    )
+
+
+def reject_residual_async_source(source: Any, type_cls: type) -> None:
+    """Reject a residual awaitable from an already-awaited async consumer resolver.
+
+    Both async consumer pipelines await the consumer ``resolver=`` return
+    exactly once before the value reaches source normalization: the list
+    field's ``post_process_queryset_result_async`` and the connection field's
+    ``connection.py::_pipeline_async``. A value that is STILL awaitable after
+    that await is an ``async def`` resolver that resolved to another awaitable;
+    it is neither a ``QuerySet`` nor a legitimate plain iterable, so the
+    non-queryset branch would pass it through and silently SKIP the
+    ``get_queryset`` visibility hook - a data-leak escape. The awaitable is
+    disposed (never recursively awaited over an unbounded chain, matching the
+    async runner's nested-awaitable handling) and the resolution fails closed.
+
+    Single-sited here, beside ``reject_awaitable_sync_source`` (the sync twin),
+    so the list and connection async pipelines cannot drift on the one boundary
+    where a miss skips visibility - the connection pipeline previously lacked
+    this guard, letting a nested async connection resolver bypass the hook.
+    """
+    if not inspect.isawaitable(source):
+        return
+    _dispose_sync_awaitable(source)
+    raise ConfigurationError(
+        f"An async {type_cls.__name__} consumer resolver resolved to another "
+        f"awaitable after being awaited; a nested awaitable is neither a QuerySet "
+        f"nor a plain iterable, and passing it through would silently skip the "
+        f"get_queryset visibility hook. Return the queryset (or iterable) directly.",
     )
 
 
@@ -543,8 +880,15 @@ async def post_process_queryset_result_async(type_cls: type, result: Any, info: 
     """Async sibling of ``post_process_queryset_result_sync``.
 
     The caller awaits the consumer coroutine BEFORE handing the result here so
-    the queryset branch sees the awaited value, not the coroutine itself.
+    the queryset branch sees the awaited value, not the coroutine itself. A
+    RESIDUAL awaitable - an already-awaited async consumer resolver that
+    resolved to another awaitable - fails closed through the shared
+    ``reject_residual_async_source`` guard (also used by the connection async
+    pipeline): it is neither a queryset nor a legitimate plain-iterable return,
+    and passing it through the non-queryset branch would skip the
+    ``get_queryset`` visibility hook.
     """
+    reject_residual_async_source(result, type_cls)
     source, is_queryset = normalize_query_source(result)
     if is_queryset:
         return await apply_type_visibility_async(type_cls, source, info)

@@ -134,8 +134,17 @@ TEMPLATES = [
 #     uv run pytest                                                 # single-DB
 #     FAKESHOP_SHARDED=1 uv run pytest                              # sharded
 #     FAKESHOP_SHARDED=1 uv run python manage.py seed_shards        # populate shard_b
+# ``DJANGO_STRAWBERRY_KANBAN_DB`` points the default SQLite alias at an alternate
+# file. Used by the ``scripts/build_kanban_*`` / ``build_glossary_md`` / ``build_tree_md``
+# render tooling to run against a migrated COPY of ``db.sqlite3`` without touching the
+# live board file (the live file may trail the code's migration state while parallel
+# sessions write it). Unset in every normal workflow, so it never changes live behavior.
+_kanban_db = os.environ.get("DJANGO_STRAWBERRY_KANBAN_DB")
 DATABASES = {
-    "default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"},
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": _kanban_db or (BASE_DIR / "db.sqlite3"),
+    },
 }
 if os.environ.get("FAKESHOP_SHARDED") == "1":  # pragma: no cover
     DATABASES["shard_b"] = {

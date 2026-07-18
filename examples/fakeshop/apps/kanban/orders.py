@@ -126,7 +126,45 @@ class BoardDocCardReferenceOrder(OrderSet):
         fields = "__all__"
 
 
+class AttemptOutcomeOrder(OrderSet):
+    class Meta:
+        model = models.AttemptOutcome
+        fields = "__all__"
+
+
+class VerificationKindOrder(OrderSet):
+    class Meta:
+        model = models.VerificationKind
+        fields = "__all__"
+
+
+class ActorOrder(OrderSet):
+    class Meta:
+        model = models.Actor
+        fields = "__all__"
+
+
+class CardTransitionOrder(OrderSet):
+    class Meta:
+        model = models.CardTransition
+        fields = "__all__"
+
+
+class WorkAttemptOrder(OrderSet):
+    class Meta:
+        model = models.WorkAttempt
+        fields = "__all__"
+
+
+class DecisionOrder(OrderSet):
+    class Meta:
+        model = models.Decision
+        fields = "__all__"
+
+
 __all__ = (
+    "ActorOrder",
+    "AttemptOutcomeOrder",
     "BoardDocCardReferenceOrder",
     "BoardDocKindOrder",
     "BoardDocOrder",
@@ -135,6 +173,8 @@ __all__ = (
     "CardOrder",
     "CardReferenceKindOrder",
     "CardReferenceOrder",
+    "CardTransitionOrder",
+    "DecisionOrder",
     "LabelOrder",
     "MilestoneOrder",
     "ParityLevelOrder",
@@ -145,4 +185,6 @@ __all__ = (
     "TargetVersionOrder",
     "TrackedPathOrder",
     "UpstreamOrder",
+    "VerificationKindOrder",
+    "WorkAttemptOrder",
 )

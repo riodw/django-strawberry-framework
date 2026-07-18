@@ -14,6 +14,7 @@ import strawberry
 from apps.accounts.schema import Mutation as AccountsMutation
 from apps.accounts.schema import Query as AccountsQuery
 from apps.glossary.schema import Query as GlossaryQuery
+from apps.kanban.schema import Mutation as KanbanMutation
 from apps.kanban.schema import Query as KanbanQuery
 from apps.library.schema import Mutation as LibraryMutation
 from apps.library.schema import Query as LibraryQuery
@@ -36,7 +37,13 @@ class Query(LibraryQuery, ProductsQuery, ScalarsQuery, KanbanQuery, GlossaryQuer
 
 
 @strawberry.type
-class Mutation(ProductsMutation, ScalarsMutation, LibraryMutation, AccountsMutation):
+class Mutation(
+    ProductsMutation,
+    ScalarsMutation,
+    LibraryMutation,
+    AccountsMutation,
+    KanbanMutation,
+):
     """Top-level Mutation - extends each app's Mutation.
 
     Products carries the create/update/delete write surface (spec-036 Slice 4);

@@ -68,8 +68,8 @@ def make_priority(key: str = "medium", **defaults):
     return _lookup(models.Priority, key, **defaults)
 
 
-def make_relative_size(key: str = "m", *, rank: int = 2, **defaults):
-    return _lookup(models.RelativeSize, key, rank=rank, **defaults)
+def make_relative_size(key: str = "m", *, order: int = 2, **defaults):
+    return _lookup(models.RelativeSize, key, order=order, **defaults)
 
 
 def make_upstream(key: str = "graphene_django", *, emoji: str = "⚛️", **defaults):
@@ -116,8 +116,17 @@ def make_target_version(number: str | None = None, *, milestone=None, **defaults
 def make_spec_doc(*, card=None, **fields):
     card = card or make_card()
     fields.setdefault("name", f"spec-{card.number:03d}-{fake.slug()}")
-    fields.setdefault("url", f"https://github.com/example/{fake.slug()}.md")
+    fields.setdefault("path", f"docs/SPECS/spec-{card.number:03d}-{fake.slug()}.md")
     return models.SpecDoc.objects.create(card=card, **fields)
+
+
+def make_tracked_path(path: str | None = None, **fields):
+    """Create a TrackedPath (``current`` by default) under the package root."""
+    path = path or f"django_strawberry_framework/factory_{_seq()}.py"
+    fields.setdefault("state", models.TRACKED_PATH_CURRENT)
+    fields.setdefault("is_directory", path.endswith("/"))
+    obj, _ = models.TrackedPath.objects.get_or_create(path=path, defaults=fields)
+    return obj
 
 
 # --------------------------------------------------------------------------- #
@@ -133,14 +142,14 @@ def _next_card_number() -> int:
 def make_card(**fields):
     """Create a Card, auto-filling every required FK and unique field.
 
-    ``milestone`` defaults to the target version's milestone (matching the
-    ``prepare_card_save`` signal). Passing ``status=make_status("done")`` creates
-    the required spec and glossary link first, then flips the card to ``done``.
+    The card's milestone is derived from its target version (no stored FK).
+    Passing ``status=make_status("done")`` creates the required spec and glossary
+    link first, then flips the card to ``done``.
     """
     target_version = fields.pop("target_version", None) or make_target_version()
     fields.setdefault("target_version", target_version)
-    fields.setdefault("milestone", target_version.milestone)
     fields.setdefault("status", make_status())
+    fields.setdefault("priority", make_priority())
     fields.setdefault("relative_size", make_relative_size())
     fields.setdefault("number", _next_card_number())
     fields.setdefault("title", f"Card {_seq()}: {fake.sentence(nb_words=4).rstrip('.')}")
@@ -152,6 +161,11 @@ def make_card(**fields):
     card = models.Card.objects.create(**fields)
     make_spec_doc(card=card)
     make_card_glossary_term(card=card)
+    # The status state machine forbids a direct todo -> done move; bridge through
+    # wip (todo -> wip -> done) so the done-card guards still fire on the final
+    # save while every step is a legal transition.
+    card.status = make_status("wip")
+    card.save(update_fields=["status"])
     card.status = requested_status
     card.save(update_fields=["status"])
     card.refresh_from_db()
@@ -167,12 +181,12 @@ def make_card_item(*, card=None, section=None, **fields):
 
 
 def make_card_reference(*, source_card=None, target_card=None, kind=None, **fields):
-    """Create a CardReference.
+    """Create a CardReference (the single source of truth for card edges).
 
-    Defaults to a side-effect-free ``related`` reference. A ``dependency``-kind
-    reference additionally auto-syncs the ``Card.dependencies`` M2M edge via the
-    ``sync_reference_dependency`` signal. ``order`` is assigned per source_card
-    by ``CardReference.save()``.
+    Defaults to a side-effect-free ``related`` reference. A ``dependency`` /
+    ``blocked_by`` reference is a dependency edge (surfaced via
+    ``Card.dependency_cards``). ``order`` is assigned per source_card by
+    ``CardReference.save()``.
     """
     source_card = source_card or make_card()
     target_card = target_card or make_card()
@@ -184,6 +198,20 @@ def make_card_reference(*, source_card=None, target_card=None, kind=None, **fiel
         kind=kind,
         **fields,
     )
+
+
+def make_card_path_link(*, card=None, path=None, **fields):
+    """Create a CardPathLink through row directly (``predicted`` kind by default).
+
+    Creating the through row via ``.objects.create()`` (rather than an M2M
+    ``.add()``) emits ``post_save``, so ``create_uuid_row`` materializes the
+    side-row; the M2M ``.add()`` path is wired separately by an ``m2m_changed``
+    receiver.
+    """
+    card = card or make_card()
+    path = path or make_tracked_path()
+    fields.setdefault("kind", models.CARD_PATH_LINK_PREDICTED)
+    return models.CardPathLink.objects.create(card=card, path=path, **fields)
 
 
 def make_parity_claim(*, card=None, upstream=None, level=None):
@@ -203,6 +231,62 @@ def make_card_glossary_term(*, card=None, term=None, **fields):
     fields.setdefault("raw_text", "")
     fields.setdefault("order", _next_order(card.glossary_links))
     return models.CardGlossaryTerm.objects.create(card=card, term=term, **fields)
+
+
+# --------------------------------------------------------------------------- #
+# Work-tracking dimension
+# --------------------------------------------------------------------------- #
+
+
+def make_attempt_outcome(key: str = "succeeded", **defaults):
+    return _lookup(models.AttemptOutcome, key, **defaults)
+
+
+def make_verification_kind(key: str = "test_run", **defaults):
+    return _lookup(models.VerificationKind, key, **defaults)
+
+
+def make_actor(key: str = "maintainer", *, kind: str = models.ACTOR_HUMAN, **defaults):
+    obj, _ = models.Actor.objects.get_or_create(
+        key=key,
+        defaults={"label": _label(key), "kind": kind, **defaults},
+    )
+    return obj
+
+
+def make_card_transition(*, card=None, from_status=None, to_status=None, actor=None, **fields):
+    card = card or make_card()
+    actor = actor or make_actor()
+    to_status = to_status or make_status("wip")
+    return models.CardTransition.objects.create(
+        card=card,
+        from_status=from_status,
+        to_status=to_status,
+        actor=actor,
+        **fields,
+    )
+
+
+def make_work_attempt(*, card=None, actor=None, **fields):
+    card = card or make_card()
+    actor = actor or make_actor()
+    return models.WorkAttempt.objects.create(card=card, actor=actor, **fields)
+
+
+_UNSET = object()
+
+
+def make_decision(*, card=_UNSET, actor=None, **fields):
+    """Create a Decision.
+
+    A card is auto-created when omitted; pass ``card=None`` explicitly for a
+    board-level decision.
+    """
+    card = make_card() if card is _UNSET else card
+    actor = actor or make_actor()
+    fields.setdefault("question", fake.sentence())
+    fields.setdefault("choice", fake.sentence())
+    return models.Decision.objects.create(card=card, actor=actor, **fields)
 
 
 def make_board_doc(*, kind=None, **fields):

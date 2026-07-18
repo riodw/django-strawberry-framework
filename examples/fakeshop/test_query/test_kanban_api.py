@@ -19,7 +19,7 @@ directly (not via the importer, so assertions stay independent of how the real
 
 import pytest
 from apps.glossary import models as glossary_models
-from apps.kanban import models
+from apps.kanban import models, services
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import assert_graphql_success as _graphql_data
 from graphql_client import post_graphql
@@ -30,10 +30,11 @@ def _seed_board():
     """A tiny deterministic board: two cards + docs + lookups + edges."""
     done = models.Status.objects.create(key="done", label="Done", order=3)
     todo = models.Status.objects.create(key="todo", label="To Do", order=0)
+    wip = models.Status.objects.create(key="wip", label="In Progress", order=2)
     alpha = models.Milestone.objects.create(key="alpha", label="Alpha", order=0)
     version = models.TargetVersion.objects.create(number="0.0.8", milestone=alpha)
-    xl = models.RelativeSize.objects.create(key="xl", label="XL", order=4, rank=4)
-    size_m = models.RelativeSize.objects.create(key="m", label="M", order=2, rank=2)
+    xl = models.RelativeSize.objects.create(key="xl", label="XL", order=4)
+    size_m = models.RelativeSize.objects.create(key="m", label="M", order=2)
     high = models.Priority.objects.create(key="high", label="High", order=0)
     graphene = models.Upstream.objects.create(
         key="graphene_django",
@@ -89,7 +90,6 @@ def _seed_board():
         title="Filtering subsystem",
         number=21,
         status=todo,
-        milestone=None,
         target_version=version,
         priority=high,
         relative_size=xl,
@@ -97,7 +97,7 @@ def _seed_board():
     models.SpecDoc.objects.create(
         card=filters_card,
         name="spec-027-filters-0_0_8",
-        url="https://github.com/example/spec-027-filters-0_0_8.md",
+        path="docs/SPECS/spec-027-filters-0_0_8.md",
     )
     # A done card requires >=1 glossary link
     # (examples/fakeshop/apps/kanban/signals.py::_validate_done_card_has_glossary_link);
@@ -115,27 +115,35 @@ def _seed_board():
         raw_text="RelatedFilter",
         order=1,
     )
+    # The status state machine forbids todo -> done; bridge through wip.
+    filters_card.status = wip
+    filters_card.save(update_fields=["status"])
     filters_card.status = done
     filters_card.save(update_fields=["status"])
     current_tracked_path = models.TrackedPath.objects.create(
         path="django_strawberry_framework/filters/base.py",
-        is_current=True,
+        state=models.TRACKED_PATH_CURRENT,
     )
     historical_tracked_path = models.TrackedPath.objects.create(
         path="django_strawberry_framework/old_filters.py",
-        is_current=False,
+        state=models.TRACKED_PATH_HISTORICAL,
     )
-    filters_card.changed_files.add(current_tracked_path)
+    filters_card.changed_files.add(
+        current_tracked_path,
+        through_defaults={"kind": models.CARD_PATH_LINK_CHANGED},
+    )
     conn_card = models.Card.objects.create(
         title="DjangoConnectionField",
         number=24,
         status=todo,
-        milestone=alpha,
         target_version=version,
         priority=high,
         relative_size=size_m,
     )
-    conn_card.changed_files.add(historical_tracked_path)
+    conn_card.changed_files.add(
+        historical_tracked_path,
+        through_defaults={"kind": models.CARD_PATH_LINK_PREDICTED},
+    )
     reference = models.CardReference.objects.create(
         source_card=conn_card,
         target_card=filters_card,
@@ -554,7 +562,10 @@ def test_select_o2o_spec_uuid_side_table_and_timestamps():
     assert card["title"] == "Filtering subsystem"
     assert card["spec"] == {
         "name": "spec-027-filters-0_0_8",
-        "url": "https://github.com/example/spec-027-filters-0_0_8.md",
+        "url": (
+            "https://github.com/riodw/django-strawberry-framework/blob/main/"
+            "docs/SPECS/spec-027-filters-0_0_8.md"
+        ),
     }
     assert card["createdDate"] is not None
     # The UUID side-table row exists and exposes a UUID scalar (a UUIDField PK).
@@ -761,13 +772,13 @@ def test_filter_cards_by_milestone_key():
 
 
 @pytest.mark.django_db
-def test_filter_cards_by_related_size_rank_numeric_lookup():
-    """A numeric lookup (``rank: { gte }``) reached through the size RelatedFilter."""
+def test_filter_cards_by_related_size_order_numeric_lookup():
+    """A numeric lookup (``order: { gte }``) reached through the size RelatedFilter."""
     _seed_board()
     _assert_graphql_data(
         """
         query {
-          allCards(filter: { relativeSize: { rank: { gte: 4 } } }) {
+          allCards(filter: { relativeSize: { order: { gte: 4 } } }) {
             title
           }
         }
@@ -840,9 +851,9 @@ def test_select_multi_fk_fanout_and_second_hop():
             title
             status { key }
             priority { key }
-            relativeSize { key rank }
+            relativeSize { key order }
             milestone { key }
-            targetVersion { number milestone { key } }
+            targetVersion { number major minor patch milestone { key } }
           }
         }
         """,
@@ -852,9 +863,15 @@ def test_select_multi_fk_fanout_and_second_hop():
                     "title": "DjangoConnectionField",
                     "status": {"key": "todo"},
                     "priority": {"key": "high"},
-                    "relativeSize": {"key": "m", "rank": 2},
+                    "relativeSize": {"key": "m", "order": 2},
                     "milestone": {"key": "alpha"},
-                    "targetVersion": {"number": "0.0.8", "milestone": {"key": "alpha"}},
+                    "targetVersion": {
+                        "number": "0.0.8",
+                        "major": 0,
+                        "minor": 0,
+                        "patch": 8,
+                        "milestone": {"key": "alpha"},
+                    },
                 },
             ],
         },
@@ -968,6 +985,131 @@ def test_order_kanban_statuses_by_key_desc():
     )
 
 
+# ---------------------------------------------------------------------------
+# Phase 2: work-tracking dimension (transitions / attempts / decisions / ready)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_ready_cards_over_http_excludes_done_and_blocked():
+    """``readyCards`` returns unblocked ``todo`` cards whose dependencies are done.
+
+    The seeded board's ``DjangoConnectionField`` (todo) depends only on the
+    shipped ``Filtering subsystem`` (done), so it is ready; the done card itself
+    is not ``todo`` and is excluded.
+    """
+    _seed_board()
+    _assert_graphql_data(
+        "query { readyCards { title } }",
+        {"readyCards": [{"title": "DjangoConnectionField"}]},
+    )
+
+
+@pytest.mark.django_db
+def test_set_card_status_transition_selectable_from_card():
+    """A ``CardTransition`` written by the service is selectable off its card."""
+    seed = _seed_board()
+    services.set_card_status(seed["conn"], "wip", actor="maintainer")
+    _assert_graphql_data(
+        """
+        query {
+          allCards(filter: { status: { key: { exact: "wip" } } }) {
+            title
+            transitions {
+              fromStatus { key }
+              toStatus { key }
+              actor { key kind }
+            }
+          }
+        }
+        """,
+        {
+            "allCards": [
+                {
+                    "title": "DjangoConnectionField",
+                    "transitions": [
+                        {
+                            "fromStatus": {"key": "todo"},
+                            "toStatus": {"key": "wip"},
+                            "actor": {"key": "maintainer", "kind": "human"},
+                        },
+                    ],
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_query_seeded_actor_and_attempt_outcome_lookups_with_filter():
+    """The migration-seeded worklog lookups are queryable with a RelatedFilter."""
+    _assert_graphql_data(
+        """
+        query {
+          maintainers: allKanbanActors(filter: { kind: { exact: human } }) { key kind }
+          succeeded: allKanbanAttemptOutcomes(filter: { key: { exact: "succeeded" } }) { key }
+          coverage: allKanbanVerificationKinds(filter: { key: { exact: "coverage_gate" } }) { key }
+        }
+        """,
+        {
+            "maintainers": [{"key": "maintainer", "kind": "human"}],
+            "succeeded": [{"key": "succeeded"}],
+            "coverage": [{"key": "coverage_gate"}],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_query_work_attempts_and_decisions_root_fields():
+    """Root list fields for WorkAttempt and Decision expose their rows + filters."""
+    seed = _seed_board()
+    actor = models.Actor.objects.get(key="maintainer")
+    models.WorkAttempt.objects.create(
+        card=seed["conn"],
+        actor=actor,
+        summary="first attempt",
+        outcome=models.AttemptOutcome.objects.get(key="succeeded"),
+    )
+    models.Decision.objects.create(
+        card=seed["conn"],
+        actor=actor,
+        question="Ship now?",
+        choice="Yes",
+    )
+    _assert_graphql_data(
+        """
+        query {
+          allKanbanWorkAttempts(filter: { outcome: { key: { exact: "succeeded" } } }) {
+            summary
+            outcome { key }
+            card { title }
+          }
+          allKanbanDecisions {
+            question
+            choice
+            card { title }
+          }
+        }
+        """,
+        {
+            "allKanbanWorkAttempts": [
+                {
+                    "summary": "first attempt",
+                    "outcome": {"key": "succeeded"},
+                    "card": {"title": "DjangoConnectionField"},
+                },
+            ],
+            "allKanbanDecisions": [
+                {
+                    "question": "Ship now?",
+                    "choice": "Yes",
+                    "card": {"title": "DjangoConnectionField"},
+                },
+            ],
+        },
+    )
+
+
 def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields():
     """``Meta.fields = "__all__"`` exposes FK columns but not reverse/M2M managers."""
     data = _graphql_data(
@@ -997,7 +1139,6 @@ def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields():
 
     for name in (
         "status",
-        "milestone",
         "targetVersion",
         "priority",
         "relativeSize",
@@ -1007,7 +1148,10 @@ def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields():
             field_type = field_type["ofType"]
         assert field_type["name"] == "Ordering"
 
+    # ``milestone`` is now a derived property (no column), so it is absent from
+    # the order-input surface alongside the reverse/M2M/property fields.
     assert {
+        "milestone",
         "dependencies",
         "dependents",
         "parity",
@@ -1016,3 +1160,80 @@ def test_kanban_card_order_input_type_exposes_only_column_backed_all_fields():
         "items",
         "uuid",
     }.isdisjoint(fields)
+
+
+@pytest.mark.django_db
+def test_select_derived_card_id_slug_blocked_and_ready_fields():
+    """The derived ``cardId`` / ``slug`` / ``isBlocked`` / ``isReady`` fields resolve.
+
+    The seeded board's ``Filtering subsystem`` is ``done`` (its card id drops the
+    milestone segment and it is neither blocked nor ready); ``DjangoConnectionField``
+    is ``todo`` and depends only on that shipped card, so it is ready and unblocked.
+    """
+    _seed_board()
+    _assert_graphql_data(
+        """
+        query {
+          allCards(orderBy: [{ number: ASC }]) {
+            title
+            cardId
+            slug
+            isBlocked
+            isReady
+          }
+        }
+        """,
+        {
+            "allCards": [
+                {
+                    "title": "Filtering subsystem",
+                    "cardId": "DONE-021-0.0.8",
+                    "slug": "filtering_subsystem",
+                    "isBlocked": False,
+                    "isReady": False,
+                },
+                {
+                    "title": "DjangoConnectionField",
+                    "cardId": "TODO-ALPHA-024-0.0.8",
+                    "slug": "djangoconnectionfield",
+                    "isBlocked": False,
+                    "isReady": True,
+                },
+            ],
+        },
+    )
+
+
+@pytest.mark.django_db
+def test_ready_cards_excludes_a_blocked_todo_card():
+    """A ``todo`` card gated by an unfinished ``blocked_by`` edge is not ``ready``."""
+    _seed_board()
+    blocked_by = models.CardReferenceKind.objects.create(
+        key="blocked_by",
+        label="Blocked by",
+        order=1,
+    )
+    blocker = models.Card.objects.get(number=24)  # DjangoConnectionField, still todo
+    blocked = models.Card.objects.create(
+        title="Blocked feature",
+        number=25,
+        status=models.Status.objects.get(key="todo"),
+        target_version=models.TargetVersion.objects.get(number="0.0.8"),
+        priority=models.Priority.objects.get(key="high"),
+        relative_size=models.RelativeSize.objects.get(key="m"),
+    )
+    models.CardReference.objects.create(
+        source_card=blocked,
+        target_card=blocker,
+        kind=blocked_by,
+    )
+
+    # ``Blocked feature`` is todo but blocked, so it stays out of ``readyCards``;
+    # ``DjangoConnectionField`` (todo, dependency done) remains ready.
+    _assert_graphql_data(
+        "query { readyCards { title } }",
+        {"readyCards": [{"title": "DjangoConnectionField"}]},
+    )
+    blocked.refresh_from_db()
+    assert blocked.is_blocked is True
+    assert blocked.is_ready is False

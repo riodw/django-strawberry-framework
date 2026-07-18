@@ -25,8 +25,70 @@ for _model in (
     models.Section,
     models.CardReferenceKind,
     models.BoardDocKind,
+    models.AttemptOutcome,
+    models.VerificationKind,
 ):
     admin.site.register(_model, _LookupAdmin)
+
+
+@admin.register(models.Actor)
+class ActorAdmin(admin.ModelAdmin):
+    list_display = (
+        "key",
+        "label",
+        "kind",
+        "order",
+    )
+    list_filter = ("kind",)
+    search_fields = ("key", "label")
+    ordering = ("order",)
+
+
+@admin.register(models.CardTransition)
+class CardTransitionAdmin(admin.ModelAdmin):
+    list_display = (
+        "card",
+        "from_status",
+        "to_status",
+        "actor",
+        "occurred_at",
+    )
+    list_filter = ("to_status", "from_status", "actor")
+    search_fields = ("card__title", "note")
+    autocomplete_fields = ("card", "actor")
+
+
+@admin.register(models.WorkAttempt)
+class WorkAttemptAdmin(admin.ModelAdmin):
+    list_display = (
+        "card",
+        "actor",
+        "outcome",
+        "started_at",
+        "ended_at",
+    )
+    list_filter = ("outcome", "actor")
+    search_fields = ("card__title", "summary", "evidence")
+    autocomplete_fields = ("card", "actor")
+
+
+@admin.register(models.Decision)
+class DecisionAdmin(admin.ModelAdmin):
+    list_display = (
+        "question",
+        "choice",
+        "card",
+        "actor",
+        "decided_at",
+    )
+    list_filter = ("actor",)
+    search_fields = (
+        "question",
+        "choice",
+        "rationale",
+        "card__title",
+    )
+    autocomplete_fields = ("card", "actor", "supersedes")
 
 
 @admin.register(models.TargetVersion)
@@ -45,8 +107,8 @@ class SpecDocAdmin(admin.ModelAdmin):
 
 @admin.register(models.TrackedPath)
 class TrackedPathAdmin(admin.ModelAdmin):
-    list_display = ("path", "is_current", "is_directory")
-    list_filter = ("is_current", "is_directory")
+    list_display = ("path", "state", "is_directory")
+    list_filter = ("state", "is_directory")
     search_fields = ("path",)
 
 
@@ -76,6 +138,13 @@ class CardGlossaryTermInline(admin.TabularInline):
     autocomplete_fields = ("term",)
 
 
+class CardPathLinkInline(admin.TabularInline):
+    model = models.CardPathLink
+    extra = 0
+    show_change_link = True
+    autocomplete_fields = ("path",)
+
+
 @admin.register(models.Card)
 class CardAdmin(admin.ModelAdmin):
     list_display = (
@@ -89,24 +158,25 @@ class CardAdmin(admin.ModelAdmin):
     )
     list_filter = (
         "status",
-        "milestone",
+        "target_version__milestone",
         "priority",
         "relative_size",
     )
     search_fields = ("title",)
-    autocomplete_fields = (
-        "status",
-        "milestone",
-        "target_version",
-        "priority",
-    )
-    filter_horizontal = ("dependencies", "labels", "changed_files")
+    autocomplete_fields = ("status", "target_version", "priority")
+    filter_horizontal = ("labels",)
     inlines = [
         CardItemInline,
         ParityClaimInline,
         CardReferenceInline,
         CardGlossaryTermInline,
+        CardPathLinkInline,
     ]
+
+    @admin.display(description="milestone")
+    def milestone(self, obj: models.Card) -> str:
+        """Show the card's derived milestone (via target version) in the list."""
+        return obj.milestone.label
 
 
 @admin.register(models.CardReference)

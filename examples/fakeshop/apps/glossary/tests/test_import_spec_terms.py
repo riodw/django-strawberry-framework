@@ -31,9 +31,13 @@ def _make_done_card_with_spec(spec_path: str, *, initial_term=None) -> kanban_mo
     kf.make_spec_doc(
         card=card,
         name=Path(spec_path).stem,
-        url=f"https://github.com/example/{spec_path}",
+        path=spec_path,
     )
     kf.make_card_glossary_term(card=card, term=initial_term or gf.make_glossary_term())
+    # The kanban status state machine forbids a direct todo -> done move; bridge
+    # through wip (todo -> wip -> done) so every step is a legal transition.
+    card.status = kf.make_status("wip")
+    card.save(update_fields=["status"])
     card.status = kf.make_status("done")
     card.save(update_fields=["status"])
     card.refresh_from_db()

@@ -55,7 +55,7 @@ class RelativeSizeFilter(FilterSet):
             "id": "__all__",
             "key": "__all__",
             "label": "__all__",
-            "rank": "__all__",
+            "order": "__all__",
         }
 
 
@@ -95,6 +95,68 @@ class TargetVersionFilter(FilterSet):
         fields = {"id": "__all__", "number": "__all__"}
 
 
+class AttemptOutcomeFilter(FilterSet):
+    class Meta:
+        model = models.AttemptOutcome
+        fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
+
+
+class VerificationKindFilter(FilterSet):
+    class Meta:
+        model = models.VerificationKind
+        fields = {"id": "__all__", "key": "__all__", "label": "__all__"}
+
+
+class ActorFilter(FilterSet):
+    class Meta:
+        model = models.Actor
+        fields = {
+            "id": "__all__",
+            "key": "__all__",
+            "label": "__all__",
+            "kind": "__all__",
+        }
+
+
+class CardTransitionFilter(FilterSet):
+    from_status = RelatedFilter(StatusFilter, field_name="from_status")
+    to_status = RelatedFilter(StatusFilter, field_name="to_status")
+    actor = RelatedFilter(ActorFilter, field_name="actor")
+
+    class Meta:
+        model = models.CardTransition
+        fields = {"id": "__all__", "note": "__all__", "occurred_at": "__all__"}
+
+
+class WorkAttemptFilter(FilterSet):
+    actor = RelatedFilter(ActorFilter, field_name="actor")
+    outcome = RelatedFilter(AttemptOutcomeFilter, field_name="outcome")
+
+    class Meta:
+        model = models.WorkAttempt
+        fields = {
+            "id": "__all__",
+            "summary": "__all__",
+            "evidence": "__all__",
+            "started_at": "__all__",
+            "ended_at": "__all__",
+        }
+
+
+class DecisionFilter(FilterSet):
+    actor = RelatedFilter(ActorFilter, field_name="actor")
+
+    class Meta:
+        model = models.Decision
+        fields = {
+            "id": "__all__",
+            "question": "__all__",
+            "choice": "__all__",
+            "rationale": "__all__",
+            "decided_at": "__all__",
+        }
+
+
 class LabelFilter(FilterSet):
     class Meta:
         model = models.Label
@@ -107,7 +169,7 @@ class TrackedPathFilter(FilterSet):
         fields = {
             "id": "__all__",
             "path": "__all__",
-            "is_current": "__all__",
+            "state": "__all__",
             "is_directory": "__all__",
         }
 
@@ -176,13 +238,23 @@ class CardFilter(FilterSet):
     status = RelatedFilter(StatusFilter, field_name="status")
     priority = RelatedFilter(PriorityFilter, field_name="priority")
     relative_size = RelatedFilter(RelativeSizeFilter, field_name="relative_size")
-    milestone = RelatedFilter(MilestoneFilter, field_name="milestone")
+    # Milestone is derived from the target version, so the filter is a related
+    # path through ``target_version`` rather than a direct FK.
+    milestone = RelatedFilter(MilestoneFilter, field_name="target_version__milestone")
     target_version = RelatedFilter(TargetVersionFilter, field_name="target_version")
     parity = RelatedFilter(UpstreamFilter, field_name="parity")
     items = RelatedFilter(CardItemFilter, field_name="items")
-    # Self-referential RelatedFilter -- exercises the cycle-safe expansion path
-    # against a genuine self-reference (a CardFilter pointing back at itself).
-    dependencies = RelatedFilter("apps.kanban.filters.CardFilter", field_name="dependencies")
+    labels = RelatedFilter(LabelFilter, field_name="labels")
+    # Self-referential RelatedFilters over CardReference edges (the M2M was
+    # replaced) -- still exercise the cycle-safe self-reference expansion path.
+    dependencies = RelatedFilter(
+        "apps.kanban.filters.CardFilter",
+        field_name="outgoing_references__target_card",
+    )
+    dependents = RelatedFilter(
+        "apps.kanban.filters.CardFilter",
+        field_name="incoming_references__source_card",
+    )
     outgoing_references = RelatedFilter(CardReferenceFilter, field_name="outgoing_references")
     incoming_references = RelatedFilter(CardReferenceFilter, field_name="incoming_references")
     glossary_links = RelatedFilter(CardGlossaryTermFilter, field_name="glossary_links")
@@ -197,6 +269,8 @@ class CardFilter(FilterSet):
 
 
 __all__ = (
+    "ActorFilter",
+    "AttemptOutcomeFilter",
     "BoardDocCardReferenceFilter",
     "BoardDocFilter",
     "BoardDocKindFilter",
@@ -205,6 +279,8 @@ __all__ = (
     "CardItemFilter",
     "CardReferenceFilter",
     "CardReferenceKindFilter",
+    "CardTransitionFilter",
+    "DecisionFilter",
     "LabelFilter",
     "MilestoneFilter",
     "ParityLevelFilter",
@@ -215,4 +291,6 @@ __all__ = (
     "TargetVersionFilter",
     "TrackedPathFilter",
     "UpstreamFilter",
+    "VerificationKindFilter",
+    "WorkAttemptFilter",
 )

@@ -1,22 +1,39 @@
-"""Signal receivers that keep the kanban board's derived state coherent."""
+"""Kanban signal receivers: guards + side-table wiring only.
+
+``apps.kanban.services`` is the sanctioned write API (card creation, status and
+board-number moves, dependency edges, work tracking). The receivers here do not
+mutate board state beyond the automatic bits that must ride along with a write:
+
+* **Raise-only guards** -- reject illegal status transitions, direct board-number
+  edits (pointing the caller at ``services.move_card_number``), reference cycles
+  / dependency mis-ordering, and done-card spec/glossary invariants -- so a
+  direct ORM ``save()`` that bypasses the service layer still cannot corrupt an
+  invariant.
+* **The new-card board-number assignment** -- validating and shifting neighbours
+  when a card is *created* at an occupied slot (the create path stays first-class;
+  only *moves* of an existing card are delegated to the service).
+* **UUID side-row creation** -- the ``post_save`` / ``m2m_changed`` wiring that
+  materializes each linked row's ``UUIDModel`` registry entry.
+* **Delete-compaction** -- delegated to ``services.compact_card_numbers``.
+"""
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-
 from django.core.exceptions import ValidationError
-from django.db import models as django_models
 from django.db import transaction
 from django.db.models import Count, Max
-from django.db.models.signals import m2m_changed, post_delete, post_save, pre_delete, pre_save
+from django.db.models.signals import (
+    m2m_changed,
+    post_delete,
+    post_save,
+    pre_delete,
+    pre_save,
+)
 from django.dispatch import receiver
-from django.utils import timezone
 
 from apps.kanban import models
 
-DEFAULT_REFERENCE_KIND_KEY = "dependency"
-DEFAULT_REFERENCE_KIND_LABEL = "Dependency"
-DONE_STATUS_KEY = "done"
+DONE_STATUS_KEY = models.DONE_STATUS_KEY
 DONE_CARD_SPEC_ERROR = "Done kanban cards require a linked spec doc."
 DONE_CARD_GLOSSARY_ERROR = "Done kanban cards require at least one glossary link."
 SPEC_CARD_REQUIRED_ERROR = "Kanban spec docs must be linked to a card."
@@ -25,14 +42,30 @@ DONE_CARD_SPEC_DELETE_ERROR = "Cannot delete a spec doc linked to a done kanban 
 DONE_CARD_GLOSSARY_REASSIGN_ERROR = "Cannot move the last glossary link away from a done card."
 DONE_CARD_GLOSSARY_DELETE_ERROR = "Cannot delete the last glossary link from a done card."
 DEPENDENCY_REFERENCE_KIND_KEYS = models.DEPENDENCY_REFERENCE_KIND_KEYS
-DEPENDENCY_SYNC_FLAG = "_kanban_syncing_dependency_edges"
-CARD_ORDER_SYNC_FLAG = "_kanban_syncing_card_order"
 CARD_ORDER_REQUESTED_NUMBER_ATTR = "_kanban_requested_card_number"
-CARD_ORDER_OLD_NUMBER_ATTR = "_kanban_old_card_number"
 CARD_NUMBER_REQUIRED_ERROR = "Kanban cards require a board number."
 CARD_NUMBER_POSITIVE_ERROR = "Kanban card number must be at least 1."
 CARD_NUMBER_RANGE_ERROR = "Kanban card number must be between 1 and {limit}."
+CARD_NUMBER_MOVE_ERROR = (
+    "Direct kanban card number edits are not allowed; use apps.kanban.services.move_card_number."
+)
 CARD_DEPENDENCY_ORDER_ERROR = "Kanban card dependencies must appear before dependent cards."
+
+# The card status state machine (2F). Each tuple is an allowed
+# ``(from_status_key, to_status_key)`` move; ``done -> todo`` is the reopen path.
+# ``services.set_card_status`` is the sanctioned writer; this raise-only guard
+# rejects illegal transitions from any write path (direct ORM or service).
+STATUS_TRANSITIONS = frozenset(
+    {
+        ("backlog", "todo"),
+        ("todo", "wip"),
+        ("wip", "done"),
+        ("wip", "todo"),
+        ("todo", "backlog"),
+        ("done", "todo"),
+    },
+)
+CARD_STATUS_TRANSITION_ERROR = "Illegal kanban card status transition: {old} -> {new}."
 
 
 UUID_LINKED_MODELS = (
@@ -52,26 +85,22 @@ UUID_LINKED_MODELS = (
     models.CardReference,
     models.CardGlossaryTerm,
     models.ParityClaim,
+    models.CardPathLink,
     models.CardItem,
     models.Label,
     models.BoardDoc,
     models.BoardDocCardReference,
+    models.AttemptOutcome,
+    models.VerificationKind,
+    models.Actor,
+    models.CardTransition,
+    models.WorkAttempt,
+    models.Decision,
 )
 
 
-def _manager(model: type[django_models.Model], using: str | None):
-    return model.objects.using(using) if using else model.objects
-
-
-def _target_milestone_id(card: models.Card, using: str | None) -> int | None:
-    if card.target_version_id is None:
-        return None
-    return (
-        _manager(models.TargetVersion, using)
-        .filter(pk=card.target_version_id)
-        .values_list("milestone_id", flat=True)
-        .get()
-    )
+# The alias-aware manager helper lives once in models.py (shared with services.py).
+_manager = models.manager
 
 
 def _status_is_done(status_id: int | None, using: str | None) -> bool:
@@ -125,27 +154,14 @@ def _delete_origin_is_card(origin) -> bool:
     return isinstance(origin, models.Card) or getattr(origin, "model", None) is models.Card
 
 
-def _card_identifier(card: models.Card) -> str:
-    milestone = ""
-    if card.status.key != "done" and card.milestone_id:
-        milestone = f"-{card.milestone.key.upper()}"
-    return f"{card.status.key.upper()}{milestone}-{card.number:03d}-{card.target_version.number}"
-
-
-def _has_dependency_path(start_card_id: int, target_card_id: int, using: str | None) -> bool:
-    seen: set[int] = set()
-    frontier = {start_card_id}
-    card_manager = _manager(models.Card, using)
-    while frontier:
-        if target_card_id in frontier:
-            return True
-        seen.update(frontier)
-        next_ids = set(
-            card_manager.filter(pk__in=frontier).values_list("dependencies__pk", flat=True),
-        )
-        next_ids.discard(None)
-        frontier = next_ids - seen
-    return False
+def _kind_is_dependency_reference(kind_id: int | None, using: str | None) -> bool:
+    if kind_id is None:
+        return False
+    return (
+        _manager(models.CardReferenceKind, using)
+        .filter(pk=kind_id, key__in=DEPENDENCY_REFERENCE_KIND_KEYS)
+        .exists()
+    )
 
 
 def _has_reference_path(
@@ -173,6 +189,48 @@ def _has_reference_path(
         )
         frontier = next_ids - seen
     return False
+
+
+def _stored_card_status_key(card_id: int, using: str | None) -> str | None:
+    return (
+        _manager(models.Card, using)
+        .filter(pk=card_id)
+        .values_list("status__key", flat=True)
+        .first()
+    )
+
+
+def _validate_card_status_transition(
+    instance: models.Card,
+    update_fields: frozenset[str] | None,
+    using: str | None,
+) -> None:
+    """Raise on an illegal status move (2F state machine).
+
+    Only fires when an existing card's ``status`` actually changes. The OLD
+    status is read from the DB (the same technique the number machinery uses),
+    so the guard is independent of the in-memory instance state. New cards
+    (``pk is None``) have no prior status and are not transitions -- a card may
+    deliberately be born in any status (importers seed mid-flight cards; the
+    done-card spec/glossary guards still apply to a born-``done`` card).
+    """
+    if instance.pk is None:
+        return
+    if update_fields is not None and "status" not in update_fields:
+        return
+    old_key = _stored_card_status_key(instance.pk, using)
+    if old_key is None:
+        return
+    new_key = (
+        _manager(models.Status, using)
+        .filter(pk=instance.status_id)
+        .values_list("key", flat=True)
+        .first()
+    )
+    if new_key is None or new_key == old_key:
+        return
+    if (old_key, new_key) not in STATUS_TRANSITIONS:
+        raise ValidationError(CARD_STATUS_TRANSITION_ERROR.format(old=old_key, new=new_key))
 
 
 def _normalize_card_number(number: int | str | None) -> int:
@@ -204,48 +262,6 @@ def _validate_card_number(number: int, *, limit: int | None = None) -> None:
         raise ValidationError(CARD_NUMBER_RANGE_ERROR.format(limit=limit))
 
 
-def _project_neighbor_number(number: int, old_number: int, requested_number: int) -> int:
-    if requested_number < old_number and requested_number <= number < old_number:
-        return number + 1
-    if old_number < requested_number and old_number < number <= requested_number:
-        return number - 1
-    return number
-
-
-def _validate_card_move_dependency_order(
-    card_id: int,
-    old_number: int,
-    requested_number: int,
-    using: str | None,
-) -> None:
-    card_manager = _manager(models.Card, using)
-    dependency_numbers = card_manager.filter(dependents__pk=card_id).values_list(
-        "number",
-        flat=True,
-    )
-    for dependency_number in dependency_numbers:
-        final_dependency_number = _project_neighbor_number(
-            dependency_number,
-            old_number,
-            requested_number,
-        )
-        if final_dependency_number >= requested_number:
-            raise ValidationError(CARD_DEPENDENCY_ORDER_ERROR)
-
-    dependent_numbers = card_manager.filter(dependencies__pk=card_id).values_list(
-        "number",
-        flat=True,
-    )
-    for dependent_number in dependent_numbers:
-        final_dependent_number = _project_neighbor_number(
-            dependent_number,
-            old_number,
-            requested_number,
-        )
-        if final_dependent_number <= requested_number:
-            raise ValidationError(CARD_DEPENDENCY_ORDER_ERROR)
-
-
 def _validate_dependency_order(
     source_card_id: int,
     target_card_id: int,
@@ -262,14 +278,6 @@ def _validate_dependency_order(
         return
     if source_number <= target_number:
         raise ValidationError(CARD_DEPENDENCY_ORDER_ERROR)
-
-
-def _validate_dependency_edge(source_card_id: int, target_card_id: int, using: str | None) -> None:
-    if source_card_id == target_card_id:
-        raise ValidationError("A kanban card cannot depend on itself.")
-    if _has_dependency_path(target_card_id, source_card_id, using):
-        raise ValidationError("Kanban card dependencies cannot contain cycles.")
-    _validate_dependency_order(source_card_id, target_card_id, using)
 
 
 def _validate_reference_edge(
@@ -294,50 +302,21 @@ def _validate_reference_edge(
     _validate_dependency_order(source_card_id, target_card_id, using)
 
 
-@contextmanager
-def _card_order_sync(card: models.Card):
-    previous = getattr(card, CARD_ORDER_SYNC_FLAG, None)
-    setattr(card, CARD_ORDER_SYNC_FLAG, True)
-    try:
-        yield
-    finally:
-        if previous is None:
-            delattr(card, CARD_ORDER_SYNC_FLAG)
-        else:
-            setattr(card, CARD_ORDER_SYNC_FLAG, previous)
-
-
-def _is_card_order_sync(instance: models.Card) -> bool:
-    return bool(getattr(instance, CARD_ORDER_SYNC_FLAG, False))
-
-
-def _set_card_order_request(
-    card: models.Card,
-    *,
-    requested_number: int,
-    old_number: int | None,
-) -> None:
-    setattr(card, CARD_ORDER_REQUESTED_NUMBER_ATTR, requested_number)
-    setattr(card, CARD_ORDER_OLD_NUMBER_ATTR, old_number)
-
-
-def _clear_card_order_request(card: models.Card) -> None:
-    for attribute in (CARD_ORDER_REQUESTED_NUMBER_ATTR, CARD_ORDER_OLD_NUMBER_ATTR):
-        if hasattr(card, attribute):
-            delattr(card, attribute)
-
-
-def _save_card_number(card: models.Card, number: int, using: str | None) -> None:
-    card.number = number
-    with _card_order_sync(card):
-        card.save(update_fields=["number", "updated_date"], using=using)
-
-
 def _prepare_card_order(
     card: models.Card,
     update_fields: frozenset[str] | None,
     using: str | None,
 ) -> None:
+    """Validate a card's board number on save; only the create path may assign one.
+
+    New cards (no stored number yet) keep the first-class auto-append/insert
+    behaviour: a number at an occupied slot parks the card above the sequence
+    and flags it so :func:`sync_card_after_save` shifts the neighbours into
+    place. Changing an EXISTING card's number via ``save()`` raises -- the
+    renumbering engine lives in ``services.move_card_number`` (which shifts
+    neighbours with per-row ``.update()`` so their ``updated_date`` and signals
+    do not churn).
+    """
     if update_fields is not None and "number" not in update_fields:
         return
 
@@ -345,258 +324,45 @@ def _prepare_card_order(
     card.number = requested_number
 
     max_number, accepts_sparse_numbers = _card_number_state(using)
-    new_card_limit = None if accepts_sparse_numbers else max_number + 1
-    if card.pk is None:
-        _validate_card_number(requested_number, limit=new_card_limit)
-        if requested_number <= max_number:
-            _set_card_order_request(
-                card,
-                requested_number=requested_number,
-                old_number=None,
-            )
-            card.number = max_number + 2
-        return
-
-    old_number = _stored_card_number(card.pk, using)
+    old_number = None if card.pk is None else _stored_card_number(card.pk, using)
     if old_number is None:
+        new_card_limit = None if accepts_sparse_numbers else max_number + 1
         _validate_card_number(requested_number, limit=new_card_limit)
         if requested_number <= max_number:
-            _set_card_order_request(
-                card,
-                requested_number=requested_number,
-                old_number=None,
-            )
+            setattr(card, CARD_ORDER_REQUESTED_NUMBER_ATTR, requested_number)
             card.number = max_number + 2
         return
     if requested_number == old_number:
         return
-
-    _validate_card_number(requested_number, limit=max_number)
-    _validate_card_move_dependency_order(card.pk, old_number, requested_number, using)
-    _set_card_order_request(
-        card,
-        requested_number=requested_number,
-        old_number=old_number,
-    )
-    card.number = max_number + 1
+    raise ValidationError(CARD_NUMBER_MOVE_ERROR)
 
 
-def _shift_cards_after_insert(
-    inserted_card: models.Card,
-    requested_number: int,
-    using: str | None,
-) -> None:
-    queryset = (
-        _manager(models.Card, using)
-        .filter(number__gte=requested_number)
-        .exclude(pk=inserted_card.pk)
-        .order_by("-number")
-    )
-    for card in queryset:
-        _save_card_number(card, card.number + 1, using)
+def _sync_card_order_after_insert(card: models.Card, using: str | None) -> None:
+    """Shift neighbours up and settle a just-created card at its requested slot.
 
-
-def _shift_cards_after_move(
-    moved_card: models.Card,
-    old_number: int,
-    requested_number: int,
-    using: str | None,
-) -> None:
-    card_manager = _manager(models.Card, using).exclude(pk=moved_card.pk)
-    if requested_number < old_number:
-        queryset = card_manager.filter(
-            number__gte=requested_number,
-            number__lt=old_number,
-        ).order_by("-number")
-        delta = 1
-    else:
-        queryset = card_manager.filter(
-            number__gt=old_number,
-            number__lte=requested_number,
-        ).order_by("number")
-        delta = -1
-    for card in queryset:
-        _save_card_number(card, card.number + delta, using)
-
-
-def _sync_card_order_after_save(card: models.Card, using: str | None) -> None:
-    if _is_card_order_sync(card):
-        return
-
+    Runs only for the create path (an existing card's number cannot change via
+    ``save()``). Every shift is a per-row ``.update()``, so neighbour rows keep
+    their ``updated_date`` and no ``Card`` signals fire for the shifts.
+    """
     requested_number = getattr(card, CARD_ORDER_REQUESTED_NUMBER_ATTR, None)
     if requested_number is None:
         return
-    old_number = getattr(card, CARD_ORDER_OLD_NUMBER_ATTR, None)
 
+    card_manager = _manager(models.Card, using)
     try:
         with transaction.atomic(using=using):
-            if old_number is None:
-                _shift_cards_after_insert(card, requested_number, using)
-            else:
-                _shift_cards_after_move(card, old_number, requested_number, using)
-            _save_card_number(card, requested_number, using)
+            neighbors = list(
+                card_manager.filter(number__gte=requested_number)
+                .exclude(pk=card.pk)
+                .order_by("-number")
+                .values_list("pk", "number"),
+            )
+            for neighbor_pk, neighbor_number in neighbors:
+                card_manager.filter(pk=neighbor_pk).update(number=neighbor_number + 1)
+            card_manager.filter(pk=card.pk).update(number=requested_number)
+            card.number = requested_number
     finally:
-        _clear_card_order_request(card)
-
-
-def _compact_card_numbers_after_delete(card: models.Card, using: str | None) -> None:
-    queryset = _manager(models.Card, using).filter(number__gt=card.number).order_by("number")
-    for shifted_card in queryset:
-        _save_card_number(shifted_card, shifted_card.number - 1, using)
-
-
-@contextmanager
-def _dependency_sync(card: models.Card):
-    previous = getattr(card, DEPENDENCY_SYNC_FLAG, None)
-    setattr(card, DEPENDENCY_SYNC_FLAG, True)
-    try:
-        yield
-    finally:
-        if previous is None:
-            delattr(card, DEPENDENCY_SYNC_FLAG)
-        else:
-            setattr(card, DEPENDENCY_SYNC_FLAG, previous)
-
-
-def _is_dependency_sync(instance: models.Card) -> bool:
-    return bool(getattr(instance, DEPENDENCY_SYNC_FLAG, False))
-
-
-def _dependency_edge_exists(
-    source_card: models.Card,
-    target_card: models.Card,
-    using: str | None,
-) -> bool:
-    return (
-        _manager(models.Card, using).filter(pk=source_card.pk, dependencies=target_card).exists()
-    )
-
-
-def _kind_is_dependency_reference(kind_id: int | None, using: str | None) -> bool:
-    if kind_id is None:
-        return False
-    return (
-        _manager(models.CardReferenceKind, using)
-        .filter(pk=kind_id, key__in=DEPENDENCY_REFERENCE_KIND_KEYS)
-        .exists()
-    )
-
-
-def _dependency_reference_exists(
-    source_card_id: int,
-    target_card_id: int,
-    using: str | None,
-) -> bool:
-    return (
-        _manager(models.CardReference, using)
-        .filter(
-            source_card_id=source_card_id,
-            target_card_id=target_card_id,
-            kind__key__in=DEPENDENCY_REFERENCE_KIND_KEYS,
-        )
-        .exists()
-    )
-
-
-def _default_reference_kind(using: str | None) -> models.CardReferenceKind:
-    kind, _ = _manager(models.CardReferenceKind, using).get_or_create(
-        key=DEFAULT_REFERENCE_KIND_KEY,
-        defaults={"label": DEFAULT_REFERENCE_KIND_LABEL},
-    )
-    return kind
-
-
-def _ensure_reference_for_dependency(
-    source_card: models.Card,
-    target_card: models.Card,
-    using: str | None,
-) -> None:
-    if _dependency_reference_exists(source_card.pk, target_card.pk, using):
-        return
-    kind = _default_reference_kind(using)
-    # ``order`` is assigned per ``source_card`` by ``CardReference.save()``.
-    _manager(models.CardReference, using).create(
-        source_card=source_card,
-        target_card=target_card,
-        kind=kind,
-        raw_text=f"Manual dependency: `{_card_identifier(target_card)}`.",
-    )
-
-
-def _delete_default_references(
-    source_card_id: int,
-    target_card_id: int,
-    using: str | None,
-) -> None:
-    kind = _manager(models.CardReferenceKind, using).filter(key=DEFAULT_REFERENCE_KIND_KEY).first()
-    if kind is None:
-        return
-    _manager(models.CardReference, using).filter(
-        source_card_id=source_card_id,
-        target_card_id=target_card_id,
-        kind=kind,
-    ).delete()
-
-
-def _restore_dependency_if_references_remain(
-    source_card_id: int,
-    target_card_id: int,
-    using: str | None,
-) -> None:
-    if not _dependency_reference_exists(source_card_id, target_card_id, using):
-        return
-    card_manager = _manager(models.Card, using)
-    source_card = card_manager.filter(pk=source_card_id).first()
-    target_card = card_manager.filter(pk=target_card_id).first()
-    if source_card is None or target_card is None:
-        return
-    if _dependency_edge_exists(source_card, target_card, using):
-        return
-    with _dependency_sync(source_card):
-        source_card.dependencies.add(target_card)
-
-
-def _remove_dependency_if_unreferenced(
-    source_card_id: int,
-    target_card_id: int,
-    using: str | None,
-) -> None:
-    if _dependency_reference_exists(source_card_id, target_card_id, using):
-        return
-    card_manager = _manager(models.Card, using)
-    source_card = card_manager.filter(pk=source_card_id).first()
-    target_card = card_manager.filter(pk=target_card_id).first()
-    if source_card is None or target_card is None:
-        return
-    if not _dependency_edge_exists(source_card, target_card, using):
-        return
-    with _dependency_sync(source_card):
-        source_card.dependencies.remove(target_card)
-
-
-def _dependency_edges_from_pk_set(
-    instance: models.Card,
-    pk_set: set[int],
-    *,
-    reverse: bool,
-) -> list[tuple[int, int]]:
-    if reverse:
-        return [(pk, instance.pk) for pk in pk_set]
-    return [(instance.pk, pk) for pk in pk_set]
-
-
-def _dependency_edges_for_clear(
-    instance: models.Card,
-    using: str | None,
-    *,
-    reverse: bool,
-) -> list[tuple[int, int]]:
-    card_manager = _manager(models.Card, using)
-    if reverse:
-        source_ids = card_manager.filter(dependencies=instance).values_list("pk", flat=True)
-        return [(source_id, instance.pk) for source_id in source_ids]
-    target_ids = card_manager.filter(pk=instance.pk).values_list("dependencies__pk", flat=True)
-    return [(instance.pk, target_id) for target_id in target_ids if target_id is not None]
+        delattr(card, CARD_ORDER_REQUESTED_NUMBER_ATTR)
 
 
 @receiver(pre_save, sender=models.Card, dispatch_uid="kanban_prepare_card_save")
@@ -607,9 +373,7 @@ def prepare_card_save(
     using: str | None,
     **kwargs,
 ) -> None:
-    if _is_card_order_sync(instance):
-        return
-    instance.milestone_id = _target_milestone_id(instance, using)
+    _validate_card_status_transition(instance, update_fields, using)
     _validate_done_card_has_spec(instance, using)
     _validate_done_card_has_glossary_link(instance, using)
     _prepare_card_order(instance, update_fields, using)
@@ -708,19 +472,7 @@ def sync_card_after_save(
     using: str | None,
     **kwargs,
 ) -> None:
-    if _is_card_order_sync(instance):
-        return
-
-    _sync_card_order_after_save(instance, using)
-    if (
-        update_fields is not None
-        and {"target_version", "target_version_id"} & set(update_fields)
-        and "milestone" not in update_fields
-    ):
-        _manager(models.Card, using).filter(pk=instance.pk).update(
-            milestone_id=instance.milestone_id,
-            updated_date=timezone.now(),
-        )
+    _sync_card_order_after_insert(instance, using)
 
 
 @receiver(post_delete, sender=models.Card, dispatch_uid="kanban_compact_card_order_after_delete")
@@ -730,7 +482,10 @@ def compact_card_order_after_delete(
     using: str | None,
     **kwargs,
 ) -> None:
-    _compact_card_numbers_after_delete(instance, using)
+    """Delegate delete-compaction to the service layer (the receiver only wires it)."""
+    from apps.kanban import services
+
+    services.compact_card_numbers(instance, using=using)
 
 
 @receiver(pre_save, sender=models.CardReference, dispatch_uid="kanban_prepare_card_reference")
@@ -740,6 +495,11 @@ def prepare_card_reference(
     using: str | None,
     **kwargs,
 ) -> None:
+    """Raise-only guard: reject self-references, cycles, and dependency mis-ordering.
+
+    Runs for every ``CardReference`` write, including direct ORM writes that
+    bypass ``services.add_dependency``, so the edge invariants hold everywhere.
+    """
     if instance.source_card_id is not None and instance.target_card_id is not None:
         _validate_reference_edge(
             instance.source_card_id,
@@ -748,115 +508,45 @@ def prepare_card_reference(
             using,
             exclude_reference_id=instance.pk,
         )
-    if instance.pk is None:
-        instance._kanban_old_reference_edge = None
-        return
-    instance._kanban_old_reference_edge = (
-        _manager(models.CardReference, using)
-        .filter(pk=instance.pk)
-        .values_list("source_card_id", "target_card_id", "kind_id")
-        .first()
-    )
-
-
-@receiver(post_save, sender=models.CardReference, dispatch_uid="kanban_sync_reference_dependency")
-def sync_reference_dependency(
-    sender,
-    instance: models.CardReference,
-    using: str | None,
-    **kwargs,
-) -> None:
-    old_reference = getattr(instance, "_kanban_old_reference_edge", None)
-    new_edge = (instance.source_card_id, instance.target_card_id)
-    is_dependency_reference = _kind_is_dependency_reference(instance.kind_id, using)
-    if old_reference is not None:
-        old_edge = (old_reference[0], old_reference[1])
-        if _kind_is_dependency_reference(old_reference[2], using) and (
-            old_edge != new_edge or not is_dependency_reference
-        ):
-            _remove_dependency_if_unreferenced(old_edge[0], old_edge[1], using)
-
-    if not is_dependency_reference:
-        return
-    if not _dependency_edge_exists(instance.source_card, instance.target_card, using):
-        with _dependency_sync(instance.source_card):
-            instance.source_card.dependencies.add(instance.target_card)
-
-
-@receiver(
-    post_delete,
-    sender=models.CardReference,
-    dispatch_uid="kanban_delete_reference_dependency",
-)
-def delete_reference_dependency(
-    sender,
-    instance: models.CardReference,
-    using: str | None,
-    **kwargs,
-) -> None:
-    if not _kind_is_dependency_reference(instance.kind_id, using):
-        return
-    _remove_dependency_if_unreferenced(instance.source_card_id, instance.target_card_id, using)
 
 
 @receiver(
     m2m_changed,
-    sender=models.Card.dependencies.through,
-    dispatch_uid="kanban_sync_dependency_references",
+    sender=models.Card.changed_files.through,
+    dispatch_uid="kanban_uuid_cardpathlink_m2m",
 )
-def sync_dependency_references(
+def create_card_path_link_uuid_rows(
     sender,
-    instance: models.Card,
+    instance,
     action: str,
     reverse: bool,
-    pk_set: set[int] | None,
-    using: str | None,
+    model,
+    pk_set,
+    using: str | None = None,
     **kwargs,
 ) -> None:
-    if _is_dependency_sync(instance):
-        return
+    """Create ``UUIDModel`` side-rows for ``CardPathLink`` rows added via M2M writes.
 
-    if action == "pre_add" and pk_set:
-        for source_card_id, target_card_id in _dependency_edges_from_pk_set(
-            instance,
-            pk_set,
-            reverse=reverse,
-        ):
-            _validate_dependency_edge(source_card_id, target_card_id, using)
+    ``Card.changed_files`` has an explicit ``CardPathLink`` through model, so
+    ``.add()`` / ``.set()`` insert through rows with ``bulk_create`` -- which does
+    NOT emit ``post_save``, so ``create_uuid_row`` never fires for them. This
+    ``m2m_changed`` ``post_add`` receiver backfills the missing side-rows for
+    every M2M write path (services, admin, tests' ``.add()``), respecting the
+    write's database alias. Rows created via ``.save()`` / ``.objects.create()``
+    already have a side-row (from ``create_uuid_row``); the ``uuid__isnull``
+    filter keeps this idempotent so neither path double-creates.
+    """
+    if action != "post_add":
         return
-
-    if action == "post_add" and pk_set:
-        card_by_id = _manager(models.Card, using).in_bulk(pk_set | {instance.pk})
-        for source_card_id, target_card_id in _dependency_edges_from_pk_set(
-            instance,
-            pk_set,
-            reverse=reverse,
-        ):
-            _ensure_reference_for_dependency(
-                card_by_id[source_card_id],
-                card_by_id[target_card_id],
-                using,
-            )
-        return
-
-    if action == "pre_clear":
-        instance._kanban_cleared_dependency_edges = _dependency_edges_for_clear(
-            instance,
-            using,
-            reverse=reverse,
-        )
-        return
-
-    if action == "post_clear":
-        dependency_edges = getattr(instance, "_kanban_cleared_dependency_edges", [])
-    elif action == "post_remove" and pk_set:
-        dependency_edges = _dependency_edges_from_pk_set(instance, pk_set, reverse=reverse)
+    link_manager = _manager(models.CardPathLink, using)
+    if reverse:
+        # ``instance`` is a TrackedPath; ``pk_set`` holds the added Card ids.
+        links = link_manager.filter(path=instance, card_id__in=pk_set or ())
     else:
-        return
-
-    for source_card_id, target_card_id in dependency_edges:
-        _delete_default_references(source_card_id, target_card_id, using)
-        _restore_dependency_if_references_remain(source_card_id, target_card_id, using)
+        # ``instance`` is a Card; ``pk_set`` holds the added TrackedPath ids.
+        links = link_manager.filter(card=instance, path_id__in=pk_set or ())
+    for link in links.filter(uuid__isnull=True):
+        _manager(models.UUIDModel, using).create(cardpathlink=link)
 
 
 def create_uuid_row(sender, instance, created: bool, using: str | None = None, **kwargs) -> None:

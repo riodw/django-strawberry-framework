@@ -188,7 +188,11 @@ def test_create_card_from_spec_accepts_historical_changed_file(beta_version):
 @pytest.mark.django_db
 def test_set_card_changed_files_rejects_unknown_path(beta_version):
     """The DONE-card surface stays strict: no planned-row creation."""
-    card = kf.make_card(title="Strict changed files card", target_version=beta_version)
+    card = kf.make_card(
+        title="Strict changed files card",
+        target_version=beta_version,
+        status=kf.make_status("done"),
+    )
 
     with pytest.raises(services.KanbanServiceError, match="Unknown tracked path"):
         services.set_card_changed_files(card, ["django_strawberry_framework/not_real.py"])
@@ -249,7 +253,11 @@ def test_add_dependency_rejects_non_dependency_kind(beta_version):
 
 @pytest.mark.django_db
 def test_set_card_changed_files_links_carry_changed_kind(beta_version):
-    card = kf.make_card(title="Changed-kind card", target_version=beta_version)
+    card = kf.make_card(
+        title="Changed-kind card",
+        target_version=beta_version,
+        status=kf.make_status("done"),
+    )
     services.set_card_changed_files(card, [TRACKED_FILE])
 
     link = models.CardPathLink.objects.get(card=card)
@@ -270,7 +278,11 @@ def test_set_card_predicted_files_links_carry_predicted_kind(beta_version):
 def test_set_card_changed_files_link_has_uuid_side_row(beta_version):
     # M2M .set() inserts through rows with bulk_create (no post_save), so the
     # UUID side-row must be created by the m2m_changed receiver, not create_uuid_row.
-    card = kf.make_card(title="Uuid side-row card", target_version=beta_version)
+    card = kf.make_card(
+        title="Uuid side-row card",
+        target_version=beta_version,
+        status=kf.make_status("done"),
+    )
     services.set_card_changed_files(card, [TRACKED_FILE])
 
     link = models.CardPathLink.objects.get(card=card)
@@ -281,11 +293,14 @@ def test_set_card_changed_files_link_has_uuid_side_row(beta_version):
 @pytest.mark.django_db
 def test_set_card_changed_files_flips_predicted_link_to_changed(beta_version):
     # A predicted->changed re-import must flip the kind on the retained link;
-    # .set(through_defaults=...) alone leaves the old kind on surviving rows.
+    # .set(through_defaults=...) alone leaves the old kind on surviving rows. The
+    # flip is the ship transition, so the card is done before the changed write.
     card = kf.make_card(title="Flip predicted card", target_version=beta_version)
     services.set_card_predicted_files(card, [TRACKED_FILE])
     assert models.CardPathLink.objects.get(card=card).kind == models.CARD_PATH_LINK_PREDICTED
 
+    models.Card.objects.filter(pk=card.pk).update(status=kf.make_status("done"))
+    card.refresh_from_db()
     services.set_card_changed_files(card, [TRACKED_FILE])
     link = models.CardPathLink.objects.get(card=card)
     assert link.kind == models.CARD_PATH_LINK_CHANGED
@@ -294,13 +309,50 @@ def test_set_card_changed_files_flips_predicted_link_to_changed(beta_version):
 
 @pytest.mark.django_db
 def test_set_card_predicted_files_flips_changed_link_to_predicted(beta_version):
-    # The reverse direction: changed->predicted flip on a retained link.
-    card = kf.make_card(title="Flip changed card", target_version=beta_version)
+    # The reverse direction: changed->predicted flip on a retained link (the
+    # reopen path, so the card is done for the changed write, then reopened).
+    card = kf.make_card(
+        title="Flip changed card",
+        target_version=beta_version,
+        status=kf.make_status("done"),
+    )
     services.set_card_changed_files(card, [TRACKED_FILE])
     assert models.CardPathLink.objects.get(card=card).kind == models.CARD_PATH_LINK_CHANGED
 
+    models.Card.objects.filter(pk=card.pk).update(status=kf.make_status("todo"))
+    card.refresh_from_db()
     services.set_card_predicted_files(card, [TRACKED_FILE])
     assert models.CardPathLink.objects.get(card=card).kind == models.CARD_PATH_LINK_PREDICTED
+
+
+@pytest.mark.django_db
+def test_set_card_changed_files_rejects_undone_card(beta_version):
+    """The symmetric mirror of the predicted-on-done guard: changed needs a done card."""
+    card = kf.make_card(title="Undone changed card", target_version=beta_version)
+
+    with pytest.raises(services.KanbanServiceError) as undone:
+        services.set_card_changed_files(card, [TRACKED_FILE])
+    assert undone.value.code == "changed_files_on_undone_card"
+    assert not card.changed_files.exists()
+
+
+@pytest.mark.django_db
+def test_create_card_from_spec_out_of_range_number(beta_version):
+    """An explicit out-of-range ``number`` raises a coded error, not the signal's uncoded one."""
+    kf.make_card(number=1, title="First")
+    kf.make_card(number=2, title="Second")
+
+    with pytest.raises(services.KanbanServiceError) as out_of_range:
+        services.create_card_from_spec(
+            {
+                "title": "Out of range card",
+                "target_version": beta_version.number,
+                "relative_size": "s",
+                "number": 99,
+            },
+        )
+    assert out_of_range.value.code == "card_number_out_of_range"
+    assert not models.Card.objects.filter(title="Out of range card").exists()
 
 
 @pytest.mark.django_db
@@ -481,8 +533,13 @@ def test_tracked_path_error_codes(beta_version):
         services.set_card_predicted_files(card, ["docs/GLOSSARY.md"])
     assert outside.value.code == "tracked_path_outside_roots"
 
+    done_card = kf.make_card(
+        title="Code paths done card",
+        target_version=beta_version,
+        status=kf.make_status("done"),
+    )
     with pytest.raises(services.KanbanServiceError) as unknown:
-        services.set_card_changed_files(card, ["django_strawberry_framework/not_real.py"])
+        services.set_card_changed_files(done_card, ["django_strawberry_framework/not_real.py"])
     assert unknown.value.code == "unknown_tracked_path"
 
     with pytest.raises(services.KanbanServiceError) as invalid:

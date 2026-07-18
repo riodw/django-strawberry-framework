@@ -19,6 +19,8 @@ from django.test import Client
 from graphql_client import post_graphql as _post_graphql
 from strawberry import relay
 
+from django_strawberry_framework.testing import AsyncTestClient
+
 
 @pytest.fixture(autouse=True)
 def _lookups(db):
@@ -417,3 +419,126 @@ def test_set_card_files_outside_root_envelope():
     envelope = payload["data"]["setCardFiles"]
     assert envelope["ok"] is False
     assert envelope["errors"][0]["codes"] == ["tracked_path_outside_roots"]
+
+
+# An allowlisted package path (constants.py TRACKED_FILE_PATHS) so the strict
+# changed-file writer accepts it without a planned-row escape.
+_ALLOWLISTED_PATH = "django_strawberry_framework/filters/base.py"
+
+
+@pytest.mark.django_db
+def test_set_card_files_changed_happy_path():
+    # A DONE card is the only legal home for ``kind=changed`` links; the factory
+    # builds the required spec + glossary link and ships it through todo->wip->done.
+    card = kf.make_card(status=kf.make_status("done"))
+    client = _staff_client()
+
+    payload = _run(
+        "mutation($d: SetCardFilesFormInput!) { setCardFiles(data: $d) { ok errors { field } } }",
+        {"d": {"cardId": _card_gid(card), "kind": "changed", "paths": [_ALLOWLISTED_PATH]}},
+        client=client,
+    )
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["setCardFiles"]["ok"] is True
+    assert card.path_links.filter(path__path=_ALLOWLISTED_PATH, kind="changed").exists()
+
+
+@pytest.mark.django_db
+def test_set_card_files_changed_on_undone_card_envelope():
+    card = kf.make_card(status=kf.make_status("todo"))
+    client = _staff_client()
+
+    payload = _run(
+        "mutation($d: SetCardFilesFormInput!) { setCardFiles(data: $d) "
+        "{ ok errors { field codes } } }",
+        {"d": {"cardId": _card_gid(card), "kind": "changed", "paths": [_ALLOWLISTED_PATH]}},
+        client=client,
+    )
+
+    envelope = payload["data"]["setCardFiles"]
+    assert envelope["ok"] is False
+    assert envelope["errors"][0]["codes"] == ["changed_files_on_undone_card"]
+    assert not card.path_links.exists()
+
+
+@pytest.mark.django_db
+def test_create_card_from_spec_number_branch_places_and_shifts():
+    """Passing an explicit ``number`` inserts the card at that slot and shifts neighbours up."""
+    version = kf.make_target_version("9.9.9")
+    kf.make_card(number=1, title="Board one")
+    second = kf.make_card(number=2, title="Board two")
+    client = _staff_client()
+
+    payload = _run(
+        "mutation($d: CreateCardFromSpecFormInput!) { createCardFromSpec(data: $d) "
+        "{ ok errors { field messages } } }",
+        {
+            "d": {
+                "title": "Inserted card",
+                "targetVersion": version.number,
+                "relativeSize": "s",
+                "number": 2,
+            },
+        },
+        client=client,
+    )
+
+    assert "errors" not in payload, payload
+    assert payload["data"]["createCardFromSpec"]["ok"] is True
+    inserted = models.Card.objects.get(title="Inserted card")
+    assert inserted.number == 2
+    second.refresh_from_db()
+    assert second.number == 3
+
+
+@pytest.fixture
+def _async_kanban_card(transactional_db):
+    """Seed lookups, a TODO card, and a staff user, committed so the async view thread sees them.
+
+    ``AsyncTestClient`` posts through Django's in-process async handler, running
+    the sync GraphQL view (and thus ``resolve_async``) on asgiref's executor
+    thread; that thread's connection only sees committed rows, so the seed runs
+    in a sync ``transactional_db`` fixture rather than the async test body.
+    """
+    for key in (
+        "backlog",
+        "todo",
+        "wip",
+        "done",
+    ):
+        kf.make_status(key)
+    kf.make_priority("medium")
+    kf.make_relative_size("s", order=1)
+    kf.make_actor("maintainer")
+    card = kf.make_card(status=kf.make_status("todo"))
+    user = get_user_model().objects.create_user(
+        username="async_staff_agent",
+        password="pw",
+        is_staff=True,
+    )
+    return card, user
+
+
+async def test_set_card_status_illegal_transition_async_envelope(_async_kanban_card):
+    """Drive one mutation through ``resolve_async``: an illegal transition maps to the envelope.
+
+    The async color of ``test_set_card_status_illegal_transition_returns_envelope``:
+    the ``_ServiceErrorMixin.resolve_async`` seam catches the signal guard's
+    ``ValidationError`` and returns the ``{ok: false, errors}`` write envelope
+    rather than a top-level GraphQL error.
+    """
+    card, user = _async_kanban_card
+    client = AsyncTestClient()
+
+    async with client.login(user):
+        res = await client.query(
+            _SET_STATUS,
+            variables={
+                "d": {"cardId": _card_gid(card), "statusKey": "done", "actorKey": "maintainer"},
+            },
+        )
+
+    envelope = res.data["setCardStatus"]
+    assert envelope["ok"] is False
+    assert "Illegal kanban card status transition" in envelope["errors"][0]["messages"][0]

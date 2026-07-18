@@ -23,7 +23,7 @@ from typing import Any
 
 from django.db import models as django_models
 from django.db import transaction
-from django.db.models import Max
+from django.db.models import Count, Max
 from django.utils import timezone
 from django.utils.text import slugify
 
@@ -237,8 +237,18 @@ def planned_tracked_paths_for_paths(
 def set_card_changed_files(card: models.Card, paths: object) -> None:
     """Replace a DONE card's actually-changed tracked paths (strict allowlist).
 
-    Links carry ``kind=changed`` (the files the card actually changed).
+    Links carry ``kind=changed`` (the files the card actually changed). ``changed``
+    links only make sense once a card has shipped, so a non-DONE card is rejected
+    -- the mirror of :func:`set_card_predicted_files`'s done-card guard, keeping
+    the documented invariant (predicted on wip/todo, changed on done) enforced
+    from both sides.
     """
+    if card.status.key != DONE_STATUS_KEY:
+        raise KanbanServiceError(
+            f"Cannot set changed files on undone card {card.card_id!r}; "
+            "use predicted-file imports until the card is done.",
+            code="changed_files_on_undone_card",
+        )
     using = _database_alias(card)
     card.changed_files.set(
         tracked_paths_for_paths(paths, using=using),
@@ -411,12 +421,31 @@ def resolve_card(identifier: object, *, using: str | None = None) -> models.Card
 def _target_number(spec: dict[str, Any], using: str | None) -> int:
     if spec.get("number") is not None:
         try:
-            return int(spec["number"])
+            number = int(spec["number"])
         except (TypeError, ValueError) as error:
             raise KanbanServiceError(
                 '"number" must be an integer when provided.',
                 code="invalid_card_number",
             ) from error
+        # Validate the explicit slot against the same 1..max+1 range the
+        # ``prepare_card_save`` signal guard enforces (``_validate_card_number``),
+        # so an out-of-range number surfaces a coded service error instead of the
+        # signal's uncoded ``ValidationError``. A sparse board (a gap in the
+        # sequence) accepts any positive number, mirroring the guard's
+        # ``accepts_sparse_numbers`` branch.
+        state = _manager(models.Card, using).aggregate(
+            count=Count("number"),
+            max_number=Max("number"),
+        )
+        max_number = state["max_number"] or 0
+        accepts_sparse_numbers = max_number == 0 or state["count"] != max_number
+        limit = None if accepts_sparse_numbers else max_number + 1
+        if number < 1 or (limit is not None and number > limit):
+            raise KanbanServiceError(
+                f"Card number must be between 1 and {max_number + 1} (got {number}).",
+                code="card_number_out_of_range",
+            )
+        return number
     if spec.get("after") is not None:
         return resolve_card(spec["after"], using=using).number + 1
     highest = _manager(models.Card, using).order_by("-number").first()

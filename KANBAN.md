@@ -222,6 +222,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - Priority: Medium
 - Status: To Do
 - Relative size: M
+- Labels: `internal`
 - Spec: [spec-045-debug_extraction-0_0_15.md](docs/spec-045-debug_extraction-0_0_15.md)
 
 #### Dependencies
@@ -335,7 +336,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 - Priority: High
 - Status: To Do
 - Relative size: M
-- Labels: `cleanup`, `release`, `tests`
+- Labels: `cleanup`, `internal`, `release`, `tests`
 
 #### Predicted files
 

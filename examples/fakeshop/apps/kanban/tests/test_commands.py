@@ -45,7 +45,11 @@ def _write_json(tmp_path, payload: dict) -> str:
 
 @pytest.mark.django_db
 def test_import_card_files_changed_dry_run_rolls_back(tmp_path, beta_version):
-    card = kf.make_card(title="Existing card", target_version=beta_version)
+    card = kf.make_card(
+        title="Existing card",
+        target_version=beta_version,
+        status=kf.make_status("done"),
+    )
     path = _write_json(
         tmp_path,
         {"cards": [{"card": card.title, "files": [TRACKED_FILE]}]},
@@ -60,7 +64,11 @@ def test_import_card_files_changed_dry_run_rolls_back(tmp_path, beta_version):
 
 @pytest.mark.django_db
 def test_import_card_files_changed_replaces_existing_links(tmp_path, beta_version):
-    card = kf.make_card(title="Existing card", target_version=beta_version)
+    card = kf.make_card(
+        title="Existing card",
+        target_version=beta_version,
+        status=kf.make_status("done"),
+    )
     services.set_card_changed_files(card, [TRACKED_FILE])
     path = _write_json(
         tmp_path,
@@ -77,7 +85,11 @@ def test_import_card_files_changed_replaces_existing_links(tmp_path, beta_versio
 
 @pytest.mark.django_db
 def test_import_card_files_changed_clears_links(tmp_path, beta_version):
-    card = kf.make_card(title="Existing card", target_version=beta_version)
+    card = kf.make_card(
+        title="Existing card",
+        target_version=beta_version,
+        status=kf.make_status("done"),
+    )
     services.set_card_changed_files(card, [TRACKED_FILE])
     path = _write_json(tmp_path, {"cards": [{"card": card.title, "files": []}]})
 
@@ -235,7 +247,11 @@ def test_import_card_files_wraps_validation_error_as_command_error(
 
 @pytest.mark.django_db
 def test_changed_files_alias_uses_legacy_key(tmp_path, beta_version):
-    card = kf.make_card(title="Existing card", target_version=beta_version)
+    card = kf.make_card(
+        title="Existing card",
+        target_version=beta_version,
+        status=kf.make_status("done"),
+    )
     path = _write_json(
         tmp_path,
         {"cards": [{"card": card.title, "changed_files": [TRACKED_FILE]}]},

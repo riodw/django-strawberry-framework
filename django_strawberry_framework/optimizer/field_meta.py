@@ -117,6 +117,17 @@ class FieldMeta:
             Distinguishes a concrete auto-created MTI parent link from a
             non-concrete reverse ``OneToOneRel`` when this snapshot is
             reclassified by ``relation_kind``.
+        content_type_field_name: For a ``contenttypes`` ``GenericRelation``,
+            the name of the child model's content-type FK
+            (``getattr(field, "content_type_field_name", None)``); ``None``
+            for every other field shape. Populated so ``relation_kind`` sees
+            the same ``"generic"`` classification whether it is handed the raw
+            ``GenericRelation`` or this ``FieldMeta`` snapshot of it (the
+            duck-typed detector reads non-``None`` slots, not ``hasattr``).
+        object_id_field_name: For a ``GenericRelation``, the name of the child
+            model's object-id column (``getattr(field, "object_id_field_name",
+            None)``); ``None`` otherwise. The optimizer partitions the
+            windowed prefetch by this column's attname.
     """
 
     name: str
@@ -135,6 +146,8 @@ class FieldMeta:
     auto_created: bool = False
     accessor_name: str | None = None
     concrete: bool = False
+    content_type_field_name: str | None = None
+    object_id_field_name: str | None = None
 
     @property
     def relation_kind(self) -> RelationKind:
@@ -234,6 +247,8 @@ class FieldMeta:
             auto_created=auto_created,
             accessor_name=instance_accessor(field),
             concrete=bool(getattr(field, "concrete", False)),
+            content_type_field_name=getattr(field, "content_type_field_name", None),
+            object_id_field_name=getattr(field, "object_id_field_name", None),
         )
 
     @classmethod

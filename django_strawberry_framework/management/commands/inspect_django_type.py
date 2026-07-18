@@ -78,6 +78,7 @@ _RELATION_KIND_LABELS: dict[str, str] = {
     "forward_single": "forward FK",
     "reverse_many_to_one": "reverse FK",
     "reverse_one_to_one": "reverse O2O",
+    "generic": "generic relation",
 }
 _UNFINALIZED_HINT = (
     "finalize_django_types() has not run - pass "

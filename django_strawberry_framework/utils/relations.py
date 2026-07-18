@@ -15,10 +15,11 @@ RelationKind: TypeAlias = Literal[
     "reverse_many_to_one",
     "reverse_one_to_one",
     "forward_single",
+    "generic",
 ]
 
 MANY_SIDE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
-    {"many", "reverse_many_to_one"},
+    {"many", "reverse_many_to_one", "generic"},
 )
 
 
@@ -42,9 +43,17 @@ class _RelationFieldLike(Protocol):
 def relation_kind(field: _RelationFieldLike) -> RelationKind:
     """Classify a Django relation field by GraphQL/runtime cardinality.
 
-    Four shapes are distinguished:
+    Five shapes are distinguished:
 
     - ``"many"`` - forward ``ManyToManyField`` (``many_to_many=True``).
+    - ``"generic"`` - a ``contenttypes`` ``GenericRelation`` (the reverse
+      side of a ``GenericForeignKey``), detected duck-typed by the presence
+      of non-``None`` ``content_type_field_name`` and ``object_id_field_name``
+      attributes. It is many-valued (``one_to_many=True``,
+      ``auto_created=False``) and would otherwise land in the defensive
+      ``"many"`` fallback below; the explicit kind lets the optimizer inject
+      the constant content-type morph predicate and partition by the child
+      ``object_id`` column instead of guessing a reverse join.
     - ``"reverse_many_to_one"`` - the reverse side of a ``ForeignKey``
       (Django's ``ManyToOneRel`` descriptor: ``one_to_many=True`` paired
       with ``auto_created=True``). Cardinality-wise this collapses into
@@ -61,8 +70,9 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
       (``ForeignKey``, forward ``OneToOneField``, and the concrete
       auto-created MTI parent link).
 
-    Any ``one_to_many=True`` shape without ``auto_created`` falls back to
-    ``"many"`` as a defensive mapping; stock Django relation descriptors
+    Any ``one_to_many=True`` shape without ``auto_created`` that is NOT a
+    ``GenericRelation`` falls back to ``"many"`` as a defensive mapping;
+    stock Django relation descriptors
     never produce that combination (``ManyToManyField`` sets
     ``many_to_many=True``; reverse FK/M2M descriptors always set
     ``auto_created=True``; forward FK and forward ``OneToOneField`` set
@@ -72,6 +82,7 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
 
     Examples:
         ``ManyToManyField``-like -> ``"many"``;
+        ``GenericRelation``-like -> ``"generic"``;
         ``ManyToOneRel``-like -> ``"reverse_many_to_one"``;
         ``OneToOneRel``-like -> ``"reverse_one_to_one"``;
         ``ForeignKey``-like -> ``"forward_single"``;
@@ -79,6 +90,17 @@ def relation_kind(field: _RelationFieldLike) -> RelationKind:
     """
     if getattr(field, "many_to_many", False):
         return "many"
+    # A ``GenericRelation`` (and a ``FieldMeta`` snapshot of one) is detected
+    # duck-typed BEFORE the ``one_to_many`` ``"many"`` fallback below. The
+    # ``getattr(..., None) is not None`` form (not ``hasattr``) is load-bearing:
+    # ``FieldMeta`` is a slotted dataclass that ALWAYS carries the two slots, so
+    # ``hasattr`` would misclassify every ``FieldMeta`` as ``"generic"`` - only a
+    # genuine ``GenericRelation`` populates the slots with real field names.
+    if (
+        getattr(field, "content_type_field_name", None) is not None
+        and getattr(field, "object_id_field_name", None) is not None
+    ):
+        return "generic"
     if getattr(field, "one_to_many", False):
         if getattr(field, "auto_created", False):
             return "reverse_many_to_one"

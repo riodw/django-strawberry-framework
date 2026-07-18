@@ -37,6 +37,22 @@ without consulting the default alias. The walker reaches the active
 instance's strategy through a ``ContextVar`` the extension publishes in
 ``on_execute`` - direct ``plan_optimizations`` callers (tests) get the
 windowed default.
+
+Nested connection indexing
+--------------------------
+Both the windowed and lateral strategies partition each parent's children by
+the child connector column and order them by the deterministic connection order,
+so the database serves each page fastest from a composite index whose leading
+columns mirror ``(parent_fk, order columns..., pk)``. For a keyset connection
+the composite mirrors ``keyset.py::keyset_seek_q``'s redundant-leading-bound
+design (the same leading columns the seek predicate compares). The planner emits
+a dev-mode advisory (``optimizer/nested_planner.py::_advise_composite_index``,
+``WARNING`` only under ``settings.DEBUG``) when no such index is found; it is
+advisory only - DBAs own index creation, and expression indexes never trigger a
+false positive. A per-field override
+(``OptimizerHint.strategy("windowed" | "lateral" | "auto")`` in
+``Meta.optimizer_hints``) selects which strategy fetches one connection field;
+it is schema-static and needs no plan-cache-key change.
 """
 
 from __future__ import annotations
@@ -174,6 +190,22 @@ class NestedConnectionStrategy(Protocol):
 
     def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
         """Attach fetch directives for one nested connection; ``True`` = planned."""
+
+
+#: The single public strategy-selection type. Every seam that lets a consumer
+#: choose a nested-connection fetch backend accepts this shape: the
+#: ``DjangoOptimizerExtension`` constructor's ``nested_connection_strategy=``
+#: kwarg, the ``OptimizerHint.nested_strategy`` field, and the
+#: ``OptimizerHint.strategy(...)`` factory. A value is either a registered
+#: strategy name (``"windowed"`` / ``"lateral"`` / ``"auto"``) or a
+#: consumer-authored ``NestedConnectionStrategy`` instance; ``resolve_strategy``
+#: validates it. Owned here beside ``NestedConnectionStrategy`` and
+#: ``resolve_strategy`` so the three annotation sites share one definition; the
+#: hint module imports it (and ``resolve_strategy``) at RUNTIME - the verified
+#: import graph has no cycle (``nested_fetch`` never imports ``hints``), so the
+#: annotation resolves under ``typing.get_type_hints`` without a custom
+#: namespace.
+StrategySelection = str | NestedConnectionStrategy
 
 
 def attach_windowed_prefetch(

@@ -10,11 +10,15 @@ cannot leak partial directives into the walker's parent plan.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Callable, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
+from django.conf import settings
+from django.core.exceptions import FieldDoesNotExist
 from django.db import models
 from graphql import GraphQLError
 
@@ -25,6 +29,7 @@ from ..keyset import (
     order_fingerprint,
 )
 from ..utils.connections import (
+    FetchMode,
     UnwindowableConnection,
     derive_connection_window_bounds,
     derive_keyset_window_bounds,
@@ -35,10 +40,11 @@ from ..utils.relations import instance_accessor
 from ..utils.typing import schema_config_from_info
 from . import logger
 from .hints import hint_is_skip
-from .join_taxonomy import classify_relation_join
+from .join_taxonomy import RelationJoinDescriptor, classify_relation_join
 from .nested_fetch import (
     NestedConnectionRequest,
     active_strategy,
+    resolve_strategy,
     unwindowable_child_queryset_reason,
 )
 from .plans import (
@@ -57,6 +63,57 @@ from .selections import (
 from .selections import (
     response_keys as _response_keys,
 )
+
+# The exact ``Index`` types proven to build an ordinary ORDER-serving B-tree:
+# the plain ``models.Index`` and PostgreSQL's ``BTreeIndex``. ``GinIndex`` /
+# ``GistIndex`` / ``HashIndex`` / ``BrinIndex`` / ``SpGistIndex`` share the base
+# ``.fields`` API but back a non-ordering access method, and a custom ``Index``
+# subclass's method we cannot vouch for; all are excluded so the inventory
+# degrades them to UNKNOWN rather than trusting them to serve the window's
+# ``ORDER BY`` (the false-``covered`` defect for non-B-tree indexes). The
+# ``BTreeIndex`` import is guarded because ``django.contrib.postgres`` need not
+# be importable on every install; its absence simply leaves the plain
+# ``models.Index`` as the sole B-tree-backed type (the safe default).
+try:
+    from django.contrib.postgres.indexes import BTreeIndex as _PostgresBTreeIndex
+except Exception:  # pragma: no cover - contrib.postgres unavailable on this install
+    _PostgresBTreeIndex = None
+
+_BTREE_INDEX_TYPES: tuple[type, ...] = (
+    (models.Index,) if _PostgresBTreeIndex is None else (models.Index, _PostgresBTreeIndex)
+)
+
+
+def _every_backend_supports_index_column_ordering() -> bool:
+    """Whether EVERY configured database can store per-column index directions.
+
+    A ``-``-prefixed field in an ``Index`` (``fields=["title", "-id"]``) is a
+    physical ``id DESC`` column ONLY when the backend supports index-column
+    ordering; where it does not, Django silently builds a plain ascending index,
+    so reading that term as ``("id", True)`` would be wrong.
+
+    A nested plan is backend-NEUTRAL and cache-shared: the same cached plan may
+    execute on whatever alias the parent prefetch's ``.using(...)`` or the router
+    selects, and the advisory is computed at plan time with no parent instance in
+    hand. Consulting one unhinted ``router.db_for_read`` route and treating its
+    answer as universal is the alias-early error already removed from
+    ``GenericRelation`` content-type planning: a divergent router can return a
+    direction-capable default while the plan later runs on a shard that silently
+    drops the direction. So a descending term is trusted only when NO reachable
+    backend would drop it - every configured alias must support index-column
+    ordering. Any failure enumerating the databases is fail-soft (``False``), and
+    an empty configuration is treated as unproven, so the caller leaves such an
+    index UNKNOWN rather than making a coverage claim it cannot prove.
+    """
+    try:
+        from django.db import connections
+
+        aliases = list(connections)
+        return bool(aliases) and all(
+            connections[alias].features.supports_index_column_ordering for alias in aliases
+        )
+    except Exception:
+        return False
 
 
 @dataclass(frozen=True)
@@ -128,6 +185,478 @@ def _concrete_order_columns(order_by: Sequence[Any], model: type[models.Model]) 
     return columns
 
 
+def _select_nested_strategy(hint: Any) -> Any:
+    """Return the fetch strategy for a connection field, honoring a per-field hint.
+
+    ``OptimizerHint.strategy(name)`` (``nested_strategy=...``) overrides the
+    extension-wide default for one Relay connection field; the name was already
+    validated through ``nested_fetch.py::resolve_strategy`` at
+    ``Meta.optimizer_hints`` build time (``optimizer/hints.py::OptimizerHint``),
+    so re-resolving it here cannot raise on a landed schema. When no hint sets a
+    strategy, fall back to the active extension instance's default
+    (``nested_fetch.py::active_strategy``). The knob is schema-static, so this
+    selection never enters the instance-bound plan cache key.
+    """
+    name = getattr(hint, "nested_strategy", None)
+    if name is not None:
+        return resolve_strategy(name)
+    return active_strategy()
+
+
+def _has_explicit_nulls_placement(entry: Any) -> bool:
+    """Whether an order ``entry`` requests an explicit ``NULLS FIRST`` / ``LAST``.
+
+    A string order ref (``"title"`` / ``"-title"``) never carries one; only an
+    ``OrderBy`` expression can (``nulls_first`` / ``nulls_last`` default to
+    ``None`` = the backend's default placement). A non-``None`` value means the
+    SQL NULL ordering is explicit and cannot be proven served by a plain
+    ``Meta.indexes`` term, so the caller treats the whole order as UNKNOWN.
+    """
+    return (
+        getattr(entry, "nulls_first", None) is not None
+        or getattr(entry, "nulls_last", None) is not None
+    )
+
+
+def _concrete_order_terms(
+    order_by: Sequence[Any],
+    model: type[models.Model],
+) -> list[tuple[str, bool]] | None:
+    """Return the LOCAL concrete ``(attname, descending)`` order terms, or ``None`` if any is not.
+
+    The direction-carrying sibling of ``_concrete_order_columns``: a B-tree can
+    serve a requested ordering (or its full reverse) only when the index terms
+    match the requested ``(column, direction)`` sequence, so the composite-index
+    advisory must compare directions, not bare attnames (a mixed
+    ``title ASC, id DESC`` is NOT served by ``(title, id)`` ascending).
+
+    The fail-soft tri-state begins HERE, not only at index parsing: the SQL
+    ``ORDER BY`` references EVERY effective ordering term regardless of the
+    ``.only()`` projection, so a related-span lookup (``author__name``), an
+    arbitrary expression (``Lower("title")``), an alias, or an unresolvable name
+    means the order is only PARTIALLY understood. Silently dropping it and
+    coverage-checking the remaining suffix would let ``(Lower("title"), "id")``
+    be declared served by ``(parent_id, id)`` (a false positive) or recommend
+    that incomplete index as the serving shape. Return ``None`` the moment ANY
+    term cannot be represented as a local concrete ``(attname, direction)`` so
+    the advisory stays SILENT for that plan shape - this UNKNOWN dominates the
+    index-parsing tri-state exactly as an uninspectable index leaves absence
+    unproven. (The sibling projection helper ``_concrete_order_columns`` may
+    still skip such terms: forgoing a column a scalar-only selection never reads
+    is harmless, whereas a coverage CLAIM from a partial order is not.)
+
+    Explicit NULLS placement is likewise UNKNOWN: an ``OrderBy`` carrying
+    ``nulls_first`` / ``nulls_last`` executes ``title ASC NULLS FIRST`` (etc.),
+    which a plain ``Meta.indexes`` term (whose NULL ordering is the backend
+    default) cannot be PROVEN to serve, so any such term returns ``None`` rather
+    than collapse to a bare ``(attname, direction)`` that would falsely read as
+    covered.
+    """
+    by_name = {field.name: field.attname for field in model._meta.concrete_fields}
+    attnames = set(by_name.values())
+    terms: list[tuple[str, bool]] = []
+    seen: set[str] = set()
+    for entry in order_by:
+        if _has_explicit_nulls_placement(entry):
+            return None
+        parsed = order_entry_name_and_direction(entry)
+        if parsed is None:
+            return None
+        name, descending = parsed
+        if "__" in name:
+            return None
+        if name in by_name:
+            attname = by_name[name]
+        elif name in attnames:
+            attname = name
+        else:
+            return None
+        if attname in seen:
+            continue
+        seen.add(attname)
+        terms.append((attname, descending))
+    return terms
+
+
+def _index_leading_terms(meta: Any, index: Any) -> list[tuple[str, bool]] | None:
+    """Return an index's leading ``(attname, descending)`` terms, or ``None`` when uninspectable.
+
+    ``Meta.indexes`` entries carry field NAMES (optionally ``-``-prefixed for a
+    descending column), so each is mapped to its concrete attname AND direction
+    for comparison with the window's leading terms. Several shapes are
+    UNINSPECTABLE and return ``None`` so the caller leaves absence UNPROVEN
+    rather than either concluding an index is absent OR trusting it to cover:
+
+    - a NON-B-TREE / CUSTOM access method: ``GinIndex`` / ``GistIndex`` /
+      ``HashIndex`` / ``BrinIndex`` / ``SpGistIndex`` (and any custom ``Index``
+      subclass) all inherit ``.fields`` yet do not build an ordinary ordered
+      B-tree, so only the exact ``models.Index`` / PostgreSQL ``BTreeIndex``
+      types may claim to serve a multi-column ``ORDER BY``;
+    - a NON-DEFAULT OPCLASS (``varchar_pattern_ops`` etc.): an explicit opclass
+      is chosen for a lookup semantics (prefix search) that need not provide the
+      query's ordinary ordering, so the term cannot be PROVEN covering;
+    - an EXPRESSION index exposes no ``.fields``;
+    - a PARTIAL index carries a ``.condition`` - PostgreSQL uses it only for
+      queries whose predicate implies that condition, which the nested window
+      does not, so a partial index on the right columns must NOT be read as
+      covering the general page (the P2-3 false-coverage defect);
+    - a name that no longer resolves is a migration lag;
+    - a DESCENDING index column when any configured backend cannot store
+      index-column ordering (Django then silently builds a plain ascending index,
+      so the ``("id", True)`` reading would be wrong; the plan is backend-neutral,
+      so the direction is trusted only when EVERY alias supports it -
+      ``_every_backend_supports_index_column_ordering``).
+    """
+    if type(index) not in _BTREE_INDEX_TYPES:
+        return None
+    if getattr(index, "condition", None) is not None:
+        return None
+    if getattr(index, "opclasses", None):
+        return None
+    field_names = getattr(index, "fields", None)
+    if not field_names:
+        return None
+    terms: list[tuple[str, bool]] = []
+    saw_descending = False
+    for name in field_names:
+        descending = name.startswith("-")
+        saw_descending = saw_descending or descending
+        bare = name[1:] if descending else name
+        try:
+            field = meta.get_field(bare)
+        except FieldDoesNotExist:
+            return None
+        terms.append((field.attname, descending))
+    if saw_descending and not _every_backend_supports_index_column_ordering():
+        return None
+    return terms
+
+
+# Tri-state result of index inspection: a covering index is present, no index in
+# the represented model metadata covers the shape, or the metadata cannot be
+# classified (a non-B-tree / expression / partial index, or a shape only a
+# DBA-created index outside all Django model metadata could satisfy) so absence
+# is UNPROVEN. "Represented model metadata" spans ``Meta.indexes``,
+# ``Meta.constraints`` unique constraints, ``unique_together``, and field-level
+# pk/unique/db_index - see ``_model_index_shapes``.
+_INDEX_COVERED = "covered"
+_INDEX_ABSENT = "absent"
+_INDEX_UNKNOWN = "unknown"
+
+
+def _terms_serve_order(
+    rest: Sequence[tuple[str, bool]],
+    order_terms: Sequence[tuple[str, bool]],
+) -> bool:
+    """Whether index terms ``rest`` serve ``order_terms`` exactly or fully reversed.
+
+    After the equality-constrained prefix columns, a B-tree yields rows in the
+    requested order only when its remaining leading terms equal the requested
+    ``(attname, direction)`` sequence, or equal that sequence with EVERY
+    direction flipped (a backward index scan). A partial flip cannot be served
+    without a sort - the false-negative the advisory must still flag.
+    """
+    order_terms = list(order_terms)
+    if len(rest) < len(order_terms):
+        return False
+    head = list(rest[: len(order_terms)])
+    if head == order_terms:
+        return True
+    flipped = [(attname, not descending) for attname, descending in order_terms]
+    return head == flipped
+
+
+def _index_serves_window(
+    index_terms: Sequence[tuple[str, bool]],
+    equality: Sequence[str],
+    order_terms: Sequence[tuple[str, bool]],
+) -> bool:
+    """Whether one index's leading terms cover the window's equality prefix + order.
+
+    The window equality-constrains the ``equality`` columns (the connector, and
+    for a ``GenericRelation`` the ``content_type_id`` morph column), so any
+    permutation of them at the index head is acceptable; direction on an
+    equality column is irrelevant. The index's terms AFTER that prefix must then
+    serve the requested order (``_terms_serve_order``).
+    """
+    prefix_len = len(equality)
+    lead = list(index_terms[:prefix_len])
+    if len(lead) < prefix_len:
+        return False
+    if {attname for attname, _ in lead} != set(equality):
+        return False
+    return _terms_serve_order(index_terms[prefix_len:], order_terms)
+
+
+def _plain_field_terms(meta: Any, names: Sequence[str]) -> list[tuple[str, bool]] | None:
+    """Map DIRECTIONLESS field names to ascending ``(attname, False)`` terms, or ``None``.
+
+    For ``UniqueConstraint`` / ``unique_together`` entries, which carry no
+    per-column direction: the unique btree is ascending, and
+    ``_terms_serve_order`` still admits a FULL backward scan, so ascending terms
+    correctly cover the requested order or its full reverse. ``None`` when any
+    name does not resolve to a field (a migration lag), so the caller leaves
+    absence unproven rather than trusting a stale shape.
+    """
+    terms: list[tuple[str, bool]] = []
+    for name in names:
+        try:
+            field = meta.get_field(name)
+        except FieldDoesNotExist:
+            return None
+        terms.append((field.attname, False))
+    return terms
+
+
+def _model_index_shapes(meta: Any) -> tuple[list[list[tuple[str, bool]]], bool]:
+    """Return ``(inspectable leading-term shapes, saw_uninspectable)`` for a model.
+
+    The coverage inventory built from every PHYSICAL index shape model metadata
+    represents inspectably, so the advisory reasons about the indexes PostgreSQL
+    can actually use for a nested window - not only ``Meta.indexes``:
+
+    - unconditional field-based ``Meta.indexes`` entries (direction-carrying);
+    - unconditional field-based ``UniqueConstraint`` entries and legacy
+      ``unique_together`` (a unique btree is a usable ascending composite);
+    - single-field ``primary_key`` / ``unique`` / ``db_index`` columns (one
+      shared field-index predicate - this is what makes the FK auto-index cover
+      the connector-only window).
+
+    A conditional/partial or expression ``Index``/``UniqueConstraint``, or a
+    name that no longer resolves, is counted as UNINSPECTABLE (``saw_uninspectable
+    = True``) rather than a covering or an absent shape: its predicate cannot be
+    proven to imply the window's, so absence stays unproven. ``CheckConstraint``
+    and other non-unique constraints are simply irrelevant (never uninspectable).
+    """
+    shapes: list[list[tuple[str, bool]]] = []
+    saw_uninspectable = False
+    for index in meta.indexes:
+        terms = _index_leading_terms(meta, index)
+        if terms is None:
+            saw_uninspectable = True
+        else:
+            shapes.append(terms)
+    for constraint in meta.constraints:
+        if not isinstance(constraint, models.UniqueConstraint):
+            continue  # CheckConstraint / ExclusionConstraint: not a coverage shape.
+        if (
+            constraint.condition is not None
+            or getattr(constraint, "contains_expressions", False)
+            or getattr(constraint, "opclasses", None)
+            or not constraint.fields
+        ):
+            # Conditional / expression / non-default-opclass unique: unprovable.
+            # A non-default opclass (``varchar_pattern_ops`` etc.) is chosen for a
+            # lookup semantics that need not provide the window's ordinary
+            # ordering, exactly as ``_index_leading_terms`` rejects an ``Index``
+            # opclass - so route it through the SAME capability gate rather than
+            # letting the constraint claim an ordinary ascending B-tree.
+            saw_uninspectable = True
+            continue
+        terms = _plain_field_terms(meta, constraint.fields)
+        if terms is None:
+            saw_uninspectable = True
+        else:
+            shapes.append(terms)
+    for names in meta.unique_together or ():
+        terms = _plain_field_terms(meta, names)
+        if terms is None:
+            saw_uninspectable = True
+        else:
+            shapes.append(terms)
+    shapes.extend(
+        [(field.attname, False)]
+        for field in meta.concrete_fields
+        if field.primary_key
+        or getattr(field, "unique", False)
+        or getattr(field, "db_index", False)
+    )
+    return shapes, saw_uninspectable
+
+
+def _index_coverage(
+    related_model: type[models.Model],
+    equality: Sequence[str],
+    order_terms: Sequence[tuple[str, bool]],
+) -> str:
+    """Tri-state classify whether a represented index covers the window's leading shape.
+
+    Returns ``_INDEX_COVERED`` when some inspectable physical index shape
+    (``_model_index_shapes``: an unconditional field-based ``Index`` /
+    ``UniqueConstraint`` / ``unique_together``, or a single equality column's
+    field-level ``db_index`` / ``unique`` / FK auto-index) serves the
+    ``(equality prefix, order terms)`` shape; ``_INDEX_UNKNOWN`` when a covering
+    index is not represented but at least one index could not be classified
+    (expression / partial index, migration-lagged field), so absence is
+    unproven; ``_INDEX_ABSENT`` only when every represented index is inspectable
+    and none covers. The caller warns solely on ``_INDEX_ABSENT`` - "not
+    represented in model metadata" is never conflated with "proved absent" (a
+    DBA-created index outside model metadata stays invisible here).
+    """
+    shapes, saw_uninspectable = _model_index_shapes(related_model._meta)
+    for index_terms in shapes:
+        if _index_serves_window(index_terms, equality, order_terms):
+            return _INDEX_COVERED
+    return _INDEX_UNKNOWN if saw_uninspectable else _INDEX_ABSENT
+
+
+def _describe_index_columns(
+    equality: Sequence[str],
+    order_terms: Sequence[tuple[str, bool]],
+) -> list[str]:
+    """Render the recommended composite-index columns, annotating descending order.
+
+    Equality columns carry no direction (an equality predicate is
+    direction-agnostic); each order column shows ``DESC`` when the requested
+    ordering is descending so the advisory names the exact B-tree shape.
+    """
+    columns = list(equality)
+    for attname, descending in order_terms:
+        columns.append(f"{attname} DESC" if descending else attname)
+    return columns
+
+
+# Bounded dedup so ONE plan shape warns at most once even when its plan is
+# rebuilt on every request. Plans carrying a custom ``get_queryset`` (a common
+# visibility-scoped nested connection) are intentionally excluded from the
+# extension's cross-request plan cache, so ``plan_connection_relation`` re-runs
+# this advisory per request; without the guard the same DEBUG warning repeats
+# every request and buries genuinely new plan shapes in the noise, breaking the
+# README / module "one advisory per plan shape" promise. The key is strategy-
+# AND request-INDEPENDENT: ``(model label, equality-prefix columns, order
+# terms)`` is the entire input that determines the recommended index, so two
+# rebuilds of one shape collapse while genuinely different shapes (a different
+# model, connector, morph prefix, or order) each still warn once - the strategy
+# is deliberately excluded so switching strategies never re-emits. Bounded LRU
+# (cap ``_MAX_INDEX_ADVISORY_KEYS``) so a pathological variety of plan shapes
+# cannot grow the process's memory without limit; eviction only re-emits a
+# long-cold advisory, never a wrong one. Reset between tests via
+# ``clear_index_advisory_dedup`` - the same module-cache reset seam the suite
+# uses for the registry / connection-type caches (this is DEBUG-toggle sensitive
+# under ``override_settings``, so advisory tests must clear it per test).
+_MAX_INDEX_ADVISORY_KEYS = 512
+_IndexAdvisoryKey = tuple[str, tuple[str, ...], tuple[tuple[str, bool], ...]]
+_index_advisory_seen: OrderedDict[_IndexAdvisoryKey, None] = OrderedDict()
+
+
+def clear_index_advisory_dedup() -> None:
+    """Reset the composite-index advisory dedup (module-cache test-isolation seam)."""
+    _index_advisory_seen.clear()
+
+
+def _index_advisory_already_emitted(key: _IndexAdvisoryKey) -> bool:
+    """Record ``key`` in the bounded LRU; return whether it was ALREADY present.
+
+    A hit promotes the key (LRU recency) and suppresses a repeat emission; a
+    miss inserts it and evicts the least-recently-emitted key past the cap. The
+    ``KeyError`` suppression guards the (benign) concurrent-eviction race one
+    process-wide dedup shared across extension instances and threads can hit -
+    a dropped or double record only changes whether a cold shape re-warns, never
+    correctness, exactly like the extension's cross-request LRUs.
+    """
+    if key in _index_advisory_seen:
+        with suppress(KeyError):
+            _index_advisory_seen.move_to_end(key)
+        return True
+    _index_advisory_seen[key] = None
+    if len(_index_advisory_seen) > _MAX_INDEX_ADVISORY_KEYS:
+        with suppress(KeyError):
+            _index_advisory_seen.popitem(last=False)
+    return False
+
+
+def _advise_composite_index(
+    related_model: type[models.Model],
+    join: RelationJoinDescriptor,
+    order_by: Sequence[Any],
+) -> None:
+    """Emit a dev-mode advisory when no index covers a nested window's leading columns.
+
+    A windowed or lateral nested connection equality-constrains the child
+    connector column (``join.parent_join_column``) - and, for a
+    ``GenericRelation``, the ``content_type_id`` morph column
+    (``join.content_type_column``) ahead of it - then orders by the deterministic
+    order terms, so a composite index whose leading columns mirror
+    ``(content_type_id?, connector, order terms..., pk)`` lets the database serve
+    each partition's page from the index instead of sorting per partition (the
+    keyset composite mirrors ``keyset.py::keyset_seek_q``'s redundant-leading-bound
+    design). Direction is load-bearing: a B-tree serves only the requested order
+    or its FULL reverse after the equality prefix.
+
+    Coverage is inspected against every physical index shape Django model
+    metadata REPRESENTS, not only ``Meta.indexes``: unconditional field-based
+    ``Meta.indexes``, ``Meta.constraints`` unique constraints, legacy
+    ``unique_together``, and field-level primary-key / unique / ``db_index``
+    columns (``_model_index_shapes``). A covering ``UniqueConstraint`` therefore
+    correctly silences the advisory.
+
+    This is advisory ONLY: it never raises, and logs at ``WARNING`` only under
+    ``settings.DEBUG`` (``DEBUG`` off -> ``debug``). It stays SILENT unless
+    absence is proven from fully-inspectable metadata. That fail-soft tri-state
+    spans BOTH ends of the comparison: a non-B-tree / expression / partial index
+    (or any shape the represented metadata cannot classify) leaves index
+    coverage UNKNOWN, AND an effective ORDER term that is not a local concrete
+    column (a related span, a ``Lower("title")`` expression, an alias, an
+    unresolvable name - ``_concrete_order_terms`` returns ``None``) leaves the
+    SQL order only partially understood; either UNKNOWN keeps the advisory silent
+    so it never claims coverage from - or recommends an index covering only - the
+    remaining suffix. A DBA-created index absent from Django model metadata is
+    never visible here, so the wording frames the recommendation as advisory
+    rather than asserting the index does not exist.
+
+    Called once per plan shape from ``plan_connection_relation`` AFTER the first
+    window a strategy accepts (a strategy that refuses every window plans no
+    window, so it must advise no window index); cross-request plan caching
+    handles the cached shapes, and the bounded ``_index_advisory_seen`` dedup
+    handles the request-scoped shapes a custom ``get_queryset`` keeps OUT of that
+    cache, so a given ``(model, equality prefix, order terms)`` shape warns at
+    most once.
+    """
+    connector = join.parent_join_column
+    if connector is None:
+        return
+    equality: list[str] = []
+    if join.content_type_column is not None:
+        append_unique(equality, join.content_type_column)
+    append_unique(equality, connector)
+    order_terms = _concrete_order_terms(order_by, related_model)
+    if order_terms is None:
+        # Order-parsing UNKNOWN dominates: some effective ordering term is not a
+        # local concrete ``(attname, direction)`` (or carries explicit NULLS
+        # placement), so the SQL order is only partially understood - stay silent
+        # rather than claim a false coverage or recommend an index that omits the
+        # unrepresented term.
+        return
+    # The window equality-constrains every ``equality`` column (the connector,
+    # and for a ``GenericRelation`` the ``content_type_id`` morph column), so each
+    # is CONSTANT within a partition and contributes nothing to the
+    # within-partition order. Strip them to the EFFECTIVE order before comparison
+    # and rendering, or an order like ``parent_id, title, id`` would be checked
+    # against - and recommended as - ``(parent_id, parent_id, title, id)``,
+    # falsely reporting the real ``(parent_id, title, id)`` index absent and
+    # naming a duplicated column (the P2-3 defect).
+    equality_columns = set(equality)
+    effective_order = [term for term in order_terms if term[0] not in equality_columns]
+    if _index_coverage(related_model, equality, effective_order) != _INDEX_ABSENT:
+        return
+    if _index_advisory_already_emitted(
+        (related_model._meta.label, tuple(equality), tuple(effective_order)),
+    ):
+        return
+    columns = _describe_index_columns(equality, effective_order)
+    log = logger.warning if settings.DEBUG else logger.debug
+    log(
+        "Optimizer: nested connection on %s.%s has no represented index covering the "
+        "window's leading columns %s; a composite index on (%s) would let the database "
+        "serve each page from the index instead of sorting per partition. Advisory only "
+        "(an index absent from Django model metadata is not visible here).",
+        related_model._meta.app_label,
+        related_model._meta.object_name,
+        columns,
+        ", ".join(columns),
+    )
+
+
 def _project_scalar_only_window(
     child_queryset: Any,
     django_field: Any,
@@ -159,6 +688,18 @@ def _project_scalar_only_window(
     connector = _connector_only_field(django_field)
     if connector is not None:
         append_unique(fields, connector)
+    # GenericRelation: the connector above is only the ``object_id`` side.
+    # Django's ``GenericRelatedObjectManager.get_prefetch_querysets`` attaches
+    # each fetched child to its parent by reading the child's ``content_type_id``
+    # (its ``rel_obj_attr`` key is ``(object_id, content_type_id)``), so a
+    # scalar-only window that ``.only()``-masks that column would deferred-refetch
+    # it once per row (an N+1 in sync, ``SynchronousOnlyOperation`` in async).
+    # Include the content-type attname so the attach key is already loaded - this
+    # stays required even though the morph WHERE is now alias-late (Django's, not
+    # the planner's): the attach happens regardless of where the predicate lives.
+    content_type_field_name = getattr(django_field, "content_type_field_name", None)
+    if content_type_field_name is not None:
+        append_unique(fields, related_model._meta.get_field(content_type_field_name).attname)
     for column in _concrete_order_columns(order_by, related_model):
         append_unique(fields, column)
     return child_queryset.only(*fields)
@@ -816,6 +1357,28 @@ def plan_connection_relation(
         base_queryset=base_queryset,
         enable_only=enable_only,
     )
+    # GenericRelation morph predicate: NOT injected at plan time. The window
+    # partitions by the child ``object_id`` column alone, so the parent's morph
+    # content type must still constrain the scan - but resolving a ``ContentType``
+    # here is alias-EARLY and DB I/O in the planner: the child queryset is
+    # unrouted (``_default_manager.all()``, ``_db is None``), so ``.db`` asks the
+    # router without the parent-instance hint and commonly returns ``default``,
+    # baking a constant that is wrong under a divergent router (the ct pk can
+    # differ per shard) AND a cached plan preserves; on a cold ``ContentType``
+    # cache under async execution the lookup can raise ``SynchronousOnlyOperation``.
+    # Django's own ``GenericRelatedObjectManager.get_prefetch_querysets`` adds the
+    # correct alias-late predicate at fetch time - ``.using(queryset._db or
+    # self._db)`` picks the parent instances' alias, ``get_content_type(obj)``
+    # resolves the ct against THAT alias, and ``queryset.filter(
+    # content_type__pk=..., object_id__in=...)`` is a base-column WHERE that
+    # Django's qualify wrapping keeps INSIDE the window subquery (verified against
+    # the compiled SQL: the morph predicate lands in the ``FROM`` the
+    # ``ROW_NUMBER``/``COUNT`` windows partition over, only the row-number range
+    # filter is pushed outside). Re-deriving it here would only DUPLICATE that
+    # predicate with a possibly-wrong constant; the lateral backend refuses the
+    # generic join (``parent_link_field=None``) and runs this same windowed body,
+    # so both paths inherit Django's fetch-time morph. The ``for_concrete_model``
+    # an MTI parent needs is honored by Django's manager too.
     # No post-build re-check: the classified base queryset is the single
     # strategy-independent gate; later child-plan application only adds the
     # package's optimizer directives.
@@ -859,26 +1422,22 @@ def plan_connection_relation(
     # (the n+1 overfetch probe): annotate the per-partition ``Count(1) OVER``
     # only when something needs it. The two selection observers come from the
     # shared per-selection walks (``selections.py``), computed ONCE here and
-    # reused for both the count decision and the probe decision (their OR is
-    # what ``connection_count_required`` returns; splitting them avoids
-    # re-walking the selection). ``totalCount`` selected or the window SHAPE
-    # needing the count (``requires_total_count``: the ambiguous-empty marker
-    # shapes serve counts from it, workstream C; an unbounded limit keeps it
-    # conservatively) forces the annotation. A plain ``first: N`` page
-    # selecting ``pageInfo.hasNextPage`` but NOT ``totalCount`` takes the probe
-    # instead: overfetch one sentinel row (``fetch_*`` bounds) so the row's
-    # presence answers ``hasNextPage`` without a partition scan. The probe
-    # decision is ``WindowRangePlan.wants_next_page_probe``, made HERE only:
+    # reused for the single fetch-mode decision (their OR is what
+    # ``connection_count_required`` returns; splitting them avoids re-walking
+    # the selection). Both the count and the probe are DERIVED from one
+    # ``WindowRangePlan.fetch_mode`` value below - the shared ``FetchMode``
+    # source of truth - so the two decisions cannot drift from each other or
+    # from the resolver's physical-shape reads. The decision is made HERE only:
     # ``sel`` is the merged (union) selection when aliases share this relation,
-    # so the resolver must not re-derive the probe per response
-    # key - it reads the decision back off the window's physical shape (count
-    # annotation absent on a plain first page), which stays truthful only
-    # while ``next_page_probe`` and ``with_total_count`` below remain mutually
-    # exclusive (``_resolve_from_window`` documents that invariant; the
-    # ``NestedConnectionRequest`` seam enforces it per window). Under the
-    # divergent scheme the observers stay UNION-conservative on purpose: a
-    # sibling alias selecting ``totalCount`` keeps every per-key window on the
-    # count (no probe) - correct for each window, one shared decision input.
+    # so the resolver must not re-derive the mode per response key - it reads it
+    # back off the window's physical shape (count annotation absent on a
+    # probe-eligible page), which stays truthful only while ``FetchMode``'s
+    # ``PROBED`` and ``COUNTED`` stay mutually exclusive (``_resolve_from_window``
+    # documents that invariant; the ``NestedConnectionRequest`` seam enforces it
+    # per window). Under the divergent scheme the observers stay
+    # UNION-conservative on purpose: a sibling alias selecting ``totalCount``
+    # keeps every per-key window on the count (no probe) - correct for each
+    # window, one shared decision input.
     total_selected = connection_total_count_selected(sel)
     has_next_selected = connection_has_next_page_selected(sel)
     # (g) Hand one fully-resolved fetch request PER WINDOW to the active
@@ -889,18 +1448,43 @@ def plan_connection_relation(
     # O(parents x aliases) per-parent fallbacks). A strategy returning
     # ``False`` leaves that window unplanned, keeping the Decision-6
     # strictness contract (no resolver identities recorded for it).
+    # Strategy selection (optimizer-improvement-plan WS-D D1): a per-field
+    # ``OptimizerHint.strategy(name)`` overrides the extension default; otherwise
+    # the active strategy applies. It is field-static (the same for every keyed
+    # window), so resolve it once here rather than per window. The composite-index
+    # advisory (WS-D D2) is likewise field-static, but it is emitted from INSIDE
+    # the loop, only after the FIRST window a strategy accepts - a public
+    # consumer-authored strategy may return ``False`` for every window (no nested
+    # window planned, the per-parent fallback runs), and advising a composite
+    # WINDOW index for a backend that will not run is confusing under strictness.
+    # It still fires at most ONCE per plan build (the ``advised`` latch): the
+    # recommendation is identical for every keyed window. Across requests it
+    # self-dedupes on ``(model, equality prefix, order terms)`` so a request-scoped
+    # plan a custom ``get_queryset`` keeps out of the cross-request plan cache
+    # (rebuilt every request) still warns at most once, honoring the "one advisory
+    # per plan shape" promise.
+    strategy = _select_nested_strategy(hints_map.get(relation_field_name))
     planned_keys: list[str | None] = []
+    advised = False
     for resp_key, (offset, limit, reverse), window_seek in keyed_windows:
         range_plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
-        next_page_probe = range_plan.wants_next_page_probe(
+        # Count policy (optimizer-improvement-plan WS-A A0/A1/A2), now derived
+        # from the ONE shared ``FetchMode`` value instead of two independent
+        # expressions: ``COUNTED`` annotates the per-partition ``Count(1) OVER``
+        # (``totalCount`` observed, or the ``first: 0`` marker shape); ``PROBED``
+        # overfetches one sentinel row (``fetch_*`` bounds) so its presence
+        # answers ``hasNextPage`` without a partition scan (plain-first / bounded
+        # offset page); ``CONSTANT_FALSE`` / ``NONE`` need neither (unbounded
+        # forward and reversed pages end at the partition tail; an edges-only page
+        # observes no count-derived field). ``fetch_mode`` reads ``range_plan``'s
+        # already-normalized ``limit`` (``window_range_plan`` folded the loop-local
+        # ``sys.maxsize`` bound to ``None``), so the ``first: 0`` check is exact.
+        mode = range_plan.fetch_mode(
             has_next_selected=has_next_selected,
             total_selected=total_selected,
         )
-        with_total_count = (
-            range_plan.requires_total_count
-            or total_selected
-            or (has_next_selected and not next_page_probe)
-        )
+        with_total_count = mode is FetchMode.COUNTED
+        next_page_probe = mode is FetchMode.PROBED
         request = NestedConnectionRequest(
             django_field=raw_relation_field,
             relation_field_name=relation_field_name,
@@ -921,11 +1505,15 @@ def plan_connection_relation(
             ),
             lookup=f"{prefix}{instance_accessor(django_field)}",
         )
-        strategy = active_strategy()
         strategy_plan = OptimizationPlan()
         if strategy.plan(request, strategy_plan):
             plan.merge_from(strategy_plan)
             planned_keys.append(resp_key)
+            if not advised:
+                # First accepted window: emit the field-static composite-index
+                # advisory exactly once (see the note above the loop).
+                _advise_composite_index(django_field.related_model, join, order_by)
+                advised = True
         else:
             _log_connection_fallback(
                 relation_field_name,

@@ -6,7 +6,7 @@ Covers ``FieldMeta.from_django_field``, definition-backed field maps on
 
 import pytest
 import strawberry
-from apps.library.models import Book, Genre, MembershipCard, Patron
+from apps.library.models import Book, Branch, Genre, MembershipCard, Patron, TaggedItem
 from apps.products import services
 from apps.products.models import Category, Item
 from django.db import models
@@ -181,6 +181,28 @@ def test_from_django_field_many_to_many():
     assert fm.nullable is False
 
 
+def test_from_django_field_generic_relation():
+    """A ``GenericRelation`` populates the content-type / object-id slots and classifies generic.
+
+    The duck-typed detector reads the two slots as non-``None`` (never
+    ``hasattr``, since a slotted ``FieldMeta`` always carries them), so the
+    snapshot must classify identically to the raw ``GenericRelation`` -
+    ``"generic"``, many-side.
+    """
+    tags_field = Branch._meta.get_field("tags")
+    fm = FieldMeta.from_django_field(tags_field)
+    assert fm.name == "tags"
+    assert fm.is_relation is True
+    assert fm.related_model is TaggedItem
+    assert fm.content_type_field_name == "content_type"
+    assert fm.object_id_field_name == "object_id"
+    assert fm.relation_kind == "generic"
+    assert fm.is_many_side is True
+    # A non-generic field leaves both slots ``None`` (the fallback the detector
+    # must NOT read as generic).
+    assert FieldMeta.from_django_field(Book._meta.get_field("genres")).object_id_field_name is None
+
+
 def test_from_django_field_one_to_one():
     """Forward OneToOne sets one_to_one=True with attname and target field."""
     patron_field = MembershipCard._meta.get_field("patron")
@@ -268,6 +290,13 @@ def test_is_many_side_pins_every_relation_kind():
         auto_created=True,
     )
     forward_single = FieldMeta(name="forward_single", is_relation=True)
+    generic = FieldMeta(
+        name="generic",
+        is_relation=True,
+        one_to_many=True,
+        content_type_field_name="content_type",
+        object_id_field_name="object_id",
+    )
 
     assert forward_m2m.relation_kind == "many"
     assert forward_m2m.is_many_side is True
@@ -280,6 +309,9 @@ def test_is_many_side_pins_every_relation_kind():
 
     assert forward_single.relation_kind == "forward_single"
     assert forward_single.is_many_side is False
+
+    assert generic.relation_kind == "generic"
+    assert generic.is_many_side is True
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +461,26 @@ def test_can_elide_fk_id_reads_stamped_field_meta_and_raw_django_field():
     reverse = FieldMeta.from_django_field(items_field)
     assert FieldMeta.can_elide_fk_id(reverse) is False
     assert FieldMeta.can_elide_fk_id(items_field) is False
+
+
+def test_can_elide_fk_id_reads_stamped_duck_typed_shape():
+    """A non-FieldMeta stamp carrying a non-None ``fk_id_elision_eligible`` is trusted.
+
+    Duck-typed stamps that are not ``FieldMeta`` (nor raw Django fields) short-
+    circuit on the stamped bool rather than rebuilding through
+    ``_from_field_shape``.
+    """
+    from types import SimpleNamespace
+
+    assert FieldMeta.can_elide_fk_id(SimpleNamespace(fk_id_elision_eligible=True)) is True
+    assert FieldMeta.can_elide_fk_id(SimpleNamespace(fk_id_elision_eligible=False)) is False
+
+
+def test_target_pk_name_of_reads_stamped_duck_typed_shape():
+    """A non-FieldMeta stamp carrying a non-None ``target_pk_name`` is trusted."""
+    from types import SimpleNamespace
+
+    assert FieldMeta.target_pk_name_of(SimpleNamespace(target_pk_name="uuid")) == "uuid"
 
 
 def test_target_pk_name_of_trusts_stamped_none_on_field_meta():

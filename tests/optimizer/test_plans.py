@@ -891,30 +891,53 @@ class TestApplyWindowPagination:
         assert "<= 3" not in sql  # NOT the plain page bound
         assert " OR " not in sql  # a probe is not a marker shape
 
-    def test_next_page_probe_ignored_off_the_plain_first_page_shape(self):
-        """The probe flag is inert on non-plain shapes (bound stays the page bound).
+    def test_next_page_probe_composes_with_marker_on_the_offset_page(self):
+        """WS-A: the bounded forward offset page overfetches the sentinel AND markers.
 
-        ``window_range_plan`` normalizes ``next_page_probe`` to the
-        ``plain_first_page`` shape, so an ``after``-offset window passed the flag
-        keeps its plain ``<= offset + limit`` bound - no accidental overfetch.
+        ``next_page_probe`` now engages on the offset page too, composing with the
+        marker: the range bound becomes ``<= offset + limit + 1`` (the n+1 sentinel
+        via ``fetch_upper_bound``) OR'd with the ``= 1`` marker alternative, and no
+        count is annotated. This is the load-bearing WS-A change - the offset page
+        stops paying ``Count(1) OVER`` for a ``hasNextPage``-only selection.
         """
-        qs = self._windowed(offset=2, limit=3, next_page_probe=True)
+        qs = self._windowed(offset=2, limit=3, with_total_count=False, next_page_probe=True)
+        annotations = qs.query.annotations
+        assert WINDOW_ROW_NUMBER in annotations
+        assert WINDOW_TOTAL_COUNT not in annotations
         sql = str(qs.query).upper()
-        assert "<= 5" in sql  # offset 2 + limit 3, no +1
-        assert "<= 6" not in sql
+        assert "> 2" in sql
+        assert "<= 6" in sql  # offset 2 + limit 3 + 1 sentinel
+        assert "<= 5" not in sql  # NOT the plain page bound
+        assert "= 1" in sql  # the marker alternative
+        assert " OR " in sql  # marker composes with the probe bound
+
+    def test_next_page_probe_inert_on_the_unbounded_offset_shape(self):
+        """The probe flag stays inert on the unbounded offset page (no finite bound).
+
+        An ``after``-offset window with no ``first`` has no upper bound for the
+        sentinel to sit past, so ``window_range_plan`` drops the probe and the
+        window keeps its marker-only shape (``> offset`` OR ``= 1``).
+        """
+        qs = self._windowed(offset=3, limit=None, next_page_probe=True)
+        sql = str(qs.query).upper()
+        assert "> 3" in sql
+        assert "= 1" in sql  # marker only
+        assert "<= " not in sql  # no finite fetch ceiling
 
     def test_engaged_probe_with_count_is_rejected(self):
         """An engaged-probe window that also annotates the count fails loudly.
 
         The probe/count mutual-exclusion contract at the ORM window entry point
-        (``utils/connections.py::assert_window_fetch_mode``): a ``plain_first_page``
-        window (offset 0, ``limit`` > 0) with ``next_page_probe=True`` engages the
-        overfetch, so ``with_total_count=True`` is a planner bug - the sentinel
-        would leak as a real edge. The off-shape case is inert and stays allowed
-        (``test_next_page_probe_ignored_off_the_plain_first_page_shape`` above).
+        (``utils/connections.py::assert_window_fetch_mode``): a probe-eligible
+        window (the plain first page OR the bounded forward offset page) with
+        ``next_page_probe=True`` engages the overfetch, so ``with_total_count=True``
+        is a planner bug - the sentinel would leak as a real edge. The unbounded
+        offset case is inert and stays allowed
+        (``test_next_page_probe_inert_on_the_unbounded_offset_shape`` above).
         """
-        with pytest.raises(OptimizerError, match="mutually exclusive"):
-            self._windowed(offset=0, limit=3, with_total_count=True, next_page_probe=True)
+        for offset in (0, 2):
+            with pytest.raises(OptimizerError, match="mutually exclusive"):
+                self._windowed(offset=offset, limit=3, with_total_count=True, next_page_probe=True)
 
     def test_with_total_count_false_reverse_branch_still_bounds(self):
         """The reverse (last-only) branch honors ``with_total_count=False`` too."""
@@ -1108,6 +1131,22 @@ class TestDeterministicOrderHoistParity:
         from django.db.models.functions import Lower
 
         assert ends_in_unique_column((Lower("name"),), Category) is False
+
+    def test_ends_in_unique_column_nullable_unique_is_not_total_order(self):
+        """A NULLABLE unique terminal is NOT a total order (WS-E step 1).
+
+        SQL ``UNIQUE`` permits multiple NULLs, so terminal ties among NULL rows
+        are nondeterministic - the pk must still be appended. ``NullableScalarSpecimen.label``
+        is ``unique=True, null=True``: unique but not a total order.
+        """
+        from apps.scalars.models import NullableScalarSpecimen
+
+        assert ends_in_unique_column(("label",), NullableScalarSpecimen) is False
+        # So the pk is appended as the terminal tiebreaker.
+        assert deterministic_order(("label",), NullableScalarSpecimen) == ("label", "id")
+        # Contrast: a NON-nullable unique terminal remains a total order.
+        assert ends_in_unique_column(("name",), Category) is True
+        assert deterministic_order(("name",), Category) == ("name",)
 
     def test_deterministic_order_appends_pk_when_not_unique(self):
         """A non-unique terminal gets the pk appended; a unique one is returned unchanged."""

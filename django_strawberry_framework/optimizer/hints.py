@@ -30,6 +30,20 @@ from django.db.models import Prefetch
 
 from ..exceptions import ConfigurationError
 
+# The shared public strategy-selection type (and the validator it feeds) are
+# owned by ``nested_fetch`` beside ``NestedConnectionStrategy``. They are
+# imported at RUNTIME, not under ``TYPE_CHECKING``: ``StrategySelection``
+# annotates the public ``nested_strategy`` field / ``strategy()`` factory, and a
+# runtime consumer calling ``typing.get_type_hints(OptimizerHint)`` (a docs
+# generator, a runtime-validation library, an IDE bridge) must be able to
+# resolve that name from this module's globals - a ``TYPE_CHECKING``-only import
+# leaves the postponed annotation unresolvable and raises ``NameError``. There
+# is NO import cycle to guard against: ``nested_fetch`` and its transitive
+# imports (``plans`` / ``join_taxonomy`` / ``utils.connections`` /
+# ``exceptions``) never import this module, so a plain runtime import is the
+# smallest correct fix.
+from .nested_fetch import StrategySelection, resolve_strategy
+
 # ``Prefetch`` is imported at runtime (not under ``TYPE_CHECKING``) because
 # ``_require_prefetch`` performs an ``isinstance(..., Prefetch)`` validation;
 # the field annotation ``Prefetch | None`` is also string-deferred by
@@ -71,12 +85,24 @@ class OptimizerHint:
         prefetch_obj: A specific ``django.db.models.Prefetch`` instance
             to use instead of the auto-generated lookup string.
         skip: Exclude this relation from the optimization plan entirely.
+        nested_strategy: Override the nested-connection fetch strategy for a
+            Relay connection field (a registered strategy name such as
+            ``"windowed"`` / ``"lateral"``, ``"auto"``, or a
+            ``NestedConnectionStrategy`` instance). Validated at construction
+            time through ``optimizer/nested_fetch.py::resolve_strategy``, so a
+            typo raises ``ConfigurationError`` at ``Meta.optimizer_hints`` build
+            time. The knob is schema-static and needs NO plan-cache-key change:
+            the plan cache is instance-bound (``optimizer/extension.py``
+            Decision 11), so strategy selection never depends on request-varying
+            data. Strategy selection MUST never depend on request-varying data
+            outside the cache key.
     """
 
     force_select: bool = False
     force_prefetch: bool = False
     prefetch_obj: Prefetch | None = None
     skip: bool = False
+    nested_strategy: StrategySelection | None = None
 
     # ------------------------------------------------------------------
     # Class-level sentinel
@@ -126,10 +152,37 @@ class OptimizerHint:
                     "OptimizerHint.prefetch(obj) (prefetch_obj=...) cannot be combined "
                     "with select_related() or prefetch_related().",
                 )
+        if self.nested_strategy is not None:
+            # A connection is always a prefetch, so ``skip``/``prefetch(obj)``/
+            # ``select_related()`` are incoherent with a strategy override;
+            # ``force_prefetch`` is redundant-but-harmless and stays allowed.
+            if self.skip or self.prefetch_obj is not None or self.force_select:
+                raise ConfigurationError(
+                    "OptimizerHint.strategy(name) (nested_strategy=...) cannot be combined "
+                    "with SKIP (skip=True), prefetch(obj), or select_related(); force_prefetch "
+                    "is redundant but allowed.",
+                )
+            # Route the name through ``resolve_strategy`` for typo-loud
+            # ConfigurationError parity (module-level import above; no cycle).
+            resolve_strategy(self.nested_strategy)
 
     # ------------------------------------------------------------------
     # Factory classmethods
     # ------------------------------------------------------------------
+
+    @classmethod
+    def strategy(cls, name: StrategySelection) -> OptimizerHint:
+        """Override the nested-connection fetch strategy for this field.
+
+        ``name`` is a registered strategy name (``"windowed"`` / ``"lateral"``),
+        ``"auto"``, or a ``NestedConnectionStrategy`` instance. It is validated
+        at construction time through
+        ``optimizer/nested_fetch.py::resolve_strategy`` (see ``__post_init__``),
+        so a typo raises ``ConfigurationError`` at ``Meta.optimizer_hints``
+        build time rather than at query time. Applies only to Relay connection
+        fields; a non-connection field silently ignores the override.
+        """
+        return cls(nested_strategy=name)
 
     @classmethod
     def select_related(cls) -> OptimizerHint:

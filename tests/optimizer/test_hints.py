@@ -93,6 +93,89 @@ class TestPrefetchFactory:
             OptimizerHint.prefetch(None)  # type: ignore[arg-type]
 
 
+class TestStrategyFactory:
+    """``OptimizerHint.strategy(name)`` overrides the nested-connection strategy."""
+
+    def test_stores_name(self) -> None:
+        """The factory carries the strategy name on ``nested_strategy``."""
+        hint = OptimizerHint.strategy("windowed")
+        assert hint.nested_strategy == "windowed"
+
+    def test_no_other_flags(self) -> None:
+        """No skip / select / prefetch flags come along for the ride."""
+        hint = OptimizerHint.strategy("lateral")
+        assert hint.skip is False
+        assert hint.force_select is False
+        assert hint.force_prefetch is False
+        assert hint.prefetch_obj is None
+
+    def test_default_hint_has_no_strategy(self) -> None:
+        """An unspecified ``nested_strategy`` stays ``None``."""
+        assert OptimizerHint().nested_strategy is None
+        assert OptimizerHint.SKIP.nested_strategy is None
+
+    def test_accepts_lateral_and_auto(self) -> None:
+        """``lateral`` and ``auto`` are registered / resolvable names."""
+        assert OptimizerHint.strategy("lateral").nested_strategy == "lateral"
+        assert OptimizerHint.strategy("auto").nested_strategy == "auto"
+
+    def test_force_prefetch_is_redundant_but_allowed(self) -> None:
+        """``force_prefetch`` + ``nested_strategy`` is redundant, not rejected."""
+        hint = OptimizerHint(force_prefetch=True, nested_strategy="windowed")
+        assert hint.nested_strategy == "windowed"
+        assert hint.force_prefetch is True
+
+    def test_bad_name_raises_at_construction(self) -> None:
+        """A typo'd strategy name fails loud through ``resolve_strategy``."""
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
+            OptimizerHint.strategy("winowed")
+        with pytest.raises(ConfigurationError, match="Unknown nested_connection_strategy"):
+            OptimizerHint(nested_strategy="not-a-strategy")
+
+    def test_strategy_with_skip_raises(self) -> None:
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="nested_strategy"):
+            OptimizerHint(skip=True, nested_strategy="windowed")
+
+    def test_strategy_with_force_select_raises(self) -> None:
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="nested_strategy"):
+            OptimizerHint(force_select=True, nested_strategy="windowed")
+
+    def test_strategy_with_prefetch_obj_raises(self) -> None:
+        from django_strawberry_framework.exceptions import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="nested_strategy"):
+            OptimizerHint(prefetch_obj=Prefetch("items"), nested_strategy="windowed")
+
+    def test_public_annotations_resolve_at_runtime(self) -> None:
+        """``typing.get_type_hints(OptimizerHint)`` resolves ``StrategySelection``.
+
+        The public dataclass annotates ``nested_strategy`` (and the
+        ``strategy()`` factory) with ``StrategySelection``, whose name must live
+        in ``hints``' runtime globals so a docs generator / runtime-validation
+        library / IDE bridge doing an ordinary ``get_type_hints`` introspection
+        (no custom ``globalns``) does not hit ``NameError``. Regression against
+        the ``TYPE_CHECKING``-only import that resolved for static checkers but
+        left the postponed annotation unevaluable at runtime.
+        """
+        import typing
+
+        from django_strawberry_framework.optimizer.nested_fetch import (
+            NestedConnectionStrategy,
+        )
+
+        resolved = typing.get_type_hints(OptimizerHint)
+        assert resolved["nested_strategy"] == (str | NestedConnectionStrategy | None)
+        # The factory signature resolves too (no custom globalns workaround).
+        factory_hints = typing.get_type_hints(OptimizerHint.strategy)
+        assert factory_hints["name"] == (str | NestedConnectionStrategy)
+
+
 class TestFrozenImmutability:
     """Hints are frozen dataclasses - mutation raises."""
 

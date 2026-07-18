@@ -591,16 +591,20 @@ def connection_count_required(selection: Any) -> bool:
     each walk - and the resolve-time defensive fallback covers even a drift here.
 
     This is the generic observability gate, NOT the planner's final count
-    decision. The walker computes the ``totalCount`` and ``hasNextPage``
-    observers SEPARATELY (``walker.py::_plan_connection_relation``) and layers the
-    count-free probe exception on top: a plain ``first: N`` page that selects
-    ``hasNextPage`` but NOT ``totalCount`` is served by the n+1 overfetch probe
-    with NO ``_dst_total_count`` annotation
-    (``utils/connections.py::WindowRangePlan.wants_next_page_probe``), its
+    decision. The planner computes the ``totalCount`` and ``hasNextPage``
+    observers SEPARATELY
+    (``optimizer/nested_planner.py::plan_connection_relation``) and feeds them to
+    the single ``WindowRangePlan.fetch_mode`` decision: a plain ``first: N`` page
+    that selects ``hasNextPage`` but NOT ``totalCount`` resolves to
+    ``FetchMode.PROBED``, served by the n+1 overfetch probe with NO
+    ``_dst_total_count`` annotation (``utils/connections.py::FetchMode``), its
     ``hasNextPage`` read from the sentinel's presence rather than
-    ``row_number < total``. Every other count-observable shape still annotates
-    the count. So ``True`` here means "the count is observable"; the planner then
-    chooses count vs probe.
+    ``row_number < total``. Nor does every count-observable shape annotate the
+    count: an unbounded forward or reversed ``last``-only page with
+    ``hasNextPage`` selected resolves to ``FetchMode.CONSTANT_FALSE`` and serves
+    ``hasNextPage`` as a constant ``False`` with NO ``_dst_total_count`` either.
+    So ``True`` here means "the count is observable"; the fetch mode
+    then chooses count vs probe vs constant-false.
 
     Alias-merged selections carry the UNION of every alias's children
     (``walker.py::_merge_aliased_selections``), so one alias selecting

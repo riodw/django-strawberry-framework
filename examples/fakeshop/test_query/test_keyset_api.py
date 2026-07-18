@@ -471,6 +471,46 @@ def test_nested_keyset_count_free_page_uses_probe_not_partition_count():
 
 
 @pytest.mark.django_db
+def test_nested_keyset_unselected_cursor_column_is_not_lazy_loaded_per_edge():
+    """A node selection omitting the cursor columns still mints cursors in ONE query (WS-E step 3).
+
+    ``IssueType.cursor_field = ("-number", "id")``. When the node selection does
+    NOT select ``number`` (only ``title``), the scalar-only window projection
+    would ``.only("title", "id")`` and DEFER ``number`` - so minting each edge's
+    value cursor would lazy-load ``number`` once PER edge (an N+1). The already
+    -implemented ``_extend_only_projection`` (which killed the strawberry-django
+    ``annotate_ordering_fields`` port) folds the cursor columns back into the
+    projection, so the whole nested window stays a single batched prefetch with
+    zero per-edge lazy loads. Pinned here as live behavior.
+    """
+    _seed_periodicals()
+    query = """
+    {
+      allLibraryPeriodicalsConnection(first: 10) {
+        edges { node { name issuesConnection(first: 3) {
+          edges { cursor node { title } }
+        } } }
+      }
+    }
+    """
+    with CaptureQueriesContext(connection) as ctx:
+        data = _assert_graphql_success(query)
+    issue_queries = [q["sql"] for q in ctx.captured_queries if "library_issue" in q["sql"]]
+    # One batched window prefetch: no per-edge lazy-load of the deferred
+    # ``number`` cursor column.
+    assert len(issue_queries) == 1, issue_queries
+    # Cursors still mint correctly for every edge (the projection carried the
+    # cursor columns despite ``number`` not being selected).
+    by_name = {
+        e["node"]["name"]: e["node"]["issuesConnection"]
+        for e in data["allLibraryPeriodicalsConnection"]["edges"]
+    }
+    astronomy_edges = by_name["Astronomy Weekly"]["edges"]
+    assert [e["node"]["title"] for e in astronomy_edges] == ["Astro #5", "Astro #4", "Astro #3"]
+    assert all(edge["cursor"] for edge in astronomy_edges)
+
+
+@pytest.mark.django_db
 def test_nested_keyset_first_zero_serves_flags_from_markers():
     """``first: 0`` with a cursor: empty edges, true pre-seek count, value-domain flags."""
     _seed_periodicals()

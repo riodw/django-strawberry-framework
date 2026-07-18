@@ -73,8 +73,8 @@ from ._context import (
     stash_on_context as _stash_on_context,
 )
 from .hints import hint_is_skip
+from .nested_fetch import StrategySelection, resolve_strategy
 from .nested_fetch import _active_strategy as _active_nested_strategy
-from .nested_fetch import resolve_strategy
 from .plans import (
     diff_plan_for_queryset,
     lookup_paths,
@@ -820,7 +820,7 @@ class DjangoOptimizerExtension(SchemaExtension):
         strictness: str = "off",
         *,
         execution_context: Any = None,
-        nested_connection_strategy: Any = None,
+        nested_connection_strategy: StrategySelection | None = None,
     ) -> None:
         # Strawberry assigns ``extension.execution_context`` once per
         # operation. The documented singleton-factory form returns this SAME

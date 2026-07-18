@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any
 
 from strawberry.relay.utils import SliceMetadata
@@ -109,6 +110,64 @@ def has_connection_sidecar_kwargs(kwargs: dict[str, Any]) -> bool:
     return has_connection_sidecar_input(filter_input=filter_input, order_by_input=order_by_input)
 
 
+class FetchMode(Enum):
+    """The single fetch policy one window shape + its selection observers imply.
+
+    The ONE source of truth for the count/probe decision, so the policy cannot
+    drift between the planner
+    (``optimizer/nested_planner.py::plan_connection_relation``, which derives
+    ``with_total_count`` / ``next_page_probe`` from the mode) and the resolver
+    (``connection.py::_resolve_from_window``, which reads the mode's shared shape
+    predicates - ``probe_shape`` / ``constant_false_shape`` - off the returned
+    rows' physical shape). Four disjoint modes, computed by
+    ``WindowRangePlan.fetch_mode`` from ``(shape, total_selected,
+    has_next_selected)``:
+
+    * ``COUNTED`` - annotate the per-partition ``Count(1) OVER (PARTITION BY)``.
+      Fires when ``totalCount`` is observed OR on the ``first: 0`` shape
+      (``limit == 0``), whose marker IS a would-be sentinel (folding it into a
+      probe is a later refinement). Maps to ``with_total_count=True``.
+    * ``PROBED`` - serve ``hasNextPage`` from the count-free n+1 overfetch on a
+      probe-eligible shape (plain ``first: N`` OR the bounded forward offset
+      page) when ``hasNextPage`` is observed but ``totalCount`` is not. Maps to
+      ``next_page_probe=True``.
+    * ``CONSTANT_FALSE`` - serve ``hasNextPage`` as a constant ``False`` with no
+      count and no probe: an unbounded forward page ends at the partition tail
+      and a reversed ``last``-only page IS the tail.
+    * ``NONE`` - no count-derived field is observable (an edges-only bounded
+      forward page): neither a count nor a probe is needed.
+
+    ``COUNTED`` and ``PROBED`` are mutually exclusive (probe XOR count, the
+    invariant ``assert_window_fetch_mode`` enforces). ``CONSTANT_FALSE`` and
+    ``NONE`` both leave the window count-free with no probe - they yield the same
+    ``(with_total_count, next_page_probe)`` planner triple and differ only in the
+    resolve-time ``hasNextPage`` derivation (served ``False`` vs never read).
+    """
+
+    COUNTED = "counted"
+    PROBED = "probed"
+    CONSTANT_FALSE = "constant_false"
+    NONE = "none"
+
+
+def _is_probe_shape(
+    *,
+    offset: int,
+    limit: int | None,
+    reverse: bool,
+    plain_first_page: bool,
+) -> bool:
+    """Whether a window SHAPE can answer ``hasNextPage`` from an n+1 probe.
+
+    The single spelling of the probe-shape predicate - the plain ``first: N``
+    page (``plain_first_page``) OR the bounded forward offset page (``offset > 0``
+    with a positive ``limit``). Shared by ``window_range_plan`` (deciding whether
+    to honor a ``next_page_probe`` request) and ``WindowRangePlan.probe_shape``
+    (which the resolver and ``fetch_mode`` read), so the three cannot drift.
+    """
+    return plain_first_page or (not reverse and offset > 0 and limit is not None and limit > 0)
+
+
 def is_ambiguous_empty_window(offset: int, limit: int | None, *, reverse: bool = False) -> bool:
     """Whether this window shape can produce an AMBIGUOUS empty page.
 
@@ -121,9 +180,12 @@ def is_ambiguous_empty_window(offset: int, limit: int | None, *, reverse: bool =
     The plan-time/resolve-time contract shared - like the sidecar-kwarg family
     above - by everything that must agree on "ambiguous": the window builders
     that ADD the marker rows (``plans.py::window_range_plan``, feeding both
-    ``apply_window_pagination`` and the lateral SQL), the walker's forced
-    ``with_total_count`` for these shapes, and the resolver that CONSUMES rows
-    as marker-classified (``connection.py::_resolve_from_window``). One
+    ``apply_window_pagination`` and the lateral SQL) and the resolver that
+    CONSUMES rows as marker-classified (``connection.py::_resolve_from_window``).
+    The count decision is a SEPARATE axis owned by ``FetchMode`` /
+    ``WindowRangePlan.fetch_mode`` - these ambiguous shapes are NO LONGER
+    shape-forced to a count (WS-A): the offset page composes the count-free probe
+    with its marker, and only the ``first: 0`` marker still serves a count. One
     predicate so the plan side and the consume side cannot drift.
     """
     return not reverse and (offset > 0 or limit == 0)
@@ -140,27 +202,40 @@ class WindowRangePlan:
     is the inclusive ceiling; ``add_marker_rows`` keeps each partition's row 1
     for ambiguous empty-window shapes; ``plain_first_page`` marks the
     unambiguous ``first: N`` shape a renderer may express as plain
-    ``ORDER BY``/``LIMIT``; ``requires_total_count`` marks windows whose
-    resolution needs the partition count regardless of the selected fields.
+    ``ORDER BY``/``LIMIT``. The count-vs-probe policy is NOT a stored field: it
+    is derived on demand from ``fetch_mode`` (the single ``FetchMode`` source of
+    truth), whose ``COUNTED`` / ``PROBED`` values the planner maps to
+    ``with_total_count`` / ``next_page_probe`` and whose shape predicates
+    (``probe_shape`` / ``constant_false_shape``) the resolver reads off the rows.
 
     ``next_page_probe`` marks the count-free ``hasNextPage`` overfetch (the
-    n+1 probe): a ``plain_first_page`` window that fetches ONE sentinel row
-    past the page so ``hasNextPage`` is answered by the sentinel's presence
-    instead of a ``COUNT(1) OVER (PARTITION BY ...)`` that scans the whole
-    partition. It is honored only on the ``plain_first_page`` shape (every
-    other shape already needs the count for an independent reason), so it and
-    ``add_marker_rows`` are mutually exclusive by construction. The ``+1``
+    n+1 probe): a window that fetches ONE sentinel row past the page so
+    ``hasNextPage`` is answered by the sentinel's presence instead of a
+    ``COUNT(1) OVER (PARTITION BY ...)`` that scans the whole partition. It is
+    honored on the ``plain_first_page`` shape AND on the bounded forward
+    offset page (``offset > 0`` with a positive ``limit``); every OTHER shape
+    leaves the probe off, but that no longer implies a count. Under the WS-A
+    fetch policy (``FetchMode``) a shape needs the ``COUNT(1) OVER`` only when it
+    is ``COUNTED`` (``totalCount`` observed, or the ``first: 0`` marker shape) -
+    an unbounded forward or reversed ``last``-only page is ``CONSTANT_FALSE``
+    (``hasNextPage`` served as a constant ``False``, no count) and a bounded
+    edges-only page is ``NONE`` (nothing count-derived is observable), both
+    count-free. On the offset page the
+    probe COMPOSES with ``add_marker_rows`` (the marker keeps each partition's
+    row 1 while the sentinel answers ``hasNextPage``), so probe and markers are
+    NO LONGER mutually exclusive - but probe and count still are (probe XOR
+    count is the standing invariant, enforced by ``assert_window_fetch_mode``).
+    The ``+1``
     sentinel arithmetic lives in exactly one place - the ``_probe_increment``
     primitive that both ``fetch_upper_bound`` and ``fetch_limit`` add to the
     derived bounds the renderers read UNCONDITIONALLY; ``upper_bound`` /
     ``limit`` keep their PAGE semantics (the resolver's split and the marker
-    predicate depend on that). The plan-time decision is
-    ``wants_next_page_probe``, the pure
-    predicate the walker calls; the resolver does NOT re-derive it from the
-    selection (same-argument aliases share one window whose shape was fixed
-    from the MERGED selection, so a per-alias re-derivation would drift) - it
-    reads the probe off the window's physical shape instead
-    (``connection.py::_resolve_from_window``).
+    predicate depend on that). The plan-time decision is ``fetch_mode`` (whose
+    ``PROBED`` value the planner maps to ``next_page_probe``); the resolver does
+    NOT re-derive it from the selection (same-argument aliases share one window
+    whose shape was fixed from the MERGED selection, so a per-alias re-derivation
+    would drift) - it reads the probe off the window's physical shape instead
+    (``connection.py::_resolve_from_window``, via the shared ``probe_shape``).
     """
 
     offset: int
@@ -170,7 +245,6 @@ class WindowRangePlan:
     upper_bound: int | None
     add_marker_rows: bool
     plain_first_page: bool
-    requires_total_count: bool
     next_page_probe: bool = False
 
     @property
@@ -209,32 +283,70 @@ class WindowRangePlan:
             return None
         return self.limit + self._probe_increment
 
-    def wants_next_page_probe(self, *, has_next_selected: bool, total_selected: bool) -> bool:
-        """Whether this window should serve ``hasNextPage`` from an overfetch probe.
+    @property
+    def probe_shape(self) -> bool:
+        """Whether this window's SHAPE can answer ``hasNextPage`` from an n+1 probe.
 
-        True only for the ``plain_first_page`` shape (``first: N`` from the
-        start) when ``pageInfo.hasNextPage`` is selected and ``totalCount`` is
-        NOT: the sentinel row answers ``hasNextPage`` without the per-partition
-        count. Every other shape already forces the count (ambiguous /
-        unbounded / reversed windows via ``requires_total_count``, or a
-        genuinely-observable ``totalCount``), so the internal
-        ``plain_first_page`` re-check makes this self-normalizing and safe to
-        call on any plan.
-
-        The single implementation of the PLAN-time probe decision, called by
-        ``walker.py::_plan_connection_relation`` (feeding ``has_next_selected``
-        / ``total_selected`` from the ``optimizer/selections.py`` walks over
-        the merged selection). The resolver deliberately does NOT call this:
-        same-argument aliases share one window planned from the MERGED
-        selection, so re-deriving per alias from each response key's ``info``
-        would drift from the shared shape.
-        ``connection.py::_resolve_from_window`` instead reads the probe off the
-        window's physical shape (a ``plain_first_page`` window carrying no
-        ``_dst_total_count`` annotation), which IS this decision materialized -
-        sound because the walker keeps ``next_page_probe`` and
-        ``with_total_count`` mutually exclusive.
+        True for the plain ``first: N`` page (``plain_first_page``) AND the
+        bounded forward offset page (``offset > 0`` with a positive ``limit``) -
+        the shapes whose ``hasNextPage`` a single overfetched sentinel row
+        settles. Observer-free (the SHAPE half of ``FetchMode.PROBED``); the
+        selection observers are layered on in ``fetch_mode``. The resolver reads
+        this predicate off the window's physical shape to decide whether a
+        count-absent window was overfetched, so the plan-time and resolve-time
+        views of "is this a probe shape" cannot drift (both go through the shared
+        ``_is_probe_shape``).
         """
-        return self.plain_first_page and has_next_selected and not total_selected
+        return _is_probe_shape(
+            offset=self.offset,
+            limit=self.limit,
+            reverse=self.reverse,
+            plain_first_page=self.plain_first_page,
+        )
+
+    @property
+    def constant_false_shape(self) -> bool:
+        """Whether this window's SHAPE serves ``hasNextPage`` as a constant ``False``.
+
+        True for the unbounded forward page (no ``first`` -> the served page ends
+        at the partition's last row) and the reversed ``last``-only page (which
+        IS the tail). The SHAPE half of ``FetchMode.CONSTANT_FALSE``; both
+        ``fetch_mode`` and the resolver's count-absent ``hasNextPage`` drift-guard
+        exemption read it here. ``first: 0`` (``limit == 0``) is NOT constant-false
+        - it is counted - and a keyset-counted marker shape carries its count, so
+        both are excluded where this is consumed (``fetch_mode`` checks it only
+        after ``COUNTED``; the resolver gates it on ``total is None``).
+        """
+        return self.limit is None or self.reverse
+
+    def fetch_mode(self, *, has_next_selected: bool, total_selected: bool) -> FetchMode:
+        """Resolve the ONE ``FetchMode`` this window + selection observers imply.
+
+        The single source of truth the planner consumes for BOTH
+        ``with_total_count`` (``mode is FetchMode.COUNTED``) and
+        ``next_page_probe`` (``mode is FetchMode.PROBED``), replacing the two
+        formerly-independent derivations. Called by
+        ``optimizer/nested_planner.py::plan_connection_relation`` with the
+        ``totalCount`` / ``hasNextPage`` observers from the merged selection
+        (``optimizer/selections.py``). The resolver deliberately does NOT call
+        this: same-argument aliases share one window planned from the MERGED
+        selection, so re-deriving the mode per alias from each response key's
+        ``info`` would drift - it reads the mode's shared shape predicates
+        (``probe_shape`` / ``constant_false_shape``) off the window's physical
+        shape instead (``connection.py::_resolve_from_window``).
+
+        Order matters: ``COUNTED`` wins first (``totalCount`` observed, or the
+        ``first: 0`` marker shape), so a ``probe_shape`` window with an observable
+        ``totalCount`` is counted, never probed - keeping ``PROBED`` and
+        ``COUNTED`` mutually exclusive (probe XOR count).
+        """
+        if total_selected or self.limit == 0:
+            return FetchMode.COUNTED
+        if self.probe_shape and has_next_selected:
+            return FetchMode.PROBED
+        if self.constant_false_shape:
+            return FetchMode.CONSTANT_FALSE
+        return FetchMode.NONE
 
 
 def window_range_plan(
@@ -264,10 +376,12 @@ def window_range_plan(
       objects must not turn one into an absolute SQL row-number floor.
 
     ``next_page_probe`` (the count-free ``hasNextPage`` overfetch) is honored
-    only on the ``plain_first_page`` shape and ignored everywhere else, so a
-    caller may pass the raw decision through without re-checking the shape and
-    the ``add_marker_rows`` / ``next_page_probe`` fields stay mutually
-    exclusive by construction.
+    on the ``plain_first_page`` shape AND the bounded forward offset page
+    (``offset > 0`` with a positive ``limit``), and ignored everywhere else, so
+    a caller may pass the raw decision through without re-checking the shape. On
+    the offset page the probe COMPOSES with ``add_marker_rows`` (both fields set
+    at once); probe and count stay mutually exclusive by construction (probe XOR
+    count).
 
     ``keyset_counted`` marks the COUNTED keyset-seek window (a ``cursor_field``
     connection resolving ``after:`` with an observable count): its row numbers
@@ -291,6 +405,12 @@ def window_range_plan(
     upper_bound = (limit if reverse else offset + limit) if bounded else None
     ambiguous = keyset_counted or is_ambiguous_empty_window(offset, limit, reverse=reverse)
     plain_first_page = not reverse and offset == 0 and bounded and limit > 0
+    probe_shape = _is_probe_shape(
+        offset=offset,
+        limit=limit,
+        reverse=reverse,
+        plain_first_page=plain_first_page,
+    )
     return WindowRangePlan(
         offset=offset,
         limit=limit,
@@ -299,8 +419,7 @@ def window_range_plan(
         upper_bound=upper_bound,
         add_marker_rows=ambiguous and (lower_bound is not None or upper_bound is not None),
         plain_first_page=plain_first_page,
-        requires_total_count=ambiguous or limit is None,
-        next_page_probe=next_page_probe and plain_first_page and not keyset_counted,
+        next_page_probe=next_page_probe and probe_shape and not keyset_counted,
     )
 
 
@@ -308,15 +427,17 @@ def assert_window_fetch_mode(range_plan: WindowRangePlan, *, with_total_count: b
     """Enforce the probe/count mutual-exclusion contract on a RESOLVED window plan.
 
     The count-free ``hasNextPage`` probe (``range_plan.next_page_probe``, already
-    normalized by ``window_range_plan`` to the ``plain_first_page`` shape) fetches
-    one sentinel row past the page and answers ``hasNextPage`` from its presence.
-    A window that engages the probe must NOT also annotate the partition count:
-    the resolver infers "no probe" from a present ``_dst_total_count`` and would
-    pass the n+1 sentinel through as a real edge
-    (``connection.py::_resolve_from_window``). The invariant is the EFFECTIVE
-    state, not the raw flags - a ``next_page_probe`` request off the plain-first-page
-    shape is inert (``window_range_plan`` drops it), so it may coexist with the
-    count harmlessly and is not rejected here.
+    normalized by ``window_range_plan`` to the ``plain_first_page`` OR bounded
+    forward offset-page shape) fetches one sentinel row past the page and answers
+    ``hasNextPage`` from its presence. A window that engages the probe must NOT
+    also annotate the partition count: the resolver infers "no probe" from a
+    present ``_dst_total_count`` and would pass the n+1 sentinel through as a real
+    edge (``connection.py::_resolve_from_window``). The invariant is the
+    EFFECTIVE state, not the raw flags - a ``next_page_probe`` request off a
+    probe-eligible shape is inert (``window_range_plan`` drops it), so it may
+    coexist with the count harmlessly and is not rejected here. Probe and
+    ``add_marker_rows`` DO compose on the offset page (probe XOR count is the
+    only exclusion this enforces).
 
     The single owner of the boundary check every window entry point shares
     (``plans.py::apply_window_pagination`` for the ORM window,
@@ -372,19 +493,26 @@ def split_window_rows(
     """Split annotated window ``rows`` into page rows and dropped sentinel rows.
 
     Returns ``(page_rows, probe_row_seen)``. The one home for sentinel-row
-    exclusion, owning BOTH sentinel shapes the window may carry - and they are
-    mutually exclusive (a window is ``add_marker_rows`` XOR ``next_page_probe``
-    XOR neither):
+    exclusion, owning the sentinel shapes the window may carry. ``add_marker_rows``
+    and ``next_page_probe`` are NO LONGER mutually exclusive: they COMPOSE on the
+    bounded forward offset page (marker keeps row 1, probe adds the sentinel past
+    the page), so the composed case is handled FIRST:
 
-    - ``add_marker_rows`` (the ambiguous ``after:`` / ``first: 0`` shapes,
-      workstream C): each partition's row 1 is kept as a marker so an empty
-      page and a childless parent stay distinguishable. The page proper is the
-      rows past the offset (``limit == 0`` has no page at all); ``probe_row_seen``
-      is ``False`` (markers do not signal a next page).
-    - ``next_page_probe`` (the count-free ``hasNextPage`` overfetch): the window
-      fetched one row past the page (``rn == upper_bound + 1``). The page is the
-      rows up to ``upper_bound``; ``probe_row_seen`` reports whether the sentinel
-      was present, which IS ``hasNextPage`` - no ``_dst_total_count`` needed.
+    - ``add_marker_rows`` and ``next_page_probe`` (the composed offset page): the
+      page proper is ``offset < rn <= upper_bound``; the marker (``rn == 1``) and
+      the probe sentinel (``rn == fetch_upper_bound``) are both excluded from it.
+      ``probe_row_seen`` reports whether the sentinel was present, which IS
+      ``hasNextPage``.
+    - ``add_marker_rows`` alone (the ambiguous ``after:`` / ``first: 0`` /
+      unbounded offset shapes): each partition's row 1 is kept as a marker so an
+      empty page and a childless parent stay distinguishable. The page proper is
+      the rows past the offset (``limit == 0`` has no page at all);
+      ``probe_row_seen`` is ``False`` (markers do not signal a next page).
+    - ``next_page_probe`` alone (the count-free plain-first-page overfetch): the
+      window fetched one row past the page (``rn == upper_bound + 1``). The page
+      is the rows up to ``upper_bound``; ``probe_row_seen`` reports whether the
+      sentinel was present, which IS ``hasNextPage`` - no ``_dst_total_count``
+      needed.
 
     Render-agnostic: works identically for the ORM window and the lateral SQL
     because both keep FORWARD row numbers and the lateral fast branch computes
@@ -395,6 +523,19 @@ def split_window_rows(
     future keyset-cursor backend (which makes ``rn`` page-relative) has to
     touch - everything else consumes ``(page_rows, probe_row_seen)`` unchanged.
     """
+    if range_plan.add_marker_rows and range_plan.next_page_probe:
+        # Composed offset page: the marker (rn == 1) and the probe sentinel
+        # (rn == fetch_upper_bound == upper_bound + 1) are both dropped; the page
+        # proper is the rows strictly past the offset and within the page ceiling.
+        page_rows = [
+            row
+            for row in rows
+            if range_plan.offset < getattr(row, row_number) <= range_plan.upper_bound
+        ]
+        probe_row_seen = any(
+            getattr(row, row_number) == range_plan.fetch_upper_bound for row in rows
+        )
+        return page_rows, probe_row_seen
     if range_plan.add_marker_rows:
         if range_plan.limit == 0:
             return [], False

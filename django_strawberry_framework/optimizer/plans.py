@@ -818,7 +818,13 @@ def ends_in_unique_column(effective: tuple, model: type) -> bool:
         # Annotation alias (e.g. a to-many aggregate) or a transform - not a
         # model column we can call unique.
         return False
-    return bool(getattr(field_obj, "unique", False) or getattr(field_obj, "primary_key", False))
+    # A NULLABLE unique column is not a total order: SQL UNIQUE permits multiple
+    # NULLs, so terminal ties among NULL rows are nondeterministic and the pk must
+    # be appended as a tiebreaker.
+    return bool(
+        (getattr(field_obj, "unique", False) and not field_obj.null)
+        or getattr(field_obj, "primary_key", False),
+    )
 
 
 def deterministic_order(effective: tuple, model: type) -> tuple:
@@ -981,6 +987,21 @@ def apply_window_pagination(
     Reversed keyset windows are not planned in v1 (the nested planner's fallback
     discipline routes ``last`` / ``before:`` keyset shapes per-parent), so
     ``keyset_seek`` + ``reverse`` raises the loud ``OptimizerError``.
+
+    Window FILTERS, never slices (load-bearing invariant): every strategy hands
+    this function - and the lateral dialect - a queryset the window narrows via
+    ``.filter()`` on the ``_dst_*`` row-number annotations, NOT a Python-sliced
+    (``qs[a:b]``) queryset. A pre-sliced child would re-enter Django's own
+    ``_filter_prefetch_queryset`` sliced-window branch at attach time and
+    inherit its duplicate-through-join hazard (rows fanned out by a
+    many-to-many / GenericRelation join counted against the slice bounds). The
+    package never slices a windowed child, so that branch is unreachable by
+    construction; keep it that way - a "slice the child" refactor is a silent
+    correctness regression, not an optimization. The GenericRelation morph
+    predicate Django's ``GenericRelatedObjectManager.get_prefetch_querysets``
+    adds at fetch time is likewise a ``.filter()`` (a base-column WHERE on
+    ``content_type_id`` / ``object_id``), so Django's qualify wrapping keeps it
+    INSIDE this window's subquery - it composes without tripping this rule.
     """
     if keyset_seek is not None and reverse:
         raise OptimizerError(
@@ -1055,8 +1076,12 @@ def apply_window_pagination(
             # forcing a per-parent fallback. Keeping each partition's ROW 1
             # alongside the page rows disambiguates in the same single query:
             # an empty ``to_attr`` list now PROVES zero children, while a
-            # marker-only list carries the real ``_dst_total_count`` (the
-            # walker forces ``with_total_count`` for these shapes). The
+            # marker-only list disambiguates the empty page. The count is a
+            # SEPARATE axis (``utils/connections.py::FetchMode``): only the
+            # ``first: 0`` marker shape is ``COUNTED`` (its marker doubles as the
+            # count carrier); the offset markers (overshot / bounded ``after:``)
+            # are count-free unless ``totalCount`` is selected - the bounded
+            # offset page composes this marker with the count-free n+1 probe. The
             # resolve side (``connection.py::_resolve_from_window``) excludes
             # row 1 from edge building for these shapes, so cursors are
             # untouched; the cost is at most one extra row per parent.

@@ -12,7 +12,7 @@ directly.
 
 from types import SimpleNamespace
 
-from apps.library.models import Book, Genre
+from apps.library.models import Book, Branch, Genre, TaggedItem
 from apps.products.models import Category, Item
 
 from django_strawberry_framework.optimizer.join_taxonomy import (
@@ -31,7 +31,14 @@ def test_windowable_relation_kinds_is_classifier_membership_set():
     from ``classify_relation_join``'s membership test.
     """
     assert (
-        frozenset({"many", "reverse_many_to_one", "reverse_one_to_one"})
+        frozenset(
+            {
+                "many",
+                "reverse_many_to_one",
+                "reverse_one_to_one",
+                "generic",
+            },
+        )
         == WINDOWABLE_RELATION_KINDS
     )
     assert "forward_single" not in WINDOWABLE_RELATION_KINDS
@@ -130,6 +137,60 @@ def test_windowable_kind_without_partition_classifies_unwindowable():
     assert descriptor.windowable is False
     assert descriptor.partition_expr is None
     assert descriptor.parent_join_column is None
+
+
+def test_generic_relation_classifies_direct_fk_partitioned_by_object_id():
+    """GenericRelation (analog B, morph): partition/attach on the child ``object_id`` column.
+
+    The content type is a constant WHERE, never part of the partition -
+    supplied ALIAS-LATE at fetch time by Django's
+    ``GenericRelatedObjectManager.get_prefetch_querysets`` (the planner performs
+    no plan-time ``ContentType`` lookup; see
+    ``nested_planner.py::plan_connection_relation``). ``parent_link_field``
+    STAYS ``None`` so the lateral backend refuses at ``_build_lateral_spec`` and
+    the strategy degrades to the windowed body - there is no
+    ``LateralJoinShape.GENERIC`` arm.
+    """
+    descriptor = classify_relation_join(Branch._meta.get_field("tags"))
+    object_id_attname = TaggedItem._meta.get_field("object_id").attname
+    content_type_attname = TaggedItem._meta.get_field("content_type").attname
+    assert descriptor.kind == "generic"
+    assert descriptor.windowable is True
+    assert descriptor.partition_expr == object_id_attname
+    assert descriptor.parent_join_column == object_id_attname
+    # The morph column rides the descriptor so the composite-index advisory can
+    # recommend the ``(content_type_id, object_id, ...)`` prefix (never object_id
+    # alone) even though the content type is a constant WHERE, not a partition.
+    assert descriptor.content_type_column == content_type_attname
+    assert descriptor.lateral_shape is LateralJoinShape.DIRECT_FK
+    assert descriptor.through_model is None
+    assert descriptor.parent_link_field is None
+    assert descriptor.through_child_field is None
+
+
+def test_generic_double_without_related_model_classifies_unwindowable():
+    """A generic double lacking ``related_model`` -> partition ``None``, windowable ``False``.
+
+    The classifier never raises: an unresolvable ``object_id`` column yields a
+    ``None`` partition and the caller owns the fallback posture.
+    """
+    double = SimpleNamespace(
+        name="tags",
+        many_to_many=False,
+        one_to_many=True,
+        one_to_one=False,
+        auto_created=False,
+        content_type_field_name="content_type",
+        object_id_field_name="object_id",
+        related_model=None,
+    )
+    descriptor = classify_relation_join(double)
+    assert descriptor.kind == "generic"
+    assert descriptor.windowable is False
+    assert descriptor.partition_expr is None
+    assert descriptor.parent_join_column is None
+    assert descriptor.lateral_shape is LateralJoinShape.DIRECT_FK
+    assert descriptor.parent_link_field is None
 
 
 def test_m2m_double_without_related_model_has_no_connector():

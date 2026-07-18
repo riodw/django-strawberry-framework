@@ -45,6 +45,7 @@ from django_strawberry_framework.keyset import (
     validate_cursor_field_columns,
 )
 from django_strawberry_framework.utils.connections import (
+    FetchMode,
     UnwindowableConnection,
     derive_keyset_window_bounds,
     resolve_relay_max_results,
@@ -606,7 +607,10 @@ def test_window_range_plan_keyset_counted_floor_and_markers():
     assert plan.lower_bound == 0  # the exclusive rn-0 floor
     assert plan.upper_bound == 2
     assert plan.add_marker_rows is True
-    assert plan.requires_total_count is True
+    # The counted keyset seek fires only when totalCount is observed, so its
+    # fetch mode is COUNTED (never PROBED - the seek count cannot come from a
+    # probe); the probe is suppressed on the shape below.
+    assert plan.fetch_mode(has_next_selected=True, total_selected=True) is FetchMode.COUNTED
     assert plan.next_page_probe is False
 
 

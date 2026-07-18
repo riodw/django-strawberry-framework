@@ -326,19 +326,23 @@ def _resolve_from_window(
     ``has_next_page = total > offset``, the "would the overfetch have yielded
     a row" predicate) - byte parity with the per-parent pipeline is the bar.
 
-    The common ``first: N`` page selecting ``pageInfo.hasNextPage`` but NOT
-    ``totalCount`` is served count-free by the n+1 probe (``next_page_probe``):
-    the walker overfetched ONE sentinel row past the page instead of a
-    per-partition ``COUNT(1) OVER`` scan, so ``hasNextPage`` is the sentinel's
-    presence (``probe_row_seen`` from ``split_window_rows``) rather than
-    ``row_number < total``. This resolver reads the probe off the window's
-    PHYSICAL shape - a ``plain_first_page`` window carrying no
-    ``_dst_total_count`` annotation was overfetched (or needs no count) - NOT
-    off this response key's ``info``: same-argument aliases merge into one
-    shared window whose shape was fixed at plan time from the merged selection,
-    so a per-alias re-derivation would drift (an edges-only alias would keep the
-    sentinel). The output is byte-identical (same edges, cursors, ``hasNextPage``;
-    ``totalCount`` not selected); only the SQL cost changes. ``split_window_rows``
+    A page selecting ``pageInfo.hasNextPage`` but NOT ``totalCount`` is served
+    count-free by the n+1 probe (``next_page_probe``) on the plain ``first: N``
+    page AND the bounded forward offset page: the walker overfetched ONE sentinel
+    row past the page instead of a per-partition ``COUNT(1) OVER`` scan, so
+    ``hasNextPage`` is the sentinel's presence (``probe_row_seen`` from
+    ``split_window_rows``) rather than ``row_number < total``. On the offset page
+    the probe COMPOSES with the marker row, so the sentinel and the marker are
+    both dropped from the page. This resolver reads the probe off the window's
+    PHYSICAL shape - a probe-eligible window carrying no ``_dst_total_count``
+    annotation was overfetched (or needs no count) - NOT off this response key's
+    ``info``: same-argument aliases merge into one shared window whose shape was
+    fixed at plan time from the merged selection, so a per-alias re-derivation
+    would drift (an edges-only alias would keep the sentinel). The output is
+    byte-identical (same edges, cursors, ``hasNextPage``; ``totalCount`` not
+    selected); only the SQL cost changes. Unbounded forward pages and reversed
+    ``last``-only pages serve ``hasNextPage=False`` as a CONSTANT (they end at the
+    partition tail), count-free with no probe. ``split_window_rows``
     + the ``hasNextPage`` derivation here are the resolve-side surface a future
     keyset-cursor backend inherits: it makes ``_dst_row_number`` page-relative
     (so ``row_number < total`` no longer holds) and derives ``hasNextPage`` from
@@ -375,31 +379,35 @@ def _resolve_from_window(
     # edges-only alias would keep the overfetched sentinel row, and a
     # ``hasNextPage``-only alias beside a ``totalCount`` alias would read a stale
     # flag off an un-overfetched, counted window. The ``_dst_total_count``
-    # annotation's presence on the rows IS the materialized plan decision. On the
-    # ``plain_first_page`` shape (the only one a probe applies to) its ABSENCE
-    # means the window was overfetched by the probe - or needs no count at all -
-    # so ``hasNextPage`` is the sentinel's presence; a counted window keeps
-    # ``row_number < total``. Reading ground truth, every alias sharing the
-    # window resolves identically. ``window_range_plan`` is a pure construction;
-    # the empty-``rows`` early return below never consults the probe flag, so
-    # requiring ``rows`` here just avoids an inert rebuild.
+    # annotation's presence on the rows IS the materialized plan decision. On a
+    # probe-eligible shape (the plain first page OR the bounded forward offset
+    # page) its ABSENCE means the window was overfetched by the probe - or needs
+    # no count at all - so ``hasNextPage`` is the sentinel's presence; a counted
+    # window keeps ``row_number < total``. Reading ground truth, every alias
+    # sharing the window resolves identically. ``window_range_plan`` is a pure
+    # construction; the empty-``rows`` early return below never consults the probe
+    # flag, so requiring ``rows`` here just avoids an inert rebuild.
     #
     # LOAD-BEARING plan-time invariant: this "count-absent -> overfetched"
-    # inference is sound only because the walker keeps ``next_page_probe`` and
-    # ``with_total_count`` mutually exclusive - a count-free ``plain_first_page``
-    # window whose ``hasNextPage`` is OBSERVABLE is ALWAYS overfetched
-    # (``wants_next_page_probe`` forces ``with_total_count=False``, walker.py's
-    # ``_plan_connection_relation``). So count-absent here can only mean
-    # overfetched OR no observer at all, never observable-but-not-overfetched. A
-    # future optimization that produced a count-free non-overfetched first page
-    # while ``hasNextPage`` is selected would under-report it - keep that
-    # invariant if the count/overfetch decision ever changes.
+    # inference is sound only because the planner keeps ``FetchMode.PROBED`` and
+    # ``FetchMode.COUNTED`` mutually exclusive - a count-free probe-eligible window
+    # whose ``hasNextPage`` is OBSERVABLE is ALWAYS overfetched (``fetch_mode``
+    # returns ``PROBED`` -> ``with_total_count=False``,
+    # ``nested_planner.py::plan_connection_relation``). So count-absent here can
+    # only mean overfetched OR no observer at all, never
+    # observable-but-not-overfetched. A future optimization that produced a
+    # count-free non-overfetched page while ``hasNextPage`` is selected would
+    # under-report it - keep that invariant if the count/overfetch decision ever
+    # changes. The probe-shape classification DELEGATES to the shared
+    # ``range_plan.probe_shape`` predicate (the SHAPE half of ``FetchMode.PROBED``)
+    # rather than re-hardcoding the plain-first / bounded-offset shapes; only the
+    # physical overfetch signal (``count_absent``) is inferred here. The bounded
+    # offset page rebuilds with ``next_page_probe=True`` so ``add_marker_rows`` and
+    # the probe COMPOSE: ``split_window_rows`` then reads the marker (rn 1) and the
+    # sentinel together.
     range_plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
-    if (
-        range_plan.plain_first_page
-        and rows
-        and getattr(rows[-1], WINDOW_TOTAL_COUNT, None) is None
-    ):
+    count_absent = bool(rows) and getattr(rows[-1], WINDOW_TOTAL_COUNT, None) is None
+    if count_absent and range_plan.probe_shape:
         range_plan = window_range_plan(
             offset=offset,
             limit=limit,
@@ -444,13 +452,13 @@ def _resolve_from_window(
         )
 
     # Sentinel exclusion via the shared ``split_window_rows``: the window may
-    # carry marker rows (ambiguous ``after:`` / ``first: 0`` shapes, workstream
-    # C) OR one probe sentinel (the count-free ``hasNextPage`` overfetch) - both
-    # dropped from the page here, mutually exclusive by shape, so cursors are
-    # untouched. ``probe_row_seen`` IS ``hasNextPage`` on the probe shape (a row
-    # existed past the page); it is ``False`` for every other shape. The
-    # splitter reads the range plan, so what the window PLANNED and what this
-    # path CLASSIFIES cannot drift.
+    # carry marker rows (ambiguous ``after:`` / ``first: 0`` / unbounded offset
+    # shapes), one probe sentinel (the count-free ``hasNextPage`` overfetch), OR
+    # BOTH composed on the bounded forward offset page - all dropped from the page
+    # here, so cursors are untouched. ``probe_row_seen`` IS ``hasNextPage`` on the
+    # probe shape (a row existed past the page); it is ``False`` for every other
+    # shape. The splitter reads the range plan, so what the window PLANNED and
+    # what this path CLASSIFIES cannot drift.
     page_rows, probe_row_seen = split_window_rows(
         rows,
         range_plan,
@@ -458,18 +466,35 @@ def _resolve_from_window(
     )
     if not page_rows:
         # Marker-only window: children exist (the marker is one) but the page
-        # is empty. Serve the true count and the pipeline's flag arithmetic:
-        # ``has_next_page = total > offset`` (the overfetch probe - for
-        # ``first: 0`` a row exists past the offset; for an overshot ``after:``
-        # ``total <= offset`` by construction, so it is False). Unreachable on
-        # the probe shape (its page always keeps row 1). A keyset seek page's
-        # flags live in the value domain instead: ``has_next_page`` is "any
-        # post-seek row exists" (the annotated seek count - zero here by
-        # construction, since one such row would BE the page), and a supplied
-        # cursor is the previous-page signal.
+        # is empty. When the count IS annotated (``first: 0``, counted keyset,
+        # or any counted overshoot), serve the true count and the pipeline's
+        # flag arithmetic: ``has_next_page = total > offset`` (the overfetch
+        # probe - for ``first: 0`` a row exists past the offset; for an overshot
+        # ``after:`` ``total <= offset`` by construction, so it is False). A
+        # keyset seek page's flags live in the value domain instead:
+        # ``has_next_page`` is "any post-seek row exists" (the annotated seek
+        # count - zero here by construction, since one such row would BE the
+        # page), and a supplied cursor is the previous-page signal.
         total = getattr(rows[-1], WINDOW_TOTAL_COUNT, None)
         if total is None:
-            return None  # workstream-B drift guard: never infer a count.
+            # Count-free marker-only FORWARD shape (the probed offset overshoot
+            # and the edges-only offset overshoot): the marker proves children
+            # exist, but every one sits at or before the offset - any row with
+            # ``rn > offset`` would have survived as a page row - so
+            # ``total <= offset`` and ``hasNextPage`` is False by construction.
+            # Serve the empty page directly (NO per-parent fallback). Only a
+            # genuinely-observed ``totalCount`` with no annotation is real plan
+            # drift, which cannot be answered count-free.
+            if want_count:
+                return None
+            return _empty_page_connection(
+                cls,
+                offset=offset,
+                has_next_page=False,
+                want_count=False,
+                total=0,
+                has_previous_page=True if keyset_seek_supplied else None,
+            )
         if keyset_seek_supplied:
             has_next_page = bool(getattr(rows[-1], WINDOW_KEYSET_SEEK_COUNT, 0))
         else:
@@ -495,8 +520,26 @@ def _resolve_from_window(
     # ``has_next_page`` below is never serialized).
     last_row = page_rows[-1]
     total = getattr(last_row, WINDOW_TOTAL_COUNT, None)
+    # Drift guard: a count-less page whose selection needs a count-derived answer
+    # the window does not carry has DRIFTED and falls back per-parent. The
+    # ``want_count`` clause is NEVER exempt (count-absent + ``totalCount`` is
+    # always genuine drift). The ``hasNextPage`` clause is exempt for the probe
+    # (``probe_row_seen`` answers it) AND for the constant-False shapes (an
+    # unbounded forward page ends at the partition tail; a reversed ``last``-only
+    # page is the partition tail) - those serve ``hasNextPage=False`` soundly with
+    # no count, which the non-empty ``has_next_page`` below yields for free. The
+    # shape half of that exemption DELEGATES to the shared
+    # ``range_plan.constant_false_shape`` predicate (the SHAPE half of
+    # ``FetchMode.CONSTANT_FALSE``) rather than re-spelling ``limit is None or
+    # reverse``; only the physical ``total is None`` signal is read here.
+    constant_false = total is None and range_plan.constant_false_shape
     if total is None and (
-        want_count or (_has_next_page_requested(info) and not range_plan.next_page_probe)
+        want_count
+        or (
+            _has_next_page_requested(info)
+            and not range_plan.next_page_probe
+            and not constant_false
+        )
     ):
         return None
     if (

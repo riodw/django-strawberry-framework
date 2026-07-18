@@ -18,6 +18,7 @@ from django_strawberry_framework.utils.connections import (
     CONNECTION_ORDER_KWARG,
     CONNECTION_SIDECAR_KWARGS,
     ConnectionWindowBounds,
+    FetchMode,
     UnwindowableConnection,
     assert_window_fetch_mode,
     assert_window_fetch_mode_for,
@@ -325,45 +326,54 @@ def test_has_connection_sidecar_kwargs_combines_extraction_and_predicate():
 # ---------------------------------------------------------------------------
 
 
-def test_next_page_probe_only_on_plain_first_page_with_has_next_not_total():
-    """``wants_next_page_probe`` is the shape+selection gate for the probe.
+def test_fetch_mode_probes_on_plain_first_and_offset_pages_with_has_next_not_total():
+    """``fetch_mode`` returns ``PROBED`` on the probe shapes when only hasNextPage is up.
 
-    True only for the plain ``first: N`` shape when ``hasNextPage`` is selected
-    and ``totalCount`` is NOT; the internal ``plain_first_page`` re-check makes
-    it self-normalizing and safe to call on any plan.
+    True for the plain ``first: N`` shape AND the bounded forward offset page
+    (``offset > 0`` with a positive ``limit``) when ``hasNextPage`` is selected
+    and ``totalCount`` is NOT (WS-A: the offset page composes the probe with its
+    marker). ``COUNTED`` wins first when ``totalCount`` is observable, so probe
+    XOR count holds.
     """
-    plain = window_range_plan(offset=0, limit=3, reverse=False)
-    assert plain.plain_first_page is True
-    assert plain.wants_next_page_probe(has_next_selected=True, total_selected=False) is True
-    # totalCount observable -> the count is genuinely needed, no probe.
-    assert plain.wants_next_page_probe(has_next_selected=True, total_selected=True) is False
-    # hasNextPage not selected -> nothing to serve from the sentinel.
-    assert plain.wants_next_page_probe(has_next_selected=False, total_selected=False) is False
-    # Non-plain shapes never probe, regardless of the selection.
+    for offset, limit in [(0, 3), (5, 3)]:
+        plan = window_range_plan(offset=offset, limit=limit, reverse=False)
+        assert plan.probe_shape is True
+        assert plan.fetch_mode(has_next_selected=True, total_selected=False) is FetchMode.PROBED
+        # totalCount observable -> the count is genuinely needed, no probe.
+        assert plan.fetch_mode(has_next_selected=True, total_selected=True) is FetchMode.COUNTED
+        # hasNextPage not selected on a bounded forward page -> NONE (no observer).
+        assert plan.fetch_mode(has_next_selected=False, total_selected=False) is FetchMode.NONE
+    # Non-probe shapes never probe, regardless of the selection: ``first: 0``,
+    # reversed ``last:N``, and the unbounded forward page.
     for offset, limit, reverse in [
-        (5, 3, False),
         (0, 0, False),
         (0, 3, True),
         (0, None, False),
+        (5, None, False),
     ]:
         plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
-        assert plan.wants_next_page_probe(has_next_selected=True, total_selected=False) is False
+        assert plan.probe_shape is False
+        assert (
+            plan.fetch_mode(has_next_selected=True, total_selected=False) is not FetchMode.PROBED
+        )
 
 
-def test_next_page_probe_field_normalized_to_plain_first_page():
-    """The ``next_page_probe`` kwarg is honored only on the ``plain_first_page`` shape."""
-    assert window_range_plan(
-        offset=0,
-        limit=3,
-        reverse=False,
-        next_page_probe=True,
-    ).next_page_probe
-    # Inert everywhere else even when the caller passes it through.
+def test_next_page_probe_field_honored_on_plain_first_and_offset_pages():
+    """The ``next_page_probe`` kwarg is honored on the plain-first AND offset pages."""
+    for offset, limit in [(0, 3), (5, 3)]:
+        assert window_range_plan(
+            offset=offset,
+            limit=limit,
+            reverse=False,
+            next_page_probe=True,
+        ).next_page_probe
+    # Inert on the non-probe shapes even when the caller passes it through:
+    # ``first: 0``, reversed ``last:N``, and the unbounded forward page.
     for offset, limit, reverse in [
-        (5, 3, False),
         (0, 0, False),
         (0, 3, True),
         (0, None, False),
+        (5, None, False),
     ]:
         plan = window_range_plan(
             offset=offset,
@@ -400,9 +410,9 @@ def test_fetch_bounds_add_one_only_when_probe_active():
 def test_fetch_bounds_are_none_for_an_unbounded_window():
     """An unbounded window (no ``first``) has no fetch ceiling - both bounds are None.
 
-    The probe never engages off the plain-first-page shape, so an unbounded
-    window carries no ``upper_bound`` / ``limit`` and both derived fetch bounds
-    stay ``None`` (nothing for the ``_probe_increment`` to add to).
+    The probe never engages on the unbounded shape, so an unbounded window
+    carries no ``upper_bound`` / ``limit`` and both derived fetch bounds stay
+    ``None`` (nothing for the ``_probe_increment`` to add to).
     """
     unbounded = window_range_plan(offset=0, limit=None, reverse=False)
     assert unbounded.upper_bound is None
@@ -411,13 +421,14 @@ def test_fetch_bounds_are_none_for_an_unbounded_window():
     assert unbounded.fetch_limit is None
 
 
-def test_probe_and_marker_shapes_are_mutually_exclusive():
-    """``next_page_probe`` and ``add_marker_rows`` are never both true.
+def test_probe_composes_with_marker_but_never_with_count():
+    """WS-A: probe and marker COMPOSE on the offset page; probe XOR count holds.
 
-    The property the whole design rests on (the probe is a sibling sentinel to
-    the marker row, never a co-resident): enforced across the window-shape input
-    space, not merely asserted. ``wants_next_page_probe`` likewise never fires
-    on a marker shape.
+    The whole design now rests on ``next_page_probe`` XOR ``with_total_count``
+    (the marker is a co-resident on the offset page, no longer a mutually-exclusive
+    sibling): enforced across the window-shape input space, not merely asserted.
+    On the plain first page the probe engages ALONE (no marker); on the bounded
+    forward offset page it engages WITH the marker.
     """
     for offset in (0, 1, 5):
         for limit in (
@@ -433,26 +444,40 @@ def test_probe_and_marker_shapes_are_mutually_exclusive():
                     reverse=reverse,
                     next_page_probe=True,
                 )
-                assert not (plan.add_marker_rows and plan.next_page_probe)
-                if plan.wants_next_page_probe(has_next_selected=True, total_selected=False):
-                    assert plan.add_marker_rows is False
-                    assert plan.plain_first_page is True
+                # An engaged probe is always safe to leave count-free (probe XOR
+                # count) - the shared invariant never rejects a count-free probe.
+                if plan.next_page_probe:
+                    assert_window_fetch_mode(plan, with_total_count=False)
+                probes = (
+                    plan.fetch_mode(has_next_selected=True, total_selected=False)
+                    is FetchMode.PROBED
+                )
+                if probes:
+                    # Plain first page probes alone; the bounded offset page
+                    # composes the probe with its marker row.
+                    if plan.plain_first_page:
+                        assert plan.add_marker_rows is False
+                    else:
+                        assert plan.offset > 0
+                        assert plan.add_marker_rows is True
 
 
 def test_assert_window_fetch_mode_rejects_engaged_probe_with_count():
     """An engaged probe window carrying the count is a rejected planner bug.
 
     The probe answers ``hasNextPage`` from an overfetched sentinel; a count
-    annotation makes the resolver treat that sentinel as a real edge. On the
-    ``plain_first_page`` shape (where the probe engages) the two fetch modes are
-    mutually exclusive and the contract raises loudly - never normalizes.
+    annotation makes the resolver treat that sentinel as a real edge. On a
+    probe-eligible shape (the plain first page OR the bounded forward offset page)
+    the two fetch modes are mutually exclusive and the contract raises loudly -
+    never normalizes.
     """
-    engaged = window_range_plan(offset=0, limit=3, reverse=False, next_page_probe=True)
-    assert engaged.next_page_probe is True
-    with pytest.raises(OptimizerError, match="mutually exclusive"):
-        assert_window_fetch_mode(engaged, with_total_count=True)
-    # The probe alone (no count) is the legitimate count-free shape.
-    assert_window_fetch_mode(engaged, with_total_count=False)
+    for offset in (0, 5):
+        engaged = window_range_plan(offset=offset, limit=3, reverse=False, next_page_probe=True)
+        assert engaged.next_page_probe is True
+        with pytest.raises(OptimizerError, match="mutually exclusive"):
+            assert_window_fetch_mode(engaged, with_total_count=True)
+        # The probe alone (no count) is the legitimate count-free shape.
+        assert_window_fetch_mode(engaged, with_total_count=False)
 
 
 def test_assert_window_fetch_mode_allows_count_without_probe():
@@ -463,25 +488,25 @@ def test_assert_window_fetch_mode_allows_count_without_probe():
 
 
 def test_assert_window_fetch_mode_for_allows_inert_off_shape_probe_with_count():
-    """The RAW-flag pair is fine off the plain-first-page shape (the probe is inert).
+    """The RAW-flag pair is fine off any probe-eligible shape (the probe is inert).
 
-    ``window_range_plan`` drops ``next_page_probe`` off the ``plain_first_page``
-    shape, so an ``after``-offset window passed both flags never overfetches and
+    ``window_range_plan`` drops ``next_page_probe`` off the probe-eligible shapes
+    (plain first page and bounded forward offset page), so an unbounded offset
+    window (``after`` with no ``first``) passed both flags never overfetches and
     must not be rejected - the contract keys on the EFFECTIVE probe, not the raw
-    request flags (guarding the off-shape unit path in
-    ``test_plans.py::test_next_page_probe_ignored_off_the_plain_first_page_shape``).
+    request flags.
     """
     assert_window_fetch_mode_for(
         offset=2,
-        limit=3,
+        limit=None,
         reverse=False,
         with_total_count=True,
         next_page_probe=True,
     )
-    # The same params on the plain-first-page shape DO engage the probe -> reject.
+    # The same params on the bounded offset page DO engage the probe -> reject.
     with pytest.raises(OptimizerError, match="mutually exclusive"):
         assert_window_fetch_mode_for(
-            offset=0,
+            offset=2,
             limit=3,
             reverse=False,
             with_total_count=True,
@@ -532,3 +557,214 @@ def test_split_window_rows_plain_shape_passes_rows_through():
     page_rows, probe_seen = split_window_rows(_rows(1, 2, 3), plan, row_number="rn")
     assert [r.rn for r in page_rows] == [1, 2, 3]
     assert probe_seen is False
+
+
+def test_split_window_rows_composed_offset_probe_drops_marker_and_sentinel():
+    """WS-A composed offset page: the marker (rn 1) AND the probe sentinel drop.
+
+    ``after:`` offset 5, ``first: 2`` with the probe engaged fetches the abs-first
+    marker (rn 1), the page rows (rn 6, 7), and the sentinel (rn 8 ==
+    ``fetch_upper_bound`` == ``upper_bound`` 7 + 1). The page proper is
+    ``offset < rn <= upper_bound`` and ``probe_row_seen`` reports the sentinel.
+    """
+    plan = window_range_plan(offset=5, limit=2, reverse=False, next_page_probe=True)
+    assert plan.add_marker_rows is True
+    assert plan.next_page_probe is True
+    assert plan.upper_bound == 7
+    assert plan.fetch_upper_bound == 8
+    # Full page plus the marker and the sentinel -> hasNextPage True.
+    page_rows, probe_seen = split_window_rows(_rows(1, 6, 7, 8), plan, row_number="rn")
+    assert [r.rn for r in page_rows] == [6, 7]
+    assert probe_seen is True
+    # Full page, marker present, no sentinel -> hasNextPage False (partition ends
+    # exactly at offset+limit).
+    page_rows, probe_seen = split_window_rows(_rows(1, 6, 7), plan, row_number="rn")
+    assert [r.rn for r in page_rows] == [6, 7]
+    assert probe_seen is False
+    # Marker-only overshoot (all children at or before the offset) -> empty page,
+    # no sentinel.
+    page_rows, probe_seen = split_window_rows(_rows(1), plan, row_number="rn")
+    assert page_rows == []
+    assert probe_seen is False
+
+
+@pytest.mark.parametrize(
+    (
+        "offset",
+        "limit",
+        "reverse",
+        "expect_marker",
+        "expect_probe",
+        "expect_mode",
+    ),
+    [
+        # plain first:N -> probe eligible, no marker; hasNext-only -> PROBED.
+        (
+            0,
+            3,
+            False,
+            False,
+            True,
+            FetchMode.PROBED,
+        ),
+        # offset page (offset>0, bounded) -> marker AND probe compose -> PROBED.
+        (
+            5,
+            3,
+            False,
+            True,
+            True,
+            FetchMode.PROBED,
+        ),
+        # first:0 -> marker, no probe; the marker shape is always COUNTED.
+        (
+            0,
+            0,
+            False,
+            True,
+            False,
+            FetchMode.COUNTED,
+        ),
+        # unbounded forward -> no marker at offset 0, no probe -> CONSTANT_FALSE.
+        (
+            0,
+            None,
+            False,
+            False,
+            False,
+            FetchMode.CONSTANT_FALSE,
+        ),
+        # unbounded offset -> marker (ambiguous), no probe -> CONSTANT_FALSE.
+        (
+            5,
+            None,
+            False,
+            True,
+            False,
+            FetchMode.CONSTANT_FALSE,
+        ),
+        # reverse last:N -> no marker, no probe -> CONSTANT_FALSE (partition tail).
+        (
+            0,
+            3,
+            True,
+            False,
+            False,
+            FetchMode.CONSTANT_FALSE,
+        ),
+    ],
+)
+def test_window_range_plan_mode_table(
+    offset,
+    limit,
+    reverse,
+    expect_marker,
+    expect_probe,
+    expect_mode,
+):
+    """WS-A post-change decision table for ``window_range_plan`` (probe passed on).
+
+    Pins the composed offset-page shape (marker AND probe both set), the
+    probe-eligible plain first page, and the count-forcing / constant-False shapes
+    that never probe. The centralized ``fetch_mode`` (the single ``FetchMode``
+    source of truth) is asserted under the count-free-preferring observer set
+    (``hasNextPage`` selected, ``totalCount`` not) so each shape's distinct mode
+    is visible; ``totalCount`` would collapse every row to ``COUNTED``.
+    """
+    plan = window_range_plan(offset=offset, limit=limit, reverse=reverse, next_page_probe=True)
+    assert plan.add_marker_rows is expect_marker
+    assert plan.next_page_probe is expect_probe
+    assert plan.fetch_mode(has_next_selected=True, total_selected=False) is expect_mode
+
+
+#: The canonical fetch-mode contract: each ``FetchMode`` maps to exactly one
+#: ``(with_total_count, next_page_probe, serves_constant_false_has_next_page)``
+#: triple. The planner reads the first two off the mode; the resolver reads the
+#: constant-False shape at resolve time. Pinned here so a future edit to the
+#: single source cannot silently re-point a mode at a different triple.
+_FETCH_MODE_TRIPLE = {
+    FetchMode.COUNTED: (True, False, False),
+    FetchMode.PROBED: (False, True, False),
+    FetchMode.CONSTANT_FALSE: (False, False, True),
+    FetchMode.NONE: (False, False, False),
+}
+
+
+@pytest.mark.parametrize(
+    (
+        "plan",
+        "has_next_selected",
+        "total_selected",
+        "expected_mode",
+    ),
+    [
+        # COUNTED: totalCount observed on a plain first page.
+        (
+            window_range_plan(offset=0, limit=3, reverse=False),
+            True,
+            True,
+            FetchMode.COUNTED,
+        ),
+        # COUNTED: the ``first: 0`` marker shape, no observers needed.
+        (
+            window_range_plan(offset=0, limit=0, reverse=False),
+            False,
+            False,
+            FetchMode.COUNTED,
+        ),
+        # PROBED: bounded forward offset page, hasNextPage only.
+        (
+            window_range_plan(offset=5, limit=3, reverse=False),
+            True,
+            False,
+            FetchMode.PROBED,
+        ),
+        # CONSTANT_FALSE: unbounded forward page, hasNextPage only.
+        (
+            window_range_plan(offset=0, limit=None, reverse=False),
+            True,
+            False,
+            FetchMode.CONSTANT_FALSE,
+        ),
+        # CONSTANT_FALSE: reversed last:N page (the partition tail).
+        (
+            window_range_plan(offset=0, limit=3, reverse=True),
+            True,
+            False,
+            FetchMode.CONSTANT_FALSE,
+        ),
+        # NONE: edges-only bounded forward page (no count-derived observer).
+        (
+            window_range_plan(offset=0, limit=3, reverse=False),
+            False,
+            False,
+            FetchMode.NONE,
+        ),
+    ],
+)
+def test_fetch_mode_maps_to_the_count_probe_constant_false_triple(
+    plan,
+    has_next_selected,
+    total_selected,
+    expected_mode,
+):
+    """Each ``FetchMode`` resolves to exactly one (count, probe, constant_false) triple.
+
+    The single source of truth: the planner derives ``with_total_count`` from
+    ``COUNTED`` and ``next_page_probe`` from ``PROBED`` (probe XOR count), and the
+    resolver reads ``constant_false_shape`` for the ``CONSTANT_FALSE`` mode. This
+    pins the whole taxonomy in one place so the centralization cannot drift.
+    """
+    mode = plan.fetch_mode(has_next_selected=has_next_selected, total_selected=total_selected)
+    assert mode is expected_mode
+    want_count, want_probe, want_constant_false = _FETCH_MODE_TRIPLE[mode]
+    # Planner derivation - both flags come from the ONE mode value.
+    assert (mode is FetchMode.COUNTED) is want_count
+    assert (mode is FetchMode.PROBED) is want_probe
+    # probe XOR count is the standing invariant.
+    assert not (want_count and want_probe)
+    # The mode's shared SHAPE predicates the resolver reads off the rows.
+    if want_probe:
+        assert plan.probe_shape is True
+    if want_constant_false:
+        assert plan.constant_false_shape is True

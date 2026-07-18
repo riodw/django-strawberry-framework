@@ -2888,37 +2888,58 @@ def test_nested_connection_first_page_total_count_keeps_count_and_skips_probe():
         registry.clear()
 
 
-def test_nested_connection_offset_window_forces_total_count():
-    """An ``after``-offset window keeps the count even with no count observer.
+def test_nested_connection_offset_window_count_free_unless_total_selected():
+    """WS-A: an ``after``-offset window is count-free unless ``totalCount`` is selected.
 
-    ``offset > 0`` is an ambiguous-empty SHAPE (overshot ``after:`` and
-    zero-children parents produce the same empty page), so the marker-window
-    classification (workstream C) serves its counts from ``_dst_total_count``
-    regardless of what the selection observes - the walker forces the
-    annotation for these shapes.
+    The old policy shape-forced ``_dst_total_count`` on every ``offset > 0``
+    window. WS-A drops that: an offset page composes the count-free hasNextPage
+    probe with the abs-first marker. The single ``WindowRangePlan.fetch_mode``
+    decision resolves an edges-only / hasNextPage-only offset page to ``PROBED``
+    (``with_total_count=False``), so it carries NO ``_dst_total_count``
+    annotation; selecting ``totalCount`` resolves it to ``COUNTED`` and keeps the
+    annotation.
     """
     from strawberry.relay.utils import to_base64
 
     from django_strawberry_framework.optimizer.plans import WINDOW_TOTAL_COUNT
 
+    after_offset_1 = to_base64("arrayconnection", "1")
+
     registry.clear()
     try:
         types = _connection_relay_types()
         genre_model, genre_type = types["Genre"]
-        plan = plan_optimizations(
+
+        # Edges-only offset page -> count-free (probe + marker composed).
+        edges_only = plan_optimizations(
             [
                 _conn_sel(
                     "booksConnection",
                     node_selections=[_sel("title")],
-                    arguments={"first": "3", "after": to_base64("arrayconnection", "1")},
+                    arguments={"first": "3", "after": after_offset_1},
                 ),
             ],
             genre_model,
             info=_fake_info(),
             source_type=genre_type,
         )
-        prefetch = _prefetch_entry(plan)
-        assert WINDOW_TOTAL_COUNT in prefetch.queryset.query.annotations
+        assert WINDOW_TOTAL_COUNT not in _prefetch_entry(edges_only).queryset.query.annotations
+
+        # totalCount selected on the same offset shape -> count kept.
+        with_total = plan_optimizations(
+            [
+                _conn_sel(
+                    "booksConnection",
+                    node_selections=[_sel("title")],
+                    scalar_children=["totalCount"],
+                    arguments={"first": "3", "after": after_offset_1},
+                ),
+            ],
+            genre_model,
+            info=_fake_info(),
+            source_type=genre_type,
+        )
+        assert WINDOW_TOTAL_COUNT in _prefetch_entry(with_total).queryset.query.annotations
     finally:
         registry.clear()
 
@@ -5269,5 +5290,84 @@ def test_consumer_assigned_relation_may_hint_prefetch_with_to_attr():
         )
         (entry,) = plan.prefetch_related
         assert entry.to_attr == "curated_books"
+    finally:
+        registry.clear()
+
+
+def _generic_connection_types():
+    """Register ``BranchNode`` / ``TaggedItemNode`` with a windowed ``tags`` connection.
+
+    ``Branch.tags = GenericRelation(TaggedItem)`` is the package's generic-relation
+    substrate; registering the pair here lets the walker plan a real ``"generic"``
+    nested connection against live models (the same substrate the in-process
+    acceptance tests in
+    ``examples/fakeshop/apps/library/tests/test_generic_connection.py`` drive).
+    """
+    from apps.library.models import Branch, TaggedItem
+    from strawberry import relay
+
+    from django_strawberry_framework import DjangoType, finalize_django_types
+
+    class TaggedItemNode(DjangoType):
+        class Meta:
+            model = TaggedItem
+            fields = ("id", "tag")
+            interfaces = (relay.Node,)
+
+    class BranchNode(DjangoType):
+        class Meta:
+            model = Branch
+            fields = ("id", "name", "tags")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    return {"Branch": (Branch, BranchNode), "TaggedItem": (TaggedItem, TaggedItemNode)}
+
+
+@pytest.mark.django_db
+async def test_generic_connection_planning_does_no_sync_db_io_under_async():
+    """Planning a generic connection under an event loop raises no ``SynchronousOnlyOperation``.
+
+    The morph content type is resolved alias-late by Django's
+    ``GenericRelatedObjectManager.get_prefetch_querysets`` at fetch time, NOT at
+    plan time (``nested_planner.py::plan_connection_relation``). The removed
+    plan-time ``ContentType.objects.get_for_model`` was synchronous DB I/O; on a
+    cold ``ContentType`` cache reached from ``DjangoOptimizerExtension._optimize``
+    on the event-loop thread it raised ``SynchronousOnlyOperation``. This test
+    runs the real walker planner inside a running loop (an ``async def`` test)
+    with the cache cleared: the planner must complete and attach a windowed
+    ``Prefetch`` without touching the database. A full async ``/graphql``
+    execution cannot isolate this - iterating the parent list on the loop thread
+    needs ``DJANGO_ALLOW_ASYNC_UNSAFE``, which would also mask the plan-time
+    lookup - so the planner is driven directly here (package tier).
+    """
+    from django.contrib.contenttypes.models import ContentType
+
+    registry.clear()
+    try:
+        types = _generic_connection_types()
+        branch_model, branch_type = types["Branch"]
+        # A cold content-type cache: the removed plan-time lookup would have to
+        # hit the DB here (sync I/O), raising ``SynchronousOnlyOperation`` under
+        # the running loop. The alias-late design never touches it.
+        ContentType.objects.clear_cache()
+        plan = plan_optimizations(
+            [
+                _conn_sel(
+                    "tagsConnection",
+                    node_selections=[_sel("tag")],
+                    arguments={"first": 2},
+                ),
+            ],
+            branch_model,
+            info=_fake_info(),
+            source_type=branch_type,
+        )
+        # The generic connection planned a windowed prefetch (no plan-time morph
+        # constant baked in - Django adds it alias-late at fetch time).
+        prefetch = _prefetch_entry(plan)
+        assert prefetch.to_attr == "_dst_tags_connection"
+        child_where = str(prefetch.queryset.query.where)
+        assert "content_type" not in child_where
     finally:
         registry.clear()

@@ -2093,6 +2093,121 @@ def test_nested_pagination_variable_two_plans_two_windows():
 
 
 @pytest.mark.django_db
+def test_distinct_target_get_queryset_produces_no_window_prefetch():
+    """A target ``get_queryset`` returning ``.distinct()`` never windows (WS-E step 2).
+
+    ``.distinct()`` can never reach ``apply_window_pagination``: the
+    strategy-independent gate ``unwindowable_child_queryset_reason`` classifies
+    the base child queryset as ``"distinct"`` and the nested planner leaves the
+    connection FULLY unplanned (Decision 6), so the connection resolves through
+    the strictness-visible per-parent fallback - one child query per parent, no
+    single batched ``ROW_NUMBER() OVER`` window. Pins the verified
+    unreachability that killed the strawberry-django ``remove_window_pagination``
+    distinct-count fallback port (it would be dead code here).
+    """
+    from django.db import connection as db_connection
+    from django.test.utils import CaptureQueriesContext
+
+    services.seed_data(2)
+
+    class DistinctItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return queryset.distinct()
+
+    class DistinctCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        objs: list[DistinctCategoryType] = DjangoListField(DistinctCategoryType)
+
+    ext = DjangoOptimizerExtension()
+    schema = strawberry.Schema(
+        query=Query,
+        config=strawberry_config(),
+        extensions=[lambda: ext],
+    )
+    query = "{ objs { name itemsConnection(first: 2) { edges { node { name } } } } }"
+    with CaptureQueriesContext(db_connection) as ctx:
+        result = schema.execute_sync(query)
+
+    assert result.errors is None, result.errors
+    item_queries = [q["sql"] for q in ctx.captured_queries if "products_item" in q["sql"]]
+    # No batched window prefetch: the distinct child never gets a ``ROW_NUMBER()
+    # OVER`` window annotation.
+    assert not any("OVER (" in sql for sql in item_queries), item_queries
+    # Per-parent fallback instead: one child query per seeded category (> 1),
+    # never a single collapsed window query.
+    assert len(item_queries) > 1, item_queries
+
+
+@pytest.mark.django_db
+def test_per_field_nested_strategy_hint_selects_windowed(django_assert_num_queries):
+    """WS-D1: a ``nested_strategy`` hint drives the per-field strategy selection.
+
+    ``OptimizerHint.strategy("windowed")`` on a connection field routes
+    ``nested_planner.py::_select_nested_strategy`` through
+    ``resolve_strategy(name)`` (the per-field override) rather than the
+    extension-wide ``active_strategy()`` default, so the connection plans as a
+    single batched ``ROW_NUMBER() OVER`` window and returns the correct page.
+    """
+    from django.db import connection as db_connection
+    from django.test.utils import CaptureQueriesContext
+
+    from django_strawberry_framework import OptimizerHint
+
+    services.seed_data(2)
+
+    class ItemType(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    class WindowedCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name", "items")
+            interfaces = (relay.Node,)
+            optimizer_hints = {"items": OptimizerHint.strategy("windowed")}
+
+    finalize_django_types()
+
+    @strawberry.type
+    class Query:
+        objs: list[WindowedCategoryType] = DjangoListField(WindowedCategoryType)
+
+    ext = DjangoOptimizerExtension()
+    schema = strawberry.Schema(
+        query=Query,
+        config=strawberry_config(),
+        extensions=[lambda: ext],
+    )
+    query = "{ objs { name itemsConnection(first: 2) { edges { node { name } } } } }"
+    with CaptureQueriesContext(db_connection) as ctx:
+        result = schema.execute_sync(query)
+
+    assert result.errors is None, result.errors
+    item_queries = [q["sql"] for q in ctx.captured_queries if "products_item" in q["sql"]]
+    # The per-field windowed hint plans one batched ROW_NUMBER() OVER window.
+    assert any("OVER (" in sql for sql in item_queries), item_queries
+    # Every category resolves from that single window, not a per-parent fallback.
+    windowed = [sql for sql in item_queries if "OVER (" in sql]
+    assert len(windowed) == 1, item_queries
+
+
+@pytest.mark.django_db
 def test_root_pagination_variable_one_plan_through_schema():
     """End-to-end: a ROOT connection's ``first: $n`` value shares one cached plan.
 

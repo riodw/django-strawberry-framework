@@ -51,6 +51,31 @@ class Branch(models.Model):
         return self.name
 
 
+class ProxyBranch(Branch):
+    """Proxy of ``Branch`` carrying a ``for_concrete_model=False`` generic relation.
+
+    Test substrate (never exposed by the public example schema) for the
+    alias-late GenericRelation content-type morph under the NON-default
+    ``for_concrete_model`` setting. ``proxy_tags`` filters ``TaggedItem`` rows by
+    THIS proxy model's content type (``get_for_model(ProxyBranch,
+    for_concrete_model=False)``), not ``Branch``'s concrete content type - so a
+    generic connection over a ``ProxyBranch`` parent must resolve the proxy
+    content type alias-late at fetch time. If planning ever re-baked a
+    concrete-default content type (the removed plan-time lookup), rows seeded
+    under the proxy content type would not match.
+    """
+
+    proxy_tags = GenericRelation(
+        TaggedItem,
+        for_concrete_model=False,
+    )
+
+    class Meta:
+        proxy = True
+        verbose_name = "Proxy branch"
+        verbose_name_plural = "Proxy branches"
+
+
 class Shelf(models.Model):
     """A shelf inside a branch."""
 

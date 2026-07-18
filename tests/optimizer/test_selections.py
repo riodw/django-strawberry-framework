@@ -12,10 +12,11 @@ directly; the deep behavioral coverage lives in ``tests/optimizer/test_walker.py
 functions through the underscore aliases the two modules re-bind).
 """
 
+import copy
 from types import SimpleNamespace
 
 from graphql import parse
-from graphql.language.ast import FragmentDefinitionNode
+from graphql.language.ast import FragmentDefinitionNode, FragmentSpreadNode
 
 from django_strawberry_framework.optimizer.selections import (
     ast_child_selections,
@@ -89,6 +90,12 @@ def test_resolve_unvisited_fragment_resolves_once_then_dedups():
     assert resolve_unvisited_fragment(field, fragments, set()) is None
     # A spread for an undefined fragment -> None (defensive).
     assert resolve_unvisited_fragment(spread, {}, set()) is None
+    # A spread whose ``name`` is falsy -> None (defensive; graphql-core
+    # validation would normally reject a nameless spread before the optimizer).
+    nameless = copy.copy(spread)
+    nameless.name = None
+    assert isinstance(nameless, FragmentSpreadNode)
+    assert resolve_unvisited_fragment(nameless, fragments, set()) is None
 
 
 def test_resolve_unvisited_fragment_depth_keys_visits_per_spread_site():

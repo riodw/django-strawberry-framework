@@ -3688,6 +3688,295 @@ def test_genre_books_connection_divergent_aliases_batched_per_key():
     assert fallback_payload["data"] == payload["data"]
 
 
+def _seed_genre_books(*titles: str) -> models.Genre:
+    """Seed one genre with ``titles`` books (pk / window order == argument order)."""
+    genre = models.Genre.objects.create(name="Speculative")
+    shelf = _seed_shelf()
+    for title in titles:
+        book = models.Book.objects.create(title=title, shelf=shelf)
+        book.genres.add(genre)
+    return genre
+
+
+def _genre_books_connection(arguments: str, selection: str):
+    """Post one anonymous ``allLibraryGenres[0].booksConnection`` page + captured SQL.
+
+    Returns ``(connection_payload, captured)`` so the WS-A count-policy pins can
+    assert the served page AND the SQL shape (count-free vs counted) plus the
+    fixed two-query cost (no per-parent fallback) in one place.
+    """
+    # An unbounded page passes no arguments; GraphQL rejects an empty ``()``
+    # argument list, so emit the parens only when there are arguments.
+    arg_clause = f"({arguments})" if arguments else ""
+    query = f"""
+        query {{
+          allLibraryGenres {{
+            booksConnection{arg_clause} {{ {selection} }}
+          }}
+        }}
+        """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    return payload["data"]["allLibraryGenres"][0]["booksConnection"], captured
+
+
+def _array_cursor(index: int) -> str:
+    """The ``arrayconnection`` cursor for a 0-based offset index (matches endCursor)."""
+    return relay.to_base64("arrayconnection", str(index))
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_offset_page_probe_composes_marker_count_free():
+    """WS-A A1: the bounded offset page serves ``hasNextPage`` from the composed probe.
+
+    ``after:`` offset with ``first: N`` + ``hasNextPage`` (no ``totalCount``) now
+    overfetches ONE sentinel row composed with the marker, so ``hasNextPage`` is
+    the sentinel's presence - NO ``Count(1) OVER`` scan. Pinned both boundary
+    directions (a sentinel exists -> True; the partition ends exactly at
+    offset+limit -> False), the count-free SQL, and the fixed two-query cost.
+    """
+    _seed_genre_books("Aurora", "Binti", "Circe", "Delta", "Echo")
+
+    # offset 1 (after index 0), first 2 -> [Binti, Circe]; Delta is the sentinel.
+    conn, captured = _genre_books_connection(
+        f'first: 2, after: "{_array_cursor(0)}"',
+        "edges { node { title } } pageInfo { hasNextPage hasPreviousPage }",
+    )
+    assert [edge["node"]["title"] for edge in conn["edges"]] == ["Binti", "Circe"]
+    assert conn["pageInfo"]["hasNextPage"] is True
+    assert conn["pageInfo"]["hasPreviousPage"] is True
+    assert len(captured) == 2
+    window_sql = captured[1]["sql"]
+    assert "_dst_total_count" not in window_sql
+    assert "COUNT(" not in window_sql.upper()
+
+    # offset 3 (after index 2), first 2 -> [Delta, Echo]; the partition ends
+    # exactly at offset+limit, so NO sentinel -> hasNextPage False (boundary).
+    boundary, boundary_captured = _genre_books_connection(
+        f'first: 2, after: "{_array_cursor(2)}"',
+        "edges { node { title } } pageInfo { hasNextPage }",
+    )
+    assert [edge["node"]["title"] for edge in boundary["edges"]] == ["Delta", "Echo"]
+    assert boundary["pageInfo"]["hasNextPage"] is False
+    assert len(boundary_captured) == 2
+    assert "_dst_total_count" not in boundary_captured[1]["sql"]
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_offset_page_edges_only_served_count_free():
+    """WS-A: an edges-only bounded offset page serves the page count-free, no fallback.
+
+    Neither ``hasNextPage`` nor ``totalCount`` is selected, so the window is
+    planned without the probe - but the offset marker still lands and the
+    resolver serves the page from ``offset < rn <= upper_bound`` with no count
+    window and no per-parent fallback.
+    """
+    _seed_genre_books("Aurora", "Binti", "Circe", "Delta")
+    conn, captured = _genre_books_connection(
+        f'first: 2, after: "{_array_cursor(0)}"',
+        "edges { cursor node { title } }",
+    )
+    assert [edge["node"]["title"] for edge in conn["edges"]] == ["Binti", "Circe"]
+    assert len(captured) == 2  # no per-parent fallback.
+    window_sql = captured[1]["sql"]
+    assert "_dst_total_count" not in window_sql
+    assert "COUNT(" not in window_sql.upper()
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_offset_overshoot_served_count_free_no_fallback():
+    """WS-A: an overshot ``after:`` on the offset page serves an empty page, no fallback.
+
+    Both the ``hasNextPage``-only shape and the edges-only shape (the Gap-6b hole):
+    the marker proves ``total <= offset``, so ``hasNextPage`` is False and the
+    edges are empty - served directly, count-free, in the fixed two-query cost
+    (a per-parent fallback would be an N+1 regression vs today).
+    """
+    _seed_genre_books("Aurora", "Binti", "Circe")
+    overshoot = _array_cursor(9)  # far past the 3-book partition.
+
+    has_next, has_next_captured = _genre_books_connection(
+        f'first: 2, after: "{overshoot}"',
+        "edges { node { title } } pageInfo { hasNextPage }",
+    )
+    assert has_next["edges"] == []
+    assert has_next["pageInfo"]["hasNextPage"] is False
+    assert len(has_next_captured) == 2
+    assert "_dst_total_count" not in has_next_captured[1]["sql"]
+
+    edges_only, edges_captured = _genre_books_connection(
+        f'first: 2, after: "{overshoot}"',
+        "edges { node { title } }",
+    )
+    assert edges_only["edges"] == []
+    assert len(edges_captured) == 2  # Gap-6b: served, not per-parent fallback.
+    assert "_dst_total_count" not in edges_captured[1]["sql"]
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_unbounded_overshoot_served_count_free_no_fallback():
+    """WS-A finding-2 hole: ``after:`` past the end with NO ``first`` is served count-free.
+
+    An unbounded overshot page must serve the empty page from the marker-only
+    window (``total <= offset``), never silently degrade to a per-parent
+    fallback. Pinned: empty edges, ``hasNextPage`` False, count-free, two queries.
+    """
+    _seed_genre_books("Aurora", "Binti", "Circe")
+    conn, captured = _genre_books_connection(
+        f'after: "{_array_cursor(9)}"',
+        "edges { node { title } } pageInfo { hasNextPage }",
+    )
+    assert conn["edges"] == []
+    assert conn["pageInfo"]["hasNextPage"] is False
+    assert len(captured) == 2  # NO per-parent fallback.
+    window_sql = captured[1]["sql"]
+    assert "_dst_total_count" not in window_sql
+    assert "COUNT(" not in window_sql.upper()
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_empty_partition_on_page_two_served_count_free():
+    """WS-A: a childless parent queried with ``after:`` serves an empty page, no fallback.
+
+    The empty-window branch on an offset page: no rows (not even a marker) means
+    the parent has no children, so the empty page is served count-free with
+    ``hasNextPage`` False and the fixed two-query cost.
+    """
+    models.Genre.objects.create(name="Empty")
+    conn, captured = _genre_books_connection(
+        f'first: 2, after: "{_array_cursor(0)}"',
+        "edges { node { title } } pageInfo { hasNextPage }",
+    )
+    assert conn["edges"] == []
+    assert conn["pageInfo"]["hasNextPage"] is False
+    assert len(captured) == 2
+    assert "_dst_total_count" not in captured[1]["sql"]
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_last_page_has_next_page_constant_false_count_free():
+    """WS-A A2: reversed ``last: N`` serves ``hasNextPage`` as a constant False, count-free.
+
+    A ``last``-only page is the partition's tail, so ``hasNextPage`` is False by
+    construction - no ``Count(1) OVER`` needed. ``hasPreviousPage`` still derives
+    from the forward row number. Pinned: correct tail edges, both flags,
+    count-free SQL, two queries.
+    """
+    _seed_genre_books("Aurora", "Binti", "Circe", "Delta", "Echo")
+    conn, captured = _genre_books_connection(
+        "last: 2",
+        "edges { node { title } } pageInfo { hasNextPage hasPreviousPage }",
+    )
+    assert [edge["node"]["title"] for edge in conn["edges"]] == ["Delta", "Echo"]
+    assert conn["pageInfo"]["hasNextPage"] is False
+    assert conn["pageInfo"]["hasPreviousPage"] is True
+    assert len(captured) == 2
+    window_sql = captured[1]["sql"]
+    assert "_dst_total_count" not in window_sql
+    assert "COUNT(" not in window_sql.upper()
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_unbounded_edges_and_has_next_page_count_free():
+    """WS-A A2: an unbounded forward page serves ``hasNextPage`` False, count-free.
+
+    A served unbounded page ends at the partition's last row, so ``hasNextPage``
+    is a constant False - the count is dropped. Pinned: every edge, the constant
+    flag, count-free SQL, two queries.
+    """
+    _seed_genre_books("Aurora", "Binti", "Circe")
+    conn, captured = _genre_books_connection(
+        "",
+        "edges { node { title } } pageInfo { hasNextPage }",
+    )
+    assert [edge["node"]["title"] for edge in conn["edges"]] == ["Aurora", "Binti", "Circe"]
+    assert conn["pageInfo"]["hasNextPage"] is False
+    assert len(captured) == 2
+    window_sql = captured[1]["sql"]
+    assert "_dst_total_count" not in window_sql
+    assert "COUNT(" not in window_sql.upper()
+
+
+@pytest.mark.django_db
+def test_genre_books_connection_offset_alias_merge_composes_probe_and_marker():
+    """WS-A: composed-offset aliases share ONE window; sentinel AND marker never leak.
+
+    ``a`` selects ``pageInfo { hasNextPage }`` (the offset probe) and ``b`` selects
+    only ``edges`` under the SAME ``first: 2, after:`` args, so Decision 6 merges
+    them into one overfetched, marker-bearing window. The resolver must drop both
+    the sentinel AND the marker for EVERY alias: ``b`` renders exactly its page of
+    2, ``a`` reports the next page. Count-free throughout.
+    """
+    _seed_genre_books("Aurora", "Binti", "Circe", "Delta", "Echo")
+    after = _array_cursor(0)  # offset 1.
+    query = f"""
+        query {{
+          allLibraryGenres {{
+            a: booksConnection(first: 2, after: "{after}") {{ pageInfo {{ hasNextPage }} }}
+            b: booksConnection(first: 2, after: "{after}") {{ edges {{ node {{ title }} }} }}
+          }}
+        }}
+        """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    node = payload["data"]["allLibraryGenres"][0]
+    assert [edge["node"]["title"] for edge in node["b"]["edges"]] == ["Binti", "Circe"]
+    assert node["a"]["pageInfo"]["hasNextPage"] is True
+    for window_sql in (entry["sql"] for entry in captured[1:]):
+        assert "_dst_total_count" not in window_sql
+        assert "COUNT(" not in window_sql.upper()
+
+
+@pytest.mark.django_db
+def test_book_genres_connection_last_page_with_total_count_stays_counted():
+    """WS-A regression pin: ``last: N`` + ``totalCount`` keeps the count (unchanged).
+
+    The A2 constant-False path applies ONLY when ``totalCount`` is not observed;
+    a reversed page that DOES select ``totalCount`` still annotates the partition
+    count and serves its true value. Uses ``genresConnection`` (which exposes
+    ``totalCount``) on a book with three genres.
+    """
+    shelf = _seed_shelf()
+    book = models.Book.objects.create(title="Anthology", shelf=shelf)
+    for name in ("Sci-Fi", "Fantasy", "Horror"):
+        book.genres.add(models.Genre.objects.create(name=name))
+
+    query = """
+        query {
+          allLibraryBooks {
+            genresConnection(last: 2) {
+              totalCount
+              edges { node { name } }
+              pageInfo { hasPreviousPage hasNextPage }
+            }
+          }
+        }
+        """
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(query)
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+    target = next(
+        row["genresConnection"]
+        for row in payload["data"]["allLibraryBooks"]
+        if row["genresConnection"]["totalCount"] == 3
+    )
+    assert target["totalCount"] == 3
+    assert [edge["node"]["name"] for edge in target["edges"]] == ["Fantasy", "Horror"]
+    assert target["pageInfo"]["hasPreviousPage"] is True
+    assert target["pageInfo"]["hasNextPage"] is False
+    # The count IS annotated for the counted reverse page (regression pin).
+    executed = " ".join(entry["sql"] for entry in captured)
+    assert "_dst_total_count" in executed
+
+
 @pytest.mark.django_db
 def test_genre_books_connection_divergent_sidecar_alias_isolated():
     """A sidecar alias resolves per-parent WITHOUT dragging its divergent sibling.

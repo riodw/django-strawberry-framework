@@ -43,6 +43,52 @@ def test_relation_kind_classifies_one_to_many_as_many():
     assert relation_kind(field) == "many"
 
 
+def test_relation_kind_classifies_generic_relation():
+    """A ``GenericRelation``-shaped field classifies as ``"generic"`` before the fallback.
+
+    Detected duck-typed by non-``None`` ``content_type_field_name`` /
+    ``object_id_field_name`` slots, BEFORE the ``one_to_many`` ``"many"``
+    fallback below.
+    """
+    field = SimpleNamespace(
+        many_to_many=False,
+        one_to_many=True,
+        one_to_one=False,
+        auto_created=False,
+        content_type_field_name="content_type",
+        object_id_field_name="object_id",
+    )
+
+    assert relation_kind(field) == "generic"
+
+
+def test_relation_kind_none_valued_generic_slots_fall_back_to_many():
+    """``None`` content-type / object-id slots (a plain ``FieldMeta``) are NOT generic.
+
+    ``FieldMeta`` is a slotted dataclass that always carries the two slots
+    defaulted to ``None``, so the detector reads ``getattr(...) is not None``,
+    not ``hasattr`` - otherwise every ``FieldMeta`` snapshot would misclassify
+    as ``"generic"``.
+    """
+    field = SimpleNamespace(
+        many_to_many=False,
+        one_to_many=True,
+        one_to_one=False,
+        auto_created=False,
+        content_type_field_name=None,
+        object_id_field_name=None,
+    )
+
+    assert relation_kind(field) == "many"
+
+
+def test_relation_kind_generic_is_in_literal():
+    """The ``RelationKind`` alias enumerates ``"generic"``."""
+    import typing
+
+    assert "generic" in typing.get_args(RelationKind)
+
+
 def test_relation_kind_classifies_auto_created_one_to_many_as_reverse_many_to_one():
     """Reverse-FK descriptor (Django ``ManyToOneRel``): ``one_to_many`` + ``auto_created``."""
     field = SimpleNamespace(
@@ -77,6 +123,7 @@ def test_utils_init_reexports_match_submodule():
 def test_is_many_side_relation_kind_matches_list_valued_shapes():
     assert is_many_side_relation_kind("many") is True
     assert is_many_side_relation_kind("reverse_many_to_one") is True
+    assert is_many_side_relation_kind("generic") is True
     assert is_many_side_relation_kind("reverse_one_to_one") is False
     assert is_many_side_relation_kind("forward_single") is False
     assert is_many_side_relation_kind(None) is False

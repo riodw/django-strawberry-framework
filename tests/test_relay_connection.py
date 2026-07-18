@@ -1406,6 +1406,15 @@ def test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by():
             "b",
         ):  # pk order (d,a,c,b) != title order (a,b,c,d)
             OConnPost.objects.create(title=title, tag=tag)
+        # A SECOND parent keeps the prefetch multi-parent so the windowed body
+        # runs: the single-parent degenerate fast path
+        # (optimizer/single_parent_fetch.py) would otherwise serve a plain
+        # filtered LIMIT (no ROW_NUMBER) for a lone parent, which this test
+        # cannot inspect for the outer ORDER BY tiebreaker. The fast path applies
+        # the SAME deterministic order; here we pin the windowed path explicitly.
+        other = OConnTag.objects.create(name="u")
+        for title in ("z", "y"):
+            OConnPost.objects.create(title=title, tag=other)
 
         query = (
             "{ objs { postsConnection(first: 2) { edges { cursor node { title } } "
@@ -2429,14 +2438,20 @@ def test_fast_path_count_less_window_serves_cheap_page(django_assert_num_queries
 
 
 def test_count_less_window_with_count_observer_falls_back_defensively():
-    """A count-less window whose selection observes the count returns ``None``.
+    """A count-less window whose selection OBSERVES the count returns ``None``.
 
-    The workstream-B defensive tail in ``_resolve_from_window``: plan-time
-    (``connection_count_required``) and resolve-time (``want_count`` /
-    ``_has_next_page_requested``) share the selection walk, so this branch is
-    unreachable live until they DRIFT - which is exactly when serving a wrong
-    flag/count must lose to the per-parent fallback. Checked before any edge
-    is built, so a stub ``cls`` proves the early return.
+    The workstream-B defensive tail in ``_resolve_from_window``, narrowed by
+    WS-A's count-policy overhaul: the ONLY genuine drift left is a ``totalCount``
+    observer (``want_count=True``) on a window that carries no count annotation.
+    Plan-time (``connection_count_required``) and resolve-time (``want_count``)
+    share the selection walk, so this is unreachable live until they DRIFT -
+    which is exactly when serving a fabricated count must lose to the per-parent
+    fallback. The count-free ``hasNextPage`` shapes that USED to fall back here
+    (bounded forward offset page, unbounded forward, reversed ``last: N``) are
+    now SERVED count-free by the probe or the constant-False ``hasNextPage``
+    (A1 / A2, covered in the live tier). ``want_count`` is NEVER exempt, so the
+    guard still fires here; checked before any edge is built, so a stub ``cls``
+    proves the early return.
     """
     from types import SimpleNamespace
 
@@ -2445,14 +2460,14 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
         _WindowedConnectionRows,
     )
 
-    rows = [SimpleNamespace(_dst_row_number=1), SimpleNamespace(_dst_row_number=2)]
-    window = _WindowedConnectionRows(rows=rows, fallback=lambda: None)
-
-    def _sel_node(name, selections=()):
-        return SimpleNamespace(name=name, directives={}, selections=list(selections))
-
-    # ``totalCount`` requested (want_count True): info is never consulted.
     inert_info = SimpleNamespace(selected_fields=[])
+
+    # Plain forward page, ``totalCount`` requested, count annotation absent: the
+    # count cannot be fabricated, so fall back per-parent.
+    window = _WindowedConnectionRows(
+        rows=[SimpleNamespace(_dst_row_number=1), SimpleNamespace(_dst_row_number=2)],
+        fallback=lambda: None,
+    )
     assert (
         _resolve_from_window(
             object,
@@ -2465,9 +2480,10 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
         is None
     )
 
-    # Marker-only rows (offset > 0, page empty) missing the count: the same
-    # drift guard fires from the marker-classification branch - the marker
-    # shapes force the count at plan time, so a count-less marker IS drift.
+    # Marker-only page (offset > 0, page empty) with ``totalCount`` requested but
+    # no count annotation: still drift - the empty-page count is observed and
+    # cannot be inferred. (The SAME shape count-FREE is now SERVED, not dropped -
+    # see the live edges-only / unbounded overshoot pins.)
     marker_only = _WindowedConnectionRows(
         rows=[SimpleNamespace(_dst_row_number=1)],
         fallback=lambda: None,
@@ -2479,34 +2495,7 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
             info=inert_info,
             offset=5,
             limit=2,
-            want_count=False,
-        )
-        is None
-    )
-
-    # ``pageInfo { hasNextPage }`` requested on a NON-probe shape: the
-    # resolve-time predicate walk fires and the drift guard still returns None.
-    # A reversed ``last:`` window is not the count-free probe shape
-    # (``plain_first_page`` is forward/offset-0 only), so the walker always
-    # plans its count - a count-less one here IS drift. The forward plain
-    # ``first: N`` shape is instead SERVED by the n+1 probe (covered live), so
-    # it is deliberately not the shape exercised here.
-    has_next_info = SimpleNamespace(
-        selected_fields=[
-            SimpleNamespace(
-                selections=[_sel_node("pageInfo", [_sel_node("hasNextPage")])],
-            ),
-        ],
-    )
-    assert (
-        _resolve_from_window(
-            object,
-            window,
-            info=has_next_info,
-            offset=0,
-            limit=2,
-            reverse=True,
-            want_count=False,
+            want_count=True,
         )
         is None
     )

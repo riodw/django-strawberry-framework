@@ -16,6 +16,13 @@ forward ``M2M`` /        A (child derives a     ``THROUGH_TABLE`` - the
 reverse ``M2M``          parent-id list)        join table owns the attach
 forward FK / O2O         D (parent stores the   ``UNSUPPORTED`` - single-
 (``forward_single``)     child id)              valued; nothing to window
+``GenericRelation``      B (child stores a      ``DIRECT_FK`` - the child
+(``generic``)            parent id + a morph    ``object_id`` column carries
+                         content type)          the parent id; the content
+                                                type is a constant WHERE, and
+                                                ``parent_link_field`` stays
+                                                ``None`` so lateral degrades
+                                                to the windowed body
 ======================  =====================  ==========================
 
 One classification (``classify_relation_join``) carries every join-derived
@@ -64,7 +71,12 @@ class LateralJoinShape(enum.Enum):
 # (``plans.py::window_partition_for_prefetch``) can distinguish "wrong kind"
 # from "kind OK, partition unresolved" without re-listing the set.
 WINDOWABLE_RELATION_KINDS: frozenset[RelationKind] = frozenset(
-    {"many", "reverse_many_to_one", "reverse_one_to_one"},
+    {
+        "many",
+        "reverse_many_to_one",
+        "reverse_one_to_one",
+        "generic",
+    },
 )
 
 
@@ -88,6 +100,14 @@ class RelationJoinDescriptor:
     table's parent-side FK and child-side FK respectively; ``None`` when the
     shape is ``UNSUPPORTED`` or the field cannot resolve them (synthetic
     doubles - the classifier never raises).
+
+    ``content_type_column`` is the child ``content_type_id`` attname a
+    ``GenericRelation`` window constrains by equality alongside the
+    ``object_id`` connector (every generic query carries a constant morph
+    predicate, so ``(content_type_id, object_id, ...)`` is the useful
+    composite-index prefix, not ``object_id`` alone). ``None`` for every
+    non-generic shape and for a synthetic generic double that cannot resolve
+    it - the classifier never raises.
     """
 
     kind: RelationKind
@@ -98,6 +118,7 @@ class RelationJoinDescriptor:
     lateral_shape: LateralJoinShape
     parent_link_field: Any = None
     through_child_field: Any = None
+    content_type_column: str | None = None
 
 
 def _partition_expr(field: Any) -> str | None:
@@ -172,6 +193,43 @@ def _through_link_fields(field: Any, through: type | None) -> tuple[Any, Any]:
     return target_fk, source_fk  # reverse: parent side is the target FK.
 
 
+def _generic_object_id_attname(field: Any) -> str | None:
+    """The child ``object_id`` column attname a ``GenericRelation`` partitions by.
+
+    A ``GenericForeignKey`` stores the parent id in an ordinary column
+    (``object_id`` by default) named on the ``GenericRelation`` via
+    ``object_id_field_name``; the windowed prefetch partitions by that
+    column's attname (the content type is a constant WHERE, not part of the
+    partition - Laravel morphMany precedent). ``None`` when the related model
+    or the field name is missing (synthetic doubles) - the classifier never
+    raises. ``get_field`` resolves for a genuine ``GenericRelation``, so no
+    defensive ``FieldDoesNotExist`` swallow is needed once both inputs exist.
+    """
+    related_model = getattr(field, "related_model", None)
+    object_id_field_name = getattr(field, "object_id_field_name", None)
+    if related_model is None or object_id_field_name is None:
+        return None
+    return related_model._meta.get_field(object_id_field_name).attname
+
+
+def _generic_content_type_attname(field: Any) -> str | None:
+    """The child ``content_type_id`` column attname a ``GenericRelation`` morphs on.
+
+    A ``GenericForeignKey`` pairs the ``object_id`` column with a content-type
+    FK named on the ``GenericRelation`` via ``content_type_field_name``. The
+    windowed prefetch constrains that column by EQUALITY (Django's alias-late
+    morph WHERE), so it belongs ahead of ``object_id`` in a covering composite
+    index even though it is not part of the partition. ``None`` when the
+    related model or the field name is missing (synthetic doubles) - the
+    classifier never raises.
+    """
+    related_model = getattr(field, "related_model", None)
+    content_type_field_name = getattr(field, "content_type_field_name", None)
+    if related_model is None or content_type_field_name is None:
+        return None
+    return related_model._meta.get_field(content_type_field_name).attname
+
+
 def classify_relation_join(field: Any) -> RelationJoinDescriptor:
     """Classify one raw Django relation field into its join descriptor.
 
@@ -185,29 +243,49 @@ def classify_relation_join(field: Any) -> RelationJoinDescriptor:
     kind = relation_kind(field)
     is_m2m = bool(getattr(field, "many_to_many", False))
     windowable = kind in WINDOWABLE_RELATION_KINDS
-    partition = _partition_expr(field) if windowable else None
     parent_link_field = None
     through_child_field = None
-    if is_m2m:
-        lateral_shape = LateralJoinShape.THROUGH_TABLE
-        through = _through_model(field)
-        parent_link_field, through_child_field = _through_link_fields(field, through)
-    elif windowable:
+    content_type_column = None
+    if kind == "generic":
+        # GenericRelation: partition by the child ``object_id`` COLUMN and
+        # attach on the same column; the content type is an alias-late WHERE
+        # Django's ``GenericRelatedObjectManager.get_prefetch_querysets`` adds at
+        # fetch time (never the planner - resolving it early is wrong-alias DB I/O;
+        # see ``nested_planner.py::plan_connection_relation``), never part of the
+        # partition. ``parent_link_field``
+        # STAYS None so the lateral backend refuses at ``_build_lateral_spec``
+        # and the strategy degrades to the windowed body - no
+        # ``LateralJoinShape.GENERIC`` arm exists (or is wanted).
+        object_id_attname = _generic_object_id_attname(field)
+        partition = object_id_attname
+        parent_join_column = object_id_attname
+        content_type_column = _generic_content_type_attname(field)
         lateral_shape = LateralJoinShape.DIRECT_FK
         through = None
-        # The child-side FK carrying the parent id (a rel descriptor's
-        # ``.field``); ``None`` on a synthetic double without one.
-        parent_link_field = getattr(field, "field", None)
     else:
-        lateral_shape = LateralJoinShape.UNSUPPORTED
-        through = None
+        partition = _partition_expr(field) if windowable else None
+        parent_join_column = _parent_join_column(field, kind)
+        if is_m2m:
+            lateral_shape = LateralJoinShape.THROUGH_TABLE
+            through = _through_model(field)
+            parent_link_field, through_child_field = _through_link_fields(field, through)
+        elif windowable:
+            lateral_shape = LateralJoinShape.DIRECT_FK
+            through = None
+            # The child-side FK carrying the parent id (a rel descriptor's
+            # ``.field``); ``None`` on a synthetic double without one.
+            parent_link_field = getattr(field, "field", None)
+        else:
+            lateral_shape = LateralJoinShape.UNSUPPORTED
+            through = None
     return RelationJoinDescriptor(
         kind=kind,
         windowable=windowable and partition is not None,
         partition_expr=partition,
-        parent_join_column=_parent_join_column(field, kind),
+        parent_join_column=parent_join_column,
         through_model=through,
         lateral_shape=lateral_shape,
         parent_link_field=parent_link_field,
         through_child_field=through_child_field,
+        content_type_column=content_type_column,
     )

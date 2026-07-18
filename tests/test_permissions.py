@@ -467,8 +467,9 @@ def test_single_column_scope_skips_m2m_reverse_and_generic():
         m2m = models.ManyToManyField(ScopeTag, related_name="scope_models")
         # GenericForeignKey (``related_model`` absent) + its GenericRelation
         # (virtual, no ``column``) both live on this model so the walk's edge scan
-        # sees and skips them.
-        content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+        # sees and skips them. ``DO_NOTHING`` for the same reason as ``_GfkHost``:
+        # this table-less fixture must not join real models' deletion collectors.
+        content_type = models.ForeignKey(ContentType, on_delete=models.DO_NOTHING)
         object_id = models.PositiveIntegerField()
         content_object = GenericForeignKey("content_type", "object_id")
         generics = GenericRelation("ScopeModel")
@@ -521,15 +522,27 @@ def test_single_column_scope_skips_m2m_reverse_and_generic():
 
 
 class _GfkHost(models.Model):
-    """GFK-carrying fixture shared by the preflight / explicit-selection pins."""
+    """GFK-carrying fixture shared by the preflight / explicit-selection pins.
+
+    This is an inspection-only fixture (its tests only build/inspect the COMPOSED
+    cascade query, never insert rows), so - per this module's design - it is NOT
+    given a real ``schema_editor()`` table. Because the model class is registered
+    module-wide at import, its forward FKs to the REAL ``Category`` / ``ContentType``
+    tables would otherwise wire table-less reverse edges into those models'
+    ``deletion.Collector`` graphs: ANY ``Category.delete()`` anywhere in the suite
+    would then emit ``DELETE FROM products__gfkhost`` against a table that does not
+    exist. ``on_delete=DO_NOTHING`` excludes the edges from the collector
+    (``deletion.py`` short-circuits ``DO_NOTHING`` before querying) while leaving
+    them as ordinary forward FK edges the visibility cascade still walks.
+    """
 
     target = models.ForeignKey(
         Category,
         null=True,
-        on_delete=models.CASCADE,
+        on_delete=models.DO_NOTHING,
         related_name="+",
     )
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    content_type = models.ForeignKey(ContentType, on_delete=models.DO_NOTHING)
     object_id = models.PositiveIntegerField()
     content_object = GenericForeignKey("content_type", "object_id")
 

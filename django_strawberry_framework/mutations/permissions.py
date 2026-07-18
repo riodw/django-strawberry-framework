@@ -59,12 +59,7 @@ _PERMISSION_ASYNC_RECOURSE = (
 )
 
 
-def _require_sync_bool_auth_result(
-    value: Any,
-    *,
-    owner: str,
-    method: str,
-) -> bool:
+def _require_sync_bool_auth_result(value: Any, *, owner: str, method: str) -> bool:
     """Return a sync authorization bool; reject awaitables and non-bools (BETA-055).
 
     The ONE write-authorization result contract the three sync seams share:

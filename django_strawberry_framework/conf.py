@@ -73,6 +73,14 @@ UPSTREAM_PATCH_DEPENDENCIES = frozenset({"django", "strawberry", "cross_web"})
 # (see ``optimizer/nested_fetch.py``). Defaults to ``"windowed"``.
 NESTED_CONNECTION_STRATEGY_KEY = "NESTED_CONNECTION_STRATEGY"
 
+# Whether the runtime single-parent degenerate window fast path is enabled
+# (see ``optimizer/single_parent_fetch.py``). When a windowed nested-connection
+# prefetch executes with exactly one parent id and a count-free plain-first-page
+# shape, the fast path runs the plain filtered ``LIMIT`` query instead of the
+# whole-partition ``ROW_NUMBER()`` window. Read at FETCH time, so the flag is
+# plan-cache invisible. Defaults to ``True``.
+SINGLE_PARENT_FAST_PATH_KEY = "SINGLE_PARENT_FAST_PATH"
+
 # Project-wide GraphQL endpoint for the ``testing/client.py`` test-client
 # family (``TestClient`` / ``AsyncTestClient`` / ``GraphQLTestMixin``) -
 # graphene-django's ``TESTING_ENDPOINT`` knob, package-namespaced (spec-043
@@ -361,6 +369,16 @@ def nested_connection_strategy_setting() -> str:
     lives.
     """
     return getattr(settings, NESTED_CONNECTION_STRATEGY_KEY, "windowed")
+
+
+def single_parent_fast_path_setting() -> bool:
+    """Whether the runtime single-parent degenerate window fast path is enabled.
+
+    Reads DJANGO_STRAWBERRY_FRAMEWORK["SINGLE_PARENT_FAST_PATH"], default True.
+    Consumed at FETCH time by optimizer/single_parent_fetch.py so the flag is
+    plan-cache invisible and override_settings-testable.
+    """
+    return getattr(settings, SINGLE_PARENT_FAST_PATH_KEY, True)
 
 
 def testing_endpoint_setting() -> str:

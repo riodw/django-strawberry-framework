@@ -308,6 +308,45 @@ def test_testing_endpoint_setting_carries_pytest_collection_guard():
     assert testing_endpoint_setting.__test__ is False
 
 
+def test_single_parent_fast_path_setting_defaults_true_when_absent():
+    """The runtime single-parent fast path is ON by default (key/settings absent)."""
+    from django_strawberry_framework.conf import single_parent_fast_path_setting
+
+    assert single_parent_fast_path_setting() is True
+
+
+def test_single_parent_fast_path_setting_reads_explicit_values_live(settings):
+    """An explicit boolean is read LIVE - each dict assignment triggers reload_settings.
+
+    The flag is consumed at FETCH time (``optimizer/single_parent_fetch.py``), so
+    an ``override_settings`` / live reassignment must be observed immediately
+    rather than being baked into a plan cache.
+    """
+    from django_strawberry_framework.conf import single_parent_fast_path_setting
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"SINGLE_PARENT_FAST_PATH": False}
+    assert single_parent_fast_path_setting() is False
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"SINGLE_PARENT_FAST_PATH": True}
+    assert single_parent_fast_path_setting() is True
+
+
+def test_single_parent_fast_path_setting_is_an_unvalidated_toggle(settings):
+    """The toggle is a pure on/off read: any value passes through, consumed by truthiness.
+
+    Unlike ``NESTED_CONNECTION_STRATEGY`` (validated in ``resolve_strategy``
+    against the strategy registry), the fast path has no downstream registry to
+    validate against - the fetch-time consumer only asks
+    ``if not single_parent_fast_path_setting()``, so a non-bool value is returned
+    verbatim and interpreted by truthiness rather than raising.
+    """
+    from django_strawberry_framework.conf import single_parent_fast_path_setting
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"SINGLE_PARENT_FAST_PATH": 0}
+    assert single_parent_fast_path_setting() == 0  # falsy -> disables, no raise.
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"SINGLE_PARENT_FAST_PATH": "yes"}
+    assert single_parent_fast_path_setting() == "yes"  # truthy -> enables, no raise.
+
+
 # ---------------------------------------------------------------------------
 # Live sync when django.conf mutates without setting_changed
 # ---------------------------------------------------------------------------

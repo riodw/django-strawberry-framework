@@ -79,7 +79,7 @@ Searches:
 
 Disproved / rejected candidates:
 
-1. **Share queryset-flag checks with `lateral_fetch._extract_parent_ids` /
+1. **Share queryset-flag checks with `lateral_fetch._recognize_lateral_fetch` /
    `_fetch_lateral_rows`.** Overlap on sliced / distinct / locking /
    combinator / non-`ModelIterable` is real syntax, not one responsibility.
    `unwindowable_*` is **plan-time Decision-6** (leave selection fully
@@ -157,7 +157,7 @@ registry, bypass, or second selection path found under package search.
 Challenged rejected candidates (all hold):
 
 1. **Queryset-flag overlap with
-   `lateral_fetch._extract_parent_ids` / `_fetch_lateral_rows`.** Overlap on
+   `lateral_fetch._recognize_lateral_fetch` / `_fetch_lateral_rows`.** Overlap on
    sliced / distinct / locking / combinator / non-`ModelIterable` is real
    syntax. Contracts still diverge: plan-time returns a reason string and
    leaves the selection fully unplanned; fetch-time returns `None` and

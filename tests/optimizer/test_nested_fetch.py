@@ -17,6 +17,7 @@ from django.db.models import Prefetch
 
 from django_strawberry_framework import DjangoOptimizerExtension
 from django_strawberry_framework.exceptions import ConfigurationError, OptimizerError
+from django_strawberry_framework.optimizer.hints import OptimizerHint
 from django_strawberry_framework.optimizer.nested_fetch import (
     AUTO_STRATEGY,
     WINDOWED_STRATEGY,
@@ -148,6 +149,37 @@ def test_extension_pins_strategy_at_construction():
     )
     with pytest.raises(ConfigurationError):
         DjangoOptimizerExtension(nested_connection_strategy="correlated")
+
+
+def test_optimizer_hint_strategy_accepts_and_drives_a_consumer_instance():
+    """``OptimizerHint.strategy(instance)`` takes a consumer-authored backend.
+
+    The per-field seam accepts the same ``str | NestedConnectionStrategy`` the
+    extension-wide kwarg does: an instance survives ``__post_init__`` validation
+    verbatim (no str coercion), the stored selection dispatches back to the same
+    object through ``resolve_strategy``, and driving it plans one request through
+    the consumer's own ``plan()``.
+    """
+    planned: list = []
+
+    class RecordingStrategy:
+        name = "recording"
+
+        def plan(self, request, plan):
+            planned.append(request)
+            return True
+
+    backend = RecordingStrategy()
+    hint = OptimizerHint.strategy(backend)
+    # Validated at construction and carried as the instance itself.
+    assert hint.nested_strategy is backend
+    # The stored selection resolves back to the same consumer backend...
+    assert resolve_strategy(hint.nested_strategy) is backend
+    # ...and driving it plans the request through the consumer's plan().
+    plan = OptimizationPlan()
+    request = _books_request()
+    assert resolve_strategy(hint.nested_strategy).plan(request, plan) is True
+    assert planned == [request]
 
 
 def test_active_strategy_defaults_windowed_and_reads_contextvar():

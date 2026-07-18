@@ -800,10 +800,10 @@ def test_lateral_count_free_keyset_renders_in_branch_seek():
     # Mixed directions (-number, id): redundant leading bound + OR expansion,
     # inside the branch, before the in-branch ORDER BY ... LIMIT.
     assert (
-        '"__dst_child"."number" <= %s AND ("__dst_child"."number" < %s '
-        'OR ("__dst_child"."number" = %s AND "__dst_child"."id" > %s))'
+        '"library_issue"."number" <= %s AND ("library_issue"."number" < %s '
+        'OR ("library_issue"."number" = %s AND "library_issue"."id" > %s))'
     ) in sql
-    assert sql.index("LIMIT %s") > sql.index('"__dst_child"."number" <=')
+    assert sql.index("LIMIT %s") > sql.index('"library_issue"."number" <=')
     assert params == [
         1,
         2,
@@ -853,7 +853,7 @@ def test_lateral_uniform_keyset_renders_row_value_seek():
     request = replace(_issue_lateral_request(seek), order_by=("number", "id"))
     spec = _plan_lateral(request)._dst_lateral_spec
     sql, params = build_lateral_sql(spec, [1], quote_name=lambda name: f'"{name}"')
-    assert '("__dst_child"."number", "__dst_child"."id") > (%s, %s)' in sql
+    assert '("library_issue"."number", "library_issue"."id") > (%s, %s)' in sql
     assert params == [
         1,
         3,
@@ -871,7 +871,7 @@ def test_lateral_single_column_keyset_renders_scalar_seek():
     request = replace(_issue_lateral_request(seek), order_by=("pk",))
     spec = _plan_lateral(request)._dst_lateral_spec
     sql, params = build_lateral_sql(spec, [1], quote_name=lambda name: f'"{name}"')
-    assert '"__dst_child"."id" > %s' in sql
+    assert '"library_issue"."id" > %s' in sql
     assert params == [1, 5, 2]
 
 
@@ -896,25 +896,25 @@ def test_lateral_seek_arity_mismatch_downgrades_to_windowed():
 
 
 def test_lateral_fetch_recognizes_planned_seek_residue():
-    from django_strawberry_framework.optimizer.lateral_fetch import _extract_parent_ids
+    from django_strawberry_framework.optimizer.lateral_fetch import _recognize_lateral_fetch
 
     lateral_queryset = _plan_lateral(_issue_lateral_request(_issue_seek(), next_page_probe=True))
     spec = lateral_queryset._dst_lateral_spec
     filtered = lateral_queryset.filter(periodical__in=[1, 2])
-    assert _extract_parent_ids(filtered, spec) == [1, 2]
+    assert _recognize_lateral_fetch(filtered, spec).parent_ids == [1, 2]
 
 
 def test_lateral_fetch_rejects_foreign_filters_and_missing_seek():
-    from django_strawberry_framework.optimizer.lateral_fetch import _extract_parent_ids
+    from django_strawberry_framework.optimizer.lateral_fetch import _recognize_lateral_fetch
 
     lateral_queryset = _plan_lateral(_issue_lateral_request(_issue_seek(), next_page_probe=True))
     spec = lateral_queryset._dst_lateral_spec
     # A consumer filter beside the seek: never swallowed as the seek.
     poisoned = lateral_queryset.filter(periodical__in=[1]).filter(title__startswith="x")
-    assert _extract_parent_ids(poisoned, spec) is None
+    assert _recognize_lateral_fetch(poisoned, spec) is None
     # A seek-bearing spec over a body whose seek residue is ABSENT: mismatch.
     stripped = _plan_lateral(_issue_lateral_request(None, next_page_probe=True))
-    assert _extract_parent_ids(stripped.filter(periodical__in=[1]), spec) is None
+    assert _recognize_lateral_fetch(stripped.filter(periodical__in=[1]), spec) is None
 
 
 def test_lateral_seek_quals_match_rejects_shape_drift():

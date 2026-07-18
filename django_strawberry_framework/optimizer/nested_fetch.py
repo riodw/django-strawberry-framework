@@ -253,13 +253,38 @@ def attach_windowed_prefetch(
 
 
 class WindowedPrefetchStrategy:
-    """The default: spec-033's windowed prefetch, moved verbatim from the walker."""
+    """The default: spec-033's windowed prefetch, moved verbatim from the walker.
+
+    The planned body is unchanged, but for the single-parent degenerate shape the
+    windowed queryset is wrapped as a ``SingleParentWindowQuerySet`` (see
+    ``optimizer/single_parent_fetch.py``): a RUNTIME-ONLY fast path that, when the
+    Django-prefetch-injected parent ``IN`` list has length one, runs the plain
+    filtered ``LIMIT`` query instead of the whole-partition ``ROW_NUMBER()``
+    window and synthesizes ``_dst_row_number`` in Python. The wrap is plan-time
+    (so it rides the plan cache), but the len==1 decision is fetch-time, and every
+    unrecognized shape falls back to the identical windowed body - a performance
+    downgrade, never a correctness cliff. Under the ``"lateral"``/``"auto"``
+    strategies ``LateralPrefetchStrategy`` handles the clean eligible shape at
+    plan time, so this fast path is effectively a ``"windowed"``-strategy feature;
+    a lateral single-parent variant is out of v1 scope.
+    """
 
     name = "windowed"
 
     def plan(self, request: NestedConnectionRequest, plan: OptimizationPlan) -> bool:
         """Window the child queryset and carry it as a ``to_attr`` Prefetch."""
-        return attach_windowed_prefetch(request, plan)
+        # Lazy import: single_parent_fetch imports lateral_fetch which imports
+        # this module (the same cycle the auto strategy breaks lazily).
+        from .single_parent_fetch import as_single_parent_queryset, single_parent_spec
+
+        spec = single_parent_spec(request)
+        if spec is None:
+            return attach_windowed_prefetch(request, plan)
+        return attach_windowed_prefetch(
+            request,
+            plan,
+            wrap=lambda queryset: as_single_parent_queryset(queryset, spec),
+        )
 
 
 #: The shared default-strategy singleton (stateless, so one instance serves

@@ -148,6 +148,43 @@ artifact is aligned. -->
 
 **`1.0.0`** — stable release: full `django-graphene-filters` depth + **API freeze** (strict SemVer applies from `1.0.0` forward).
 
+## Nested connection indexing
+
+`OptimizerHint.strategy(...)` overrides the nested-connection fetch backend for **one** Relay connection field, taking precedence over the extension-wide default (`nested_connection_strategy=` on `DjangoOptimizerExtension`, the `NESTED_CONNECTION_STRATEGY` setting, or `"auto"`):
+
+```python
+from django_strawberry_framework import DjangoType, OptimizerHint
+
+class ShelfType(DjangoType):
+    class Meta:
+        model = Shelf
+        fields = "__all__"
+        optimizer_hints = {
+            # Force the Postgres LATERAL backend for this field only; every
+            # other connection keeps the extension-wide strategy.
+            "books": OptimizerHint.strategy("lateral"),
+        }
+```
+
+The name (`"windowed"`, `"lateral"`, `"auto"`, or a `NestedConnectionStrategy` instance) is validated at `Meta.optimizer_hints` build time, so a typo raises `ConfigurationError` immediately rather than at query time. The override is schema-static and never enters the plan cache key.
+
+Both the default windowed prefetch and the LATERAL backend partition each parent's page by the child connector column and order by the connection's deterministic order. The database can serve each page **from an index** instead of sorting per partition when a composite index leads with the window's leading columns:
+
+- **reverse FK / M2M:** `(connector, order columns…, pk)` — e.g. an `ORDER BY title, id` window on `Book.shelf_id` is served by an index on `(shelf_id, title, id)`.
+- **direction matters:** a B-tree serves the requested order **or its full reverse** after the equality-constrained prefix, never a partial flip. A mixed `ORDER BY title ASC, id DESC` needs `(shelf_id, title, -id)` (or the full `(shelf_id, -title, id)` reverse); a plain `(shelf_id, title, id)` cannot serve it.
+- **`GenericRelation`:** the morph `content_type_id` is an equality predicate on every query, so the useful prefix is `(content_type_id, object_id, order columns…, pk)` — not `object_id` alone.
+
+When `settings.DEBUG` is on, the optimizer logs a one-time **advisory** warning per plan shape naming the recommended composite index if the model's *represented* metadata does not already contain a covering one. The check inventories every physical index shape Django model metadata represents — not only `Meta.indexes`, but also field-based `Meta.constraints` `UniqueConstraint`s, legacy `unique_together`, and field-level primary-key / unique / `db_index` columns — so a covering `UniqueConstraint` correctly silences the advisory. It is advisory only: it never raises, drops to `debug` level with `DEBUG` off, and stays **silent** when it cannot prove absence. Coverage is claimed only for ordinary B-tree indexes (a plain `models.Index` or PostgreSQL `BTreeIndex`); a non-B-tree access method (`GinIndex`, `GistIndex`, `HashIndex`, `BrinIndex`, `SpGistIndex`), a custom `Index` subclass, a non-default opclass (on an `Index` **or** a `UniqueConstraint`), an expression or partial index, or any shape the metadata cannot classify leaves coverage **unknown** (silent, never falsely covered). A descending index column is trusted only when **every** configured database supports index-column ordering (a backend-neutral cached plan may run on a shard that would silently drop the direction). An index absent from Django model metadata entirely — a DBA-managed index created only in the database — is not visible to the check. See [`GLOSSARY.md`][glossary] for the full optimizer surface.
+
+### Single-parent fast path
+
+The windowed backend numbers **every** child of a partition (`ROW_NUMBER() OVER (PARTITION BY fk)`) before filtering to the page — the right trade across many parents, but wasteful when a prefetch runs for exactly one parent (e.g. a root list filtered to a single row), where a plain `WHERE fk = x ORDER BY … LIMIT n` is a bounded index walk. A **default-on** runtime optimization handles that degenerate case: when the parent `IN` list Django injects has length one and the query is exactly the shape that was planned, the fast path runs the plain filtered `LIMIT` from the pristine child queryset and synthesizes the row numbers in Python, instead of the whole-partition window.
+
+- **Eligible shape:** a single parent id, a direct FK (reverse FK / reverse one-to-one), and a count-free bounded first page.
+- **Still windowed (never eligible):** a counted (`totalCount`), reversed (`last:`), offset (`after:`), or keyset-seek page; an M2M / `GenericRelation` join; and any fetch-time query carrying a visibility filter or other predicate that is not exactly the planned window — every such case, and any Django-internals drift, degrades to the identical windowed body (a performance downgrade, never a wrong page).
+- **Disable it:** set `DJANGO_STRAWBERRY_FRAMEWORK["SINGLE_PARENT_FAST_PATH"] = False`. The flag is read at **fetch time**, so it is `override_settings`-testable and never baked into the plan cache.
+- **Strategy composition:** it is a `"windowed"`-strategy feature. Under `"lateral"` / `"auto"` the lateral backend handles the clean eligible shape at plan time; a lateral plan that *downgrades* through the windowed floor (for example a child queryset carrying `select_related`, which lateral refuses) can still receive this wrapper.
+
 ## Schema setup boundary
 
 `finalize_django_types()` must run once during single-threaded import/schema setup, after every module that defines `DjangoType` classes has been imported and before `strawberry.Schema(...)` is constructed. The most common failure mode is forgetting to import a module that contains a related type before finalization.

@@ -8,7 +8,7 @@ The target owns the **Postgres `CROSS JOIN LATERAL` nested-connection fetch
 backend**: plan-time capability detection (`LateralPrefetchStrategy` /
 `_build_lateral_spec` / `LateralWindowSpec`), fetch-time recognition and
 fallback to the windowed ORM body (`LateralQuerySet` / `_fetch_lateral_rows` /
-`_extract_parent_ids`), and raw-SQL rendering (`build_lateral_sql`) that is a
+`_recognize_lateral_fetch`), and raw-SQL rendering (`build_lateral_sql`) that is a
 byte-mirror of `plans.py::apply_window_pagination` for the `to_attr` contract
 consumed by `connection.py::_resolve_from_window`.
 

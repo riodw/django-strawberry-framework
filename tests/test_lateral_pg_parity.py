@@ -20,7 +20,11 @@ from django.test.utils import CaptureQueriesContext
 from strategy_schemas import build_strategy_schema, make_django_type
 from strawberry.relay.utils import to_base64
 
-from django_strawberry_framework import DjangoListField, finalize_django_types
+from django_strawberry_framework import (
+    DjangoListField,
+    OptimizerHint,
+    finalize_django_types,
+)
 
 pytestmark = [pytest.mark.pg, pytest.mark.django_db]
 
@@ -202,6 +206,36 @@ def test_reverse_fk_parity_across_pagination_shapes(arguments, page, count_free)
         count_free=count_free,
     )
     assert len(data["shelves"]) == 3  # including the childless shelf C.
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        # Bounded offset page: the composed probe + marker (A1 lateral half - the
+        # ``fetch_upper_bound`` rn-filter bind, invisible on the SQLite tier).
+        pytest.param(f'(first: 2, after: "{_MID_CURSOR}")', id="offset-probe"),
+        # Offset overshoot: marker-only, hasNextPage False, no per-parent fallback.
+        pytest.param(f'(first: 2, after: "{_OVERSHOOT_CURSOR}")', id="offset-overshoot"),
+        # Unbounded forward: constant-False hasNextPage (A2).
+        pytest.param("", id="unbounded-constant-false"),
+        # Reversed last:N: constant-False hasNextPage (A2).
+        pytest.param("(last: 2)", id="reverse-constant-false"),
+    ],
+)
+def test_count_free_has_next_page_parity_across_shapes(arguments):
+    """WS-A count-free ``hasNextPage`` shapes page byte-identically with NO count.
+
+    The A1 composed offset probe (bounded offset page) and the A2 constant-False
+    shapes (unbounded forward, reversed ``last: N``, offset overshoot) all resolve
+    ``hasNextPage`` without a ``COUNT(1) OVER`` window under BOTH strategies. The
+    lateral half of the offset probe depends on the ``fetch_upper_bound``
+    rn-filter bind (a raw ``upper_bound`` would read ``hasNextPage`` constantly
+    False on PG only). Byte parity + count-free + fixed two-query cost (no
+    per-parent fallback, asserted via the real lateral join) is the bar.
+    """
+    _seed_library()
+    query = f"{{ shelves {{ id code booksConnection{arguments} {{ {_NEXT_PAGE_PROBE} }} }} }}"
+    _assert_parity(query, count_free=True)
 
 
 def test_next_page_probe_parity_is_count_free():
@@ -404,6 +438,276 @@ def test_stray_executor_thread_connections_are_tracked_for_session_close():
     # The wrapper closed its handle already; the session drain re-closing it
     # must be a harmless no-op (idempotent close is the drain's contract).
     registry_list[-1].close()
+
+
+# =============================================================================
+# WS-C: single-table visibility WHERE (a get_queryset scope) on the lateral path
+# =============================================================================
+
+
+def _visibility_schemas():
+    """A ``ShelfType.booksConnection`` whose child type hides repair books.
+
+    The anonymous-traffic substrate: ``get_queryset`` applies a single-table
+    plain-column ``exclude`` (the ``BookType`` visibility shape), which used to
+    force the windowed body and now rides the lateral branch as a spliced
+    WHERE. The scope is unconditional so both strategies filter identically.
+    """
+
+    @classmethod
+    def _hide_repair(cls, queryset, info):
+        return queryset.exclude(circulation_status="repair")
+
+    make_django_type(
+        "VisibilityBookType",
+        Book,
+        ("id", "title"),
+        meta_extra={"connection": {"total_count": True}},
+        namespace_extra={"get_queryset": _hide_repair},
+    )
+    shelf_type = make_django_type("VisibilityShelfType", Shelf, ("id", "code", "books"))
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"shelves": list[shelf_type]},
+                "shelves": DjangoListField(shelf_type),
+            },
+        ),
+    )
+    return (
+        build_strategy_schema(query_cls, "windowed"),
+        build_strategy_schema(query_cls, "lateral"),
+    )
+
+
+def _seed_visibility():
+    """Shelf A: four visible books + two hidden ``repair`` books; shelf B empty."""
+    branch = Branch.objects.create(name="central")
+    shelf_a = Shelf.objects.create(code="A", branch=branch)
+    Shelf.objects.create(code="B", branch=branch)
+    for index in range(4):
+        Book.objects.create(
+            title=f"a{index}",
+            shelf=shelf_a,
+            circulation_status=Book.CirculationStatus.AVAILABLE,
+        )
+    for index in range(2):
+        Book.objects.create(
+            title=f"r{index}",
+            shelf=shelf_a,
+            circulation_status=Book.CirculationStatus.REPAIR,
+        )
+
+
+def test_visibility_scope_takes_the_lateral_path_with_parity():
+    """A single-table ``get_queryset`` scope now takes the lateral path.
+
+    The headline WS-C win: anonymous traffic over a visibility-scoped connection
+    executes ``CROSS JOIN LATERAL`` (not the windowed downgrade), the scope's
+    column rides into the lateral SQL, and the response is byte-identical to the
+    windowed strategy - the hidden ``repair`` books excluded under both.
+    """
+    _seed_visibility()
+    windowed_schema, lateral_schema = _visibility_schemas()
+    query = (
+        "{ shelves { id code booksConnection(first: 2) "
+        "{ edges { node { title } } totalCount pageInfo { hasNextPage } } } }"
+    )
+    windowed = windowed_schema.execute_sync(query)
+    assert windowed.errors is None, windowed.errors
+    with CaptureQueriesContext(db_connection) as captured:
+        lateral = lateral_schema.execute_sync(query)
+    assert lateral.errors is None, lateral.errors
+    assert _canonical(lateral.data) == _canonical(windowed.data)
+    executed_sql = " ".join(entry["sql"] for entry in captured)
+    assert "CROSS JOIN LATERAL" in executed_sql
+    assert "circulation_status" in executed_sql  # the scope rode into the branch.
+    by_code = {shelf["code"]: shelf["booksConnection"] for shelf in lateral.data["shelves"]}
+    # Anonymous sees only the four available books on shelf A (two repair hidden).
+    assert by_code["A"]["totalCount"] == 4
+    assert by_code["A"]["pageInfo"]["hasNextPage"] is True
+
+
+def test_visibility_scope_lateral_applies_the_filter_exactly_once():
+    """The scope predicate is spliced ONCE - no double-apply, correct rows.
+
+    A double-apply would be invisible on this idempotent ``exclude``, so the pin
+    is structural: the ``circulation_status`` predicate appears exactly once in
+    the executed lateral SQL, and only the four visible books surface.
+    """
+    _seed_visibility()
+    _windowed_schema, lateral_schema = _visibility_schemas()
+    query = "{ shelves { id code booksConnection(first: 10) { edges { node { title } } totalCount } } }"
+    with CaptureQueriesContext(db_connection) as captured:
+        result = lateral_schema.execute_sync(query)
+    assert result.errors is None, result.errors
+    lateral_sql = next(entry["sql"] for entry in captured if "CROSS JOIN LATERAL" in entry["sql"])
+    assert lateral_sql.count("circulation_status") == 1
+    by_code = {shelf["code"]: shelf["booksConnection"] for shelf in result.data["shelves"]}
+    titles = [edge["node"]["title"] for edge in by_code["A"]["edges"]]
+    assert titles == [
+        "a0",
+        "a1",
+        "a2",
+        "a3",
+    ]  # repair books excluded, in order.
+    assert by_code["A"]["totalCount"] == 4
+
+
+def test_multi_table_visibility_scope_downgrades_off_the_lateral_path():
+    """A join-traversal ``get_queryset`` scope is refused - the windowed body runs.
+
+    The refusal boundary at the live tier: a scope filtering through a relation
+    (``branch__city``) uses more than the child table, so the spec refuses it
+    and the connection serves through the windowed strategy (no lateral SQL) -
+    still byte-identical to the standalone windowed run.
+    """
+    _seed_visibility()
+
+    @classmethod
+    def _hide_by_branch(cls, queryset, info):
+        return queryset.exclude(shelf__branch__city="restricted")
+
+    make_django_type(
+        "MultiTableBookType",
+        Book,
+        ("id", "title"),
+        meta_extra={"connection": {"total_count": True}},
+        namespace_extra={"get_queryset": _hide_by_branch},
+    )
+    shelf_type = make_django_type("MultiTableShelfType", Shelf, ("id", "code", "books"))
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"shelves": list[shelf_type]},
+                "shelves": DjangoListField(shelf_type),
+            },
+        ),
+    )
+    lateral_schema = build_strategy_schema(query_cls, "lateral")
+    query = (
+        "{ shelves { id code booksConnection(first: 2) { edges { node { title } } totalCount } } }"
+    )
+    with CaptureQueriesContext(db_connection) as captured:
+        result = lateral_schema.execute_sync(query)
+    assert result.errors is None, result.errors
+    executed_sql = " ".join(entry["sql"] for entry in captured)
+    assert "CROSS JOIN LATERAL" not in executed_sql  # multi-table scope refused.
+    by_code = {shelf["code"]: shelf["booksConnection"] for shelf in result.data["shelves"]}
+    assert by_code["A"]["totalCount"] == 6  # no city is restricted, so all six show.
+
+
+def _request_varying_visibility_schema():
+    """A ``ShelfType.booksConnection`` whose child scope VARIES by request.
+
+    Mirrors the real fakeshop permission idiom (``BookType.get_queryset`` hides
+    ``circulation_status="repair"`` from non-staff): an anonymous request gets the
+    restrictive predicate, a staff request gets the queryset unchanged. Returns
+    ONE lateral schema bound to a SINGLE persistent extension instance
+    (``extensions=[lambda: extension]``) so its plan-cache counters report BOTH
+    requests rather than resetting per execution.
+    """
+    from types import SimpleNamespace
+
+    from django_strawberry_framework import DjangoOptimizerExtension, strawberry_config
+
+    @classmethod
+    def _scope_by_staff(cls, queryset, info):
+        # The real idiom: unwrap info.context -> request -> user -> is_staff.
+        context = getattr(info, "context", None)
+        request = getattr(context, "request", None) or context
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_staff", False):
+            return queryset
+        return queryset.exclude(circulation_status="repair")
+
+    make_django_type(
+        "ReqVaryBookType",
+        Book,
+        ("id", "title"),
+        meta_extra={"connection": {"total_count": True}},
+        namespace_extra={"get_queryset": _scope_by_staff},
+    )
+    shelf_type = make_django_type("ReqVaryShelfType", Shelf, ("id", "code", "books"))
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"shelves": list[shelf_type]},
+                "shelves": DjangoListField(shelf_type),
+            },
+        ),
+    )
+    extension = DjangoOptimizerExtension(nested_connection_strategy="lateral")
+    schema = strawberry.Schema(
+        query=query_cls,
+        config=strawberry_config(),
+        extensions=[lambda: extension],
+    )
+    return schema, extension, SimpleNamespace
+
+
+def test_request_varying_visibility_is_not_cached_across_callers():
+    """P2-4: two callers of ONE extension get their OWN visibility WHERE, never a replay.
+
+    The security-critical composition the earlier unconditional tests could not
+    pin: a custom ``get_queryset`` marks the plan non-cacheable, so the anonymous
+    caller's restrictive predicate must never survive in the plan cache and be
+    replayed for a staff caller (or the reverse). Both callers execute real
+    lateral SQL through the SAME extension instance; the anonymous branch carries
+    the ``circulation_status`` scope and the staff branch does not; their visible
+    rows differ; and the extension's plan-cache counters prove the request-varying
+    plan was never cached or reused.
+    """
+    _seed_visibility()  # shelf A: 4 available + 2 repair; shelf B empty.
+    schema, extension, namespace = _request_varying_visibility_schema()
+    query = (
+        "{ shelves { id code booksConnection(first: 10) "
+        "{ edges { node { title } } totalCount } } }"
+    )
+
+    def _context(*, is_staff):
+        return namespace(request=namespace(user=namespace(is_staff=is_staff)))
+
+    with CaptureQueriesContext(db_connection) as anon_captured:
+        anon = schema.execute_sync(query, context_value=_context(is_staff=False))
+    assert anon.errors is None, anon.errors
+    with CaptureQueriesContext(db_connection) as staff_captured:
+        staff = schema.execute_sync(query, context_value=_context(is_staff=True))
+    assert staff.errors is None, staff.errors
+
+    anon_books = {s["code"]: s["booksConnection"] for s in anon.data["shelves"]}
+    staff_books = {s["code"]: s["booksConnection"] for s in staff.data["shelves"]}
+    # The two callers see DIFFERENT rows - each request's scope was applied, not
+    # replayed from a cached first-caller plan.
+    assert anon_books["A"]["totalCount"] == 4  # repair hidden from anonymous.
+    assert staff_books["A"]["totalCount"] == 6  # staff sees all six.
+    staff_titles = {edge["node"]["title"] for edge in staff_books["A"]["edges"]}
+    anon_titles = {edge["node"]["title"] for edge in anon_books["A"]["edges"]}
+    assert staff_titles - anon_titles == {"r0", "r1"}  # the two repair books.
+
+    anon_sql = " ".join(entry["sql"] for entry in anon_captured)
+    staff_sql = " ".join(entry["sql"] for entry in staff_captured)
+    # Both take the lateral path; only the anonymous branch splices the scope.
+    assert "CROSS JOIN LATERAL" in anon_sql
+    assert "CROSS JOIN LATERAL" in staff_sql
+    assert "circulation_status" in anon_sql
+    assert "circulation_status" not in staff_sql
+
+    # The plan is request-scoped (custom get_queryset -> non-cacheable): it never
+    # enters the cross-request cache, so no caller can be served another's plan.
+    info = extension.cache_info()
+    assert info.hits == 0
+    assert info.size == 0
+    assert info.misses >= 2
 
 
 # =============================================================================
@@ -825,3 +1129,107 @@ def test_keyset_lateral_seek_is_an_index_seek():
             cursor.execute("DROP INDEX keyset_seek_pin_idx")
     assert "keyset_seek_pin_idx" in explain_plan
     assert "Index" in explain_plan
+
+
+def _hinted_shelf_schema(default_strategy, books_hint):
+    """One schema whose ``ShelfType.books`` connection carries a strategy hint.
+
+    The extension default is ``default_strategy``; ``books_hint`` overrides the
+    fetch strategy for the ``booksConnection`` field alone
+    (``OptimizerHint.strategy(...)`` keyed on the ``"books"`` relation name).
+    """
+    _make_type("BookType", Book, ("id", "title"))
+    shelf_type = make_django_type(
+        "ShelfType",
+        Shelf,
+        ("id", "code", "books"),
+        meta_extra={"optimizer_hints": {"books": books_hint}},
+    )
+    finalize_django_types()
+    query_cls = strawberry.type(
+        type(
+            "Query",
+            (),
+            {
+                "__annotations__": {"shelves": list[shelf_type]},
+                "shelves": DjangoListField(shelf_type),
+            },
+        ),
+    )
+    return build_strategy_schema(query_cls, default_strategy)
+
+
+_HINT_QUERY = "{ shelves { id code booksConnection(first: 2) { edges { node { title } } } } }"
+
+
+def _shelf_a_titles(data):
+    """The ``booksConnection`` node titles for shelf ``A`` (the five-book parent)."""
+    by_code = {shelf["code"]: shelf["booksConnection"] for shelf in data["shelves"]}
+    return [edge["node"]["title"] for edge in by_code["A"]["edges"]]
+
+
+def test_per_field_hint_windowed_under_lateral_default_takes_windowed_path():
+    """``OptimizerHint.strategy("windowed")`` overrides a lateral-default extension.
+
+    The hinted ``booksConnection`` must fetch through the windowed body, so the
+    executed SQL carries NO ``CROSS JOIN LATERAL`` even though the extension
+    default is ``"lateral"`` - and the page is still correct.
+    """
+    _seed_library()
+    schema = _hinted_shelf_schema("lateral", OptimizerHint.strategy("windowed"))
+    with CaptureQueriesContext(db_connection) as captured:
+        result = schema.execute_sync(_HINT_QUERY)
+    assert result.errors is None, result.errors
+    executed_sql = " ".join(entry["sql"] for entry in captured)
+    assert "CROSS JOIN LATERAL" not in executed_sql
+    assert _shelf_a_titles(result.data) == ["a0", "a1"]
+
+
+def test_per_field_hint_lateral_under_windowed_default_takes_lateral_path():
+    """``OptimizerHint.strategy("lateral")`` overrides a windowed-default extension.
+
+    The hinted ``booksConnection`` must fetch through the lateral join, so the
+    executed SQL carries ``CROSS JOIN LATERAL`` even though the extension default
+    is ``"windowed"`` - and the page is still correct.
+    """
+    _seed_library()
+    schema = _hinted_shelf_schema("windowed", OptimizerHint.strategy("lateral"))
+    with CaptureQueriesContext(db_connection) as captured:
+        result = schema.execute_sync(_HINT_QUERY)
+    assert result.errors is None, result.errors
+    executed_sql = " ".join(entry["sql"] for entry in captured)
+    assert "CROSS JOIN LATERAL" in executed_sql
+    assert _shelf_a_titles(result.data) == ["a0", "a1"]
+
+
+# =============================================================================
+# Single-parent degenerate fast path parity (optimizer/single_parent_fetch.py)
+# =============================================================================
+
+
+def test_single_parent_fast_path_pages_identically_to_lateral():
+    """The windowed single-parent fast path pages byte-identically to lateral.
+
+    With exactly one seeded shelf the Django-prefetch-injected parent ``IN`` list
+    has length one, so under the windowed strategy
+    ``WindowedPrefetchStrategy.plan``'s runtime wrap swaps in the plain filtered
+    ``LIMIT`` fast path (``optimizer/single_parent_fetch.py``) instead of the
+    ``ROW_NUMBER() OVER (PARTITION BY fk)`` body. That fast-path run must return
+    rows / cursors / ``pageInfo`` byte-identical to the lateral strategy's output
+    for the same count-free page - the same parity bar every shape here holds.
+
+    Under ``strategy=lateral`` the fast path never engages (the wrap is
+    windowed-branch-only), so the lateral half executes real ``CROSS JOIN
+    LATERAL`` SQL and stands as the parity oracle.
+    """
+    branch = Branch.objects.create(name="central")
+    shelf = Shelf.objects.create(code="A", branch=branch)
+    for index in range(5):
+        Book.objects.create(title=f"a{index}", shelf=shelf)
+    data, _ = _assert_parity(
+        f"{{ shelves {{ id booksConnection(first: 2) {{ {_CHEAP_PAGE} }} }} }}",
+        count_free=True,
+    )
+    # The single seeded parent is what drives the len==1 IN list the fast path
+    # keys on; shelf A carries five books so ``first: 2`` is a real bounded page.
+    assert len(data["shelves"]) == 1

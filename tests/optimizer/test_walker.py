@@ -948,6 +948,8 @@ def test_plan_does_not_elide_forward_fk_when_target_has_custom_get_queryset():
     registry.clear()
 
     class FilteredCategoryType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
         @classmethod
         def has_custom_get_queryset(cls):
             return True
@@ -1196,6 +1198,8 @@ def test_plan_downgrades_select_related_when_target_has_custom_get_queryset():
     calls = {}
 
     class FilteredCategoryType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
         @classmethod
         def has_custom_get_queryset(cls):
             return True
@@ -1258,6 +1262,8 @@ def test_plan_prefetches_many_side_with_custom_target_get_queryset():
     calls = {}
 
     class FilteredItemType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Item)
+
         @classmethod
         def has_custom_get_queryset(cls):
             return True
@@ -1367,6 +1373,8 @@ def test_plan_propagates_uncacheable_nested_custom_get_queryset():
     registry.clear()
 
     class FilteredEntryType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Entry)
+
         @classmethod
         def has_custom_get_queryset(cls):
             return True
@@ -1541,6 +1549,8 @@ def test_plan_force_select_hint_downgrades_for_custom_target_get_queryset():
     calls = []
 
     class CategoryType:
+        __django_strawberry_definition__ = SimpleNamespace(model=Category)
+
         @classmethod
         def has_custom_get_queryset(cls):
             return True

@@ -256,6 +256,64 @@ class _IdxChildUniqueTogether(models.Model):
         unique_together = (("parent", "title", "id"),)
 
 
+class _IdxChildCheckConstraint(models.Model):
+    """Child whose only ``Meta.constraints`` entry is a ``CheckConstraint``.
+
+    A ``CheckConstraint`` (like an ``ExclusionConstraint``) is not a unique
+    btree, so it is neither a coverage shape nor uninspectable - the shape
+    inventory simply skips it. With no covering index the window is PROVEN
+    absent, unaffected by the constraint's presence.
+    """
+
+    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="ckc")
+    title = models.CharField(max_length=50)
+
+    class Meta:
+        app_label = "tests"
+        managed = False
+        ordering = ("title", "id")
+        constraints = [
+            models.CheckConstraint(condition=models.Q(title__gt=""), name="ck_title_nonempty"),
+        ]
+
+
+class _IdxChildUniqueConstraintMigrationLag(models.Model):
+    """Child whose composite ``UniqueConstraint`` names a field the model no longer has.
+
+    A migration-lagged constraint field (here ``ghost``) cannot be resolved to a
+    column, so the shape is UNINSPECTABLE rather than a covering ascending btree -
+    absence stays unproven instead of trusting a stale unique shape.
+    """
+
+    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="uclag")
+    title = models.CharField(max_length=50)
+
+    class Meta:
+        app_label = "tests"
+        managed = False
+        ordering = ("title", "id")
+        constraints = [
+            models.UniqueConstraint(fields=["parent", "title", "ghost"], name="uq_lag_ghost"),
+        ]
+
+
+class _IdxChildUniqueTogetherMigrationLag(models.Model):
+    """Child whose legacy ``unique_together`` names a field the model no longer has.
+
+    The ``unique_together`` twin of the migration-lag case: an unresolvable name
+    leaves the shape uninspectable, so absence stays unproven.
+    """
+
+    parent = models.ForeignKey(_IdxParent, on_delete=models.CASCADE, related_name="utlag")
+    title = models.CharField(max_length=50)
+
+    class Meta:
+        app_label = "tests"
+        managed = False
+        ordering = ("title", "id")
+        unique_together = (("parent", "ghost"),)
+
+
 class _IdxChildGin(models.Model):
     """Child whose only composite ``Meta.indexes`` entry is a NON-B-tree ``GinIndex``.
 
@@ -633,6 +691,44 @@ class TestIndexCoverage:
                 [("title", False), ("id", False)],
             )
             == _INDEX_COVERED
+        )
+
+    def test_check_constraint_is_skipped_not_uninspectable(self) -> None:
+        """A ``CheckConstraint`` is neither a coverage shape nor uninspectable.
+
+        It is skipped by the shape inventory, so a model whose only constraint is
+        a ``CheckConstraint`` and which has no covering index leaves the window
+        PROVEN absent (the constraint never muddies the tri-state to unknown).
+        """
+        assert (
+            _index_coverage(
+                _IdxChildCheckConstraint,
+                ["parent_id"],
+                [("title", False), ("id", False)],
+            )
+            == _INDEX_ABSENT
+        )
+
+    def test_migration_lagged_unique_constraint_is_unknown(self) -> None:
+        """A ``UniqueConstraint`` naming an unresolvable field is uninspectable -> unknown."""
+        assert (
+            _index_coverage(
+                _IdxChildUniqueConstraintMigrationLag,
+                ["parent_id"],
+                [("title", False), ("id", False)],
+            )
+            == _INDEX_UNKNOWN
+        )
+
+    def test_migration_lagged_unique_together_is_unknown(self) -> None:
+        """A ``unique_together`` naming an unresolvable field is uninspectable -> unknown."""
+        assert (
+            _index_coverage(
+                _IdxChildUniqueTogetherMigrationLag,
+                ["parent_id"],
+                [("title", False), ("id", False)],
+            )
+            == _INDEX_UNKNOWN
         )
 
     def test_unique_constraint_full_reverse_covers(self) -> None:

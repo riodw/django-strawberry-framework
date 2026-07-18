@@ -453,6 +453,35 @@ def test_mti_child_hook_result_fails_closed():
         apply_type_visibility_sync(hook, _QsBoundaryBase.objects.all(), info=None)
 
 
+def test_combined_query_branch_over_another_model_fails_closed():
+    """A union whose branch reads another model's table fails closed.
+
+    ``QuerySet.model`` reports the outer (registered) model, but a
+    ``combined_queries`` branch reads ``Item``'s table; with a compatible
+    projection those rows would materialize as ``Category`` and cross the
+    visibility boundary. The recursive branch check (``_combined_query_table_defect``)
+    catches the divergent branch the public ``.model`` hides. Constructing the
+    union composes lazy query state only - no SQL runs.
+    """
+    hostile = Category.objects.all().union(Item.objects.all())
+    with pytest.raises(ConfigurationError, match="concrete table"):
+        apply_type_visibility_sync(_sync_hook_type(hostile), Category.objects.all(), info=None)
+
+
+def test_mutable_public_model_disagreeing_with_query_model_fails_closed():
+    """A queryset whose public ``.model`` matches but ``query.model`` does not fails closed.
+
+    ``QuerySet.model`` is a mutable public attribute that can disagree with the
+    SQL-bearing ``query.model``; validating only the public model would let the
+    SQL read another table. The boundary validates ``Query.model`` too, so the
+    disagreement is caught. No SQL runs.
+    """
+    hostile = Category.objects.all()
+    hostile.query.model = Item
+    with pytest.raises(ConfigurationError, match="concrete table"):
+        apply_type_visibility_sync(_sync_hook_type(hostile), Category.objects.all(), info=None)
+
+
 def test_proxy_hook_result_is_accepted():
     """A proxy-sibling queryset shares the concrete table and passes the boundary."""
     hook = _stub_type(_QsBoundaryBase, lambda cls, qs, info: _QsBoundaryProxy.objects.all())

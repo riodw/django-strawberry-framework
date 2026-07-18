@@ -247,6 +247,7 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── nested_planner.py         # Transactional planner for nested Relay connection selections.
 │   ├── plans.py                  # ``OptimizationPlan`` - the shape the walker emits and the extension consumes.
 │   ├── selections.py             # Selection-tree traversal substrate - the AST and converted-selection adapters.
+│   ├── single_parent_fetch.py    # Runtime single-parent degenerate fast path for the windowed nested prefetch.
 │   └── walker.py                 # Selection walker that delegates nested Relay connections to their private planner.
 ├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
 │   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
@@ -314,13 +315,13 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── scalars.py                    # Public GraphQL scalars + the ``strawberry_config()`` schema-config factory.
 ├── schema.py                     # ``DjangoSchema`` - the schema whose mutation transactions span response completion.
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared by the ``FilterSet`` and ``OrderSet`` families.
-├── aggregates/    # planned by TODO-BETA-050-0.1.3 - Declarative AggregateSet output types with related, permissioned, selection-aware sync/async statistics.
+├── aggregates/    # planned by TODO-BETA-051-0.1.3 - Declarative AggregateSet output types with related, permissioned, selection-aware sync/async statistics.
 ├── auth/    # Opt-in session-auth field factories (spec-040).
 │   ├── mutations.py              # Session-auth mutation factories + the phase-2.5 auth bind (spec-040).
 │   └── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
 ├── extensions/    # Strawberry schema extensions supplied by django-strawberry-framework.
 │   └── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
-├── fieldset/    # planned by TODO-BETA-047-0.1.1 - FieldSet computed fields, resolver overrides, field permissions, and optimizer dependencies.
+├── fieldset/    # planned by TODO-BETA-048-0.1.1 - FieldSet computed fields, resolver overrides, field permissions, and optimizer dependencies.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
 │   ├── base.py                   # Filter primitives + ``RelatedFilter``.
 │   ├── factories.py              # Filter input-class BFS factory + the (currently unconsumed) dynamic-FilterSet cache.
@@ -355,13 +356,14 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 │   ├── nested_planner.py         # Transactional planner for nested Relay connection selections.
 │   ├── plans.py                  # ``OptimizationPlan`` - the shape the walker emits and the extension consumes.
 │   ├── selections.py             # Selection-tree traversal substrate - the AST and converted-selection adapters.
+│   ├── single_parent_fetch.py    # Runtime single-parent degenerate fast path for the windowed nested prefetch.
 │   └── walker.py                 # Selection walker that delegates nested Relay connections to their private planner.
 ├── orders/    # Ordering subsystem - declarative ``OrderSet`` classes that become GraphQL ``orderBy:`` arguments.
 │   ├── base.py                   # ``RelatedOrder`` - the nested-path ordering primitive.
 │   ├── factories.py              # Order input-class BFS factory; dynamic ``OrderSet`` generation is deferred.
 │   ├── inputs.py                 # Order input namespace, direction enum, and input-data adapters.
 │   └── sets.py                   # ``OrderSet`` + ``OrderSetMetaclass`` - declaration, validation, and the apply pipeline.
-├── permissions/    # planned by TODO-BETA-052-0.1.4 - Cascade-permission package migration plus opt-in node-sentinel redaction (``Meta.redaction_mode``).
+├── permissions/    # planned by TODO-BETA-053-0.1.4 - Cascade-permission package migration plus opt-in node-sentinel redaction (``Meta.redaction_mode``).
 ├── rest_framework/    # DRF serializer mutations: generated inputs, conversion, binding, and execution behind an import guard.
 │   ├── hook_context.py           # The frozen serializer-hook context + upload metadata (the hardening pass).
 │   ├── inputs.py                 # DRF-serializer-derived ``@strawberry.input`` generation substrate (spec-039 Slice 1).
@@ -479,9 +481,11 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_lateral_fetch.py     # Tests for the Postgres lateral fetch strategy (``optimizer/lateral_fetch.py``).
 │   ├── test_multi_db.py          # Optimizer-plan tests for multi-database cooperation and DB-alias preservation.
 │   ├── test_nested_fetch.py      # Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
+│   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix (optimizer-improvement-plan WS-D D2).
 │   ├── test_plans.py             # OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
 │   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).
+│   ├── test_single_parent_fetch.py  # Tests for the single-parent window fast path (``optimizer/single_parent_fetch.py``).
 │   └── test_walker.py            # Selection-walker tests for GraphQL selection to ORM OptimizationPlan conversion.
 ├── orders/    # Package tests for the OrderSet subsystem.
 │   ├── test_base.py              # RelatedOrder binding and lazy-resolution tests plus Meta.orderset_class promotion and validation.
@@ -539,11 +543,17 @@ examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the
 │       └── test_models.py        # Glossary model tests for term edges, aliases, categories, and spec mentions.
 ├── kanban/
 │   └── tests/    # Non-live app tests for kanban commands, services, signals, and board invariants.
-│       ├── test_commands.py      # Kanban command tests for changed-file and predicted-file import workflows.
+│       ├── test_commands.py      # Kanban command tests for the merged import_card_files workflow (and aliases).
+│       ├── test_mutations.py     # In-process wiring + error-mapping tests for the kanban GraphQL mutation surface (WS-3B).
 │       ├── test_services.py      # Kanban service tests for card resolution, creation, tracked paths, validation, and rollback.
-│       └── test_signals.py       # Kanban signal tests for dependencies, done-card guards, blocking, and ordering.
+│       ├── test_services_gaps.py # Service-layer gap coverage for branches the main service suite leaves open.
+│       ├── test_signals.py       # Kanban signal tests for dependencies, done-card guards, blocking, and ordering.
+│       ├── test_uuid.py          # Tests for the UUID side-table wiring and its one-hot link constraint.
+│       └── test_worklog.py       # Tests for the Phase 2 work-tracking dimension.
 ├── library/
 │   └── tests/    # Non-live app tests for library models, schema exposure, and declaration-order invariants.
+│       ├── test_generic_connection.py  # In-process windowed GenericRelation connection acceptance tests (WS-B).
+│       ├── test_generic_connection_sharded.py  # Sharded (``FAKESHOP_SHARDED=1``) GenericRelation connection alias-late morph test.
 │       ├── test_models.py        # Library model tests for string rendering, relation traversal, and per-shelf title uniqueness.
 │       └── test_schema.py        # Library schema tests for project-schema exposure and declaration-order invariants without HTTP.
 ├── products/
@@ -582,6 +592,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_debug_toolbar_api.py     # Live HTTP tests for ``DebugToolbarMiddleware`` across GraphQL, panel, and pass-through routes.
 ├── test_glossary_api.py          # Live GraphQL HTTP tests for the glossary docs-as-data API.
 ├── test_kanban_api.py            # Live GraphQL HTTP tests for the kanban board docs-as-data API.
+├── test_kanban_mutations_api.py  # Live GraphQL HTTP tests for the kanban write surface (WS-3B).
 ├── test_keyset_api.py            # Live GraphQL HTTP tests for keyset (``Meta.cursor_field``) cursor pagination.
 ├── test_library_api.py           # Live GraphQL HTTP tests for the library app's read/write, Relay, keyset, and optimizer surface.
 ├── test_multi_db.py              # Live GraphQL HTTP tests for sharded resolver isolation and multi-database debug capture.
@@ -590,6 +601,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_products_api.py          # Live GraphQL HTTP tests for products reads, mutations, permissions, optimization, and request parsing.
 ├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar wire formats, filtering, relations, and optimizer behavior.
 ├── test_scalars_filter_api.py    # Live GraphQL HTTP tests for scalar filtering, ordering, and related-queryset behavior.
+├── test_single_parent_fastpath_api.py  # Live GraphQL HTTP tests for the single-parent windowed-prefetch fast path.
 └── test_uploads_api.py           # Live GraphQL HTTP tests for the spec-037 file/image wire contract.
 ```
 
@@ -638,8 +650,8 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_factories.py         # FilterArgumentsFactory tests for BFS input generation and dynamic FilterSet caching.
 │   ├── test_finalizer.py         # Finalizer tests for filter binding, owner-aware materialization, and orphan validation.
 │   ├── test_inputs.py            # Filter input-generation tests for lookup naming, field construction, normalization, references, and reset.
-│   ├── test_pg_full_text.py      # planned by TODO-BETA-049-0.1.2 - Postgres full-text search filter primitives
-│   ├── test_search_fields.py     # planned by TODO-BETA-048-0.1.2 - `Meta.search_fields` support
+│   ├── test_pg_full_text.py      # planned by TODO-BETA-050-0.1.2 - Postgres full-text search filter primitives
+│   ├── test_search_fields.py     # planned by TODO-BETA-049-0.1.2 - `Meta.search_fields` support
 │   ├── test_sets.py              # FilterSet tests for Meta validation, relations, Relay fields, permissions, visibility, and logic trees.
 │   └── fixtures/    # Fixture modules for filter lazy resolution and cyclic input-generation tests.
 │       └── filtersets.py         # Fixture FilterSet declarations for cross-module lazy resolution and self-referential cycle handling.
@@ -671,9 +683,11 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_lateral_fetch.py     # Tests for the Postgres lateral fetch strategy (``optimizer/lateral_fetch.py``).
 │   ├── test_multi_db.py          # Optimizer-plan tests for multi-database cooperation and DB-alias preservation.
 │   ├── test_nested_fetch.py      # Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
+│   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix (optimizer-improvement-plan WS-D D2).
 │   ├── test_plans.py             # OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
 │   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).
+│   ├── test_single_parent_fetch.py  # Tests for the single-parent window fast path (``optimizer/single_parent_fetch.py``).
 │   └── test_walker.py            # Selection-walker tests for GraphQL selection to ORM OptimizationPlan conversion.
 ├── orders/    # Package tests for the OrderSet subsystem.
 │   ├── test_base.py              # RelatedOrder binding and lazy-resolution tests plus Meta.orderset_class promotion and validation.
@@ -763,12 +777,13 @@ examples/fakeshop/    # A Django + Strawberry GraphQL example project that exerc
     │   ├── models.py             # Relational source of truth for this repository's ``KANBAN.md`` and ``KANBAN.html`` exports.
     │   ├── orders.py             # OrderSet declarations for the kanban board app.
     │   ├── schema.py             # GraphQL schema for the kanban board.
-    │   ├── services.py           # Application workflows for the kanban app.
-    │   ├── signals.py            # Signal receivers that keep the kanban board's derived state coherent.
+    │   ├── services.py           # The sanctioned write API for the kanban app.
+    │   ├── signals.py            # Kanban signal receivers: guards + side-table wiring only.
     │   └── management/    # Django management namespace for kanban tracked-path imports.
     │       └── commands/    # Kanban management commands for changed-file and predicted-path imports.
-    │           ├── import_card_changed_files.py  # manage.py import_card_changed_files - replace kanban card changed-file links.
-    │           └── import_card_predicted_files.py  # manage.py import_card_predicted_files - replace kanban card predicted-path links.
+    │           ├── import_card_changed_files.py  # manage.py import_card_changed_files - DEPRECATED alias of import_card_files.
+    │           ├── import_card_files.py  # manage.py import_card_files - replace kanban card package/path links.
+    │           └── import_card_predicted_files.py  # manage.py import_card_predicted_files - DEPRECATED alias of import_card_files.
     ├── library/    # Library app exercising relation graphs, keyset connections, and live model/form/serializer mutations.
     │   ├── apps.py               # Django app configuration for the library acceptance app.
     │   ├── filters.py            # FilterSet declarations for the library acceptance app (Slice 4).
@@ -832,8 +847,9 @@ It is the database source for the root ``KANBAN.md`` export and ``KANBAN.html`` 
 It owns the board invariants rather than leaving them in importer scripts: card numbers, status placement, dependency edges, dependency prose, card references, and reusable BoardDoc prose are validated in app services/signals so every entry point behaves the same way.
 
 Management commands:
-- `manage.py import_card_changed_files` - Replace kanban card changed-file links.
-- `manage.py import_card_predicted_files` - Replace kanban card predicted-path links.
+- `manage.py import_card_changed_files` - DEPRECATED alias of import_card_files.
+- `manage.py import_card_files` - Replace kanban card package/path links.
+- `manage.py import_card_predicted_files` - DEPRECATED alias of import_card_files.
 
 `apps.library/`
 

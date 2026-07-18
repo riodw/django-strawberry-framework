@@ -1,5 +1,13 @@
 # Plan: Single-parent degenerate fast path for the windowed nested-connection prefetch
 
+> **Status (2026-07-17): shipped and committed** (`optimizer/single_parent_fetch.py` and
+> its test tiers). The plan below is preserved verbatim as the working record: its
+> session-scoped constraint lines ("do NOT commit", "leave the tree dirty") and raw
+> `path:NN` line refs describe the authoring-time snapshot and are superseded by the
+> landed commits; the shipped fetch-time recognizer additionally gates on the
+> window-predicate signature (`optimizer/lateral_fetch.py::window_predicate_signature`),
+> which postdates Step 3d's WHERE-walk design.
+
 ## Context
 
 The windowed nested-connection scheme (`ROW_NUMBER() OVER (PARTITION BY fk)` in
@@ -88,6 +96,16 @@ Adversarial-verifier confirmations the executor can rely on (do not re-derive):
   the absence of `OVER (`. The live `OVER (` string-scan is a new (but sound) idiom —
   the only existing `OVER (` assertion is package-tier.
 
+> **Implementation status (2026-07-17):** Steps 1–4 are implemented in the working tree.
+> Step 1 was found ALREADY present (concurrent session landed the keyword signature and
+> updated all six call sites, including removing the dead `spec = _build_lateral_spec(...)`
+> assignment) — no re-edit was made. One rationale correction: "DIRECT_FK always has a
+> non-None `parent_link_field`" holds only for genuine FK relations; a **generic relation**
+> classifies as DIRECT_FK with `parent_link_field=None` (join_taxonomy.py
+> `classify_relation_join`, generic arm). The mandated single combined `or` branch already
+> excludes it correctly; the module docstring wording was softened to "for a genuine
+> DIRECT_FK FK relation". Step 5 (tests) + final gate remain.
+
 ## Step 1 — refactor `_parent_in_values` (lateral_fetch.py:644)
 
 Decouple from `LateralWindowSpec` so both fetchers share the recognizer:
@@ -97,7 +115,7 @@ def _parent_in_values(node: Any, *, column: str, table: str) -> list | None:
 ```
 
 Body: `spec.parent_link_column` -> `column`, `spec.parent_link_table` -> `table`. Update the
-single caller in `_extract_parent_ids` (~548) to keyword form. Grep
+single caller in `_recognize_lateral_fetch` (~548) to keyword form. Grep
 `tests/optimizer/test_lateral_fetch.py` for direct call sites and update them.
 
 ## Step 2 — setting (conf.py)
@@ -173,7 +191,7 @@ Refuse (`return None`, windowed body runs) unless:
    refuse select_related — the pristine clone carries the same one);
 5. `tuple(query.order_by) == tuple(spec.order_by)` and `query.standard_ordering`;
 6. `set(query.annotations) == {WINDOW_ROW_NUMBER}` (eligible shape annotates ONLY rn);
-7. WHERE walk (structural twin of `_extract_parent_ids` minus keyset): root not negated,
+7. WHERE walk (structural twin of `_recognize_lateral_fetch` minus keyset): root not negated,
    connector AND; per child `_is_window_qual` -> skip, else `_parent_in_values(child,
    column=spec.parent_link_column, table=spec.parent_link_table)` — accept at most one;
    anything else -> None;
@@ -310,6 +328,67 @@ ONE test: with the windowed strategy forced on the PG alias, the single-parent s
 returns rows/cursors/pageInfo identical to the lateral strategy's output for the same
 query (reuse `_assert_parity` / `build_strategy_schema` helpers). Comment: under
 strategy=lateral the fast path never engages (wrap is windowed-branch-only).
+
+> **Step 5 status (2026-07-17):** All three tiers landed and green in isolation.
+> **Plan correction (5a substrate):** `ShelfType.booksConnection` does NOT exist —
+> relation connections are synthesized only on Relay-Node parents
+> (`types/finalizer.py::_synthesize_relation_connections` gates on
+> `implements_relay_node`), and `ShelfType` is not Relay-Node. All DIRECT_FK live tests
+> ride `PeriodicalType.issuesConnection` AS STAFF instead (embargo `get_queryset`
+> bypassed; keyset FIRST page engages the fast path — verified: plain
+> `WHERE periodical_id = ... ORDER BY ... LIMIT n`, no `OVER (`). The plan's separate
+> arrayconnection "offset page" test is not expressible on a keyset connection; it became
+> a keyset `after:` seek page (same non-first-page refusal). M2M test rides
+> `genre.booksConnection` (GenreType IS Relay-Node). 10/10 live tests pass.
+> **5b corrections:** the "expression rhs" recognizer case is not constructible via a real
+> queryset (F() resolves at build time); covered by existing `_parent_in_values` guards in
+> `test_lateral_fetch.py`. Keyword-signature units and the TypeError dedup arm already
+> live in `test_lateral_fetch.py` — not duplicated. 34/34 package tests pass, module 100%.
+> **5c:** one parity test appended; skips cleanly without the PG env.
+
+> **Final gate result (2026-07-17):** ruff format/check clean; ASCII-clean; trailing-comma
+> check clean for all fast-path files. Full suite: 4039 passed, 5 failed, 38 skipped,
+> coverage 99.93%. ALL fast-path scope files are 100% covered (`single_parent_fetch.py`
+> 95/95, conf.py, connection.py, lateral_fetch.py, nested_fetch.py, plans.py, walker.py).
+> The 5 failures (test_walker custom-get_queryset) and 8 uncovered lines
+> (utils/querysets.py 283/287/329 + nested_planner.py 392-393/428/438/444) are the
+> documented CONCURRENT maintainer-owned get_queryset visibility-boundary work — not
+> fast-path fallout; left untouched. One committed test was legitimately invalidated by
+> the feature and fixed:
+> `tests/test_relay_connection.py::test_fast_path_non_pk_ordering_applies_explicit_deterministic_order_by`
+> had a single-parent-eligible substrate, so it no longer windowed; a second parent tag
+> was added so the windowed tiebreaker (the test's actual subject) stays under test.
+> Deterministic-ordering correctness of the fast path itself was verified (spec.order_by
+> == planned order, recognizer-gated). NOT committed — tree left dirty for the maintainer.
+
+> **Adversarial review (2026-07-17, post-gate):** no correctness-breaking finding survived
+> verification. Survivors (all minor/nit, unfixed): (1) MINOR — `_fetch_single_parent_rows`
+> does not re-verify the fetch-time projection/`select_related` against the planned body
+> the way `_recognize_lateral_fetch` does; no consumer-reachable path mutates projection
+> between plan and fetch (Django's `_filter_prefetch_queryset` only adds the IN), so this
+> is drift-hardening only, not a bug. (2) NIT — `SingleParentWindowSpec.limit` is
+> runtime-dead (only `fetch_limit` is consumed; `limit` is read by one package test).
+> Explicitly refuted (do not re-litigate): row/cursor byte-parity incl. probe row and
+> `split_window_rows`; `_dst_total_count`-absence probe re-inference safety; empty/zero/
+> duplicate/NULL/unhashable parent-id arms (fail-closed via shared
+> `_deduplicate_parent_ids`); recognizer refusal of every silent-wrong-result mutation;
+> marker rows impossible on `plain_first_page`; generic-relation/M2M/MTI eligibility
+> refusals; multi-db `.using(queryset.db)` alias pinning; plan-cache/thread-safety of the
+> frozen spec's pristine queryset (chain-only, never evaluated in place); nested
+> prefetches not double-running; `OVER (` string-scan cannot false-pass (data assertions +
+> `LIMIT 3` pin); the `test_relay_connection.py` multi-parent edit is a legitimate premise
+> repair, not a papered-over regression; AGENTS.md conformance (ASCII, tiers, refs).
+> Note: `tests/test_relay_connection.py` also carries an unrelated concurrent hunk
+> (count-policy test rewrite) that is NOT part of this change set.
+>
+> **Review fixes applied (2026-07-17):** both survivors fixed. (1) Recognizer now verifies
+> fetch-time projection + `select_related` against plan-time state, mirroring
+> `_recognize_lateral_fetch` (reused `_select_columns`; new spec fields `select_related` +
+> `select_columns`; mismatch -> None -> windowed body). (2) Runtime-dead
+> `SingleParentWindowSpec.limit` removed; tests pin the fact via `fetch_limit` instead.
+> Two refusal parametrize cases added (`only("id")`, `select_related("shelf")`). Package
+> tier 36/36, lateral+nested sanity 93/93, live tier 10/10, module coverage 100%,
+> ruff/trailing-comma/ASCII clean. Uncommitted.
 
 ## Verification (final gate)
 

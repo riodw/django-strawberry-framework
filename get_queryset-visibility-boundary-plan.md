@@ -224,3 +224,25 @@ Required fix:
   versus query-model disagreement, and alias-changing evaluated clones.
 - Did not run pytest, in accordance with the repository instruction that
   pytest runs require explicit maintainer authorization.
+
+<!-- LINK DEFINITIONS -->
+
+<!-- Root -->
+
+<!-- docs/ -->
+
+<!-- docs/SPECS/ -->
+
+<!-- docs/builder/ -->
+
+<!-- django_strawberry_framework/ -->
+
+<!-- tests/ -->
+
+<!-- examples/ -->
+
+<!-- scripts/ -->
+
+<!-- .venv/ -->
+
+<!-- External -->

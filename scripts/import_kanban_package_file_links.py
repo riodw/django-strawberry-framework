@@ -6,11 +6,15 @@ from __future__ import annotations
 import argparse
 import os
 import re
-import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# Sibling scripts/ import: reuse the single ``run_git`` implementation from the
+# tracked-path constants builder instead of duplicating it (mirrors the way
+# build_kanban_md imports helpers from build_kanban_html).
+from build_kanban_tracked_path_constants import ConstantsRenderError, run_git
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAKESHOP_ROOT = REPO_ROOT / "examples" / "fakeshop"
@@ -20,6 +24,10 @@ PACKAGE_PATH_PREFIX = "django_strawberry_framework/"
 CARD_HEADING_RE = re.compile(
     r"^## (?P<card_id>DONE-(?P<number>\d{3})-[^\s]+) (?P<title>.+)$",
 )
+# A heading that looks like a DONE-card section but fails the full pattern above
+# must be an error (a typo silently dropping a whole card's attribution), not a
+# silent skip.
+DONE_HEADING_HINT_RE = re.compile(r"^## DONE-")
 UNIQUE_COUNT_RE = re.compile(r"^Unique package files: (?P<count>\d+)$")
 PACKAGE_FILE_RE = re.compile(r"- `(?P<path>django_strawberry_framework/[^`]+)`")
 
@@ -81,22 +89,6 @@ class MutableCardAttribution:
         )
 
 
-def run_git(args: Sequence[str]) -> str:
-    """Run ``git --no-pager <args>`` and return stdout."""
-    try:
-        result = subprocess.run(
-            ["git", "--no-pager", *args],
-            cwd=REPO_ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as error:
-        message = error.stderr.strip() or f"git {' '.join(args)} failed."
-        raise AttributionImportError(message) from error
-    return result.stdout
-
-
 def historical_package_paths() -> frozenset[str]:
     """Return every package path that appears in git history."""
     output = run_git(
@@ -142,6 +134,11 @@ def parse_attribution(path: Path) -> list[CardAttribution]:
                     card_id=match.group("card_id"),
                     number=int(match.group("number")),
                     title=match.group("title"),
+                )
+            elif DONE_HEADING_HINT_RE.match(line):
+                raise AttributionImportError(
+                    f"Malformed DONE-card heading (does not match "
+                    f"'## DONE-NNN-<slug> <title>'): {line!r}",
                 )
             continue
 
@@ -207,18 +204,26 @@ def import_links(cards: Sequence[CardAttribution], *, dry_run: bool) -> None:
     all_paths = sorted({package_path for card in cards for package_path in card.files})
     historical_paths = [path for path in all_paths if path not in TRACKED_PATH_SET]
     updated: list[str] = []
+    state_flips: list[tuple[str, str, str]] = []
 
     try:
         with transaction.atomic():
+            before_states = dict(models.TrackedPath.objects.values_list("path", "state"))
             services.sync_tracked_paths_from_constants()
+            after_states = dict(models.TrackedPath.objects.values_list("path", "state"))
+            state_flips = sorted(
+                (path, before_states[path], new_state)
+                for path, new_state in after_states.items()
+                if path in before_states and before_states[path] != new_state
+            )
             for path in historical_paths:
                 package_file, _ = models.TrackedPath.objects.get_or_create(
                     path=path,
-                    defaults={"is_current": False},
+                    defaults={"state": models.TRACKED_PATH_HISTORICAL},
                 )
-                if package_file.is_current:
-                    package_file.is_current = False
-                    package_file.save(update_fields=["is_current", "updated_date"])
+                if package_file.state == models.TRACKED_PATH_CURRENT:
+                    package_file.state = models.TRACKED_PATH_HISTORICAL
+                    package_file.save(update_fields=["state", "updated_date"])
 
             for attribution in cards:
                 card = services.resolve_card(attribution.number)
@@ -241,6 +246,9 @@ def import_links(cards: Sequence[CardAttribution], *, dry_run: bool) -> None:
     print(f"Cards: {len(cards)}")
     print(f"Unique package files: {len(all_paths)}")
     print(f"Historical package files seeded: {len(historical_paths)}")
+    print(f"Tracked-path state flips (sync side effect): {len(state_flips)}")
+    for path, old_state, new_state in state_flips:
+        print(f"  {path}: {old_state} -> {new_state}")
 
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
@@ -274,6 +282,9 @@ def main(argv: Sequence[str] | None = None) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except AttributionImportError as error:
+    except (AttributionImportError, ConstantsRenderError) as error:
+        # ``run_git`` (imported from build_kanban_tracked_path_constants) raises
+        # ConstantsRenderError; treat it as a caller-correctable exit-2 failure
+        # alongside the attribution errors this script raises directly.
         print(error, file=sys.stderr)
         raise SystemExit(2) from error

@@ -1,21 +1,39 @@
-"""Build ``KANBAN.html`` from the fakeshop GraphQL endpoint."""
+"""Build ``KANBAN.html`` and the canonical ``KANBAN.json`` from the fakeshop GraphQL endpoint.
+
+``KANBAN.json`` is the first-class, machine-diffable board snapshot: the same
+dashboard payload embedded in ``KANBAN.html``, deep-sorted for stable diffs and
+carrying an ``asOf`` block (the max ``updatedDate`` across the kanban tables plus a
+render timestamp). Both artifacts derive from one :func:`fetch_dashboard_data` call.
+"""
 
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import json
-import os
 import re
 import sys
 from pathlib import Path
 from typing import Any
 
+# Re-exported for back-compat: build_kanban_md / build_glossary_md / build_tree_md /
+# check_alpha_parity import these names from this module.
+from _kanban_lib import (
+    cli_exit,
+    configure_django,
+    fetch_graphql_data,
+    version_tuple,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAKESHOP_ROOT = REPO_ROOT / "examples" / "fakeshop"
 DEFAULT_HTML_PATH = REPO_ROOT / "KANBAN.html"
+DEFAULT_JSON_PATH = REPO_ROOT / "KANBAN.json"
 DATA_BLOCK_RE = re.compile(
     r"(?s)<!-- KANBAN_DATA_START -->.*?<!-- KANBAN_DATA_END -->",
 )
+
+__all__ = ["configure_django", "fetch_graphql_data", "version_tuple"]
 
 STATIC_KANBAN_QUERY = """
 query StaticKanbanDashboard {
@@ -53,6 +71,7 @@ query StaticKanbanDashboard {
         id
       }
       name
+      path
       url
       createdDate
       updatedDate
@@ -118,6 +137,18 @@ query StaticKanbanDashboard {
     }
     changedFiles {
       ...TrackedPathFields
+    }
+    pathLinks {
+      id
+      uuid {
+        id
+      }
+      kind
+      createdDate
+      updatedDate
+      path {
+        ...TrackedPathFields
+      }
     }
   }
   allKanbanBoardDocs {
@@ -215,6 +246,9 @@ fragment TargetVersionFields on TargetVersionType {
     id
   }
   number
+  major
+  minor
+  patch
   createdDate
   updatedDate
   milestone {
@@ -245,7 +279,6 @@ fragment RelativeSizeFields on RelativeSizeType {
   key
   label
   order
-  rank
   description
   createdDate
   updatedDate
@@ -409,24 +442,19 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_HTML_PATH,
         help="HTML file to update. Defaults to the repository-root KANBAN.html.",
     )
+    parser.add_argument(
+        "--json",
+        type=Path,
+        default=DEFAULT_JSON_PATH,
+        dest="json_path",
+        help="Canonical JSON snapshot to write. Defaults to the repository-root KANBAN.json.",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Exit 1 if KANBAN.html / KANBAN.json are not already up to date (0 fresh, 2 on error).",
+    )
     return parser.parse_args()
-
-
-def configure_django() -> None:
-    """Load the fakeshop Django settings for the in-process GraphQL request.
-
-    Mutates process state without undoing it: prepends ``FAKESHOP_ROOT`` to
-    ``sys.path`` and sets ``DJANGO_SETTINGS_MODULE``. Fine for this top-level
-    build script (one process, exits after writing the dashboard); if this
-    module is ever imported into a longer-lived process, isolate or restore
-    these instead.
-    """
-    sys.path.insert(0, str(FAKESHOP_ROOT))
-    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-
-    import django
-
-    django.setup()
 
 
 LOOKUP_FIELDS = {
@@ -444,68 +472,47 @@ LOOKUP_FIELDS = {
 }
 
 
-def fetch_graphql_data(query: str, *, required_lists: tuple[str, ...]) -> dict[str, Any]:
-    """Fetch a GraphQL payload and validate required top-level list fields."""
-    from django.test import Client
-
-    response = Client(HTTP_HOST="localhost").post(
-        "/graphql/",
-        data={"query": query},
-        content_type="application/json",
-    )
-    if response.status_code != 200:
-        body = response.content.decode("utf-8", errors="replace")
-        raise RuntimeError(f"GraphQL request failed with HTTP {response.status_code}:\n{body}")
-
-    payload = response.json()
-    if payload.get("errors"):
-        raise RuntimeError(json.dumps(payload["errors"], indent=2, sort_keys=True))
-
-    data = payload.get("data") or {}
-    for key in required_lists:
-        if not isinstance(data.get(key), list):
-            raise TypeError(f"GraphQL response did not include data.{key} as a list.")
-    return data
-
-
-_RELEASE_VERSION = (1, 0, 0)
-
-
 def _pct(part: float, whole: float) -> float:
     """Percent ``part`` of ``whole``, one decimal, 0.0 when ``whole`` is 0."""
     return round(100 * part / whole, 1) if whole else 0.0
 
 
-def version_tuple(text: str | None) -> tuple[int, ...]:
-    """Parse a ``"X.Y.Z"`` version string to a comparable int tuple (digits only).
+def release_version(milestones: list[dict[str, Any]]) -> tuple[int, ...]:
+    """Return the road-to-release target version, derived from Milestone rows.
 
-    Tolerant of empty / suffixed segments (``"1.0.0 (stable)"`` -> ``(1, 0, 0)``);
-    a missing or empty version yields ``(0,)`` so an unbounded floor sorts low.
-    Shared with ``build_kanban_md.py`` so both exports order versions identically -
-    a suffixed version string must not render on one side and crash the other.
+    The release boundary is the highest ``versionCeiling`` across the milestone
+    lookup table (``alpha`` ceils at ``0.1.0``, ``beta`` at ``1.0.0``), so the
+    ``1.0.0`` cut is read from the DB rather than frozen in a script constant -
+    re-versioning a milestone reshapes the progress board on the next build with
+    no code edit. Raises when no milestone carries a ceiling (the metric would
+    otherwise silently compare against ``(0,)`` and count everything as shipped).
     """
-    parts: list[int] = []
-    for segment in (text or "").split("."):
-        digits = "".join(ch for ch in segment if ch in "0123456789")
-        if not digits:
-            break
-        try:
-            parts.append(int(digits))
-        except ValueError:
-            break
-    return tuple(parts) or (0,)
+    ceilings = [
+        version_tuple(milestone["versionCeiling"])
+        for milestone in milestones
+        if milestone.get("versionCeiling")
+    ]
+    if not ceilings:
+        raise RuntimeError(
+            "No milestone carries a versionCeiling; cannot derive the road-to-release "
+            "target version for the progress board.",
+        )
+    return max(ceilings)
 
 
-def compute_progress_metrics(cards: list[dict[str, Any]]) -> dict[str, Any]:
+def compute_progress_metrics(
+    cards: list[dict[str, Any]],
+    target_release: tuple[int, ...],
+) -> dict[str, Any]:
     """Aggregate road-to-``1.0.0`` progress from the card set.
 
     Backlog cards are excluded (deferred / un-triaged). Cards are counted raw and
     weighted by relative size (XS=1 .. XL=5) so the figure is not skewed by many tiny
-    cards, then broken down per milestone. Every label, ordering, and the
-    pre-/post-``1.0.0`` split are derived from the live milestone records (their
-    ``label`` / ``order`` / ``versionFloor``), so nothing here goes stale or has to be
-    re-typed when a milestone is renamed or re-versioned -- both exports recompute it on
-    every build.
+    cards, then broken down per milestone. Every label, ordering, the pre-/post-release
+    split (``target_release``, itself derived from the milestone ``versionCeiling``
+    values by :func:`release_version`), and the per-size weight (``RelativeSize.order``)
+    are read from the live DB, so nothing here goes stale or has to be re-typed when a
+    milestone is renamed or re-versioned -- both exports recompute it on every build.
 
     Two headline scopes are reported (the board surfaces both so neither misleads):
 
@@ -524,18 +531,18 @@ def compute_progress_metrics(cards: list[dict[str, Any]]) -> dict[str, Any]:
     """
 
     def rank(card: dict[str, Any]) -> int:
-        # ``RelativeSize.rank`` is 0-indexed (XS=0 .. XL=4); weight by ``rank + 1``
+        # ``RelativeSize.order`` is 0-indexed (XS=0 .. XL=4); weight by ``order + 1``
         # (XS=1 .. XL=5) so an XS card still counts as 1 unit of work rather than
         # being invisible to the size-weighted figure.
         size = card.get("relativeSize")
-        return size["rank"] + 1 if size else 0
+        return size["order"] + 1 if size else 0
 
     def targets_by_release(card: dict[str, Any]) -> bool:
         # The 1.0.0 release card ships exactly 1.0.0, so the boundary is inclusive
         # (``<=``). A card with no target version is treated as pre-release work.
         target = card.get("targetVersion") or {}
         number = target.get("number")
-        return number is None or version_tuple(number) <= _RELEASE_VERSION
+        return number is None or version_tuple(number) <= target_release
 
     universe = [card for card in cards if (card.get("status") or {}).get("key") != "backlog"]
 
@@ -579,22 +586,26 @@ def compute_progress_metrics(cards: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def render_progress_markdown(metrics: dict[str, Any]) -> str:
-    """Render the progress metrics as a markdown body (headline + per-milestone table)."""
+def render_progress_markdown(metrics: dict[str, Any], release_label: str) -> str:
+    """Render the progress metrics as a markdown body (headline + per-milestone table).
+
+    ``release_label`` is the road-to-release target version (e.g. ``"1.0.0"``),
+    derived from the milestone ``versionCeiling`` values, not frozen in the prose.
+    """
     toward = metrics["toward"]
     overall = metrics["overall"]
     cards_pct = toward["cards_pct"]
     crossed = "Past the 50% mark." if cards_pct >= 50 else "Not yet at the 50% mark."
     headline = (
-        f"**{cards_pct}% complete** toward `1.0.0` - {toward['cards_done']} of "
+        f"**{cards_pct}% complete** toward `{release_label}` - {toward['cards_done']} of "
         f"{toward['cards_total']} cards done ({toward['weighted_pct']}% size-weighted)."
     )
-    # Surface the full-board figure too whenever a post-1.0.0 milestone widens the
-    # non-backlog set beyond the toward-1.0.0 scope, so neither number misleads.
+    # Surface the full-board figure too whenever a post-release milestone widens the
+    # non-backlog set beyond the toward-release scope, so neither number misleads.
     if overall["cards_total"] != toward["cards_total"]:
         headline += (
-            f" Across all non-backlog cards (incl. post-`1.0.0`), {overall['cards_done']} "
-            f"of {overall['cards_total']} ({overall['cards_pct']}%, "
+            f" Across all non-backlog cards (incl. post-`{release_label}`), "
+            f"{overall['cards_done']} of {overall['cards_total']} ({overall['cards_pct']}%, "
             f"{overall['weighted_pct']}% size-weighted)."
         )
     headline += f" {crossed} Backlog excluded; size-weighted by relative size (XS=1 .. XL=5)."
@@ -616,26 +627,37 @@ def render_progress_markdown(metrics: dict[str, Any]) -> str:
 def progress_board_doc(
     board_docs: list[dict[str, Any]],
     cards: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    """Build the synthetic, export-time ``Progress to 1.0.0`` reference board doc.
+    milestones: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build the synthetic, export-time ``Progress to <release>`` reference board doc.
 
     Clones the kind / namespace / timestamps from the existing ``snapshot`` reference
     doc so it groups with the other reference docs in both exports, and carries
     pre-resolved numbers in its body (literal markdown -- no client-side token
-    recompute, so the KANBAN.html app renders it with no JS change). Returns ``None``
-    if there is no ``snapshot`` doc to anchor against.
+    recompute, so the KANBAN.html app renders it with no JS change).
+
+    Loud, not silent: raises when there is no ``snapshot`` doc to anchor against, so a
+    missing anchor fails the build instead of silently dropping the progress board.
+    The road-to-release target and title are derived from the milestone
+    ``versionCeiling`` values (see :func:`release_version`).
     """
     anchor = next((doc for doc in board_docs if doc.get("key") == "snapshot"), None)
     if anchor is None:
-        return None
+        raise RuntimeError(
+            "No 'snapshot' board doc to anchor the synthetic progress board against; "
+            "the progress metrics cannot be positioned. Add a 'snapshot' reference doc.",
+        )
+    target_release = release_version(milestones)
+    release_label = ".".join(str(part) for part in target_release)
+    metrics = compute_progress_metrics(cards, target_release)
     return {
-        "id": "synthetic:progress-to-1-0-0",
-        "uuid": {"id": "synthetic:progress-to-1-0-0"},
+        "id": "synthetic:progress-to-release",
+        "uuid": {"id": "synthetic:progress-to-release"},
         "namespace": anchor.get("namespace", "kanban"),
-        "key": "progress-to-1-0-0",
-        "title": "Progress to 1.0.0",
+        "key": "progress-to-release",
+        "title": f"Progress to {release_label}",
         "order": anchor.get("order", 3) + 0.5,
-        "body": render_progress_markdown(compute_progress_metrics(cards)),
+        "body": render_progress_markdown(metrics, release_label),
         "includeHeading": True,
         "kind": anchor["kind"],
         "createdDate": anchor.get("createdDate"),
@@ -647,8 +669,8 @@ def progress_board_doc(
 def fetch_dashboard_data() -> dict[str, Any]:
     """Fetch the kanban dashboard payload through the real ``/graphql/`` route.
 
-    A synthetic ``Progress to 1.0.0`` board doc is injected right after the
-    ``snapshot`` doc so both exports surface the road-to-``1.0.0`` metrics with no
+    A synthetic ``Progress to <release>`` board doc is injected right after the
+    ``snapshot`` doc so both exports surface the road-to-release metrics with no
     per-builder render change.
     """
     from apps.kanban import models
@@ -663,13 +685,12 @@ def fetch_dashboard_data() -> dict[str, Any]:
         lookups[payload_name] = data[graphql_name]
 
     board_docs = data["allKanbanBoardDocs"]
-    progress = progress_board_doc(board_docs, data["allCards"])
-    if progress is not None:
-        snapshot_index = next(
-            (index for index, doc in enumerate(board_docs) if doc.get("key") == "snapshot"),
-            len(board_docs) - 1,
-        )
-        board_docs.insert(snapshot_index + 1, progress)
+    progress = progress_board_doc(board_docs, data["allCards"], lookups["milestones"])
+    snapshot_index = next(
+        (index for index, doc in enumerate(board_docs) if doc.get("key") == "snapshot"),
+        len(board_docs) - 1,
+    )
+    board_docs.insert(snapshot_index + 1, progress)
 
     return {
         "cards": data["allCards"],
@@ -677,6 +698,99 @@ def fetch_dashboard_data() -> dict[str, Any]:
         "lookups": lookups,
         "blockingReferenceKindKeys": sorted(models.BLOCKING_REFERENCE_KIND_KEYS),
     }
+
+
+def _sort_cards(cards: list[dict[str, Any]]) -> None:
+    """Sort every per-card child list, then the cards themselves, in place.
+
+    Deterministic ordering (not resolver order) so both the HTML data block and
+    the KANBAN.json snapshot diff cleanly build over build.
+    """
+    for card in cards:
+        card.get("items", []).sort(
+            key=lambda item: (item["section"]["order"], item["order"], item["id"]),
+        )
+        card.get("parityClaims", []).sort(
+            key=lambda claim: (claim["upstream"]["order"], claim["id"]),
+        )
+        card.get("outgoingReferences", []).sort(key=lambda ref: (ref["order"], ref["id"]))
+        card.get("incomingReferences", []).sort(key=lambda ref: (ref["order"], ref["id"]))
+        card.get("dependencies", []).sort(key=lambda dep: dep["number"])
+        card.get("dependents", []).sort(key=lambda dep: dep["number"])
+        card.get("labels", []).sort(key=lambda label: label["key"])
+        card.get("glossaryLinks", []).sort(key=lambda link: (link["order"], link["id"]))
+        card.get("pathLinks", []).sort(key=lambda link: link["path"]["path"])
+        card.get("changedFiles", []).sort(key=lambda path: path["path"])
+    cards.sort(key=lambda card: card["number"])
+
+
+def _sort_board_docs(board_docs: list[dict[str, Any]]) -> None:
+    """Sort board docs and their card references in place."""
+    for doc in board_docs:
+        doc.get("cardReferences", []).sort(key=lambda ref: (ref["order"], ref["id"]))
+    board_docs.sort(key=lambda doc: (doc["order"], doc["key"]))
+
+
+def _sort_lookups(lookups: dict[str, list[dict[str, Any]]]) -> None:
+    """Sort each lookup array in place (by ``order`` where present, else path)."""
+    for name, rows in lookups.items():
+        if name == "trackedPaths":
+            rows.sort(key=lambda row: row["path"])
+        else:
+            rows.sort(key=lambda row: (row.get("order", 0), row["id"]))
+
+
+def build_dashboard_snapshot(dashboard_data: dict[str, Any]) -> dict[str, Any]:
+    """Deep-sort every list in the dashboard payload in place, returning it."""
+    _sort_cards(dashboard_data["cards"])
+    _sort_board_docs(dashboard_data["boardDocs"])
+    _sort_lookups(dashboard_data["lookups"])
+    return dashboard_data
+
+
+def _max_updated_date(snapshot: dict[str, Any]) -> str | None:
+    """Return the maximum ``updatedDate`` across every row in the snapshot.
+
+    ISO-8601 UTC strings (identical ``+00:00`` offset) compare lexicographically,
+    so a plain ``max`` over the collected values is a correct as-of anchor.
+    """
+    best: str | None = None
+
+    def walk(node: Any) -> None:
+        nonlocal best
+        if isinstance(node, dict):
+            value = node.get("updatedDate")
+            if isinstance(value, str) and (best is None or value > best):
+                best = value
+            for child in node.values():
+                walk(child)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(snapshot)
+    return best
+
+
+def build_canonical_export(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Wrap a (sorted) snapshot with the ``asOf`` block for the KANBAN.json artifact.
+
+    ``asOf.maxUpdatedDate`` is data-derived and deterministic (the board's freshness
+    anchor); ``asOf.generatedAt`` is the render wall-clock and is the ONLY field that
+    varies between two runs over unchanged data (``--check`` ignores it).
+    """
+    return {
+        "asOf": {
+            "maxUpdatedDate": _max_updated_date(snapshot),
+            "generatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        },
+        **snapshot,
+    }
+
+
+def render_json(export: dict[str, Any]) -> str:
+    """Render the canonical KANBAN.json text (indented, key-sorted, newline-terminated)."""
+    return json.dumps(export, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
 
 
 def render_data_block(dashboard_data: dict[str, Any]) -> str:
@@ -705,19 +819,70 @@ def embed_dashboard_data(html_path: Path, dashboard_data: dict[str, Any]) -> Non
     html_path.write_text(updated, encoding="utf-8")
 
 
-def main() -> None:
-    """Build the dashboard."""
+def _strip_volatile(export: dict[str, Any]) -> dict[str, Any]:
+    """Return ``export`` with the wall-clock ``asOf.generatedAt`` removed, for --check."""
+    clone = dict(export)
+    as_of = dict(clone.get("asOf", {}))
+    as_of.pop("generatedAt", None)
+    clone["asOf"] = as_of
+    return clone
+
+
+def _html_is_fresh(html_path: Path, data_block: str) -> bool:
+    """Return whether ``html_path`` already carries the freshly rendered data block."""
+    if not html_path.is_file():
+        return False
+    match = DATA_BLOCK_RE.search(html_path.read_text(encoding="utf-8"))
+    return match is not None and match.group(0) == data_block
+
+
+def _json_is_fresh(json_path: Path, export: dict[str, Any]) -> bool:
+    """Return whether ``json_path`` matches ``export`` (ignoring the wall-clock field)."""
+    if not json_path.is_file():
+        return False
+    try:
+        current = json.loads(json_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    return _strip_volatile(current) == _strip_volatile(export)
+
+
+def main() -> int:
+    """Build the HTML dashboard and the canonical KANBAN.json (or check freshness)."""
     args = parse_args()
     configure_django()
-    dashboard_data = fetch_dashboard_data()
-    embed_dashboard_data(args.html, dashboard_data)
+    snapshot = build_dashboard_snapshot(fetch_dashboard_data())
+    data_block = render_data_block(snapshot)
+    export = build_canonical_export(snapshot)
+
+    if args.check:
+        stale = [
+            str(path)
+            for path, fresh in (
+                (args.html, _html_is_fresh(args.html, data_block)),
+                (args.json_path, _json_is_fresh(args.json_path, export)),
+            )
+            if not fresh
+        ]
+        if stale:
+            print(
+                f"Stale (run scripts/build_kanban_html.py): {', '.join(stale)}",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"{args.html} and {args.json_path} are up to date.")
+        return 0
+
+    embed_dashboard_data(args.html, snapshot)
+    args.json_path.write_text(render_json(export), encoding="utf-8")
     print(
         "Wrote "
-        f"{len(dashboard_data['cards'])} cards, "
-        f"{len(dashboard_data['boardDocs'])} board docs, and "
-        f"{len(dashboard_data['lookups'])} lookup arrays to {args.html}",
+        f"{len(snapshot['cards'])} cards, "
+        f"{len(snapshot['boardDocs'])} board docs, and "
+        f"{len(snapshot['lookups'])} lookup arrays to {args.html} and {args.json_path}",
     )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    cli_exit(main)

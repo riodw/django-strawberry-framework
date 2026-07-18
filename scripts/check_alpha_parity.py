@@ -31,7 +31,7 @@ def main() -> int:
     configure_django()
     from apps.kanban.models import Card
 
-    alpha = Card.objects.filter(milestone__key="alpha").order_by("number")
+    alpha = Card.objects.filter(target_version__milestone__key="alpha").order_by("number")
     violations: list[tuple[str, str]] = []
     exempt = 0
     for card in alpha:

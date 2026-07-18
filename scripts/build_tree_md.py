@@ -517,7 +517,7 @@ def fetch_planned_paths() -> list[PlannedPath]:
     """Return planned TrackedPath rows linked from WIP/TODO kanban cards.
 
     Backlog cards and DONE-card historical paths never qualify: only
-    ``is_current=False`` rows with at least one ``wip``/``todo`` card link are
+    non-``current`` rows with at least one ``wip``/``todo`` card link are
     planned, and the lowest-numbered linking card owns the annotation.
     """
     from build_kanban_html import configure_django
@@ -526,13 +526,14 @@ def fetch_planned_paths() -> list[PlannedPath]:
     from apps.kanban.models import TrackedPath
 
     rows = (
-        TrackedPath.objects.filter(
-            is_current=False,
-            cards__status__key__in=("wip", "todo"),
-        )
+        TrackedPath.objects.exclude(state="current")
+        .filter(cards__status__key__in=("wip", "todo"))
         .distinct()
         .order_by("path")
-        .prefetch_related("cards__status", "cards__milestone", "cards__target_version")
+        .prefetch_related(
+            "cards__status",
+            "cards__target_version__milestone",
+        )
     )
     return _planned_paths_from_rows(rows)
 

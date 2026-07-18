@@ -9,21 +9,26 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from _kanban_lib import cli_exit
 from build_kanban_html import configure_django, fetch_dashboard_data, version_tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "KANBAN.md"
 KANBAN_HTML_PATH = "KANBAN.html"
-GITHUB_BLOB_URL = "https://github.com/riodw/django-strawberry-framework/blob/main"
 CARD_REF_RE = re.compile(r"\{\{card_ref:(\d+)\}\}")
 UNRESOLVED_PLACEHOLDER_RE = re.compile(r"\{\{[^}]+\}\}")
 LINK_DEFINITIONS_KEY = "link-definitions"
-COLUMN_DOC_KEYS = {
-    "in-progress",
-    "to-do-alpha-010",
-    "to-do-beta-100",
-    "done",
-}
+COLUMN_DOC_KIND_KEY = "column"
+
+
+def column_doc_keys(board_docs: list[dict[str, Any]]) -> set[str]:
+    """Return the card-bearing column keys, derived from the ``column`` board docs.
+
+    The set of columns that carry cards is DB-owned (every ``BoardDoc`` of kind
+    ``column``), not a script-frozen tuple, so adding or renaming a column reshapes
+    the export from the data with no code edit.
+    """
+    return {doc["key"] for doc in board_docs if doc["kind"]["key"] == COLUMN_DOC_KIND_KEY}
 
 
 def parse_args() -> argparse.Namespace:
@@ -73,28 +78,17 @@ def card_url(card: dict[str, Any]) -> str:
     return f"{KANBAN_HTML_PATH}#{card['slug']}"
 
 
-def spec_path_from_url(url: str) -> str:
-    """Return the repo path from a GitHub ``blob/main`` URL.
-
-    Raises on a URL that does not carry the expected ``blob/main`` prefix rather
-    than returning ``""`` - a silent empty string degrades a card that *has* a
-    spec into "No dedicated spec", so a repo rename or moved default branch would
-    quietly blank every spec link instead of failing the build loudly.
-    """
-    prefix = f"{GITHUB_BLOB_URL}/"
-    if not url.startswith(prefix):
-        raise ValueError(
-            f"Spec URL {url!r} does not start with the expected prefix {prefix!r}.",
-        )
-    return url.removeprefix(prefix)
-
-
 def spec_paths_for_card(card: dict[str, Any]) -> list[str]:
-    """Return the DB-backed spec path for ``card``, when it has one."""
+    """Return the DB-backed spec path for ``card``, when it has one.
+
+    Reads the repo-relative ``SpecDoc.path`` directly (the GitHub URL is derived
+    from it in the model layer), so the exporter no longer reverse-parses a
+    hardcoded URL prefix.
+    """
     spec = card.get("spec")
     if not spec:
         return []
-    db_path = spec_path_from_url(spec.get("url", ""))
+    db_path = spec.get("path", "")
     return [db_path] if db_path else []
 
 
@@ -205,7 +199,10 @@ def resolve_card_refs(text: str, doc: dict[str, Any]) -> str:
     def replace(match: re.Match[str]) -> str:
         reference = references.get(int(match.group(1)))
         if reference is None:
-            return match.group(0)
+            raise RuntimeError(
+                f"Board doc {doc['key']!r} references card_ref:{match.group(1)}, "
+                "but no cardReference with that order exists on the doc.",
+            )
         return card_key(reference["card"])
 
     return CARD_REF_RE.sub(replace, text)
@@ -228,7 +225,10 @@ def resolve_card_refs_for_card(text: str, card: dict[str, Any]) -> str:
     def replace(match: re.Match[str]) -> str:
         reference = references.get(int(match.group(1)))
         if reference is None:
-            return match.group(0)
+            raise RuntimeError(
+                f"Card {card['cardId']!r} references card_ref:{match.group(1)}, "
+                "but no outgoingReference with that order exists on the card.",
+            )
         return card_key(reference["targetCard"])
 
     return CARD_REF_RE.sub(replace, text)
@@ -248,11 +248,11 @@ def render_relative_size_scale(dashboard_data: dict[str, Any]) -> str:
     """Render the ``## Relative size`` bullet scale from the RelativeSize table.
 
     The five rows (and their effort blurbs) live in the lookup table, so the
-    scale is derived rather than frozen in the board prose. Sorted by ``rank``.
+    scale is derived rather than frozen in the board prose. Sorted by ``order``.
     """
     sizes = sorted(
         dashboard_data["lookups"].get("relativeSizes", []),
-        key=lambda size: size.get("rank", 0),
+        key=lambda size: size.get("order", 0),
     )
     return "\n".join(
         f"- **{size['label']}** - {size['description']}"
@@ -360,21 +360,23 @@ def render_glossary_terms(card: dict[str, Any]) -> list[str]:
 def render_tracked_paths(card: dict[str, Any]) -> list[str]:
     """Render the tracked paths linked to one card.
 
-    DONE cards list the files they actually changed; WIP/TODO cards list the
-    paths they are predicted to touch.
+    The link ``kind`` (``changed`` vs ``predicted``), not the card's status,
+    decides whether these are package files (actually changed) or predicted
+    files -- the through model carries the distinction per link.
     """
-    changed_files = sorted(
-        card.get("changedFiles", []),
-        key=lambda tracked_path: tracked_path["path"],
+    path_links = sorted(
+        card.get("pathLinks", []),
+        key=lambda link: link["path"]["path"],
     )
-    if not changed_files:
+    if not path_links:
         return []
 
-    planned = card["status"]["key"] != "done"
+    planned = all(link["kind"] == "predicted" for link in path_links)
     heading = "#### Predicted files" if planned else "#### Package files"
     lines = [heading, ""]
     lines.extend(
-        f"- {tracked_path_link(tracked_path, planned=planned)}" for tracked_path in changed_files
+        f"- {tracked_path_link(link['path'], planned=link['kind'] == 'predicted')}"
+        for link in path_links
     )
     lines.append("")
     return lines
@@ -504,6 +506,8 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
     link_definitions = link_def_docs[0] if link_def_docs else None
     docs = [doc for doc in docs if doc["key"] != LINK_DEFINITIONS_KEY]
 
+    card_column_doc_keys = column_doc_keys(dashboard_data["boardDocs"])
+
     cards_by_column = defaultdict(list)
     active = active_version(dashboard_data["cards"])
     for card in dashboard_data["cards"]:
@@ -513,12 +517,12 @@ def render_markdown(dashboard_data: dict[str, Any]) -> str:
     rendered = []
     rendered_card_ids = set()
     for doc in docs:
-        if doc["kind"]["key"] == "column" and doc["key"] not in COLUMN_DOC_KEYS:
+        if doc["kind"]["key"] == "column" and doc["key"] not in card_column_doc_keys:
             continue
         rendered.extend(render_doc(doc, computed))
         if doc["key"] == "board-columns":
             rendered.extend(render_spec_map(dashboard_data))
-        if doc["key"] in COLUMN_DOC_KEYS:
+        if doc["key"] in card_column_doc_keys:
             for card in sorted_column_cards(doc["key"], cards_by_column.get(doc["key"], [])):
                 rendered.extend(render_card(card))
                 rendered_card_ids.add(card["id"])
@@ -588,4 +592,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    cli_exit(main)

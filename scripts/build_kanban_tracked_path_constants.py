@@ -5,10 +5,11 @@ from __future__ import annotations
 
 import argparse
 import re
-import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+
+from _kanban_lib import run_git as _run_git
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPO_ROOT / "examples" / "fakeshop" / "apps" / "kanban" / "constants.py"
@@ -28,19 +29,8 @@ class ConstantsRenderError(RuntimeError):
 
 
 def run_git(args: Sequence[str]) -> str:
-    """Run ``git --no-pager <args>`` and return stdout."""
-    try:
-        result = subprocess.run(
-            ["git", "--no-pager", *args],
-            cwd=REPO_ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as error:
-        message = error.stderr.strip() or f"git {' '.join(args)} failed."
-        raise ConstantsRenderError(message) from error
-    return result.stdout
+    """Run ``git --no-pager <args>`` and return stdout (errors as ConstantsRenderError)."""
+    return _run_git(args, error_cls=ConstantsRenderError)
 
 
 def path_root(path: str) -> str | None:

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Any
 
+from _kanban_lib import cli_exit
 from build_kanban_html import configure_django, fetch_graphql_data
 from build_kanban_md import finalize_markdown
 
@@ -35,29 +37,6 @@ query StaticGlossary {
       id
       key
       label
-      order
-    }
-    outgoingLinks {
-      id
-      rawLabel
-      order
-      kind {
-        id
-        key
-        label
-        order
-      }
-      targetTerm {
-        id
-        title
-        anchor
-      }
-    }
-    specMentions {
-      id
-      specPath
-      specName
-      termText
       order
     }
   }
@@ -103,6 +82,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=DEFAULT_MD_PATH,
         help="Markdown file to write. Defaults to docs/GLOSSARY.md.",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Exit 1 if docs/GLOSSARY.md is not already up to date (0 fresh, 2 on error).",
     )
     return parser.parse_args()
 
@@ -251,12 +235,24 @@ def render_markdown(glossary_data: dict[str, Any]) -> str:
     return finalize_markdown(rendered)
 
 
-def main() -> None:
-    """Build the glossary markdown export."""
+def main() -> int:
+    """Build the glossary markdown export (or check its freshness)."""
     args = parse_args()
     configure_django()
     glossary_data = fetch_glossary_data()
     markdown = render_markdown(glossary_data)
+
+    if args.check:
+        current = args.md.read_text(encoding="utf-8") if args.md.exists() else ""
+        if current != markdown:
+            print(
+                f"{args.md} is not up to date; run scripts/build_glossary_md.py.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"{args.md} is up to date.")
+        return 0
+
     args.md.write_text(markdown, encoding="utf-8")
 
     mentioned_specs = {mention["specPath"] for mention in glossary_data["specMentions"]}
@@ -267,7 +263,8 @@ def main() -> None:
         f"{len(glossary_data['specMentions'])} spec mentions across "
         f"{len(mentioned_specs)} specs to {args.md}",
     )
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    cli_exit(main)

@@ -1171,7 +1171,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 - The sealed boundary changed the accepted queryset shapes, identity/cache behavior, aliases, errors, and query execution of the framework's single data-leak-critical seam. Repository policy requires a governing numbered security decision, a KANBAN card, a spec, and a GLOSSARY update for exactly such a change; commit 60998b17 and the docs/feedback.md Resolution closed the correctness work but deferred these artifacts. This card discharges that deferral so the standing documentation matches the implemented security contract.
 
-#### Other
+#### Note
 
 - Documents: commit 60998b17 - sealed get_queryset visibility boundary.
 - Closes: docs/feedback.md [P2] "The standing guarantee and historical note declare the unsafe boundary complete" (the deferred policy-artifact residual only; the correctness findings were closed in the Resolution).

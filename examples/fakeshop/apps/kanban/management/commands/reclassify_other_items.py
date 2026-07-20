@@ -14,10 +14,10 @@ repairs.
 
 Idempotency: an item is moved only while it still lives in ``other``; a re-run
 skips items already relocated. Processing is deterministic (sorted by
-``(card_number, orig_order)``) so re-runs and the ``--rollback`` inverse behave
-predictably. Item ``text`` travels verbatim -- ``{{card_ref:N}}`` placeholders
-resolve against ``CardReference.order``, never ``CardItem.order``, so moving an
-item cannot break a placeholder.
+``(card_number, orig_order)``) so re-runs behave predictably. Item ``text``
+travels verbatim -- ``{{card_ref:N}}`` placeholders resolve against
+``CardReference.order``, never ``CardItem.order``, so moving an item cannot
+break a placeholder.
 
 Usage::
 
@@ -25,8 +25,6 @@ Usage::
         --mapping section-other-mapping.json
     uv run python examples/fakeshop/manage.py reclassify_other_items \\
         --mapping section-other-mapping.json --dry-run
-    uv run python examples/fakeshop/manage.py reclassify_other_items \\
-        --mapping section-other-mapping.json --rollback
 
 Mapping schema: a JSON array of objects, each with ``carditem_uuid``,
 ``card_number``, ``orig_order``, ``target_section_key``, ``text_prefix``.
@@ -58,7 +56,7 @@ class Command(BaseCommand):
     help = "Reclassify the parked ``other`` card items into their real sections."
 
     def add_arguments(self, parser: CommandParser) -> None:
-        """Register --mapping, --dry-run, --rollback, and --compact/--no-compact."""
+        """Register --mapping, --dry-run, and --compact/--no-compact."""
         parser.add_argument(
             "--mapping",
             required=True,
@@ -68,11 +66,6 @@ class Command(BaseCommand):
             "--dry-run",
             action="store_true",
             help="Validate and report the plan without writing to the database.",
-        )
-        parser.add_argument(
-            "--rollback",
-            action="store_true",
-            help="Reverse the mapping: move items back into ``other``.",
         )
         parser.add_argument(
             "--compact",
@@ -118,15 +111,9 @@ class Command(BaseCommand):
         )
         return 0 if highest is None else highest + 1
 
-    def _move(
-        self,
-        rows: list[dict],
-        sections: dict[str, models.Section],
-        rollback: bool,
-    ) -> list[str]:
-        """Apply the mapping (forward or reverse); return moved-item descriptions."""
+    def _move(self, rows: list[dict], sections: dict[str, models.Section]) -> list[str]:
+        """Apply the mapping; return moved-item descriptions."""
         moved: list[str] = []
-        other = sections[OTHER_KEY]
         for row in rows:
             try:
                 item = models.CardItem.objects.select_related("section", "card").get(
@@ -134,17 +121,10 @@ class Command(BaseCommand):
                 )
             except models.CardItem.DoesNotExist:
                 continue
-            target = sections[row["target_section_key"]]
-            if rollback:
-                # Only pull back items still sitting where we placed them.
-                if item.section_id != target.id:
-                    continue
-                destination = other
-            else:
-                # Idempotent: skip anything already relocated out of ``other``.
-                if item.section.key != OTHER_KEY:
-                    continue
-                destination = target
+            # Idempotent: skip anything already relocated out of ``other``.
+            if item.section.key != OTHER_KEY:
+                continue
+            destination = sections[row["target_section_key"]]
             next_order = self._next_order(item.card_id, destination.id)
             models.CardItem.objects.filter(pk=item.pk).update(
                 section=destination,
@@ -177,7 +157,6 @@ class Command(BaseCommand):
         """Move the mapped items inside one transaction; honor --dry-run."""
         rows = self._load(options["mapping"])
         dry_run = options["dry_run"]
-        rollback = options["rollback"]
         compact = options["compact"]
         sections = self._sections({row["target_section_key"] for row in rows})
         card_ids = {row["card_number"] for row in rows}
@@ -194,7 +173,7 @@ class Command(BaseCommand):
         compacted = 0
         try:
             with transaction.atomic(using=alias):
-                moved = self._move(rows, sections, rollback)
+                moved = self._move(rows, sections)
                 if compact:
                     compacted = self._compact(card_pks, sections)
                 if dry_run:
@@ -210,9 +189,8 @@ class Command(BaseCommand):
                 self.stdout.write(f"  {line}")
             return
 
-        verb = "Rolled back" if rollback else "Moved"
         self.stdout.write(
             self.style.SUCCESS(
-                f"{verb} {len(moved)} item(s); renumbered {compacted} ``other`` order(s).",
+                f"Moved {len(moved)} item(s); renumbered {compacted} ``other`` order(s).",
             ),
         )

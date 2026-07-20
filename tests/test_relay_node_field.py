@@ -21,6 +21,7 @@ import strawberry
 from apps.products import services
 from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
+from django.db import models
 from strawberry import relay
 
 import django_strawberry_framework
@@ -1170,6 +1171,138 @@ def test_node_refetch_of_cascade_hidden_row_returns_null():
     )
     assert result.errors is None
     assert result.data == {"item": None}
+
+
+# ---------------------------------------------------------------------------
+# Sealed-execution boundary: a hostile hook-return subclass cannot widen the
+# refetched row set (docs/feedback.md P1 "unchecked terminal / transformation"
+# findings, surface-level). The hook returns a QuerySet SUBCLASS whose overrides
+# would erase the visibility predicate (``.filter()``) or synthesize hidden rows
+# (``.first()`` / ``.get()`` / ``.afirst()`` / ``.aget()`` / ``.__aiter__()``) if
+# the framework ever dispatched through the consumer object. The boundary seals
+# the return into a fresh plain ``QuerySet`` rebuilt from the validated query
+# state, so none of the overrides run: a hidden pk still refetches null and a
+# visible pk resolves. Each test asserts WHICH ROWS SURVIVE, not metadata.
+# ---------------------------------------------------------------------------
+
+
+def _make_hostile_category_node() -> type:
+    """Relay-Node ``Category`` type whose ``get_queryset`` returns a HOSTILE subclass.
+
+    The subclass would leak if ever dispatched: ``.filter()`` drops the predicate
+    (and the pk narrowing) and returns a fresh unfiltered queryset, and every
+    terminal (``.first()`` / ``.get()`` and the async ``.afirst()`` / ``.aget()`` /
+    ``.__aiter__()``) synthesizes an unsaved hidden row. The hook seeds a genuine
+    ``is_private=False`` predicate through the unbound ``models.QuerySet.filter``
+    (bypassing its own override) so the visibility filter is real query state; the
+    seal preserves that state and drops the subclass identity.
+    """
+
+    class _HostileQuerySet(models.QuerySet):
+        def filter(self, *args, **kwargs):  # predicate + pk erased if dispatched
+            return Category.objects.all()
+
+        def first(self):
+            return Category(name="secret-from-first")
+
+        def get(self, *args, **kwargs):
+            return Category(name="secret-from-get")
+
+        async def afirst(self):
+            return Category(name="secret-from-afirst")
+
+        async def aget(self, *args, **kwargs):
+            return Category(name="secret-from-aget")
+
+        async def __aiter__(self):
+            yield Category(name="secret-from-aiter")
+
+    class HostileCategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            return models.QuerySet.filter(_HostileQuerySet(model=Category), is_private=False)
+
+    return HostileCategoryNode
+
+
+@pytest.mark.django_db
+def test_node_hostile_subclass_hook_is_sealed_sync():
+    """Sync node refetch of a hostile-subclass hook serves only the visible row.
+
+    A private (hidden) pk refetches null and a public pk resolves - the
+    predicate-erasing ``.filter()`` and synthetic ``.first()`` / ``.get()``
+    overrides never dispatch on the sealed plain queryset.
+    """
+    hostile = _make_hostile_category_node()
+    schema = _schema_with("category", hostile | None, DjangoNodeField(hostile))
+    public = Category.objects.create(name="public_cat", is_private=False)
+    private = Category.objects.create(name="private_cat", is_private=True)
+
+    hidden = schema.execute_sync(
+        _CATEGORY_QUERY,
+        variable_values={"id": _gid("products.category", private.pk)},
+    )
+    assert hidden.errors is None
+    assert hidden.data == {"category": None}
+
+    visible = schema.execute_sync(
+        _CATEGORY_QUERY,
+        variable_values={"id": _gid("products.category", public.pk)},
+    )
+    assert visible.errors is None
+    assert visible.data == {"category": {"name": public.name}}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_node_hostile_subclass_hook_is_sealed_async():
+    """Async single-node refetch neutralizes the synthetic ``.afirst()`` / ``.aget()`` overrides."""
+    hostile = _make_hostile_category_node()
+    schema = _schema_with("category", hostile | None, DjangoNodeField(hostile))
+    public = await Category.objects.acreate(name="public_cat", is_private=False)
+    private = await Category.objects.acreate(name="private_cat", is_private=True)
+
+    hidden = await schema.execute(
+        _CATEGORY_QUERY,
+        variable_values={"id": _gid("products.category", private.pk)},
+    )
+    assert hidden.errors is None
+    assert hidden.data == {"category": None}
+
+    visible = await schema.execute(
+        _CATEGORY_QUERY,
+        variable_values={"id": _gid("products.category", public.pk)},
+    )
+    assert visible.errors is None
+    assert visible.data == {"category": {"name": public.name}}
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_nodes_hostile_subclass_hook_is_sealed_async_aiter():
+    """Async batch refetch neutralizes the synthetic ``.__aiter__()`` override.
+
+    The batch async path materializes via ``async for obj in qs``; the sealed
+    plain queryset iterates the real (visibility-narrowed) rows, so the hidden pk
+    becomes a positional ``null`` hole and the visible pk resolves - never the
+    ``secret-from-aiter`` synthetic row the subclass would yield if dispatched.
+    """
+    hostile = _make_hostile_category_node()
+    schema = _schema_with("categories", list[hostile | None], DjangoNodesField(hostile))
+    public = await Category.objects.acreate(name="public_cat", is_private=False)
+    private = await Category.objects.acreate(name="private_cat", is_private=True)
+
+    result = await schema.execute(
+        _CATEGORIES_QUERY,
+        variable_values={
+            "ids": [_gid("products.category", private.pk), _gid("products.category", public.pk)],
+        },
+    )
+    assert result.errors is None
+    assert result.data["categories"] == [None, {"name": public.name}]
 
 
 @pytest.mark.django_db

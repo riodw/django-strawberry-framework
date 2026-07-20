@@ -46,6 +46,7 @@ import strawberry
 from apps.products import services
 from apps.products.models import Category, Item
 from asgiref.sync import sync_to_async
+from django.db import models
 from django.db.models import Prefetch
 from strawberry.types import Info
 
@@ -414,7 +415,7 @@ def test_djangolistfield_consumer_resolver_queryset_return_gets_get_queryset_app
     assert all(not name.startswith("a") for name in names)
 
 
-# The sync ``Manager``-return arm (``django_strawberry_framework/utils/querysets.py::normalize_query_source #"source = source.all()"`` coverage) lives in
+# The sync ``Manager``-return arm (``django_strawberry_framework/utils/querysets.py::_coerced_manager_queryset`` coverage) lives in
 # ``examples/fakeshop/test_query/test_library_api.py::test_library_branches_via_djangolistfield_consumer_manager_resolver_over_http``
 # per the live-HTTP-first rule at ``examples/fakeshop/test_query/README.md #"**Coverage rule.**"``.
 
@@ -519,9 +520,9 @@ async def test_djangolistfield_async_consumer_resolver_manager_return_gets_get_q
     """Async consumer resolver returning a ``Manager`` receives ``target_type.get_queryset(...)``.
 
     Pins the async field-wrapper's ``Manager -> QuerySet`` coercion at
-    ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"source = source.all()"`` - ``normalize_query_source`` calls
-    ``source.all()`` on a ``Manager`` return BEFORE the is-queryset check
-    so the subsequent ``await apply_type_visibility_async(...)`` runs on a
+    ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"return _coerced_manager_queryset(source), True"`` - ``normalize_query_source``
+    coerces a ``Manager`` return through ``_coerced_manager_queryset`` BEFORE
+    the is-queryset check so the subsequent ``await apply_type_visibility_async(...)`` runs on a
     real ``QuerySet`` (rev4 M1 symmetry with the sync path; spec #"the **field wrapper** owns the `Manager -> QuerySet` coercion").
     The ``DJANGO_ALLOW_ASYNC_UNSAFE`` env override unblocks Strawberry's
     list-completion iteration of the returned QuerySet under
@@ -541,7 +542,7 @@ async def test_djangolistfield_async_consumer_resolver_manager_return_gets_get_q
 
     async def _resolver(root: Any, info: Info) -> Any:
         # Return the ``Manager`` itself, not a ``QuerySet`` - exercises
-        # the coercion branch at ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"source = source.all()"``.
+        # the coercion branch at ``django_strawberry_framework/utils/querysets.py::_coerced_manager_queryset``.
         return Category.objects
 
     @strawberry.type
@@ -1285,3 +1286,265 @@ def test_list_field_default_resolver_applies_cascade() -> None:
     names = sorted(row["name"] for row in result.data["allItems"])
     # The item under a private category drops; only the visible item remains.
     assert names == ["visible_item"]
+
+
+# =============================================================================
+# Sealed-execution boundary at the list-field surface (docs/feedback.md P1).
+# Mirrors the connection-surface regressions in ``tests/test_connection.py`` (the
+# hostile-subclass, instance-shadowed ``.all()``, and Manager degrade / alias-drift
+# tests). A hostile hook-return whose overrides would erase the visibility
+# predicate or synthesize rows is neutralized by sealing: the list field serves
+# ONLY the visible rows, sync AND async. Seeding makes visible != raw so the
+# assertions are not vacuous.
+# =============================================================================
+
+
+class _HostileListQuerySet(models.QuerySet):
+    """A predicate-erasing / synthetic-row ``QuerySet`` subclass.
+
+    Every override would widen the result if ``DjangoListField`` dispatched
+    through the consumer object: ``.filter()`` / ``.order_by()`` drop all
+    narrowing and ``__iter__`` yields the raw (unfiltered) table rows. The seal
+    rebuilds a plain ``QuerySet`` from the validated query state, so none run.
+    """
+
+    def filter(self, *args, **kwargs):
+        return Category.objects.all()
+
+    def order_by(self, *args, **kwargs):
+        return Category.objects.all()
+
+    def __iter__(self):
+        return iter(Category.objects.all().order_by("pk"))
+
+
+def _seed_public_private_categories() -> list[str]:
+    """Create two public + one private ``Category``; return the ordered public names."""
+    public_a = Category.objects.create(name="public_a", is_private=False)
+    public_b = Category.objects.create(name="public_b", is_private=False)
+    Category.objects.create(name="private_x", is_private=True)
+    return [public_a.name, public_b.name]
+
+
+def _hostile_list_hook(cls, queryset, info, **kwargs):
+    """Return the hostile subclass carrying a genuine ``is_private=False`` predicate.
+
+    The predicate is applied through the UNBOUND ``models.QuerySet.filter`` so the
+    subclass's predicate-erasing ``.filter()`` override does not run at seed time.
+    """
+    return models.QuerySet.filter(_HostileListQuerySet(model=Category), is_private=False)
+
+
+@pytest.mark.django_db
+def test_djangolistfield_hostile_hook_subclass_serves_only_visible_rows_sync() -> None:
+    """A hostile-subclass ``get_queryset`` return serves only the visible rows (sync).
+
+    The predicate-erasing / synthetic-row overrides on ``_HostileListQuerySet`` are
+    neutralized by ``django_strawberry_framework/utils/querysets.py::_seal_or_defect``:
+    the boundary rebuilds a plain ``QuerySet`` from the validated query state, never
+    dispatching through the consumer object, so the ``is_private=False`` predicate
+    survives and the private row never leaks.
+    """
+    public_names = _seed_public_private_categories()
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        get_queryset = classmethod(_hostile_list_hook)
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ allCategories { id name } }")
+    assert result.errors is None
+    names = sorted(row["name"] for row in result.data["allCategories"])
+    assert names == public_names  # only the visible rows, never the raw private one
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_hostile_hook_subclass_serves_only_visible_rows_async(
+    monkeypatch,
+) -> None:
+    """Async twin: the hostile subclass overrides are sealed away on the async path too."""
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+    public_names = await sync_to_async(_seed_public_private_categories)()
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        get_queryset = classmethod(_hostile_list_hook)
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories { id name } }")
+    assert result.errors is None
+    names = sorted(row["name"] for row in result.data["allCategories"])
+    assert names == public_names
+
+
+@pytest.mark.django_db
+def test_djangolistfield_instance_shadowed_all_hook_is_sealed() -> None:
+    """A hook returning a PLAIN queryset with an instance-shadowed ``.all()`` is sealed.
+
+    The seal reads the queryset's state from ``__dict__`` via
+    ``object.__getattribute__``, never through attribute access, so an instance
+    attribute ``all`` shadowing the method (which would drop the predicate if the
+    framework called ``.all()``) cannot lie or run: only the visible rows are served.
+    """
+    public_names = _seed_public_private_categories()
+
+    class ShadowedAllCategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+        @classmethod
+        def get_queryset(cls, queryset, info, **kwargs):
+            source = Category.objects.filter(is_private=False)
+            source.all = lambda: Category.objects.all()  # instance shadow (predicate-dropping)
+            return source
+
+    @strawberry.type
+    class Query:
+        all_categories: list[ShadowedAllCategoryType] = DjangoListField(ShadowedAllCategoryType)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ allCategories { id name } }")
+    assert result.errors is None
+    names = sorted(row["name"] for row in result.data["allCategories"])
+    assert names == public_names
+
+
+# --- Manager failure propagation at the list-field surface -------------------
+
+
+class _ListManager(models.Manager):
+    """A hostile Manager whose ``.all()`` degrades into a plain list (a bypass shape)."""
+
+    def all(self):
+        return ["secret"]
+
+
+def _degrading_manager() -> models.Manager:
+    """An unrouted ``_ListManager`` bound to ``Category``."""
+    manager = _ListManager()
+    manager.model = Category
+    manager._db = None
+    return manager
+
+
+class _DriftManager(models.Manager):
+    """A Manager pinned to one alias whose ``.all()`` silently routes to another."""
+
+    def get_queryset(self):
+        return Category.objects.using("elsewhere")
+
+
+def _alias_drift_manager() -> models.Manager:
+    """A ``_DriftManager`` pinned to ``other`` whose ``.all()`` drifts to ``elsewhere``."""
+    manager = _DriftManager()
+    manager.model = Category
+    manager._db = "other"
+    return manager
+
+
+@pytest.mark.django_db
+def test_djangolistfield_resolver_manager_degrading_to_list_fails_closed_sync() -> None:
+    """A consumer resolver returning a Manager that degrades to a list fails closed (sync).
+
+    ``django_strawberry_framework/utils/querysets.py::_coerced_manager_queryset`` refuses
+    a ``Manager.all()`` that returns a non-queryset, so the degraded list can never be
+    mistaken for the deliberate plain-iterable bypass and skip the visibility hook.
+    """
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    def _resolver(root: Any, info: Info) -> Any:
+        return _degrading_manager()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ allCategories { id name } }")
+    assert result.errors is not None
+    assert any("must produce a QuerySet" in str(err.message) for err in result.errors)
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_djangolistfield_resolver_manager_degrading_to_list_fails_closed_async(
+    monkeypatch,
+) -> None:
+    """Sync/async parity: the Manager-degrade failure propagates on the async path too."""
+    monkeypatch.setenv("DJANGO_ALLOW_ASYNC_UNSAFE", "true")
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    async def _resolver(root: Any, info: Info) -> Any:
+        return _degrading_manager()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = await schema.execute("{ allCategories { id name } }")
+    assert result.errors is not None
+    assert any("must produce a QuerySet" in str(err.message) for err in result.errors)
+
+
+@pytest.mark.django_db
+def test_djangolistfield_resolver_manager_alias_drift_fails_closed_sync() -> None:
+    """A consumer resolver returning a Manager whose ``.all()`` drifts alias fails closed (sync).
+
+    ``_coerced_manager_queryset`` requires the coerced queryset's ``_db`` to EXACTLY
+    preserve the manager's explicit routing, so a manager pinned to ``other`` whose
+    ``.all()`` self-routes to ``elsewhere`` cannot silently change databases.
+    """
+
+    class CategoryType(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+
+    def _resolver(root: Any, info: Info) -> Any:
+        return _alias_drift_manager()
+
+    @strawberry.type
+    class Query:
+        all_categories: list[CategoryType] = DjangoListField(CategoryType, resolver=_resolver)
+
+    finalize_django_types()
+    schema = strawberry.Schema(query=Query)
+
+    result = schema.execute_sync("{ allCategories { id name } }")
+    assert result.errors is not None
+    assert any(
+        "preserve the manager's explicit routing" in str(err.message) for err in result.errors
+    )

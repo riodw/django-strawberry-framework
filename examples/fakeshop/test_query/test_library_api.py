@@ -629,7 +629,7 @@ def test_library_branches_via_djangolistfield_optimized_nested_selection():
 def test_library_branches_via_djangolistfield_consumer_manager_resolver_over_http():
     """End-to-end ``Manager -> QuerySet`` coercion via a sync consumer ``resolver=``.
 
-    Pins ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"source = source.all()"`` - the field-wrapper's
+    Pins ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"_coerced_manager_queryset(source)"`` - the field-wrapper's
     shared ``Manager.all()`` coercion (reached via ``_post_process_consumer_sync``) before
     ``apply_type_visibility_sync`` runs (rev4 M1). The fakeshop resolver
     ``apps.library.schema._branches_manager_resolver`` returns

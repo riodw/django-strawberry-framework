@@ -31,7 +31,7 @@ from django_strawberry_framework.orders import order_input_type
 
 # Consumer ``resolver=`` helper exercising the shared field-wrapper
 # ``Manager`` coercion line at
-# ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"source = source.all()"``.
+# ``django_strawberry_framework/utils/querysets.py::normalize_query_source #"_coerced_manager_queryset(source)"``.
 # The README rule at ``examples/fakeshop/test_query/README.md #"Coverage rule"`` requires
 # coverage lines reachable from a live ``/graphql/`` query to land here. Returns
 # ``models.Branch.objects`` (a ``Manager``) - NOT ``.all()`` - so the field-

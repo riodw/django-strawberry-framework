@@ -113,12 +113,15 @@ from .utils.querysets import SyncMisuseError as SyncMisuseError
 # ``apply_type_visibility_sync`` runs a target's ``get_queryset`` and rejects an
 # async hook with ``SyncMisuseError`` (the coroutine closed first); the cascade
 # reuses it as the per-edge probe so the package keeps ONE sync-misuse site
-# (Decision 10). The runner is also the shared hardened visibility boundary:
+# (Decision 10). The runner is also the shared sealed visibility boundary:
 # it owns the hook-result shape / concrete-table / alias contract (Manager
-# coercion, unrouted-result repinning onto the pinned base alias, explicit
-# cross-alias rejection, evaluated refresh), rendered through the cascade's
-# per-edge error seam (``_edge_error_renderer``); only the SQL-composability
-# battery around the ``.values(...)`` re-projection stays cascade-local.
+# coercion, sealing into a framework-owned plain QuerySet rebuilt from validated
+# query state, alias pinned at construction, explicit cross-alias rejection),
+# rendered through the cascade's per-edge error seam (``_edge_error_renderer``);
+# because the boundary now returns a SEALED queryset, the cascade's
+# ``.values(...)`` re-projection runs on a genuine ``QuerySet.values`` (never a
+# consumer ``_values`` override), and only the SQL-composability battery around
+# that re-projection stays cascade-local.
 from .utils.querysets import apply_type_visibility_sync, model_for, run_in_one_sync_boundary
 
 _ASYNC_RECOURSE = (
@@ -393,9 +396,13 @@ def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
     (``utils/querysets.py::_normalized_visibility_result``); this seam keeps
     the cascade's path-rich per-edge prose on those failures. The ``type`` /
     ``table`` / ``alias`` wordings are the cascade's established strings;
-    ``evaluated`` (a hostile queryset subclass whose ``.all()`` preserved
-    cached rows through the boundary's refresh) is boundary-new and gets
-    cascade-flavored prose of its own.
+    ``untrusted`` (a queryset whose state the boundary cannot seal into a
+    framework-owned execution queryset -- a foreign ``Query`` class, a foreign
+    row iterable, or an unresolved deferred filter) is boundary-new and gets
+    cascade-flavored prose of its own. The cascade runs
+    with ``require_model_rows=False``, so the boundary never raises the
+    ``projection`` code here - a ``.values()`` return is the cascade's
+    supported input, not a defect.
     """
 
     def _render(code: str, detail: str) -> str:
@@ -414,22 +421,24 @@ def _edge_error_renderer(target_type: type, field: Any, alias: str) -> Any:
                 f"target's concrete table (proxy siblings are compatible, MTI "
                 f"children are not)."
             )
-        if code == "alias":
+        if code == "untrusted":
             return (
-                f"{target_type.__name__}.get_queryset returned a queryset on alias "
-                f"{detail!r} for the cascade subquery on "
-                f"{field.model.__name__}.{field.name}, but the cascade is pinned to "
-                f"{alias!r}; a cascade cannot compose cross-database subqueries."
+                f"{target_type.__name__}.get_queryset returned a queryset that cannot be "
+                f"sealed into a framework-owned execution queryset ({detail}) for the "
+                f"cascade subquery on {field.model.__name__}.{field.name}; the cascade "
+                f"re-projects the sealed queryset to the edge's target column, and a "
+                f"foreign Query class, a foreign row iterable, or an unresolved deferred "
+                f"filter cannot be faithfully rebuilt. Return plain rows."
             )
-        # ``code == "evaluated"`` -- the only remaining boundary code; an
-        # unhandled future code would fall through silently, so this last
-        # branch is unconditional.
+        # ``code == "alias"`` -- the only remaining boundary code the cascade
+        # can surface (it runs with require_model_rows=False, so no
+        # ``projection`` code reaches here); an unhandled future code would fall
+        # through silently, so this last branch is unconditional.
         return (
-            f"{target_type.__name__}.get_queryset returned a {detail} whose .all() "
-            f"preserved cached rows for the cascade subquery on "
-            f"{field.model.__name__}.{field.name}; the cascade composes lazy "
-            f"subqueries only, and rows cached before the visibility boundary "
-            f"must never survive it."
+            f"{target_type.__name__}.get_queryset returned a queryset on alias "
+            f"{detail!r} for the cascade subquery on "
+            f"{field.model.__name__}.{field.name}, but the cascade is pinned to "
+            f"{alias!r}; a cascade cannot compose cross-database subqueries."
         )
 
     return _render
@@ -670,6 +679,7 @@ def _walk(
                 info,
                 async_recourse=_ASYNC_RECOURSE,
                 render_error=_edge_error_renderer(target_type, field, state.alias),
+                require_model_rows=False,
             )
         finally:
             _cascade_state.reset(edge_token)

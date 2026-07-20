@@ -374,7 +374,14 @@ def _build_child_queryset(
     """
     queryset = field.related_model._default_manager.all()
     if has_custom_qs:
-        queryset = apply_type_visibility_sync(target_type, queryset, info)
+        # ``allow_sliced=True``: a nested-connection child may legitimately return a
+        # sliced queryset, and the plan's own gate
+        # (``nested_fetch.py::unwindowable_child_queryset_reason``) detects that shape
+        # and degrades to the fully-unplanned per-parent fallback WITHOUT recomposing
+        # filters / ordering, so the seal's slice rejection (which exists because
+        # recomposing surfaces would raise a raw ``TypeError``) must not pre-empt the
+        # designed degradation (``docs/feedback2.md`` P0-3 degrade-to-unplanned).
+        queryset = apply_type_visibility_sync(target_type, queryset, info, allow_sliced=True)
     return queryset
 
 

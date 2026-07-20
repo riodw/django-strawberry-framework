@@ -1504,28 +1504,95 @@ def test_unpinned_hook_return_is_repinned_to_root_alias():
     assert _cascade_state.get() is None
 
 
-def test_hostile_hook_queryset_clone_fails_closed_with_cascade_prose():
-    """A hostile queryset subclass whose ``.all()`` preserves cached rows fails closed.
+def test_hostile_hook_clone_override_is_neutralized_by_sealing_in_cascade():
+    """A hostile queryset subclass overriding ``.all()`` is neutralized by sealing.
 
-    The boundary refreshes an evaluated hook return with ``.all()`` and then
-    REVALIDATES the clone (a consumer-overridable method just ran); a subclass
-    that returns itself with its cache intact would otherwise serve rows
-    cached before the visibility boundary. The error routes through the
-    cascade's per-edge renderer, so the prose stays path-rich.
+    The boundary seals the hook return into a fresh plain ``QuerySet`` rebuilt
+    from its query state, so the overridden ``.all()`` never runs; the cascade
+    then re-projects that sealed queryset with a genuine ``.values(...)``. The
+    visibility predicate survives, and the composed ``__in`` subquery carries it.
     """
 
     class _StickyQuerySet(models.QuerySet):
-        def all(self):
-            return self
+        def all(self):  # a predicate-dropping clone if ever dispatched
+            return _CtTarget.objects.all()
 
     def _hostile_hook(cls, qs, info):
-        sticky = _StickyQuerySet(model=_CtTarget, using=qs.db)
-        sticky._result_cache = []
-        return sticky
+        return models.QuerySet.filter(
+            _StickyQuerySet(model=_CtTarget, using=qs.db),
+            name="visible",
+        )
 
     registry.clear()
     parent_type = _register_ct_pair(_hostile_hook)
-    with pytest.raises(ConfigurationError, match="preserved cached rows for the cascade subquery"):
+    result = apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
+    assert "visible" in str(result.query)  # the sealed target predicate reached the subquery
+    assert _cascade_state.get() is None
+
+
+@pytest.mark.django_db(transaction=True)
+def test_hostile_values_override_end_to_end_is_neutralized_by_sealing():
+    """A target hook overriding ``_values`` cannot keep a parent whose target is hidden.
+
+    ``QuerySet.values()`` delegates to ``self._values(...)``; the cascade re-projects
+    the sealed target queryset to the FK's target column via ``.values(attname)``. A
+    hook returning a subclass whose ``_values`` re-projects the FULL unfiltered target
+    set would (if dispatched) compose ``target_id IN (SELECT <all ids>)`` and keep the
+    hidden-target parent. The seal rebuilds a plain ``QuerySet`` from the validated
+    query state, so the override never runs: the parent pointing at the hidden target
+    is filtered out end-to-end. Real visible/hidden rows make the assertion non-vacuous.
+    """
+
+    class _ValuesEraser(models.QuerySet):
+        def _values(self, *fields, **expressions):  # re-projects the UNFILTERED set
+            return models.QuerySet._values(_CtTarget.objects.all(), *fields, **expressions)
+
+    def _hostile_hook(cls, qs, info):
+        return models.QuerySet.filter(
+            _ValuesEraser(model=_CtTarget, using=qs.db),
+            name="visible",
+        )
+
+    with _tables(_CtTarget, _CtParent):
+        parent_type = _register_ct_pair(_hostile_hook)
+
+        visible = _CtTarget.objects.create(name="visible")
+        hidden = _CtTarget.objects.create(name="hidden")
+        keeps = _CtParent.objects.create(name="keeps", target=visible)
+        _CtParent.objects.create(name="drops", target=hidden)
+
+        result = apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
+        # The sealed re-projection binds only the visible target id; the hidden-target
+        # parent drops. A dispatched ``_values`` override would have kept it.
+        assert sorted(result.values_list("name", flat=True)) == ["keeps"]
+        assert keeps in result
+        assert _cascade_state.get() is None
+
+
+def test_unsealable_hook_query_class_fails_closed_with_cascade_prose():
+    """A hook returning a foreign ``Query`` class fails closed with path-rich cascade prose.
+
+    Where sealing is impossible (a foreign ``Query`` subclass cannot be
+    faithfully rebuilt into a framework-owned execution queryset) the cascade
+    fails closed with the ``untrusted`` defect, routed through the per-edge
+    renderer so the prose stays path-rich.
+    """
+    from django.db.models import sql
+
+    class _ForeignQuery(sql.Query):
+        pass
+
+    def _hostile_hook(cls, qs, info):
+        target = _CtTarget.objects.filter(name="visible").using(qs.db)
+        target._query = _ForeignQuery(_CtTarget)
+        return target
+
+    registry.clear()
+    parent_type = _register_ct_pair(_hostile_hook)
+    with pytest.raises(
+        ConfigurationError,
+        match="cannot be sealed into a framework-owned execution queryset.*for the cascade subquery",
+    ):
         apply_cascade_permissions(parent_type, _CtParent.objects.all(), _INFO)
     assert _cascade_state.get() is None
 

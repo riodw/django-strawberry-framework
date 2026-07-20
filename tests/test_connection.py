@@ -31,6 +31,7 @@ import strawberry
 from apps.kanban.models import Status
 from apps.products import services
 from apps.products.models import Category, Item
+from django.db import models
 from django.db.models import F
 from django.http import HttpRequest
 from graphql import GraphQLError
@@ -1068,6 +1069,36 @@ async def test_connection_sync_resolver_returning_coroutine_raises_sync_misuse()
     assert result.data is None
 
 
+async def test_connection_async_resolver_resolving_to_residual_awaitable_fails_closed():
+    """An async connection resolver resolving to a SECOND awaitable fails closed before visibility.
+
+    ``_build_connection_resolver``'s async branch awaits the consumer resolver
+    once; a value that is STILL awaitable after that await is a nested async
+    resolver whose inner awaitable would otherwise pass the non-queryset sidecar
+    guard and skip ``get_queryset`` entirely. This is the connection twin of the
+    list field's ``reject_residual_async_source`` guard - the bug it closes
+    survived precisely because only the list helper had a unit test. Exercised at
+    a real ``DjangoConnectionField`` with NO sidecar input (the bypass shape),
+    so the residual-awaitable guard, not the sidecar guard, is what rejects it.
+    """
+    node_type = _make_sidecar_node_type("ResidualAsyncConnNode")
+
+    async def _inner() -> Iterable:
+        return []
+
+    async def _async_resolver_returning_awaitable(root, info) -> Iterable:
+        return _inner()  # resolves (after one await) to ANOTHER coroutine
+
+    schema = _field_schema(node_type, resolver=_async_resolver_returning_awaitable)
+    result = await schema.execute("{ items { edges { node { id } } } }")
+
+    assert result.errors is not None
+    assert len(result.errors) == 1
+    assert isinstance(result.errors[0].original_error, ConfigurationError)
+    assert "silently skip the get_queryset visibility hook" in str(result.errors[0])
+    assert result.data is None
+
+
 # =============================================================================
 # Slice 3 - optimizer cooperation point + connection-aware-planning gap guard
 # =============================================================================
@@ -1526,3 +1557,243 @@ def test_consumer_resolver_pre_sliced_queryset_raises_clear_error():
     assert not any("Cannot reorder a query once a slice has been taken" in m for m in messages)
     # ...it is replaced by the connection's clear pre-sliced guard.
     assert any("already-sliced" in m for m in messages)
+
+
+# =============================================================================
+# Sealed-execution boundary at the connection surface (docs/feedback.md P1).
+# A hostile hook-return SUBCLASS whose overrides would erase the visibility
+# predicate or synthesize rows is neutralized by sealing: edges carry only the
+# visible rows and totalCount counts only the visible rows, sync AND async. Each
+# test asserts WHICH ROWS SURVIVE, and the seeding makes visible != raw so the
+# assertions are not vacuous.
+# =============================================================================
+
+
+class _HostileConnQuerySet(models.QuerySet):
+    """A predicate-erasing / synthetic-count ``QuerySet`` subclass.
+
+    Every override would widen the result if the framework dispatched through the
+    consumer object: ``.filter()`` / ``.order_by()`` drop all narrowing, slicing
+    returns the unfiltered rows, and ``.count()`` / ``.acount()`` report the raw
+    table count. The seal rebuilds a plain ``QuerySet`` from the validated query
+    state, so none of these run.
+    """
+
+    def filter(self, *args, **kwargs):
+        return Category.objects.all()
+
+    def order_by(self, *args, **kwargs):
+        return Category.objects.all()
+
+    def __getitem__(self, item):
+        return list(Category.objects.all().order_by("pk"))[item]
+
+    def count(self):
+        return Category.objects.count()
+
+    async def acount(self):
+        return await Category.objects.acount()
+
+
+def _hostile_visibility_hook(cls, qs, info):
+    """Return the hostile subclass carrying a genuine ``is_private=False`` predicate."""
+    return models.QuerySet.filter(_HostileConnQuerySet(model=Category), is_private=False)
+
+
+def _seed_public_private_categories() -> list[str]:
+    """Create two public + one private ``Category``; return the ordered public names."""
+    public_a = Category.objects.create(name="public_a", is_private=False)
+    public_b = Category.objects.create(name="public_b", is_private=False)
+    Category.objects.create(name="private_x", is_private=True)
+    return [public_a.name, public_b.name]
+
+
+@pytest.mark.django_db
+def test_connection_hostile_hook_narrows_edges_and_total_count_sync():
+    """A hostile-subclass hook through ``DjangoConnectionField`` narrows edges + totalCount (sync)."""
+    public_names = _seed_public_private_categories()
+    node_type = _make_sidecar_node_type(
+        "HostileConnNode",
+        total_count=True,
+        filterset=None,
+        orderset=None,
+        get_queryset=_hostile_visibility_hook,
+    )
+    schema = _field_schema(node_type)
+    result = schema.execute_sync(
+        "{ items { edges { node { name } } totalCount } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is None
+    conn = result.data["items"]
+    assert [edge["node"]["name"] for edge in conn["edges"]] == public_names
+    assert conn["totalCount"] == len(public_names)  # only the visible rows, not the raw 3
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_connection_hostile_hook_narrows_edges_and_total_count_async():
+    """Async twin: the hostile ``.acount()`` / slicing overrides are sealed away too."""
+    from asgiref.sync import sync_to_async
+
+    public_names = await sync_to_async(_seed_public_private_categories)()
+    node_type = _make_sidecar_node_type(
+        "AsyncHostileConnNode",
+        total_count=True,
+        filterset=None,
+        orderset=None,
+        get_queryset=_hostile_visibility_hook,
+    )
+    schema = await sync_to_async(_field_schema)(node_type)
+    result = await schema.execute("{ items { edges { node { name } } totalCount } }")
+    assert result.errors is None
+    conn = result.data["items"]
+    assert [edge["node"]["name"] for edge in conn["edges"]] == public_names
+    assert conn["totalCount"] == len(public_names)
+
+
+@pytest.mark.django_db
+def test_connection_instance_shadowed_all_hook_is_sealed():
+    """A hook returning a PLAIN queryset with an instance-shadowed ``.all()`` is sealed.
+
+    The seal reads the queryset's state from ``__dict__`` via
+    ``object.__getattribute__``, never through attribute access, so an instance
+    attribute ``all`` shadowing the method (which would drop the predicate if the
+    framework called ``.all()``) cannot lie or run: only the visible rows are served.
+    """
+    public_names = _seed_public_private_categories()
+
+    def _shadowed_all_hook(cls, qs, info):
+        source = Category.objects.filter(is_private=False)
+        source.all = lambda: Category.objects.all()  # instance shadow (predicate-dropping)
+        return source
+
+    node_type = _make_sidecar_node_type(
+        "ShadowAllConnNode",
+        filterset=None,
+        orderset=None,
+        get_queryset=_shadowed_all_hook,
+    )
+    schema = _field_schema(node_type)
+    result = schema.execute_sync(
+        "{ items { edges { node { name } } } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is None
+    assert [edge["node"]["name"] for edge in result.data["items"]["edges"]] == public_names
+
+
+@pytest.mark.django_db
+def test_connection_query_chain_shadow_hook_is_sealed():
+    """A hook whose ``query.chain`` is instance-replaced FAILS CLOSED (docs/feedback.md P1-1).
+
+    ``sql.Query.clone`` shallow-copies the source ``Query.__dict__``, so an
+    instance ``chain`` shadow would ride into the sealed query and dispatch on the
+    connection's first post-seal transform (ordering / slicing), erasing the
+    predicate. The structural no-shadow check rejects the query at the boundary, so
+    the connection surface raises the typed error rather than serving widened rows.
+    """
+    _seed_public_private_categories()
+
+    def _shadowed_chain_hook(cls, qs, info):
+        source = Category.objects.filter(is_private=False)
+        unfiltered = Category.objects.all().query
+        source.query.chain = lambda *args, **kwargs: unfiltered  # instance shadow
+        return source
+
+    node_type = _make_sidecar_node_type(
+        "ChainShadowConnNode",
+        filterset=None,
+        orderset=None,
+        get_queryset=_shadowed_chain_hook,
+    )
+    schema = _field_schema(node_type)
+    result = schema.execute_sync(
+        "{ items { edges { node { name } } } }",
+        context_value=HttpRequest(),
+    )
+    assert result.errors is not None
+    assert "cannot be sealed" in result.errors[0].message
+
+
+# --- Manager failure propagation at the connection surface -------------------
+
+
+class _ListManager(models.Manager):
+    """A hostile Manager whose ``.all()`` degrades into a plain list (a bypass shape)."""
+
+    def all(self):
+        return ["secret"]
+
+
+def _degrading_manager() -> models.Manager:
+    """An unrouted ``_ListManager`` bound to ``Category``."""
+    manager = _ListManager()
+    manager.model = Category
+    manager._db = None
+    return manager
+
+
+class _DriftManager(models.Manager):
+    """A Manager pinned to one alias whose ``.all()`` silently routes to another."""
+
+    def get_queryset(self):
+        return Category.objects.using("elsewhere")
+
+
+def _alias_drift_manager() -> models.Manager:
+    """A ``_DriftManager`` pinned to ``other`` whose ``.all()`` drifts to ``elsewhere``."""
+    manager = _DriftManager()
+    manager.model = Category
+    manager._db = "other"
+    return manager
+
+
+@pytest.mark.django_db
+def test_connection_resolver_manager_degrading_to_list_fails_closed():
+    """A consumer resolver returning a Manager that degrades to a list fails closed (sync)."""
+
+    def resolver(root, info) -> Iterable:
+        return _degrading_manager()
+
+    schema = _field_schema(
+        _make_sidecar_node_type("MgrDegradeConnNode", filterset=None, orderset=None),
+        resolver=resolver,
+    )
+    result = schema.execute_sync("{ items { edges { node { id } } } }")
+    assert result.errors is not None
+    assert any("must produce a QuerySet" in str(err.message) for err in result.errors)
+
+
+@pytest.mark.django_db
+def test_connection_resolver_manager_alias_drift_fails_closed():
+    """A consumer resolver returning a Manager whose ``.all()`` drifts alias fails closed (sync)."""
+
+    def resolver(root, info) -> Iterable:
+        return _alias_drift_manager()
+
+    schema = _field_schema(
+        _make_sidecar_node_type("MgrDriftConnNode", filterset=None, orderset=None),
+        resolver=resolver,
+    )
+    result = schema.execute_sync("{ items { edges { node { id } } } }")
+    assert result.errors is not None
+    assert any(
+        "preserve the manager's explicit routing" in str(err.message) for err in result.errors
+    )
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_connection_resolver_manager_degrading_to_list_fails_closed_async():
+    """Sync/async parity: the Manager-degrade failure propagates on the async path too."""
+    from asgiref.sync import sync_to_async
+
+    async def resolver(root, info) -> Iterable:
+        return _degrading_manager()
+
+    schema = await sync_to_async(_field_schema)(
+        _make_sidecar_node_type("AsyncMgrDegradeConnNode", filterset=None, orderset=None),
+        resolver=resolver,
+    )
+    result = await schema.execute("{ items { edges { node { id } } } }")
+    assert result.errors is not None
+    assert any("must produce a QuerySet" in str(err.message) for err in result.errors)

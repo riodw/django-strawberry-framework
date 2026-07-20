@@ -1,0 +1,49 @@
+term,anchor,notes
+`DjangoType`,djangotype,core read-side surface; carries the surviving alpha constraint dispositioned in Slice 4
+`finalize_django_types`,finalize_django_types,used in the built-artifact smoke schema build
+`DjangoOptimizerExtension`,djangooptimizerextension,doc cross-check subject
+`DjangoConnectionField`,djangoconnectionfield,Relay parity surface
+`DjangoNodeField`,djangonodefield,Relay refetch parity surface
+`DjangoNodesField`,djangonodesfield,Relay batch refetch parity surface
+`DjangoListField`,djangolistfield,non-Relay list parity surface
+Relay Node integration,relay-node-integration,parity-audit surface family
+`FilterSet`,filterset,query-side sidecar counted toward parity
+`OrderSet`,orderset,query-side sidecar counted toward parity
+`DjangoMutation`,djangomutation,write flavor 1
+`DjangoFormMutation`,djangoformmutation,write flavor (plain Form)
+`DjangoModelFormMutation`,djangomodelformmutation,write flavor (ModelForm)
+`SerializerMutation`,serializermutation,write flavor (DRF)
+Auth mutations,auth-mutations,session-auth parity block
+`FieldError`,fielderror-envelope,shared error envelope named in glossary refs
+`Upload`,upload-scalar,file/image wire contract
+`DjangoFileType`,djangofiletype,file read output object
+`DjangoImageType`,djangoimagetype,image read output object
+`DjangoGraphQLProtocolRouter`,djangographqlprotocolrouter,0.0.14 joint-cut surface
+Debug-toolbar middleware,debug-toolbar-middleware,0.0.14 joint-cut surface
+`TestClient`,testclient,0.0.14 joint-cut surface
+`GraphQLTestCase`,graphqltestcase,0.0.14 joint-cut surface
+Response-extensions debug middleware,response-extensions-debug-middleware,0.0.14 joint-cut capability name
+`DjangoDebugExtension`,djangodebugextension,extracted by card 045 before this card runs
+Visibility boundary,visibility-boundary,hardened permission seam re-verified by doc cross-check
+Sealed execution queryset,sealed-execution-queryset,hardened permission seam re-verified by doc cross-check
+`apply_cascade_permissions`,apply_cascade_permissions,cascade permissions surface
+Joint version cut,joint-version-cut,release rule; lone card owns the cut here
+Soft dependency,soft-dependency,import innocence must hold on the published wheel
+Hard dependency,hard-dependency,dependency posture vocabulary
+`require_optional_module`,require_optional_module,optional-import guard preserved by the artifact smoke
+Live-first coverage mandate,live-first-coverage-mandate,test-placement discipline cited by the test plan
+Strictness mode,strictness-mode,verification-tier vocabulary
+Plan cache,plan-cache,verification-tier vocabulary
+Schema audit,schema-audit,verification-tier vocabulary
+Cookbook parity,cookbook-parity,parity-audit discipline for migration claims
+Single-upstream parity,single-upstream-parity,parity-audit discipline for one-upstream surfaces
+Cross-subsystem invariants,cross-subsystem-invariants,1.0.0-scoped goals the beta docs must not claim early
+`FieldSet`,fieldset,beta-line 0.1.1 surface kept planned
+`Meta.fields_class`,metafields_class,beta-line 0.1.1 key kept planned
+`Meta.search_fields`,metasearch_fields,beta-line 0.1.2 key kept planned
+`AggregateSet`,aggregateset,beta-line 0.1.3 surface kept planned
+`Meta.aggregate_class`,metaaggregate_class,beta-line 0.1.3 key kept planned
+`Meta.choice_enum_names`,metachoice_enum_names,beta-line 0.1.4 key kept planned
+`ConfigurationError`,configurationerror,raise type of surviving constraints
+`BigInt`,bigint-scalar,named in the Decision 7 wire-break callout
+`GlobalID`,relay-node-integration,model-anchored default named in the Decision 7 wire-break callout

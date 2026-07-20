@@ -1,0 +1,36 @@
+term,anchor,notes
+`FieldSet`,fieldset,the surface this card ships; planned for 0.1.1
+`Meta.fields_class`,metafields_class,promoted from DEFERRED_META_KEYS by this card
+Per-field permission hooks,per-field-permission-hooks,check_<field>_permission read gates; signature pinned by spec-034 Decision 2
+`DjangoType`,djangotype,owning type whose resolver chain the FieldSet customizes
+`Meta.fields`,metafields,stays the single source of truth for surfaced model fields (Decision 6)
+`Meta.exclude`,metaexclude,named alongside Meta.fields in the schema-shape Non-goal
+`Meta.model`,metamodel,required FieldSet Meta key
+`finalize_django_types`,finalize_django_types,phase-2.5 window hosting _bind_fieldsets
+`Meta.filterset_class`,metafilterset_class,binding-precedent surface the wiring mirrors
+`Meta.orderset_class`,metaorderset_class,binding-precedent surface the wiring mirrors
+`FilterSet`,filterset,composability counterpart; input-gate signature contrast
+`OrderSet`,orderset,composability counterpart
+`DjangoConnectionField`,djangoconnectionfield,card dependency DONE-030-0.0.9; FieldSet composes on top
+`DjangoListField`,djangolistfield,wrapping applies identically under list surface
+Relay Node integration,relay-node-integration,wrapping applies identically under Node refetch
+`apply_cascade_permissions`,apply_cascade_permissions,cascade-first composition (Decision 9)
+`get_queryset` visibility hook,get_queryset-visibility-hook,row-level visibility orthogonal to field-level behavior
+`DjangoOptimizerExtension`,djangooptimizerextension,the planner Meta.depends_on feeds
+`only()` projection,only-projection,the projection Meta.depends_on widens (Decision 7)
+`Meta.optimizer_hints`,metaoptimizer_hints,shipped consumer-side projection-widening precedent
+`OptimizerHint`,optimizerhint,shipped consumer-side projection-widening precedent
+FK-id elision,fk-id-elision,must stay undisturbed for unmanaged fields
+Connection-aware optimizer planning,connection-aware-optimizer-planning,must stay undisturbed for unmanaged fields
+`ConfigurationError`,configurationerror,raise type for every new finalize-time validation
+`Meta.aggregate_class`,metaaggregate_class,stays in DEFERRED_META_KEYS
+`Meta.search_fields`,metasearch_fields,stays in DEFERRED_META_KEYS; card 049 owns it
+`AggregateSet`,aggregateset,remaining sidecar sibling (0.1.3)
+`Meta.choice_enum_names`,metachoice_enum_names,out-of-scope 0.1.4-line key
+Live-first coverage mandate,live-first-coverage-mandate,governs Slice 4 test placement
+Joint version cut,joint-version-cut,lone-card rule making this slice the 0.1.1 cut owner
+Cookbook parity,cookbook-parity,borrowing discipline for the recipes/fields.py migration claim
+Single-upstream parity,single-upstream-parity,borrowing posture: graphene-django cookbook line only
+`FieldError` envelope,fielderror-envelope,contrast only: mutation envelope vs read-side GraphQLError denial
+Schema audit,schema-audit,_audit_field_surface precedent for computed-field collision checks
+Definition-order independence,definition-order-independence,why binding defers to the finalizer (Decision 4)

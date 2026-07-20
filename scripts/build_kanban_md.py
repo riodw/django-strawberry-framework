@@ -9,8 +9,12 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-from _kanban_lib import cli_exit
-from build_kanban_html import configure_django, fetch_dashboard_data, version_tuple
+try:
+    from _kanban_lib import cli_exit
+    from build_kanban_html import configure_django, fetch_dashboard_data, version_tuple
+except ModuleNotFoundError:  # imported as ``scripts.build_kanban_md`` (repo root on path)
+    from scripts._kanban_lib import cli_exit
+    from scripts.build_kanban_html import configure_django, fetch_dashboard_data, version_tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "KANBAN.md"

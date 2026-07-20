@@ -18,12 +18,20 @@ from typing import Any
 
 # Re-exported for back-compat: build_kanban_md / build_glossary_md / build_tree_md /
 # check_alpha_parity import these names from this module.
-from _kanban_lib import (
-    cli_exit,
-    configure_django,
-    fetch_graphql_data,
-    version_tuple,
-)
+try:
+    from _kanban_lib import (
+        cli_exit,
+        configure_django,
+        fetch_graphql_data,
+        version_tuple,
+    )
+except ModuleNotFoundError:  # imported as ``scripts.build_kanban_html`` (repo root on path)
+    from scripts._kanban_lib import (
+        cli_exit,
+        configure_django,
+        fetch_graphql_data,
+        version_tuple,
+    )
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAKESHOP_ROOT = REPO_ROOT / "examples" / "fakeshop"

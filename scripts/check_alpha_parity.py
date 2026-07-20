@@ -23,7 +23,10 @@ from __future__ import annotations
 
 import sys
 
-from build_kanban_html import configure_django
+try:
+    from build_kanban_html import configure_django
+except ModuleNotFoundError:  # imported as ``scripts.check_alpha_parity`` (repo root on path)
+    from scripts.build_kanban_html import configure_django
 
 
 def main() -> int:

@@ -7,9 +7,14 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from _kanban_lib import cli_exit
-from build_kanban_html import configure_django, fetch_graphql_data
-from build_kanban_md import finalize_markdown
+try:
+    from _kanban_lib import cli_exit
+    from build_kanban_html import configure_django, fetch_graphql_data
+    from build_kanban_md import finalize_markdown
+except ModuleNotFoundError:  # imported as ``scripts.build_glossary_md`` (repo root on path)
+    from scripts._kanban_lib import cli_exit
+    from scripts.build_kanban_html import configure_django, fetch_graphql_data
+    from scripts.build_kanban_md import finalize_markdown
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_MD_PATH = REPO_ROOT / "docs" / "GLOSSARY.md"

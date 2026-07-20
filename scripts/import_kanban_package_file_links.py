@@ -14,7 +14,10 @@ from pathlib import Path
 # Sibling scripts/ import: reuse the single ``run_git`` implementation from the
 # tracked-path constants builder instead of duplicating it (mirrors the way
 # build_kanban_md imports helpers from build_kanban_html).
-from build_kanban_tracked_path_constants import ConstantsRenderError, run_git
+try:
+    from build_kanban_tracked_path_constants import ConstantsRenderError, run_git
+except ModuleNotFoundError:  # imported as ``scripts.import_kanban_package_file_links``
+    from scripts.build_kanban_tracked_path_constants import ConstantsRenderError, run_git
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAKESHOP_ROOT = REPO_ROOT / "examples" / "fakeshop"

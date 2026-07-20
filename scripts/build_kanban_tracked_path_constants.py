@@ -9,7 +9,10 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from _kanban_lib import run_git as _run_git
+try:
+    from _kanban_lib import run_git as _run_git
+except ModuleNotFoundError:  # imported as ``scripts.build_kanban_tracked_path_constants``
+    from scripts._kanban_lib import run_git as _run_git
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT = REPO_ROOT / "examples" / "fakeshop" / "apps" / "kanban" / "constants.py"

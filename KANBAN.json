@@ -1,6 +1,6 @@
 {
   "asOf": {
-    "generatedAt": "2026-07-20T19:11:56.537165+00:00",
+    "generatedAt": "2026-07-20T19:54:46.555742+00:00",
     "maxUpdatedDate": "2026-07-20T17:25:42.869268+00:00"
   },
   "blockingReferenceKindKeys": [
@@ -66722,17 +66722,6 @@
         "updatedDate": "2026-05-30T16:27:12.433248+00:00",
         "uuid": {
           "id": "180cbfe9-eef3-4b1f-bb6d-e4c0cba77f56"
-        }
-      },
-      {
-        "createdDate": "2026-05-30T16:27:12.433579+00:00",
-        "id": 9,
-        "key": "other",
-        "label": "Other",
-        "order": 8,
-        "updatedDate": "2026-05-30T16:27:12.433583+00:00",
-        "uuid": {
-          "id": "2b9b999f-9035-43f0-a1c6-519f5c3c4fef"
         }
       },
       {

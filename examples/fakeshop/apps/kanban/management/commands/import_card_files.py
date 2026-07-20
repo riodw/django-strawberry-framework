@@ -8,8 +8,8 @@ predicted to touch (unknown paths under an approved root become planned
 layer and replaces each card's linked file set exactly.
 
 This single command supersedes the former ``import_card_changed_files`` /
-``import_card_predicted_files`` pair (which are kept as thin deprecated aliases
-that pin ``--kind`` and the legacy JSON key). The merged JSON key is ``files``.
+``import_card_predicted_files`` pair (retired). The merged JSON key is
+``files``.
 
 Usage::
 

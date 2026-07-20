@@ -781,9 +781,7 @@ examples/fakeshop/    # A Django + Strawberry GraphQL example project that exerc
     │   ├── signals.py            # Kanban signal receivers: guards + side-table wiring only.
     │   └── management/    # Django management namespace for kanban tracked-path imports.
     │       └── commands/    # Kanban management commands for changed-file and predicted-path imports.
-    │           ├── import_card_changed_files.py  # manage.py import_card_changed_files - DEPRECATED alias of import_card_files.
-    │           ├── import_card_files.py  # manage.py import_card_files - replace kanban card package/path links.
-    │           └── import_card_predicted_files.py  # manage.py import_card_predicted_files - DEPRECATED alias of import_card_files.
+    │           └── import_card_files.py  # manage.py import_card_files - replace kanban card package/path links.
     ├── library/    # Library app exercising relation graphs, keyset connections, and live model/form/serializer mutations.
     │   ├── apps.py               # Django app configuration for the library acceptance app.
     │   ├── filters.py            # FilterSet declarations for the library acceptance app (Slice 4).
@@ -847,9 +845,7 @@ It is the database source for the root ``KANBAN.md`` export and ``KANBAN.html`` 
 It owns the board invariants rather than leaving them in importer scripts: card numbers, status placement, dependency edges, dependency prose, card references, and reusable BoardDoc prose are validated in app services/signals so every entry point behaves the same way.
 
 Management commands:
-- `manage.py import_card_changed_files` - DEPRECATED alias of import_card_files.
 - `manage.py import_card_files` - Replace kanban card package/path links.
-- `manage.py import_card_predicted_files` - DEPRECATED alias of import_card_files.
 
 `apps.library/`
 

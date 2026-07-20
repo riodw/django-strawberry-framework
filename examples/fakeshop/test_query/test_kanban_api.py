@@ -19,6 +19,7 @@ directly (not via the importer, so assertions stay independent of how the real
 
 import pytest
 from apps.glossary import models as glossary_models
+from apps.kanban import factories as kf
 from apps.kanban import models, services
 from graphql_client import assert_graphql_data as _assert_graphql_data
 from graphql_client import assert_graphql_success as _graphql_data
@@ -1009,6 +1010,9 @@ def test_ready_cards_over_http_excludes_done_and_blocked():
 def test_set_card_status_transition_selectable_from_card():
     """A ``CardTransition`` written by the service is selectable off its card."""
     seed = _seed_board()
+    # Ensure the maintainer actor exists: migration 0014 seeds it, but a prior
+    # transactional test can flush it (Django does not restore migration seeds).
+    kf.make_actor("maintainer")
     services.set_card_status(seed["conn"], "wip", actor="maintainer")
     _assert_graphql_data(
         """
@@ -1043,6 +1047,11 @@ def test_set_card_status_transition_selectable_from_card():
 @pytest.mark.django_db
 def test_query_seeded_actor_and_attempt_outcome_lookups_with_filter():
     """The migration-seeded worklog lookups are queryable with a RelatedFilter."""
+    # Re-assert the seed rows idempotently: migration 0014 creates them, but a
+    # prior transactional test can flush them (migration seeds are not restored).
+    kf.make_actor("maintainer")
+    kf.make_attempt_outcome("succeeded")
+    kf.make_verification_kind("coverage_gate")
     _assert_graphql_data(
         """
         query {
@@ -1063,12 +1072,14 @@ def test_query_seeded_actor_and_attempt_outcome_lookups_with_filter():
 def test_query_work_attempts_and_decisions_root_fields():
     """Root list fields for WorkAttempt and Decision expose their rows + filters."""
     seed = _seed_board()
-    actor = models.Actor.objects.get(key="maintainer")
+    # Ensure the seeded worklog lookups exist (a prior transactional test may
+    # have flushed migration 0014's seeds; Django does not restore them).
+    actor = kf.make_actor("maintainer")
     models.WorkAttempt.objects.create(
         card=seed["conn"],
         actor=actor,
         summary="first attempt",
-        outcome=models.AttemptOutcome.objects.get(key="succeeded"),
+        outcome=kf.make_attempt_outcome("succeeded"),
     )
     models.Decision.objects.create(
         card=seed["conn"],

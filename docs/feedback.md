@@ -232,7 +232,8 @@ regressions for `None`, a non-model object, and a branch missing its model.
 Affected documentation and tests:
 
 - [`docs/README.md`][docs-readme]
-- [`get_queryset-visibility-boundary-plan.md`][historical-note]
+- `get_queryset-visibility-boundary-plan.md` (root historical note, since retired;
+  recoverable from git history)
 - [`tests/utils/test_querysets.py`][queryset-tests]
 - [`tests/test_connection.py`][connection-tests]
 
@@ -345,8 +346,6 @@ at 100% coverage.
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
-
-[historical-note]: ../get_queryset-visibility-boundary-plan.md
 
 <!-- docs/ -->
 

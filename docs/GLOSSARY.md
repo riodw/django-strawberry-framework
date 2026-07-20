@@ -84,6 +84,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Auth mutations](#auth-mutations) | shipped (`0.0.13`) |
 | [`BigInt` scalar](#bigint-scalar) | shipped (`0.0.6`) |
 | [Bounded query-log rollover](#bounded-query-log-rollover) | shipped (`0.0.14`) |
+| [Callable shadow defect](#callable-shadow-defect) | shipped (`0.0.14`) |
 | [Channels request adapter](#channels-request-adapter) | shipped (`0.0.14`) |
 | [Choice enum generation](#choice-enum-generation) | shipped (`0.0.1`) |
 | [`ConfigurationError`](#configurationerror) | shipped (`0.0.1`) |
@@ -158,8 +159,10 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Per-field permission hooks](#per-field-permission-hooks) | planned for `0.1.1` |
 | [Per-operation extension isolation](#per-operation-extension-isolation) | shipped (`0.0.14`) |
 | [Plan cache](#plan-cache) | shipped (`0.0.3`) |
+| [Prefetch alias threading](#prefetch-alias-threading) | shipped (`0.0.14`) |
 | [Probe URLconf](#probe-urlconf) | shipped (repository test pattern) |
 | [Queryset diffing](#queryset-diffing) | shipped (`0.0.3`) |
+| [Prove-then-clone AST trust](#prove-then-clone-ast-trust) | shipped (`0.0.14`) |
 | [Reference-counted cursor coordinator](#reference-counted-cursor-coordinator) | shipped (`0.0.14`) |
 | [`RelatedAggregate`](#relatedaggregate) | planned for `0.1.3` |
 | [`RelatedFilter`](#relatedfilter) | shipped (`0.0.8`) |
@@ -178,6 +181,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [Schema export management command](#schema-export-management-command) | shipped (`0.0.7`) |
 | [Schema introspection management command](#schema-introspection-management-command) | shipped (`0.0.9`) |
 | [Schema reload discipline](#schema-reload-discipline) | shipped |
+| [Sealed execution queryset](#sealed-execution-queryset) | shipped (`0.0.14`) |
 | [`seed_data`](#seed_data) | shipped |
 | [`SerializerMutation`](#serializermutation) | shipped (`0.0.13`) |
 | [Single-upstream parity](#single-upstream-parity) | shipped |
@@ -190,6 +194,7 @@ Alphabetical lookup. Each row links to the entry; the status column reflects cur
 | [`TestClient`](#testclient) | shipped (`0.0.14`) |
 | [Django Trac #37064 hardening](#django-trac-37064-hardening) | shipped (`0.0.7`) |
 | [`Upload` scalar](#upload-scalar) | shipped (`0.0.11`) |
+| [Visibility boundary](#visibility-boundary) | shipped (`0.0.14`) |
 | [Cross-subsystem invariants](#cross-subsystem-invariants) | planned for 1.0.0 |
 | [`auto`-typed annotations](#auto-typed-annotations) | shipped (`0.0.9`) |
 
@@ -205,7 +210,7 @@ For readers exploring rather than looking up a specific term:
 - **Aggregation:** [`AggregateSet`](#aggregateset) · [`RelatedAggregate`](#relatedaggregate) · [`Meta.aggregate_class`](#metaaggregate_class) · [`get_child_queryset`](#get_child_queryset).
 - **Field selection:** [`FieldSet`](#fieldset) · [`Meta.fields_class`](#metafields_class).
 - **Search:** [`Meta.search_fields`](#metasearch_fields).
-- **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoModelPermission`](#djangomodelpermission) · [Per-field permission hooks](#per-field-permission-hooks) · [`request_from_info`](#request_from_info) · [Channels request adapter](#channels-request-adapter).
+- **Permissions:** [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions) · [`DjangoModelPermission`](#djangomodelpermission) · [Per-field permission hooks](#per-field-permission-hooks) · [`request_from_info`](#request_from_info) · [Channels request adapter](#channels-request-adapter) · [Visibility boundary](#visibility-boundary) · [Sealed execution queryset](#sealed-execution-queryset) · [Prove-then-clone AST trust](#prove-then-clone-ast-trust) · [Callable shadow defect](#callable-shadow-defect) · [Prefetch alias threading](#prefetch-alias-threading).
 - **Relay:** [Relay Node integration](#relay-node-integration) · [RELAY_GLOBALID_STRATEGY](#relay_globalid_strategy) · [`DjangoNodeField`](#djangonodefield) · [`DjangoNodesField`](#djangonodesfield) · [`DjangoConnectionField`](#djangoconnectionfield) · [`DjangoConnection`](#djangoconnection) · [`Meta.connection`](#metaconnection) · [`Meta.relation_shapes`](#metarelation_shapes) · [Connection-aware optimizer planning](#connection-aware-optimizer-planning) · [`SyncMisuseError`](#syncmisuseerror).
 - **List fields:** [`DjangoListField`](#djangolistfield) · [Relation handling](#relation-handling).
 - **Mutations:** [`DjangoMutation`](#djangomutation) · [`DjangoMutationField`](#djangomutationfield) · [`DjangoFormMutation`](#djangoformmutation) · [`DjangoModelFormMutation`](#djangomodelformmutation) · [`SerializerMutation`](#serializermutation) · [Input type generation](#input-type-generation) · [`FieldError` envelope](#fielderror-envelope) · [Auth mutations](#auth-mutations).
@@ -297,6 +302,14 @@ Consumers register `BigInt` via the [`strawberry_config`](#strawberry_config) fa
 The best-effort capture boundary created by Django's bounded `queries_log` deque. [`DjangoDebugExtension`](#djangodebugextension) snapshots each log's length, materializes the deque at teardown, and reads from `min(snapshot, current_length)`, so a reset or shortened log cannot raise. If a full deque rolls over while keeping the same length, however, a length snapshot cannot distinguish old rows from new rows and the operation may report some or none of its queries. Django's own `CaptureQueriesContext` has the same limitation. The default 9000-row limit makes this pathological, but the behavior is documented and tested rather than represented as exact capture.
 
 **See also:** [Django debug-cursor capture](#django-debug-cursor-capture) · [Debug SQL row](#debug-sql-row).
+
+## Callable shadow defect
+
+**Status:** shipped (`0.0.14`).
+
+A fail-closed rejection of any instance-`__dict__` key that names a callable class attribute on an otherwise-genuine Django node. Python methods are non-data descriptors, so an instance-`__dict__` entry named after a class method (`chain`, `clone`, `as_sql`, a dynamically-resolved per-vendor `as_<vendor>` emitter, or any other) wins over the genuine method even when the node's type is exactly the expected Django class, and would dispatch during `sql.Query.clone` or at compile time to strip the visibility predicate or return synthetic rows. The check reads straight from `__dict__` so the shadow cannot hide itself, runs only after the node's type is proven genuine, and rejects the vendor-prefix emitters before the generic callable check (a mixin-provided `as_sqlite` is still dispatched through the compiler's dynamic `getattr(node, "as_" + connection.vendor, node.as_sql)` lookup). A non-string `__dict__` key is itself anomalous and fails closed. Implemented by `_shadow_defect` in `django_strawberry_framework/utils/querysets.py`.
+
+**See also:** [prove-then-clone AST trust](#prove-then-clone-ast-trust) · [sealed execution queryset](#sealed-execution-queryset).
 
 ## Channels request adapter
 
@@ -1267,6 +1280,14 @@ Properties:
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Queryset diffing](#queryset-diffing) · [FK-id elision](#fk-id-elision).
 
+## Prefetch alias threading
+
+**Status:** shipped (`0.0.14`).
+
+The rule that seals a `Prefetch` child queryset onto the same database alias as its parent so one GraphQL resolution never spans two connections. Every `Prefetch` — including the `queryset=None` case — is rebuilt as an EXACT `django.db.models.Prefetch` (only the exact-`str` / `None` path state is copied) so a consumer `Prefetch` subclass cannot survive with a `get_current_querysets` override that substitutes an unsealed child at fetch time; non-`Prefetch` lookups must be exactly `str`. Each inner queryset is recursively [sealed](#sealed-execution-queryset) with the outer effective alias threaded in under `require_shared_alias`: a child explicitly routed off a DIFFERENT alias fails closed, and when the parent is UNROUTED (effective alias `None`) an explicitly routed child also fails closed while an unrouted child inherits the parent alias. The child seal allows a sliced top-N-per-parent prefetch queryset (`allow_sliced=True`) because nothing refilters it. Implemented by `_rebuilt_prefetch_or_defect` and `_sealed_prefetch_related_lookups` in `django_strawberry_framework/utils/querysets.py`.
+
+**See also:** [sealed execution queryset](#sealed-execution-queryset) · [visibility boundary](#visibility-boundary).
+
 ## Probe URLconf
 
 **Status:** shipped (repository test pattern).
@@ -1290,6 +1311,14 @@ Cooperation rules:
 - **`only()` cooperation.** If your resolver already calls `.only(...)` to enforce a column-level projection (e.g., a permission boundary that restricts which columns leave the database), the optimizer drops its own `only_fields` rather than chaining a second `.only(...)` that would replace yours — Django's `QuerySet.only(...).only(...)` replaces (not merges) the deferred-field set. `.defer(...)` is not treated as a consumer projection because `.defer()` and `.only()` compose cleanly in Django.
 
 **See also:** [`DjangoOptimizerExtension`](#djangooptimizerextension) · [Plan cache](#plan-cache) · [`OptimizerHint`](#optimizerhint).
+
+## Prove-then-clone AST trust
+
+**Status:** shipped (`0.0.14`).
+
+The rule that a candidate query's entire expression graph is proven trusted BEFORE it is cloned, because `sql.Query.clone` is not a no-dispatch operation — it shallow-copies the source `__dict__`, calls `self.where.clone()`, copies containers, and the compiler later dispatches each node's `as_sql`. Every compiler-reachable node (the `where` / `having` trees and their leaf operands, annotations incl. nested `Func` / `Case` operands and inner `Subquery` graphs, the `order_by` / `group_by` / `distinct` / `select` sequences, the `extra_order_by` / `extra_tables` raw-SQL slots, the `alias_map` joins and any `filtered_relation` condition, and `select_related`) must be an EXACT genuine Django type — proven by OBJECT IDENTITY against `sys.modules[module].<qualname>`, never the spoofable `__module__` string — that carries no [callable shadow](#callable-shadow-defect), no non-`str` SQL-template metadata, and whose containers are exact builtins. Consumer-defined expressions / lookups are NOT supported across the boundary; anything unproven fails closed as `untrusted`. Implemented by `_type_is_genuinely_django`, `_expr_graph_defect`, and `_query_ast_defect` in `django_strawberry_framework/utils/querysets.py`.
+
+**See also:** [sealed execution queryset](#sealed-execution-queryset) · [callable shadow defect](#callable-shadow-defect) · [visibility boundary](#visibility-boundary).
 
 ## Reference-counted cursor coordinator
 
@@ -1544,6 +1573,14 @@ The fakeshop suites' order-independence-by-reconstruction rule, single-sited in 
 
 The rule exists because package tests under root `tests/` call `registry.clear()` for isolation while `config.schema` composes every app's `Query` / `Mutation`: a partial (one-app) reload leaves the other apps unregistered, so the combined build raises a `LazyType` `KeyError` — or `DuplicatedTypeName` when a stale re-imported schema module survives in `sys.modules` — under collection orders that did not happen to pre-materialize the types. `pytest-xdist`'s `--dist loadscope` localizes the flake to whichever worker drew both files, which is why the reload must be complete and per-test rather than fixed by ordering. Every `test_query/` acceptance suite's autouse fixture delegates to the helper (via `test_query/conftest.py`); package tests that execute real GraphQL through fakeshop (e.g. the [Debug-toolbar middleware](#debug-toolbar-middleware) suite) call it on fixture setup, before any URLconf steps.
 
+## Sealed execution queryset
+
+**Status:** shipped (`0.0.14`).
+
+The framework-owned plain `django.db.models.QuerySet` the [visibility boundary](#visibility-boundary) rebuilds from a consumer source or `get_queryset` hook result. The consumer object is treated as untrusted query STATE: its `__dict__` is read through `object.__getattribute__` (no descriptor or `__getattribute__` can run code or lie), the query graph is validated, and a fresh `QuerySet` is constructed from the validated `sql.Query`, iterable class, routing, hints, and prefetch metadata. The consumer's subclass identity — its executable override dispatch, the leak vector — is deliberately dropped, and `_result_cache` / `_known_related_objects` are never copied forward, so no cached or synthetic row and no shadowed `.all()` / `.filter()` / `.first()` / `.__aiter__()` / `Query.chain` can cross the boundary. Implemented by `_seal_or_defect` in `django_strawberry_framework/utils/querysets.py`.
+
+**See also:** [visibility boundary](#visibility-boundary) · [prove-then-clone AST trust](#prove-then-clone-ast-trust) · [`get_queryset` visibility hook](#get_queryset-visibility-hook).
+
 ## `seed_data`
 
 **Status:** shipped.
@@ -1708,6 +1745,14 @@ Strawberry's built-in `Upload` scalar (`NewType("Upload", bytes)`), **re-exporte
 **See also:** [`DjangoFileType`](#djangofiletype) · [`DjangoImageType`](#djangoimagetype) · [`DjangoMutation`](#djangomutation).
 
 ---
+
+## Visibility boundary
+
+**Status:** shipped (`0.0.14`).
+
+The single hardened seam through which every framework-owned invocation of a type's [`get_queryset`](#get_queryset-visibility-hook) hook runs, so source preparation and result normalization live in one place rather than per resolver surface (Relay node defaults, connection root, list field, cascade, filter related-derive, optimizer walker). A `get_queryset` mistake is a data-leak bug, so the routing must not be re-decided per surface. Both the source (before the hook) and the hook result (after) are turned into a [sealed execution queryset](#sealed-execution-queryset); every non-sealable shape fails closed with a typed [`ConfigurationError`](#configurationerror) (or [`SyncMisuseError`](#syncmisuseerror) for an async hook in a sync context). The sync and async runners share the same preparation and normalization primitives so the two colored paths cannot drift. Implemented by `apply_type_visibility_sync` / `apply_type_visibility_async` in `django_strawberry_framework/utils/querysets.py`.
+
+**See also:** [sealed execution queryset](#sealed-execution-queryset) · [`get_queryset` visibility hook](#get_queryset-visibility-hook) · [`apply_cascade_permissions`](#apply_cascade_permissions).
 
 ## Cross-subsystem invariants
 

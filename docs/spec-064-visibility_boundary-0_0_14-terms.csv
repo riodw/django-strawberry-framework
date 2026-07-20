@@ -1,0 +1,10 @@
+term,anchor,notes
+Sealed execution queryset,sealed-execution-queryset,Authored with spec-064.
+Visibility boundary,visibility-boundary,Authored with spec-064.
+Prove-then-clone AST trust,prove-then-clone-ast-trust,Authored with spec-064.
+Callable shadow defect,callable-shadow-defect,Authored with spec-064.
+Prefetch alias threading,prefetch-alias-threading,Authored with spec-064.
+get_queryset visibility hook,get_queryset-visibility-hook,Existing term relinked.
+apply_cascade_permissions,apply_cascade_permissions,Existing term relinked.
+ConfigurationError,configurationerror,Existing term relinked.
+SyncMisuseError,syncmisuseerror,Existing term relinked.

@@ -510,12 +510,7 @@ The project hits the goal when a Django developer can:
 4. **Enforce row, field, and cascade permissions declaratively** — the same hook covers reads and writes.
 5. **Rely on automatic ORM optimization** — nested GraphQL selections get the right `select_related` / `prefetch_related` / `only()` plan from one selection-tree walk that cooperates with consumer-shaped querysets.
 6. **Write mutations declaratively from `ModelForm`, `ModelSerializer`, or auto-generated `Input` types** — one shared `errors: list[FieldError]` envelope across every flavor, plus `Upload` scalar for `FileField` / `ImageField`. The auto-generated `Input`-type flavor — including the `Upload` scalar and the `FileField` / `ImageField` → `Upload` mutation-input mapping — ships for generated `DjangoMutation` inputs in `0.0.11`; the `ModelForm` flavor (`DjangoModelFormMutation`, plus the plain-`Form` `DjangoFormMutation` sibling) ships in `0.0.12`; and the `ModelSerializer` flavor (`SerializerMutation`) ships in `0.0.13`.
-<!-- TODO(spec-044 Slice 2): Scope criterion 7's "only the import line
-changes" promise to Meta-driven domain declarations. Project-level engine
-configuration (schema extensions and the GRAPHENE settings block) migrates by
-the documented debug recipe: remove _debug + DjangoDebugMiddleware, add
-DjangoDebugExtension, and read response.extensions.debug. -->
-7. **Migrate from `graphene-django`, `strawberry-graphql-django`, `django-graphene-filters`, or DRF + `django-filter`** without bringing the source package along — the `Meta` mental model carries over; only the import line changes.
+7. **Migrate from `graphene-django`, `strawberry-graphql-django`, `django-graphene-filters`, or DRF + `django-filter`** without bringing the source package along — the `Meta` mental model carries over; only the import line changes. The import-only promise covers `Meta`-driven domain declarations; project-level engine configuration (a schema's `extensions=` list, the `GRAPHENE` settings block) migrates by documented recipe — for example, the `graphene-django` debug surface ports by removing `_debug` and `DjangoDebugMiddleware`, adding `DjangoDebugExtension` to the Strawberry schema's `extensions=` list, and reading `response.extensions.debug`.
 
 The project misses the goal if users must routinely hand-build the same schema machinery the package is supposed to generate.
 

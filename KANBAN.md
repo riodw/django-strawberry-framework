@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-07-16
+Last refreshed: 2026-07-20
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -81,11 +81,11 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**69.4% complete** toward `1.0.0` - 43 of 62 cards done (70.7% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**71.0% complete** toward `1.0.0` - 44 of 62 cards done (72.3% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
-| Alpha (pre-0.1.0) | 43/47 (91.5%) | 90.5% |
+| Alpha (pre-0.1.0) | 44/47 (93.6%) | 92.5% |
 | Beta (pre-1.0.0) | 0/14 (0.0%) | 0.0% |
 | Stable (post-1.0.0) | 0/1 (0.0%) | 0.0% |
 
@@ -95,7 +95,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 | Card | Spec file |
 | --- | --- |
-| `WIP-ALPHA-044-0.0.14` - Response-extensions debug middleware | [spec-044-debug_extension-0_0_14.md](docs/spec-044-debug_extension-0_0_14.md) |
+| `DONE-044-0.0.14` - Response-extensions debug middleware | [spec-044-debug_extension-0_0_14.md](docs/spec-044-debug_extension-0_0_14.md) |
 | `DONE-043-0.0.14` - Test client helper | [spec-043-test_client-0_0_14.md](docs/SPECS/spec-043-test_client-0_0_14.md) |
 | `DONE-042-0.0.14` - Debug-toolbar middleware | [spec-042-debug_toolbar-0_0_14.md](docs/SPECS/spec-042-debug_toolbar-0_0_14.md) |
 | `DONE-041-0.0.14` - Channels ASGI router (migration aid) | [spec-041-channels_router-0_0_14.md](docs/SPECS/spec-041-channels_router-0_0_14.md) |
@@ -142,75 +142,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## In progress
 
-Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts.
-
-<a id="response_extensions_debug_middleware"></a>
-### [WIP-ALPHA-044-0.0.14 - Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
-
-- Priority: Low
-- Parity: ⚛️ graphene-django (Required)
-- Status: WIP
-- Relative size: M
-- Labels: `debugging`, `graphql-api`, `middleware`
-- Spec: [spec-044-debug_extension-0_0_14.md](docs/spec-044-debug_extension-0_0_14.md)
-
-#### Predicted files
-
-- `django_strawberry_framework/extensions/debug.py` (planned)
-- `tests/extensions/` (planned)
-
-#### Definition of done
-
-- [ ] Implement `django_strawberry_framework/extensions/debug.py` as a Strawberry `SchemaExtension` that captures SQL and exceptions for the in-flight operation and attaches them to the response `extensions` map (key: `debug`).
-- [ ] Pin the **exposure mechanism** (response-`extensions` map vs. schema-level `_debug` field) and the **fidelity choice** (cursor-wrap port vs. `connection.queries`) in the spec; default both to the simpler choice (response-`extensions` map + `connection.queries`) unless the spec authoring round chooses otherwise.
-- [ ] Output shape mirrors graphene's `DjangoDebugSQL` / `DjangoDebugException` field names where the chosen fidelity supports them; document any shape narrowing (e.g., omitted Postgres-specific fields) explicitly.
-- [ ] Off by default; opt-in via the extensions list passed to `strawberry.Schema(...)`.
-- [ ] Tests under `tests/extensions/test_debug.py` against a fakeshop request that emits SQL.
-- [ ] Documented as the response-side counterpart to `DONE-042-0.0.14`.
-
-#### Files likely touched
-
-- `django_strawberry_framework/extensions/` (new)
-- `tests/extensions/` (new)
-
-#### Verified in upstream
-
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/__init__.py` — exports `DjangoDebugMiddleware`, `DjangoDebug`.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/middleware.py` — `DjangoDebugContext` (lifecycle around cursor wrapping, exception capture, accumulated debug object), `DjangoDebugMiddleware` (Graphene `resolve` middleware — see Architectural posture; wraps each field resolution and returns the accumulated debug object when the field's return type matches `DjangoDebug`).
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/types.py` — `class DjangoDebug(ObjectType)` with `sql: List(DjangoDebugSQL)` and `exceptions: List(DjangoDebugException)`.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/types.py` — `DjangoDebugSQL` shape: `vendor`, `alias`, `sql`, `duration`, `raw_sql`, `params`, `start_time`, `stop_time`, `is_slow`, `is_select`, plus Postgres-specific `trans_id`, `trans_status`, `iso_level`, `encoding`.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/types.py` — `DjangoDebugException` shape: `exc_type`, `message`, `stack`.
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/tracking.py` — thread-local cursor wrapping (`wrap_cursor`, `unwrap_cursor`, `NormalCursorWrapper`, `ExceptionCursorWrapper`, `ThreadLocalState`).
-- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/formating.py` — `wrap_exception` (serializes `exc_type`, `message`, `stack`).
-
-#### Architectural posture
-
-- **"Middleware" is overloaded here**: graphene-django's `DjangoDebugMiddleware` is a **Graphene field-resolver middleware** (a callable invoked around each `resolve(root, info, **args)`), not a Django request/response middleware. The card title says "middleware" because that's what the graphene side calls the same idea; our Strawberry-native shape is a `SchemaExtension` (operation-scoped), not a Django middleware. The file name `middleware.py` is preserved on the graphene side for parity with their naming; ours lives under `extensions/`.
-- **Exposure mechanism — pick one before writing the spec**:
-- graphene-django: **schema-level**. Consumers add a `_debug: DjangoDebug` field to their query and selectively pull `{ _debug { sql { duration } } }`. Pay-for-what-you-select.
-- Card's proposed Strawberry-native shape: **response-extensions-level**. Always emit the whole map under `extensions["debug"]` when the extension is enabled, or skip it entirely.
-- Both end up "in the GraphQL response," but the graphene shape gives consumers per-query selectivity at the cost of needing a schema field. The Strawberry-extension shape is simpler to wire and skips schema surface entirely.
-- **Fidelity tradeoff — pick one before writing the spec**:
-- **Port graphene's cursor wrapping** (`sql/tracking.py`): wraps `connection.cursor` per-thread so the wrapper sees `start_time` before `execute()` and computes precise `duration`, captures Postgres-specific `iso_level` / `encoding`, surfaces `is_slow` / `is_select` flags. Higher fidelity; requires thread-local state management and `enable_instrumentation` / `disable_instrumentation` lifecycle hooks tied to the extension's operation begin / end.
-- **Use `django.db.connection.queries`**: the SchemaExtension reads `connection.queries` at operation end and emits a smaller shape. Lower fidelity (relies on Django's existing logging — no Postgres-specific data, less precise timing). Trivially threadsafe; no cursor wrapping to manage.
-- **Thread-local state** (if porting the cursor wrap): `sql/tracking.py::ThreadLocalState` plus `enable_instrumentation` / `disable_instrumentation` are the lifecycle hooks. The SchemaExtension's `on_operation` (or equivalent) wraps `wrap_cursor` for the request and `unwrap_cursor` on teardown. Exception capture wires through the corresponding execution hooks similarly.
-
-#### Why it matters
-
-- `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `DONE-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive.
-- A Strawberry-native equivalent is a small `SchemaExtension` that captures SQL (through `django.db.connection.queries` or via a port of graphene's cursor-wrap mechanism — see Architectural posture) and exceptions and attaches the result to the response's `extensions` map.
-- `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `DONE-042-0.0.14`); this card is graphene-django parity only.
-
-#### Other
-
-- developer experience.
-- graphene-django ships an in-response `DjangoDebug` SQL/exception subsystem; strawberry-graphql-django ships none.
-- distinct from `DONE-042-0.0.14` (Django debug toolbar).
-- a Strawberry `SchemaExtension` that captures SQL + exceptions into `extensions['debug']`; one design choice between porting graphene's cursor-wrap and reading `connection.queries`. Single extension module + tests.
-
-#### Card references
-
-- Related: Documented as the response-side counterpart to `DONE-042-0.0.14`. -> `DONE-042-0.0.14` - Debug-toolbar middleware
+Cards actively being implemented — WIP is kept small (typically one or two) so work finishes before new work starts. No cards in progress.
 
 ## To Do - Alpha (0.1.0)
 
@@ -227,7 +159,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 #### Dependencies
 
-- `WIP-ALPHA-044-0.0.14` - Response-extensions debug middleware
+- `DONE-044-0.0.14` - Response-extensions debug middleware
 
 #### Scope
 
@@ -264,11 +196,11 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 #### Dependencies
 
-- Sequenced behind WIP-ALPHA-044-0.0.14: the extension must SHIP at 0.0.14 before it is extracted (extracting an unreleased feature would rewrite card 044 mid-flight). The whole card - not just the cut - waits for the 0.0.14 release. Within the card, Slice 2 is gated on Slice 1's published 0.1.0 artifact.
+- Sequenced behind DONE-044-0.0.14: the extension must SHIP at 0.0.14 before it is extracted (extracting an unreleased feature would rewrite card 044 mid-flight). The whole card - not just the cut - waits for the 0.0.14 release. Within the card, Slice 2 is gated on Slice 1's published 0.1.0 artifact.
 
 #### Card references
 
-- Dependency: `WIP-ALPHA-044-0.0.14` - Response-extensions debug middleware
+- Dependency: `DONE-044-0.0.14` - Response-extensions debug middleware
 
 <a id="boundary_hardening_and_system_wide_dry_squeeze"></a>
 ### [TODO-ALPHA-046-0.0.16 - Boundary hardening and system-wide DRY squeeze](KANBAN.html#boundary_hardening_and_system_wide_dry_squeeze)
@@ -281,7 +213,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 #### Dependencies
 
-- `WIP-ALPHA-044-0.0.14` - Response-extensions debug middleware
+- `DONE-044-0.0.14` - Response-extensions debug middleware
 - `TODO-ALPHA-045-0.0.15` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
 
 #### Scope
@@ -322,12 +254,12 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 #### Dependencies
 
-- Sequenced behind WIP-ALPHA-044-0.0.14: card 044 owns the `0.0.14` joint cut and its TODO anchors sit on the version-quintet sites; this card's Slice 5 (and its quintet anchors) wait until that cut lands.
+- Sequenced behind DONE-044-0.0.14: card 044 owns the `0.0.14` joint cut and its TODO anchors sit on the version-quintet sites; this card's Slice 5 (and its quintet anchors) wait until that cut lands.
 - Also sequenced behind TODO-ALPHA-045-0.0.15: the debug extraction ships `0.0.15` first and removes `extensions/debug.py`, so this card's import-linter leaf wording (contract 3) and its extras additions (Decision 5) build on the post-extraction tree - hold all slices until that card wraps.
 
 #### Card references
 
-- Dependency: `WIP-ALPHA-044-0.0.14` - Response-extensions debug middleware
+- Dependency: `DONE-044-0.0.14` - Response-extensions debug middleware
 - Dependency: `TODO-ALPHA-045-0.0.15` - Extract DjangoDebugExtension into the standalone django-strawberry-debug package
 
 <a id="beta_release_cleanup_verification_alpha_beta"></a>
@@ -345,7 +277,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 #### Definition of done
 
-- [ ] Every other Alpha card (`DONE-013-0.0.4` through `WIP-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`.
+- [ ] Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`.
 - [ ] Full test pass under each supported `(Python, Django, Strawberry)` combination.
 - [ ] Coverage stays at 100% for the package source tree.
 - [ ] Version bumped to `0.1.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
@@ -378,9 +310,9 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 #### Card references
 
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `WIP-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-013-0.0.4` - Real M2M coverage
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `WIP-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `WIP-ALPHA-044-0.0.14` - Response-extensions debug middleware
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `WIP-ALPHA-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method`
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-013-0.0.4` - Real M2M coverage
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-044-0.0.14` - Response-extensions debug middleware
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method`
 
 ## To Do - Beta (1.0.0)
 
@@ -1165,6 +1097,121 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 Shipped cards, newest first. Each retains its spec link, parity claims, and completion evidence; the WIP / DONE spec map indexes card to spec file.
 
+<a id="response_extensions_debug_middleware"></a>
+### [DONE-044-0.0.14 - Response-extensions debug middleware](KANBAN.html#response_extensions_debug_middleware)
+
+- Priority: Low
+- Parity: ⚛️ graphene-django (Required)
+- Status: Done
+- Relative size: M
+- Labels: `debugging`, `graphql-api`, `middleware`
+- Spec: [spec-044-debug_extension-0_0_14.md](docs/spec-044-debug_extension-0_0_14.md)
+
+#### Glossary terms
+
+| Term | Status |
+| --- | --- |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
+| [`DjangoDebugExtension`](docs/GLOSSARY.md#djangodebugextension) | shipped (`0.0.14`) |
+| [Strawberry extension lifecycle](docs/GLOSSARY.md#strawberry-extension-lifecycle) | shipped (`0.0.14`) |
+| [Per-operation extension isolation](docs/GLOSSARY.md#per-operation-extension-isolation) | shipped (`0.0.14`) |
+| [Debug payload availability](docs/GLOSSARY.md#debug-payload-availability) | shipped (`0.0.14`) |
+| [Response-extension merge semantics](docs/GLOSSARY.md#response-extension-merge-semantics) | shipped (`0.0.14`) |
+| [Django debug-cursor capture](docs/GLOSSARY.md#django-debug-cursor-capture) | shipped (`0.0.14`) |
+| [Reference-counted cursor coordinator](docs/GLOSSARY.md#reference-counted-cursor-coordinator) | shipped (`0.0.14`) |
+| [Bounded query-log rollover](docs/GLOSSARY.md#bounded-query-log-rollover) | shipped (`0.0.14`) |
+| [Async SQL-capture boundary](docs/GLOSSARY.md#async-sql-capture-boundary) | shipped (`0.0.14`) |
+| [Debug SQL row](docs/GLOSSARY.md#debug-sql-row) | shipped (`0.0.14`) |
+| [Debug exception row](docs/GLOSSARY.md#debug-exception-row) | shipped (`0.0.14`) |
+| [Masking-extension ordering](docs/GLOSSARY.md#masking-extension-ordering) | shipped (`0.0.14`) |
+| [Developer-only debug posture](docs/GLOSSARY.md#developer-only-debug-posture) | shipped (`0.0.14`) |
+| [Graphene debug migration](docs/GLOSSARY.md#graphene-debug-migration) | shipped (`0.0.14`) |
+| [Cookbook parity](docs/GLOSSARY.md#cookbook-parity) | planned through `1.0.0` |
+| [Probe URLconf](docs/GLOSSARY.md#probe-urlconf) | shipped (repository test pattern) |
+| [Hard dependency](docs/GLOSSARY.md#hard-dependency) | shipped |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
+| [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
+| [Channels request adapter](docs/GLOSSARY.md#channels-request-adapter) | shipped (`0.0.14`) |
+| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | shipped (`0.0.14`) |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
+| [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
+| [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
+| [Schema reload discipline](docs/GLOSSARY.md#schema-reload-discipline) | shipped |
+| [`seed_data`](docs/GLOSSARY.md#seed_data) | shipped |
+| [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
+| [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
+| [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
+| [Single-upstream parity](docs/GLOSSARY.md#single-upstream-parity) | shipped |
+| [Strictness mode](docs/GLOSSARY.md#strictness-mode) | shipped (`0.0.3`) |
+| [Plan cache](docs/GLOSSARY.md#plan-cache) | shipped (`0.0.3`) |
+| [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
+| [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
+| [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
+| [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
+| [Django Trac #37064 hardening](docs/GLOSSARY.md#django-trac-37064-hardening) | shipped (`0.0.7`) |
+| [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
+| [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
+
+#### Package files
+
+- [`django_strawberry_framework/extensions/debug.py`](django_strawberry_framework/extensions/debug.py)
+- [`tests/extensions/`](tests/extensions/)
+
+#### Definition of done
+
+- [ ] Implement `django_strawberry_framework/extensions/debug.py` as a Strawberry `SchemaExtension` that captures SQL and exceptions for the in-flight operation and attaches them to the response `extensions` map (key: `debug`).
+- [ ] Pin the **exposure mechanism** (response-`extensions` map vs. schema-level `_debug` field) and the **fidelity choice** (cursor-wrap port vs. `connection.queries`) in the spec; default both to the simpler choice (response-`extensions` map + `connection.queries`) unless the spec authoring round chooses otherwise.
+- [ ] Output shape mirrors graphene's `DjangoDebugSQL` / `DjangoDebugException` field names where the chosen fidelity supports them; document any shape narrowing (e.g., omitted Postgres-specific fields) explicitly.
+- [ ] Off by default; opt-in via the extensions list passed to `strawberry.Schema(...)`.
+- [ ] Tests under `tests/extensions/test_debug.py` against a fakeshop request that emits SQL.
+- [ ] Documented as the response-side counterpart to `DONE-042-0.0.14`.
+
+#### Files likely touched
+
+- `django_strawberry_framework/extensions/` (new)
+- `tests/extensions/` (new)
+
+#### Verified in upstream
+
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/__init__.py` — exports `DjangoDebugMiddleware`, `DjangoDebug`.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/middleware.py` — `DjangoDebugContext` (lifecycle around cursor wrapping, exception capture, accumulated debug object), `DjangoDebugMiddleware` (Graphene `resolve` middleware — see Architectural posture; wraps each field resolution and returns the accumulated debug object when the field's return type matches `DjangoDebug`).
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/types.py` — `class DjangoDebug(ObjectType)` with `sql: List(DjangoDebugSQL)` and `exceptions: List(DjangoDebugException)`.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/types.py` — `DjangoDebugSQL` shape: `vendor`, `alias`, `sql`, `duration`, `raw_sql`, `params`, `start_time`, `stop_time`, `is_slow`, `is_select`, plus Postgres-specific `trans_id`, `trans_status`, `iso_level`, `encoding`.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/types.py` — `DjangoDebugException` shape: `exc_type`, `message`, `stack`.
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/sql/tracking.py` — thread-local cursor wrapping (`wrap_cursor`, `unwrap_cursor`, `NormalCursorWrapper`, `ExceptionCursorWrapper`, `ThreadLocalState`).
+- `/Users/riordenweber/projects/django-graphene-filters/.venv/lib/python3.14/site-packages/graphene_django/debug/exception/formating.py` — `wrap_exception` (serializes `exc_type`, `message`, `stack`).
+
+#### Architectural posture
+
+- **"Middleware" is overloaded here**: graphene-django's `DjangoDebugMiddleware` is a **Graphene field-resolver middleware** (a callable invoked around each `resolve(root, info, **args)`), not a Django request/response middleware. The card title says "middleware" because that's what the graphene side calls the same idea; our Strawberry-native shape is a `SchemaExtension` (operation-scoped), not a Django middleware. The file name `middleware.py` is preserved on the graphene side for parity with their naming; ours lives under `extensions/`.
+- **Exposure mechanism — pick one before writing the spec**:
+- graphene-django: **schema-level**. Consumers add a `_debug: DjangoDebug` field to their query and selectively pull `{ _debug { sql { duration } } }`. Pay-for-what-you-select.
+- Card's proposed Strawberry-native shape: **response-extensions-level**. Always emit the whole map under `extensions["debug"]` when the extension is enabled, or skip it entirely.
+- Both end up "in the GraphQL response," but the graphene shape gives consumers per-query selectivity at the cost of needing a schema field. The Strawberry-extension shape is simpler to wire and skips schema surface entirely.
+- **Fidelity tradeoff — pick one before writing the spec**:
+- **Port graphene's cursor wrapping** (`sql/tracking.py`): wraps `connection.cursor` per-thread so the wrapper sees `start_time` before `execute()` and computes precise `duration`, captures Postgres-specific `iso_level` / `encoding`, surfaces `is_slow` / `is_select` flags. Higher fidelity; requires thread-local state management and `enable_instrumentation` / `disable_instrumentation` lifecycle hooks tied to the extension's operation begin / end.
+- **Use `django.db.connection.queries`**: the SchemaExtension reads `connection.queries` at operation end and emits a smaller shape. Lower fidelity (relies on Django's existing logging — no Postgres-specific data, less precise timing). Trivially threadsafe; no cursor wrapping to manage.
+- **Thread-local state** (if porting the cursor wrap): `sql/tracking.py::ThreadLocalState` plus `enable_instrumentation` / `disable_instrumentation` are the lifecycle hooks. The SchemaExtension's `on_operation` (or equivalent) wraps `wrap_cursor` for the request and `unwrap_cursor` on teardown. Exception capture wires through the corresponding execution hooks similarly.
+
+#### Why it matters
+
+- `graphene-django` ships a debug subsystem that exposes the executed SQL queries and raised exceptions for each GraphQL request via a `DjangoDebug` object. This is different from `DONE-042-0.0.14` (django-debug-toolbar SQL panel UI): graphene's mechanism is **inside the GraphQL response**, so frontend clients and Apollo DevTools can read it without the toolbar. Both mechanisms are useful and not mutually exclusive.
+- A Strawberry-native equivalent is a small `SchemaExtension` that captures SQL (through `django.db.connection.queries` or via a port of graphene's cursor-wrap mechanism — see Architectural posture) and exceptions and attaches the result to the response's `extensions` map.
+- `strawberry-graphql-django` ships **no** equivalent (no file references `connection.queries` and no `*debug*` module exists outside the toolbar middleware tracked by `DONE-042-0.0.14`); this card is graphene-django parity only.
+
+#### Other
+
+- developer experience.
+- graphene-django ships an in-response `DjangoDebug` SQL/exception subsystem; strawberry-graphql-django ships none.
+- distinct from `DONE-042-0.0.14` (Django debug toolbar).
+- a Strawberry `SchemaExtension` that captures SQL + exceptions into `extensions['debug']`; one design choice between porting graphene's cursor-wrap and reading `connection.queries`. Single extension module + tests.
+
+#### Card references
+
+- Related: Documented as the response-side counterpart to `DONE-042-0.0.14`. -> `DONE-042-0.0.14` - Debug-toolbar middleware
+
 <a id="test_client_helper"></a>
 ### [DONE-043-0.0.14 - Test client helper](KANBAN.html#test_client_helper)
 
@@ -1179,8 +1226,8 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 | Term | Status |
 | --- | --- |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
 | [`Upload` scalar](docs/GLOSSARY.md#upload-scalar) | shipped (`0.0.11`) |
 | [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
 | [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
@@ -1190,9 +1237,9 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [Schema reload discipline](docs/GLOSSARY.md#schema-reload-discipline) | shipped |
 | [`seed_data`](docs/GLOSSARY.md#seed_data) | shipped |
 | [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.14` |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.14` |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
 | [`FieldError` envelope](docs/GLOSSARY.md#fielderror-envelope) | shipped (`0.0.11`) |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
@@ -1269,22 +1316,22 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 | Term | Status |
 | --- | --- |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.14` |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.14` |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
 | [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
 | [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
 | [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
-| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | planned for `0.0.14` |
+| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | shipped (`0.0.14`) |
 | [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
 | [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
 | [Schema reload discipline](docs/GLOSSARY.md#schema-reload-discipline) | shipped |
 | [`seed_data`](docs/GLOSSARY.md#seed_data) | shipped |
 | [Single-upstream parity](docs/GLOSSARY.md#single-upstream-parity) | shipped |
 | [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
 | [`SerializerMutation`](docs/GLOSSARY.md#serializermutation) | shipped (`0.0.13`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
 | [Django `AppConfig`](docs/GLOSSARY.md#django-appconfig) | shipped (`0.0.7`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
@@ -1296,7 +1343,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 #### Package files
 
-- `django_strawberry_framework/middleware/debug_toolbar.py` (historical)
+- [`django_strawberry_framework/middleware/debug_toolbar.py`](django_strawberry_framework/middleware/debug_toolbar.py)
 
 #### Definition of done
 
@@ -1345,13 +1392,13 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 | Term | Status |
 | --- | --- |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
 | [Soft dependency](docs/GLOSSARY.md#soft-dependency) | shipped (`0.0.13`) |
 | [PEP 562 lazy export](docs/GLOSSARY.md#pep-562-lazy-export) | shipped (`0.0.13`) |
 | [Eviction-simulated absence](docs/GLOSSARY.md#eviction-simulated-absence) | shipped (`0.0.13`) |
-| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | planned for `0.0.14` |
+| [`require_optional_module`](docs/GLOSSARY.md#require_optional_module) | shipped (`0.0.14`) |
 | [`request_from_info`](docs/GLOSSARY.md#request_from_info) | shipped (`0.0.8`) |
-| [Channels request adapter](docs/GLOSSARY.md#channels-request-adapter) | planned for `0.0.14` |
+| [Channels request adapter](docs/GLOSSARY.md#channels-request-adapter) | shipped (`0.0.14`) |
 | [Joint version cut](docs/GLOSSARY.md#joint-version-cut) | shipped (`0.0.13`) |
 | [Live-first coverage mandate](docs/GLOSSARY.md#live-first-coverage-mandate) | shipped (`0.0.4`) |
 | [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
@@ -1363,10 +1410,10 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
 | [`DjangoModelPermission`](docs/GLOSSARY.md#djangomodelpermission) | shipped (`0.0.11`) |
 | [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.14` |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.14` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
 | [`DjangoOptimizerExtension`](docs/GLOSSARY.md#djangooptimizerextension) | shipped (`0.0.2`) |
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
 | [`SyncMisuseError`](docs/GLOSSARY.md#syncmisuseerror) | shipped (`0.0.5`) |
@@ -1453,9 +1500,9 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
 | [Definition-order independence](docs/GLOSSARY.md#definition-order-independence) | shipped (`0.0.4`) |
 | [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
 | [`FieldSet`](docs/GLOSSARY.md#fieldset) | planned for `0.1.1` |
 | [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
@@ -1520,7 +1567,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`get_queryset` visibility hook](docs/GLOSSARY.md#get_queryset-visibility-hook) | shipped (`0.0.1`) |
 | [Input type generation](docs/GLOSSARY.md#input-type-generation) | shipped (`0.0.11`) |
 | [Auth mutations](docs/GLOSSARY.md#auth-mutations) | shipped (`0.0.13`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
 | [`only()` projection](docs/GLOSSARY.md#only-projection) | shipped (`0.0.2`) |
 | [Scalar field conversion](docs/GLOSSARY.md#scalar-field-conversion) | shipped (`0.0.1`+) |
 | [Choice enum generation](docs/GLOSSARY.md#choice-enum-generation) | shipped (`0.0.1`) |
@@ -1634,7 +1681,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
 | [`OrderSet`](docs/GLOSSARY.md#orderset) | shipped (`0.0.8`) |
 | [`finalize_django_types`](docs/GLOSSARY.md#finalize_django_types) | shipped (`0.0.4`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
 
 #### Package files
 
@@ -1718,7 +1765,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 | [`Meta.required_overrides`](docs/GLOSSARY.md#metarequired_overrides) | shipped (`0.0.9`) |
 | [Scalar field override semantics](docs/GLOSSARY.md#scalar-field-override-semantics) | shipped (`0.0.6`) |
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
 | [`FilterSet`](docs/GLOSSARY.md#filterset) | shipped (`0.0.8`) |
 
 #### Package files
@@ -2270,8 +2317,8 @@ Strawberry port of graphene-django's `apply_cascade_permissions(cls, queryset, i
 | [`apply_cascade_permissions`](docs/GLOSSARY.md#apply_cascade_permissions) | shipped (`0.0.10`) |
 | [Per-field permission hooks](docs/GLOSSARY.md#per-field-permission-hooks) | planned for `0.1.1` |
 | [strawberry_config](docs/GLOSSARY.md#strawberry_config) | shipped (`0.0.7`) |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
 | [`safe_wrap_connection_method`](docs/GLOSSARY.md#safe_wrap_connection_method) | shipped (`0.0.7`) |
 | [Cross-subsystem invariants](docs/GLOSSARY.md#cross-subsystem-invariants) | planned for 1.0.0 |
 
@@ -3108,11 +3155,11 @@ planned; three independent slices that ship in any order. Card body counts as co
 | [`ConfigurationError`](docs/GLOSSARY.md#configurationerror) | shipped (`0.0.1`) |
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
 | [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.14` |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.14` |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
 
 #### Package files
 
@@ -3152,11 +3199,11 @@ planned; three independent slices that ship in any order. Card body counts as co
 | [`DjangoListField`](docs/GLOSSARY.md#djangolistfield) | shipped (`0.0.7`) |
 | [Schema export management command](docs/GLOSSARY.md#schema-export-management-command) | shipped (`0.0.7`) |
 | [Multi-database cooperation](docs/GLOSSARY.md#multi-database-cooperation) | shipped (`0.0.7`) |
-| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | planned for `0.0.14` |
-| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | planned for `0.0.14` |
-| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | planned for `0.0.14` |
-| [`TestClient`](docs/GLOSSARY.md#testclient) | planned for `0.0.14` |
-| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | planned for `0.0.14` |
+| [`DjangoGraphQLProtocolRouter`](docs/GLOSSARY.md#djangographqlprotocolrouter) | shipped (`0.0.14`) |
+| [Debug-toolbar middleware](docs/GLOSSARY.md#debug-toolbar-middleware) | shipped (`0.0.14`) |
+| [Response-extensions debug middleware](docs/GLOSSARY.md#response-extensions-debug-middleware) | shipped (`0.0.14`) |
+| [`TestClient`](docs/GLOSSARY.md#testclient) | shipped (`0.0.14`) |
+| [`GraphQLTestCase`](docs/GLOSSARY.md#graphqltestcase) | shipped (`0.0.14`) |
 
 #### Package files
 

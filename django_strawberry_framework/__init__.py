@@ -35,11 +35,10 @@ from .schema import DjangoMutationExecutionContext, DjangoSchema  # noqa: E402
 from .types import DjangoType, SyncMisuseError, finalize_django_types  # noqa: E402
 from .types.converters import DjangoFileType, DjangoImageType  # noqa: E402
 
-# TODO(spec-044 Slice 3): Move this to 0.0.14 with the joint-cut version
-# quintet. Do not import or root-export DjangoDebugExtension here: its public
+# Do not import or root-export DjangoDebugExtension here: its public
 # opt-in remains django_strawberry_framework.extensions.
 
-__version__ = "0.0.13"
+__version__ = "0.0.14"
 
 
 # The DRF-soft-dependency public names, resolved lazily by NAME through the shared

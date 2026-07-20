@@ -370,10 +370,6 @@ Products grows toward its `1.0.0` Relay shape as these unshipped surfaces land (
 - `Meta.aggregate_class` — aggregation (`0.1.3`)
 
 ## Shipped package capabilities not exercised by products
-<!-- TODO(spec-044 Slice 3): With the joint 0.0.14 cut, add shipped-tense
-entries here for the debug-toolbar middleware, TestClient/GraphQLTestCase
-family, and DjangoDebugExtension. Keep the existing Channels router entry;
-products deliberately exercises none of these project/test/debug surfaces. -->
 
 These ship today but products' model shapes don't reach them — most are demonstrated instead by the sibling apps: `library` covers `Meta.primary`, `Meta.exclude`, `Meta.name`, `Meta.description`, `Meta.connection` (`totalCount`), `DjangoListField`, `DjangoNodeField`, and `DjangoNodesField`; `scalars` covers `BigInt`, the JSON / UUID / Decimal / date / time conversions, the file/image read output, and the `Upload` scalar. The rest are covered by the package test suite (see [`docs/GLOSSARY.md`][glossary]):
 
@@ -386,6 +382,9 @@ These ship today but products' model shapes don't reach them — most are demons
 - **`Upload` scalar + file/image mapping** (shipped `0.0.11`) — the re-exported `Upload` scalar, the structured `DjangoFileType` / `DjangoImageType` read output, and the generated `DjangoMutation` `FileField` / `ImageField` → `Upload` mutation-input mapping. **Products** exercises the mutation-input half only — its `Item.attachment` `FileField` maps to the `Upload` scalar in the live `CreateItemWithFileViaForm` mutation, while `ItemType` exposes no file/image read output. The structured `DjangoFileType` / `DjangoImageType` output is demonstrated instead by the **`scalars` acceptance app**, via its `MediaSpecimen` model — live `/graphql/` tests in `examples/fakeshop/test_query/test_uploads_api.py` cover the read output objects, the default-nullable SDL shape, the empty-file object-`null` case, the `Upload` input SDL, and a real multipart upload. The synthetic-model package tests retain the storage-backend fault-injection / corrupt-image edges (unreachable from a live request). The broader products/fakeshop activation stays `TODO-BETA-053-0.1.5`. See [`docs/GLOSSARY.md#upload-scalar`][glossary-upload-scalar] / [`#djangofiletype`][glossary-djangofiletype] / [`#djangoimagetype`][glossary-djangoimagetype].
 - **Session-auth mutations** (shipped `0.0.13`) — the opt-in `login` / `logout` / `register` field factories and the `current_user` (`me`) query helper, imported from the `django_strawberry_framework.auth` submodule (never a package-root export). Products stays the canonical connections + write-flavor vehicle and declares no auth surface; the live demonstration is the sibling **`accounts` app** (`examples/fakeshop/apps/accounts/`), which builds a `UserType` over `auth.User` and wires `login` / `logout` / `register` / `me` onto its own schema — exercised over `/graphql/` by `examples/fakeshop/test_query/test_auth_api.py` (the login/session-cookie/logout round trip, register → login → `me`, the `"__all__"` wrong-credentials envelope, and the anonymous `me: null`). The permission-gate variants (exact denial strings, the `IsAuthenticated`-style `me` gate) live in the package suite under `tests/auth/`, unreachable from the AllowAny-default live surface. See [`docs/GLOSSARY.md#auth-mutations`][glossary-auth-mutations].
 - **Channels ASGI router** (`0.0.14`, `DONE-041`) — `DjangoGraphQLProtocolRouter`, imported from `django_strawberry_framework.routers` (a lazy PEP 562 submodule export, never a package-root export): a `channels.routing.ProtocolTypeRouter` subclass serving GraphQL on both HTTP and WebSocket in one import, with `AuthMiddlewareStack` (sessions + `scope["user"]` on both protocols) and the WebSocket `AllowedHostsOriginValidator` composed in — constructor-compatible with upstream `strawberry_django.routers.AuthGraphQLProtocolTypeRouter`, so a migrant changes exactly the import line. `channels` is the package's second **soft** dependency (after `djangorestframework`): importing the package or the submodule stays channels-free, and only symbol access raises the install-hint `ImportError`. Fakeshop runs WSGI-only with no `asgi.py`, so no example app demonstrates it; the tests live in `tests/test_routers.py` (the documented genuinely-unreachable-live case). See [`docs/GLOSSARY.md#djangographqlprotocolrouter`][glossary-djangographqlprotocolrouter].
+- **Debug-toolbar middleware** (`0.0.14`, `DONE-042`) — `DebugToolbarMiddleware`, imported from `django_strawberry_framework.middleware.debug_toolbar` (the leaf-module import is the opt-in boundary, never a package-root export): a subclass of the stock `debug_toolbar.middleware.DebugToolbarMiddleware` that teaches `django-debug-toolbar`'s SQL panel to see Strawberry `/graphql/` traffic — tagging Strawberry-view requests and injecting a `debugToolbar` panel payload into JSON operation responses. `django-debug-toolbar` is the package's third **soft** dependency (after `djangorestframework` and `channels`): importing the package stays toolbar-free, and only importing this leaf raises the install-hint `ImportError`. Products declares no development middleware; the live behavior is exercised over `/graphql/` by `examples/fakeshop/test_query/test_debug_toolbar_api.py`, with the package-tier mechanics in `tests/middleware/test_debug_toolbar.py`. See [`docs/GLOSSARY.md#debug-toolbar-middleware`][glossary-debug-toolbar-middleware].
+- **Test-client family** (`0.0.14`, `DONE-043`) — `TestClient` / `AsyncTestClient` and the `GraphQLTestMixin` / `GraphQLTestCase` unittest family, imported from `django_strawberry_framework.testing`: each drives Django's in-process test client against `/graphql/`, decodes the GraphQL response, and returns a typed `Response` carrying `errors` / `data` / `extensions` / the raw Django response, with a documented endpoint-selection precedence and multipart-upload support. It is a test-authoring tool rather than a schema surface, so products declares nothing for it; the family is exercised over `/graphql/` by `examples/fakeshop/test_query/test_client_api.py`, with the package-tier mechanics in `tests/testing/`. See [`docs/GLOSSARY.md#testclient`][glossary-testclient] / [`#graphqltestcase`][glossary-graphqltestcase].
+- **`DjangoDebugExtension`** (`0.0.14`, `DONE-044`) — a Strawberry `SchemaExtension`, imported from `django_strawberry_framework.extensions` and added to an aggregate schema's `extensions=` list (never a package-root export, one fresh instance per operation, requiring `strawberry-graphql>=0.316.0`): it captures a GraphQL operation's SQL (through Django's own debug cursor, one bracket per `connections.all()` alias) and raised resolver exceptions into the response's `extensions.debug` map — the Strawberry-native equivalent of graphene-django's `DjangoDebugMiddleware` / `_debug` field, never for an internet-facing production schema since it returns interpolated SQL and unmasked exception messages. Products' aggregate schema deliberately opts out; the live payload is exercised over `/graphql/` by `examples/fakeshop/test_query/test_debug_extension_api.py`, with the lifecycle mechanics in `tests/extensions/test_debug.py`. See [`docs/GLOSSARY.md#djangodebugextension`][glossary-djangodebugextension].
 
 <!-- LINK DEFINITIONS -->
 
@@ -397,6 +396,8 @@ These ship today but products' model shapes don't reach them — most are demons
 [glossary]: docs/GLOSSARY.md
 [glossary-apply-cascade-permissions]: docs/GLOSSARY.md#apply_cascade_permissions
 [glossary-auth-mutations]: docs/GLOSSARY.md#auth-mutations
+[glossary-debug-toolbar-middleware]: docs/GLOSSARY.md#debug-toolbar-middleware
+[glossary-djangodebugextension]: docs/GLOSSARY.md#djangodebugextension
 [glossary-djangofiletype]: docs/GLOSSARY.md#djangofiletype
 [glossary-djangoformmutation]: docs/GLOSSARY.md#djangoformmutation
 [glossary-djangographqlprotocolrouter]: docs/GLOSSARY.md#djangographqlprotocolrouter
@@ -404,12 +405,14 @@ These ship today but products' model shapes don't reach them — most are demons
 [glossary-djangomutation]: docs/GLOSSARY.md#djangomutation
 [glossary-djangonodefield]: docs/GLOSSARY.md#djangonodefield
 [glossary-djangonodesfield]: docs/GLOSSARY.md#djangonodesfield
+[glossary-graphqltestcase]: docs/GLOSSARY.md#graphqltestcase
 [glossary-metaconnection]: docs/GLOSSARY.md#metaconnection
 [glossary-metanullable_overrides]: docs/GLOSSARY.md#metanullable_overrides
 [glossary-metaprimary]: docs/GLOSSARY.md#metaprimary
 [glossary-metarelation_shapes]: docs/GLOSSARY.md#metarelation_shapes
 [glossary-scalar-field-override-semantics]: docs/GLOSSARY.md#scalar-field-override-semantics
 [glossary-serializermutation]: docs/GLOSSARY.md#serializermutation
+[glossary-testclient]: docs/GLOSSARY.md#testclient
 [glossary-upload-scalar]: docs/GLOSSARY.md#upload-scalar
 
 <!-- docs/SPECS/ -->

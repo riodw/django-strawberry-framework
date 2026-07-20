@@ -15,12 +15,22 @@ This project follows a milestone-style cadence during pre-`1.0.0`:
 - **Stable (`1.x.y`)** — strict [Semantic Versioning](https://semver.org/spec/v2.0.0.html) applies from this point forward: breaking changes require a MAJOR bump, additive changes require a MINOR bump, and bug-fix-only releases get a PATCH bump.
 
 See [`KANBAN.md`][kanban] for the per-card sequencing and the version scope of each patch.
-<!-- TODO(spec-044 Slice 3): Add the 0.0.14 release section only after all
-four cards' implementation and docs are complete. Cover the Channels router,
-debug-toolbar middleware, test-client family, and response-extensions debug
-extension; record the Strawberry >=0.316.0 floor and the version change.
-This anchor is the spec's explicit CHANGELOG edit grant, not permission to
-write the release early. -->
+
+## [0.0.14] - 2026-07-20
+
+The joint alpha cut of four surfaces — the Channels ASGI router, the debug-toolbar middleware, the test-client family, and the response-extensions debug extension.
+
+### Added
+- **Channels ASGI router — `DjangoGraphQLProtocolRouter` (`DONE-041`).** A `channels.routing.ProtocolTypeRouter` subclass serving GraphQL on both HTTP and WebSocket in one import, with `AuthMiddlewareStack` (sessions + `scope["user"]` on both protocols) and the WebSocket `AllowedHostsOriginValidator` composed in — constructor-compatible with upstream `strawberry_django.routers.AuthGraphQLProtocolTypeRouter`, so a migrant changes exactly the import line. Imported from [`django_strawberry_framework.routers`][glossary-djangographqlprotocolrouter] as a lazy PEP 562 submodule export (never a package-root export). `channels` is the package's **second soft dependency** (after `djangorestframework`): importing the package or the submodule stays channels-free, and only symbol access raises the install-hint `ImportError`.
+- **Debug-toolbar middleware — `DebugToolbarMiddleware` (`DONE-042`).** A subclass of the stock `debug_toolbar.middleware.DebugToolbarMiddleware` that teaches [`django-debug-toolbar`][glossary-debug-toolbar-middleware]'s SQL panel to see Strawberry `/graphql/` traffic — `process_view` tags Strawberry-view requests, and `_postprocess` appends the GraphiQL bridge template to the IDE's HTML and injects a `debugToolbar` panel payload (per-panel `title` / `nav_subtitle` + the toolbar `requestId`) into JSON operation responses (`IntrospectionQuery` skipped). Imported from `django_strawberry_framework.middleware.debug_toolbar` — the leaf-module import is the opt-in boundary, never a package-root export. `django-debug-toolbar` is the package's **third soft dependency** (after `djangorestframework` and `channels`): importing the package stays toolbar-free and only importing this leaf raises the install-hint `ImportError`, while omitting `"debug_toolbar"` from `INSTALLED_APPS` raises `ImproperlyConfigured` at leaf import.
+- **Test-client family — `TestClient` / `AsyncTestClient` / `GraphQLTestMixin` / `GraphQLTestCase` (`DONE-043`).** GraphQL test helpers imported from `django_strawberry_framework.testing`: the sync [`TestClient`][glossary-testclient] over `django.test.Client` and its `AsyncTestClient` twin over `django.test.AsyncClient`, plus the `graphene-django`-shaped [`GraphQLTestMixin`][glossary-graphqltestcase] / `GraphQLTestCase` / `GraphQLTransactionTestCase` unittest family. Each drives Django's in-process test client against `/graphql/`, decodes the GraphQL response, and returns a typed `Response` carrying `errors` / `data` / `extensions` and the raw Django response. Endpoint selection follows a documented precedence (per-call `query(..., url=)` → constructor `path=` → `GRAPHQL_URL` → the `TESTING_ENDPOINT` setting → `"/graphql/"`); `TestClient` / `AsyncTestClient` default to `assert_no_errors=True` while the mixin defaults to `False` for `assertResponseNoErrors()` / `assertResponseHasErrors()`. The helpers also carry the multipart-`Upload` HTTP ergonomics the `0.0.11` `Upload` scalar deferred.
+- **Response-extensions debug extension — `DjangoDebugExtension` (`DONE-044`).** A Strawberry `SchemaExtension` that captures a GraphQL operation's SQL (through Django's own debug cursor, one `force_debug_cursor` bracket per `connections.all()` alias) and raised resolver exceptions into the response's [`extensions.debug`][glossary-djangodebugextension] map — the Strawberry-native equivalent of `graphene-django`'s `DjangoDebugMiddleware` / `_debug` field (which `strawberry-graphql-django` offers nothing to borrow back). It is opt-in by adding the class to an aggregate `strawberry.Schema(...)`'s `extensions=` list (imported from `django_strawberry_framework.extensions`, never a package-root export), one fresh instance per operation. This is a capability-equivalent, not wire-compatible, migration of the Graphene surface: a migrant removes `_debug` + `DjangoDebugMiddleware`, adds `DjangoDebugExtension`, and reads `response.extensions.debug`. Never enable it on an internet-facing production schema — it returns interpolated SQL values and unmasked exception messages and tracebacks.
+- **Pluggable nested-connection fetch-strategy seam.** *How* a recognized nested Relay connection is fetched is now a strategy seam on [`DjangoOptimizerExtension`][glossary-djangooptimizerextension]: the windowed prefetch is the default backend (`"windowed"`), a Postgres `CROSS JOIN LATERAL` backend pages per parent (O(parents × page) instead of the window's O(all children)), and the backend is selected per extension instance via the `nested_connection_strategy=` constructor kwarg, the `NESTED_CONNECTION_STRATEGY` setting, or `"auto"` (which keeps one cache-stable lateral-capable plan, selects lateral only when the nested queryset's effective routed alias is PostgreSQL, and executes the same bounded window on every other vendor). A consumer-authored `NestedConnectionStrategy` instance and per-field `OptimizerHint.strategy(...)` overrides are also accepted.
+
+### Changed
+- **Generated mutations now require `DjangoSchema` and lock their rows by default.** As part of the joint cut, every generated [`DjangoMutation`][glossary-djangomutation] flavor requires the schema to be built as `DjangoSchema` — its `DjangoMutationExecutionContext` holds each top-level mutation's `transaction.atomic()` open through GraphQL response completion, so an unserializable payload rolls the write back instead of committing behind a `data: null` response; plain `strawberry.Schema` execution now fails with a `ConfigurationError` before any database work. Each model-backed flavor locks its target and relation rows by default (`Meta.select_for_update`, base-manager `FOR UPDATE` under a visibility pk subquery; explicit `False` opts out), and a row that disappears mid-operation returns the in-band `conflict` `FieldError` instead of a silent success. `DjangoSchema` / `DjangoMutationExecutionContext` are new package-root exports.
+- **`strawberry-graphql` floor raised to `>=0.316.0`.** `DjangoDebugExtension` relies on Strawberry constructing one fresh extension instance per operation, which is guaranteed only from `0.316.0`; the dependency floor moves up accordingly.
+- **`django_strawberry_framework.__version__` is now `0.0.14`.**
 
 ## [0.0.13] - 2026-07-06
 
@@ -322,11 +332,14 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [glossary-bigint-scalar]: docs/GLOSSARY.md#bigint-scalar
 [glossary-configurationerror]: docs/GLOSSARY.md#configurationerror
 [glossary-connection-aware-optimizer-planning]: docs/GLOSSARY.md#connection-aware-optimizer-planning
+[glossary-debug-toolbar-middleware]: docs/GLOSSARY.md#debug-toolbar-middleware
 [glossary-django-trac-37064-hardening]: docs/GLOSSARY.md#django-trac-37064-hardening
 [glossary-djangoconnection]: docs/GLOSSARY.md#djangoconnection
 [glossary-djangoconnectionfield]: docs/GLOSSARY.md#djangoconnectionfield
+[glossary-djangodebugextension]: docs/GLOSSARY.md#djangodebugextension
 [glossary-djangofiletype]: docs/GLOSSARY.md#djangofiletype
 [glossary-djangoformmutation]: docs/GLOSSARY.md#djangoformmutation
+[glossary-djangographqlprotocolrouter]: docs/GLOSSARY.md#djangographqlprotocolrouter
 [glossary-djangoimagetype]: docs/GLOSSARY.md#djangoimagetype
 [glossary-djangomodelformmutation]: docs/GLOSSARY.md#djangomodelformmutation
 [glossary-djangomodelpermission]: docs/GLOSSARY.md#djangomodelpermission
@@ -338,6 +351,7 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [glossary-filterset]: docs/GLOSSARY.md#filterset
 [glossary-fk-id-elision]: docs/GLOSSARY.md#fk-id-elision
 [glossary-get_queryset-visibility-hook]: docs/GLOSSARY.md#get_queryset-visibility-hook
+[glossary-graphqltestcase]: docs/GLOSSARY.md#graphqltestcase
 [glossary-input-type-generation]: docs/GLOSSARY.md#input-type-generation
 [glossary-metaconnection]: docs/GLOSSARY.md#metaconnection
 [glossary-metafields]: docs/GLOSSARY.md#metafields
@@ -362,6 +376,7 @@ See [`docs/README.md`][readme] for the architecture and [`KANBAN.md`][kanban] fo
 [glossary-strawberry-config]: docs/GLOSSARY.md#strawberry_config
 [glossary-strictness-mode]: docs/GLOSSARY.md#strictness-mode
 [glossary-syncmisuseerror]: docs/GLOSSARY.md#syncmisuseerror
+[glossary-testclient]: docs/GLOSSARY.md#testclient
 [glossary-upload-scalar]: docs/GLOSSARY.md#upload-scalar
 [readme]: docs/README.md
 [tree]: docs/TREE.md

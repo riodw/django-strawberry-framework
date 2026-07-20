@@ -71,7 +71,7 @@ carries the version quintet, the GLOSSARY `shipped (0.0.14)` status flips for
 all four `0.0.14` cards, and the release-status doc moves — mirroring the
 lone-card ownership shape of [`spec-038`][spec-038] Decision 14.
 
-Status: **PLANNED — no slice built yet.**
+Status: **COMPLETE (card `DONE-044-0.0.14`) — all three slices built and the card-wrap landed; this card owned and applied the joint `0.0.14` version cut (the version quintet, the GLOSSARY `shipped (0.0.14)` status flips for `041` / `042` / `043` / `044`, and the release-status doc moves).**
 Three slices (the card is an M with one module, two test files, and the joint
 cut's mechanically-wide doc alignment): Slice 1 (**the `extensions/`
 subpackage + `extensions/debug.py` + split live/mechanics coverage** — the

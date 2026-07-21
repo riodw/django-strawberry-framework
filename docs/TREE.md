@@ -210,7 +210,8 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── sets_mixins.py                # Mixins and lifecycle machinery shared by the ``FilterSet`` and ``OrderSet`` families.
 ├── auth/    # Opt-in session-auth field factories (spec-040).
 │   ├── mutations.py              # Session-auth mutation factories + the phase-2.5 auth bind (spec-040).
-│   └── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
+│   ├── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
+│   └── sessions.py               # Transport-owned auth session boundary (auth session-lifecycle hardening, Commit 1).
 ├── extensions/    # Strawberry schema extensions supplied by django-strawberry-framework.
 │   └── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
 ├── filters/    # Filtering subsystem - declarative ``FilterSet`` classes that become GraphQL ``filter:`` arguments.
@@ -318,7 +319,8 @@ django_strawberry_framework/    # Public API of django-strawberry-framework, a D
 ├── aggregates/    # planned by TODO-BETA-051-0.1.3 - Declarative AggregateSet output types with related, permissioned, selection-aware sync/async statistics.
 ├── auth/    # Opt-in session-auth field factories (spec-040).
 │   ├── mutations.py              # Session-auth mutation factories + the phase-2.5 auth bind (spec-040).
-│   └── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
+│   ├── queries.py                # The ``current_user()`` query-field factory + its return-alias namespace (spec-040).
+│   └── sessions.py               # Transport-owned auth session boundary (auth session-lifecycle hardening, Commit 1).
 ├── extensions/    # Strawberry schema extensions supplied by django-strawberry-framework.
 │   └── debug.py                  # ``DjangoDebugExtension`` - Django query-log SQL and execution exceptions in the response.
 ├── fieldset/    # planned by TODO-BETA-048-0.1.1 - FieldSet computed fields, resolver overrides, field permissions, and optimizer dependencies.
@@ -438,8 +440,11 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
+│   ├── _helpers.py               # Shared auth-test helpers hoisted out of the individual test modules.
+│   ├── conftest.py               # Shared fixtures for the auth test modules.
 │   ├── test_mutations.py         # Auth mutation tests for declaration and bind lifecycles, operations, registration, and permissions.
-│   └── test_queries.py           # Current-user query tests for alias binding, visibility, permission gates, and sync/async resolution.
+│   ├── test_queries.py           # Current-user query tests for alias binding, visibility, permission gates, and sync/async resolution.
+│   └── test_sessions.py          # Transport classification, session pre-check, scope lock, and capability tests.
 ├── base/    # Frozen base tests for settings, initialization, version, logging, and public exports.
 │   ├── test_conf.py              # Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK.
 │   └── test_init.py              # Package init tests for version metadata and public exports.
@@ -470,7 +475,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_permissions.py       # ``DjangoModelPermission`` class behavior + write-auth enforcement (spec-036 Slice 2 + Slice 3).
 │   ├── test_resolvers.py         # Write-pipeline resolver tests (spec-036 Slice 3).
 │   ├── test_sets.py              # ``DjangoMutation`` base, ``Meta`` validation, registration, and the phase-2.5 bind.
-│   └── test_write_transaction.py # The BETA-055 write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
+│   └── test_write_transaction.py # The 0.0.14 mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 ├── optimizer/    # Package tests for optimizer plans, application, extensions, selections, and nested-fetch strategies.
 │   ├── _builders.py              # Shared builders for the optimizer test package.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
@@ -481,7 +486,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_lateral_fetch.py     # Tests for the Postgres lateral fetch strategy (``optimizer/lateral_fetch.py``).
 │   ├── test_multi_db.py          # Optimizer-plan tests for multi-database cooperation and DB-alias preservation.
 │   ├── test_nested_fetch.py      # Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
-│   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix (optimizer-improvement-plan WS-D D2).
+│   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix for nested connection strategies.
 │   ├── test_plans.py             # OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
 │   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).
@@ -543,7 +548,8 @@ examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the
 │       └── test_models.py        # Glossary model tests for term edges, aliases, categories, and spec mentions.
 ├── kanban/
 │   └── tests/    # Non-live app tests for kanban commands, services, signals, and board invariants.
-│       ├── test_commands.py      # Kanban command tests for the merged import_card_files workflow (and aliases).
+│       ├── test_commands.py      # Kanban command tests for the merged ``import_card_files`` workflow.
+│       ├── test_migrations.py    # Kanban data-migration contract tests.
 │       ├── test_mutations.py     # In-process wiring + error-mapping tests for the kanban GraphQL mutation surface (WS-3B).
 │       ├── test_services.py      # Kanban service tests for card resolution, creation, tracked paths, validation, and rollback.
 │       ├── test_services_gaps.py # Service-layer gap coverage for branches the main service suite leaves open.
@@ -552,7 +558,7 @@ examples/fakeshop/apps/    # Per-Django-app, non-live tests that stay beside the
 │       └── test_worklog.py       # Tests for the Phase 2 work-tracking dimension.
 ├── library/
 │   └── tests/    # Non-live app tests for library models, schema exposure, and declaration-order invariants.
-│       ├── test_generic_connection.py  # In-process windowed GenericRelation connection acceptance tests (WS-B).
+│       ├── test_generic_connection.py  # In-process windowed GenericRelation connection acceptance tests.
 │       ├── test_generic_connection_sharded.py  # Sharded (``FAKESHOP_SHARDED=1``) GenericRelation connection alias-late morph test.
 │       ├── test_models.py        # Library model tests for string rendering, relation traversal, and per-shelf title uniqueness.
 │       └── test_schema.py        # Library schema tests for project-schema exposure and declaration-order invariants without HTTP.
@@ -596,7 +602,7 @@ examples/fakeshop/test_query/    # Live GraphQL HTTP tests for fakeshop's consum
 ├── test_keyset_api.py            # Live GraphQL HTTP tests for keyset (``Meta.cursor_field``) cursor pagination.
 ├── test_library_api.py           # Live GraphQL HTTP tests for the library app's read/write, Relay, keyset, and optimizer surface.
 ├── test_multi_db.py              # Live GraphQL HTTP tests for sharded resolver isolation and multi-database debug capture.
-├── test_mutation_atomicity.py    # Live ``/graphql/`` acceptance for the BETA-055 response-completion transaction contract.
+├── test_mutation_atomicity.py    # Live ``/graphql/`` acceptance for the 0.0.14 mutation-atomicity response-completion transaction contract.
 ├── test_optimizer_auto_api.py    # Live ``/graphql/`` coverage for routed nested-fetch strategy selection.
 ├── test_products_api.py          # Live GraphQL HTTP tests for products reads, mutations, permissions, optimization, and request parsing.
 ├── test_scalars_api.py           # Live GraphQL HTTP tests for scalar wire formats, filtering, relations, and optimizer behavior.
@@ -638,8 +644,11 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 ├── test_scalars.py               # Scalar tests for BigInt, Upload, and the framework StrawberryConfig helper.
 ├── test_strawberry_patches.py    # Tests for the Strawberry request-body patch.
 ├── auth/    # Package-internal tests for the opt-in auth subsystem (spec-040).
+│   ├── _helpers.py               # Shared auth-test helpers hoisted out of the individual test modules.
+│   ├── conftest.py               # Shared fixtures for the auth test modules.
 │   ├── test_mutations.py         # Auth mutation tests for declaration and bind lifecycles, operations, registration, and permissions.
-│   └── test_queries.py           # Current-user query tests for alias binding, visibility, permission gates, and sync/async resolution.
+│   ├── test_queries.py           # Current-user query tests for alias binding, visibility, permission gates, and sync/async resolution.
+│   └── test_sessions.py          # Transport classification, session pre-check, scope lock, and capability tests.
 ├── base/    # Frozen base tests for settings, initialization, version, logging, and public exports.
 │   ├── test_conf.py              # Package settings-reader tests for DJANGO_STRAWBERRY_FRAMEWORK.
 │   └── test_init.py              # Package init tests for version metadata and public exports.
@@ -672,7 +681,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_permissions.py       # ``DjangoModelPermission`` class behavior + write-auth enforcement (spec-036 Slice 2 + Slice 3).
 │   ├── test_resolvers.py         # Write-pipeline resolver tests (spec-036 Slice 3).
 │   ├── test_sets.py              # ``DjangoMutation`` base, ``Meta`` validation, registration, and the phase-2.5 bind.
-│   └── test_write_transaction.py # The BETA-055 write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
+│   └── test_write_transaction.py # The 0.0.14 mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 ├── optimizer/    # Package tests for optimizer plans, application, extensions, selections, and nested-fetch strategies.
 │   ├── _builders.py              # Shared builders for the optimizer test package.
 │   ├── test_definition_order.py  # Optimizer tests for definition-order-independent DjangoType relation graphs.
@@ -683,7 +692,7 @@ tests/    # Package, integration, and repository-tool tests for django_strawberr
 │   ├── test_lateral_fetch.py     # Tests for the Postgres lateral fetch strategy (``optimizer/lateral_fetch.py``).
 │   ├── test_multi_db.py          # Optimizer-plan tests for multi-database cooperation and DB-alias preservation.
 │   ├── test_nested_fetch.py      # Tests for the nested-connection fetch-strategy seam (``optimizer/nested_fetch.py``).
-│   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix (optimizer-improvement-plan WS-D D2).
+│   ├── test_nested_index_advisory.py  # Composite-index advisory unit matrix for nested connection strategies.
 │   ├── test_plans.py             # OptimizationPlan tests for lifecycle, ORM reconciliation, paths, ordering, and window pagination.
 │   ├── test_relay_id_projection.py  # Optimizer tests for Relay GlobalID projection and connector-column invariants.
 │   ├── test_selections.py        # Tests for the selection-traversal substrate (``optimizer/selections.py``).

@@ -56,6 +56,14 @@ def _clear_if_importable(module_path: str, attr_name: str, action: Callable[[Any
 
 _subsystem_clears: dict[str, tuple[Callable[[], None], bool]] = {}
 
+# Sentinel for ``TypeRegistry._globalid_setting_snapshot`` meaning "not yet
+# computed this build" - distinct from ``None``, which is a valid snapshot value
+# (no ``RELAY_GLOBALID_STRATEGY`` override configured). The finalizer computes
+# the validated setting once per finalization and stores it here; the cache
+# boundary is the registry lifecycle, reset by ``clear()`` (spec-031 GlobalID
+# setting snapshot).
+GLOBALID_SETTING_UNSET: Any = object()
+
 
 def register_subsystem_clear(
     clear: Callable[[], None],
@@ -115,6 +123,11 @@ class TypeRegistry:
         self._pending: list[PendingRelation] = []
         self._type_teardowns: dict[type, list[Callable[[], None]]] = {}
         self._finalized: bool = False
+        # The validated ``RELAY_GLOBALID_STRATEGY`` snapshot for the current
+        # build, computed once by ``finalize_django_types`` and read by the Relay
+        # loop. ``GLOBALID_SETTING_UNSET`` distinguishes "not yet computed" from a
+        # ``None`` (no-override) snapshot; reset in ``clear()``.
+        self._globalid_setting_snapshot: Any = GLOBALID_SETTING_UNSET
 
     def _check_mutable(self) -> None:
         """Defense-in-depth guard: refuse mutation after ``mark_finalized``.
@@ -586,6 +599,7 @@ class TypeRegistry:
         self._pending.clear()
         self._type_teardowns.clear()
         self._finalized = False
+        self._globalid_setting_snapshot = GLOBALID_SETTING_UNSET
 
         # Every loaded subsystem announces its own teardown callback. This
         # preserves soft-dependency laziness and makes renames fail at the owner

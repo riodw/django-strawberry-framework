@@ -338,54 +338,79 @@ def _apply_node_filter(
 # testing helpers belong to the sibling Full Relay card.
 
 
+def _validated_globalid_setting() -> str | Callable[..., str] | None:
+    """Read and validate the schema-wide ``RELAY_GLOBALID_STRATEGY`` setting once.
+
+    Reads ``conf.relay_globalid_strategy_setting()`` (a thin reader that does not
+    validate domain values) and, when non-``None``, validates it through the SAME
+    shared ``_validate_globalid_strategy`` rule the per-type ``Meta`` path uses
+    (one validator, two sources - spec-031 Decisions 6/7). An unknown string, a
+    wrong-arity callable, or an ``async def`` callable in ``RELAY_GLOBALID_STRATEGY``
+    therefore raises ``ConfigurationError`` naming the setting rather than failing
+    opaquely from the installed closure. A ``None`` setting returns ``None``
+    unchanged (no schema-wide override).
+
+    This is the single validation site for the setting: the finalizer computes it
+    ONCE per finalization and snapshots the result on the registry
+    (``registry._globalid_setting_snapshot``), so the value is read once per build
+    rather than once per defaulted type - and an explicitly configured invalid
+    value raises even when zero Relay types (or every type overriding) would
+    otherwise keep the resolver from ever reading it. Passes ``relay_shaped=True``
+    / ``meta=None`` so the setting framing (naming ``RELAY_GLOBALID_STRATEGY``) is
+    used and the per-type Relay-shape gate - which already ran at type creation -
+    is skipped.
+    """
+    # In-function imports: ``base.py`` imports ``install_is_type_of`` from this
+    # module at module top, so a module-top ``relay.py -> base.py`` import would
+    # close the load cycle. This runs only at finalization - well after module
+    # load - so the local import resolves cheaply. Same cycle-dodge justification
+    # ``base.py`` documents for its ``FilterSet`` / ``OrderSet`` in-function
+    # imports. Do NOT hoist either import to module top.
+    from ..conf import relay_globalid_strategy_setting
+    from .base import _validate_globalid_strategy
+
+    setting = relay_globalid_strategy_setting()
+    if setting is None:
+        return None
+    return _validate_globalid_strategy(
+        None,
+        setting,
+        relay_shaped=True,
+        source="setting",
+    )
+
+
 def _resolve_globalid_strategy(
     definition: DjangoTypeDefinition,
+    globalid_setting: str | Callable[..., str] | None,
 ) -> str | Callable[..., str]:
-    """Resolve a type's effective raw GlobalID strategy by the three-tier precedence.
+    """Resolve a type's effective raw GlobalID strategy by pure three-tier precedence.
 
     Precedence (spec-031 Decision 5): the per-type ``Meta.globalid_strategy``
-    override (already validated at type creation) -> the schema-wide
-    ``RELAY_GLOBALID_STRATEGY`` setting (read defensively as "absent -> package
-    default") -> the ``DEFAULT_GLOBALID_STRATEGY`` (``"model"``) package default.
+    override (already validated at type creation) -> the pre-validated schema-wide
+    setting snapshot ``globalid_setting`` -> the ``DEFAULT_GLOBALID_STRATEGY``
+    (``"model"``) package default.
 
-    The setting branch is validated through the SAME ``_validate_globalid_strategy``
-    rule the ``Meta`` path uses (one validator, two sources - spec-031 Decisions
-    6/7), so an unknown string, a wrong-arity callable, or an ``async def``
-    callable in ``RELAY_GLOBALID_STRATEGY`` raises ``ConfigurationError`` naming
-    the setting rather than failing opaquely from the installed closure.
-    ``conf.py`` is a thin reader that does not validate domain values, so the
-    validation belongs here.
+    Pure precedence: this reads NO setting and validates NOTHING. The setting is
+    read and validated exactly once per finalization by ``_validated_globalid_setting``
+    and threaded in as ``globalid_setting`` (the finalizer's registry snapshot), so
+    the resolver cannot read the setting per type nor smuggle in a second
+    validation. ``globalid_setting`` is already a validated string /
+    validated callable / ``None`` (no override).
 
     Returns the resolved raw strategy (a string in ``STRING_GLOBALID_STRATEGIES``
     or a validated callable); never ``None``.
 
     Called at finalization (Slice 2's ``install_globalid_typename_resolver``)
-    for a type the Relay-shape gate already accepted, so the setting-path
-    validation passes ``relay_shaped=True`` (its per-type gate does not re-run).
+    for a type the Relay-shape gate already accepted.
     """
-    # In-function imports: ``base.py`` imports ``install_is_type_of`` from this
-    # module at module top, so a module-top ``relay.py -> base.py`` import would
-    # close the load cycle. This resolver is only called at finalization - well
-    # after module load - so the local import resolves cheaply. Same cycle-dodge
-    # justification ``base.py`` documents for its ``FilterSet`` / ``OrderSet``
-    # in-function imports. Do NOT hoist either import to module top.
-    from ..conf import relay_globalid_strategy_setting
-    from .base import (
-        DEFAULT_GLOBALID_STRATEGY,
-        _validate_globalid_strategy,
-    )
+    from .base import DEFAULT_GLOBALID_STRATEGY
 
     strategy = definition.globalid_strategy
     if strategy is not None:
         return strategy
-    setting = relay_globalid_strategy_setting()
-    if setting is not None:
-        return _validate_globalid_strategy(
-            None,
-            setting,
-            relay_shaped=True,
-            source="setting",
-        )
+    if globalid_setting is not None:
+        return globalid_setting
     return DEFAULT_GLOBALID_STRATEGY
 
 
@@ -444,7 +469,6 @@ def encode_typename(
     strategy: str | Callable[..., str],
     type_cls: type,
     root: Any,
-    info: Any,
 ) -> str:
     """Compute the ``GlobalID`` type-name slot for one resolved strategy.
 
@@ -458,21 +482,24 @@ def encode_typename(
       only when shadowing a framework closure inherited from a concrete Relay
       parent - see ``install_globalid_typename_resolver`` step 2 - so this
       branch is the live implementation for exactly that shape).
-    - callable -> the consumer callable's ``(type_cls, model, root, info) -> str``
+    - callable -> the consumer callable's ``(type_cls, model, root) -> str``
       return, validated non-empty ``str``. A non-``str`` or empty return raises
       ``ConfigurationError`` naming the type and the contract, rather than
       letting Strawberry's ``Node._id`` ``assert isinstance(type_name, str)``
       fire as an opaque ``AssertionError`` (spec-031 Decision 4/10).
       The callable's arity / sync-ness were already
       validated at type creation (Slice 1) - this is ONLY the per-call
-      return-value check.
+      return-value check. A callable encoder is a deterministic pure
+      per-(type, object) function; ``info`` is deliberately NOT passed so the
+      encoder cannot easily depend on the request / actor (purity remains the
+      consumer's obligation - withholding ``info`` cannot prevent I/O).
     """
     if callable(strategy):
-        result = strategy(type_cls, definition.model, root, info)
+        result = strategy(type_cls, definition.model, root)
         if not isinstance(result, str) or not result:
             raise ConfigurationError(
                 f"{definition.graphql_type_name}: the Meta.globalid_strategy callable "
-                f"returned {result!r}; a (type_cls, model, root, info) -> str encoder "
+                f"returned {result!r}; a (type_cls, model, root) -> str encoder "
                 "must return a non-empty string for the GlobalID type-name slot.",
             )
         return result
@@ -536,7 +563,11 @@ def _consumer_overrode_resolve_typename(type_cls: type) -> bool:
     return existing_func is not node_func
 
 
-def install_globalid_typename_resolver(type_cls: type, definition: DjangoTypeDefinition) -> None:
+def install_globalid_typename_resolver(
+    type_cls: type,
+    definition: DjangoTypeDefinition,
+    globalid_setting: str | Callable[..., str] | None,
+) -> None:
     """Inject the strategy-parameterized ``resolve_typename`` default (Phase 2.5).
 
     Runs alongside ``install_relay_node_resolvers`` for every Relay-Node-shaped
@@ -558,7 +589,9 @@ def install_globalid_typename_resolver(type_cls: type, definition: DjangoTypeDef
        ``Meta`` key collides); otherwise the effective strategy is ``custom``,
        install nothing (the override owns the slot).
     2. **No override.** Resolve the raw strategy via
-       ``_resolve_globalid_strategy``; install the framework closure for
+       ``_resolve_globalid_strategy`` (pure precedence over the passed
+       ``globalid_setting`` - the finalizer's once-per-finalization validated
+       setting snapshot, never a per-type setting read); install the framework closure for
        ``model`` / ``type+model`` / ``callable`` (the closure validates a
        non-empty ``str`` callable return); install NOTHING for ``type``
        (Strawberry's default returns ``info.path.typename``, byte-identical to
@@ -586,7 +619,7 @@ def install_globalid_typename_resolver(type_cls: type, definition: DjangoTypeDef
         definition.effective_globalid_strategy = "custom"
         return
 
-    strategy = _resolve_globalid_strategy(definition)
+    strategy = _resolve_globalid_strategy(definition, globalid_setting)
     classification = "callable" if callable(strategy) else strategy
 
     if classification != "type" or _inherits_framework_closure(type_cls):
@@ -613,8 +646,11 @@ def _install_typename_closure(
     override.
     """
 
-    def resolve_typename(cls: type, root: Any, info: Any) -> str:
-        return encode_typename(definition, strategy, cls, root, info)
+    def resolve_typename(cls: type, root: Any, info: Any) -> str:  # noqa: ARG001
+        # Strawberry's resolve_typename seam passes ``(cls, root, info)``; the
+        # encoder contract dropped ``info`` (pre-1.0), so only ``root`` is
+        # forwarded to ``encode_typename``.
+        return encode_typename(definition, strategy, cls, root)
 
     setattr(resolve_typename, _FRAMEWORK_CLOSURE_MARKER, True)
     type_cls.resolve_typename = classmethod(resolve_typename)

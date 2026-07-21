@@ -318,17 +318,14 @@ def _validate_relation_shapes(meta: type, value: Any, relay_shaped: bool) -> dic
     return dict(value)
 
 
-# The four positional parameters a ``callable`` GlobalID encoder must accept.
-# Mirrors the ``resolve_typename(root, info)`` seam (spec-031 Decision 4): the
-# callable runs at encode time, BEFORE ``resolve_id``, so it never receives
-# ``node_id``. Named once so the validator's error text and the Slice-2 install
-# closure stay in lockstep.
-_GLOBALID_CALLABLE_PARAMS = (
-    "type_cls",
-    "model",
-    "root",
-    "info",
-)
+# The three positional parameters a ``callable`` GlobalID encoder must accept.
+# The callable runs at encode time, BEFORE ``resolve_id``, so it never receives
+# ``node_id``. ``info`` was dropped pre-1.0 (this is unpublished): a callable
+# encoder is a deterministic pure per-(type, object) function, and withholding
+# ``info`` prevents easy request/actor dependence (it cannot prevent I/O -
+# purity stays the consumer's obligation). Named once so the validator's error
+# text and the install closure stay in lockstep.
+_GLOBALID_CALLABLE_PARAMS = ("type_cls", "model", "root")
 
 
 def _validate_globalid_strategy(
@@ -342,14 +339,15 @@ def _validate_globalid_strategy(
 
     The single validator shared by BOTH the ``Meta.globalid_strategy`` path
     (via ``_validate_meta``) and the ``RELAY_GLOBALID_STRATEGY`` setting path
-    (via ``types/relay.py::_resolve_globalid_strategy``) - spec-031 Decisions
+    (via ``types/relay.py::_validated_globalid_setting``, the finalizer's
+    once-per-finalization setting snapshot) - spec-031 Decisions
     6/7's "one validator, two sources, source-specific error text" rule. The
     callable arity / sync-ness check lives here once so it is never duplicated
     across the two call sites.
 
     Structurally modeled on ``_validate_connection``: ``None``-short-circuits
     when unset; a string must be in ``STRING_GLOBALID_STRATEGIES`` (typo guard);
-    a callable must accept the four positional ``_GLOBALID_CALLABLE_PARAMS`` and
+    a callable must accept the three positional ``_GLOBALID_CALLABLE_PARAMS`` and
     must NOT be ``async def`` (an opaque ``TypeError`` / coroutine per request is
     promoted to a build-time ``ConfigurationError``); any other type raises.
 
@@ -393,7 +391,7 @@ def _validate_globalid_strategy(
 def _validate_globalid_callable(subject: str, value: Callable[..., str]) -> None:
     """Reject a wrong-arity or async GlobalID encoder at validation time.
 
-    ``inspect.signature`` must bind the four positional ``_GLOBALID_CALLABLE_PARAMS``
+    ``inspect.signature`` must bind the three positional ``_GLOBALID_CALLABLE_PARAMS``
     and the encoder must be sync (spec-031 Decision 6).
     The sync-ness test (``utils/typing.py::is_async_callable``, shared with the
     field factories per the 0.0.9 DRY pass) sees through callable instances with
@@ -407,14 +405,14 @@ def _validate_globalid_callable(subject: str, value: Callable[..., str]) -> None
     if is_async_callable(value):
         raise ConfigurationError(
             f"{subject} callable encoder must be sync; "
-            f"got an `async def`. Expected `(type_cls, model, root, info) -> str`.",
+            f"got an `async def`. Expected `(type_cls, model, root) -> str`.",
         )
     try:
         inspect.signature(value).bind(*_GLOBALID_CALLABLE_PARAMS)
     except TypeError as exc:
         raise ConfigurationError(
             f"{subject} callable encoder must accept "
-            f"`(type_cls, model, root, info) -> str`; got an incompatible signature ({exc}).",
+            f"`(type_cls, model, root) -> str`; got an incompatible signature ({exc}).",
         ) from exc
 
 

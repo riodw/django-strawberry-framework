@@ -34,6 +34,7 @@ from django_strawberry_framework import DjangoType, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.filters import (
     FilterSet,
+    GlobalIDFilter,
     RelatedFilter,
     _helper_referenced_filtersets,
     filter_input_type,
@@ -1273,3 +1274,104 @@ def test_phase_2_5_configuration_error_from_get_filters_propagates_unwrapped():
     # Re-raised unchanged: the original message survives, not the
     # "Cannot finalize ..." rewrap used for ImportError / generic failures.
     assert "intentional configuration failure inside get_filters" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Build-time encode-only GlobalID-filter audit (spec-031 fail-closed hardening).
+# ---------------------------------------------------------------------------
+
+
+def test_phase_2_5_rejects_globalid_filter_on_callable_strategy_target():
+    """A GlobalID filter whose own-PK target uses a ``callable`` strategy fails at build.
+
+    ``callable`` is encode-only (no decode path), so the schema would otherwise
+    carry a typed GlobalID filter input that can never validly consume the IDs
+    its target emits. ``_audit_globalid_filter_strategies`` raises at finalize,
+    naming the filterset and field.
+    """
+
+    def encode(type_cls, model, root):
+        return "GenreType"
+
+    class GenreFilter(FilterSet):
+        class Meta:
+            model = Genre
+            fields = {"id": ["exact"]}
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = Genre
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            primary = True
+            globalid_strategy = encode
+            filterset_class = GenreFilter
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert "GenreFilter" in msg
+    assert "encode-only" in msg
+    assert "callable" in msg
+
+
+def test_phase_2_5_rejects_globalid_filter_on_custom_strategy_target():
+    """A GlobalID filter whose own-PK target overrides ``resolve_typename`` fails at build.
+
+    Overriding ``resolve_typename`` classifies the target ``custom`` - also
+    encode-only - so the same build-time audit rejects the filter binding.
+    """
+
+    class GenreFilter(FilterSet):
+        class Meta:
+            model = Genre
+            fields = {"id": ["exact"]}
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = Genre
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            primary = True
+            filterset_class = GenreFilter
+
+        @classmethod
+        def resolve_typename(cls, root, info):
+            return "GenreType"
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        finalize_django_types()
+    msg = str(exc_info.value)
+    assert "GenreFilter" in msg
+    assert "encode-only" in msg
+    assert "custom" in msg
+
+
+def test_phase_2_5_globalid_audit_skips_unresolvable_target():
+    """The audit skips a GlobalID filter whose target definition resolves to ``None``.
+
+    A consumer-declared ``GlobalIDFilter`` pointed at a scalar field ('name')
+    is neither the own PK nor a relation head, so
+    ``resolve_globalid_target_definition`` returns ``None`` during the audit and
+    the filter is skipped (there is no target strategy to fail-close on). This
+    is a legal filterset - the pre-existing unregistered-related-target audit
+    only walks ``RelatedFilter`` instances - so finalization succeeds.
+    """
+
+    class GenreFilter(FilterSet):
+        genre_gid = GlobalIDFilter(field_name="name")
+
+        class Meta:
+            model = Genre
+            fields = {"name": ["exact"]}
+
+    class GenreType(DjangoType):
+        class Meta:
+            model = Genre
+            fields = ("id", "name")
+            primary = True
+            filterset_class = GenreFilter
+
+    # Finalization succeeds: the unresolvable-target branch is a no-op skip.
+    finalize_django_types()
+    assert GenreType.__django_strawberry_definition__.finalized

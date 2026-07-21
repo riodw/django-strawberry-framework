@@ -12,7 +12,7 @@ promotion discipline).
   type's finalize-stamped strategy: ``model`` / ``type+model`` emit the model
   label (``app_label.modelname``); ``type`` emits the ``graphql_type_name``;
   ``callable`` / ``custom`` raise ``ConfigurationError`` - those encoders run
-  on a live ``(root, info)`` pair the helper does not have, so it cannot
+  on a live ``root`` the helper does not have, so it cannot
   promise the emitted payload (a consumer with a custom encoder owns its own
   test helper). Finalize first: the strategy is stamped at finalization, so an
   unfinalized type (and a finalized non-Relay-Node type) raises too.
@@ -85,13 +85,13 @@ def global_id_for(type_cls: type, id: object) -> str:  # noqa: A002
     if strategy not in STRING_GLOBALID_STRATEGIES:
         raise ConfigurationError(
             f"global_id_for: {definition.graphql_type_name} records the {strategy!r} "
-            "GlobalID strategy, whose encoder runs on a live (root, info) pair this "
+            "GlobalID strategy, whose encoder runs on a live root this "
             "helper does not have, so it cannot promise the emitted payload. A "
             "consumer with a custom encoder owns its own test helper.",
         )
     # The string-strategy branches of ``encode_typename`` never touch
-    # ``root`` / ``info`` (only the ``callable`` branch does, and it is
-    # unreachable here per the gate above), so the payload comes from the
-    # exact code path the live ``resolve_typename`` closure runs.
-    payload = encode_typename(definition, strategy, type_cls, None, None)
+    # ``root`` (only the ``callable`` branch does, and it is unreachable here per
+    # the gate above), so the payload comes from the exact code path the live
+    # ``resolve_typename`` closure runs.
+    payload = encode_typename(definition, strategy, type_cls, None)
     return str(relay.GlobalID(type_name=payload, node_id=str(id)))

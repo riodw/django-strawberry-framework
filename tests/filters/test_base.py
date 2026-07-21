@@ -720,8 +720,14 @@ def test_accepted_globalid_type_names_per_strategy():
 
 
 @pytest.mark.parametrize("strategy", ["callable", "custom", None])
-def test_accepted_globalid_type_names_node_id_only_strategies(strategy):
-    """`callable` / `custom` / absent strategy -> `None` (node-id-only fallback)."""
+def test_accepted_globalid_type_names_non_framework_strategies(strategy):
+    """`callable` / `custom` / absent strategy -> `None` accepted set (defensive belt).
+
+    `_decode_and_validate_global_id` fail-closes on these before reaching this
+    helper (see `test_filter_encode_only_strategy_rejects_fail_closed` /
+    `test_filter_known_definition_none_strategy_rejects_fail_closed`); the helper
+    keeps returning `None` as a defensive belt only.
+    """
     owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy=strategy)
     assert _accepted_globalid_type_names(owner) is None
 
@@ -770,17 +776,46 @@ def test_filter_type_plus_model_accepts_both():
     assert _decode_and_validate_global_id(relay.to_base64("OwnerType", "2"), f) == "2"
 
 
-@pytest.mark.parametrize("strategy", ["callable", "custom", None])
-def test_filter_callable_custom_node_id_only(strategy):
-    """`callable` / `custom` / absent-strategy types fall back to node-id-only.
+@pytest.mark.parametrize("strategy", ["callable", "custom"])
+def test_filter_encode_only_strategy_rejects_fail_closed(strategy):
+    """`callable` / `custom` targets fail closed: the strategy is encode-only.
 
-    The `type_name` guard is skipped, so even a payload that matches no
-    framework shape decodes to its `node_id` without raising.
+    These strategies have no decode path, so a typed filter input for the
+    target's GlobalID could never validly consume the IDs it emits. The runtime
+    backstop (behind the build-time audit) rejects with a coded GraphQLError.
     """
     owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy=strategy)
     f = _global_id_filter_with_owner("id", owner)
     encoded = relay.to_base64("AnythingAtAll", "99")
-    assert _decode_and_validate_global_id(encoded, f) == "99"
+    with pytest.raises(GraphQLError, match="encode-only") as exc_info:
+        _decode_and_validate_global_id(encoded, f)
+    assert exc_info.value.extensions == {"code": "GLOBALID_UNVALIDATABLE"}
+    assert strategy in str(exc_info.value)
+
+
+def test_filter_known_definition_none_strategy_rejects_fail_closed():
+    """A known target whose recorded strategy is `None` is a lifecycle defect.
+
+    An unfinalized / non-Relay target should never reach a GlobalID filter; the
+    backstop rejects with a coded GraphQLError distinct from the encode-only
+    message rather than silently falling back to node-id-only.
+    """
+    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy=None)
+    f = _global_id_filter_with_owner("id", owner)
+    encoded = relay.to_base64("AnythingAtAll", "99")
+    with pytest.raises(GraphQLError, match="no .*recorded globalid strategy") as exc_info:
+        _decode_and_validate_global_id(encoded, f)
+    assert exc_info.value.extensions == {"code": "GLOBALID_UNVALIDATABLE"}
+
+
+def test_multi_value_filter_encode_only_reject_names_index():
+    """`GlobalIDMultipleChoiceFilter` names the offending index on a fail-closed reject."""
+    owner = _FakeOwnerDefinition(target=None, effective_globalid_strategy="callable")
+    f = GlobalIDMultipleChoiceFilter(field_name="id")
+    f.parent = _FakeParent(owner)
+    with pytest.raises(GraphQLError, match="at index 0") as exc_info:
+        f.filter(object(), [relay.to_base64("AnythingAtAll", "99")])
+    assert exc_info.value.extensions == {"code": "GLOBALID_UNVALIDATABLE"}
 
 
 def test_filter_unbound_owner_node_id_only():

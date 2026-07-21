@@ -61,7 +61,7 @@ from strawberry.utils.str_converters import to_camel_case
 from ..exceptions import ConfigurationError
 from ..optimizer import logger
 from ..optimizer.field_meta import FieldMeta
-from ..registry import registry
+from ..registry import GLOBALID_SETTING_UNSET, registry
 from ..utils.imports import loaded_attr
 from ..utils.relations import instance_accessor
 from ..utils.strings import snake_case
@@ -71,6 +71,7 @@ from .relay import (
     _accepts_model_label_decode,
     _check_composite_pk_for_relay_node,
     _emits_model_label,
+    _validated_globalid_setting,
     apply_interfaces,
     implements_relay_node,
     install_globalid_typename_resolver,
@@ -688,6 +689,34 @@ def finalize_django_types() -> None:
     # contract.
     multi_type_models = tuple(registry.models_with_multiple_types())
 
+    # Snapshot the validated ``RELAY_GLOBALID_STRATEGY`` setting ONCE per
+    # finalization, before the Relay loop, so the value is read + validated once
+    # per build rather than once per defaulted type (spec-031 GlobalID setting
+    # snapshot). Computed UNCONDITIONALLY: an explicitly configured invalid value
+    # must raise even with zero Relay types, or with every Relay type overriding
+    # via Meta.globalid_strategy / a resolve_typename override - cases where the
+    # resolver would otherwise never read the setting. This is a pure read (may
+    # raise before any class is mutated), so it does not disturb Phase 1's
+    # failure-atomic contract. The cache boundary is the registry lifecycle:
+    # ``registry.clear()`` resets the snapshot, so ``override_settings`` +
+    # ``registry.clear()`` + rebuild flips the strategy with no process-global.
+    current_globalid_setting = _validated_globalid_setting()
+    if registry._globalid_setting_snapshot is GLOBALID_SETTING_UNSET:
+        registry._globalid_setting_snapshot = current_globalid_setting
+    elif current_globalid_setting != registry._globalid_setting_snapshot:
+        # Retry path (the recover-in-place contract after a partial failure): the
+        # snapshot already stamped some Relay types under the prior value. A
+        # differing configured value now would produce a mixed-strategy schema
+        # (some types stamped old, the rest new), so refuse and require a clean
+        # rebuild rather than silently mixing.
+        raise ConfigurationError(
+            "RELAY_GLOBALID_STRATEGY changed between finalization attempts "
+            f"({registry._globalid_setting_snapshot!r} -> {current_globalid_setting!r}); "
+            "a retry after a partial finalize must reuse the original snapshot to "
+            "avoid a mixed-strategy schema. Call registry.clear() first, then "
+            "rebuild under the new value.",
+        )
+
     _audit_primary_ambiguity(multi_type_models)
 
     unresolved: list[PendingRelation] = []
@@ -773,7 +802,11 @@ def finalize_django_types() -> None:
         if implements_relay_node(type_cls):
             _check_composite_pk_for_relay_node(type_cls)
             install_relay_node_resolvers(type_cls)
-            install_globalid_typename_resolver(type_cls, definition)
+            install_globalid_typename_resolver(
+                type_cls,
+                definition,
+                registry._globalid_setting_snapshot,
+            )
         if definition.cursor_field is not None:
             # Keyset-cursor column contract (the ``stable_cursor_field``
             # finalization half): every ``Meta.cursor_field`` entry must be a
@@ -1627,6 +1660,87 @@ def _bind_ordersets() -> None:
     )
 
 
+def _audit_globalid_filter_strategies(wired: list[type]) -> None:
+    """Filter-only subpass 2.5: reject GlobalID filters bound to encode-only targets.
+
+    Runs AFTER every Relay type's ``effective_globalid_strategy`` is stamped
+    (Phase 2.5 install; see the ``_bind_filtersets`` docstring and
+    ``install_globalid_typename_resolver``). Every ``GlobalIDFilter`` /
+    ``GlobalIDMultipleChoiceFilter`` on a bound filterset resolves the target
+    definition it would validate against -- the owner itself for the own-PK
+    branch, the relation target otherwise -- through the same single-sited
+    resolver the runtime path uses
+    (``filters/base.py::resolve_globalid_target_definition``).
+
+    When that target's ``effective_globalid_strategy`` is ``callable`` or
+    ``custom``, the strategy is encode-only: ``decode_global_id`` has no decode
+    path for it, so a typed filter input of the target's GlobalID could never
+    validly consume the IDs the target emits. That mismatch surfaces here -- at
+    schema build, naming the filterset and field -- rather than as the runtime
+    backstop reject in ``_decode_and_validate_global_id`` on the first request
+    that hits the input.
+    """
+    from ..filters.base import (
+        ENCODE_ONLY_GLOBALID_STRATEGIES,
+        GlobalIDFilter,
+        GlobalIDMultipleChoiceFilter,
+        resolve_globalid_target_definition,
+    )
+
+    for filterset_cls in wired:
+        owner = filterset_cls._owner_definition
+        for field_name, filter_instance in (filterset_cls.get_filters() or {}).items():
+            if not isinstance(filter_instance, GlobalIDFilter | GlobalIDMultipleChoiceFilter):
+                continue
+            target = resolve_globalid_target_definition(owner, filter_instance.field_name)
+            if target is None:
+                continue
+            strategy = target.effective_globalid_strategy
+            if strategy in ENCODE_ONLY_GLOBALID_STRATEGIES:
+                raise ConfigurationError(
+                    _format_globalid_encode_only_filter_error(
+                        filterset_cls,
+                        field_name,
+                        target,
+                        strategy,
+                    ),
+                )
+
+
+def _format_globalid_encode_only_filter_error(
+    filterset_cls: type,
+    field_name: str,
+    target: DjangoTypeDefinition,
+    strategy: str,
+) -> str:
+    """Build the encode-only GlobalID-filter ConfigurationError message."""
+    return (
+        f"Cannot finalize Django types: filterset {filterset_cls.__qualname__} declares "
+        f"GlobalID filter '{field_name}' targeting {target.graphql_type_name}, whose "
+        f"globalid strategy is '{strategy}'. The '{strategy}' strategy is encode-only "
+        f"(no decode path exists), so this filter input could never validly consume the "
+        f"IDs its target emits. Remove the filter or give {target.graphql_type_name} a "
+        f"decodable globalid strategy (model / type / type+model)."
+    )
+
+
+def _audit_filterset_subpass_2_5(wired: list[type]) -> None:
+    """Run every filter-only subpass-2.5 audit in order over the wired filtersets.
+
+    1. ``_audit_unregistered_related_filter_targets`` -- every reachable
+       ``RelatedFilter`` target must be registered.
+    2. ``_audit_globalid_filter_strategies`` -- no ``GlobalIDFilter`` /
+       ``GlobalIDMultipleChoiceFilter`` may target an encode-only
+       (``callable`` / ``custom``) strategy.
+
+    The related-target audit runs first: an unregistered relation target makes
+    the relation head unresolvable, so running it first keeps the GlobalID
+    audit's target resolution operating on a validated relation graph.
+    """
+    _audit_unregistered_related_filter_targets(wired)
+    _audit_globalid_filter_strategies(wired)
+
+
 def _bind_filtersets() -> None:
     """Run the four ordered phase-2.5 subpasses for filterset binding.
 
@@ -1682,6 +1796,6 @@ def _bind_filtersets() -> None:
             materialize=materialize_input_class,
             format_orphans=_format_orphan_filtersets_error,
             expand=_expand_filterset,
-            post_expand_audit=_audit_unregistered_related_filter_targets,
+            post_expand_audit=_audit_filterset_subpass_2_5,
         ),
     )

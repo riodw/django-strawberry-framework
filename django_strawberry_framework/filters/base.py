@@ -49,6 +49,21 @@ from ..sets_mixins import RelatedSetTargetMixin
 from ..types.relay import MODEL_LABEL_STRATEGIES, TYPE_NAME_STRATEGIES
 from ..utils.querysets import coerce_field_value_or_none
 
+# The three framework strategies whose emitted GlobalID a filter input CAN
+# decode + validate (``model`` / ``type`` / ``type+model``). Derived from the
+# encoder's own payload-shape memberships so the "validatable on a filter" set
+# cannot drift from the "emitted by the encoder" set.
+FRAMEWORK_GLOBALID_STRATEGIES = MODEL_LABEL_STRATEGIES | TYPE_NAME_STRATEGIES
+# ``callable`` / ``custom`` are encode-only in the GlobalID system (there is
+# deliberately no decode path - see ``types/relay.py`` #"no ``{"callable",
+# "custom"}`` literal"). A typed filter input for such a target can never
+# validly consume the IDs its target emits, so the build-time audit
+# (``finalizer._audit_globalid_filter_strategies``) rejects those bindings and
+# this runtime guard is the defense-in-depth backstop for hand-built filtersets
+# constructed outside finalization. The names are needed for the reject message
+# so the literal lives here rather than being derived by exclusion.
+ENCODE_ONLY_GLOBALID_STRATEGIES = frozenset({"callable", "custom"})
+
 if TYPE_CHECKING:  # pragma: no cover - type-checking-only import.
     from django.http import HttpRequest
     from django_filters.filterset import BaseFilterSet
@@ -362,7 +377,27 @@ def _target_definition_for(filter_instance: Filter) -> DjangoTypeDefinition | No
     owner = getattr(parent, "_owner_definition", None) if parent is not None else None
     if owner is None:
         return None
-    field_name = filter_instance.field_name or ""
+    return resolve_globalid_target_definition(owner, filter_instance.field_name)
+
+
+def resolve_globalid_target_definition(
+    owner: DjangoTypeDefinition,
+    field_name: str | None,
+) -> DjangoTypeDefinition | None:
+    """Resolve the target definition a GlobalID filter validates against, given its owner.
+
+    The own-PK-vs-relation resolution of ``_target_definition_for`` factored out
+    of the ``filter_instance.parent`` accessor so the finalizer's build-time
+    audit (``finalizer._audit_globalid_filter_strategies``) resolves the SAME
+    target definition from a bound ``filterset_cls._owner_definition`` +
+    ``filter.field_name`` that the runtime path resolves from a live filter
+    instance - the own-PK-vs-relation decision stays single-sited here.
+
+    Returns the owner itself for the own-PK branch, the related target's
+    definition for a relation head, or ``None`` when the relation head does not
+    resolve to a registered target.
+    """
+    field_name = field_name or ""
     head, _sep, _tail = field_name.partition("__")
     pk_name = getattr(owner.model._meta.pk, "name", None)
     if head == pk_name or field_name == pk_name:
@@ -385,13 +420,15 @@ def _accepted_globalid_type_names(definition: DjangoTypeDefinition | None) -> se
     - ``model`` -> the model label only (``definition.model._meta.label_lower``).
     - ``type`` -> the ``graphql_type_name`` only (pre-0.0.9 behavior).
     - ``type+model`` -> either the model label or the ``graphql_type_name``.
-    - ``callable`` / ``custom`` (the framework cannot compute the label), or an
-      unbound owner / unresolvable target (``definition is None``), or an absent
-      (``None``) ``effective_globalid_strategy`` (a non-finalized / non-Relay
-      definition) -> ``None`` (node-id-only fallback; the ``type_name`` guard is
-      skipped). The filter is defense-in-depth, not the uniform-error contract
-      decode owns, so it never raises for an unknown/absent strategy - it falls
-      back to node-id-only, mirroring the existing unbound-owner fallback.
+    - ``definition is None`` (unbound owner / unresolvable target) -> ``None``
+      (node-id-only fallback; the ``type_name`` guard is skipped).
+
+    ``_decode_and_validate_global_id`` calls this only after it has fail-closed
+    on the encode-only (``callable`` / ``custom``) and lifecycle-defect
+    (``effective_globalid_strategy is None`` on a known definition) cases, so a
+    non-``None`` definition passed here always carries a framework strategy and
+    always yields a non-empty accepted set. The ``accepted or None`` collapse is
+    kept as a defensive belt only.
     """
     if definition is None:
         return None
@@ -421,10 +458,17 @@ def _decode_and_validate_global_id(
     mismatch: filter expects <expected> but received <actual>")` when the
     decoded `type_name` is not in the accepted set for the three framework
     strategies (spec-027 #"filter expects <expected> but received <actual>",
-    now strategy-aware per spec-031 Decision 13). `callable` / `custom` types,
-    an unbound owner,
-    or an unresolvable target fall back to node-id-only (the `type_name` guard
-    is skipped). A malformed wire string (unparseable base64 / not a
+    now strategy-aware per spec-031 Decision 13). An unbound owner or an
+    unresolvable target (`definition is None`) falls back to node-id-only (the
+    `type_name` guard is skipped). A target on a `callable` / `custom`
+    (encode-only) strategy, or a known target whose
+    `effective_globalid_strategy` is `None` (an unfinalized / non-Relay
+    lifecycle defect), is a fail-closed reject with a coded
+    `GraphQLError(..., extensions={"code": "GLOBALID_UNVALIDATABLE"})` - the
+    runtime backstop behind the build-time audit
+    (`finalizer._audit_globalid_filter_strategies`) for hand-built filtersets
+    constructed outside finalization. A malformed wire string (unparseable
+    base64 / not a
     `type_name:node_id` payload) raises `GraphQLError(..., extensions={"code":
     "GLOBALID_INVALID"})` - the uniform coded error the node-refetch path emits
     (`relay.py::_decode_or_graphql_error`) - instead of leaking Strawberry's raw
@@ -455,6 +499,33 @@ def _decode_and_validate_global_id(
                 extensions={"code": "GLOBALID_INVALID"},
             ) from exc
     definition = _target_definition_for(filter_instance)
+    if definition is not None:
+        strategy = definition.effective_globalid_strategy
+        if strategy not in FRAMEWORK_GLOBALID_STRATEGIES:
+            # Fail closed: the target emits GlobalIDs a filter input cannot
+            # decode + validate. ``callable`` / ``custom`` are encode-only; a
+            # ``None`` strategy on a known definition is a lifecycle defect
+            # (the type was never finalized / is not Relay-shaped). Both are
+            # normally blocked at schema build by
+            # ``finalizer._audit_globalid_filter_strategies``; this backstop
+            # covers filtersets hand-built outside finalization.
+            suffix = "" if index is None else f" at index {index}"
+            if strategy in ENCODE_ONLY_GLOBALID_STRATEGIES:
+                message = (
+                    f"GlobalID for a {strategy}-strategy type "
+                    f"({definition.graphql_type_name}) cannot be validated on a filter "
+                    f"input; these strategies are encode-only{suffix}."
+                )
+            else:
+                message = (
+                    f"GlobalID filter target {definition.graphql_type_name} has no "
+                    f"recorded globalid strategy; the type was not finalized as a Relay "
+                    f"node, so its filter input cannot validate a GlobalID{suffix}."
+                )
+            raise GraphQLError(
+                message,
+                extensions={"code": "GLOBALID_UNVALIDATABLE"},
+            )
     accepted = _accepted_globalid_type_names(definition)
     if accepted is not None and decoded.type_name not in accepted:
         suffix = "" if index is None else f" at index {index}"

@@ -16,10 +16,12 @@ from asgiref.sync import sync_to_async
 from django.db.models import CompositePrimaryKey
 from strawberry import relay
 
-from django_strawberry_framework import DjangoType, finalize_django_types
+from django_strawberry_framework import DjangoType, conf, finalize_django_types
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.optimizer.field_meta import FieldMeta
 from django_strawberry_framework.registry import registry
+from django_strawberry_framework.types import base as types_base
+from django_strawberry_framework.types import finalizer as types_finalizer
 from django_strawberry_framework.types.base import _build_annotations, _validate_interfaces
 from django_strawberry_framework.types.definition import DjangoTypeDefinition
 from django_strawberry_framework.types.relay import (
@@ -1653,12 +1655,7 @@ def test_globalid_type_plus_model_emits_model_label():
 def test_globalid_callable_strategy_emits_custom():
     """A callable returns the type-name slot and it appears in the emitted GlobalID."""
 
-    def encoder(
-        type_cls,
-        model,
-        root,
-        info,
-    ):
+    def encoder(type_cls, model, root):
         return f"custom:{model._meta.label_lower}"
 
     class CategoryNode(DjangoType):
@@ -1688,12 +1685,7 @@ def test_globalid_callable_non_string_return_raises(bad_return):
     The installed closure raises (not Strawberry's ``Node._id`` ``AssertionError``).
     """
 
-    def encoder(
-        type_cls,
-        model,
-        root,
-        info,
-    ):
+    def encoder(type_cls, model, root):
         return bad_return
 
     class CategoryNode(DjangoType):
@@ -1719,24 +1711,14 @@ def test_encode_typename_helper_dispatch():
 
     finalize_django_types()
     definition = _definition_of(CategoryNode)
-    assert (
-        encode_typename(definition, "model", CategoryNode, object(), None) == "products.category"
-    )
-    assert (
-        encode_typename(definition, "type+model", CategoryNode, object(), None)
-        == "products.category"
-    )
-    assert encode_typename(definition, "type", CategoryNode, object(), None) == "CategoryNode"
+    assert encode_typename(definition, "model", CategoryNode, object()) == "products.category"
+    assert encode_typename(definition, "type+model", CategoryNode, object()) == "products.category"
+    assert encode_typename(definition, "type", CategoryNode, object()) == "CategoryNode"
 
-    def encoder(
-        type_cls,
-        model,
-        root,
-        info,
-    ):
+    def encoder(type_cls, model, root):
         return "from-callable"
 
-    assert encode_typename(definition, encoder, CategoryNode, object(), None) == "from-callable"
+    assert encode_typename(definition, encoder, CategoryNode, object()) == "from-callable"
 
 
 def test_consumer_resolve_typename_override_preserved_and_recorded_custom():
@@ -2095,12 +2077,7 @@ def test_routing_audit_sees_child_true_recorded_strategy():
     The child's true ``model`` recording must trip the routing audit.
     """
 
-    def encoder(
-        type_cls,
-        model,
-        root,
-        info,
-    ):
+    def encoder(type_cls, model, root):
         return "custom-payload"
 
     class PrimaryNode(DjangoType):
@@ -2165,12 +2142,7 @@ def test_plain_function_resolve_typename_is_not_classified_override():
 def test_callable_setting_well_formed_accepted(settings):
     """A well-formed callable ``RELAY_GLOBALID_STRATEGY`` setting is accepted (-> ``callable``)."""
 
-    def encoder(
-        type_cls,
-        model,
-        root,
-        info,
-    ):
+    def encoder(type_cls, model, root):
         return "from-setting"
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
@@ -2207,12 +2179,7 @@ def test_callable_setting_wrong_arity_raises(settings):
 def test_callable_setting_async_raises(settings):
     """An ``async def`` callable setting raises at finalization, naming the setting."""
 
-    async def encoder(
-        type_cls,
-        model,
-        root,
-        info,
-    ):
+    async def encoder(type_cls, model, root):
         return "x"
 
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
@@ -2242,7 +2209,6 @@ def test_callable_setting_async_callable_object_raises(settings):
             type_cls,
             model,
             root,
-            info,
         ):
             return "x"
 
@@ -2273,7 +2239,6 @@ def test_callable_setting_partial_wrapped_async_callable_raises(settings):
             type_cls,
             model,
             root,
-            info,
         ):
             return "x"
 
@@ -2289,6 +2254,230 @@ def test_callable_setting_partial_wrapped_async_callable_raises(settings):
 
     with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
         finalize_django_types()
+
+
+# ---------------------------------------------------------------------------
+# The registry-lifecycle validated setting snapshot (one read + one validation
+# per finalization; fail-loud even with zero / all-overriding Relay types;
+# retry-lifecycle mixed-strategy guard; no request-time read; clear-and-rebuild
+# flips the strategy with no process-global).
+# ---------------------------------------------------------------------------
+
+
+def test_invalid_setting_raises_when_all_types_meta_override(settings):
+    """An invalid setting raises even when every Relay type overrides via Meta.
+
+    Pre-snapshot the setting was read once per DEFAULTED type, so a schema where
+    every type carries ``Meta.globalid_strategy`` never read (never validated) an
+    invalid setting. The unconditional snapshot closes that hole.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "nonsense"}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+            globalid_strategy = "type"
+
+    with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
+        finalize_django_types()
+
+
+def test_invalid_setting_raises_when_only_type_has_resolve_typename_override(settings):
+    """An invalid setting raises even when the only type overrides ``resolve_typename``."""
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "nonsense"}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+        @classmethod
+        def resolve_typename(cls, root, info):
+            return "ConsumerOwned"
+
+    with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
+        finalize_django_types()
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "nonsense",
+        lambda type_cls, model: "x",  # wrong arity (2-arg)
+    ],
+    ids=["invalid-string", "wrong-arity-callable"],
+)
+def test_invalid_setting_raises_with_zero_relay_types(settings, bad_value):
+    """An explicitly invalid setting raises with ZERO Relay types registered.
+
+    Pins the new fail-loud scope: the snapshot is computed unconditionally, so an
+    invalid ``RELAY_GLOBALID_STRATEGY`` fails the build even when the resolver
+    would never otherwise read it.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": bad_value}
+    with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
+        finalize_django_types()
+
+
+def test_invalid_async_callable_setting_raises_with_zero_relay_types(settings):
+    """An ``async def`` callable setting raises with zero Relay types (sync-ness check)."""
+
+    async def encoder(type_cls, model, root):
+        return "x"
+
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": encoder}
+    with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
+        finalize_django_types()
+
+
+def test_setting_read_and_validated_once_per_finalize(settings, monkeypatch):
+    """N defaulted types -> exactly ONE setting read AND ONE validation per finalize.
+
+    Counting monkeypatches on BOTH ``conf.relay_globalid_strategy_setting`` and
+    ``types/base.py::_validate_globalid_strategy`` (the two collaborators of
+    ``_validated_globalid_setting``), installed AFTER the type bodies run so only
+    the finalization pass is measured. The prior read-per-defaulted-type design
+    would score N of each.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type"}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    class ItemNode(DjangoType):
+        class Meta:
+            model = Item
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    read_calls = 0
+    validate_calls = 0
+    real_read = conf.relay_globalid_strategy_setting
+    real_validate = types_base._validate_globalid_strategy
+
+    def _counting_read():
+        nonlocal read_calls
+        read_calls += 1
+        return real_read()
+
+    def _counting_validate(*args, **kwargs):
+        nonlocal validate_calls
+        validate_calls += 1
+        return real_validate(*args, **kwargs)
+
+    monkeypatch.setattr(conf, "relay_globalid_strategy_setting", _counting_read)
+    monkeypatch.setattr(types_base, "_validate_globalid_strategy", _counting_validate)
+
+    finalize_django_types()
+    assert read_calls == 1
+    assert validate_calls == 1
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "type"
+    assert _definition_of(ItemNode).effective_globalid_strategy == "type"
+
+
+def test_no_request_time_setting_read(settings, monkeypatch):
+    """After finalize, id / typename resolution never re-reads the setting.
+
+    The strategy is resolved once (finalize) into the installed closure, so a
+    reader that raises post-finalize does not disturb emission.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+
+    def _boom():
+        raise AssertionError("relay_globalid_strategy_setting must not run post-finalize")
+
+    monkeypatch.setattr(conf, "relay_globalid_strategy_setting", _boom)
+    # Emission (default ``model``) still works without touching the reader.
+    assert _emitted_typename(CategoryNode) == "products.category"
+
+
+def test_retry_lifecycle_rejects_setting_change_no_mixed_strategy(settings, monkeypatch):
+    """A retry after a partial finalize with a CHANGED setting raises (no mixed schema).
+
+    A Phase-3 failure stamps >= 1 type under the snapshotted value while leaving
+    ``finalized = False`` (the recover-in-place contract). If the configured value
+    then differs, the retry must refuse rather than stamp the rest under a new
+    value; ``registry.clear()`` + rebuild under the new value succeeds.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type"}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("phase-3 boom")
+
+    monkeypatch.setattr(types_finalizer.strawberry, "type", _boom)
+    with pytest.raises(RuntimeError, match="phase-3 boom"):
+        finalize_django_types()
+    # The type was stamped under the snapshot in Phase 2.5, before Phase 3 failed.
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "type"
+    assert registry._globalid_setting_snapshot == "type"
+
+    # Changing the setting and retrying trips the mixed-strategy guard.
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type+model"}
+    with pytest.raises(ConfigurationError, match="changed between finalization attempts"):
+        finalize_django_types()
+
+    # A clean rebuild under the new value succeeds (snapshot reset by clear()).
+    monkeypatch.undo()
+    registry.clear()
+
+    class CategoryNodeRebuilt(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    assert _definition_of(CategoryNodeRebuilt).effective_globalid_strategy == "type+model"
+
+
+def test_clear_and_rebuild_flips_strategy_no_process_global(settings):
+    """override_settings + registry.clear() + rebuild flips the schema-wide strategy.
+
+    Proves the snapshot's cache boundary is the registry lifecycle, not a
+    module/process global.
+    """
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type"}
+
+    class CategoryNode(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    assert _definition_of(CategoryNode).effective_globalid_strategy == "type"
+
+    registry.clear()
+    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type+model"}
+
+    class CategoryNodeAgain(DjangoType):
+        class Meta:
+            model = Category
+            fields = ("id", "name")
+            interfaces = (relay.Node,)
+
+    finalize_django_types()
+    assert _definition_of(CategoryNodeAgain).effective_globalid_strategy == "type+model"
 
 
 # ---------------------------------------------------------------------------
@@ -2423,12 +2612,7 @@ def test_decode_type_strategy_rejects_model_label_id():
 def test_decode_callable_strategy_has_no_decode_path():
     """A payload resolving to a ``callable``-strategy type raises (encode-only)."""
 
-    def encoder(
-        type_cls,
-        model,
-        root,
-        info,
-    ):
+    def encoder(type_cls, model, root):
         return model._meta.label_lower
 
     class CategoryNode(DjangoType):

@@ -100,8 +100,9 @@ HIDE_FLAT_FILTERS_KEY = "HIDE_FLAT_FILTERS"
 
 # Schema-wide default GlobalID type-name-slot strategy for Relay-Node-shaped
 # types without a per-type ``Meta.globalid_strategy`` (spec-031 Decision 5;
-# see ``types/relay.py::_resolve_globalid_strategy``, which validates the
-# value where the strategy vocabulary lives). Defaults to ``None`` - no
+# see ``types/relay.py::_validated_globalid_setting``, the finalizer's
+# once-per-finalization snapshot that validates the value where the strategy
+# vocabulary lives). Defaults to ``None`` - no
 # schema-wide override; the ``DEFAULT_GLOBALID_STRATEGY`` package default
 # applies downstream.
 RELAY_GLOBALID_STRATEGY_KEY = "RELAY_GLOBALID_STRATEGY"
@@ -423,10 +424,10 @@ def relay_globalid_strategy_setting() -> str | Callable[..., str] | None:
     Reads ``DJANGO_STRAWBERRY_FRAMEWORK["RELAY_GLOBALID_STRATEGY"]``,
     defaulting to ``None`` ("no schema-wide override") when the key (or the
     whole settings dict) is absent. Consumed by
-    ``types/relay.py::_resolve_globalid_strategy`` at finalization, where the
-    value is validated through the shared ``_validate_globalid_strategy``
-    rule - ``conf.py`` stays a thin reader that does not validate domain
-    values.
+    ``types/relay.py::_validated_globalid_setting`` (the finalizer's
+    once-per-finalization setting snapshot), where the value is validated
+    through the shared ``_validate_globalid_strategy`` rule - ``conf.py`` stays
+    a thin reader that does not validate domain values.
     """
     return getattr(settings, RELAY_GLOBALID_STRATEGY_KEY, None)
 

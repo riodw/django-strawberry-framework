@@ -134,12 +134,7 @@ def test_global_id_for_type_plus_model_strategy():
 def _callable_strategy_type():
     """A Relay type whose ``Meta.globalid_strategy`` is a consumer callable."""
 
-    def _encoder(
-        type_cls,
-        model,
-        root,
-        info,
-    ):
+    def _encoder(type_cls, model, root):
         return "products.category"
 
     return _make_node_type("CategoryNode", strategy=_encoder)
@@ -167,7 +162,7 @@ def _custom_override_type():
     ids=["callable", "custom"],
 )
 def test_global_id_for_callable_or_custom_raises(build_type, expected_classification):
-    """``callable`` / ``custom`` encoders need a live (root, info) pair -> raise."""
+    """``callable`` / ``custom`` encoders need a live root -> raise."""
     type_cls = build_type()
     finalize_django_types()
     definition = type_cls.__django_strawberry_definition__
@@ -176,7 +171,7 @@ def test_global_id_for_callable_or_custom_raises(build_type, expected_classifica
         global_id_for(type_cls, 1)
     message = str(excinfo.value)
     assert "global_id_for" in message
-    assert "(root, info)" in message
+    assert "live root" in message
     assert repr(expected_classification) in message
 
 

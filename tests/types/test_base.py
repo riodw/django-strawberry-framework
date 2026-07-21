@@ -778,15 +778,10 @@ def test_meta_globalid_strategy_wrong_type_raises():
 
 
 def test_meta_globalid_strategy_callable_accepted_and_stored():
-    """A well-formed sync four-arg encoder validates and is stored on the definition."""
+    """A well-formed sync three-arg encoder validates and is stored on the definition."""
     from strawberry import relay
 
-    def encode(
-        type_cls,
-        model,
-        root,
-        info,
-    ):
+    def encode(type_cls, model, root):
         return "custom"
 
     class CategoryType(DjangoType):
@@ -807,7 +802,35 @@ def test_meta_globalid_strategy_callable_wrong_arity_raises():
     def encode(type_cls, model):
         return "custom"
 
-    with pytest.raises(ConfigurationError, match=r"\(type_cls, model, root, info\)"):
+    with pytest.raises(ConfigurationError, match=r"\(type_cls, model, root\)"):
+
+        class CategoryType(DjangoType):
+            class Meta:
+                model = Category
+                fields = CATEGORY_SCALAR_FIELDS
+                interfaces = (relay.Node,)
+                globalid_strategy = encode
+
+
+def test_meta_globalid_strategy_callable_old_four_arg_signature_rejected():
+    """The pre-1.0 4-arg ``(type_cls, model, root, info)`` encoder is now rejected.
+
+    ``info`` was dropped from the callable-encoder contract; a callable that still
+    requires the old fourth positional cannot bind the 3-arg probe, so it fails
+    loud at type creation naming the new ``(type_cls, model, root)`` shape rather
+    than raising an opaque ``TypeError`` at the first encode.
+    """
+    from strawberry import relay
+
+    def encode(
+        type_cls,
+        model,
+        root,
+        info,
+    ):
+        return "custom"
+
+    with pytest.raises(ConfigurationError, match=r"\(type_cls, model, root\)"):
 
         class CategoryType(DjangoType):
             class Meta:
@@ -821,12 +844,7 @@ def test_meta_globalid_strategy_async_callable_raises():
     """An ``async def`` encoder is rejected at type creation (the sync-ness check)."""
     from strawberry import relay
 
-    async def encode(
-        type_cls,
-        model,
-        root,
-        info,
-    ):
+    async def encode(type_cls, model, root):
         return "custom"
 
     with pytest.raises(ConfigurationError, match="must be sync"):
@@ -856,7 +874,6 @@ def test_meta_globalid_strategy_async_callable_object_raises():
             type_cls,
             model,
             root,
-            info,
         ):
             return "custom.label"
 
@@ -887,7 +904,6 @@ def test_meta_globalid_strategy_partial_wrapped_async_callable_raises():
             type_cls,
             model,
             root,
-            info,
         ):
             return "custom.label"
 
@@ -931,16 +947,20 @@ def test_meta_globalid_strategy_absent_leaves_definition_none():
 
 
 def test_resolve_globalid_strategy_precedence(settings):
-    """``_resolve_globalid_strategy`` applies Meta -> setting -> ``"model"`` default.
+    """``_resolve_globalid_strategy`` is pure precedence: Meta -> snapshot -> ``"model"``.
 
-    Also pins the unknown-setting failure: the setting path validates through
-    the same rule as the ``Meta`` path, raising ``ConfigurationError`` whose
-    message names ``RELAY_GLOBALID_STRATEGY`` (the setting framing, distinct from
-    the type-named ``Meta`` framing).
+    The resolver no longer reads or validates the setting - it takes the
+    pre-validated snapshot as an argument. ``_validated_globalid_setting`` owns
+    the read + validation, including the unknown-setting failure whose message
+    names ``RELAY_GLOBALID_STRATEGY`` (the setting framing, distinct from the
+    type-named ``Meta`` framing).
     """
     from strawberry import relay
 
-    from django_strawberry_framework.types.relay import _resolve_globalid_strategy
+    from django_strawberry_framework.types.relay import (
+        _resolve_globalid_strategy,
+        _validated_globalid_setting,
+    )
 
     class MetaWinsType(DjangoType):
         class Meta:
@@ -958,22 +978,25 @@ def test_resolve_globalid_strategy_precedence(settings):
     meta_def = MetaWinsType.__django_strawberry_definition__
     no_meta_def = NoMetaType.__django_strawberry_definition__
 
-    # Tier 1: Meta override beats the setting.
-    settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type+model"}
-    assert _resolve_globalid_strategy(meta_def) == "type"
+    # Tier 1: Meta override beats the snapshot.
+    assert _resolve_globalid_strategy(meta_def, "type+model") == "type"
 
-    # Tier 2: setting beats the package default.
+    # Tier 2: the snapshot beats the package default.
+    assert _resolve_globalid_strategy(no_meta_def, "type") == "type"
+
+    # Tier 3: no Meta + no snapshot (None) -> the "model" package default.
+    assert _resolve_globalid_strategy(no_meta_def, None) == "model"
+
+    # ``_validated_globalid_setting`` reads + validates the setting.
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "type"}
-    assert _resolve_globalid_strategy(no_meta_def) == "type"
-
-    # Tier 3: no Meta + no setting -> the "model" package default.
+    assert _validated_globalid_setting() == "type"
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {}
-    assert _resolve_globalid_strategy(no_meta_def) == "model"
+    assert _validated_globalid_setting() is None
 
     # Unknown setting value -> ConfigurationError naming the setting.
     settings.DJANGO_STRAWBERRY_FRAMEWORK = {"RELAY_GLOBALID_STRATEGY": "nonsense"}
     with pytest.raises(ConfigurationError, match="RELAY_GLOBALID_STRATEGY"):
-        _resolve_globalid_strategy(no_meta_def)
+        _validated_globalid_setting()
 
 
 def test_meta_rejects_unknown_key():

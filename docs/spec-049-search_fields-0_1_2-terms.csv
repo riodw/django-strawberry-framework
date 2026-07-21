@@ -1,0 +1,26 @@
+term,anchor,notes
+`Meta.search_fields`,metasearch_fields,the surface this card ships; Slice 5 flips planned-for-0.1.2 to shipped
+`DjangoConnectionField`,djangoconnectionfield,where the search: String argument surfaces; dependency DONE-030-0.0.9
+`FilterSet`,filterset,sibling sidecar search composes with by intersection; deliberately NOT the host of search application (Decision 1)
+`Meta.filterset_class`,metafilterset_class,declared-sidecar precedent the synthesized argument mirrors
+`OrderSet`,orderset,downstream pipeline neighbor
+`Meta.orderset_class`,metaorderset_class,downstream pipeline neighbor's Meta key
+`DjangoType`,djangotype,the declaring owner type
+`Meta.fields`,metafields,schema-shape Non-goal: search never adds output fields
+`Meta.exclude`,metaexclude,named alongside Meta.fields in the schema-shape Non-goal
+`get_queryset` visibility hook,get_queryset-visibility-hook,search runs strictly post-visibility (Decision 6)
+`apply_cascade_permissions`,apply_cascade_permissions,cascade composition; search cannot reveal hidden rows
+`ConfigurationError`,configurationerror,raise type for declaration-time and finalize-time validation
+`finalize_django_types`,finalize_django_types,phase 2.5 hosts path validation and the distinct precompute
+Joint version cut,joint-version-cut,0.1.2 shared with card 050; bump deferred (Decision 10)
+`DjangoListField`,djangolistfield,search: on list fields is out of scope; open question in Risks
+Single-upstream parity,single-upstream-parity,borrowing posture: django-graphene-filters is the only upstream with this shape
+Cookbook parity,cookbook-parity,verbatim carry-over promise for graphene-era search_fields tuples
+Definition-order independence,definition-order-independence,why path validation waits for finalize (Decision 2)
+`filter_input_type`,filter_input_type,Decision 9: no search key injected into generated filter inputs
+Live-first coverage mandate,live-first-coverage-mandate,governs Slice 4 test placement
+`Meta.aggregate_class`,metaaggregate_class,sole DEFERRED_META_KEYS member after 048+049 land; 052 scope
+`AggregateSet`,aggregateset,remaining sidecar sibling (0.1.3)
+`FieldSet`,fieldset,spec-048 surface; ships before this card
+`Meta.fields_class`,metafields_class,spec-048 promotion precedent Decision 8 mirrors
+`Meta.choice_enum_names`,metachoice_enum_names,out-of-scope 0.1.4-line key

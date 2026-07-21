@@ -122,11 +122,20 @@ XL: four work packages spanning ~30 files, but each candidate is small and
 independently verifiable; the weight is breadth, not depth.
 
 - [ ] **Slice 1 — Boundary hardening (WP-A)**
+  - [ ] **A0 re-baseline** (before any DRY slice acts): commit `60998b17`
+        ("seal get_queryset hook results into framework-owned querysets",
+        2026-07-20, +1,677 lines to `utils/querysets.py`) landed AFTER the
+        four DRY audits collected their figures. Re-measure the audit totals
+        (the ~1,100–1,300 / 32-candidate estimate, the ~47.3k/~19.7k package
+        sizes, and Decision 1's ~12k/~25% import-closure figure) against the
+        post-`60998b17` tree, and refresh any candidate touching
+        `utils/querysets.py` before Slices 2–4 act on it.
   - [ ] **A2 first** (it makes A1's contracts satisfiable): promote the
         optimizer's inward-facing API. `optimizer/__init__.py` re-exports the
         deliberate cross-boundary surface (the `_context` names consumed by
-        `types/resolvers.py` and `mutations/resolvers.py`; `plans.resolver_key`
-        / `plans.runtime_path_from_info`; the `extension` / `nested_planner` /
+        `types/resolvers.py`; the `extension` symbols consumed by
+        `mutations/resolvers.py` and `connection.py`; `plans.resolver_key`
+        / `plans.runtime_path_from_info`; the `nested_planner` /
         `selections` symbols `connection.py` consumes; `FieldMeta`;
         `OptimizerHint`) with a docstring naming it the package-internal
         contract. Retarget the three consumer files; no behavior change.
@@ -206,10 +215,11 @@ duplication that makes every cross-cutting change cost more than it should.
 ## Current state
 
 - The optimizer imports `registry`, `keyset`, `exceptions`, `conf`, and six
-  `utils` modules; in the other direction `types/resolvers.py`,
-  `mutations/resolvers.py`, and `connection.py` import optimizer internals
-  including the private `_context` module. No mechanical check guards any of
-  this.
+  `utils` modules; in the other direction `types/resolvers.py` imports the
+  private `_context` module, while `mutations/resolvers.py` and
+  `connection.py` import optimizer internals through `extension` (and
+  `connection.py` also `nested_planner` / `plans` / `selections`). No
+  mechanical check guards any of this.
 - Soft dependencies (DRF, channels, cryptography, debug-toolbar) are guarded
   at runtime by `require_optional_module` but not advertised as pip extras.
 - Prior DRY work already landed the big shared spines: the write pipeline
@@ -304,16 +314,18 @@ Everything else in this card is package-internal.
 (standalone optimizer package, core depending on it) is rejected.
 
 **Evidence**: (a) the optimizer's minimal import closure is ~12k lines (~25%
-of the package) including `registry`, `keyset`, and — via
+of the package; re-measure post-`60998b17`, which grew `utils/querysets.py`
+by ~1,677 lines — see Slice 1 A0) including `registry`, `keyset`, and — via
 `utils/querysets.py` — the mutation write pipeline
 (`utils/write_transaction.py`); (b) the optimizer's input contract IS the
 type system (`optimizer/walker.py` plans via `registry.get_definition`,
 which returns `types/definition.py::DjangoTypeDefinition` objects only
 [`finalize_django_types`][glossary-finalize_django_types]-built types
 produce), so no external consumer could feed it; (c) reverse coupling is
-wide and partly private (`types/resolvers.py` and `mutations/resolvers.py`
-import `optimizer._context`; `connection.py` imports `extension`,
-`nested_planner`, `plans`, `selections` internals); (d) ecosystem precedent
+wide and partly private (`types/resolvers.py` imports `optimizer._context`;
+`mutations/resolvers.py` and `connection.py` import `optimizer.extension`,
+and `connection.py` also `nested_planner`, `plans`, `selections` internals);
+(d) ecosystem precedent
 is uniformly against it — strawberry-django's optimizer was absorbed FROM a
 separate package (strawberry-django-plus, 2023, ~8x perf gain credited to
 unification), graphene-django-optimizer is heavily used but unmaintained,
@@ -360,7 +372,20 @@ Contracts (initial set):
    authored — card `045`'s extraction reduced it to the guarded
    `django-strawberry-debug` re-export).
 4. **`utils` independence** (`forbidden`): `django_strawberry_framework.utils`
-   imports no feature subpackage (`exceptions` and stdlib/Django only).
+   imports no feature subpackage (`exceptions` and stdlib/Django only), with
+   exactly two sanctioned function-local deferred imports whitelisted via the
+   contract's `ignore_imports` — both exist to break real import cycles, not
+   as boundary leaks:
+   (i) `utils/querysets.py::related_visibility_queryset` does
+   `from ..registry import registry` (deferred because `registry` imports
+   `utils` at module load);
+   (ii) `utils/write_values.py::type_check_relation_id` does
+   `from ..relay import GlobalIDDecode, decode_model_global_id` inside the
+   `relay.GlobalID` branch (deferred because `relay` imports `utils.querysets`
+   at module level — cycle documented at the call site).
+   TYPE_CHECKING-only upward imports (`utils/write_values.py`,
+   `utils/errors.py` -> `mutations.inputs`) are covered by the
+   type-checking-import exclusion (see Risks).
 
 **Alternative rejected**: `scripts/check_import_boundaries.py` in the
 existing repo-tooling style — zero new dependencies but we'd own the import
@@ -375,9 +400,11 @@ optimizer's declared package-internal contract, re-exported from
 consumer inventory to cover: the `_context` names
 (`DST_OPTIMIZER_FK_ID_ELISIONS`, `DST_OPTIMIZER_PLANNED`,
 `DST_OPTIMIZER_STRICTNESS`, `get_context_value`) used by
-`types/resolvers.py` and `mutations/resolvers.py`;
+`types/resolvers.py`;
 `plans.resolver_key` / `plans.runtime_path_from_info`;
-`extension.apply_connection_optimization` and the `nested_planner` /
+`extension.apply_connection_optimization` (used by `mutations/resolvers.py`
+and `connection.py`) and `extension.mutation_payload_child_selections`
+(used by `mutations/resolvers.py`); the `nested_planner` /
 `selections` symbols `connection.py` uses; `field_meta.FieldMeta`;
 `hints.OptimizerHint`; the optimizer `logger`. Pure re-export + retarget; no
 symbol moves, no behavior change. After this, contract 2 of Decision 3 is
@@ -609,9 +636,11 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 
 - **Gate**: the full suite green under `fail_under = 100` at every slice
   boundary (run only at maintainer-invoked gates per `AGENTS.md`). Baseline
-  note: at authoring time the suite carries 49 failures + 1 collection error
-  from unrelated concurrent in-flight work; reconcile the baseline with the
-  maintainer before using the suite as this card's gate.
+  note: the 49-failure + 1-collection-error baseline observed at authoring
+  time has since resolved — the suite returned to green (4,371 passed, 100%
+  coverage) at the `0.0.14` / `DONE-064` close on 2026-07-20; still reconcile
+  the working-tree state with the maintainer before using the suite as this
+  card's gate (concurrent sessions remain active).
 - **Behavior changes get NEW coverage first** (the
   [live-first coverage mandate][glossary-live-first-coverage-mandate]):
   C2's newly-guarded plain-form path and C13's strictness rejections each
@@ -680,8 +709,9 @@ descriptor (`sets_mixins.py`), `PermissionClassesMixin`
 - Any package split or new distribution — rejected, Decision 1.
 - Test-tree DRY, docstring-volume reduction, and process/ceremony changes —
   raised in the maintainer conversation, not carded here.
-- The beta-release cleanup card (now `TODO-BETA-047-0.1.0` after the
-  renumbers) — this card's squeeze does not absorb its verification scope.
+- The beta-release cleanup card (now `TODO-ALPHA-047-0.1.0` after the
+  renumbers — it ushers in the beta and closes the Alpha column) — this
+  card's squeeze does not absorb its verification scope.
 - The `DjangoDebugExtension` extraction — card `045`
   ([`docs/spec-045-debug_extraction-0_0_15.md`][spec-045]), which this card
   depends on.

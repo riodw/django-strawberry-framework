@@ -121,7 +121,12 @@ Terms this spec relies on (statuses per [`docs/GLOSSARY.md`][glossary]):
   (staff / perm-holder / authenticated / anonymous), redaction
   (`is_private → False`), denial (anonymous raises on `updated_date`),
   computed field (`display_name`). Composability: FieldSet + FilterSet,
-  FieldSet + OrderSet, FieldSet + `apply_cascade_permissions`.
+  FieldSet + OrderSet, FieldSet + `apply_cascade_permissions`. This slice
+  activates the already-staged FieldSet classes in
+  `examples/fakeshop/apps/products/fields.py` and owns the stale-comment sweep
+  that activation implies: retarget every pre-renumber `TODO-BETA-046-0.1.1`
+  fieldset comment in `apps/products/schema.py` (7 occurrences) to the shipped
+  `048` id; the sibling search / aggregate comment IDs stay for cards 049 / 051.
 - [ ] **Slice 5 — docs + version cut + card wrap.** GLOSSARY status flips
   (DB + regen), `docs/README.md` / `README.md` / `GOAL.md` / `TODAY.md`
   touch-ups where the surface change is reflected, `docs/TREE.md` regen,
@@ -631,7 +636,7 @@ need appears (Risks).
 | 1 | `django_strawberry_framework/fieldset/__init__.py`, `fieldset/base.py`, `tests/fieldset/test_base.py` | `FieldSet` + `FieldSetMetaclass`: declaration discovery (gates / overrides / computed annotations, inheritance-aware), `Meta.model` + `Meta.depends_on` validation, `ConfigurationError` paths; unit tests one-to-one |
 | 2 | `fieldset/factories.py`, `types/finalizer.py` (`_bind_fieldsets`, phase-2.5 call), `types/base.py` (key promotion + `fields_class` value validation), `types/definition.py` (slot populator docs), `tests/fieldset/test_factories.py`, `tests/types/…` | Owner binding via `_bind_set_owner_common`, wrapper cascade construction, `skip_field_names` extension, promotion out of `DEFERRED_META_KEYS`, idempotent rerun marking |
 | 3 | `fieldset/factories.py`, `types/finalizer.py`, `optimizer/plans.py` (or the plan-construction seam that merges per-type extra columns), `tests/fieldset/test_depends_on.py`, `tests/optimizer/…` | Computed-field transplant + fail-closed audits (Decision 5), `depends_on` union → `only_fields` merge (Decision 7) |
-| 4 | `examples/fakeshop/<app>/fieldsets.py`, fakeshop schema wiring, `examples/fakeshop/test_query/test_fieldset*.py`, `tests/fieldset/test_composability.py` | Live HTTP: tiered visibility / redaction / denial / computed field across the four user tiers; composability with `FilterSet` / `OrderSet` / cascade |
+| 4 | `examples/fakeshop/apps/products/fields.py` (activate the already-staged FieldSet classes — repoint the `AdvancedFieldSet` base to `FieldSet`; not a new file), fakeshop schema wiring, `examples/fakeshop/test_query/test_fieldset*.py`, `tests/fieldset/test_composability.py` | Live HTTP: tiered visibility / redaction / denial / computed field across the four user tiers; composability with `FilterSet` / `OrderSet` / cascade |
 | 5 | `docs/GLOSSARY.md` (DB + regen), `docs/README.md`, `docs/TREE.md` (regen), `README.md`, `GOAL.md`, `TODAY.md`, `KANBAN.md`/`KANBAN.html` (DB + regen), `CHANGELOG.md`, `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock` | Status flips, new `Meta.depends_on` glossary entry, `0.1.1` entry + version quintet, card wrap |
 
 ## Helper-reuse obligations (DRY)
@@ -813,16 +818,18 @@ cannot reach.
 - **Per-row wrapper overhead.** Method-call-only per managed field per row;
   upstream flags the same. Slice 4's query-count tests double as a smoke
   benchmark; no optimization work planned for `0.1.1`.
-- **Fakeshop app choice.** The card predicts no specific app; Slice 4 will
-  wire fieldsets into an existing fakeshop app (products-line models carry
-  suitable datetime / boolean / name fields) rather than adding an app —
-  avoiding the recurring schema-module-list pollution class. If a new app
-  proves necessary, every private schema-module tuple across the test tree
-  must be synced (standing repo constraint).
+- **Fakeshop app choice.** Settled: the `products` app already stages the
+  four FieldSet classes in `examples/fakeshop/apps/products/fields.py`
+  (dormant — the classes subclass an `AdvancedFieldSet` name the framework
+  does not ship, and `apps/products/schema.py`'s import of the module is
+  commented out; Slice 4 activates them). No new app is added, avoiding the
+  recurring schema-module-list pollution class. If a new app ever proves
+  necessary, every private schema-module tuple across the test tree must be
+  synced (standing repo constraint).
 
 ## Out of scope (explicitly tracked elsewhere)
 
-- `Meta.search_fields` — `TODO-BETA-049-0.1.2` ([`spec` to come]).
+- `Meta.search_fields` — `TODO-BETA-049-0.1.2` ([`spec-049`][spec-049]).
 - `AggregateSet` / `Meta.aggregate_class` — the `0.1.3` aggregate card.
 - Layer-3 Meta key promotion machinery (dispatched binding form) —
   `TODO-BETA-052-0.1.3`.
@@ -918,6 +925,7 @@ cannot reach.
 [spec-045]: spec-045-debug_extraction-0_0_15.md
 [spec-046]: spec-046-boundary_dry_squeeze-0_0_16.md
 [spec-047]: spec-047-beta_release-0_1_0.md
+[spec-049]: spec-049-search_fields-0_1_2.md
 
 <!-- docs/SPECS/ -->
 [spec-034]: SPECS/spec-034-permissions-0_0_10.md

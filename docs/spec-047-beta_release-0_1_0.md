@@ -3,6 +3,10 @@
 Planned for `0.1.0` (card `TODO-ALPHA-047-0.1.0`); **this card is the only
 card at `0.1.0` and owns the version bump**
 ([Decision 3](#decision-3--lone-card-at-010--the-release-slice-owns-the-version-cut)).
+Number conventions in this spec: bare three-digit numbers (`045` / `046` /
+`047` / `062`) are **kanban card numbers**, dotted numbers (`0.0.15` /
+`0.0.16` / `0.1.0` / `1.0.0`) are **package versions** — card `047` is the
+card that cuts version `0.1.0`.
 This card is a **release / verification card**: it ships no new subsystem and
 no new consumer-facing symbol
 ([Decision 1](#decision-1--verification-only--the-consumer-surface-is-frozen)).
@@ -33,9 +37,9 @@ sequence:
    lifted or re-worded, the board's `## Progress to 1.0.0` section advances,
    the alpha-status prose in `README.md` / `GOAL.md` / `TODAY.md` /
    `docs/README.md` flips to beta, the PyPI Development-Status trove
-   classifier moves off `1 - Planning`, and `CHANGELOG.md`'s `[Unreleased]`
-   block is promoted to `## [0.1.0]` with the cumulative alpha history
-   ([Decision 7](#decision-7--changelog-promotion-covers-the-whole-shipped-alpha-line)).
+   classifier moves off `1 - Planning`, and a fresh `## [0.1.0]` entry is
+   written atop `CHANGELOG.md`'s patch entries with the cumulative alpha history
+   ([Decision 7](#decision-7--the-changelog-010-entry-covers-the-whole-shipped-alpha-line)).
 5. **Cut, tag, publish.** The version quintet moves to `0.1.0`, the release
    is tagged in git, and the build is published to PyPI — with the
    tag-and-publish actions maintainer-executed
@@ -45,12 +49,12 @@ Status: **PLANNED — no slice built yet.**
 Five slices: Slice 1 (**queue gate + parity audit**), Slice 2 (**matrix
 verification + release-readiness checklist**), Slice 3 (**doc status
 cross-check** against the actual shipped surface), Slice 4 (**milestone doc
-chores + `CHANGELOG.md` promotion**), Slice 5 (**the `0.1.0` version cut +
+chores + the `CHANGELOG.md` `0.1.0` entry**), Slice 5 (**the `0.1.0` version cut +
 tag + PyPI publish + card wrap**).
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits
 without explicit permission; this spec's Slice 4 grants that permission for
-the `[Unreleased]` → `[0.1.0]` promotion, and no earlier slice touches it.
+writing the fresh `[0.1.0]` entry, and no earlier slice touches it.
 
 ---
 
@@ -129,7 +133,8 @@ is a distinct gate.
 
 - [ ] **Slice 1 — Queue gate + parity audit**
   - [ ] Verify every other Alpha card is `DONE`: the card body's
-        `DONE-013-0.0.4` … `DONE-044-0.0.14` range (plus `DONE-024-0.0.7`)
+        `DONE-013-0.0.4` … `DONE-044-0.0.14` range (plus `DONE-024-0.0.7` and
+        the later 0.0.14-line `DONE-064-0.0.14` sealed-visibility-boundary card)
         AND the later-added `TODO-ALPHA-045-0.0.15` /
         `TODO-ALPHA-046-0.0.16` ([Decision 2](#decision-2--the-gating-set-is-the-whole-alpha-queue-not-the-cards-stale-done-range)).
         If either is not `DONE`, this card stops here.
@@ -165,7 +170,7 @@ is a distinct gate.
   - [ ] GLOSSARY edits go through the glossary **DB** + re-render
         (`scripts/build_glossary_md.py`), never hand-edits; `docs/TREE.md`
         via `scripts/build_tree_md.py`.
-- [ ] **Slice 4 — Milestone doc chores + `CHANGELOG.md` promotion**
+- [ ] **Slice 4 — Milestone doc chores + the `CHANGELOG.md` `0.1.0` entry**
   - [ ] Lift or re-word every `alpha constraint` status tag in
         [`docs/GLOSSARY.md`][glossary]: a constraint the alpha line actually
         resolved is lifted; a constraint that survives into beta (e.g.
@@ -183,10 +188,11 @@ is a distinct gate.
   - [ ] Move the PyPI trove classifier off
         `Development Status :: 1 - Planning`
         ([Decision 4](#decision-4--a-milestone-0-cut-carries-more-than-the-version-quintet)).
-  - [ ] Promote `CHANGELOG.md` `[Unreleased]` → `## [0.1.0] - YYYY-MM-DD`
-        with a one-paragraph release summary plus cumulative
+  - [ ] Write a fresh `CHANGELOG.md` `## [0.1.0] - YYYY-MM-DD` entry atop the
+        existing `## [0.0.x]` patch entries (the repo keeps no `[Unreleased]`
+        block), with a one-paragraph release summary plus cumulative
         Added / Changed / Fixed / Removed sections covering the shipped
-        alpha line ([Decision 7](#decision-7--changelog-promotion-covers-the-whole-shipped-alpha-line);
+        alpha line ([Decision 7](#decision-7--the-changelog-010-entry-covers-the-whole-shipped-alpha-line);
         permission granted by this slice).
 - [ ] **Slice 5 — The `0.1.0` cut + tag + publish + card wrap**
   - [ ] The version quintet: `pyproject.toml` `[project].version`,
@@ -214,8 +220,8 @@ becomes an unstructured handful of doc tweaks and version bumps spread
 across the last few patches: the parity audit never happens on a named
 slice, the full matrix pass never blocks anything, the `alpha constraint`
 glossary tags and the "alpha-quality" README prose go stale the moment
-`0.1.0` ships, and `CHANGELOG.md` accumulates an `[Unreleased]` block with
-no promotion event. Tracking the release as its own card forces all of that
+`0.1.0` ships, and the `0.1.0` release notes never get a single coherent
+entry of their own. Tracking the release as its own card forces all of that
 to happen once, in order, with evidence.
 
 ## Current state
@@ -246,6 +252,9 @@ to happen once, in order, with evidence.
   which was stale even for alpha and is flatly wrong for a beta.
 - `CHANGELOG.md` has never had a minor-version promotion; every entry so far
   is a `0.0.x` patch entry gated behind the maintainer-permission rule.
+  One 0.0.14-line hardening — the sealed `get_queryset` visibility boundary
+  (card `DONE-064-0.0.14`) — shipped after the `## [0.0.14]` entry was written
+  and has no CHANGELOG coverage yet; the `0.1.0` aggregation is where it lands.
 - The two upstream parity audits (the ⚛️ `graphene-django` audit and the 🍓
   `strawberry-graphql-django` audit) produced the card set that became the
   alpha queue; the "Alpha cards must claim upstream parity" board decision
@@ -321,7 +330,7 @@ None. The consumer-visible changes are exactly:
   documentation set.
 
 Every import path, symbol, wire format, and error contract is byte-identical
-to `0.0.16`.
+to the last shipped alpha patch (the 046 cut, planned `0.0.16`).
 
 ## Architectural decisions
 
@@ -348,13 +357,14 @@ was not actually done.
 **Decision**: the Slice 1 gate is "**every other non-Done Alpha card is
 `DONE`**" — concretely `TODO-ALPHA-045-0.0.15` and `TODO-ALPHA-046-0.0.16`
 at authoring time — in addition to the card body's enumerated
-`DONE-013-0.0.4` … `DONE-044-0.0.14` (plus `DONE-024-0.0.7`) range, which is
-verified as already satisfied.
+`DONE-013-0.0.4` … `DONE-044-0.0.14` (plus `DONE-024-0.0.7`) range — and the
+later 0.0.14-line `DONE-064-0.0.14`, which shipped after the card body was
+written — all verified as already satisfied.
 
 **Rationale**: the card's Definition-of-done range was written before cards
 045 / 046 entered the queue (the card predates the renumber that
 [`spec-046`][spec-046]'s Out-of-scope section records: "the beta-release
-cleanup card (now `TODO-BETA-047-0.1.0` after the renumbers)"). The board
+cleanup card (now `TODO-ALPHA-047-0.1.0` after the renumbers)"). The board
 column's own framing — "The final card in this column is the `0.1.0` release
 itself" — is the intent; a literal reading of the stale range would let this
 card cut `0.1.0` while `0.0.15` / `0.0.16` sit unshipped, which would strand
@@ -474,10 +484,11 @@ HEADs — upstream moved during alpha (new upstream features are future
 findings, not alpha debt); the parity target was always the audited surface,
 and chasing a moving target makes the milestone undefinable.
 
-### Decision 7 — CHANGELOG promotion covers the whole shipped alpha line
+### Decision 7 — The CHANGELOG `0.1.0` entry covers the whole shipped alpha line
 
-**Decision**: the `[Unreleased]` block is promoted to
-`## [0.1.0] - YYYY-MM-DD` carrying (a) a one-paragraph release summary — the
+**Decision**: a fresh `## [0.1.0] - YYYY-MM-DD` heading is authored atop the
+existing patch entries (the repo keeps no `[Unreleased]` block), carrying
+(a) a one-paragraph release summary — the
 package's positioning sentence plus the parity statement — and (b)
 cumulative `Added` / `Changed` / `Fixed` / `Removed` sections covering the
 shipped alpha line **from `0.0.6` through the last alpha patch actually
@@ -485,7 +496,12 @@ shipped** (at authoring time that is expected to be `0.0.16`, after cards
 045 / 046 land). The card text says "covering `0.0.6` through `0.0.14`"
 because it predates the 045 / 046 queue additions — the same staleness
 Decision 2 resolves; the extended range is the card's evident intent (the
-cumulative history of the line being released). Breaking wire-format changes
+cumulative history of the line being released). One 0.0.14-line change never
+received its own CHANGELOG entry — the sealed `get_queryset` visibility
+boundary (card `DONE-064-0.0.14`), which landed after the `## [0.0.14]`
+heading was written — so the aggregation must capture it (in `Changed` /
+`Fixed`) rather than assume the existing patch headings already cover the
+whole line. Breaking wire-format changes
 that shipped mid-alpha (the `0.0.6` `PositiveBigIntegerField` → [`BigInt`][glossary-bigint-scalar]
 switch, the `0.0.9` model-anchored `GlobalID` default, the `0.0.11`
 file/image structured output) are called out explicitly in `Changed` — a
@@ -493,7 +509,7 @@ file/image structured output) are called out explicitly in `Changed` — a
 every wire break in one entry.
 
 **Alternative rejected**: a thin `[0.1.0]` entry that just links the patch
-entries — the promotion is the one place the alpha line gets a coherent
+entries — this entry is the one place the alpha line gets a coherent
 narrative; a link farm defers the reading cost to every future consumer.
 
 ### Decision 8 — Tag and publish are maintainer-executed actions
@@ -525,12 +541,13 @@ delta is the quintet):
 | 1 | Queue gate + parity disposition ledger + stale-skip sweep | this spec (ledger); none in-package | LOW — read-only audit; blockers stop the card |
 | 2 | Full-matrix CI dispatch + isolated floor/ceiling venv runs + release-readiness checklist | none (verification only) | MEDIUM — a red row blocks the cut |
 | 3 | Doc status cross-check | `README.md`, `docs/README.md`, `docs/GLOSSARY.md` (DB+regen), `docs/TREE.md` (regen) | LOW — doc-only |
-| 4 | Milestone chores + CHANGELOG promotion | GLOSSARY DB+regen, kanban DB+regen, `README.md`, `GOAL.md`, `TODAY.md`, `docs/README.md`, `pyproject.toml` (classifier), `CHANGELOG.md` | MEDIUM — permission-gated file; generated-file discipline |
+| 4 | Milestone chores + the CHANGELOG `0.1.0` entry | GLOSSARY DB+regen, kanban DB+regen, `README.md`, `GOAL.md`, `TODAY.md`, `docs/README.md`, `pyproject.toml` (classifier), `CHANGELOG.md` | MEDIUM — permission-gated file; generated-file discipline |
 | 5 | Version quintet + build + tag + publish + card wrap | `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock`, GLOSSARY version row, kanban regen | MEDIUM — the irreversible step is maintainer-executed |
 
 Sequencing constraints: Slice 1 gates everything (Decision 2). Slice 2 runs
-against the post-`0.0.16` tree, not before. Slices 3 and 4 may interleave
-(both are doc passes) but Slice 4's CHANGELOG promotion lands last among the
+against the tree after the last alpha patch lands (the 046 cut, planned
+`0.0.16`), not before. Slices 3 and 4 may interleave
+(both are doc passes) but Slice 4's CHANGELOG entry lands last among the
 doc edits so the release date is real. Slice 5 moves the quintet only after
 Slices 1–4 are green — the version string is the last thing to change, so an
 aborted cut leaves no half-released state.
@@ -667,7 +684,7 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
   ([`AggregateSet`][glossary-aggregateset], `0.1.3`), Layer-3 Meta-key
   promotion (`0.1.3`), redaction tier + stable enum naming (`0.1.4`),
   fakeshop activation + Layer-3 HTTP tests (`0.1.5`), mutation
-  transactions/idempotency + migration guides (`0.1.6`), the adversarial
+  idempotency + migration guides (`0.1.6`), the adversarial
   suite / explain mode / filter-key namespace (`0.1.7`).
 - The API freeze and stable cut-over — `TODO-STABLE-062-1.0.0`.
 - Release-pipeline automation (CI-driven tag/publish) — raised and rejected
@@ -679,7 +696,8 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
 ## Definition of done
 
 - [ ] Every other Alpha card is `DONE` — the card body's
-      `DONE-013-0.0.4` … `DONE-044-0.0.14` range (plus `DONE-024-0.0.7`)
+      `DONE-013-0.0.4` … `DONE-044-0.0.14` range (plus `DONE-024-0.0.7` and the
+      later 0.0.14-line `DONE-064-0.0.14`)
       verified, AND `TODO-ALPHA-045-0.0.15` / `TODO-ALPHA-046-0.0.16`
       shipped (Decision 2).
 - [ ] The parity disposition ledger exists: every ⚛️ / 🍓 audit finding is
@@ -699,7 +717,7 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
       kanban DB + regen; alpha-status prose flipped to beta in `README.md`,
       `GOAL.md`, `TODAY.md`, `docs/README.md`; trove classifier moved off
       `1 - Planning` (Decision 4).
-- [ ] `CHANGELOG.md` `[Unreleased]` promoted to `## [0.1.0] - YYYY-MM-DD`
+- [ ] `CHANGELOG.md` gains a fresh `## [0.1.0] - YYYY-MM-DD` entry
       with the release summary and cumulative Added / Changed / Fixed /
       Removed sections covering the shipped alpha line, wire breaks called
       out (Decision 7).

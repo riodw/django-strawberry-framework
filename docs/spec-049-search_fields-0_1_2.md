@@ -3,8 +3,8 @@
 Planned for `0.1.2` (card `TODO-BETA-049-0.1.2`); **`TODO-BETA-050-0.1.2`
 (Postgres full-text search filter primitives) shares this patch version and
 depends on this card, so the `0.1.2` version bump belongs to the joint cut
-and this spec defers it**
-([Decision 10](#decision-10--joint-cut-at-012--the-version-bump-defers-to-card-050)).
+and this spec defers every release-state artifact to it**
+([Decision 10](#decision-10--joint-cut-at-012--release-state-defers-to-card-050)).
 The Strawberry analogue of `django-graphene-filters`' `Meta.search_fields`:
 a `DjangoType` declares a tuple of model-field paths
 (`search_fields = ("name", "description", "galaxy__name")`), and every
@@ -17,23 +17,24 @@ Relation paths ride Django's standard `__` lookup traversal; no custom
 resolver machinery. Both dependencies have shipped (`DONE-027-0.0.8`
 Filtering, `DONE-030-0.0.9` `DjangoConnectionField`) and the landing seams
 already exist in the tree: `filters/inputs.py::LOOKUP_PREFIXES` +
-`construct_search` (landed by spec-027 Decision 3 Layer 5 explicitly "for
-the future `Meta.search_fields` card") and the
+`construct_search` (landed by spec-027 Decision 3 Layer 5 under a broad
+future-search reservation that Slice 1 retargets to card 050) and the
 `connection.py::_synthesized_signature` docstring's "The `search:` argument
 is NOT generated (search is `0.1.2`)" reservation.
 
 Status: **PLANNED — no slice built yet.**
-Five slices: Slice 1 (**`filters/search.py` core** — the `Q`-builder, prefix
-translation, path validation, unit tests), Slice 2 (**Meta surface** —
+Five slices: Slice 1 (**`filters/search.py` core** — the `Q`-builder, path
+validation, unit tests), Slice 2 (**Meta surface** —
 declaration-time shape validation, the `DjangoTypeDefinition.search_fields`
 slot, phase-2.5 path validation, `DEFERRED_META_KEYS` promotion), Slice 3
 (**connection wiring** — the synthesized `search:` argument, the pipeline
 step, to-many `.distinct()`, guards), Slice 4 (**live fakeshop activation +
-composability tests**), Slice 5 (**docs + card wrap — NO version bump**).
+composability tests**), Slice 5 (**card-local docs + card wrap — all public
+release status deferred**).
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits
-without explicit permission; this spec's Slice 5 grants that permission for
-the `0.1.2`-line entry, and no earlier slice touches it.
+without explicit permission. This card does not touch `CHANGELOG.md`; card
+050's joint-cut slice must carry the maintainer's explicit grant.
 
 ---
 
@@ -41,11 +42,12 @@ the `0.1.2`-line entry, and no earlier slice touches it.
 
 Every project-specific symbol below is anchored in
 [`docs/GLOSSARY.md`][glossary]; the companion
-[`spec-049-search_fields-0_1_2-terms.csv`](spec-049-search_fields-0_1_2-terms.csv)
+[`spec-049-search_fields-0_1_2-terms.csv`][search-terms]
 is the audit ledger. Load-bearing entries:
 
 - [`Meta.search_fields`][glossary-metasearch_fields] — the surface this card
-  ships ("planned for `0.1.2`"; Slice 5 flips it to shipped).
+  implements (its status remains "planned for `0.1.2`" until card 050 cuts
+  the shared release).
 - [`DjangoConnectionField`][glossary-djangoconnectionfield] — where the
   `search:` argument surfaces.
 - [`FilterSet`][glossary-filterset] /
@@ -68,9 +70,9 @@ is the audit ledger. Load-bearing entries:
 ## Slice checklist
 
 - [ ] **Slice 1 — `filters/search.py` core.** `build_search_q` (whole-input
-  OR'd `Q` across declared paths), per-path prefix translation on top of
-  `filters/inputs.py::LOOKUP_PREFIXES`, `validate_search_fields` (path
-  resolution via `django_filters.utils.get_model_field`), unit tests under
+  OR'd `Q` across declared paths), `validate_search_fields` (path resolution
+  via `django_filters.utils.get_model_field`), explicit rejection of the
+  `LOOKUP_PREFIXES` vocabulary reserved to card 050, and unit tests under
   `tests/filters/test_search_fields.py`.
 - [ ] **Slice 2 — Meta surface.** Declaration-time shape validation in
   `types/base.py`, the `DjangoTypeDefinition.search_fields` slot, phase-2.5
@@ -89,13 +91,12 @@ is the audit ledger. Load-bearing entries:
   `examples/fakeshop/test_query/` including at least one relation path,
   composability tests (`search` + `filter:`, `search` + visibility,
   `search` + `totalCount`, `search` + keyset cursors).
-- [ ] **Slice 5 — docs + card wrap.** `docs/GLOSSARY.md` status flip (DB +
-  regen), `README.md` / `GOAL.md` / `TODAY.md` surface mentions,
-  `CHANGELOG.md` `0.1.2`-line entry (permission granted above),
-  `docs/TREE.md` regen, KANBAN card flip + board regen. **NO
-  `pyproject.toml` / `__version__` / `tests/base/test_init.py` bump** —
-  deferred to the `TODO-BETA-050-0.1.2` joint cut
-  ([Decision 10](#decision-10--joint-cut-at-012--the-version-bump-defers-to-card-050)).
+- [ ] **Slice 5 — card-local docs + card wrap.** Regenerate `docs/TREE.md`
+  for the new module and flip card 049 + regenerate the board. Leave the
+  GLOSSARY status, README/docs README shipped-surface wording, GOAL/TODAY
+  release status, `CHANGELOG.md`, and the version quintet untouched — all are
+  owned by the `TODO-BETA-050-0.1.2` joint cut
+  ([Decision 10](#decision-10--joint-cut-at-012--release-state-defers-to-card-050)).
 
 ## Problem statement
 
@@ -125,9 +126,10 @@ every other read-side layer without leaking rows the viewer cannot see.
   (`exceptions.py` names `search_fields` in its reserved-key docstring).
 - `filters/inputs.py::LOOKUP_PREFIXES` (`^` → `istartswith`, `=` → `iexact`,
   `@` → `search`, `$` → `iregex`) and `filters/inputs.py::construct_search`
-  landed with spec-027 Decision 3 Layer 5 explicitly reserved for this card;
-  `construct_search`'s docstring says so, and
-  `tests/filters/test_inputs.py` exercises the translation directly.
+  landed with spec-027 Decision 3 Layer 5 under a broad future-search
+  reservation. Canonical card 049 subsequently narrowed this card to basic
+  OR'd `icontains`; card 050 owns the shortcut parity decision and its
+  Postgres guard. Slice 1 retargets the stale reservation wording.
 - `filters/sets.py::FilterSet.get_filters` carries a
   `TODO(spec-027-filters-0_0_8 Meta.search_fields card 0.1.2)` comment at
   the point where prefix translation was originally imagined to wire in.
@@ -189,10 +191,12 @@ every other read-side layer without leaking rows the viewer cannot see.
 
 ## Non-goals
 
-- **Ranked / weighted / similarity full-text search.** That is
+- **Ranked / weighted / similarity full-text search and search-field shortcut
+  prefixes.** Those are
   `TODO-BETA-050-0.1.2` (Postgres `SearchQueryFilter` / `SearchRankFilter`
-  / `TrigramFilter` primitives), explicitly distinct from this card's
-  basic OR'd `icontains` surface and gated on it.
+  / `TrigramFilter` primitives plus the `^` / `=` / `@` / `$` parity
+  watch-item), explicitly distinct from this card's basic OR'd `icontains`
+  surface and gated on it.
 - **A `search` key inside the `filter:` input type.** Upstream injects one
   (`filterset.py::get_filter_fields`); rejected here
   ([Decision 9](#decision-9--no-search-key-inside-the-filter-input-type)).
@@ -212,17 +216,14 @@ every other read-side layer without leaking rows the viewer cannot see.
 upstream shipping this shape is `django-graphene-filters` (verified in
 `object_type.py`, `connection_field.py`, `filterset.py`, and the cookbook's
 `recipes/schema.py`), and the consumer-facing contract —
-[Cookbook parity][glossary-cookbook-parity] — is that a graphene-era
-`search_fields` tuple carries over verbatim when the import line changes.
+[Cookbook parity][glossary-cookbook-parity] — is that an unprefixed
+graphene-era `search_fields` tuple carries over verbatim when the import line
+changes. Prefix-bearing declarations belong to card 050.
 Element classification:
 
 - **Borrowed verbatim**: the Meta key name and tuple-of-paths shape; the
   single nullable `search: String` argument name and type; `icontains` as
-  the default lookup; Django `__` traversal for relation paths; the DRF
-  prefix vocabulary (`^`, `=`, `@`, `$`) — upstream's
-  `construct_search(field_name)` strips a leading prefix character and
-  falls back to `icontains`, exactly the `LOOKUP_PREFIXES` seam this
-  package landed in `0.0.8`.
+  the sole lookup; Django `__` traversal for relation paths.
 - **Engine-adapted**: argument generation moves from graphene's
   `Field.args` property merge to this package's synthesized-resolver
   signature (`connection.py::_synthesized_signature`, spec-030 Decision 6:
@@ -242,7 +243,8 @@ Element classification:
   ([Decision 7](#decision-7--conditional-distinct-only-when-a-declared-path-traverses-to-many));
   typo'd paths fail loudly at finalize with
   [`ConfigurationError`][glossary-configurationerror] instead of upstream's
-  silent runtime `FieldError`.
+  silent runtime `FieldError`; shortcut-prefixed declarations fail loudly
+  until card 050 resolves their parity and backend-safety contract.
 
 ## User-facing API
 
@@ -280,11 +282,9 @@ Semantics:
   Q(description__icontains="red dwarf") | Q(galaxy__name__icontains="red
   dwarf") | Q(galaxy__description__icontains="red dwarf")` applied via
   `.filter(...)` — the whole input as one phrase.
-- Prefixed entries opt into other lookups per path:
-  `search_fields = ("=code", "^name", "description")` →
-  `code__iexact` / `name__istartswith` / `description__icontains`.
-  `@` maps to `__search` (requires `django.contrib.postgres`; documented
-  Postgres-only, exactly as in DRF's `SearchFilter`).
+- `search_fields = ("=code",)` (or any leading `^` / `@` / `$`) raises
+  [`ConfigurationError`][glossary-configurationerror] at declaration time;
+  card 050 owns those shortcuts and the non-Postgres behavior of `@`.
 - `filter:` and `search:` in the same query intersect — the result matches
   every filter predicate AND the search OR-clause.
 
@@ -294,10 +294,9 @@ Semantics:
 
 A new sibling module `django_strawberry_framework/filters/search.py` owns
 the runtime and validation surface: `build_search_q(search_fields, value)`
-(the whole-input OR'd `Q` builder), `search_lookup_for_path(path)` (prefix
-translation over `filters/inputs.py::LOOKUP_PREFIXES`), and
-`validate_search_fields(model, search_fields)` (finalize-time path
-resolution). This satisfies the card's "argument generation lives in
+(the whole-input OR'd `Q` builder) and `validate_search_fields(model,
+search_fields)` (finalize-time path resolution). This satisfies the card's
+"argument generation lives in
 `django_strawberry_framework/filters/` and reuses the same DRF-style Meta
 surface and argument-factory machinery as `filterset_class`" DoD line while
 keeping [`FilterSet`][glossary-filterset] untouched: search needs no input
@@ -338,14 +337,14 @@ that `django_filters.utils.get_model_field` may only run after
 `apps.populate()` has resolved lazy FK strings, so declaration-time path
 walking would crash legitimate declaration orders
 ([Definition-order independence][glossary-definition-order-independence]).
-Each declared path (prefix stripped first) must resolve via
+Each declared path must resolve via
 `get_model_field(model, path)`; a `None` return raises
 [`ConfigurationError`][glossary-configurationerror] naming the type, the
 offending path, and the model — the typo-guard message discipline every
-Meta-key gate in `types/base.py` follows. The `@` prefix's `__search`
-lookup is exempt from *lookup* validation (it is a Postgres-registered
-lookup, invisible to `get_model_field`'s field walk, which validates only
-the path portion).
+Meta-key gate in `types/base.py` follows. A declaration beginning with any
+key in `filters/inputs.py::LOOKUP_PREFIXES` raises at declaration time with a
+message that assigns shortcut support to card 050; it must never be treated as
+a literal model-field name or escape to a backend error.
 
 Alternative rejected: **validate paths at declaration time** — breaks
 string-lazy FK targets and duplicates the finalize-time app-registry
@@ -397,24 +396,22 @@ launching with term-AND and narrowing later silently drops rows.
 Term-splitting as the default is therefore rejected for `0.1.2`; the
 open question is recorded in Risks with the fallback named.
 
-### Decision 5 — The DRF prefix vocabulary ships, defaulting to `icontains`
+### Decision 5 — Card 049 is `icontains`-only; shortcut prefixes fail loudly
 
-`search_fields` entries accept the four-character prefix vocabulary
-`LOOKUP_PREFIXES` pins (`^` → `istartswith`, `=` → `iexact`, `@` →
-`search`, `$` → `iregex`); an unprefixed entry gets `icontains`. The card's
-prose names only the `icontains` fan-out, but the prefix seam was landed in
-`0.0.8` *explicitly reserved for this card* (the `LOOKUP_PREFIXES` and
-`construct_search` docstrings both say so), upstream's
-`construct_search(field_name)` implements exactly this vocabulary, and DRF
-consumers migrating a `search_fields` tuple may already carry prefixes —
-rejecting them would break the verbatim-carry-over
-[Cookbook parity][glossary-cookbook-parity] promise. The per-path
-translation is a thin `search_lookup_for_path(path) -> tuple[str, str]`
-(stripped path, lookup name) beside the existing dict-shaped
-`construct_search(all_filters)` helper; both read the one
-`LOOKUP_PREFIXES` constant. `@`/`__search` is documented Postgres-only
-(consumer responsibility, as in DRF); the other three lookups are
-portable. The card-text-vs-seam tension is recorded in Risks.
+Every entry is a model-field path and always becomes `<path>__icontains`.
+The `^` / `=` / `@` / `$` vocabulary is not silently accepted: those leading
+characters raise [`ConfigurationError`][glossary-configurationerror] during
+declaration validation. Canonical card 049 pins the basic OR-of-`icontains`
+contract, while card 050 explicitly owns the shortcut parity watch-item and
+already requires a clear non-Postgres posture for its full-text surface.
+
+This also keeps SQLite safe: `@` cannot become a late `__search` lookup and
+fail at query execution before card 050 has specified and tested the backend
+gate. Slice 1 retargets the stale `construct_search` docstring/TODO reservation
+from this card to card 050 rather than deleting the shared
+`LOOKUP_PREFIXES` constant. Automatically adopting the vocabulary here is
+rejected because it expands the KANBAN contract and splits ownership of the
+same public syntax across two cards.
 
 ### Decision 6 — Pipeline position: visibility → filter → search → orderBy
 
@@ -499,19 +496,19 @@ This is a deliberate, documented upstream divergence (Borrowing posture);
 migrating consumers who used the nested spelling rewrite it to the
 top-level argument.
 
-### Decision 10 — Joint cut at `0.1.2` — the version bump defers to card 050
+### Decision 10 — Joint cut at `0.1.2` — release state defers to card 050
 
 Two non-Done cards share the `0.1.2` patch version: this card and
 `TODO-BETA-050-0.1.2` (Postgres full-text primitives), and 050 explicitly
 depends on 049 ("basic search lands first"). The
-[Joint version cut][glossary-joint-version-cut] rule therefore assigns the
-`pyproject.toml` / `__version__` / `tests/base/test_init.py` / GLOSSARY
-package-version-row / `uv.lock` quintet to the LAST `0.1.2` card to land —
-card 050. This spec's Slice 5 must NOT bump the version (mirroring
-spec-043 Decision 12's deferral shape, the most recent joint-cut
-precedent); it ships docs and the card flip only. If the maintainer
-re-sequences and 050 is descoped or retargeted, the cut ownership returns
-here — recorded in Risks.
+[Joint version cut][glossary-joint-version-cut] rule therefore assigns card
+050 every public release-state artifact: the version quintet, GLOSSARY shipped
+status, README/docs README shipped-surface moves, GOAL/TODAY release wording,
+and the cumulative `0.1.2` CHANGELOG entry covering both cards. Card 049 ships
+its implementation, card-local spec/TREE updates, and card flip only. Writing
+release notes or marking the surface shipped while the package still reports
+`0.1.1` is rejected. If the maintainer re-sequences and 050 is descoped or
+retargeted, the cut ownership returns here — recorded in Risks.
 
 ### Decision 11 — Input hygiene: strip-check only, literals stay literal
 
@@ -531,16 +528,17 @@ per declared path, the same order of work as any filter predicate.
 
 | Slice | Files touched | Delta |
 | --- | --- | --- |
-| 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `tests/filters/test_search_fields.py` (new) | `build_search_q` / `search_lookup_for_path` / `validate_search_fields`; remove the superseded `get_filters` TODO; unit tests for Q shape, prefixes, empty-input no-op, path validation raises |
+| 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `tests/filters/test_search_fields.py` (new) | `build_search_q` / `validate_search_fields`; retarget the superseded `get_filters` TODO and `construct_search` reservation to card 050; unit tests for Q shape, prefix rejection, empty-input no-op, path-validation raises |
 | 2 | `django_strawberry_framework/types/base.py`, `django_strawberry_framework/types/definition.py`, `django_strawberry_framework/types/finalizer.py`, `tests/types/` | shape validation + `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` promotion; `search_fields` + `search_requires_distinct` definition slots; phase-2.5 `validate_search_fields` call + to-many precompute |
 | 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/connection/` | `CONNECTION_SEARCH_KWARG` + sidecar-tuple extension; synthesized `search:` param; colorless pipeline step + conditional `.distinct()`; guard coverage |
 | 4 | `examples/fakeshop/apps/products/schema.py`, `examples/fakeshop/test_query/` | uncomment all four `search_fields` tuples (fix stale `TODO-BETA-047` comment IDs → this card); live HTTP tests incl. relation path, `filter:`+`search:` intersection, visibility composition, `totalCount` under distinct |
-| 5 | `docs/GLOSSARY.md` (DB + regen), `docs/TREE.md`, `README.md`, `GOAL.md`, `TODAY.md`, `CHANGELOG.md`, `KANBAN.md`/`KANBAN.html` (DB + regen) | status flips, surface mentions, `0.1.2`-line changelog entry, card wrap. NO version bump (Decision 10) |
+| 5 | `docs/TREE.md`, `KANBAN.md`/`KANBAN.html` (DB + regen) | card-local tree regeneration and card wrap only; all public release-state artifacts defer to card 050 (Decision 10) |
 
 ## Helper-reuse obligations (DRY)
 
 - `filters/inputs.py::LOOKUP_PREFIXES` is the single prefix vocabulary;
-  `search_lookup_for_path` reads it, never redeclares it.
+  declaration validation reads it to reject reserved shortcut syntax,
+  never redeclares it.
 - `django_filters.utils.get_model_field` via the
   `filters/inputs.py::_model_field_for_filter` precedent for path
   resolution — no hand-rolled `_meta.get_field` walk.
@@ -567,9 +565,8 @@ per declared path, the same order of work as any filter predicate.
   a runtime 500 on first search.
 - **To-many path** (`search_fields = ("tags__name",)`) — `.distinct()`
   applied; `totalCount` and page cardinality stay correct (Decision 7).
-- **`@` prefix on a non-Postgres database** — path validates, execution
-  raises the database's unsupported-lookup error; documented Postgres-only
-  constraint, mirroring DRF.
+- **Shortcut prefix** — declaration-time `ConfigurationError` assigning the
+  syntax to card 050; no backend-specific lookup reaches execution.
 - **`%` / `_` / quotes in input** — literal characters (Decision 11).
 - **Non-queryset consumer resolver + `search:` input** — the extended
   sidecar guard raises, matching `filter:` / `orderBy:` behavior
@@ -592,8 +589,8 @@ per declared path, the same order of work as any filter predicate.
 
 Unit (`tests/filters/test_search_fields.py`):
 
-- `build_search_q` output shape: OR across paths, whole input, default
-  `icontains`, prefix translation per entry, mixed prefixed/unprefixed.
+- `build_search_q` output shape: OR across paths, whole input, `icontains`;
+  declaration validation rejects all four reserved prefixes.
 - Empty / `None` / whitespace-only → no-op (queryset identity preserved).
 - `validate_search_fields`: flat path, relation path, typo → raises with
   type/path/model in the message; empty tuple → declaration raise.
@@ -625,15 +622,9 @@ Live HTTP (`examples/fakeshop/test_query/`, per the
 
 ## Doc updates
 
-- `docs/GLOSSARY.md` (via the glossary DB + `build_glossary_md.py`,
-  never hand-edited): flip
-  [`Meta.search_fields`][glossary-metasearch_fields] to shipped `0.1.2`;
-  cross-link the new `filters/search.py` surface; fold in the spec's
-  glossary terms per the shipping-slice fold-in rule.
-- `README.md` / `GOAL.md` / `TODAY.md`: move search from
-  "still waiting for" to shipped surface lists; GOAL's astronomy example
-  needs no edit (it already declares the tuple).
-- `CHANGELOG.md`: `0.1.2`-line entry (Slice 5 permission).
+- Keep [`Meta.search_fields`][glossary-metasearch_fields] at "planned for
+  `0.1.2`" and leave README/docs README, GOAL/TODAY, and `CHANGELOG.md`
+  release status unchanged; card 050's joint cut moves them together.
 - `docs/TREE.md`: regen after `filters/search.py` lands (module docstring
   required by the renderer).
 - `KANBAN.md` / `KANBAN.html`: card flip via DB + regen only.
@@ -647,12 +638,9 @@ Live HTTP (`examples/fakeshop/test_query/`, per the
   before first release of the surface — it must be decided before `0.1.2`
   ships because the two differ user-visibly on multi-word input and
   switching later is a semantic break.
-- **Prefix vocabulary vs card prose (Decision 5).** The card's text names
-  only `icontains`; the landed `LOOKUP_PREFIXES` seam and upstream both
-  carry the DRF prefixes. Preferred: ship prefixes (seam was reserved for
-  this card; verbatim-migration promise). Fallback: reject prefixed
-  entries with a `ConfigurationError` naming the vocabulary as `0.1.x`
-  future work — never silently treat `^name` as a literal field name.
+- **Prefix ownership (Decision 5).** Card 049 rejects shortcut-prefixed
+  declarations. Card 050 must decide which shortcuts ship, pin the migration
+  contract, and define the `@` backend guard before accepting any of them.
 - **Promotion ownership (Decision 8).** The DoD's "(per
   `TODO-BETA-052-0.1.3`)" parenthetical is ambiguous, exactly as it was
   for `fields_class` in spec-048. Preferred: promote here (end-to-end
@@ -673,16 +661,11 @@ Live HTTP (`examples/fakeshop/test_query/`, per the
   (a pre-renumber ID; 047 is now the beta-release card). Slice 4 corrects
   the comments as part of activation — noted here per the card-vs-tree
   conflict rule rather than silently reconciled.
-- **`@`/`__search` portability.** Accepting the prefix everywhere but
-  failing at execution on non-Postgres is upstream/DRF behavior, kept for
-  parity. If the maintainer prefers fail-at-finalize, the validator can
-  gate `@` on `django.contrib.postgres` presence — deferred as a
-  follow-up question, not pinned.
-
 ## Out of scope (explicitly tracked elsewhere)
 
-- Ranked / weighted / trigram full-text search —
-  `TODO-BETA-050-0.1.2` (depends on this card; owns the `0.1.2` cut).
+- Ranked / weighted / trigram full-text search and the `^` / `=` / `@` / `$`
+  shortcut parity decision — `TODO-BETA-050-0.1.2` (depends on this card;
+  owns the `0.1.2` cut).
 - The generalized deferred-key promotion sweep and
   [`Meta.aggregate_class`][glossary-metaaggregate_class] /
   [`AggregateSet`][glossary-aggregateset] — `TODO-BETA-052-0.1.3`.
@@ -701,8 +684,9 @@ Live HTTP (`examples/fakeshop/test_query/`, per the
 - [ ] `docs/spec-049-search_fields-0_1_2.md` (this file) is the card's
   spec of record.
 - [ ] `filters/search.py` ships `build_search_q` /
-  `search_lookup_for_path` / `validate_search_fields`; the
-  `filters/sets.py` TODO seam is removed.
+  `validate_search_fields`; prefix-bearing declarations fail loudly and the
+  `filters/sets.py` / `construct_search` reservations are retargeted to card
+  050.
 - [ ] `Meta.search_fields` validates at declaration (shape) and finalize
   (paths), lands on `DjangoTypeDefinition`, and is promoted to
   `ALLOWED_META_KEYS`.
@@ -713,8 +697,10 @@ Live HTTP (`examples/fakeshop/test_query/`, per the
   relation-path, and combined-with-filterset cases; sync and async.
 - [ ] Live HTTP coverage under `examples/fakeshop/test_query/` exercises a
   search across at least one relation path.
-- [ ] Slice 5 doc set updated; `CHANGELOG.md` `0.1.2`-line entry written.
-- [ ] **No version bump** — the `0.1.2` quintet belongs to the
+- [ ] Slice 5 card-local docs updated; no public release-status artifact is
+  changed.
+- [ ] **No release-state edit** — the `0.1.2` quintet, status flips, shipped
+  surface moves, and CHANGELOG entry belong to the
   `TODO-BETA-050-0.1.2` joint cut (Decision 10).
 
 <!-- LINK DEFINITIONS -->
@@ -724,32 +710,33 @@ Live HTTP (`examples/fakeshop/test_query/`, per the
 [goal]: ../GOAL.md
 
 <!-- docs/ -->
-[glossary]: GLOSSARY.md
-[glossary-metasearch_fields]: GLOSSARY.md#metasearch_fields
-[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
-[glossary-filterset]: GLOSSARY.md#filterset
-[glossary-metafilterset_class]: GLOSSARY.md#metafilterset_class
-[glossary-orderset]: GLOSSARY.md#orderset
-[glossary-metaorderset_class]: GLOSSARY.md#metaorderset_class
-[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
+[glossary-aggregateset]: GLOSSARY.md#aggregateset
 [glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
 [glossary-configurationerror]: GLOSSARY.md#configurationerror
-[glossary-finalize_django_types]: GLOSSARY.md#finalize_django_types
-[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
-[glossary-djangotype]: GLOSSARY.md#djangotype
-[glossary-metafields]: GLOSSARY.md#metafields
-[glossary-metaexclude]: GLOSSARY.md#metaexclude
-[glossary-djangolistfield]: GLOSSARY.md#djangolistfield
-[glossary-single-upstream-parity]: GLOSSARY.md#single-upstream-parity
 [glossary-cookbook-parity]: GLOSSARY.md#cookbook-parity
 [glossary-definition-order-independence]: GLOSSARY.md#definition-order-independence
+[glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
+[glossary-djangolistfield]: GLOSSARY.md#djangolistfield
+[glossary-djangotype]: GLOSSARY.md#djangotype
+[glossary-fieldset]: GLOSSARY.md#fieldset
 [glossary-filter_input_type]: GLOSSARY.md#filter_input_type
+[glossary-filterset]: GLOSSARY.md#filterset
+[glossary-finalize_django_types]: GLOSSARY.md#finalize_django_types
+[glossary-get_queryset-visibility-hook]: GLOSSARY.md#get_queryset-visibility-hook
+[glossary-joint-version-cut]: GLOSSARY.md#joint-version-cut
 [glossary-live-first-coverage-mandate]: GLOSSARY.md#live-first-coverage-mandate
 [glossary-metaaggregate_class]: GLOSSARY.md#metaaggregate_class
-[glossary-aggregateset]: GLOSSARY.md#aggregateset
-[glossary-fieldset]: GLOSSARY.md#fieldset
-[glossary-metafields_class]: GLOSSARY.md#metafields_class
 [glossary-metachoice_enum_names]: GLOSSARY.md#metachoice_enum_names
+[glossary-metaexclude]: GLOSSARY.md#metaexclude
+[glossary-metafields]: GLOSSARY.md#metafields
+[glossary-metafields_class]: GLOSSARY.md#metafields_class
+[glossary-metafilterset_class]: GLOSSARY.md#metafilterset_class
+[glossary-metaorderset_class]: GLOSSARY.md#metaorderset_class
+[glossary-metasearch_fields]: GLOSSARY.md#metasearch_fields
+[glossary-orderset]: GLOSSARY.md#orderset
+[glossary-single-upstream-parity]: GLOSSARY.md#single-upstream-parity
+[glossary]: GLOSSARY.md
+[search-terms]: spec-049-search_fields-0_1_2-terms.csv
 
 <!-- docs/SPECS/ -->
 [spec-027]: SPECS/spec-027-filters-0_0_8.md

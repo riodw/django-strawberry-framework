@@ -1,5 +1,5 @@
 term,anchor,notes
-`Meta.search_fields`,metasearch_fields,the surface this card ships; Slice 5 flips planned-for-0.1.2 to shipped
+`Meta.search_fields`,metasearch_fields,the surface this card implements; card 050's joint cut flips planned-for-0.1.2 to shipped
 `DjangoConnectionField`,djangoconnectionfield,where the search: String argument surfaces; dependency DONE-030-0.0.9
 `FilterSet`,filterset,sibling sidecar search composes with by intersection; deliberately NOT the host of search application (Decision 1)
 `Meta.filterset_class`,metafilterset_class,declared-sidecar precedent the synthesized argument mirrors

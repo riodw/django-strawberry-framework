@@ -298,7 +298,7 @@ to happen once, in order, with evidence.
   [`Meta.choice_enum_names`][glossary-metachoice_enum_names] (`0.1.4`) stay
   `planned`; the doc flips must not soften their status.
 - **No migration-guide authoring.** Migration and adoption guides are
-  `TODO-BETA-058-0.1.6`.
+  `TODO-BETA-058-0.1.7`.
 - **No CI matrix redesign.** The matrix is exercised as it exists; adding
   rows or version floors is not this card.
 

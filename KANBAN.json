@@ -1,7 +1,7 @@
 {
   "asOf": {
-    "generatedAt": "2026-07-20T21:39:49.762660+00:00",
-    "maxUpdatedDate": "2026-07-20T21:39:42.241876+00:00"
+    "generatedAt": "2026-07-21T01:32:00.916855+00:00",
+    "maxUpdatedDate": "2026-07-21T01:31:48.038759+00:00"
   },
   "blockingReferenceKindKeys": [
     "blocked_by"
@@ -21542,7 +21542,7 @@
           }
         },
         {
-          "cardId": "TODO-BETA-061-0.1.7",
+          "cardId": "TODO-BETA-061-0.1.6",
           "id": "a2FuYmFuLmNhcmQ6NjE=",
           "milestone": {
             "id": 2,
@@ -21559,8 +21559,8 @@
             "order": 1
           },
           "targetVersion": {
-            "id": 13,
-            "number": "0.1.7"
+            "id": 12,
+            "number": "0.1.6"
           },
           "title": "Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)",
           "uuid": {
@@ -22592,7 +22592,7 @@
           "order": 0,
           "rawText": "`{{card_ref:0}}` (Filtering subsystem) — owns `_LOGIC_KEYS` and the filter-tree input-type generation whose wire names this card makes configurable.",
           "sourceCard": {
-            "cardId": "TODO-BETA-061-0.1.7",
+            "cardId": "TODO-BETA-061-0.1.6",
             "id": "a2FuYmFuLmNhcmQ6NjE=",
             "milestone": {
               "id": 2,
@@ -22609,8 +22609,8 @@
               "order": 1
             },
             "targetVersion": {
-              "id": 13,
-              "number": "0.1.7"
+              "id": 12,
+              "number": "0.1.6"
             },
             "title": "Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)",
             "uuid": {
@@ -26876,7 +26876,7 @@
           }
         },
         {
-          "cardId": "TODO-BETA-061-0.1.7",
+          "cardId": "TODO-BETA-061-0.1.6",
           "id": "a2FuYmFuLmNhcmQ6NjE=",
           "milestone": {
             "id": 2,
@@ -26893,8 +26893,8 @@
             "order": 1
           },
           "targetVersion": {
-            "id": 13,
-            "number": "0.1.7"
+            "id": 12,
+            "number": "0.1.6"
           },
           "title": "Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)",
           "uuid": {
@@ -27958,7 +27958,7 @@
           "order": 1,
           "rawText": "`{{card_ref:1}}` (`DjangoConnectionField`) — owns the `filter` argument (`CONNECTION_FILTER_KWARG`) that `FILTER_KEY` renames.",
           "sourceCard": {
-            "cardId": "TODO-BETA-061-0.1.7",
+            "cardId": "TODO-BETA-061-0.1.6",
             "id": "a2FuYmFuLmNhcmQ6NjE=",
             "milestone": {
               "id": 2,
@@ -27975,8 +27975,8 @@
               "order": 1
             },
             "targetVersion": {
-              "id": 13,
-              "number": "0.1.7"
+              "id": 12,
+              "number": "0.1.6"
             },
             "title": "Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)",
             "uuid": {
@@ -47762,7 +47762,7 @@
           "order": 0,
           "rawText": "Migration guide (`{{card_ref:0}}`) gains a one-row entry in its \"symbol equivalents\" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.",
           "targetCard": {
-            "cardId": "TODO-BETA-058-0.1.6",
+            "cardId": "TODO-BETA-058-0.1.7",
             "id": "a2FuYmFuLmNhcmQ6MjE=",
             "milestone": {
               "id": 2,
@@ -47779,8 +47779,8 @@
               "order": 1
             },
             "targetVersion": {
-              "id": 12,
-              "number": "0.1.6"
+              "id": 13,
+              "number": "0.1.7"
             },
             "title": "Migration and adoption guides",
             "uuid": {
@@ -54444,7 +54444,7 @@
             }
           },
           "order": 0,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-STABLE-062-1.0.0",
             "id": "a2FuYmFuLmNhcmQ6MjM=",
@@ -54471,7 +54471,7 @@
               "id": "eb602ae8-9a41-423b-a514-58440daae8db"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.987835+00:00",
+          "updatedDate": "2026-07-21T01:31:48.035186+00:00",
           "uuid": {
             "id": "4ef45454-66a7-4496-965f-608cfdd565b1"
           }
@@ -58761,7 +58761,7 @@
             }
           },
           "order": 2,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-STABLE-062-1.0.0",
             "id": "a2FuYmFuLmNhcmQ6MjM=",
@@ -58788,7 +58788,7 @@
               "id": "eb602ae8-9a41-423b-a514-58440daae8db"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.988499+00:00",
+          "updatedDate": "2026-07-21T01:31:48.036498+00:00",
           "uuid": {
             "id": "c8fcf8a6-b45a-44c9-b551-d74f209f0ebb"
           }
@@ -61147,7 +61147,7 @@
             }
           },
           "order": 3,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-STABLE-062-1.0.0",
             "id": "a2FuYmFuLmNhcmQ6MjM=",
@@ -61174,7 +61174,7 @@
               "id": "eb602ae8-9a41-423b-a514-58440daae8db"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.988809+00:00",
+          "updatedDate": "2026-07-21T01:31:48.037029+00:00",
           "uuid": {
             "id": "ddd6bd0a-e816-4a45-88fd-e641cf0de831"
           }
@@ -62282,7 +62282,7 @@
       }
     },
     {
-      "cardId": "TODO-BETA-058-0.1.6",
+      "cardId": "TODO-BETA-058-0.1.7",
       "changedFiles": [],
       "createdDate": "2026-05-30T16:27:12.559954+00:00",
       "dependencies": [],
@@ -62352,7 +62352,7 @@
             }
           },
           "order": 1,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-STABLE-062-1.0.0",
             "id": "a2FuYmFuLmNhcmQ6MjM=",
@@ -62379,7 +62379,7 @@
               "id": "eb602ae8-9a41-423b-a514-58440daae8db"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.988182+00:00",
+          "updatedDate": "2026-07-21T01:31:48.035899+00:00",
           "uuid": {
             "id": "0bb1ef4d-4398-4f59-8908-7ad923ac6052"
           }
@@ -62739,8 +62739,8 @@
         }
       },
       "targetVersion": {
-        "createdDate": "2026-05-30T16:27:12.441721+00:00",
-        "id": 12,
+        "createdDate": "2026-05-30T16:27:12.442072+00:00",
+        "id": 13,
         "major": 0,
         "milestone": {
           "id": 2,
@@ -62749,15 +62749,15 @@
           "order": 1
         },
         "minor": 1,
-        "number": "0.1.6",
-        "patch": 6,
-        "updatedDate": "2026-05-30T16:27:12.441725+00:00",
+        "number": "0.1.7",
+        "patch": 7,
+        "updatedDate": "2026-05-30T16:27:12.442076+00:00",
         "uuid": {
-          "id": "6aa7be44-f056-4966-a27e-17885d5595a0"
+          "id": "918f70c8-7301-4478-93ce-9afe250eabbf"
         }
       },
       "title": "Migration and adoption guides",
-      "updatedDate": "2026-07-16T16:00:58.540078+00:00",
+      "updatedDate": "2026-07-21T01:31:31.283289+00:00",
       "uuid": {
         "id": "44c513e5-e7bf-417b-9ab7-4cd515ba5939"
       }
@@ -62809,7 +62809,7 @@
             }
           },
           "order": 4,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-STABLE-062-1.0.0",
             "id": "a2FuYmFuLmNhcmQ6MjM=",
@@ -62836,7 +62836,7 @@
               "id": "eb602ae8-9a41-423b-a514-58440daae8db"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.984803+00:00",
+          "updatedDate": "2026-07-21T01:31:48.037564+00:00",
           "uuid": {
             "id": "c525639c-66c4-4d53-b650-42749e7f38e6"
           }
@@ -63353,7 +63353,7 @@
       }
     },
     {
-      "cardId": "TODO-BETA-060-0.1.7",
+      "cardId": "TODO-BETA-060-0.1.5",
       "changedFiles": [
         {
           "createdDate": "2026-06-12T19:43:40.308527+00:00",
@@ -63421,7 +63421,7 @@
             }
           },
           "order": 5,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-STABLE-062-1.0.0",
             "id": "a2FuYmFuLmNhcmQ6MjM=",
@@ -63448,7 +63448,7 @@
               "id": "eb602ae8-9a41-423b-a514-58440daae8db"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.985890+00:00",
+          "updatedDate": "2026-07-21T01:31:48.038124+00:00",
           "uuid": {
             "id": "fa6fca8f-b6c3-4938-ac6a-21667a975952"
           }
@@ -64095,8 +64095,8 @@
         }
       },
       "targetVersion": {
-        "createdDate": "2026-05-30T16:27:12.442072+00:00",
-        "id": 13,
+        "createdDate": "2026-05-30T16:27:12.441367+00:00",
+        "id": 11,
         "major": 0,
         "milestone": {
           "id": 2,
@@ -64105,21 +64105,21 @@
           "order": 1
         },
         "minor": 1,
-        "number": "0.1.7",
-        "patch": 7,
-        "updatedDate": "2026-05-30T16:27:12.442076+00:00",
+        "number": "0.1.5",
+        "patch": 5,
+        "updatedDate": "2026-05-30T16:27:12.441370+00:00",
         "uuid": {
-          "id": "918f70c8-7301-4478-93ce-9afe250eabbf"
+          "id": "73fee5f4-1e38-4d61-9d08-d50f8b371f0a"
         }
       },
       "title": "Optimizer explain mode",
-      "updatedDate": "2026-07-16T16:00:58.539933+00:00",
+      "updatedDate": "2026-07-21T01:31:04.687053+00:00",
       "uuid": {
         "id": "b66916cd-be36-4cc7-9434-86b195a489fa"
       }
     },
     {
-      "cardId": "TODO-BETA-061-0.1.7",
+      "cardId": "TODO-BETA-061-0.1.6",
       "changedFiles": [
         {
           "createdDate": "2026-06-12T19:43:40.305511+00:00",
@@ -64240,7 +64240,7 @@
             }
           },
           "order": 6,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-STABLE-062-1.0.0",
             "id": "a2FuYmFuLmNhcmQ6MjM=",
@@ -64267,7 +64267,7 @@
               "id": "eb602ae8-9a41-423b-a514-58440daae8db"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.986862+00:00",
+          "updatedDate": "2026-07-21T01:31:48.038759+00:00",
           "uuid": {
             "id": "afad0e3b-85ed-437b-b871-998255fa3577"
           }
@@ -64923,8 +64923,8 @@
         }
       },
       "targetVersion": {
-        "createdDate": "2026-05-30T16:27:12.442072+00:00",
-        "id": 13,
+        "createdDate": "2026-05-30T16:27:12.441721+00:00",
+        "id": 12,
         "major": 0,
         "milestone": {
           "id": 2,
@@ -64933,15 +64933,15 @@
           "order": 1
         },
         "minor": 1,
-        "number": "0.1.7",
-        "patch": 7,
-        "updatedDate": "2026-05-30T16:27:12.442076+00:00",
+        "number": "0.1.6",
+        "patch": 6,
+        "updatedDate": "2026-05-30T16:27:12.441725+00:00",
         "uuid": {
-          "id": "918f70c8-7301-4478-93ce-9afe250eabbf"
+          "id": "6aa7be44-f056-4966-a27e-17885d5595a0"
         }
       },
       "title": "Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)",
-      "updatedDate": "2026-07-16T16:00:58.539858+00:00",
+      "updatedDate": "2026-07-21T01:31:31.280945+00:00",
       "uuid": {
         "id": "bca1367c-9640-47cf-949c-f11685fe3743"
       }
@@ -64996,8 +64996,8 @@
               "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
             }
           },
-          "text": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
-          "updatedDate": "2026-07-20T21:35:17.987396+00:00",
+          "text": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "updatedDate": "2026-07-21T01:31:48.033245+00:00",
           "uuid": {
             "id": "4a4986b1-3a4a-4bf0-8985-968fa6c2dfe6"
           }
@@ -65471,7 +65471,7 @@
             }
           },
           "order": 0,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "targetCard": {
             "cardId": "TODO-BETA-048-0.1.1",
             "id": "a2FuYmFuLmNhcmQ6MTY=",
@@ -65498,7 +65498,7 @@
               "id": "a9501a74-9247-4564-8c4f-9218328af3cc"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.987835+00:00",
+          "updatedDate": "2026-07-21T01:31:48.035186+00:00",
           "uuid": {
             "id": "4ef45454-66a7-4496-965f-608cfdd565b1"
           }
@@ -65518,9 +65518,9 @@
             }
           },
           "order": 1,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "targetCard": {
-            "cardId": "TODO-BETA-058-0.1.6",
+            "cardId": "TODO-BETA-058-0.1.7",
             "id": "a2FuYmFuLmNhcmQ6MjE=",
             "milestone": {
               "id": 2,
@@ -65537,15 +65537,15 @@
               "order": 1
             },
             "targetVersion": {
-              "id": 12,
-              "number": "0.1.6"
+              "id": 13,
+              "number": "0.1.7"
             },
             "title": "Migration and adoption guides",
             "uuid": {
               "id": "44c513e5-e7bf-417b-9ab7-4cd515ba5939"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.988182+00:00",
+          "updatedDate": "2026-07-21T01:31:48.035899+00:00",
           "uuid": {
             "id": "0bb1ef4d-4398-4f59-8908-7ad923ac6052"
           }
@@ -65565,7 +65565,7 @@
             }
           },
           "order": 2,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "targetCard": {
             "cardId": "TODO-BETA-052-0.1.3",
             "id": "a2FuYmFuLmNhcmQ6MjU=",
@@ -65592,7 +65592,7 @@
               "id": "9148833a-c4b1-481e-b4f9-9c108171746d"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.988499+00:00",
+          "updatedDate": "2026-07-21T01:31:48.036498+00:00",
           "uuid": {
             "id": "c8fcf8a6-b45a-44c9-b551-d74f209f0ebb"
           }
@@ -65612,7 +65612,7 @@
             }
           },
           "order": 3,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "targetCard": {
             "cardId": "TODO-BETA-056-0.1.5",
             "id": "a2FuYmFuLmNhcmQ6MjY=",
@@ -65639,7 +65639,7 @@
               "id": "fa990ec1-8f3c-4f45-a9ca-b48850808679"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.988809+00:00",
+          "updatedDate": "2026-07-21T01:31:48.037029+00:00",
           "uuid": {
             "id": "ddd6bd0a-e816-4a45-88fd-e641cf0de831"
           }
@@ -65659,7 +65659,7 @@
             }
           },
           "order": 4,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "targetCard": {
             "cardId": "TODO-BETA-059-0.1.7",
             "id": "a2FuYmFuLmNhcmQ6MjI=",
@@ -65686,7 +65686,7 @@
               "id": "3bb76f88-464d-44d0-aba8-71188e6b8a11"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.984803+00:00",
+          "updatedDate": "2026-07-21T01:31:48.037564+00:00",
           "uuid": {
             "id": "c525639c-66c4-4d53-b650-42749e7f38e6"
           }
@@ -65706,9 +65706,9 @@
             }
           },
           "order": 5,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "targetCard": {
-            "cardId": "TODO-BETA-060-0.1.7",
+            "cardId": "TODO-BETA-060-0.1.5",
             "id": "a2FuYmFuLmNhcmQ6NTY=",
             "milestone": {
               "id": 2,
@@ -65725,15 +65725,15 @@
               "order": 1
             },
             "targetVersion": {
-              "id": 13,
-              "number": "0.1.7"
+              "id": 11,
+              "number": "0.1.5"
             },
             "title": "Optimizer explain mode",
             "uuid": {
               "id": "b66916cd-be36-4cc7-9434-86b195a489fa"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.985890+00:00",
+          "updatedDate": "2026-07-21T01:31:48.038124+00:00",
           "uuid": {
             "id": "fa6fca8f-b6c3-4938-ac6a-21667a975952"
           }
@@ -65753,9 +65753,9 @@
             }
           },
           "order": 6,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the pre-stable gate cards `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "targetCard": {
-            "cardId": "TODO-BETA-061-0.1.7",
+            "cardId": "TODO-BETA-061-0.1.6",
             "id": "a2FuYmFuLmNhcmQ6NjE=",
             "milestone": {
               "id": 2,
@@ -65772,15 +65772,15 @@
               "order": 1
             },
             "targetVersion": {
-              "id": 13,
-              "number": "0.1.7"
+              "id": 12,
+              "number": "0.1.6"
             },
             "title": "Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)",
             "uuid": {
               "id": "bca1367c-9640-47cf-949c-f11685fe3743"
             }
           },
-          "updatedDate": "2026-07-20T21:35:17.986862+00:00",
+          "updatedDate": "2026-07-21T01:31:48.038759+00:00",
           "uuid": {
             "id": "afad0e3b-85ed-437b-b871-998255fa3577"
           }

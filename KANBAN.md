@@ -1,6 +1,6 @@
 # django-strawberry-framework Kanban
 
-Last refreshed: 2026-07-20
+Last refreshed: 2026-07-21
 
 This board summarizes what is shipped, what has recently landed, and what remains to finish based on the current code, tests, docs, and release-readiness notes. It is intentionally written as a project-management view: each card has a status, priority, scope, and a practical definition of done.
 
@@ -881,7 +881,7 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 - Dependency: Builds on the core DjangoMutation lifecycle and generated input envelope from DONE-036-0.0.11. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
 
 <a id="migration_and_adoption_guides"></a>
-### [TODO-BETA-058-0.1.6 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
+### [TODO-BETA-058-0.1.7 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
 
 - Priority: Medium
 - Status: To Do
@@ -959,7 +959,7 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 - Related: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`). -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="optimizer_explain_mode"></a>
-### [TODO-BETA-060-0.1.7 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
+### [TODO-BETA-060-0.1.5 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
 
 - Priority: High
 - Status: To Do
@@ -1016,7 +1016,7 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 - Original backlog score: Realistic 10/10, Impact 8/10, Difficulty 2/10; bang-for-buck score 40.0.
 
 <a id="configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key"></a>
-### [TODO-BETA-061-0.1.7 - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)](KANBAN.html#configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key)
+### [TODO-BETA-061-0.1.6 - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)](KANBAN.html#configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
@@ -1098,7 +1098,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Definition of done
 
-- [ ] Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`.
+- [ ] Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`.
 - [ ] API surface audit: top-level `__all__` confirmed stable; every public symbol documented; no `# experimental` markers in shipped code; no `_private` symbols accidentally referenced from docs.
 - [ ] SemVer policy committed in CHANGELOG header: every release after `1.0.0` follows MAJOR / MINOR / PATCH rules strictly; pre-`0.1.0` deprecation shims removed entirely.
 - [ ] Full async + sync coverage matrix validated; no `sync_to_async` workarounds remain on any resolver path.
@@ -1129,13 +1129,13 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Card references
 
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-048-0.1.1` - `FieldSet`
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-058-0.1.6` - Migration and adoption guides
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-056-0.1.5` - Product-catalog Layer 3 HTTP GraphQL tests
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-059-0.1.7` - Adversarial non-live test suite (try to break it, not just cover lines)
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-060-0.1.7` - Optimizer explain mode
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-061-0.1.7` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-048-0.1.1` - `FieldSet`
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-058-0.1.7` - Migration and adoption guides
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-056-0.1.5` - Product-catalog Layer 3 HTTP GraphQL tests
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-059-0.1.7` - Adversarial non-live test suite (try to break it, not just cover lines)
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-060-0.1.5` - Optimizer explain mode
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-061-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
 ## Done
 
@@ -1533,7 +1533,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - [x] Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
 - [x] `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
 - [x] Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
-- [x] Migration guide (`TODO-BETA-058-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
+- [x] Migration guide (`TODO-BETA-058-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
 
 #### Verified in upstream
 
@@ -1543,7 +1543,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 #### Architectural posture
 
 - The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`][goal] non-goal "a thin wrapper around `strawberry-graphql-django`".
-- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-058-0.1.6`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
+- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-058-0.1.7`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
 
 #### Why it matters
 
@@ -1557,7 +1557,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 #### Card references
 
-- Related: Migration guide (`TODO-BETA-058-0.1.6`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-058-0.1.6` - Migration and adoption guides
+- Related: Migration guide (`TODO-BETA-058-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-058-0.1.7` - Migration and adoption guides
 
 <a id="auth_mutations_login_logout_register"></a>
 ### [DONE-040-0.0.13 - Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)

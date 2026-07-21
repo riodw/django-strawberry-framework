@@ -382,12 +382,12 @@ distinct concern from the consumer-facing class. `fieldset/` has no
 `fieldset.py::FieldSetMetaclass` parity):
 
 1. **Gates** — methods matching `check_<field>_permission`; `<field>` must
-   name a concrete model field of `Meta.model`, else the method is recorded
-   for the finalize-time surface audit (see Edge cases).
+   name a concrete model field of `Meta.model` or a declared computed field,
+   else class creation raises `ConfigurationError`.
 2. **Overrides** — methods matching `resolve_<field>`; `<field>` may name a
-   model field (content override) or a computed field (paired with an
-   annotation) — model validation is deliberately skipped for overrides,
-   upstream parity.
+   concrete model field (content override) or a computed field (paired with
+   an annotation); a name in neither set raises `ConfigurationError` so a
+   typo cannot silently leave the generated resolver active.
 3. **Computed fields** — class-level Strawberry annotations
    (`name: <type> = strawberry.field(...)` or a bare annotation); collected
    with the same inheritance-aware walk as methods so mixin-declared
@@ -526,7 +526,9 @@ FieldSet method targeting a model field the owning type does not surface is
 a **warning, not an error** (upstream parity, and for the same reason: one
 FieldSet may be shared across multiple types with different field lists) —
 emitted once per (type, field) at bind time via `warnings.warn`, naming
-both classes.
+both classes. This warning applies only after class-creation validation has
+proved the target is a real model or computed field; unknown names always
+raise and never enter the owner-specific warning path.
 
 *Alternative rejected:* fail-closed here too. Considered for consistency
 with Decision 5, but rejected because the shared-FieldSet use case is
@@ -540,11 +542,13 @@ intentional.
 The FieldSet declares which model columns its overrides read via
 `Meta.depends_on = {"resolve_<field>": ("col", ...)}` — keyed by method
 name, valued by concrete-column tuples (the card's pre-pinned shape,
-preserved verbatim). At bind time the union of declared columns is recorded
-on the owning definition; the optimizer merges it into the type's plan
-`only_fields` (`optimizer/plans.py #"only_fields: Sequence[str]"`) whenever
-a managed field is selected, so an override reading `root.name` never
-triggers a deferred-field fetch. This mirrors the shipped
+preserved verbatim). At bind time the declarations are normalized to a map
+from managed field name to its concrete-column tuple. The optimizer merges
+only the dependencies for managed fields present in the current selection
+into the type's plan `only_fields`
+(`optimizer/plans.py #"only_fields: Sequence[str]"`), so an override reading
+`root.name` never triggers a deferred-field fetch and selecting an unrelated
+managed field does not over-project columns. This mirrors the shipped
 [`Meta.optimizer_hints`][glossary-metaoptimizer-hints] /
 [`OptimizerHint`][glossary-optimizerhint] posture: the consumer states the
 dependency; the planner honors it.
@@ -615,19 +619,21 @@ and the root entry in `uv.lock` — mirroring the lone-card Decision shape of
 `0.1.1` is a routine patch on the beta line, **not** a milestone `.0` cut —
 none of the milestone-cut extras from [`spec-047`][spec-047] apply.
 
-### Decision 11 — Wrapper preserves the generated resolver and its asyncness
+### Decision 11 — Wrapper preserves the generated resolver and composes sync/async components
 
 The resolver wrapper captures the original (generated or transplanted)
 resolver and delegates to it as cascade step 3, exactly like upstream's
 `make_wrapper` — so FK/relation resolvers, converter output
 (`types/converters.py::convert_field_output`), and optimizer-planned
 resolution all keep working under a gate-only declaration. When the wrapped
-resolver is async (`utils/typing.py::is_async_callable`), the wrapper is
-async and awaits it; gates and overrides themselves are sync-signature
-(`(self, info)` / `(self, root, info)`, per the pinned cookbook contract) —
-they run per-field-per-row and must not do I/O, which the docs state
-explicitly. Async gate/override support is deferred until a real consumer
-need appears (Risks).
+resolver, gate, or override is async
+(`utils/typing.py::is_async_callable`), the wrapper is async and awaits every
+awaitable component result before continuing the gate → override → default
+cascade. When all three components are synchronous, the wrapper stays
+synchronous so sync-only fields incur no event-loop boundary. Both sync and
+async declarations keep the same public signatures (`(self, info)` /
+`(self, root, info)`); an async gate can never be treated as a truthy
+coroutine and bypassed.
 
 ## Implementation plan
 
@@ -635,7 +641,7 @@ need appears (Risks).
 |---|---|---|
 | 1 | `django_strawberry_framework/fieldset/__init__.py`, `fieldset/base.py`, `tests/fieldset/test_base.py` | `FieldSet` + `FieldSetMetaclass`: declaration discovery (gates / overrides / computed annotations, inheritance-aware), `Meta.model` + `Meta.depends_on` validation, `ConfigurationError` paths; unit tests one-to-one |
 | 2 | `fieldset/factories.py`, `types/finalizer.py` (`_bind_fieldsets`, phase-2.5 call), `types/base.py` (key promotion + `fields_class` value validation), `types/definition.py` (slot populator docs), `tests/fieldset/test_factories.py`, `tests/types/…` | Owner binding via `_bind_set_owner_common`, wrapper cascade construction, `skip_field_names` extension, promotion out of `DEFERRED_META_KEYS`, idempotent rerun marking |
-| 3 | `fieldset/factories.py`, `types/finalizer.py`, `optimizer/plans.py` (or the plan-construction seam that merges per-type extra columns), `tests/fieldset/test_depends_on.py`, `tests/optimizer/…` | Computed-field transplant + fail-closed audits (Decision 5), `depends_on` union → `only_fields` merge (Decision 7) |
+| 3 | `fieldset/factories.py`, `types/finalizer.py`, `optimizer/plans.py` (or the plan-construction seam that merges per-type extra columns), `tests/fieldset/test_depends_on.py`, `tests/optimizer/…` | Computed-field transplant + fail-closed audits (Decision 5), selection-sensitive `depends_on` map → `only_fields` merge (Decision 7) |
 | 4 | `examples/fakeshop/apps/products/fields.py` (activate the already-staged FieldSet classes — repoint the `AdvancedFieldSet` base to `FieldSet`; not a new file), fakeshop schema wiring, `examples/fakeshop/test_query/test_fieldset*.py`, `tests/fieldset/test_composability.py` | Live HTTP: tiered visibility / redaction / denial / computed field across the four user tiers; composability with `FilterSet` / `OrderSet` / cascade |
 | 5 | `docs/GLOSSARY.md` (DB + regen), `docs/README.md`, `docs/TREE.md` (regen), `README.md`, `GOAL.md`, `TODAY.md`, `KANBAN.md`/`KANBAN.html` (DB + regen), `CHANGELOG.md`, `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, `uv.lock` | Status flips, new `Meta.depends_on` glossary entry, `0.1.1` entry + version quintet, card wrap |
 
@@ -651,8 +657,8 @@ need appears (Risks).
   `DjangoTypeDefinition.consumer_authored_fields` — the existing
   consumer-win mechanism is extended, not duplicated, for FieldSet-managed
   fields (Decision 5, Decision 11).
-- `utils/typing.py::is_async_callable` — asyncness detection in the wrapper
-  (Decision 11).
+- `utils/typing.py::is_async_callable` — asyncness detection across the
+  original resolver, gate, and override (Decision 11).
 - `exceptions.py::ConfigurationError` + the deferred-surface message shape —
   every new finalize-time raise uses the uniform error family.
 - Upstream-shape reuse ledger: `mixins.py::get_concrete_field_names` has no
@@ -672,7 +678,8 @@ need appears (Risks).
   standard error masking. The docs steer consumers to `GraphQLError`.
 - **Shared FieldSet across types.** Legal; unsurfaced-field targets warn
   per-pair (Decision 6). The warning text names the FieldSet, the field,
-  and the owning type — upstream's message shape.
+  and the owning type — upstream's message shape. Unknown targets are not
+  this case: they fail at FieldSet class creation (Decision 2).
 - **Inheritance.** Declarations on FieldSet mixins/bases are discovered
   (`dir()`-walk parity); a subclass overriding a gate/override wins by
   normal MRO.
@@ -715,20 +722,24 @@ Unit (`tests/fieldset/`, mirroring source one-to-one per the card DoD):
    stripping, inheritance, `resolve_field` exclusion, `_managed_fields`
    union.
 2. Validation raises: missing `Meta.model`; non-model `Meta.model`;
-   `depends_on` keying a nonexistent override; `depends_on` naming a
-   non-concrete column; computed annotation without resolver; computed name
-   collision; non-`FieldSet` `Meta.fields_class` value.
+   nonexistent gate/override target; `depends_on` keying a nonexistent
+   override; `depends_on` naming a non-concrete column; computed annotation
+   without resolver; computed name collision; non-`FieldSet`
+   `Meta.fields_class` value.
 3. Wrapper cascade order: gate-only, override-only, both, neither
-   (untouched-resolver identity check); original-resolver delegation; async
-   original preserved; denial propagation shape (nullable → `null` +
+   (untouched-resolver identity check); original-resolver delegation; every
+   sync/async combination across original, gate, and override (including an
+   async gate denial); denial propagation shape (nullable → `null` +
    `errors`; non-null → bubble).
 4. Binding: phase-2.5 idempotence (double `finalize_django_types`), owner
    mismatch raise, warning for unsurfaced targets, promotion (declaring
    `fields_class` no longer raises deferred-surface; `aggregate_class` /
    `search_fields` still do).
-5. Optimizer: `depends_on` columns appear in `only_fields` when a managed
-   field is selected; absent when not; deferred-fetch count assertion for
-   the undeclared case (documents the failure mode).
+5. Optimizer: two managed fields with disjoint `depends_on` declarations
+   contribute only their own columns when selected independently and the
+   union when selected together; dependencies are absent when neither is
+   selected; deferred-fetch count assertion for the undeclared case
+   documents the failure mode.
 
 Live (`examples/fakeshop/test_query/`, per the
 [live-first coverage mandate][glossary-live-first-coverage-mandate]):
@@ -806,15 +817,10 @@ cannot reach.
   deprecation) — the classes they live on differ, and the cookbook uses the
   shared name deliberately. Risk is consumer confusion only; mitigated in
   the glossary entries and the fieldset docs' contrast table.
-- **`Meta.depends_on` granularity.** Keying by method name (card shape)
-  rather than field name means a gate-only field cannot declare
-  dependencies. Gates are documented I/O-free so this should never matter;
-  if a real case appears, the dict accepts `check_<field>_permission` keys
-  as a backward-compatible widening. Preferred: ship method-name keys only.
-- **Async gates/overrides.** Deferred (Decision 11). If an async consumer
-  needs an async gate, the wrapper already branches on asyncness for the
-  original resolver; extending discovery to async methods is additive.
-  Preferred: sync-only for `0.1.1`, revisit on demand.
+- **`Meta.depends_on` key shape.** Public declarations remain keyed by
+  `resolve_<field>` method name for card/upstream compatibility, while the
+  binder normalizes them to selected field names for planning. Gates remain
+  I/O-free and therefore declare no column dependencies.
 - **Per-row wrapper overhead.** Method-call-only per managed field per row;
   upstream flags the same. Slice 4's query-count tests double as a smoke
   benchmark; no optimization work planned for `0.1.1`.
@@ -848,20 +854,23 @@ cannot reach.
   `django_strawberry_framework.fieldset.FieldSet`.
 - [ ] `FieldSet` accepts `class Meta: model = Foo` (+ optional
   `depends_on`); declarations are method-based plus class-level
-  computed-field annotations; no `Meta.fields` on the FieldSet itself.
+  computed-field annotations; unknown gate/override targets fail closed;
+  no `Meta.fields` on the FieldSet itself.
 - [ ] `Meta.fields_class = FooFieldSet` binds at phase 2.5
   (`_bind_fieldsets`), populates `DjangoTypeDefinition.fields_class`, and
   wires every gate/override/computed field into the owning type's resolver
-  chain — no type subclassing, no hand-attached decorators.
+  chain — including mixed sync/async components — with no type subclassing
+  or hand-attached decorators.
 - [ ] `Meta.fields_class` is promoted from `DEFERRED_META_KEYS` to
   `ALLOWED_META_KEYS` with `FieldSet`-subclass value validation;
   `aggregate_class` / `search_fields` remain deferred.
 - [ ] Denial raises and surfaces as a per-path `errors` entry; redaction is
   a `resolve_<field>` safe value; no deny-value substitution exists in the
   package.
-- [ ] `Meta.depends_on` columns merge into the optimizer's `only()`
-  projection; the fakeshop computed-field test proves
-  deferred-fetch-freedom by query count.
+- [ ] `Meta.depends_on` columns merge selection-sensitively into the
+  optimizer's `only()` projection; disjoint-dependency tests prevent
+  unrelated managed fields from over-projecting columns, and the fakeshop
+  computed-field test proves deferred-fetch-freedom by query count.
 - [ ] Tests under `tests/fieldset/` mirror the source one-to-one; live HTTP
   coverage under `examples/fakeshop/test_query/` exercises tiered
   visibility, redaction, denial, and a computed field across the four user
@@ -881,17 +890,17 @@ cannot reach.
 
 <!-- Root -->
 [agents]: ../AGENTS.md
+[backlog]: ../BACKLOG.md
 [goal]: ../GOAL.md
 [kanban]: ../KANBAN.md
-[backlog]: ../BACKLOG.md
 
 <!-- docs/ -->
+[glossary]: GLOSSARY.md
 [glossary-aggregateset]: GLOSSARY.md#aggregateset
 [glossary-apply-cascade-permissions]: GLOSSARY.md#apply_cascade_permissions
 [glossary-configurationerror]: GLOSSARY.md#configurationerror
 [glossary-connection-aware-optimizer-planning]: GLOSSARY.md#connection-aware-optimizer-planning
 [glossary-cookbook-parity]: GLOSSARY.md#cookbook-parity
-[glossary-single-upstream-parity]: GLOSSARY.md#single-upstream-parity
 [glossary-definition-order-independence]: GLOSSARY.md#definition-order-independence
 [glossary-djangoconnectionfield]: GLOSSARY.md#djangoconnectionfield
 [glossary-djangolistfield]: GLOSSARY.md#djangolistfield
@@ -908,8 +917,8 @@ cannot reach.
 [glossary-metaaggregate-class]: GLOSSARY.md#metaaggregate_class
 [glossary-metachoice-enum-names]: GLOSSARY.md#metachoice_enum_names
 [glossary-metaexclude]: GLOSSARY.md#metaexclude
-[glossary-metafields-class]: GLOSSARY.md#metafields_class
 [glossary-metafields]: GLOSSARY.md#metafields
+[glossary-metafields-class]: GLOSSARY.md#metafields_class
 [glossary-metafilterset-class]: GLOSSARY.md#metafilterset_class
 [glossary-metamodel]: GLOSSARY.md#metamodel
 [glossary-metaoptimizer-hints]: GLOSSARY.md#metaoptimizer_hints
@@ -921,16 +930,16 @@ cannot reach.
 [glossary-per-field-permission-hooks]: GLOSSARY.md#per-field-permission-hooks
 [glossary-relay-node-integration]: GLOSSARY.md#relay-node-integration
 [glossary-schema-audit]: GLOSSARY.md#schema-audit
-[glossary]: GLOSSARY.md
+[glossary-single-upstream-parity]: GLOSSARY.md#single-upstream-parity
 [spec-045]: spec-045-debug_extraction-0_0_15.md
 [spec-046]: spec-046-boundary_dry_squeeze-0_0_16.md
 [spec-047]: spec-047-beta_release-0_1_0.md
 [spec-049]: spec-049-search_fields-0_1_2.md
 
 <!-- docs/SPECS/ -->
+[spec-030]: SPECS/spec-030-connection_field-0_0_9.md
 [spec-034]: SPECS/spec-034-permissions-0_0_10.md
 [spec-038]: SPECS/spec-038-form_mutations-0_0_12.md
-[spec-030]: SPECS/spec-030-connection_field-0_0_9.md
 
 <!-- docs/builder/ -->
 

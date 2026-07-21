@@ -767,11 +767,11 @@ class UpdateOrder(DjangoMutation):
 
 **Spec**:
 - The GraphQL spec already executes root mutation fields **serially**; wrapping the document's execution in `atomic()` yields all-or-nothing semantics with zero new endpoint, zero dependency DSL, and full compatibility with existing GraphQL clients, validation, and tooling.
-- **The atomic boundary must span response completion, not just resolver execution.** The shipped per-mutation flavor has exactly this gap (KANBAN `BETA-055`, pinned live by the strict-`xfail` suite `examples/fakeshop/test_query/test_mutation_atomicity.py`): graphql-core serializes the payload *after* the resolver returns, so a completion failure after `atomic()` exits leaves a committed write behind `data: null`. A document-level wrapper that closes before completion re-creates the bug at document scale; this card inherits whatever boundary BETA-055 lands and must not regress it.
+- **The atomic boundary must span response completion, not just resolver execution.** The shipped per-mutation flavor already closes exactly this gap (the always-on mutation-atomicity boundary shipped at 0.0.14, pinned live by the strict-`xfail` suite `examples/fakeshop/test_query/test_mutation_atomicity.py`): graphql-core serializes the payload *after* the resolver returns, so a completion failure after `atomic()` exits leaves a committed write behind `data: null`. A document-level wrapper that closes before completion re-creates the bug at document scale; this card inherits the always-on mutation-atomicity boundary shipped at 0.0.14 and must not regress it.
 - Any root field's failure rolls back the whole document; the response carries the typed-error envelope per failed field and a document-level `code="dst.transaction.rolled_back"` marker on the sibling fields that succeeded-then-rolled-back.
 - Opt-in per schema (`DjangoTransactionalMutationsExtension`) with per-document opt-out directive for mutations that intentionally commit independently.
 
-**Composes with**: `typed_error_envelope_and_code_registry`, the promoted [Mutation transactions and idempotency][card-mutation-transactions-and-idempotency] card, `batch_mutation_endpoint` (which ships only if demand survives this card).
+**Composes with**: `typed_error_envelope_and_code_registry`, the promoted [Mutation idempotency keys][card-mutation-idempotency-keys] card, `batch_mutation_endpoint` (which ships only if demand survives this card).
 
 ### `batch_mutation_endpoint`
 
@@ -1606,6 +1606,16 @@ Cards in this section are intentionally unscheduled — kept for design context,
 
 **Composes with**: shipped `Meta.interfaces` foundation.
 
+### `schema_hookup_cap_setting`
+
+**Realistic**: 8/10 — A bounded settings knob over existing registry bookkeeping.
+
+**Impact**: 3/10 — Guardrail ergonomics; catches accidental over-registration, adds no capability.
+
+**Source**: relocated 2026-07-20 from the migration-guides card (`TODO-BETA-058-0.1.6`), where it was implementation scope on a docs-only card.
+
+**What we'd do**: Add a DSF settings knob capping the number of schema hookups per model, raising a loud error when a model exceeds the cap (original card bullet: "Add ability to set dsf settings to cap the number of schema hookups per model and error if it is more").
+
 ---
 
 ## Struck
@@ -1653,7 +1663,7 @@ If a card turns out to be wrong (the upstream packages ship it, real-world adopt
 [card-full-relay-story-node-connection-root-validation]: KANBAN.md#full_relay_story_node_connection_root_validation
 [card-multi-database-cooperation-contract]: KANBAN.md#multi_database_cooperation_contract
 [card-multiple-djangotypes-per-model-with-metaprimary]: KANBAN.md#multiple_djangotypes_per_model_with_metaprimary
-[card-mutation-transactions-and-idempotency]: KANBAN.md#mutation_transactions_and_idempotency
+[card-mutation-idempotency-keys]: KANBAN.md#mutation_idempotency_keys
 [kanban]: KANBAN.md
 
 <!-- docs/ -->

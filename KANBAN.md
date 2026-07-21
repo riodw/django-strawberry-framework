@@ -278,7 +278,7 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 #### Definition of done
 
-- [ ] Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`.
+- [ ] Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`.
 - [ ] Full test pass under each supported `(Python, Django, Strawberry)` combination.
 - [ ] Coverage stays at 100% for the package source tree.
 - [ ] Version bumped to `0.1.0` across `pyproject.toml`, `django_strawberry_framework/__init__.py`, `tests/base/test_init.py`, and `uv.lock`.
@@ -311,9 +311,10 @@ Cards required to reach feature parity with both upstreams (`⚛️ graphene-dja
 
 #### Card references
 
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-013-0.0.4` - Real M2M coverage
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-044-0.0.14` - Response-extensions debug middleware
-- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7`) is in `DONE`. -> `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method`
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`. -> `DONE-013-0.0.4` - Real M2M coverage
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`. -> `DONE-044-0.0.14` - Response-extensions debug middleware
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`. -> `DONE-024-0.0.7` - Django Trac #37064 hardening + `safe_wrap_connection_method`
+- Related: Every other Alpha card (`DONE-013-0.0.4` through `DONE-044-0.0.14` plus `DONE-024-0.0.7` and `DONE-064-0.0.14`) is in `DONE`. -> `DONE-064-0.0.14` - Sealed get_queryset visibility-boundary policy artifacts
 
 ## To Do - Beta (1.0.0)
 
@@ -326,6 +327,7 @@ Cards that complete the django-graphene-filters Layer-3 richness on top of parit
 - Status: To Do
 - Relative size: M
 - Labels: `fieldsets`, `layer-3`, `public-api`
+- Spec: [spec-048-fieldset-0_1_1.md](docs/spec-048-fieldset-0_1_1.md)
 
 #### Predicted files
 
@@ -333,7 +335,7 @@ Cards that complete the django-graphene-filters Layer-3 richness on top of parit
 
 #### Planning note
 
-Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative field-level behavior layer that the cookbook drives via `Meta.fields_class`. The cookbook shape: a consumer-authored `class GalaxyFieldSet(FieldSet)` carries `resolve_<field>(self, root, info)` overrides for custom resolution, `check_<field>_permission(self, info)` denial gates that raise before resolve runs, and class-level annotations like `display_name: str | None = strawberry.field(description="...")` for computed fields the Django model does not have. Pointed at by `Meta.fields_class = GalaxyFieldSet` on the owning `DjangoType`. This is the smallest Layer-3 surface by file count but the most novel by semantic surface area — the resolver-override contract, the redaction-vs-denial split, and the computed-field annotation discipline all live here.
+Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarative field-level behavior layer that the cookbook drives via `Meta.fields_class`. The cookbook shape: a consumer-authored `class GalaxyFieldSet(FieldSet)` carries `resolve_<field>(self, root, info)` overrides for custom resolution, `check_<field>_permission(self, info)` denial gates that raise before resolve runs, and class-level annotations like `display_name: str | None = strawberry.field(description="...")` for computed fields the Django model does not have. Pointed at by `Meta.fields_class = GalaxyFieldSet` on the owning `DjangoType`. This is the smallest Layer-3 surface by file count but the most novel by semantic surface area — the resolver-override contract, the redaction-vs-denial split, and the computed-field annotation discipline all live here.
 
 #### Dependencies
 
@@ -364,7 +366,7 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 - `Meta.fields_class` moves out of `DEFERRED_META_KEYS` only when the field-level permission / custom-resolver / computed-field machinery is applied end-to-end (see also [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` custom Strawberry field class that field-level permissions will likely require).
 - Phase-2.5 finalizer wiring follows the shipped `_bind_filtersets` / `_bind_ordersets` pattern. New helper `_bind_fieldsets` (or the equivalent dispatched form when `TODO-BETA-052-0.1.3` lands) binds each `Meta.fields_class` to its owning `DjangoTypeDefinition` so resolvers and gates are wired before schema construction.
 - Per-field resolver attachment: the existing `_attach_relation_resolvers` already accepts a `skip_field_names` set so consumer-authored fields are not clobbered; FieldSet-bound `resolve_<field>` extends that skip-set so the FieldSet's resolver wins over the auto-generated scalar resolver.
-- Custom Strawberry field class — graphene's `AdvancedFieldSet` works with a custom field type that carries the `check_<field>_permission` gate at resolve time. Strawberry's `strawberry.field(...)` already supports a `permission_classes` argument; the spec must decide between mapping `check_<field>_permission` onto that machinery or carrying a parallel gate. See [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` direction.
+- Custom Strawberry field class — django-graphene-filters' `AdvancedFieldSet` works with a custom field type that carries the `check_<field>_permission` gate at resolve time. Strawberry's `strawberry.field(...)` already supports a `permission_classes` argument; the spec must decide between mapping `check_<field>_permission` onto that machinery or carrying a parallel gate. See [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` direction.
 - Slot realized in `DONE-034-0.0.10`: `DjangoTypeDefinition.fields_class` is now declared as an inert `type | None = None` sidecar (spec-034 Decision 2 — the structural mirror of the shipped `filterset_class` / `orderset_class` slots). It has no populator yet and stays `None`; `Meta.fields_class` remains in `DEFERRED_META_KEYS` (still rejected at validation). This card's `_bind_fieldsets` is what populates the slot and promotes the key end-to-end.
 
 #### Architectural posture
@@ -400,6 +402,7 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 - Status: To Do
 - Relative size: M
 - Labels: `connections`, `filters`, `public-api`, `search`
+- Spec: [spec-049-search_fields-0_1_2.md](docs/spec-049-search_fields-0_1_2.md)
 
 #### Predicted files
 
@@ -409,7 +412,7 @@ Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative fiel
 
 #### Planning note
 
-Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Both dependencies have shipped (`DONE-027-0.0.8` Filtering and `DONE-030-0.0.9` `DjangoConnectionField`); the card is planned but unblocked.
+Strawberry analogue of django-graphene-filters' `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Both dependencies have shipped (`DONE-027-0.0.8` Filtering and `DONE-030-0.0.9` `DjangoConnectionField`); the card is planned but unblocked.
 
 #### Dependencies
 
@@ -446,7 +449,7 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 #### Why it matters
 
 - `Meta.search_fields` is one of the five django-graphene-filters Layer-3 Meta keys explicitly listed in [`GOAL.md`][goal] alongside `filterset_class`, `orderset_class`, `aggregate_class`, and `fields_class`. Without it the package cannot claim full DGF parity at 1.0.0.
-- Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-055-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap.
+- Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. The fakeshop products schema stages four commented `search_fields` tuples awaiting this card's activation slice; `TODO-BETA-055-0.1.5` (Fakeshop GraphQL schema activation) is now scoped to the `node` / `nodes` entry points plus the `totalCount` opt-in and no longer gates them.
 
 #### Dependencies
 
@@ -462,7 +465,7 @@ Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shap
 - Dependency: both dependencies have shipped: `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) landed before this card. -> `DONE-027-0.0.8` - Filtering subsystem
 - Related: Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-052-0.1.3`). -> `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
 - Dependency: both dependencies have shipped: `DONE-027-0.0.8` (Filtering) and `DONE-030-0.0.9` (DjangoConnectionField) landed before this card. -> `DONE-030-0.0.9` - `DjangoConnectionField`
-- Related: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `TODO-BETA-055-0.1.5` (Fakeshop schema activation) explicitly carries a note to "move or defer `search_fields` before uncommenting" because of this gap. -> `TODO-BETA-055-0.1.5` - Fakeshop GraphQL schema activation
+- Related: Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. The fakeshop products schema stages four commented `search_fields` tuples awaiting this card's activation slice; `TODO-BETA-055-0.1.5` (Fakeshop GraphQL schema activation) is now scoped to the `node` / `nodes` entry points plus the `totalCount` opt-in and no longer gates them. -> `TODO-BETA-055-0.1.5` - Fakeshop GraphQL schema activation
 - Related: a single `search: String` argument fanning out as an OR'd `icontains` across declared field paths; reuses `DONE-027-0.0.8`'s argument-factory machinery. Spec + tests + live HTTP + Meta-key promotion. -> `DONE-027-0.0.8` - Filtering subsystem
 
 <a id="postgres_full_text_search_filter_primitives"></a>
@@ -497,7 +500,7 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 - `SearchRankFilter`: `SearchRank` weighting with `weights` / `cover_density` / `normalization` options.
 - `TrigramFilter`: `pg_trgm` `TrigramSimilarity` / `TrigramWordSimilarity` with a `kind` selector and a similarity threshold.
 - Postgres-only: degrade with a clear `ConfigurationError` (or skip the filter) on non-Postgres backends; never emit a malformed query on SQLite.
-- Prefix-shortcut operators (parity watch-item, carried over from `docs/feedback.md`): `django_graphene_filters` also exposes single-character search shortcut operators (e.g. `^ = @ $`) over the full-text surface. This card describes the `SearchQuery` / `SearchRank` / `Trigram` filter classes but not the shortcut syntax — the spec must decide whether the shortcut operators are part of the ported surface or are intentionally left out.
+- Prefix-shortcut operators (parity watch-item, carried over from `docs/feedback.md`): `django-graphene-filters` also exposes single-character search shortcut operators (e.g. `^ = @ $`) over the full-text surface. The `@` full-text-search prefix ships fully in `TODO-BETA-049-0.1.2` (`Meta.search_fields`); this card is scoped to the `SearchQueryFilter` / `SearchRankFilter` / `TrigramFilter` classes plus PG-specific full-text, and the remaining shortcut operators (`^ = $`) stay a spec watch-item — the spec decides whether they are part of the ported surface or intentionally left out.
 
 #### Definition of done
 
@@ -554,7 +557,7 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 
 #### Planning note
 
-Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-type aggregation via `Meta.aggregate_class`. Mirrors the shipped Filtering / in-flight Ordering architecture (six-layer lazy-resolution pipeline; finalizer phase-2.5 binding; per-module input-class namespace) but emits `strawberry.type` output types (not input) and adds a sync/async `compute` / `acompute` split. The cookbook shape: `AggregateSet` subclasses declare `Meta.fields = {"name": ["count", "min", "max", "mode", "uniques"], ...}`, per-stat `check_<field>_<statname>_permission` gates, custom-stat `compute_<field>_<statname>` methods registered via `Meta.custom_stats = {...}`, `RelatedAggregate` for cross-relation traversal, and a `get_child_queryset` cascade hook for related aggregates.
+Strawberry port of django-graphene-filters' `AdvancedAggregateSet` — declarative per-type aggregation via `Meta.aggregate_class`. Mirrors the shipped Filtering and Ordering architecture (six-layer lazy-resolution pipeline; finalizer phase-2.5 binding; per-module input-class namespace) but emits `strawberry.type` output types (not input) and adds a sync/async `compute` / `acompute` split. The cookbook shape: `AggregateSet` subclasses declare `Meta.fields = {"name": ["count", "min", "max", "mode", "uniques"], ...}`, per-stat `check_<field>_<statname>_permission` gates, custom-stat `compute_<field>_<statname>` methods registered via `Meta.custom_stats = {...}`, `RelatedAggregate` for cross-relation traversal, and a `get_child_queryset` cascade hook for related aggregates.
 
 #### Scope
 
@@ -562,10 +565,10 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 - `AggregateSet`
 - GraphQL argument/result factories
 - `Meta.aggregate_class` promotion
-- Cookbook anchor: graphene-django's `recipes/aggregates.py` declares `class ObjectTypeAggregate(AggregateSet)` with `Meta.fields = {"name": ["count", "min", "max", "mode", "uniques"], "description": ["count", "min", "max"]}` and `Meta.custom_stats = {"type_breakdown": str}` paired with a `compute_body_type_type_breakdown(self, queryset) -> str` method. The Strawberry port carries this shape verbatim with `OrderSet` → `AggregateSet` substitution and the `compute` / `acompute` sync/async split.
+- Cookbook anchor: django-graphene-filters' `recipes/aggregates.py` declares `class ObjectTypeAggregate(AggregateSet)` with `Meta.fields = {"name": ["count", "min", "max", "mode", "uniques"], "description": ["count", "min", "max"]}` and `Meta.custom_stats = {"centroid": graphene.String}` paired with a `compute_value_centroid(self, queryset)` method (`recipes/aggregates.py:73-90`). The Strawberry port carries this shape verbatim with `OrderSet` → `AggregateSet` substitution and the `compute` / `acompute` sync/async split.
 - Built-in stat surface: `count`, `min`, `max`, `mode`, `uniques`, plus the Django aggregate primitives `Sum`, `Count`, `Avg`, `Min`, `Max`, `GroupBy`. The cookbook ships every one as a per-field option on `Meta.fields`; this card pins the same surface.
 - `RelatedAggregate("TargetAggregate", field_name="...")` for relation-traversed aggregates (e.g. `celestial_bodies = RelatedAggregate("CelestialBodyAggregate", field_name="galaxy")` on a `GalaxyAggregate`). Accepts a class reference, an absolute import path, or an unqualified name for circular references — the same lazy-resolution contract `RelatedFilter` and `RelatedOrder` ship.
-- `Meta.custom_stats = {"<statname>": <return_type>}` declares consumer-defined stats; the framework expects a paired `compute_<field>_<statname>(self, queryset)` method that returns a value matching the declared type. Cookbook example: `Meta.custom_stats = {"type_breakdown": str}` paired with `compute_body_type_type_breakdown(self, queryset) -> str` returning a comma-separated `KEY=count` breakdown.
+- `Meta.custom_stats = {"<statname>": <return_type>}` declares consumer-defined stats; the framework expects a paired `compute_<field>_<statname>(self, queryset)` method that returns a value matching the declared type. Cookbook example: `Meta.custom_stats = {"centroid": graphene.String}` paired with `compute_value_centroid(self, queryset)` returning the computed centroid string (`recipes/aggregates.py:73-90`).
 - Per-stat permission: `check_<field>_<statname>_permission(self, request)` gates a specific (field, stat) pair (cookbook example: `check_name_uniques_permission` raises for non-staff so non-staff cannot see the unique-name distribution while still seeing `count` / `min` / `max`). Mirrors the per-field permission gate in `FilterSet` / `OrderSet` but keyed on the (field, stat) tuple, not just the field.
 - `get_child_queryset(self, rel_name, rel_agg)` cascade hook on `AggregateSet` lets a parent aggregate enforce a cascade rule on its children (cookbook example: a shared `_private_aware_child_qs` that filters out `is_private=True` rows when traversing through a `RelatedAggregate`). Composes with `apply_cascade_permissions` (`DONE-034-0.0.10`).
 - Sync / async `compute(self, info, queryset) -> <Output>` and `async def acompute(self, info, queryset) -> <Output>` — same dual-shape contract `FilterSet.apply_sync` / `apply_async` ships. Selection-set-aware: only the aggregate output fields the GraphQL query actually selects are computed; the optimizer plan-cache infrastructure drives the selected-fields detection so a 20-stat aggregate output type does not eagerly compute all 20 when the consumer asked for 3.
@@ -574,7 +577,6 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 
 #### Definition of done
 
-- [ ] Add `docs/spec-aggregates.md`.
 - [ ] Add `django_strawberry_framework/aggregates/`.
 - [ ] Add mirrored `tests/aggregates/`.
 - [ ] Promote `Meta.aggregate_class` only when aggregation is applied end-to-end.
@@ -618,14 +620,11 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 
 #### Note
 
-- each Layer 3 subsystem implementation
-- `filterset_class`
-- `orderset_class`
+- Single-key promotion: move `Meta.aggregate_class` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` once the aggregation subsystem applies it end-to-end. It is the only `DEFERRED_META_KEYS` member left to promote — `filterset_class` and `orderset_class` are already in `ALLOWED_META_KEYS`, `fields_class` promotion is owned by the `FieldSet` card, and `search_fields` promotion is owned by the `Meta.search_fields` card.
 - `aggregate_class`
-- `fields_class`
-- `search_fields`
 - Do not move a key from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` until the pipeline applies it end-to-end.
 - mechanical bookkeeping: move keys from `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` as each subsystem lands end-to-end. The real work lives in the subsystem cards, not here.
+- Optional: fold the finalizer's per-key binding (`_bind_filtersets` / `_bind_ordersets` / `_bind_fieldsets`) into one dispatched, table-driven form so promoting a Meta key is a data change rather than a new helper per key.
 
 <a id="opt_in_node_sentinel_redaction_tier_metaredaction_mode"></a>
 ### [TODO-BETA-053-0.1.4 - Opt-in node-sentinel redaction tier (`Meta.redaction_mode`)](KANBAN.html#opt_in_node_sentinel_redaction_tier_metaredaction_mode)
@@ -643,7 +642,7 @@ Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-
 
 #### Planning note
 
-Strawberry port of graphene-django's node-level sentinel redaction — the third redaction tier the package deferred in spec-034 Decision 6 (row-exclusion) and re-confirmed as a `FieldSet` Non-goal (`TODO-BETA-048-0.1.1`). Upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes it as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden row so a non-null FK to a hidden target still resolves. This card recreates that surface behind an explicit per-`DjangoType` opt-in so a django-graphene-filters consumer relying on `isRedacted` / sentinel masking can port verbatim, without disturbing the default row-narrowing model.
+Strawberry port of django-graphene-filters' node-level sentinel redaction — the third redaction tier the package deferred in spec-034 Decision 6 (row-exclusion) and re-confirmed as a `FieldSet` Non-goal (`TODO-BETA-048-0.1.1`). Upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes it as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden row so a non-null FK to a hidden target still resolves. This card recreates that surface behind an explicit per-`DjangoType` opt-in so a django-graphene-filters consumer relying on `isRedacted` / sentinel masking can port verbatim, without disturbing the default row-narrowing model.
 
 #### Dependencies
 
@@ -666,7 +665,7 @@ Strawberry port of graphene-django's node-level sentinel redaction — the third
 - [ ] `Meta.redaction_mode` defaults to `"exclude"`; all existing schemas and tests stay unchanged under the default. The `"sentinel"` machinery is wired only when the mode is set.
 - [ ] Tests mirror the source one-to-one; live HTTP coverage exercises a hidden non-null FK target resolving to a `pk=0` sentinel with `isRedacted = true`, a normal row reading `isRedacted = false`, and `get_node` on a hidden id returning the sentinel in `"sentinel"` mode vs `null` in `"exclude"` mode.
 - [ ] Composability tests: `"sentinel"` mode + `apply_cascade_permissions` — the top-level cascade still narrows rows; sentinels appear only for relation targets of surviving rows (no row resurrection, no double counting).
-- [x] Amend the `FieldSet` (`TODO-BETA-048-0.1.1`) Architectural-posture note so its node-sentinel "Non-goal" cross-references this card as the realized opt-in tier.
+- [ ] Amend the `FieldSet` (`TODO-BETA-048-0.1.1`) Architectural-posture note so its node-sentinel "Non-goal" cross-references this card as the realized opt-in tier.
 
 #### Verified in upstream
 
@@ -679,7 +678,7 @@ Strawberry port of graphene-django's node-level sentinel redaction — the third
 #### Why it matters
 
 - Closes the single remaining django-graphene-filters public-surface gap recorded in `docs/feedback.md` (finding P2): node-sentinel redaction was the only public upstream behavior with no equivalent and no card. This converts a buried non-goal into a tracked, opt-in parity feature.
-- Lets a graphene-django consumer relying on `isRedacted` / sentinel FK masking migrate verbatim instead of re-architecting around row-exclusion.
+- Lets a django-graphene-filters consumer relying on `isRedacted` / sentinel FK masking migrate verbatim instead of re-architecting around row-exclusion.
 
 #### Dependencies
 
@@ -747,31 +746,29 @@ Strawberry port of graphene-django's node-level sentinel redaction — the third
 
 #### Planning note
 
-Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-052-0.1.3` (Layer 3 Meta key promotion).
+The product-catalog root schema is already live: four `DjangoConnectionField` roots with their filtersets, ordersets, and mutations are wired and served (the Relay decisions in `DONE-032-0.0.9` shipped). The remaining unclaimed activation is the Relay `node` / `nodes` root entry points plus the connection `totalCount` opt-in; per-subsystem activation (fieldsets, search, aggregates) is owned by the Slice 4 of the respective Layer-3 subsystem cards, not here.
 
 #### Dependencies
 
 - `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
-- `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
 
 #### Definition of done
 
-- [ ] Uncomment only the portions whose dependencies have shipped.
-- [ ] Keep unshipped subsystem lines commented until their specs land.
-- [ ] Move or defer `search_fields` before uncommenting because it is currently a rejected Meta key.
-- [ ] Add in-process schema tests under `examples/fakeshop/tests/`.
-- [ ] Add live `/graphql/` tests under `examples/fakeshop/test_query/` only when testing the HTTP endpoint.
+- [ ] Wire the Relay `node` (single-object refetch) and `nodes` (batch refetch) root entry points into the fakeshop product-catalog schema, built on the shipped Relay story (`DONE-032-0.0.9`).
+- [ ] Add the connection `totalCount` opt-in on the product-catalog `DjangoConnectionField` roots, leaving connections that do not opt in unchanged.
+- [ ] Add in-process `schema.execute_sync` coverage under `examples/fakeshop/tests/` for the `node` / `nodes` entry points and `totalCount`.
+- [ ] Add live `/graphql/` coverage under `examples/fakeshop/test_query/` exercising a `node` refetch by GlobalID, a `nodes` batch refetch, and a `totalCount` query.
 
 #### Note
 
-- example-wiring card: uncomment the product-catalog schema portions whose dependencies have shipped; in-process + live HTTP tests. Gated on the Layer-3 subsystems, not heavy itself.
-- `examples/fakeshop/apps/products/schema.py` exposes a placeholder `hello` field for the product catalog.
-- The aspirational schema block depends on `DjangoConnectionField`, Relay interfaces, filters, orders, aggregates, fieldsets, and permissions.
+- narrow example-wiring card: the product-catalog root schema is already activated (four connection roots + filtersets/ordersets/mutations); this card adds only the `node` / `nodes` entry points and the `totalCount` opt-in, with in-process + live HTTP tests.
+- `examples/fakeshop/apps/products/schema.py` already serves the four `DjangoConnectionField` roots (`allCategories` / `allItems` / `allProperties` / `allEntries`) with filtersets, ordersets, permissions, and mutations; it does not yet add the `node` / `nodes` entry points or a `totalCount` opt-in — this card adds those.
+- The `node` / `nodes` entry points build on the shipped Relay story and `totalCount` is a package-owned connection opt-in; neither needs a further Layer-3 subsystem to land here.
 
 #### Card references
 
-- Dependency: Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-052-0.1.3` (Layer 3 Meta key promotion). -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
-- Blocked by: Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-052-0.1.3` (Layer 3 Meta key promotion). -> `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
+- Dependency: The product-catalog root schema is already live; the remaining node / nodes entry points and totalCount opt-in build on the shipped Relay story (`DONE-032-0.0.9`). -> `DONE-032-0.0.9` - Full Relay story (Node + Connection + Root + validation)
+- Related: Historical gate, retyped related: the recut scope (node / nodes + totalCount) does not depend on Layer 3 Meta key promotion. -> `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
 
 <a id="product_catalog_layer_3_http_graphql_tests"></a>
 ### [TODO-BETA-056-0.1.5 - Product-catalog Layer 3 HTTP GraphQL tests](KANBAN.html#product_catalog_layer_3_http_graphql_tests)
@@ -781,9 +778,23 @@ Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-
 - Relative size: S
 - Labels: `example-app`, `graphql-api`, `layer-3`, `tests`
 
+#### Dependencies
+
+- `TODO-BETA-055-0.1.5` - Fakeshop GraphQL schema activation
+
+#### Definition of done
+
+- [ ] Add live `/graphql/` acceptance tests under `examples/fakeshop/test_query/` for the activated product-catalog schema, reusing the library app's placement and schema-reload pattern.
+- [ ] Cover the product-catalog connection / query fields and the other activated Layer 3 public surfaces end-to-end over HTTP.
+- [ ] Keep in-process `schema.execute_sync` tests under `examples/fakeshop/tests/`; live HTTP tests stay under `examples/fakeshop/test_query/`.
+
 #### Why it matters
 
 - The library app already has live `/graphql/` acceptance tests under `examples/fakeshop/test_query/`.
+
+#### Dependencies
+
+- `TODO-BETA-055-0.1.5` (Fakeshop GraphQL schema activation) — these live HTTP tests exercise the product-catalog schema that card activates, so they land after it.
 
 #### Test plan
 
@@ -796,8 +807,12 @@ Relay decisions (`DONE-032-0.0.9`) have shipped; now blocked only on `TODO-BETA-
 - Future product-catalog HTTP tests should use the same placement and schema-reload pattern.
 - In-process `schema.execute_sync` tests still go under `examples/fakeshop/tests/`.
 
-<a id="mutation_transactions_and_idempotency"></a>
-### [TODO-BETA-057-0.1.6 - Mutation transactions and idempotency](KANBAN.html#mutation_transactions_and_idempotency)
+#### Card references
+
+- Dependency: Depends on the activated product-catalog schema; these HTTP tests exercise the surface that card wires. -> `TODO-BETA-055-0.1.5` - Fakeshop GraphQL schema activation
+
+<a id="mutation_idempotency_keys"></a>
+### [TODO-BETA-057-0.1.6 - Mutation idempotency keys](KANBAN.html#mutation_idempotency_keys)
 
 - Priority: High
 - Status: To Do
@@ -820,19 +835,18 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 
 #### Scope
 
-- Add mutation-level `Meta.atomic = True` so generated create/update/delete mutation resolvers can run inside `transaction.atomic()` without every consumer hand-wrapping the resolver.
+- Shipped baseline (given, commit 1b06c39e): every top-level mutation field already runs inside an always-on `transaction.atomic()` wrap, with `Meta.select_for_update` available to lock the affected rows. This card builds on that baseline and adds idempotency only — it introduces no new transaction opt-in.
 - Add `Meta.idempotency_key = "request_id"` and `Meta.idempotency_ttl = 86400` support backed by `django.core.cache`, returning the first successful response for duplicate keys inside the TTL.
-- Cache only successful atomic-mode responses; validation, permission, and database failures roll back and skip the idempotency write so client retries naturally re-execute.
+- Cache only successful responses; validation, permission, and database failures roll back inside the always-on atomic wrap and skip the idempotency write so client retries naturally re-execute.
 - Keep the surface DRF-shaped and mutation-local: declaration lives on each `DjangoMutation.Meta`, with safe defaults and no global setting required.
 
 #### Definition of done
 
-- [ ] New or amended mutation spec documents the atomic/idempotency Meta keys, cache-key shape, TTL behavior, retry semantics, and failure rollback rules.
-- [ ] Implementation wraps the real generated mutation execution path in `transaction.atomic()` when enabled and leaves non-atomic mutations behavior-compatible.
+- [ ] New or amended mutation spec documents the idempotency Meta keys (`Meta.idempotency_key` / `Meta.idempotency_ttl`), cache-key shape, TTL behavior, retry semantics, and failure rollback rules (the always-on atomic wrap is the shipped baseline this layers on).
+- [ ] Idempotency layers on the already-shipped always-on atomic mutation execution path (commit 1b06c39e); this card adds no new transaction wrapping, and the idempotency cache write happens only after the atomic write commits.
 - [ ] Idempotency cache entries are scoped by mutation class, key value, authenticated principal or anonymous scope, and operation arguments so unrelated calls do not collide.
 - [ ] Tests cover successful replay, validation failure retry, exception rollback, TTL expiration, cache backend errors failing loudly, and sync/async mutation paths where supported.
 - [ ] Live `/graphql/` coverage exercises a real fakeshop mutation twice with the same idempotency key and proves the second response does not double-write.
-- [ ] Remove the `xfail(strict=True)` marker on `test_update_does_not_commit_when_response_completion_fails` in `examples/fakeshop/test_query/test_mutation_atomicity.py` once this card lands: that committed regression pins that a mutation whose GraphQL response completion fails after the write has committed - e.g. a corrupt related non-nullable field hydrates to `None` and trips 'Cannot return null for non-nullable field' - must roll back rather than commit a partial change. It `xfail`s today because the resolver's `transaction.atomic()` ends when the resolver returns, before graphql-core completes the payload; this card's fix (extending the transaction boundary to span response completion) makes it XPASS, and `strict=True` then turns the suite red until the marker is removed.
 
 #### Foundation-slice seam
 
@@ -876,7 +890,6 @@ Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutatio
 
 #### Scope
 
-- Add ability to set dsf settings to cap the number of schema hookups per model and error if it is more
 - Add a `graphene-django` migration guide covering `DjangoObjectType` to `DjangoType`, enum/field conversion differences, query optimizations, and Relay caveats.
 - Add a `strawberry-graphql-django` migration guide covering decorator-to-`Meta` translation, optimizer differences, `get_queryset`, and optimizer hints.
 - Add concise notes for DRF / django-filter users mapping serializers/filtersets/orders into the planned Layer 3 surfaces.
@@ -1085,7 +1098,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Definition of done
 
-- [ ] Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`) is in `DONE`.
+- [ ] Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`.
 - [ ] API surface audit: top-level `__all__` confirmed stable; every public symbol documented; no `# experimental` markers in shipped code; no `_private` symbols accidentally referenced from docs.
 - [ ] SemVer policy committed in CHANGELOG header: every release after `1.0.0` follows MAJOR / MINOR / PATCH rules strictly; pre-`0.1.0` deprecation shims removed entirely.
 - [ ] Full async + sync coverage matrix validated; no `sync_to_async` workarounds remain on any resolver path.
@@ -1116,10 +1129,13 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Card references
 
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`) is in `DONE`. -> `TODO-BETA-048-0.1.1` - `FieldSet`
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`) is in `DONE`. -> `TODO-BETA-058-0.1.6` - Migration and adoption guides
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`) is in `DONE`. -> `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`) is in `DONE`. -> `TODO-BETA-056-0.1.5` - Product-catalog Layer 3 HTTP GraphQL tests
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-048-0.1.1` - `FieldSet`
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-058-0.1.6` - Migration and adoption guides
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-056-0.1.5` - Product-catalog Layer 3 HTTP GraphQL tests
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-059-0.1.7` - Adversarial non-live test suite (try to break it, not just cover lines)
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-060-0.1.7` - Optimizer explain mode
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.6` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the `0.1.7` triple `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.7` / `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-061-0.1.7` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
 ## Done
 

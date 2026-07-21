@@ -1,7 +1,7 @@
 {
   "asOf": {
-    "generatedAt": "2026-07-20T19:54:46.555742+00:00",
-    "maxUpdatedDate": "2026-07-20T17:25:42.869268+00:00"
+    "generatedAt": "2026-07-20T21:39:49.762660+00:00",
+    "maxUpdatedDate": "2026-07-20T21:39:42.241876+00:00"
   },
   "blockingReferenceKindKeys": [
     "blocked_by"
@@ -10623,7 +10623,7 @@
             }
           },
           "order": 0,
-          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}`) is in `DONE`.",
+          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-ALPHA-047-0.1.0",
             "id": "a2FuYmFuLmNhcmQ6MTU=",
@@ -10650,7 +10650,7 @@
               "id": "7330eea0-2c0d-46aa-979d-12704e304611"
             }
           },
-          "updatedDate": "2026-06-24T14:48:56.253153+00:00",
+          "updatedDate": "2026-07-20T21:35:17.955357+00:00",
           "uuid": {
             "id": "e84211b8-a5e3-4e8e-8e4d-a92bbbc62b88"
           }
@@ -19779,7 +19779,7 @@
             }
           },
           "order": 2,
-          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}`) is in `DONE`.",
+          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-ALPHA-047-0.1.0",
             "id": "a2FuYmFuLmNhcmQ6MTU=",
@@ -19806,7 +19806,7 @@
               "id": "7330eea0-2c0d-46aa-979d-12704e304611"
             }
           },
-          "updatedDate": "2026-06-24T14:48:56.257476+00:00",
+          "updatedDate": "2026-07-20T21:35:17.956034+00:00",
           "uuid": {
             "id": "e46912c3-4117-4f90-8f5a-1138383f1b32"
           }
@@ -32039,7 +32039,7 @@
             }
           },
           "order": 0,
-          "rawText": "Relay decisions (`{{card_ref:0}}`) have shipped; now blocked only on `{{card_ref:1}}` (Layer 3 Meta key promotion).",
+          "rawText": "The product-catalog root schema is already live; the remaining node / nodes entry points and totalCount opt-in build on the shipped Relay story (`{{card_ref:0}}`).",
           "sourceCard": {
             "cardId": "TODO-BETA-055-0.1.5",
             "id": "a2FuYmFuLmNhcmQ6MjA=",
@@ -32066,7 +32066,7 @@
               "id": "7debfb89-6d1e-4be3-866b-eae5e13f184b"
             }
           },
-          "updatedDate": "2026-07-09T14:53:59.307246+00:00",
+          "updatedDate": "2026-07-20T21:37:56.972733+00:00",
           "uuid": {
             "id": "a916a055-500c-43be-8cf1-2e3f2428af59"
           }
@@ -40248,7 +40248,7 @@
             "order": 1
           },
           "number": 57,
-          "slug": "mutation_transactions_and_idempotency",
+          "slug": "mutation_idempotency_keys",
           "status": {
             "id": 1,
             "key": "todo",
@@ -40259,7 +40259,7 @@
             "id": 12,
             "number": "0.1.6"
           },
-          "title": "Mutation transactions and idempotency",
+          "title": "Mutation idempotency keys",
           "uuid": {
             "id": "7886b0e3-75b7-48e4-8172-5fde9ee5b2b6"
           }
@@ -41091,7 +41091,7 @@
               "order": 1
             },
             "number": 57,
-            "slug": "mutation_transactions_and_idempotency",
+            "slug": "mutation_idempotency_keys",
             "status": {
               "id": 1,
               "key": "todo",
@@ -41102,7 +41102,7 @@
               "id": 12,
               "number": "0.1.6"
             },
-            "title": "Mutation transactions and idempotency",
+            "title": "Mutation idempotency keys",
             "uuid": {
               "id": "7886b0e3-75b7-48e4-8172-5fde9ee5b2b6"
             }
@@ -51129,7 +51129,7 @@
             }
           },
           "order": 1,
-          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}`) is in `DONE`.",
+          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-ALPHA-047-0.1.0",
             "id": "a2FuYmFuLmNhcmQ6MTU=",
@@ -51156,7 +51156,7 @@
               "id": "7330eea0-2c0d-46aa-979d-12704e304611"
             }
           },
-          "updatedDate": "2026-06-24T14:48:56.256751+00:00",
+          "updatedDate": "2026-07-20T21:35:17.955713+00:00",
           "uuid": {
             "id": "47df1e4c-2ec8-4645-998f-46cf583084c2"
           }
@@ -53584,8 +53584,8 @@
               "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
             }
           },
-          "text": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}`) is in `DONE`.",
-          "updatedDate": "2026-05-30T16:27:12.540175+00:00",
+          "text": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
+          "updatedDate": "2026-07-20T21:35:17.954882+00:00",
           "uuid": {
             "id": "4b19c73c-51bb-4dd2-9e2b-9fcb108e998c"
           }
@@ -54103,7 +54103,7 @@
             }
           },
           "order": 0,
-          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}`) is in `DONE`.",
+          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
           "targetCard": {
             "cardId": "DONE-013-0.0.4",
             "id": "a2FuYmFuLmNhcmQ6MzU=",
@@ -54130,7 +54130,7 @@
               "id": "c7b710c4-316f-43aa-bf9c-91fa1bdf81c0"
             }
           },
-          "updatedDate": "2026-06-24T14:48:56.253153+00:00",
+          "updatedDate": "2026-07-20T21:35:17.955357+00:00",
           "uuid": {
             "id": "e84211b8-a5e3-4e8e-8e4d-a92bbbc62b88"
           }
@@ -54150,7 +54150,7 @@
             }
           },
           "order": 1,
-          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}`) is in `DONE`.",
+          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
           "targetCard": {
             "cardId": "DONE-044-0.0.14",
             "id": "a2FuYmFuLmNhcmQ6MTQ=",
@@ -54177,7 +54177,7 @@
               "id": "4fa19ada-ad60-4ca5-9f6b-cda6789bce44"
             }
           },
-          "updatedDate": "2026-06-24T14:48:56.256751+00:00",
+          "updatedDate": "2026-07-20T21:35:17.955713+00:00",
           "uuid": {
             "id": "47df1e4c-2ec8-4645-998f-46cf583084c2"
           }
@@ -54197,7 +54197,7 @@
             }
           },
           "order": 2,
-          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}`) is in `DONE`.",
+          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
           "targetCard": {
             "cardId": "DONE-024-0.0.7",
             "id": "a2FuYmFuLmNhcmQ6NDY=",
@@ -54224,9 +54224,56 @@
               "id": "8dd725ca-9914-4266-90d6-482d95b8e9d9"
             }
           },
-          "updatedDate": "2026-06-24T14:48:56.257476+00:00",
+          "updatedDate": "2026-07-20T21:35:17.956034+00:00",
           "uuid": {
             "id": "e46912c3-4117-4f90-8f5a-1138383f1b32"
+          }
+        },
+        {
+          "createdDate": "2026-07-20T21:35:17.950879+00:00",
+          "id": 99,
+          "kind": {
+            "createdDate": "2026-05-30T16:27:12.434657+00:00",
+            "id": 3,
+            "key": "related",
+            "label": "Related",
+            "order": 2,
+            "updatedDate": "2026-05-30T16:27:12.434661+00:00",
+            "uuid": {
+              "id": "6f855138-042f-4991-b6b8-68f7cea0b5b5"
+            }
+          },
+          "order": 3,
+          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
+          "targetCard": {
+            "cardId": "DONE-064-0.0.14",
+            "id": "a2FuYmFuLmNhcmQ6NjQ=",
+            "milestone": {
+              "id": 1,
+              "key": "alpha",
+              "label": "Alpha (pre-0.1.0)",
+              "order": 0
+            },
+            "number": 64,
+            "slug": "sealed_get_queryset_visibility_boundary_policy_artifacts",
+            "status": {
+              "id": 4,
+              "key": "done",
+              "label": "Done",
+              "order": 3
+            },
+            "targetVersion": {
+              "id": 24,
+              "number": "0.0.14"
+            },
+            "title": "Sealed get_queryset visibility-boundary policy artifacts",
+            "uuid": {
+              "id": "34967f20-3acf-4117-8e4d-b68b7094e11e"
+            }
+          },
+          "updatedDate": "2026-07-20T21:35:17.950891+00:00",
+          "uuid": {
+            "id": "f8c41251-6edd-40ee-bb55-5e34a8a44613"
           }
         }
       ],
@@ -54397,7 +54444,7 @@
             }
           },
           "order": 0,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-STABLE-062-1.0.0",
             "id": "a2FuYmFuLmNhcmQ6MjM=",
@@ -54424,7 +54471,7 @@
               "id": "eb602ae8-9a41-423b-a514-58440daae8db"
             }
           },
-          "updatedDate": "2026-05-30T23:17:03.870840+00:00",
+          "updatedDate": "2026-07-20T21:35:17.987835+00:00",
           "uuid": {
             "id": "4ef45454-66a7-4496-965f-608cfdd565b1"
           }
@@ -54963,8 +55010,8 @@
               "id": "aee0e54f-3039-45bb-95f6-c02c336b1096"
             }
           },
-          "text": "Custom Strawberry field class — graphene's `AdvancedFieldSet` works with a custom field type that carries the `check_<field>_permission` gate at resolve time. Strawberry's `strawberry.field(...)` already supports a `permission_classes` argument; the spec must decide between mapping `check_<field>_permission` onto that machinery or carrying a parallel gate. See [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` direction.",
-          "updatedDate": "2026-06-02T00:09:05.108776+00:00",
+          "text": "Custom Strawberry field class — django-graphene-filters' `AdvancedFieldSet` works with a custom field type that carries the `check_<field>_permission` gate at resolve time. Strawberry's `strawberry.field(...)` already supports a `permission_classes` argument; the spec must decide between mapping `check_<field>_permission` onto that machinery or carrying a parallel gate. See [`BACKLOG.md`][backlog] item 38 for the `DjangoModelField` direction.",
+          "updatedDate": "2026-07-20T21:35:17.956971+00:00",
           "uuid": {
             "id": "513e5d81-16cd-4590-8d59-81d9fe752666"
           }
@@ -55405,7 +55452,7 @@
           }
         }
       ],
-      "planningNote": "Strawberry port of graphene-django's `AdvancedFieldSet` — the declarative field-level behavior layer that the cookbook drives via `Meta.fields_class`. The cookbook shape: a consumer-authored `class GalaxyFieldSet(FieldSet)` carries `resolve_<field>(self, root, info)` overrides for custom resolution, `check_<field>_permission(self, info)` denial gates that raise before resolve runs, and class-level annotations like `display_name: str | None = strawberry.field(description=\"...\")` for computed fields the Django model does not have. Pointed at by `Meta.fields_class = GalaxyFieldSet` on the owning `DjangoType`. This is the smallest Layer-3 surface by file count but the most novel by semantic surface area — the resolver-override contract, the redaction-vs-denial split, and the computed-field annotation discipline all live here.",
+      "planningNote": "Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarative field-level behavior layer that the cookbook drives via `Meta.fields_class`. The cookbook shape: a consumer-authored `class GalaxyFieldSet(FieldSet)` carries `resolve_<field>(self, root, info)` overrides for custom resolution, `check_<field>_permission(self, info)` denial gates that raise before resolve runs, and class-level annotations like `display_name: str | None = strawberry.field(description=\"...\")` for computed fields the Django model does not have. Pointed at by `Meta.fields_class = GalaxyFieldSet` on the owning `DjangoType`. This is the smallest Layer-3 surface by file count but the most novel by semantic surface area — the resolver-override contract, the redaction-vs-denial split, and the computed-field annotation discipline all live here.",
       "priority": {
         "createdDate": "2026-05-30T16:27:12.423329+00:00",
         "id": 2,
@@ -55430,7 +55477,17 @@
         }
       },
       "slug": "fieldset",
-      "spec": null,
+      "spec": {
+        "createdDate": "2026-07-20T21:35:17.957626+00:00",
+        "id": 59,
+        "name": "spec-048-fieldset-0_1_1",
+        "path": "docs/spec-048-fieldset-0_1_1.md",
+        "updatedDate": "2026-07-20T21:35:17.957631+00:00",
+        "url": "https://github.com/riodw/django-strawberry-framework/blob/main/docs/spec-048-fieldset-0_1_1.md",
+        "uuid": {
+          "id": "01d4e0c3-7075-4ceb-9e72-34febf378090"
+        }
+      },
       "status": {
         "createdDate": "2026-05-30T16:27:12.420157+00:00",
         "id": 1,
@@ -55461,7 +55518,7 @@
         }
       },
       "title": "`FieldSet`",
-      "updatedDate": "2026-07-16T16:00:58.540727+00:00",
+      "updatedDate": "2026-07-20T21:35:17.956564+00:00",
       "uuid": {
         "id": "a9501a74-9247-4564-8c4f-9218328af3cc"
       }
@@ -56148,8 +56205,8 @@
               "id": "16c30ef4-0282-4ae2-b307-e363b6c22039"
             }
           },
-          "text": "Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `{{card_ref:3}}` (Fakeshop schema activation) explicitly carries a note to \"move or defer `search_fields` before uncommenting\" because of this gap.",
-          "updatedDate": "2026-05-30T16:27:12.547019+00:00",
+          "text": "Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. The fakeshop products schema stages four commented `search_fields` tuples awaiting this card's activation slice; `{{card_ref:3}}` (Fakeshop GraphQL schema activation) is now scoped to the `node` / `nodes` entry points plus the `totalCount` opt-in and no longer gates them.",
+          "updatedDate": "2026-07-20T21:39:42.240236+00:00",
           "uuid": {
             "id": "d3c3e33f-a5fb-4d9d-b65b-81b59e0051da"
           }
@@ -56434,7 +56491,7 @@
             }
           },
           "order": 3,
-          "rawText": "Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `{{card_ref:3}}` (Fakeshop schema activation) explicitly carries a note to \"move or defer `search_fields` before uncommenting\" because of this gap.",
+          "rawText": "Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. The fakeshop products schema stages four commented `search_fields` tuples awaiting this card's activation slice; `{{card_ref:3}}` (Fakeshop GraphQL schema activation) is now scoped to the `node` / `nodes` entry points plus the `totalCount` opt-in and no longer gates them.",
           "targetCard": {
             "cardId": "TODO-BETA-055-0.1.5",
             "id": "a2FuYmFuLmNhcmQ6MjA=",
@@ -56461,7 +56518,7 @@
               "id": "7debfb89-6d1e-4be3-866b-eae5e13f184b"
             }
           },
-          "updatedDate": "2026-05-30T23:17:03.861374+00:00",
+          "updatedDate": "2026-07-20T21:39:42.241876+00:00",
           "uuid": {
             "id": "aa8ded75-ff97-4a20-ae44-649f2c7c0eb3"
           }
@@ -56577,7 +56634,7 @@
           }
         }
       ],
-      "planningNote": "Strawberry analogue of graphene-django's `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = (\"name\", \"description\", \"object_type__name\", \"object_type__description\")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Both dependencies have shipped (`{{card_ref:0}}` Filtering and `{{card_ref:2}}` `DjangoConnectionField`); the card is planned but unblocked.",
+      "planningNote": "Strawberry analogue of django-graphene-filters' `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = (\"name\", \"description\", \"object_type__name\", \"object_type__description\")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Both dependencies have shipped (`{{card_ref:0}}` Filtering and `{{card_ref:2}}` `DjangoConnectionField`); the card is planned but unblocked.",
       "priority": {
         "createdDate": "2026-05-30T16:27:12.423329+00:00",
         "id": 2,
@@ -56602,7 +56659,17 @@
         }
       },
       "slug": "metasearch_fields_support",
-      "spec": null,
+      "spec": {
+        "createdDate": "2026-07-20T21:35:17.958687+00:00",
+        "id": 60,
+        "name": "spec-049-search_fields-0_1_2",
+        "path": "docs/spec-049-search_fields-0_1_2.md",
+        "updatedDate": "2026-07-20T21:35:17.958691+00:00",
+        "url": "https://github.com/riodw/django-strawberry-framework/blob/main/docs/spec-049-search_fields-0_1_2.md",
+        "uuid": {
+          "id": "c979d961-4e96-48cb-83a7-2983c7d20b7a"
+        }
+      },
       "status": {
         "createdDate": "2026-05-30T16:27:12.420157+00:00",
         "id": 1,
@@ -56633,7 +56700,7 @@
         }
       },
       "title": "`Meta.search_fields` support",
-      "updatedDate": "2026-07-16T16:00:58.540662+00:00",
+      "updatedDate": "2026-07-20T21:35:17.958300+00:00",
       "uuid": {
         "id": "2ed650da-32ce-4edd-a26a-40b69a2a2a7e"
       }
@@ -56895,8 +56962,8 @@
               "id": "0b9e9637-bbd0-430b-8945-ec0a70fb5faa"
             }
           },
-          "text": "Prefix-shortcut operators (parity watch-item, carried over from `docs/feedback.md`): `django_graphene_filters` also exposes single-character search shortcut operators (e.g. `^ = @ $`) over the full-text surface. This card describes the `SearchQuery` / `SearchRank` / `Trigram` filter classes but not the shortcut syntax — the spec must decide whether the shortcut operators are part of the ported surface or are intentionally left out.",
-          "updatedDate": "2026-06-24T02:22:51.997968+00:00",
+          "text": "Prefix-shortcut operators (parity watch-item, carried over from `docs/feedback.md`): `django-graphene-filters` also exposes single-character search shortcut operators (e.g. `^ = @ $`) over the full-text surface. The `@` full-text-search prefix ships fully in `{{card_ref:0}}` (`Meta.search_fields`); this card is scoped to the `SearchQueryFilter` / `SearchRankFilter` / `TrigramFilter` classes plus PG-specific full-text, and the remaining shortcut operators (`^ = $`) stay a spec watch-item — the spec decides whether they are part of the ported surface or intentionally left out.",
+          "updatedDate": "2026-07-20T21:35:17.959469+00:00",
           "uuid": {
             "id": "1c042fb4-a59f-43e0-851d-c12cf90e2322"
           }
@@ -57761,8 +57828,8 @@
               "id": "0b9e9637-bbd0-430b-8945-ec0a70fb5faa"
             }
           },
-          "text": "Cookbook anchor: graphene-django's `recipes/aggregates.py` declares `class ObjectTypeAggregate(AggregateSet)` with `Meta.fields = {\"name\": [\"count\", \"min\", \"max\", \"mode\", \"uniques\"], \"description\": [\"count\", \"min\", \"max\"]}` and `Meta.custom_stats = {\"type_breakdown\": str}` paired with a `compute_body_type_type_breakdown(self, queryset) -> str` method. The Strawberry port carries this shape verbatim with `OrderSet` → `AggregateSet` substitution and the `compute` / `acompute` sync/async split.",
-          "updatedDate": "2026-06-02T00:09:05.119810+00:00",
+          "text": "Cookbook anchor: django-graphene-filters' `recipes/aggregates.py` declares `class ObjectTypeAggregate(AggregateSet)` with `Meta.fields = {\"name\": [\"count\", \"min\", \"max\", \"mode\", \"uniques\"], \"description\": [\"count\", \"min\", \"max\"]}` and `Meta.custom_stats = {\"centroid\": graphene.String}` paired with a `compute_value_centroid(self, queryset)` method (`recipes/aggregates.py:73-90`). The Strawberry port carries this shape verbatim with `OrderSet` → `AggregateSet` substitution and the `compute` / `acompute` sync/async split.",
+          "updatedDate": "2026-07-20T21:35:17.960172+00:00",
           "uuid": {
             "id": "3dc39411-beeb-479e-bc39-d196db40c0c5"
           }
@@ -57827,8 +57894,8 @@
               "id": "0b9e9637-bbd0-430b-8945-ec0a70fb5faa"
             }
           },
-          "text": "`Meta.custom_stats = {\"<statname>\": <return_type>}` declares consumer-defined stats; the framework expects a paired `compute_<field>_<statname>(self, queryset)` method that returns a value matching the declared type. Cookbook example: `Meta.custom_stats = {\"type_breakdown\": str}` paired with `compute_body_type_type_breakdown(self, queryset) -> str` returning a comma-separated `KEY=count` breakdown.",
-          "updatedDate": "2026-06-02T00:09:05.122690+00:00",
+          "text": "`Meta.custom_stats = {\"<statname>\": <return_type>}` declares consumer-defined stats; the framework expects a paired `compute_<field>_<statname>(self, queryset)` method that returns a value matching the declared type. Cookbook example: `Meta.custom_stats = {\"centroid\": graphene.String}` paired with `compute_value_centroid(self, queryset)` returning the computed centroid string (`recipes/aggregates.py:73-90`).",
+          "updatedDate": "2026-07-20T21:35:17.960423+00:00",
           "uuid": {
             "id": "ff89e891-be77-4376-8367-3868d320f599"
           }
@@ -57944,32 +58011,10 @@
           }
         },
         {
-          "createdDate": "2026-05-30T16:27:12.552181+00:00",
-          "id": 346,
-          "isComplete": false,
-          "order": 0,
-          "section": {
-            "createdDate": "2026-05-30T16:27:12.431211+00:00",
-            "id": 2,
-            "key": "definition_of_done",
-            "label": "Definition of done",
-            "order": 1,
-            "updatedDate": "2026-05-30T16:27:12.431215+00:00",
-            "uuid": {
-              "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
-            }
-          },
-          "text": "Add `docs/spec-aggregates.md`.",
-          "updatedDate": "2026-05-30T16:27:12.552184+00:00",
-          "uuid": {
-            "id": "1a26243b-1938-49db-aeda-e8c86a795b8c"
-          }
-        },
-        {
           "createdDate": "2026-05-30T16:27:12.552369+00:00",
           "id": 347,
           "isComplete": false,
-          "order": 1,
+          "order": 0,
           "section": {
             "createdDate": "2026-05-30T16:27:12.431211+00:00",
             "id": 2,
@@ -57991,7 +58036,7 @@
           "createdDate": "2026-05-30T16:27:12.552554+00:00",
           "id": 348,
           "isComplete": false,
-          "order": 2,
+          "order": 1,
           "section": {
             "createdDate": "2026-05-30T16:27:12.431211+00:00",
             "id": 2,
@@ -58013,7 +58058,7 @@
           "createdDate": "2026-05-30T16:27:12.552741+00:00",
           "id": 349,
           "isComplete": false,
-          "order": 3,
+          "order": 2,
           "section": {
             "createdDate": "2026-05-30T16:27:12.431211+00:00",
             "id": 2,
@@ -58035,7 +58080,7 @@
           "createdDate": "2026-05-30T16:27:12.552934+00:00",
           "id": 350,
           "isComplete": false,
-          "order": 4,
+          "order": 3,
           "section": {
             "createdDate": "2026-05-30T16:27:12.431211+00:00",
             "id": 2,
@@ -58057,7 +58102,7 @@
           "createdDate": "2026-05-30T16:27:12.553133+00:00",
           "id": 351,
           "isComplete": false,
-          "order": 5,
+          "order": 4,
           "section": {
             "createdDate": "2026-05-30T16:27:12.431211+00:00",
             "id": 2,
@@ -58079,7 +58124,7 @@
           "createdDate": "2026-05-30T16:27:12.553320+00:00",
           "id": 352,
           "isComplete": false,
-          "order": 6,
+          "order": 5,
           "section": {
             "createdDate": "2026-05-30T16:27:12.431211+00:00",
             "id": 2,
@@ -58101,7 +58146,7 @@
           "createdDate": "2026-06-02T00:09:05.127926+00:00",
           "id": 854,
           "isComplete": false,
-          "order": 7,
+          "order": 6,
           "section": {
             "createdDate": "2026-05-30T16:27:12.431211+00:00",
             "id": 2,
@@ -58123,7 +58168,7 @@
           "createdDate": "2026-06-02T00:09:05.129051+00:00",
           "id": 855,
           "isComplete": false,
-          "order": 8,
+          "order": 7,
           "section": {
             "createdDate": "2026-05-30T16:27:12.431211+00:00",
             "id": 2,
@@ -58145,7 +58190,7 @@
           "createdDate": "2026-06-02T00:09:05.130114+00:00",
           "id": 856,
           "isComplete": false,
-          "order": 9,
+          "order": 8,
           "section": {
             "createdDate": "2026-05-30T16:27:12.431211+00:00",
             "id": 2,
@@ -58537,7 +58582,7 @@
           }
         }
       ],
-      "planningNote": "Strawberry port of graphene-django's `AdvancedAggregateSet` — declarative per-type aggregation via `Meta.aggregate_class`. Mirrors the shipped Filtering / in-flight Ordering architecture (six-layer lazy-resolution pipeline; finalizer phase-2.5 binding; per-module input-class namespace) but emits `strawberry.type` output types (not input) and adds a sync/async `compute` / `acompute` split. The cookbook shape: `AggregateSet` subclasses declare `Meta.fields = {\"name\": [\"count\", \"min\", \"max\", \"mode\", \"uniques\"], ...}`, per-stat `check_<field>_<statname>_permission` gates, custom-stat `compute_<field>_<statname>` methods registered via `Meta.custom_stats = {...}`, `RelatedAggregate` for cross-relation traversal, and a `get_child_queryset` cascade hook for related aggregates.",
+      "planningNote": "Strawberry port of django-graphene-filters' `AdvancedAggregateSet` — declarative per-type aggregation via `Meta.aggregate_class`. Mirrors the shipped Filtering and Ordering architecture (six-layer lazy-resolution pipeline; finalizer phase-2.5 binding; per-module input-class namespace) but emits `strawberry.type` output types (not input) and adds a sync/async `compute` / `acompute` split. The cookbook shape: `AggregateSet` subclasses declare `Meta.fields = {\"name\": [\"count\", \"min\", \"max\", \"mode\", \"uniques\"], ...}`, per-stat `check_<field>_<statname>_permission` gates, custom-stat `compute_<field>_<statname>` methods registered via `Meta.custom_stats = {...}`, `RelatedAggregate` for cross-relation traversal, and a `get_child_queryset` cascade hook for related aggregates.",
       "priority": {
         "createdDate": "2026-05-30T16:27:12.423916+00:00",
         "id": 3,
@@ -58593,7 +58638,7 @@
         }
       },
       "title": "Aggregation subsystem",
-      "updatedDate": "2026-07-16T16:00:58.540536+00:00",
+      "updatedDate": "2026-07-20T21:35:17.959924+00:00",
       "uuid": {
         "id": "781eef07-cf8d-40f1-b079-b1b425a626fd"
       }
@@ -58603,34 +58648,7 @@
       "changedFiles": [],
       "createdDate": "2026-05-30T16:27:12.586005+00:00",
       "dependencies": [],
-      "dependents": [
-        {
-          "cardId": "TODO-BETA-055-0.1.5",
-          "id": "a2FuYmFuLmNhcmQ6MjA=",
-          "milestone": {
-            "id": 2,
-            "key": "beta",
-            "label": "Beta (pre-1.0.0)",
-            "order": 1
-          },
-          "number": 55,
-          "slug": "fakeshop_graphql_schema_activation",
-          "status": {
-            "id": 1,
-            "key": "todo",
-            "label": "To Do",
-            "order": 1
-          },
-          "targetVersion": {
-            "id": 11,
-            "number": "0.1.5"
-          },
-          "title": "Fakeshop GraphQL schema activation",
-          "uuid": {
-            "id": "7debfb89-6d1e-4be3-866b-eae5e13f184b"
-          }
-        }
-      ],
+      "dependents": [],
       "glossaryLinks": [],
       "id": "a2FuYmFuLmNhcmQ6MjU=",
       "incomingReferences": [
@@ -58685,18 +58703,18 @@
           "createdDate": "2026-05-31T05:16:36.685269+00:00",
           "id": 64,
           "kind": {
-            "createdDate": "2026-05-30T16:27:12.434316+00:00",
-            "id": 2,
-            "key": "blocked_by",
-            "label": "Blocked by",
-            "order": 1,
-            "updatedDate": "2026-05-30T16:27:12.434320+00:00",
+            "createdDate": "2026-05-30T16:27:12.434657+00:00",
+            "id": 3,
+            "key": "related",
+            "label": "Related",
+            "order": 2,
+            "updatedDate": "2026-05-30T16:27:12.434661+00:00",
             "uuid": {
-              "id": "403f4b84-df4c-44db-a38c-b55819fdfc07"
+              "id": "6f855138-042f-4991-b6b8-68f7cea0b5b5"
             }
           },
           "order": 1,
-          "rawText": "Relay decisions (`{{card_ref:0}}`) have shipped; now blocked only on `{{card_ref:1}}` (Layer 3 Meta key promotion).",
+          "rawText": "Historical gate, retyped related: the recut scope (node / nodes + totalCount) does not depend on Layer 3 Meta key promotion.",
           "sourceCard": {
             "cardId": "TODO-BETA-055-0.1.5",
             "id": "a2FuYmFuLmNhcmQ6MjA=",
@@ -58723,7 +58741,7 @@
               "id": "7debfb89-6d1e-4be3-866b-eae5e13f184b"
             }
           },
-          "updatedDate": "2026-07-09T14:53:59.309480+00:00",
+          "updatedDate": "2026-07-20T21:37:14.832602+00:00",
           "uuid": {
             "id": "04874711-10f0-4e16-b53a-6f9bba245382"
           }
@@ -58743,7 +58761,7 @@
             }
           },
           "order": 2,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-STABLE-062-1.0.0",
             "id": "a2FuYmFuLmNhcmQ6MjM=",
@@ -58770,7 +58788,7 @@
               "id": "eb602ae8-9a41-423b-a514-58440daae8db"
             }
           },
-          "updatedDate": "2026-05-30T23:17:03.871704+00:00",
+          "updatedDate": "2026-07-20T21:35:17.988499+00:00",
           "uuid": {
             "id": "c8fcf8a6-b45a-44c9-b551-d74f209f0ebb"
           }
@@ -58841,61 +58859,17 @@
               "id": "26c9aae0-a1cc-44a2-a7f9-7a4f06822228"
             }
           },
-          "text": "each Layer 3 subsystem implementation",
-          "updatedDate": "2026-05-30T16:27:12.586538+00:00",
+          "text": "Single-key promotion: move `Meta.aggregate_class` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` once the aggregation subsystem applies it end-to-end. It is the only `DEFERRED_META_KEYS` member left to promote — `filterset_class` and `orderset_class` are already in `ALLOWED_META_KEYS`, `fields_class` promotion is owned by the `FieldSet` card, and `search_fields` promotion is owned by the `Meta.search_fields` card.",
+          "updatedDate": "2026-07-20T21:35:17.964107+00:00",
           "uuid": {
             "id": "ad1a284d-9098-4ece-be16-15e04df15a4c"
-          }
-        },
-        {
-          "createdDate": "2026-05-30T16:27:12.586740+00:00",
-          "id": 488,
-          "isComplete": false,
-          "order": 1,
-          "section": {
-            "createdDate": "2026-07-20T17:25:42.869264+00:00",
-            "id": 13,
-            "key": "note",
-            "label": "Note",
-            "order": 12,
-            "updatedDate": "2026-07-20T17:25:42.869268+00:00",
-            "uuid": {
-              "id": "26c9aae0-a1cc-44a2-a7f9-7a4f06822228"
-            }
-          },
-          "text": "`filterset_class`",
-          "updatedDate": "2026-05-30T16:27:12.586744+00:00",
-          "uuid": {
-            "id": "6017c2a7-95af-4851-9a23-de7d33eb025c"
-          }
-        },
-        {
-          "createdDate": "2026-05-30T16:27:12.586941+00:00",
-          "id": 489,
-          "isComplete": false,
-          "order": 2,
-          "section": {
-            "createdDate": "2026-07-20T17:25:42.869264+00:00",
-            "id": 13,
-            "key": "note",
-            "label": "Note",
-            "order": 12,
-            "updatedDate": "2026-07-20T17:25:42.869268+00:00",
-            "uuid": {
-              "id": "26c9aae0-a1cc-44a2-a7f9-7a4f06822228"
-            }
-          },
-          "text": "`orderset_class`",
-          "updatedDate": "2026-05-30T16:27:12.586945+00:00",
-          "uuid": {
-            "id": "307dd302-d539-4691-b8d2-e37c031eba67"
           }
         },
         {
           "createdDate": "2026-05-30T16:27:12.587139+00:00",
           "id": 490,
           "isComplete": false,
-          "order": 3,
+          "order": 1,
           "section": {
             "createdDate": "2026-07-20T17:25:42.869264+00:00",
             "id": 13,
@@ -58914,54 +58888,10 @@
           }
         },
         {
-          "createdDate": "2026-05-30T16:27:12.587334+00:00",
-          "id": 491,
-          "isComplete": false,
-          "order": 4,
-          "section": {
-            "createdDate": "2026-07-20T17:25:42.869264+00:00",
-            "id": 13,
-            "key": "note",
-            "label": "Note",
-            "order": 12,
-            "updatedDate": "2026-07-20T17:25:42.869268+00:00",
-            "uuid": {
-              "id": "26c9aae0-a1cc-44a2-a7f9-7a4f06822228"
-            }
-          },
-          "text": "`fields_class`",
-          "updatedDate": "2026-05-30T16:27:12.587337+00:00",
-          "uuid": {
-            "id": "c726d5fd-c1a1-4358-af29-995c6a53171f"
-          }
-        },
-        {
-          "createdDate": "2026-05-30T16:27:12.587527+00:00",
-          "id": 492,
-          "isComplete": false,
-          "order": 5,
-          "section": {
-            "createdDate": "2026-07-20T17:25:42.869264+00:00",
-            "id": 13,
-            "key": "note",
-            "label": "Note",
-            "order": 12,
-            "updatedDate": "2026-07-20T17:25:42.869268+00:00",
-            "uuid": {
-              "id": "26c9aae0-a1cc-44a2-a7f9-7a4f06822228"
-            }
-          },
-          "text": "`search_fields`",
-          "updatedDate": "2026-05-30T16:27:12.587530+00:00",
-          "uuid": {
-            "id": "f715c4d9-ed2a-43c2-9e47-ca546b447722"
-          }
-        },
-        {
           "createdDate": "2026-05-30T16:27:12.587721+00:00",
           "id": 493,
           "isComplete": false,
-          "order": 6,
+          "order": 2,
           "section": {
             "createdDate": "2026-07-20T17:25:42.869264+00:00",
             "id": 13,
@@ -58983,7 +58913,7 @@
           "createdDate": "2026-05-30T16:27:12.587931+00:00",
           "id": 494,
           "isComplete": false,
-          "order": 7,
+          "order": 3,
           "section": {
             "createdDate": "2026-07-20T17:25:42.869264+00:00",
             "id": 13,
@@ -58999,6 +58929,28 @@
           "updatedDate": "2026-05-30T16:27:12.587935+00:00",
           "uuid": {
             "id": "e1bd6263-30ee-4019-8507-28349fc2e122"
+          }
+        },
+        {
+          "createdDate": "2026-07-20T21:35:17.967969+00:00",
+          "id": 1125,
+          "isComplete": false,
+          "order": 4,
+          "section": {
+            "createdDate": "2026-07-20T17:25:42.869264+00:00",
+            "id": 13,
+            "key": "note",
+            "label": "Note",
+            "order": 12,
+            "updatedDate": "2026-07-20T17:25:42.869268+00:00",
+            "uuid": {
+              "id": "26c9aae0-a1cc-44a2-a7f9-7a4f06822228"
+            }
+          },
+          "text": "Optional: fold the finalizer's per-key binding (`_bind_filtersets` / `_bind_ordersets` / `_bind_fieldsets`) into one dispatched, table-driven form so promoting a Meta key is a data change rather than a new helper per key.",
+          "updatedDate": "2026-07-20T21:35:17.967975+00:00",
+          "uuid": {
+            "id": "e7c753e1-2d3b-49d4-b2ae-7c17d6a08ad5"
           }
         }
       ],
@@ -59492,7 +59444,7 @@
         {
           "createdDate": "2026-06-20T02:23:05.638235+00:00",
           "id": 1040,
-          "isComplete": true,
+          "isComplete": false,
           "order": 5,
           "section": {
             "createdDate": "2026-05-30T16:27:12.431211+00:00",
@@ -59506,7 +59458,7 @@
             }
           },
           "text": "Amend the `FieldSet` (`{{card_ref:2}}`) Architectural-posture note so its node-sentinel \"Non-goal\" cross-references this card as the realized opt-in tier.",
-          "updatedDate": "2026-06-21T13:41:02.248692+00:00",
+          "updatedDate": "2026-07-20T21:35:17.969749+00:00",
           "uuid": {
             "id": "ba0a8975-0100-4b77-82f8-eb56cf7e14c8"
           }
@@ -59593,8 +59545,8 @@
               "id": "16c30ef4-0282-4ae2-b307-e363b6c22039"
             }
           },
-          "text": "Lets a graphene-django consumer relying on `isRedacted` / sentinel FK masking migrate verbatim instead of re-architecting around row-exclusion.",
-          "updatedDate": "2026-06-20T02:23:05.639730+00:00",
+          "text": "Lets a django-graphene-filters consumer relying on `isRedacted` / sentinel FK masking migrate verbatim instead of re-architecting around row-exclusion.",
+          "updatedDate": "2026-07-20T21:35:17.970478+00:00",
           "uuid": {
             "id": "41a8fd24-faba-4ded-aebf-3c56830bd9c7"
           }
@@ -59918,7 +59870,7 @@
           }
         }
       ],
-      "planningNote": "Strawberry port of graphene-django's node-level sentinel redaction — the third redaction tier the package deferred in spec-034 Decision 6 (row-exclusion) and re-confirmed as a `FieldSet` Non-goal (`{{card_ref:2}}`). Upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes it as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden row so a non-null FK to a hidden target still resolves. This card recreates that surface behind an explicit per-`DjangoType` opt-in so a django-graphene-filters consumer relying on `isRedacted` / sentinel masking can port verbatim, without disturbing the default row-narrowing model.",
+      "planningNote": "Strawberry port of django-graphene-filters' node-level sentinel redaction — the third redaction tier the package deferred in spec-034 Decision 6 (row-exclusion) and re-confirmed as a `FieldSet` Non-goal (`{{card_ref:2}}`). Upstream `django_graphene_filters/object_type.py::AdvancedDjangoObjectType` exposes it as public SDL: `is_redacted = graphene.Boolean(...)` (`:137`), `resolve_is_redacted` (`:151`), `_make_sentinel` (`:200`), and a `get_node` (`:251`) that returns a `pk=0` sentinel in place of a hidden row so a non-null FK to a hidden target still resolves. This card recreates that surface behind an explicit per-`DjangoType` opt-in so a django-graphene-filters consumer relying on `isRedacted` / sentinel masking can port verbatim, without disturbing the default row-narrowing model.",
       "priority": {
         "createdDate": "2026-05-30T16:27:12.424286+00:00",
         "id": 4,
@@ -59974,7 +59926,7 @@
         }
       },
       "title": "Opt-in node-sentinel redaction tier (`Meta.redaction_mode`)",
-      "updatedDate": "2026-07-16T16:00:58.540407+00:00",
+      "updatedDate": "2026-07-20T21:35:17.970102+00:00",
       "uuid": {
         "id": "7cb58b6b-6add-4f48-adce-ce7d4ec82f9e"
       }
@@ -60597,18 +60549,20 @@
           "uuid": {
             "id": "43fc950d-97a9-4977-b537-4cdb81b17341"
           }
-        },
+        }
+      ],
+      "dependents": [
         {
-          "cardId": "TODO-BETA-052-0.1.3",
-          "id": "a2FuYmFuLmNhcmQ6MjU=",
+          "cardId": "TODO-BETA-056-0.1.5",
+          "id": "a2FuYmFuLmNhcmQ6MjY=",
           "milestone": {
             "id": 2,
             "key": "beta",
             "label": "Beta (pre-1.0.0)",
             "order": 1
           },
-          "number": 52,
-          "slug": "layer_3_meta_key_promotion",
+          "number": 56,
+          "slug": "product_catalog_layer_3_http_graphql_tests",
           "status": {
             "id": 1,
             "key": "todo",
@@ -60616,19 +60570,65 @@
             "order": 1
           },
           "targetVersion": {
-            "id": 9,
-            "number": "0.1.3"
+            "id": 11,
+            "number": "0.1.5"
           },
-          "title": "Layer 3 Meta key promotion",
+          "title": "Product-catalog Layer 3 HTTP GraphQL tests",
           "uuid": {
-            "id": "9148833a-c4b1-481e-b4f9-9c108171746d"
+            "id": "fa990ec1-8f3c-4f45-a9ca-b48850808679"
           }
         }
       ],
-      "dependents": [],
       "glossaryLinks": [],
       "id": "a2FuYmFuLmNhcmQ6MjA=",
       "incomingReferences": [
+        {
+          "createdDate": "2026-07-20T21:35:17.977836+00:00",
+          "id": 100,
+          "kind": {
+            "createdDate": "2026-05-30T16:27:12.433947+00:00",
+            "id": 1,
+            "key": "dependency",
+            "label": "Dependency",
+            "order": 0,
+            "updatedDate": "2026-05-30T16:27:12.433951+00:00",
+            "uuid": {
+              "id": "e2969079-1d91-40fc-afb3-8e1146c7e736"
+            }
+          },
+          "order": 0,
+          "rawText": "Depends on the activated product-catalog schema; these HTTP tests exercise the surface that card wires.",
+          "sourceCard": {
+            "cardId": "TODO-BETA-056-0.1.5",
+            "id": "a2FuYmFuLmNhcmQ6MjY=",
+            "milestone": {
+              "id": 2,
+              "key": "beta",
+              "label": "Beta (pre-1.0.0)",
+              "order": 1
+            },
+            "number": 56,
+            "slug": "product_catalog_layer_3_http_graphql_tests",
+            "status": {
+              "id": 1,
+              "key": "todo",
+              "label": "To Do",
+              "order": 1
+            },
+            "targetVersion": {
+              "id": 11,
+              "number": "0.1.5"
+            },
+            "title": "Product-catalog Layer 3 HTTP GraphQL tests",
+            "uuid": {
+              "id": "fa990ec1-8f3c-4f45-a9ca-b48850808679"
+            }
+          },
+          "updatedDate": "2026-07-20T21:35:17.977841+00:00",
+          "uuid": {
+            "id": "488665a8-ab5e-40ae-b80d-f661ee1352f9"
+          }
+        },
         {
           "createdDate": "2026-05-30T23:17:03.861369+00:00",
           "id": 42,
@@ -60644,7 +60644,7 @@
             }
           },
           "order": 3,
-          "rawText": "Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. `{{card_ref:3}}` (Fakeshop schema activation) explicitly carries a note to \"move or defer `search_fields` before uncommenting\" because of this gap.",
+          "rawText": "Currently `search_fields` is in `DEFERRED_META_KEYS` and rejected at validation time. The fakeshop products schema stages four commented `search_fields` tuples awaiting this card's activation slice; `{{card_ref:3}}` (Fakeshop GraphQL schema activation) is now scoped to the `node` / `nodes` entry points plus the `totalCount` opt-in and no longer gates them.",
           "sourceCard": {
             "cardId": "TODO-BETA-049-0.1.2",
             "id": "a2FuYmFuLmNhcmQ6MTc=",
@@ -60671,7 +60671,7 @@
               "id": "2ed650da-32ce-4edd-a26a-40b69a2a2a7e"
             }
           },
-          "updatedDate": "2026-05-30T23:17:03.861374+00:00",
+          "updatedDate": "2026-07-20T21:39:42.241876+00:00",
           "uuid": {
             "id": "aa8ded75-ff97-4a20-ae44-649f2c7c0eb3"
           }
@@ -60724,7 +60724,7 @@
           }
         }
       ],
-      "isBlocked": true,
+      "isBlocked": false,
       "items": [
         {
           "createdDate": "2026-05-30T16:27:12.558661+00:00",
@@ -60742,8 +60742,8 @@
               "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
             }
           },
-          "text": "Uncomment only the portions whose dependencies have shipped.",
-          "updatedDate": "2026-05-30T16:27:12.558665+00:00",
+          "text": "Wire the Relay `node` (single-object refetch) and `nodes` (batch refetch) root entry points into the fakeshop product-catalog schema, built on the shipped Relay story (`{{card_ref:0}}`).",
+          "updatedDate": "2026-07-20T21:35:17.971138+00:00",
           "uuid": {
             "id": "933ffb4c-d0c6-49f1-818d-e3a79fd8d36b"
           }
@@ -60764,8 +60764,8 @@
               "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
             }
           },
-          "text": "Keep unshipped subsystem lines commented until their specs land.",
-          "updatedDate": "2026-05-30T16:27:12.558863+00:00",
+          "text": "Add the connection `totalCount` opt-in on the product-catalog `DjangoConnectionField` roots, leaving connections that do not opt in unchanged.",
+          "updatedDate": "2026-07-20T21:35:17.971409+00:00",
           "uuid": {
             "id": "878ade79-cd5b-443e-a252-4d8bd5a802b5"
           }
@@ -60786,8 +60786,8 @@
               "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
             }
           },
-          "text": "Move or defer `search_fields` before uncommenting because it is currently a rejected Meta key.",
-          "updatedDate": "2026-05-30T16:27:12.559054+00:00",
+          "text": "Add in-process `schema.execute_sync` coverage under `examples/fakeshop/tests/` for the `node` / `nodes` entry points and `totalCount`.",
+          "updatedDate": "2026-07-20T21:35:17.971656+00:00",
           "uuid": {
             "id": "d60719d8-c08e-425c-bd53-629855fa72df"
           }
@@ -60808,32 +60808,10 @@
               "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
             }
           },
-          "text": "Add in-process schema tests under `examples/fakeshop/tests/`.",
-          "updatedDate": "2026-05-30T16:27:12.559243+00:00",
+          "text": "Add live `/graphql/` coverage under `examples/fakeshop/test_query/` exercising a `node` refetch by GlobalID, a `nodes` batch refetch, and a `totalCount` query.",
+          "updatedDate": "2026-07-20T21:35:17.971896+00:00",
           "uuid": {
             "id": "9276c9b2-39f1-4876-b7e8-d3edefd3990e"
-          }
-        },
-        {
-          "createdDate": "2026-05-30T16:27:12.559433+00:00",
-          "id": 375,
-          "isComplete": false,
-          "order": 4,
-          "section": {
-            "createdDate": "2026-05-30T16:27:12.431211+00:00",
-            "id": 2,
-            "key": "definition_of_done",
-            "label": "Definition of done",
-            "order": 1,
-            "updatedDate": "2026-05-30T16:27:12.431215+00:00",
-            "uuid": {
-              "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
-            }
-          },
-          "text": "Add live `/graphql/` tests under `examples/fakeshop/test_query/` only when testing the HTTP endpoint.",
-          "updatedDate": "2026-05-30T16:27:12.559436+00:00",
-          "uuid": {
-            "id": "64533af1-41cd-4b17-88ee-a5d00faecfa0"
           }
         },
         {
@@ -60852,8 +60830,8 @@
               "id": "26c9aae0-a1cc-44a2-a7f9-7a4f06822228"
             }
           },
-          "text": "example-wiring card: uncomment the product-catalog schema portions whose dependencies have shipped; in-process + live HTTP tests. Gated on the Layer-3 subsystems, not heavy itself.",
-          "updatedDate": "2026-05-30T16:27:12.558072+00:00",
+          "text": "narrow example-wiring card: the product-catalog root schema is already activated (four connection roots + filtersets/ordersets/mutations); this card adds only the `node` / `nodes` entry points and the `totalCount` opt-in, with in-process + live HTTP tests.",
+          "updatedDate": "2026-07-20T21:35:17.972684+00:00",
           "uuid": {
             "id": "3be34a88-91a4-453b-9d4a-6c09bcc1ff7f"
           }
@@ -60874,8 +60852,8 @@
               "id": "26c9aae0-a1cc-44a2-a7f9-7a4f06822228"
             }
           },
-          "text": "`examples/fakeshop/apps/products/schema.py` exposes a placeholder `hello` field for the product catalog.",
-          "updatedDate": "2026-05-30T16:27:12.558270+00:00",
+          "text": "`examples/fakeshop/apps/products/schema.py` already serves the four `DjangoConnectionField` roots (`allCategories` / `allItems` / `allProperties` / `allEntries`) with filtersets, ordersets, permissions, and mutations; it does not yet add the `node` / `nodes` entry points or a `totalCount` opt-in — this card adds those.",
+          "updatedDate": "2026-07-20T21:35:17.972929+00:00",
           "uuid": {
             "id": "579729c3-4185-4aa0-847a-f9e18629b17f"
           }
@@ -60896,8 +60874,8 @@
               "id": "26c9aae0-a1cc-44a2-a7f9-7a4f06822228"
             }
           },
-          "text": "The aspirational schema block depends on `DjangoConnectionField`, Relay interfaces, filters, orders, aggregates, fieldsets, and permissions.",
-          "updatedDate": "2026-05-30T16:27:12.558461+00:00",
+          "text": "The `node` / `nodes` entry points build on the shipped Relay story and `totalCount` is a package-owned connection opt-in; neither needs a further Layer-3 subsystem to land here.",
+          "updatedDate": "2026-07-20T21:35:17.973171+00:00",
           "uuid": {
             "id": "08ecb433-75fb-4b26-9cba-b77c67afc68a"
           }
@@ -60975,7 +60953,7 @@
             }
           },
           "order": 0,
-          "rawText": "Relay decisions (`{{card_ref:0}}`) have shipped; now blocked only on `{{card_ref:1}}` (Layer 3 Meta key promotion).",
+          "rawText": "The product-catalog root schema is already live; the remaining node / nodes entry points and totalCount opt-in build on the shipped Relay story (`{{card_ref:0}}`).",
           "targetCard": {
             "cardId": "DONE-032-0.0.9",
             "id": "a2FuYmFuLmNhcmQ6MjQ=",
@@ -61002,7 +60980,7 @@
               "id": "43fc950d-97a9-4977-b537-4cdb81b17341"
             }
           },
-          "updatedDate": "2026-07-09T14:53:59.307246+00:00",
+          "updatedDate": "2026-07-20T21:37:56.972733+00:00",
           "uuid": {
             "id": "a916a055-500c-43be-8cf1-2e3f2428af59"
           }
@@ -61011,18 +60989,18 @@
           "createdDate": "2026-05-31T05:16:36.685269+00:00",
           "id": 64,
           "kind": {
-            "createdDate": "2026-05-30T16:27:12.434316+00:00",
-            "id": 2,
-            "key": "blocked_by",
-            "label": "Blocked by",
-            "order": 1,
-            "updatedDate": "2026-05-30T16:27:12.434320+00:00",
+            "createdDate": "2026-05-30T16:27:12.434657+00:00",
+            "id": 3,
+            "key": "related",
+            "label": "Related",
+            "order": 2,
+            "updatedDate": "2026-05-30T16:27:12.434661+00:00",
             "uuid": {
-              "id": "403f4b84-df4c-44db-a38c-b55819fdfc07"
+              "id": "6f855138-042f-4991-b6b8-68f7cea0b5b5"
             }
           },
           "order": 1,
-          "rawText": "Relay decisions (`{{card_ref:0}}`) have shipped; now blocked only on `{{card_ref:1}}` (Layer 3 Meta key promotion).",
+          "rawText": "Historical gate, retyped related: the recut scope (node / nodes + totalCount) does not depend on Layer 3 Meta key promotion.",
           "targetCard": {
             "cardId": "TODO-BETA-052-0.1.3",
             "id": "a2FuYmFuLmNhcmQ6MjU=",
@@ -61049,7 +61027,7 @@
               "id": "9148833a-c4b1-481e-b4f9-9c108171746d"
             }
           },
-          "updatedDate": "2026-07-09T14:53:59.309480+00:00",
+          "updatedDate": "2026-07-20T21:37:14.832602+00:00",
           "uuid": {
             "id": "04874711-10f0-4e16-b53a-6f9bba245382"
           }
@@ -61057,7 +61035,7 @@
       ],
       "parityClaims": [],
       "pathLinks": [],
-      "planningNote": "Relay decisions (`{{card_ref:0}}`) have shipped; now blocked only on `{{card_ref:1}}` (Layer 3 Meta key promotion).",
+      "planningNote": "The product-catalog root schema is already live: four `DjangoConnectionField` roots with their filtersets, ordersets, and mutations are wired and served (the Relay decisions in `{{card_ref:0}}` shipped). The remaining unclaimed activation is the Relay `node` / `nodes` root entry points plus the connection `totalCount` opt-in; per-subsystem activation (fieldsets, search, aggregates) is owned by the Slice 4 of the respective Layer-3 subsystem cards, not here.",
       "priority": {
         "createdDate": "2026-05-30T16:27:12.424286+00:00",
         "id": 4,
@@ -61113,7 +61091,7 @@
         }
       },
       "title": "Fakeshop GraphQL schema activation",
-      "updatedDate": "2026-07-16T16:00:58.540278+00:00",
+      "updatedDate": "2026-07-20T21:35:17.970883+00:00",
       "uuid": {
         "id": "7debfb89-6d1e-4be3-866b-eae5e13f184b"
       }
@@ -61122,7 +61100,34 @@
       "cardId": "TODO-BETA-056-0.1.5",
       "changedFiles": [],
       "createdDate": "2026-05-30T16:27:12.588479+00:00",
-      "dependencies": [],
+      "dependencies": [
+        {
+          "cardId": "TODO-BETA-055-0.1.5",
+          "id": "a2FuYmFuLmNhcmQ6MjA=",
+          "milestone": {
+            "id": 2,
+            "key": "beta",
+            "label": "Beta (pre-1.0.0)",
+            "order": 1
+          },
+          "number": 55,
+          "slug": "fakeshop_graphql_schema_activation",
+          "status": {
+            "id": 1,
+            "key": "todo",
+            "label": "To Do",
+            "order": 1
+          },
+          "targetVersion": {
+            "id": 11,
+            "number": "0.1.5"
+          },
+          "title": "Fakeshop GraphQL schema activation",
+          "uuid": {
+            "id": "7debfb89-6d1e-4be3-866b-eae5e13f184b"
+          }
+        }
+      ],
       "dependents": [],
       "glossaryLinks": [],
       "id": "a2FuYmFuLmNhcmQ6MjY=",
@@ -61142,7 +61147,7 @@
             }
           },
           "order": 3,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-STABLE-062-1.0.0",
             "id": "a2FuYmFuLmNhcmQ6MjM=",
@@ -61169,7 +61174,7 @@
               "id": "eb602ae8-9a41-423b-a514-58440daae8db"
             }
           },
-          "updatedDate": "2026-05-30T23:17:03.871939+00:00",
+          "updatedDate": "2026-07-20T21:35:17.988809+00:00",
           "uuid": {
             "id": "ddd6bd0a-e816-4a45-88fd-e641cf0de831"
           }
@@ -61177,6 +61182,72 @@
       ],
       "isBlocked": false,
       "items": [
+        {
+          "createdDate": "2026-07-20T21:35:17.974343+00:00",
+          "id": 1126,
+          "isComplete": false,
+          "order": 0,
+          "section": {
+            "createdDate": "2026-05-30T16:27:12.431211+00:00",
+            "id": 2,
+            "key": "definition_of_done",
+            "label": "Definition of done",
+            "order": 1,
+            "updatedDate": "2026-05-30T16:27:12.431215+00:00",
+            "uuid": {
+              "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
+            }
+          },
+          "text": "Add live `/graphql/` acceptance tests under `examples/fakeshop/test_query/` for the activated product-catalog schema, reusing the library app's placement and schema-reload pattern.",
+          "updatedDate": "2026-07-20T21:35:17.974347+00:00",
+          "uuid": {
+            "id": "7438b9bd-49c1-4bfe-bd72-3800a4f093f4"
+          }
+        },
+        {
+          "createdDate": "2026-07-20T21:35:17.975204+00:00",
+          "id": 1127,
+          "isComplete": false,
+          "order": 1,
+          "section": {
+            "createdDate": "2026-05-30T16:27:12.431211+00:00",
+            "id": 2,
+            "key": "definition_of_done",
+            "label": "Definition of done",
+            "order": 1,
+            "updatedDate": "2026-05-30T16:27:12.431215+00:00",
+            "uuid": {
+              "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
+            }
+          },
+          "text": "Cover the product-catalog connection / query fields and the other activated Layer 3 public surfaces end-to-end over HTTP.",
+          "updatedDate": "2026-07-20T21:35:17.975210+00:00",
+          "uuid": {
+            "id": "0c5ff086-acf0-45c0-8049-830bb7f761d3"
+          }
+        },
+        {
+          "createdDate": "2026-07-20T21:35:17.975821+00:00",
+          "id": 1128,
+          "isComplete": false,
+          "order": 2,
+          "section": {
+            "createdDate": "2026-05-30T16:27:12.431211+00:00",
+            "id": 2,
+            "key": "definition_of_done",
+            "label": "Definition of done",
+            "order": 1,
+            "updatedDate": "2026-05-30T16:27:12.431215+00:00",
+            "uuid": {
+              "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
+            }
+          },
+          "text": "Keep in-process `schema.execute_sync` tests under `examples/fakeshop/tests/`; live HTTP tests stay under `examples/fakeshop/test_query/`.",
+          "updatedDate": "2026-07-20T21:35:17.975826+00:00",
+          "uuid": {
+            "id": "ed637d97-42b8-4069-abb5-07c7499dbd0c"
+          }
+        },
         {
           "createdDate": "2026-05-30T16:27:12.589404+00:00",
           "id": 497,
@@ -61197,6 +61268,28 @@
           "updatedDate": "2026-05-30T16:27:12.589408+00:00",
           "uuid": {
             "id": "4853ce8b-d5f1-48f7-bdfb-f83b96aa62a0"
+          }
+        },
+        {
+          "createdDate": "2026-07-20T21:35:17.978658+00:00",
+          "id": 1129,
+          "isComplete": false,
+          "order": 0,
+          "section": {
+            "createdDate": "2026-05-30T16:27:12.433244+00:00",
+            "id": 8,
+            "key": "dependencies_note",
+            "label": "Dependencies",
+            "order": 7,
+            "updatedDate": "2026-05-30T16:27:12.433248+00:00",
+            "uuid": {
+              "id": "180cbfe9-eef3-4b1f-bb6d-e4c0cba77f56"
+            }
+          },
+          "text": "`{{card_ref:0}}` (Fakeshop GraphQL schema activation) — these live HTTP tests exercise the product-catalog schema that card activates, so they land after it.",
+          "updatedDate": "2026-07-20T21:35:17.978663+00:00",
+          "uuid": {
+            "id": "8b5a339c-e226-4000-b7ab-cb4eb8c0f096"
           }
         },
         {
@@ -61366,7 +61459,55 @@
         "versionFloor": "0.1.1"
       },
       "number": 56,
-      "outgoingReferences": [],
+      "outgoingReferences": [
+        {
+          "createdDate": "2026-07-20T21:35:17.977836+00:00",
+          "id": 100,
+          "kind": {
+            "createdDate": "2026-05-30T16:27:12.433947+00:00",
+            "id": 1,
+            "key": "dependency",
+            "label": "Dependency",
+            "order": 0,
+            "updatedDate": "2026-05-30T16:27:12.433951+00:00",
+            "uuid": {
+              "id": "e2969079-1d91-40fc-afb3-8e1146c7e736"
+            }
+          },
+          "order": 0,
+          "rawText": "Depends on the activated product-catalog schema; these HTTP tests exercise the surface that card wires.",
+          "targetCard": {
+            "cardId": "TODO-BETA-055-0.1.5",
+            "id": "a2FuYmFuLmNhcmQ6MjA=",
+            "milestone": {
+              "id": 2,
+              "key": "beta",
+              "label": "Beta (pre-1.0.0)",
+              "order": 1
+            },
+            "number": 55,
+            "slug": "fakeshop_graphql_schema_activation",
+            "status": {
+              "id": 1,
+              "key": "todo",
+              "label": "To Do",
+              "order": 1
+            },
+            "targetVersion": {
+              "id": 11,
+              "number": "0.1.5"
+            },
+            "title": "Fakeshop GraphQL schema activation",
+            "uuid": {
+              "id": "7debfb89-6d1e-4be3-866b-eae5e13f184b"
+            }
+          },
+          "updatedDate": "2026-07-20T21:35:17.977841+00:00",
+          "uuid": {
+            "id": "488665a8-ab5e-40ae-b80d-f661ee1352f9"
+          }
+        }
+      ],
       "parityClaims": [],
       "pathLinks": [],
       "planningNote": "",
@@ -61518,8 +61659,8 @@
               "id": "0b9e9637-bbd0-430b-8945-ec0a70fb5faa"
             }
           },
-          "text": "Add mutation-level `Meta.atomic = True` so generated create/update/delete mutation resolvers can run inside `transaction.atomic()` without every consumer hand-wrapping the resolver.",
-          "updatedDate": "2026-06-06T21:48:00.206271+00:00",
+          "text": "Shipped baseline (given, commit 1b06c39e): every top-level mutation field already runs inside an always-on `transaction.atomic()` wrap, with `Meta.select_for_update` available to lock the affected rows. This card builds on that baseline and adds idempotency only — it introduces no new transaction opt-in.",
+          "updatedDate": "2026-07-20T21:35:17.979720+00:00",
           "uuid": {
             "id": "ff7cf7f4-2492-4e75-ad67-436b612e405f"
           }
@@ -61562,8 +61703,8 @@
               "id": "0b9e9637-bbd0-430b-8945-ec0a70fb5faa"
             }
           },
-          "text": "Cache only successful atomic-mode responses; validation, permission, and database failures roll back and skip the idempotency write so client retries naturally re-execute.",
-          "updatedDate": "2026-06-06T21:48:00.207276+00:00",
+          "text": "Cache only successful responses; validation, permission, and database failures roll back inside the always-on atomic wrap and skip the idempotency write so client retries naturally re-execute.",
+          "updatedDate": "2026-07-20T21:35:17.980013+00:00",
           "uuid": {
             "id": "a03f3d6f-414d-442c-8574-ee16e7da7a23"
           }
@@ -61606,8 +61747,8 @@
               "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
             }
           },
-          "text": "New or amended mutation spec documents the atomic/idempotency Meta keys, cache-key shape, TTL behavior, retry semantics, and failure rollback rules.",
-          "updatedDate": "2026-06-06T21:48:00.208032+00:00",
+          "text": "New or amended mutation spec documents the idempotency Meta keys (`Meta.idempotency_key` / `Meta.idempotency_ttl`), cache-key shape, TTL behavior, retry semantics, and failure rollback rules (the always-on atomic wrap is the shipped baseline this layers on).",
+          "updatedDate": "2026-07-20T21:35:17.980265+00:00",
           "uuid": {
             "id": "150bb143-58f9-408c-bc3d-8e0a4c56404f"
           }
@@ -61628,8 +61769,8 @@
               "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
             }
           },
-          "text": "Implementation wraps the real generated mutation execution path in `transaction.atomic()` when enabled and leaves non-atomic mutations behavior-compatible.",
-          "updatedDate": "2026-06-06T21:48:00.208420+00:00",
+          "text": "Idempotency layers on the already-shipped always-on atomic mutation execution path (commit 1b06c39e); this card adds no new transaction wrapping, and the idempotency cache write happens only after the atomic write commits.",
+          "updatedDate": "2026-07-20T21:35:17.980511+00:00",
           "uuid": {
             "id": "85253822-39cd-4714-a69b-49bc813f27d1"
           }
@@ -61698,28 +61839,6 @@
           "updatedDate": "2026-06-06T21:48:00.209258+00:00",
           "uuid": {
             "id": "a9f2f0e8-8316-420e-b517-7d7b786a6446"
-          }
-        },
-        {
-          "createdDate": "2026-06-19T01:51:42.769325+00:00",
-          "id": 1028,
-          "isComplete": false,
-          "order": 5,
-          "section": {
-            "createdDate": "2026-05-30T16:27:12.431211+00:00",
-            "id": 2,
-            "key": "definition_of_done",
-            "label": "Definition of done",
-            "order": 1,
-            "updatedDate": "2026-05-30T16:27:12.431215+00:00",
-            "uuid": {
-              "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
-            }
-          },
-          "text": "Remove the `xfail(strict=True)` marker on `test_update_does_not_commit_when_response_completion_fails` in `examples/fakeshop/test_query/test_mutation_atomicity.py` once this card lands: that committed regression pins that a mutation whose GraphQL response completion fails after the write has committed - e.g. a corrupt related non-nullable field hydrates to `None` and trips 'Cannot return null for non-nullable field' - must roll back rather than commit a partial change. It `xfail`s today because the resolver's `transaction.atomic()` ends when the resolver returns, before graphql-core completes the payload; this card's fix (extending the transaction boundary to span response completion) makes it XPASS, and `strict=True` then turns the suite red until the marker is removed.",
-          "updatedDate": "2026-06-19T02:02:43.912109+00:00",
-          "uuid": {
-            "id": "56361772-3180-49ee-a561-0fc51841db28"
           }
         },
         {
@@ -62125,7 +62244,7 @@
           "id": "8ab1ce12-7e57-48f5-91c0-06917481fd8c"
         }
       },
-      "slug": "mutation_transactions_and_idempotency",
+      "slug": "mutation_idempotency_keys",
       "spec": null,
       "status": {
         "createdDate": "2026-05-30T16:27:12.420157+00:00",
@@ -62156,8 +62275,8 @@
           "id": "6aa7be44-f056-4966-a27e-17885d5595a0"
         }
       },
-      "title": "Mutation transactions and idempotency",
-      "updatedDate": "2026-07-16T16:00:58.540146+00:00",
+      "title": "Mutation idempotency keys",
+      "updatedDate": "2026-07-20T21:35:17.979425+00:00",
       "uuid": {
         "id": "7886b0e3-75b7-48e4-8172-5fde9ee5b2b6"
       }
@@ -62233,7 +62352,7 @@
             }
           },
           "order": 1,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "sourceCard": {
             "cardId": "TODO-STABLE-062-1.0.0",
             "id": "a2FuYmFuLmNhcmQ6MjM=",
@@ -62260,7 +62379,7 @@
               "id": "eb602ae8-9a41-423b-a514-58440daae8db"
             }
           },
-          "updatedDate": "2026-05-30T23:17:03.871445+00:00",
+          "updatedDate": "2026-07-20T21:35:17.988182+00:00",
           "uuid": {
             "id": "0bb1ef4d-4398-4f59-8908-7ad923ac6052"
           }
@@ -62269,32 +62388,10 @@
       "isBlocked": false,
       "items": [
         {
-          "createdDate": "2026-05-30T16:27:12.561024+00:00",
-          "id": 379,
-          "isComplete": false,
-          "order": 0,
-          "section": {
-            "createdDate": "2026-05-30T16:27:12.430797+00:00",
-            "id": 1,
-            "key": "scope",
-            "label": "Scope",
-            "order": 0,
-            "updatedDate": "2026-05-30T16:27:12.430801+00:00",
-            "uuid": {
-              "id": "0b9e9637-bbd0-430b-8945-ec0a70fb5faa"
-            }
-          },
-          "text": "Add ability to set dsf settings to cap the number of schema hookups per model and error if it is more",
-          "updatedDate": "2026-05-30T16:27:12.561028+00:00",
-          "uuid": {
-            "id": "d67a611a-1599-4abb-a3e0-f1c3fdc18bf0"
-          }
-        },
-        {
           "createdDate": "2026-05-30T16:27:12.561215+00:00",
           "id": 380,
           "isComplete": false,
-          "order": 1,
+          "order": 0,
           "section": {
             "createdDate": "2026-05-30T16:27:12.430797+00:00",
             "id": 1,
@@ -62316,7 +62413,7 @@
           "createdDate": "2026-05-30T16:27:12.561407+00:00",
           "id": 381,
           "isComplete": false,
-          "order": 2,
+          "order": 1,
           "section": {
             "createdDate": "2026-05-30T16:27:12.430797+00:00",
             "id": 1,
@@ -62338,7 +62435,7 @@
           "createdDate": "2026-05-30T16:27:12.561604+00:00",
           "id": 382,
           "isComplete": false,
-          "order": 3,
+          "order": 2,
           "section": {
             "createdDate": "2026-05-30T16:27:12.430797+00:00",
             "id": 1,
@@ -62696,7 +62793,55 @@
       "dependents": [],
       "glossaryLinks": [],
       "id": "a2FuYmFuLmNhcmQ6MjI=",
-      "incomingReferences": [],
+      "incomingReferences": [
+        {
+          "createdDate": "2026-07-20T21:35:17.984797+00:00",
+          "id": 101,
+          "kind": {
+            "createdDate": "2026-05-30T16:27:12.434657+00:00",
+            "id": 3,
+            "key": "related",
+            "label": "Related",
+            "order": 2,
+            "updatedDate": "2026-05-30T16:27:12.434661+00:00",
+            "uuid": {
+              "id": "6f855138-042f-4991-b6b8-68f7cea0b5b5"
+            }
+          },
+          "order": 4,
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "sourceCard": {
+            "cardId": "TODO-STABLE-062-1.0.0",
+            "id": "a2FuYmFuLmNhcmQ6MjM=",
+            "milestone": {
+              "id": 3,
+              "key": "stable",
+              "label": "Stable (post-1.0.0)",
+              "order": 2
+            },
+            "number": 62,
+            "slug": "stable_release_api_freeze_cleanup_verification_beta_stable",
+            "status": {
+              "id": 1,
+              "key": "todo",
+              "label": "To Do",
+              "order": 1
+            },
+            "targetVersion": {
+              "id": 14,
+              "number": "1.0.0"
+            },
+            "title": "Stable release (API freeze, cleanup, verification, beta → stable)",
+            "uuid": {
+              "id": "eb602ae8-9a41-423b-a514-58440daae8db"
+            }
+          },
+          "updatedDate": "2026-07-20T21:35:17.984803+00:00",
+          "uuid": {
+            "id": "c525639c-66c4-4d53-b650-42749e7f38e6"
+          }
+        }
+      ],
       "isBlocked": false,
       "items": [
         {
@@ -63260,7 +63405,55 @@
       "dependents": [],
       "glossaryLinks": [],
       "id": "a2FuYmFuLmNhcmQ6NTY=",
-      "incomingReferences": [],
+      "incomingReferences": [
+        {
+          "createdDate": "2026-07-20T21:35:17.985885+00:00",
+          "id": 102,
+          "kind": {
+            "createdDate": "2026-05-30T16:27:12.434657+00:00",
+            "id": 3,
+            "key": "related",
+            "label": "Related",
+            "order": 2,
+            "updatedDate": "2026-05-30T16:27:12.434661+00:00",
+            "uuid": {
+              "id": "6f855138-042f-4991-b6b8-68f7cea0b5b5"
+            }
+          },
+          "order": 5,
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "sourceCard": {
+            "cardId": "TODO-STABLE-062-1.0.0",
+            "id": "a2FuYmFuLmNhcmQ6MjM=",
+            "milestone": {
+              "id": 3,
+              "key": "stable",
+              "label": "Stable (post-1.0.0)",
+              "order": 2
+            },
+            "number": 62,
+            "slug": "stable_release_api_freeze_cleanup_verification_beta_stable",
+            "status": {
+              "id": 1,
+              "key": "todo",
+              "label": "To Do",
+              "order": 1
+            },
+            "targetVersion": {
+              "id": 14,
+              "number": "1.0.0"
+            },
+            "title": "Stable release (API freeze, cleanup, verification, beta → stable)",
+            "uuid": {
+              "id": "eb602ae8-9a41-423b-a514-58440daae8db"
+            }
+          },
+          "updatedDate": "2026-07-20T21:35:17.985890+00:00",
+          "uuid": {
+            "id": "fa6fca8f-b6c3-4938-ac6a-21667a975952"
+          }
+        }
+      ],
       "isBlocked": false,
       "items": [
         {
@@ -64031,7 +64224,55 @@
       "dependents": [],
       "glossaryLinks": [],
       "id": "a2FuYmFuLmNhcmQ6NjE=",
-      "incomingReferences": [],
+      "incomingReferences": [
+        {
+          "createdDate": "2026-07-20T21:35:17.986857+00:00",
+          "id": 103,
+          "kind": {
+            "createdDate": "2026-05-30T16:27:12.434657+00:00",
+            "id": 3,
+            "key": "related",
+            "label": "Related",
+            "order": 2,
+            "updatedDate": "2026-05-30T16:27:12.434661+00:00",
+            "uuid": {
+              "id": "6f855138-042f-4991-b6b8-68f7cea0b5b5"
+            }
+          },
+          "order": 6,
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "sourceCard": {
+            "cardId": "TODO-STABLE-062-1.0.0",
+            "id": "a2FuYmFuLmNhcmQ6MjM=",
+            "milestone": {
+              "id": 3,
+              "key": "stable",
+              "label": "Stable (post-1.0.0)",
+              "order": 2
+            },
+            "number": 62,
+            "slug": "stable_release_api_freeze_cleanup_verification_beta_stable",
+            "status": {
+              "id": 1,
+              "key": "todo",
+              "label": "To Do",
+              "order": 1
+            },
+            "targetVersion": {
+              "id": 14,
+              "number": "1.0.0"
+            },
+            "title": "Stable release (API freeze, cleanup, verification, beta → stable)",
+            "uuid": {
+              "id": "eb602ae8-9a41-423b-a514-58440daae8db"
+            }
+          },
+          "updatedDate": "2026-07-20T21:35:17.986862+00:00",
+          "uuid": {
+            "id": "afad0e3b-85ed-437b-b871-998255fa3577"
+          }
+        }
+      ],
       "isBlocked": false,
       "items": [
         {
@@ -64755,8 +64996,8 @@
               "id": "89d4f588-3952-472e-9a90-b96ca7e7d2c7"
             }
           },
-          "text": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
-          "updatedDate": "2026-05-30T16:27:12.567920+00:00",
+          "text": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "updatedDate": "2026-07-20T21:35:17.987396+00:00",
           "uuid": {
             "id": "4a4986b1-3a4a-4bf0-8985-968fa6c2dfe6"
           }
@@ -65230,7 +65471,7 @@
             }
           },
           "order": 0,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "targetCard": {
             "cardId": "TODO-BETA-048-0.1.1",
             "id": "a2FuYmFuLmNhcmQ6MTY=",
@@ -65257,7 +65498,7 @@
               "id": "a9501a74-9247-4564-8c4f-9218328af3cc"
             }
           },
-          "updatedDate": "2026-05-30T23:17:03.870840+00:00",
+          "updatedDate": "2026-07-20T21:35:17.987835+00:00",
           "uuid": {
             "id": "4ef45454-66a7-4496-965f-608cfdd565b1"
           }
@@ -65277,7 +65518,7 @@
             }
           },
           "order": 1,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "targetCard": {
             "cardId": "TODO-BETA-058-0.1.6",
             "id": "a2FuYmFuLmNhcmQ6MjE=",
@@ -65304,7 +65545,7 @@
               "id": "44c513e5-e7bf-417b-9ab7-4cd515ba5939"
             }
           },
-          "updatedDate": "2026-05-30T23:17:03.871445+00:00",
+          "updatedDate": "2026-07-20T21:35:17.988182+00:00",
           "uuid": {
             "id": "0bb1ef4d-4398-4f59-8908-7ad923ac6052"
           }
@@ -65324,7 +65565,7 @@
             }
           },
           "order": 2,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "targetCard": {
             "cardId": "TODO-BETA-052-0.1.3",
             "id": "a2FuYmFuLmNhcmQ6MjU=",
@@ -65351,7 +65592,7 @@
               "id": "9148833a-c4b1-481e-b4f9-9c108171746d"
             }
           },
-          "updatedDate": "2026-05-30T23:17:03.871704+00:00",
+          "updatedDate": "2026-07-20T21:35:17.988499+00:00",
           "uuid": {
             "id": "c8fcf8a6-b45a-44c9-b551-d74f209f0ebb"
           }
@@ -65371,7 +65612,7 @@
             }
           },
           "order": 3,
-          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
           "targetCard": {
             "cardId": "TODO-BETA-056-0.1.5",
             "id": "a2FuYmFuLmNhcmQ6MjY=",
@@ -65398,9 +65639,150 @@
               "id": "fa990ec1-8f3c-4f45-a9ca-b48850808679"
             }
           },
-          "updatedDate": "2026-05-30T23:17:03.871939+00:00",
+          "updatedDate": "2026-07-20T21:35:17.988809+00:00",
           "uuid": {
             "id": "ddd6bd0a-e816-4a45-88fd-e641cf0de831"
+          }
+        },
+        {
+          "createdDate": "2026-07-20T21:35:17.984797+00:00",
+          "id": 101,
+          "kind": {
+            "createdDate": "2026-05-30T16:27:12.434657+00:00",
+            "id": 3,
+            "key": "related",
+            "label": "Related",
+            "order": 2,
+            "updatedDate": "2026-05-30T16:27:12.434661+00:00",
+            "uuid": {
+              "id": "6f855138-042f-4991-b6b8-68f7cea0b5b5"
+            }
+          },
+          "order": 4,
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "targetCard": {
+            "cardId": "TODO-BETA-059-0.1.7",
+            "id": "a2FuYmFuLmNhcmQ6MjI=",
+            "milestone": {
+              "id": 2,
+              "key": "beta",
+              "label": "Beta (pre-1.0.0)",
+              "order": 1
+            },
+            "number": 59,
+            "slug": "adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines",
+            "status": {
+              "id": 1,
+              "key": "todo",
+              "label": "To Do",
+              "order": 1
+            },
+            "targetVersion": {
+              "id": 13,
+              "number": "0.1.7"
+            },
+            "title": "Adversarial non-live test suite (try to break it, not just cover lines)",
+            "uuid": {
+              "id": "3bb76f88-464d-44d0-aba8-71188e6b8a11"
+            }
+          },
+          "updatedDate": "2026-07-20T21:35:17.984803+00:00",
+          "uuid": {
+            "id": "c525639c-66c4-4d53-b650-42749e7f38e6"
+          }
+        },
+        {
+          "createdDate": "2026-07-20T21:35:17.985885+00:00",
+          "id": 102,
+          "kind": {
+            "createdDate": "2026-05-30T16:27:12.434657+00:00",
+            "id": 3,
+            "key": "related",
+            "label": "Related",
+            "order": 2,
+            "updatedDate": "2026-05-30T16:27:12.434661+00:00",
+            "uuid": {
+              "id": "6f855138-042f-4991-b6b8-68f7cea0b5b5"
+            }
+          },
+          "order": 5,
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "targetCard": {
+            "cardId": "TODO-BETA-060-0.1.7",
+            "id": "a2FuYmFuLmNhcmQ6NTY=",
+            "milestone": {
+              "id": 2,
+              "key": "beta",
+              "label": "Beta (pre-1.0.0)",
+              "order": 1
+            },
+            "number": 60,
+            "slug": "optimizer_explain_mode",
+            "status": {
+              "id": 1,
+              "key": "todo",
+              "label": "To Do",
+              "order": 1
+            },
+            "targetVersion": {
+              "id": 13,
+              "number": "0.1.7"
+            },
+            "title": "Optimizer explain mode",
+            "uuid": {
+              "id": "b66916cd-be36-4cc7-9434-86b195a489fa"
+            }
+          },
+          "updatedDate": "2026-07-20T21:35:17.985890+00:00",
+          "uuid": {
+            "id": "fa6fca8f-b6c3-4938-ac6a-21667a975952"
+          }
+        },
+        {
+          "createdDate": "2026-07-20T21:35:17.986857+00:00",
+          "id": 103,
+          "kind": {
+            "createdDate": "2026-05-30T16:27:12.434657+00:00",
+            "id": 3,
+            "key": "related",
+            "label": "Related",
+            "order": 2,
+            "updatedDate": "2026-05-30T16:27:12.434661+00:00",
+            "uuid": {
+              "id": "6f855138-042f-4991-b6b8-68f7cea0b5b5"
+            }
+          },
+          "order": 6,
+          "rawText": "Every other Beta card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`, and the `0.1.7` triple `{{card_ref:4}}` / `{{card_ref:5}}` / `{{card_ref:6}}`) is in `DONE`.",
+          "targetCard": {
+            "cardId": "TODO-BETA-061-0.1.7",
+            "id": "a2FuYmFuLmNhcmQ6NjE=",
+            "milestone": {
+              "id": 2,
+              "key": "beta",
+              "label": "Beta (pre-1.0.0)",
+              "order": 1
+            },
+            "number": 61,
+            "slug": "configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key",
+            "status": {
+              "id": 1,
+              "key": "todo",
+              "label": "To Do",
+              "order": 1
+            },
+            "targetVersion": {
+              "id": 13,
+              "number": "0.1.7"
+            },
+            "title": "Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)",
+            "uuid": {
+              "id": "bca1367c-9640-47cf-949c-f11685fe3743"
+            }
+          },
+          "updatedDate": "2026-07-20T21:35:17.986862+00:00",
+          "uuid": {
+            "id": "afad0e3b-85ed-437b-b871-998255fa3577"
           }
         }
       ],
@@ -65947,7 +66329,55 @@
         }
       ],
       "id": "a2FuYmFuLmNhcmQ6NjQ=",
-      "incomingReferences": [],
+      "incomingReferences": [
+        {
+          "createdDate": "2026-07-20T21:35:17.950879+00:00",
+          "id": 99,
+          "kind": {
+            "createdDate": "2026-05-30T16:27:12.434657+00:00",
+            "id": 3,
+            "key": "related",
+            "label": "Related",
+            "order": 2,
+            "updatedDate": "2026-05-30T16:27:12.434661+00:00",
+            "uuid": {
+              "id": "6f855138-042f-4991-b6b8-68f7cea0b5b5"
+            }
+          },
+          "order": 3,
+          "rawText": "Every other Alpha card (`{{card_ref:0}}` through `{{card_ref:1}}` plus `{{card_ref:2}}` and `{{card_ref:3}}`) is in `DONE`.",
+          "sourceCard": {
+            "cardId": "TODO-ALPHA-047-0.1.0",
+            "id": "a2FuYmFuLmNhcmQ6MTU=",
+            "milestone": {
+              "id": 1,
+              "key": "alpha",
+              "label": "Alpha (pre-0.1.0)",
+              "order": 0
+            },
+            "number": 47,
+            "slug": "beta_release_cleanup_verification_alpha_beta",
+            "status": {
+              "id": 1,
+              "key": "todo",
+              "label": "To Do",
+              "order": 1
+            },
+            "targetVersion": {
+              "id": 6,
+              "number": "0.1.0"
+            },
+            "title": "Beta release (cleanup, verification, alpha → beta)",
+            "uuid": {
+              "id": "7330eea0-2c0d-46aa-979d-12704e304611"
+            }
+          },
+          "updatedDate": "2026-07-20T21:35:17.950891+00:00",
+          "uuid": {
+            "id": "f8c41251-6edd-40ee-bb55-5e34a8a44613"
+          }
+        }
+      ],
       "isBlocked": false,
       "items": [
         {

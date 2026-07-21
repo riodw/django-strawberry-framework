@@ -1,0 +1,1105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>django-strawberry-framework — Lifecycles</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --panel: #171a23;
+    --panel2: #1d2130;
+    --border: #2a2f42;
+    --text: #e6e9f2;
+    --muted: #9aa3b8;
+    --accent: #7aa2f7;
+    --gate: #e0af68;
+    --error: #f7768e;
+    --result: #9ece6a;
+    --fork: #bb9af7;
+    --phase: #2ac3de;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6fa; --panel: #ffffff; --panel2: #eef0f6; --border: #d6dae6;
+      --text: #1d2230; --muted: #5d6577;
+      --accent: #2f5fd0; --gate: #a9741a; --error: #cf2b4d;
+      --result: #3e7d1f; --fork: #7a4fd0; --phase: #0d7f96;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 28px 32px 18px; border-bottom: 1px solid var(--border);
+    background: var(--panel);
+  }
+  header h1 { margin: 0 0 6px; font-size: 22px; }
+  header p { margin: 0; color: var(--muted); max-width: 900px; }
+  nav.toc { display: flex; gap: 10px; padding: 14px 32px; flex-wrap: wrap; }
+  nav.toc a {
+    color: var(--accent); text-decoration: none; font-size: 13px;
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 12px;
+    background: var(--panel);
+  }
+  main { max-width: 1080px; margin: 0 auto; padding: 8px 24px 80px; }
+  section.lifecycle { margin-top: 40px; }
+  section.lifecycle > h2 {
+    font-size: 19px; margin: 0 0 4px; padding-top: 8px;
+    border-top: 2px solid var(--border);
+  }
+  section.lifecycle > p.subtitle { color: var(--muted); margin: 2px 0 18px; }
+
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin: 0 0 18px; font-size: 12px; color: var(--muted); }
+  .legend span::before {
+    content: ""; display: inline-block; width: 10px; height: 10px;
+    border-radius: 3px; margin-right: 5px; vertical-align: -1px;
+  }
+  .legend .l-step::before { background: var(--accent); }
+  .legend .l-gate::before { background: var(--gate); }
+  .legend .l-fork::before { background: var(--fork); }
+  .legend .l-result::before { background: var(--result); }
+  .legend .l-phase::before { background: var(--phase); }
+  .legend .l-error::before { background: var(--error); }
+
+  /* flow column */
+  .flow { display: flex; flex-direction: column; align-items: stretch; }
+  .node {
+    background: var(--panel); border: 1px solid var(--border);
+    border-left: 4px solid var(--accent); border-radius: 8px;
+    padding: 10px 14px; position: relative;
+  }
+  .node.gate  { border-left-color: var(--gate); }
+  .node.fork  { border-left-color: var(--fork); }
+  .node.result{ border-left-color: var(--result); }
+  .node.phase { border-left-color: var(--phase); background: var(--panel2); }
+  .node .n-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .node .n-idx {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 4px; padding: 0 5px;
+  }
+  .node .n-title { font-weight: 600; font-size: 14px; }
+  .node .n-kind {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+    color: var(--muted); margin-left: auto;
+  }
+  .node .n-detail { color: var(--muted); font-size: 13px; margin-top: 3px; }
+  .node .n-module {
+    font-family: var(--mono); font-size: 11.5px; color: var(--accent);
+    margin-top: 5px; word-break: break-all;
+  }
+  .node .n-errors { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px; }
+  .node .n-errors span {
+    font-size: 11px; color: var(--error); border: 1px solid var(--error);
+    border-radius: 4px; padding: 1px 6px; opacity: .85;
+  }
+  .node .n-children { margin-top: 10px; display: flex; flex-direction: column; }
+  .node .n-children .node { border-radius: 6px; }
+  .connector { display: flex; justify-content: center; padding: 2px 0; }
+  .connector svg { display: block; }
+  .connector line { stroke: var(--muted); stroke-width: 1.5; }
+  .connector polygon { fill: var(--muted); }
+
+  /* tabs */
+  .tabs { margin-top: 4px; }
+  .tabbar { display: flex; gap: 6px; flex-wrap: wrap; margin: 14px 0; }
+  .tabbar button {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+  }
+  .tabbar button.active {
+    border-color: var(--accent); color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset;
+  }
+  .shared-label, .variant-label {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); margin: 10px 0 8px;
+  }
+  .shared-wrap {
+    border: 1px dashed var(--border); border-radius: 10px; padding: 12px;
+    background: color-mix(in srgb, var(--panel2) 55%, transparent);
+  }
+  .fork-note {
+    text-align: center; color: var(--fork); font-size: 12px; margin: 8px 0 2px;
+  }
+
+  /* mermaid graph + synced detail list */
+  .mermaid-graph { overflow-x: auto; margin: 8px 0 6px; }
+  .mermaid-graph svg { max-width: 100%; height: auto; }
+  .detail-head {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); margin: 14px 0 8px;
+  }
+  ol.detail-list {
+    list-style: none; margin: 0; padding: 0;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  ol.detail-list li.node { scroll-margin-top: 20px; }
+  ol.detail-list li.node.flash {
+    animation: detail-flash 1.6s ease-out;
+  }
+  @keyframes detail-flash {
+    0% { box-shadow: 0 0 0 2px var(--accent); }
+    100% { box-shadow: 0 0 0 2px transparent; }
+  }
+  .render-error {
+    color: var(--error); font-family: var(--mono); font-size: 12px;
+    white-space: pre-wrap; border: 1px solid var(--error); border-radius: 8px;
+    padding: 10px 12px;
+  }
+
+  /* simple (Vue-style) diagram + collapsible detailed view */
+  .simple-diagram { margin: 8px 0 4px; overflow-x: auto; }
+  .simple-diagram svg { max-width: 100%; height: auto; display: block; }
+  .simple-note { color: var(--muted); font-size: 12.5px; margin: 4px 0 12px; max-width: 820px; }
+  details.detailed-view {
+    margin-top: 10px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--panel);
+  }
+  details.detailed-view > summary {
+    cursor: pointer; padding: 10px 14px; font-size: 13px; font-weight: 600;
+    color: var(--accent); list-style: none; user-select: none;
+  }
+  details.detailed-view > summary::-webkit-details-marker { display: none; }
+  details.detailed-view > summary::before { content: "\25B8  "; color: var(--muted); }
+  details.detailed-view[open] > summary::before { content: "\25BE  "; }
+  details.detailed-view > summary:hover { color: var(--text); }
+  .detailed-body { padding: 6px 14px 16px; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<header>
+  <h1>django-strawberry-framework — Lifecycles</h1>
+  <p>Three lifecycles of the package: startup from <code>runserver</code>, the anonymous read-request
+     pipeline (tabbed per data shape), and the session-auth cycle. All content is driven by the
+     <code>LIFECYCLE_DATA</code> object at the bottom of this file — edit the data, not the markup.</p>
+</header>
+<nav class="toc" id="toc"></nav>
+<main id="app"></main>
+
+<!-- NOTE: This page now imports mermaid@11 from the jsdelivr CDN in the module
+     script below, so rendering the flow graphs requires NETWORK ACCESS on first
+     load. To restore fully offline use, vendor the mermaid ESM bundle locally
+     (e.g. save mermaid.esm.min.mjs beside this file) and change the import
+     specifier in the script to that local path. -->
+<script type="module">
+import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+
+/* =====================================================================
+ * DATA — single source of truth. The renderer below never hardcodes
+ * lifecycle content. Step shape:
+ *   { title, detail?, module?, kind?: "step"|"gate"|"fork"|"result"|"phase",
+ *     errors?: [..], children?: [step, ...] }
+ * Section shape:
+ *   { id, title, subtitle, flow?: [steps]                 // single graph
+ *     shared?: [steps], variants?: [{id,label,steps}] }   // tabbed graphs
+ * ===================================================================== */
+const LIFECYCLE_DATA = {
+  sections: [
+
+    /* ---------------- 1. STARTUP ---------------- */
+    {
+      id: "startup",
+      title: "1 · Startup — runserver to a ready schema",
+      subtitle: "What happens between `manage.py runserver` and a servable /graphql/ endpoint.",
+      simple: {
+        spine: [
+          { id: "boot", kind: "start", label: "runserver" },
+          { id: "django", kind: "process", label: "Django boot" },
+          { id: "ready", kind: "process", label: "AppConfig.ready()" },
+          { id: "import", kind: "process", label: "import schema modules" },
+          { id: "finalize", kind: "process", label: "finalize_django_types" },
+          { id: "decide", kind: "decision", label: "every relation target registered?" },
+          { id: "schema", kind: "process", label: "build DjangoSchema", edgeLabel: "yes" },
+          { id: "live", kind: "state", label: "/graphql/ live" },
+        ],
+        callouts: [
+          { attach: "ready", side: "right", variant: "special", label: "upstream patches applied" },
+          { attach: "import", side: "right", variant: "special", label: "DjangoType.__init_subclass__ registers each type" },
+          { attach: "finalize", side: "right", variant: "hook", label: "ConfigurationError — unresolved relations / bad Meta" },
+          { attach: "schema", side: "right", variant: "special", label: "optimizer singleton + plan cache" },
+        ],
+        detours: [
+          { at: "decide", branchLabel: "no", node: { id: "fail", kind: "state", label: "Startup fails" } },
+        ],
+      },
+      flow: [
+        { title: "Django boots, app registry populates",
+          detail: "django.setup() reads INSTALLED_APPS (includes \"django_strawberry_framework\"); each app's models.py imports.",
+          module: "manage.py → django.setup()" },
+        { title: "Settings singleton wires up",
+          detail: "Import side effect connects setting_changed → reload_settings; DJANGO_STRAWBERRY_FRAMEWORK is read lazily on first access.",
+          module: "django_strawberry_framework/conf.py",
+          errors: ["ConfigurationError — non-mapping DJANGO_STRAWBERRY_FRAMEWORK (on first read)"] },
+        { title: "Package __init__ builds the export surface",
+          detail: "Eager subpackage imports make DjangoType.__init_subclass__, field factories, DjangoSchema, strawberry_config available and register subsystem-clear callbacks.",
+          module: "django_strawberry_framework/__init__.py" },
+        { title: "AppConfig.ready() applies upstream patches",
+          detail: "apply_django() → apply_strawberry() → apply_cross_web(); gated by APPLY_UPSTREAM_PATCHES (default on), idempotent under repeated ready().",
+          module: "apps.py::DjangoStrawberryFrameworkConfig.ready",
+          errors: ["ConfigurationError — malformed APPLY_UPSTREAM_PATCHES shape"] },
+        { title: "Type collection (per DjangoType subclass)",
+          detail: "Importing each app's schema module fires __init_subclass__: Meta validated, field_map built, scalar annotations synthesized, PendingRelation records queued, definition registered atomically. strawberry.type is NOT called yet.",
+          module: "types/base.py::DjangoType.__init_subclass__ → registry.register_with_definition",
+          errors: [
+            "ConfigurationError — bad Meta (model / fields×exclude / interfaces / overrides / relation_shapes …)",
+            "ConfigurationError — registry collisions (duplicate primary, reverse collision, post-finalize registration)",
+          ] },
+        { title: "finalize_django_types() — once-only build gate", kind: "phase",
+          detail: "No-op if already finalized. Snapshots + validates RELAY_GLOBALID_STRATEGY once, then runs the phases below; registry.mark_finalized() only on full success.",
+          module: "types/finalizer.py::finalize_django_types",
+          children: [
+            { title: "Phase 1 — failure-atomic relation resolution",
+              detail: "Primary-ambiguity audit, then every PendingRelation classified (unresolved / consumer-authored / resolved) BEFORE any class is mutated; resolved annotations rewritten.",
+              errors: ["ConfigurationError — unresolved relation targets", "ConfigurationError — multi-type model without a declared primary"] },
+            { title: "Phase 2 — resolver attachment",
+              detail: "Relation resolvers and file/image resolvers attached per type; consumer-authored fields are skipped." },
+            { title: "Phase 2.5 — interfaces, Relay, synthesis, sidecar binding",
+              detail: "Meta.interfaces injected; Relay-Node types get resolve_* + GlobalID/typename resolvers (composite-pk check); cursor_field columns validated; <field>Connection siblings synthesized per relation_shapes; model-label routing audited; then the ordered binds: auth mutations → mutations → form mutations → filtersets → ordersets (materializes Input/Payload/filter/order classes as module globals); field-surface audit last.",
+              errors: [
+                "ConfigurationError — composite pk on a Relay Node",
+                "ConfigurationError — explicit connection shape over a non-Node target / name collision",
+                "ConfigurationError — orphan filterset refs, mutation target mismatch",
+                "ConfigurationError — empty field surface or camelCase field collision",
+              ] },
+            { title: "Phase 3 — decoration",
+              detail: "strawberry.type(cls) per pending type; definition.finalized = True; registry.mark_finalized() as the final statement (a raise anywhere leaves the flag False for a fine-grained rerun)." },
+          ] },
+        { title: "Optimizer extension instantiated (singleton-in-factory)",
+          detail: "One instance with the cross-request plan cache (LRU 256); nested-connection strategy fixed at construction (kwarg → NESTED_CONNECTION_STRATEGY → \"windowed\"). Passed as extensions=[lambda: _optimizer] so every request gets the SAME instance back.",
+          module: "optimizer/extension.py::DjangoOptimizerExtension",
+          errors: ["ConfigurationError — unknown nested-connection strategy", "ValueError — bad strictness"] },
+        { title: "DjangoSchema construction",
+          detail: "strawberry.Schema subclass installing DjangoMutationExecutionContext (required for generated mutations). Strawberry resolves the lazy Input/Payload references Phase 2.5 materialized.",
+          module: "schema.py::DjangoSchema",
+          errors: ["graphql-core schema-build errors (duplicate fields, unresolved refs)"] },
+        { title: "URL wiring — endpoint live", kind: "result",
+          detail: "GraphQLView.as_view(schema=schema) mounted at /graphql/ (or DjangoGraphQLProtocolRouter for ASGI). Per-request hooks now engage per operation.",
+          module: "urls.py / routers.py::DjangoGraphQLProtocolRouter" },
+      ],
+    },
+
+    /* ---------------- 2. ANONYMOUS READ REQUEST ---------------- */
+    {
+      id: "read",
+      title: "2 · Read request — anonymous user asks for data",
+      subtitle: "Every read shares the same front portion; the pipeline then diverges by the shape of the requested data. Pick a tab.",
+      simple: {
+        spine: [
+          { id: "post", kind: "start", label: "POST /graphql/" },
+          { id: "execute", kind: "process", label: "view + schema execute" },
+          { id: "walk", kind: "process", label: "optimizer walks selection tree" },
+          { id: "kind", kind: "decision", label: "field kind?" },
+          { id: "visibility", kind: "process", label: "get_queryset visibility" },
+          { id: "sql", kind: "process", label: "single optimized SQL" },
+          { id: "response", kind: "state", label: "Response" },
+        ],
+        callouts: [
+          { attach: "walk", side: "right", variant: "special", label: "plan cache" },
+          { attach: "visibility", side: "left", variant: "hook", label: "anonymous scoping — hidden row ≡ not found" },
+          { attach: "sql", side: "right", variant: "special", label: "select_related / prefetch / only" },
+        ],
+        fan: {
+          at: "kind", rejoinTo: "visibility",
+          branches: [
+            { label: "list", node: { id: "b_list", label: "list field" } },
+            { label: "connection", node: { id: "b_conn", label: "connection" } },
+            { label: "node", node: { id: "b_node", label: "node refetch" } },
+          ],
+        },
+        note: "Each branch is one variant — open the Detailed view below for the full per-shape pipeline (list / connection / node / nested / filtered).",
+      },
+      shared: [
+        { title: "HTTP transport receives the POST",
+          detail: "Strawberry's Django GraphQLView (WSGI) or GraphQLHTTPConsumer via DjangoGraphQLProtocolRouter (ASGI). Middleware has already resolved request.user → AnonymousUser.",
+          module: "strawberry GraphQLView / routers.py" },
+        { title: "DjangoSchema executes the operation",
+          detail: "For a read, the parent type is never the mutation root, so the mutation transaction machinery stays dormant — fields run as stock graphql-core.",
+          module: "schema.py::DjangoSchema" },
+        { title: "Optimizer extension arms itself",
+          detail: "on_execute clears stale stashes and publishes the active instance, nested-connection strategy, and per-execution plan/selection memos via ContextVars.",
+          module: "optimizer/extension.py::on_execute" },
+        { title: "Root-gated resolve hook",
+          detail: "The resolve middleware only optimizes at the operation ROOT (info.path.prev is None) — one selection-tree walk builds an OptimizationPlan (plan cache consulted) and applies select_related / prefetch_related / .only(). Non-root resolvers pass straight through.",
+          module: "optimizer/extension.py::resolve → walker.plan_optimizations" },
+        { title: "Field resolver dispatch — paths diverge", kind: "fork",
+          detail: "What happens next depends on the field kind the query hit. Visibility rule everywhere: DjangoType.get_queryset default is identity; an override is the anonymous-scoping hook, and the optimizer downgrades select_related → Prefetch so the filter survives joins." },
+      ],
+      variants: [
+        {
+          id: "list", label: "Plain list field",
+          steps: [
+            { title: "Default resolver builds the base queryset",
+              detail: "initial_queryset(target_type) → model._default_manager.all().",
+              module: "list_field.py::DjangoListField._default" },
+            { title: "Visibility gate", kind: "gate",
+              detail: "apply_type_visibility_sync/async runs the type's get_queryset — the ONLY anonymous scoping on this path (no filter/order sidecars exist here).",
+              module: "utils/querysets.py::apply_type_visibility_*" },
+            { title: "Optimizer plan applied on the way out",
+              detail: "The middleware normalizes Manager→QuerySet, skips an already-evaluated queryset, resolves (origin, model) from the return type, and applies the plan.",
+              module: "optimizer/extension.py::_optimize" },
+            { title: "Flat list returned", kind: "result",
+              detail: "No cursors, no ordering guarantee (DB order unless the model declares Meta.ordering) — the documented list-field asymmetry." },
+          ],
+        },
+        {
+          id: "connection", label: "Root connection",
+          steps: [
+            { title: "Pipeline source prepared",
+              detail: "Manager→QuerySet; a non-queryset iterable rejects filter:/orderBy:; a pre-sliced queryset raises a clear GraphQLError.",
+              module: "connection.py::_prepare_pipeline_source",
+              errors: ["GraphQLError — pre-sliced source"] },
+            { title: "Visibility gate", kind: "gate",
+              detail: "apply_type_visibility_* runs the node type's get_queryset BEFORE any narrowing.",
+              module: "connection.py pipeline step 1" },
+            { title: "filter: applied (if sent)",
+              detail: "Meta.filterset_class.apply_sync/async — see the “Filtered + ordered” tab for the permission gates inside.",
+              module: "filters/sets.py::FilterSet.apply_*" },
+            { title: "orderBy: applied (if sent)",
+              detail: "Meta.orderset_class.apply_sync/async.",
+              module: "orders/sets.py::OrderSet.apply_*" },
+            { title: "Deterministic total order enforced",
+              detail: "_finalize_queryset appends a pk tiebreaker unless the effective order already ends in a unique column — positional offset cursors (arrayconnection:N) require it. A Meta.cursor_field type is keyset-mode instead: encrypted opaque cursors, tuple-comparison seek.",
+              module: "connection.py::_finalize_queryset / keyset.py" },
+            { title: "Connection-owned optimizer pass",
+              detail: "The connection resolves the NODE model itself and shares the instance plan cache (Strawberry's ConnectionExtension hides the pre-slice queryset from the middleware).",
+              module: "optimizer/extension.py::apply_connection_optimization" },
+            { title: "Window sliced, edges built", kind: "result",
+              detail: "ConnectionExtension slices to first/after; totalCount computed only when selected, on the post-filter pre-slice queryset." },
+          ],
+        },
+        {
+          id: "node", label: "Node refetch by GlobalID",
+          steps: [
+            { title: "Decode first — no query",
+              detail: "GlobalID shape validated and model-checked; the pk is coerced before any DB hit.",
+              module: "relay.py::_decode_or_graphql_error / decode_model_global_id",
+              errors: ["GraphQLError code=GLOBALID_INVALID — malformed id", "null — uncoercible pk (no query, no leak)"] },
+            { title: "Dispatch to resolve_node / resolve_nodes",
+              detail: "Default resolvers on the decoded type; multi-type models route to the primary type per the strategy.",
+              module: "relay.py::_resolve_node_default / _resolve_nodes_default" },
+            { title: "Visibility gate BEFORE the id filter", kind: "gate",
+              detail: "get_queryset runs first, so an anonymous user probing a hidden row gets null — indistinguishable from missing (no existence leak).",
+              module: "relay.py + utils/querysets.py" },
+            { title: "Id filter applied",
+              detail: "Single: filter + get/first. Batch (nodes): one pk__in query per type, then re-interleaved 1:1 with the input ids — null holes, duplicates supported.",
+              module: "relay.py::_apply_node_filter / _order_nodes" },
+            { title: "Typename stamped, node returned", kind: "result",
+              detail: "_stamp_node_type records the decode-resolved type so is_type_of picks the right __typename." },
+          ],
+        },
+        {
+          id: "nested", label: "Nested relation / connection",
+          steps: [
+            { title: "Handled inside the ROOT walk",
+              detail: "Nothing new fires at the nested resolver — the root plan already fetched it. Plain to-one → select_related; to-many → prefetch_related with __-chained paths.",
+              module: "optimizer/nested_planner.py::plan_connection_relation" },
+            { title: "Visibility across the join", kind: "gate",
+              detail: "A nested type with a custom get_queryset forces a Prefetch keyed on the filtered queryset — the anonymous filter survives the join instead of being clobbered by select_related.",
+              module: "types/base.py::has_custom_get_queryset → Prefetch downgrade" },
+            { title: "Nested CONNECTION → strategy seam", kind: "fork",
+              detail: "windowed (default): one window-function query per relation, partitioned by connector, Prefetch to_attr. lateral/auto: Postgres CROSS JOIN LATERAL picked at fetch time by DB alias (cached plans stay backend-neutral). Divergent aliases each get their own window.",
+              module: "optimizer/nested_fetch.py::resolve_strategy" },
+            { title: "Per-parent fallback (deliberately UNPLANNED)",
+              detail: "filter:/orderBy: sidecars, OptimizerHint.SKIP, an unwindowable child queryset, or a keyset backward page leave the field unplanned — it reruns the full connection pipeline per parent row.",
+              module: "optimizer/nested_planner.py" },
+            { title: "Strictness watches the gap", kind: "result",
+              detail: "strictness ∈ off/warn/raise: an unplanned relation access probes as a lazy load — \"raise\" throws OptimizerError(\"Unplanned N+1\"), \"warn\" logs, fallback reasons carried into the message.",
+              module: "types/resolvers.py::_check_n1" },
+          ],
+        },
+        {
+          id: "filtered", label: "Filtered + ordered (permission gates)",
+          steps: [
+            { title: "Same connection pipeline, zoomed into steps 3–4",
+              detail: "Visibility gate has already run; now the sidecar inputs are applied.",
+              module: "connection.py pipeline" },
+            { title: "check_*_permission gates fire BEFORE any WHERE", kind: "gate",
+              detail: "Only ACTIVE input fields are walked; per-class dedupe, recursion into active related sub-filtersets, then the per-branch parent gate. A denial RAISES before the queryset touches the DB. Gates are sync-by-contract — an async gate on the async surface raises the authorization-bypass error.",
+              module: "filters/sets.py / orders/sets.py::_run_permission_checks",
+              errors: ["PermissionDenied-style raise — denied filter/order field"] },
+            { title: "Related branches re-check visibility", kind: "gate",
+              detail: "A related filter branch also runs the TARGET type's get_queryset, so a joined branch cannot leak rows the anonymous user can't see.",
+              module: "filters/sets.py related-branch scoping" },
+            { title: "WHERE / ORDER BY built",
+              detail: "Membership semantics: explicit [] matches nothing, null/omitted is no-constraint; reverse-FK/M2M paths auto-apply distinct; invalid in-list members are discarded per model-field coercion.",
+              module: "filters/base.py / orders/base.py" },
+            { title: "Deterministic order → optimize → slice", kind: "result",
+              detail: "An explicit orderBy becomes the effective order the pk tiebreaker extends; then the shared connection tail (plan, window, totalCount) runs as usual." },
+          ],
+        },
+      ],
+    },
+
+    /* ---------------- 3. AUTHENTICATION ---------------- */
+    {
+      id: "auth",
+      title: "3 · Authentication cycle",
+      subtitle: "Package-specific session auth: opt-in field factories from django_strawberry_framework.auth. Two envelopes throughout — FieldError payload for expected data-level failures, top-level GraphQLError for authorization/config/transport denials.",
+      simple: {
+        spine: [
+          { id: "anon", kind: "state", label: "Anonymous" },
+          { id: "login", kind: "process", label: "login mutation" },
+          { id: "auth", kind: "decision", label: "authenticate()?" },
+          { id: "session", kind: "process", label: "session established", edgeLabel: "yes" },
+          { id: "authed", kind: "state", label: "Authenticated" },
+        ],
+        callouts: [
+          { attach: "login", side: "right", variant: "special", label: "permission gate" },
+          { attach: "login", side: "right", variant: "hook", label: "FieldError __all__ — bad credentials" },
+          { attach: "session", side: "right", variant: "special", label: "session + CSRF rotated" },
+        ],
+        detours: [
+          { at: "auth", branchLabel: "no", node: { id: "reject", kind: "state", label: "rejected" } },
+        ],
+        loop: {
+          at: "authed",
+          ringLabel: "each subsequent request",
+          node: { id: "cookie", label: "session cookie → request.user" },
+          callouts: [
+            { variant: "special", label: "get_queryset visibility (reads)" },
+            { variant: "special", label: "DjangoModelPermission (writes)" },
+          ],
+          returnLabel: "logout / session expiry",
+          returnTo: "anon",
+        },
+      },
+      shared: [
+        { title: "Auth surface declared at schema build",
+          detail: "login_mutation() / logout_mutation() / register_mutation() / current_user() are opt-in factories (no package-root export). login/logout/current_user default to AllowAny (permission_classes=[]) — the documented inversion of the write family's deny-by-default; register, as a real DjangoMutation, defaults to DjangoModelPermission. Session transport only.",
+          module: "django_strawberry_framework/auth/" },
+        { title: "Per-call transport prologue",
+          detail: "Resolve the request (Django HttpRequest or Channels scope adapter) and classify the transport; unsupported transports are rejected before any credential or session work.",
+          module: "auth/mutations.py::_transport_prologue",
+          errors: ["GraphQLError — WebSocket login / signed-cookie-WS logout unsupported", "ConfigurationError — SessionMiddleware missing"] },
+        { title: "Which flow?", kind: "fork",
+          detail: "Pick a tab: the four fields, plus what an established session changes on every subsequent request." },
+      ],
+      variants: [
+        {
+          id: "login", label: "login",
+          steps: [
+            { title: "Permission gate", kind: "gate",
+              detail: "authorize_or_raise(\"login\", {username}) — data carries the username (never the password) so a rate-limit gate can key on it. Default [] = open.",
+              module: "mutations/resolvers.py::authorize_or_raise",
+              errors: ["GraphQLError — \"Not authorized to login …\""] },
+            { title: "Storability preflight",
+              detail: "Unencodable username/password (lone surrogate) short-circuits to the failed-credentials envelope instead of a raw UnicodeEncodeError." },
+            { title: "authenticate() — exactly once",
+              detail: "One django.contrib.auth.authenticate(request, …) call; no local user query (actor-not-lookup rule).",
+              module: "auth/mutations.py::_login_authenticate" },
+            { title: "Bad credentials → FieldError envelope",
+              detail: "user is None → one undifferentiated __all__ message; session untouched. Same message for wrong-user and wrong-password.",
+              errors: ["FieldError __all__ — invalid credentials"] },
+            { title: "Session established", kind: "result",
+              detail: "auth.login(): session key rotated, CSRF rotated, user_logged_in fires (updates last_login), explicit session.save(). Channels path runs under the per-scope lock. Any failure after partial mutation → anonymize + flush + re-raise, never a false success.",
+              module: "auth/mutations.py::_django_http_login_establish" },
+          ],
+        },
+        {
+          id: "logout", label: "logout",
+          steps: [
+            { title: "Permission gate", kind: "gate",
+              detail: "authorize_or_raise(\"logout\") on the Session holder; default open.",
+              errors: ["GraphQLError — \"Not authorized to logout Session.\""] },
+            { title: "Observe BEFORE teardown",
+              detail: "ok = was there an authenticated actor? The payload describes the pre-teardown state.",
+              module: "auth/mutations.py::_logout_observation" },
+            { title: "Unconditional idempotent teardown", kind: "result",
+              detail: "auth.logout(): user_logged_out, session.flush(), request.user = AnonymousUser(). Already-anonymous still flushes residual data → {ok: false, errors: []}. Failure → anonymize where possible + re-raise, never a false ok:true.",
+              module: "auth/mutations.py" },
+          ],
+        },
+        {
+          id: "register", label: "register",
+          steps: [
+            { title: "A real DjangoMutation rider",
+              detail: "register(data: RegisterInput!) over get_user_model(); rides the shared write skeleton (transaction.atomic, authorize-before-decode, envelope short-circuits with rollback). NOT AllowAny by default — DjangoModelPermission add_<user> unless overridden.",
+              module: "auth/mutations.py::_synthesize_register_rider" },
+            { title: "Privilege fields refused at build time", kind: "gate",
+              detail: "is_active / is_staff / is_superuser / groups / user_permissions are never auto-exposed; requesting one explicitly raises. Privilege stays server-owned.",
+              errors: ["build-time raise — privileged field in register input"] },
+            { title: "Decode with the password carve-out",
+              detail: "password is captured OUT of the constructed model attrs — the raw value never reaches model(**attrs).",
+              module: "auth/mutations.py::_register_decode_step" },
+            { title: "validate_password against the unsaved instance", kind: "gate",
+              detail: "So UserAttributeSimilarityValidator sees username/email. Failure keys directly to the password field.",
+              errors: ["FieldError password — validator failure"] },
+            { title: "set_password → full_clean → save", kind: "result",
+              detail: "Hash happens BEFORE full_clean (the column validates the hash, not the raw input); race IntegrityError converts to the envelope; M2M via the shared tail.",
+              errors: ["FieldError — IntegrityError race"] },
+          ],
+        },
+        {
+          id: "me", label: "current_user",
+          steps: [
+            { title: "A query field, not a mutation",
+              detail: "me: UserType | null — no {ok, errors} envelope. The user type's field selection IS the authenticated read surface (exclude password / privilege columns).",
+              module: "auth/queries.py::current_user" },
+            { title: "Permission gate first", kind: "gate",
+              detail: "authorize_or_raise(\"current_user\", instance=actor). With an IsAuthenticated-style class, anonymous gets a GraphQLError instead of null.",
+              errors: ["GraphQLError — denial (only if a gate is configured)"] },
+            { title: "Nullable-return rule", kind: "result",
+              detail: "Authenticated → the middleware-loaded user row (no re-fetch, no get_queryset re-run — actor-not-lookup rule); anonymous → null, never an error." },
+          ],
+        },
+        {
+          id: "subsequent", label: "Subsequent requests",
+          steps: [
+            { title: "Session cookie is the boundary",
+              detail: "Resolvers never re-authenticate — SessionMiddleware + AuthenticationMiddleware (or AuthMiddlewareStack on Channels) populate request.user / scope[\"user\"] from the rotated session cookie. CSRF belongs to this transport layer, not the resolvers.",
+              module: "Django / Channels middleware" },
+            { title: "Reads — row visibility", kind: "gate",
+              detail: "get_queryset (+ apply_cascade_permissions) answers \"may this actor SEE this row\" — for queries and for the update/delete locate. Hidden row ≡ not-found (no existence leak).",
+              module: "types/base.py::get_queryset" },
+            { title: "Writes — model permissions", kind: "gate",
+              detail: "DjangoModelPermission maps create/update/delete → add/change/delete perms via user.has_perm. Anonymous holds no perms → denied by default. Can-view is never can-write.",
+              module: "mutations/permissions.py::DjangoModelPermission",
+              errors: ["GraphQLError — write denied"] },
+            { title: "Net effect", kind: "result",
+              detail: "Anonymous: sees only what get_queryset allows, cannot write. Authenticated w/o perms: sees visible rows, still denied writes. Authenticated + permissioned: passes the write gate. Every permission hook must return a real bool — a truthy non-bool / coroutine is a ConfigurationError, never a silent allow." },
+          ],
+        },
+      ],
+    },
+  ],
+};
+
+/* =====================================================================
+ * RENDERER — generic; reads LIFECYCLE_DATA only. Walks the data into
+ * mermaid `flowchart TD` definition text, renders it via the mermaid ESM
+ * API, and renders each step's detail/module/errors into a numbered side
+ * list keyed to the node numbers in the graph (clicking a node scrolls to
+ * and flashes its detail entry).
+ * ===================================================================== */
+
+const KIND_LABEL = { step: "", gate: "gate", fork: "branch", result: "outcome", phase: "phase" };
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+/* Escape mermaid-special characters for a quoted `id["..."]` label.
+ * Order matters: ampersand first so we do not double-escape the entities. */
+function esc(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/#/g, "&#35;");
+}
+
+/* Build classDef statements from the live CSS custom-property palette, so
+ * the mermaid node styling tracks the same light/dark values as the chrome. */
+function classDefLines() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (name) => cs.getPropertyValue(name).trim();
+  const panel = v("--panel");
+  const panel2 = v("--panel2");
+  const text = v("--text");
+  const map = {
+    step: v("--accent"),
+    gate: v("--gate"),
+    fork: v("--fork"),
+    result: v("--result"),
+    phase: v("--phase"),
+  };
+  return Object.entries(map).map(([kind, color]) => {
+    const fill = kind === "phase" ? panel2 : panel;
+    return `  classDef ${kind} fill:${fill},stroke:${color},stroke-width:2px,color:${text};`;
+  });
+}
+
+/* Walk a linear list of steps into a mermaid definition + a parallel detail
+ * array. `children` (finalizer phases) become a mermaid subgraph.
+ * `graphKey` namespaces node ids so callbacks and detail anchors never
+ * collide across the many graphs on the page. */
+function buildDef(steps, startIdx, graphKey) {
+  const nodeLines = ["flowchart TD"];
+  const edges = [];
+  const classAssign = [];
+  const clicks = [];
+  const details = [];
+  let seq = 0;
+
+  const badge = (kind) => (KIND_LABEL[kind] ? "  «" + KIND_LABEL[kind] + "»" : "");
+
+  function makeNode(step, displayNum) {
+    const kind = step.kind || "step";
+    const id = graphKey + "_n" + seq++;
+    const label = displayNum + ".  " + step.title + badge(kind);
+    nodeLines.push(`  ${id}["${esc(label)}"]`);
+    classAssign.push(`  class ${id} ${kind};`);
+    clicks.push(`  click ${id} __lifecycleNodeClick`);
+    details.push({
+      id, num: displayNum, kind,
+      title: step.title, detail: step.detail, module: step.module, errors: step.errors,
+    });
+    return id;
+  }
+
+  function makePhase(step, displayNum) {
+    const id = graphKey + "_sg" + seq++;
+    nodeLines.push(`  subgraph ${id}["${esc(displayNum + ".  " + step.title + badge("phase"))}"]`);
+    nodeLines.push("    direction TB");
+    // The phase's own detail goes first so the list reads parent-then-children.
+    details.push({
+      id, num: displayNum, kind: "phase",
+      title: step.title, detail: step.detail, module: step.module, errors: step.errors,
+    });
+    let prevChild = null;
+    step.children.forEach((c, i) => {
+      const cid = makeNode(c, displayNum + "." + (i + 1));
+      if (prevChild) edges.push(`  ${prevChild} --> ${cid}`);
+      prevChild = cid;
+    });
+    nodeLines.push("  end");
+    classAssign.push(`  class ${id} phase;`);
+    return id;
+  }
+
+  let prevExit = null;
+  steps.forEach((step, i) => {
+    const displayNum = (startIdx || 1) + i;
+    const hasChildren = step.children && step.children.length;
+    const anchor = hasChildren ? makePhase(step, displayNum) : makeNode(step, displayNum);
+    if (prevExit) edges.push(`  ${prevExit} --> ${anchor}`);
+    prevExit = anchor;
+  });
+
+  const def = [...nodeLines, ...edges, ...classDefLines(), ...classAssign, ...clicks].join("\n");
+  return { def, details };
+}
+
+/* Numbered detail list keyed to the graph node numbers. Content is set via
+ * textContent so nothing needs escaping and no data is reworded. */
+function buildDetailList(details) {
+  const list = el("ol", "detail-list");
+  details.forEach((d) => {
+    const kind = d.kind || "step";
+    const li = el("li", "node " + kind);
+    li.id = "detail-" + d.id;
+    const head = el("div", "n-head");
+    head.appendChild(el("span", "n-idx", String(d.num)));
+    head.appendChild(el("span", "n-title", d.title));
+    if (KIND_LABEL[kind]) head.appendChild(el("span", "n-kind", KIND_LABEL[kind]));
+    li.appendChild(head);
+    if (d.detail) li.appendChild(el("div", "n-detail", d.detail));
+    if (d.module) li.appendChild(el("div", "n-module", d.module));
+    if (d.errors && d.errors.length) {
+      const errs = el("div", "n-errors");
+      d.errors.forEach((e) => errs.appendChild(el("span", null, e)));
+      li.appendChild(errs);
+    }
+    list.appendChild(li);
+  });
+  return list;
+}
+
+/* Click a mermaid node → scroll to + flash its detail entry. Registered
+ * globally because mermaid (securityLevel:"loose") calls it by name. */
+window.__lifecycleNodeClick = function (nodeId) {
+  const target = document.getElementById("detail-" + nodeId);
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.classList.remove("flash");
+  // reflow so the animation restarts on repeat clicks
+  void target.offsetWidth;
+  target.classList.add("flash");
+};
+
+let renderSeq = 0;
+
+/* Render one graph + its detail list into `container`. Each call uses a
+ * unique mermaid render id so no stale/duplicate SVG ids leak between
+ * renders (important for async tab switches). */
+async function renderGraph(container, steps, startIdx, graphKey) {
+  const { def, details } = buildDef(steps, startIdx, graphKey);
+  const graphWrap = el("div", "mermaid-graph");
+  container.appendChild(graphWrap);
+  try {
+    const { svg, bindFunctions } = await mermaid.render("mmd-" + renderSeq++, def);
+    graphWrap.innerHTML = svg;
+    if (bindFunctions) bindFunctions(graphWrap);
+  } catch (err) {
+    graphWrap.innerHTML = "";
+    graphWrap.appendChild(el("div", "render-error", "Graph render failed:\n" + (err && err.message ? err.message : String(err))));
+  }
+  container.appendChild(el("div", "detail-head", "Step details"));
+  container.appendChild(buildDetailList(details));
+}
+
+/* =====================================================================
+ * SIMPLE DIAGRAM — hand-generated inline SVG in the visual language of the
+ * Vue.js component-lifecycle diagram. PURE string generation (no DOM), so
+ * it runs headless under node for testing. Reads only a `simple` block:
+ *
+ *   simple: {
+ *     spine:    [ { id, kind:"start|process|decision|state", label, edgeLabel? } ],
+ *     callouts: [ { attach:<spine id>, side:"left|right",
+ *                   variant:"hook|special", label } ],
+ *     detours:  [ { at:<decision id>, branchLabel,
+ *                   node:{ id, kind, label } } ],        // side terminal
+ *     fan:      { at:<decision id>, rejoinTo:<spine id>,
+ *                 branches:[ { label, node:{ id, label } } ] },  // parallel branches
+ *     loop:     { at:<spine id>, ringLabel, node:{ id, label },
+ *                 callouts:[ { variant, label } ],
+ *                 returnLabel, returnTo:<spine id> },
+ *     note?:    "text under the diagram"
+ *   }
+ *
+ * Layout: fixed vertical rhythm down a center spine at SPINE_X; callouts sit
+ * left/right and attach by a horizontal dashed arrow; a decision detour is a
+ * dashed side branch to a terminal; a fan is N parallel branch nodes between
+ * the decision and its rejoin node; the loop is a dashed ring to the right of
+ * a state node. viewBox is computed from the content bounds so it scales.
+ * ===================================================================== */
+function buildSimpleSVG(model, P) {
+  const SPINE_X = 250, TOP = 40, ROW = 96;
+  const rectW = 180, rectH = 46, dW = 158, dH = 76, R = 40;
+  const calloutW = 214, calloutH = 44, lineH = 14;
+
+  const conns = [], shapes = [];
+  const bounds = { minX: SPINE_X, minY: TOP, maxX: SPINE_X, maxY: TOP };
+  const track = (x, y) => {
+    if (x < bounds.minX) bounds.minX = x;
+    if (y < bounds.minY) bounds.minY = y;
+    if (x > bounds.maxX) bounds.maxX = x;
+    if (y > bounds.maxY) bounds.maxY = y;
+  };
+  const esc = (s) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const num = (n) => Number(n).toFixed(1);
+  const halfW = (k) => (k === "decision" ? dW / 2 : k === "state" ? R : rectW / 2);
+  const halfH = (k) => (k === "decision" ? dH / 2 : k === "state" ? R : rectH / 2);
+
+  function wrap(str, maxChars) {
+    const out = [];
+    let cur = "";
+    String(str).split(/\s+/).forEach((w) => {
+      if (!cur) cur = w;
+      else if ((cur + " " + w).length <= maxChars) cur += " " + w;
+      else { out.push(cur); cur = w; }
+    });
+    if (cur) out.push(cur);
+    return out.length ? out : [""];
+  }
+  function textBlock(cx, cy, str, maxChars, fill, size, weight) {
+    const lines = wrap(str, maxChars);
+    const startY = cy - ((lines.length - 1) * lineH) / 2;
+    const tspans = lines
+      .map((ln, i) => `<tspan x="${num(cx)}" y="${num(startY + i * lineH)}">${esc(ln)}</tspan>`)
+      .join("");
+    return `<text text-anchor="middle" dominant-baseline="middle" font-size="${size}" `
+      + `font-weight="${weight || 400}" fill="${fill}" `
+      + `font-family="-apple-system,Segoe UI,Roboto,sans-serif">${tspans}</text>`;
+  }
+  function annot(x, y, str, anchor) {
+    track(x, y);
+    return `<text text-anchor="${anchor || "middle"}" dominant-baseline="middle" `
+      + `font-size="10.5" font-style="italic" fill="${P.muted}" `
+      + `font-family="-apple-system,Segoe UI,Roboto,sans-serif">${esc(str)}</text>`
+        .replace("<text ", `<text x="${num(x)}" y="${num(y)}" `);
+  }
+  function arrow(x1, y1, x2, y2, dashed, color) {
+    track(x1, y1); track(x2, y2);
+    const dash = dashed ? ' stroke-dasharray="5 4"' : "";
+    const ang = Math.atan2(y2 - y1, x2 - x1);
+    const ah = 7;
+    const p1x = x2 - ah * Math.cos(ang - Math.PI / 7), p1y = y2 - ah * Math.sin(ang - Math.PI / 7);
+    const p2x = x2 - ah * Math.cos(ang + Math.PI / 7), p2y = y2 - ah * Math.sin(ang + Math.PI / 7);
+    conns.push(`<line x1="${num(x1)}" y1="${num(y1)}" x2="${num(x2)}" y2="${num(y2)}" `
+      + `stroke="${color}" stroke-width="1.6"${dash}/>`);
+    conns.push(`<polygon points="${num(x2)},${num(y2)} ${num(p1x)},${num(p1y)} ${num(p2x)},${num(p2y)}" `
+      + `fill="${color}"/>`);
+  }
+  function polyline(pts, color) {
+    for (let i = 0; i < pts.length; i++) track(pts[i][0], pts[i][1]);
+    const d = pts.map((p, i) => (i ? "L" : "M") + num(p[0]) + " " + num(p[1])).join(" ");
+    conns.push(`<path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" stroke-dasharray="5 4"/>`);
+  }
+
+  function rectNode(cx, cy, w, h, fill, label, weight) {
+    track(cx - w / 2, cy - h / 2); track(cx + w / 2, cy + h / 2);
+    shapes.push(`<rect x="${num(cx - w / 2)}" y="${num(cy - h / 2)}" width="${num(w)}" height="${num(h)}" `
+      + `rx="11" ry="11" fill="${fill}" stroke="${fill}"/>`);
+    shapes.push(textBlock(cx, cy, label, Math.floor((w - 20) / 6.6), P.nodeText, 12.5, weight || 600));
+  }
+  function diamondNode(cx, cy, label) {
+    track(cx - dW / 2, cy - dH / 2); track(cx + dW / 2, cy + dH / 2);
+    const pts = `${num(cx)},${num(cy - dH / 2)} ${num(cx + dW / 2)},${num(cy)} `
+      + `${num(cx)},${num(cy + dH / 2)} ${num(cx - dW / 2)},${num(cy)}`;
+    shapes.push(`<polygon points="${pts}" fill="${P.decision}" stroke="${P.decision}"/>`);
+    shapes.push(textBlock(cx, cy, label, 17, P.nodeText, 11.5, 600));
+  }
+  function circleNode(cx, cy, label) {
+    track(cx - R, cy - R); track(cx + R, cy + R);
+    shapes.push(`<circle cx="${num(cx)}" cy="${num(cy)}" r="${R}" fill="${P.state}" stroke="${P.state}"/>`);
+    shapes.push(textBlock(cx, cy, label, 11, P.nodeText, 11, 600));
+  }
+  function calloutBox(cx, cy, label, variant) {
+    const border = variant === "hook" ? P.error : P.accent;
+    const lines = wrap(label, 36);
+    const h = Math.max(calloutH, lines.length * lineH + 20);
+    track(cx - calloutW / 2, cy - h / 2); track(cx + calloutW / 2, cy + h / 2);
+    shapes.push(`<rect x="${num(cx - calloutW / 2)}" y="${num(cy - h / 2)}" width="${calloutW}" `
+      + `height="${num(h)}" rx="8" ry="8" fill="${P.calloutBg}" stroke="${border}" stroke-width="1.5"/>`);
+    shapes.push(textBlock(cx, cy, label, 36, P.text, 11, 500));
+    return h;
+  }
+  function calloutHeight(label) {
+    return Math.max(calloutH, wrap(label, 36).length * lineH + 20);
+  }
+
+  // 1. Spine node positions (fixed vertical rhythm; extra gap after a fan decision).
+  const pos = {};
+  let cy = TOP + 30;
+  model.spine.forEach((n, i) => {
+    if (i > 0) {
+      const prev = model.spine[i - 1];
+      const fanned = model.fan && model.fan.at === prev.id && model.fan.rejoinTo === n.id;
+      cy += fanned ? Math.round(ROW * 1.9) : ROW;
+      // extra clearance so a loop's ring-top node clears the row above's callouts
+      if (model.loop && model.loop.at === n.id) cy += 56;
+    }
+    pos[n.id] = { cx: SPINE_X, cy, kind: n.kind };
+  });
+
+  // 2. Spine edges (solid), skipping the segment a fan replaces.
+  for (let i = 1; i < model.spine.length; i++) {
+    const prev = model.spine[i - 1], cur = model.spine[i];
+    if (model.fan && model.fan.at === prev.id && model.fan.rejoinTo === cur.id) continue;
+    const y1 = pos[prev.id].cy + halfH(prev.kind);
+    const y2 = pos[cur.id].cy - halfH(cur.kind);
+    arrow(SPINE_X, y1, SPINE_X, y2, false, P.muted);
+    if (cur.edgeLabel) shapes.push(annot(SPINE_X + 12, (y1 + y2) / 2, cur.edgeLabel, "start"));
+  }
+
+  // 3. Spine callouts (grouped per attach+side so multiples stack).
+  const groups = {};
+  (model.callouts || []).forEach((c) => {
+    (groups[c.attach + "|" + c.side] ||= []).push(c);
+  });
+  Object.values(groups).forEach((list) => {
+    const anchor = pos[list[0].attach];
+    const heights = list.map((c) => calloutHeight(c.label));
+    const total = heights.reduce((a, b) => a + b, 0) + 12 * (list.length - 1);
+    let top = anchor.cy - total / 2;
+    list.forEach((c, i) => {
+      const ccy = top + heights[i] / 2;
+      top += heights[i] + 12;
+      const right = c.side !== "left";
+      const ccx = right ? SPINE_X + 150 + calloutW / 2 : SPINE_X - 150 - calloutW / 2;
+      const nodeEdge = right ? SPINE_X + halfW(anchor.kind) : SPINE_X - halfW(anchor.kind);
+      const boxEdge = right ? ccx - calloutW / 2 : ccx + calloutW / 2;
+      arrow(nodeEdge, anchor.cy, boxEdge, ccy, true, P.muted);
+      calloutBox(ccx, ccy, c.label, c.variant);
+    });
+  });
+
+  // 4. Decision detours (dashed side branch to a terminal node).
+  (model.detours || []).forEach((d) => {
+    const anchor = pos[d.at];
+    const dcx = SPINE_X + 190, dcy = anchor.cy;
+    pos[d.node.id] = { cx: dcx, cy: dcy, kind: d.node.kind };
+    arrow(SPINE_X + halfW(anchor.kind), anchor.cy, dcx - halfW(d.node.kind), dcy, true, P.muted);
+    shapes.push(annot((SPINE_X + halfW(anchor.kind) + dcx - halfW(d.node.kind)) / 2, dcy - 10, d.branchLabel));
+    if (d.node.kind === "state") circleNode(dcx, dcy, d.node.label);
+    else if (d.node.kind === "decision") diamondNode(dcx, dcy, d.node.label);
+    else rectNode(dcx, dcy, rectW, rectH, d.node.kind === "start" ? P.start : P.process, d.node.label);
+  });
+
+  // 5. Fan (parallel branches between a decision and its rejoin node).
+  if (model.fan) {
+    const f = model.fan;
+    const dec = pos[f.at], rej = pos[f.rejoinTo];
+    const midY = (dec.cy + halfH("decision") + rej.cy - halfH(rej.kind)) / 2;
+    const bW = 150, bH = 40, gap = 175, n = f.branches.length;
+    f.branches.forEach((b, i) => {
+      const bx = SPINE_X + (i - (n - 1) / 2) * gap;
+      pos[b.node.id] = { cx: bx, cy: midY, kind: "process" };
+      arrow(SPINE_X, dec.cy + halfH("decision"), bx, midY - bH / 2, true, P.muted);
+      arrow(bx, midY + bH / 2, SPINE_X, rej.cy - halfH(rej.kind), true, P.muted);
+      shapes.push(annot(bx, midY - bH / 2 - 12, b.label));
+      rectNode(bx, midY, bW, bH, P.process, b.node.label);
+    });
+  }
+
+  // 6. Loop (dashed ring beside a state node with a process node + callouts).
+  if (model.loop) {
+    const L = model.loop;
+    const anchor = pos[L.at];
+    const ringR = 64, rcx = SPINE_X + 200, rcy = anchor.cy;
+    conns.push(`<circle cx="${num(rcx)}" cy="${num(rcy)}" r="${ringR}" fill="none" `
+      + `stroke="${P.muted}" stroke-width="1.6" stroke-dasharray="5 4"/>`);
+    track(rcx - ringR, rcy - ringR); track(rcx + ringR, rcy + ringR);
+    // entry from the state node into the ring
+    arrow(SPINE_X + R, anchor.cy, rcx - ringR, rcy, true, P.muted);
+    // ring annotation + process node riding the top of the ring
+    shapes.push(annot(rcx, rcy - ringR - 34, L.ringLabel));
+    pos[L.node.id] = { cx: rcx, cy: rcy - ringR, kind: "process" };
+    rectNode(rcx, rcy - ringR, 190, 40, P.process, L.node.label);
+    // ring callouts stacked to the right of the ring
+    const heights = (L.callouts || []).map((c) => calloutHeight(c.label));
+    const total = heights.reduce((a, b) => a + b, 0) + 12 * (heights.length - 1);
+    let top = rcy - total / 2;
+    (L.callouts || []).forEach((c, i) => {
+      const ccy = top + heights[i] / 2;
+      top += heights[i] + 12;
+      const ccx = rcx + ringR + 24 + calloutW / 2;
+      arrow(rcx + ringR, rcy, ccx - calloutW / 2, ccy, true, P.muted);
+      calloutBox(ccx, ccy, c.label, c.variant);
+    });
+    // return edge back to an earlier state node, down-left-up channel
+    const ret = pos[L.returnTo];
+    const chX = SPINE_X - 150, lowY = rcy + ringR + 34;
+    polyline([[rcx, rcy + ringR], [rcx, lowY], [chX, lowY], [chX, ret.cy]], P.muted);
+    arrow(chX, ret.cy, SPINE_X - halfW(ret.kind), ret.cy, true, P.muted);
+    shapes.push(annot(chX + 8, (lowY + ret.cy) / 2, L.returnLabel, "start"));
+  }
+
+  // 7. Spine shapes drawn last so connectors tuck underneath.
+  model.spine.forEach((n) => {
+    const p = pos[n.id];
+    if (n.kind === "decision") diamondNode(p.cx, p.cy, n.label);
+    else if (n.kind === "state") circleNode(p.cx, p.cy, n.label);
+    else rectNode(p.cx, p.cy, rectW, rectH, n.kind === "start" ? P.start : P.process, n.label);
+  });
+
+  const pad = 14;
+  const vbX = bounds.minX - pad, vbY = bounds.minY - pad;
+  const vbW = bounds.maxX - bounds.minX + pad * 2;
+  const vbH = bounds.maxY - bounds.minY + pad * 2;
+  return `<svg viewBox="${num(vbX)} ${num(vbY)} ${num(vbW)} ${num(vbH)}" `
+    + `width="${Math.round(vbW)}" preserveAspectRatio="xMidYMid meet" role="img" `
+    + `xmlns="http://www.w3.org/2000/svg">${conns.join("")}${shapes.join("")}</svg>`;
+}
+
+/* Palette for the simple SVG, pulled from the live CSS custom properties so
+ * it tracks the same light/dark values as the rest of the page. */
+function simplePalette() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = (n) => cs.getPropertyValue(n).trim();
+  return {
+    start: v("--accent"), process: v("--result"), decision: v("--fork"),
+    state: v("--error"), accent: v("--accent"), error: v("--error"),
+    muted: v("--muted"), text: v("--text"),
+    calloutBg: v("--panel"), nodeText: "#ffffff",
+  };
+}
+
+/* The full detailed view (legend + mermaid graph(s) + step lists). Extracted
+ * so it can be rendered lazily the first time its <details> is opened — a
+ * collapsed container has zero width, which would break mermaid's useMaxWidth. */
+function renderDetailed(container, section) {
+  const legend = el("div", "legend");
+  [["l-step", "step"], ["l-gate", "permission / visibility gate"], ["l-fork", "branch point"],
+   ["l-result", "outcome"], ["l-phase", "phase group"], ["l-error", "error path"]]
+    .forEach(([c, t]) => legend.appendChild(el("span", c, t)));
+  container.appendChild(legend);
+
+  if (section.flow) {
+    renderGraph(container, section.flow, 1, section.id);
+    return;
+  }
+
+  const sharedWrap = el("div", "shared-wrap");
+  sharedWrap.appendChild(el("div", "shared-label", "Shared — every request"));
+  renderGraph(sharedWrap, section.shared, 1, section.id + "_shared");
+  container.appendChild(sharedWrap);
+
+  const tabs = el("div", "tabs");
+  const bar = el("div", "tabbar");
+  const pane = el("div");
+  tabs.appendChild(el("div", "fork-note", "▼ diverges by request shape ▼"));
+  tabs.appendChild(bar);
+  tabs.appendChild(pane);
+
+  // Token guards against out-of-order async renders on rapid tab clicks.
+  let selectToken = 0;
+  function select(variantId) {
+    const myToken = ++selectToken;
+    bar.querySelectorAll("button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.id === variantId));
+    const v = section.variants.find((x) => x.id === variantId);
+    const staging = el("div");
+    staging.appendChild(el("div", "variant-label", "Variant — " + v.label));
+    renderGraph(staging, v.steps, section.shared.length + 1, section.id + "_" + v.id)
+      .then(() => {
+        if (myToken !== selectToken) return; // a newer click won
+        pane.innerHTML = "";
+        pane.appendChild(staging);
+      });
+  }
+
+  section.variants.forEach((v) => {
+    const b = el("button", null, v.label);
+    b.dataset.id = v.id;
+    b.addEventListener("click", () => select(v.id));
+    bar.appendChild(b);
+  });
+  select(section.variants[0].id);
+  container.appendChild(tabs);
+}
+
+function render() {
+  const app = document.getElementById("app");
+  const toc = document.getElementById("toc");
+
+  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: "loose",
+    theme: dark ? "dark" : "default",
+    flowchart: { htmlLabels: true, useMaxWidth: true },
+  });
+
+  LIFECYCLE_DATA.sections.forEach((section) => {
+    const a = el("a", null, section.title);
+    a.href = "#" + section.id;
+    toc.appendChild(a);
+
+    const sec = el("section", "lifecycle");
+    sec.id = section.id;
+    sec.appendChild(el("h2", null, section.title));
+    if (section.subtitle) sec.appendChild(el("p", "subtitle", section.subtitle));
+
+    // Lead with the simple Vue-style diagram.
+    if (section.simple) {
+      const simpleWrap = el("div", "simple-diagram");
+      simpleWrap.innerHTML = buildSimpleSVG(section.simple, simplePalette());
+      sec.appendChild(simpleWrap);
+      if (section.simple.note) sec.appendChild(el("p", "simple-note", section.simple.note));
+    }
+
+    // Demote the detailed mermaid view into a collapsed, lazily-rendered panel.
+    const details = document.createElement("details");
+    details.className = "detailed-view";
+    const summary = document.createElement("summary");
+    summary.textContent = "Detailed view";
+    details.appendChild(summary);
+    const body = el("div", "detailed-body");
+    details.appendChild(body);
+    let built = false;
+    details.addEventListener("toggle", () => {
+      if (details.open && !built) {
+        built = true;
+        renderDetailed(body, section);
+      }
+    });
+    sec.appendChild(details);
+
+    app.appendChild(sec);
+  });
+}
+
+render();
+</script>
+</body>
+</html>

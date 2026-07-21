@@ -1,6 +1,6 @@
 """Write-transaction plumbing: the managed alias, alias pinning, row locks, and conflicts.
 
-The 0.0.14 mutation-atomicity hardening seam: everything here exists so
+The 0.0.14 mutation write-hardening seam: everything here exists so
 the three write flavors (model / form / serializer) share ONE database
 discipline instead of three drifting copies:
 

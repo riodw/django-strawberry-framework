@@ -11,6 +11,9 @@ these tests pin the neutral mechanics directly. The deep behavioral coverage
 surface suites (``tests/test_list_field.py``, ``tests/test_connection.py``,
 ``tests/test_relay_node_field.py``, ``tests/filters/test_sets.py``).
 
+Visibility-boundary decision references below resolve to
+``docs/spec-064-visibility_boundary-0_0_14.md #"## Architectural decisions"``.
+
 ``coerce_field_value_or_none`` (the 0.0.13 DRY pass) is the sibling "raw
 literal -> Django field value, or nothing" primitive shared by the Relay id
 decode, the raw relation-pk decode, and the ``__in`` filter member decode; its
@@ -1017,7 +1020,7 @@ async def test_predicate_dropping_override_result_is_neutralized_async():
 
 # ---------------------------------------------------------------------------
 # Row-survival proof of the seal: an instance-shadowed refresh / query-level
-# clone attack cannot widen the served rows (docs/feedback.md P1, asserting
+# clone attack cannot widen the served rows (Decisions 1-2, asserting
 # WHICH ROWS SURVIVE rather than only the composed query text).
 # ---------------------------------------------------------------------------
 
@@ -1070,7 +1073,7 @@ async def test_instance_shadowed_all_hook_serves_only_visible_rows_async():
 
 
 def test_query_chain_shadow_hook_fails_closed_sync():
-    """A hook whose ``query.chain`` is instance-replaced FAILS CLOSED (docs/feedback.md P1-1).
+    """A hook whose ``query.chain`` is instance-replaced FAILS CLOSED (spec-064 Decision 2).
 
     ``sql.Query.clone`` shallow-copies the source ``Query.__dict__``, so an
     instance ``chain`` shadow would ride into the sealed query and dispatch on the
@@ -1090,7 +1093,7 @@ def test_query_chain_shadow_hook_fails_closed_sync():
 def test_query_shadow_defect_is_name_agnostic():
     """The no-shadow check rejects any shadowed ``sql.Query`` method, not just ``chain``.
 
-    Proves the fix is structural (``docs/feedback.md`` P1-1: "do not fix only the
+    Proves the fix is structural (spec-064 Decision 2: "do not fix only the
     literal ``chain`` name") -- a shadowed ``get_compiler`` fails closed identically.
     """
     source = Category.objects.filter(is_private=False)
@@ -1327,7 +1330,7 @@ def test_seal_copies_hints_into_a_fresh_dict():
 def test_identity_hook_result_is_resealed_dropping_injected_cache_sync():
     """A hook that mutates the received source's ``_result_cache`` and returns it is re-sealed.
 
-    Object identity is not immutability (``docs/feedback.md`` P1-2): the removed
+    Object identity is not immutability (spec-064 Decision 3): the removed
     identity fast path let a hook inject a synthetic unsaved row into the sealed
     source's ``_result_cache`` and return the SAME object, serving that row with
     zero SQL. The result is now ALWAYS re-sealed, so the returned queryset has
@@ -1349,14 +1352,14 @@ def test_identity_hook_result_is_resealed_dropping_injected_cache_sync():
 
 
 # ---------------------------------------------------------------------------
-# The hardened visibility boundary -- embedded AST-node trust (docs/feedback.md
-# P1-3): every node ``sql.Query.clone`` clones or the compiler later executes
+# The hardened visibility boundary -- embedded AST-node trust (Decision 2): every node
+# ``sql.Query.clone`` clones or the compiler later executes
 # must be a trusted Django implementation, else the seal fails closed.
 # ---------------------------------------------------------------------------
 
 
 def test_hostile_where_subclass_fails_closed():
-    """A ``WhereNode`` SUBCLASS whose ``clone`` widens the query fails closed (P1-3).
+    """A ``WhereNode`` SUBCLASS whose ``clone`` widens the query fails closed.
 
     ``sql.Query.clone`` dispatches ``self.where.clone()``; a consumer subclass
     could strip the predicate during sealing, so any non-exact ``WhereNode`` in
@@ -1383,7 +1386,7 @@ def test_non_django_where_leaf_fails_closed():
 
 
 def test_hostile_annotation_expression_fails_closed():
-    """A consumer annotation expression is not a trusted Django node - fail closed (P1-3).
+    """A consumer annotation expression is not a trusted Django node - fail closed.
 
     The recursive genuineness walk reaches annotation values through
     ``_expr_graph_defect``, so a top-level consumer annotation is rejected with the
@@ -1397,7 +1400,7 @@ def test_hostile_annotation_expression_fails_closed():
 
 
 def test_hostile_alias_join_fails_closed():
-    """A non-Django join object in the alias map fails closed (P1-3)."""
+    """A non-Django join object in the alias map fails closed."""
     source = Category.objects.filter(is_private=False)
     source.query.alias_map = {**source.query.alias_map, "bogus": object()}
     _, defect = _seal_or_defect(source, Category, None)
@@ -1405,7 +1408,7 @@ def test_hostile_alias_join_fails_closed():
 
 
 def test_non_dict_select_related_fails_closed():
-    """A ``select_related`` that is neither bool nor dict fails closed (P1-3)."""
+    """A ``select_related`` that is neither bool nor dict fails closed."""
     source = Category.objects.filter(is_private=False)
     source.query.select_related = object()
     _, defect = _seal_or_defect(source, Category, None)
@@ -1413,7 +1416,7 @@ def test_non_dict_select_related_fails_closed():
 
 
 def test_non_str_select_related_key_fails_closed():
-    """A ``select_related`` dict with a non-str key fails closed (P1-3)."""
+    """A ``select_related`` dict with a non-str key fails closed."""
     source = Category.objects.filter(is_private=False)
     source.query.select_related = {1: {}}
     _, defect = _seal_or_defect(source, Category, None)
@@ -1421,7 +1424,7 @@ def test_non_str_select_related_key_fails_closed():
 
 
 def test_nested_select_related_value_fails_closed():
-    """A nested ``select_related`` value that is not a dict tree fails closed (P1-3)."""
+    """A nested ``select_related`` value that is not a dict tree fails closed."""
     source = Category.objects.filter(is_private=False)
     source.query.select_related = {"category": object()}
     _, defect = _seal_or_defect(source, Category, None)
@@ -1429,7 +1432,7 @@ def test_nested_select_related_value_fails_closed():
 
 
 def test_clean_annotation_and_select_related_seal_fine():
-    """A plain Django annotation + ``select_related`` dict tree seals with no defect (P1-3).
+    """A plain Django annotation + ``select_related`` dict tree seals with no defect.
 
     The complement of the fail-closed AST tests: trusted Django nodes (a ``Count``
     annotation, a ``{str: {}}`` select_related tree) pass the graph validation.
@@ -1441,8 +1444,8 @@ def test_clean_annotation_and_select_related_seal_fine():
 
 
 # ---------------------------------------------------------------------------
-# The hardened visibility boundary -- a model-less select query (docs/feedback.md
-# P2-1) escapes as malformed SQL, so it must fail closed as a table defect.
+# The hardened visibility boundary -- under spec-064 Decision 5 a model-less select
+# query escapes as malformed SQL, so it must fail closed as a table defect.
 # ---------------------------------------------------------------------------
 
 
@@ -1455,7 +1458,7 @@ def test_query_model_none_fails_closed_as_table():
 
 
 def test_combined_branch_missing_model_fails_closed_as_table():
-    """A ``combined_queries`` branch with no model fails closed as a table defect (P2-1)."""
+    """A ``combined_queries`` branch with no model fails closed as a table defect."""
     source = Category.objects.filter(name="a").union(Category.objects.filter(name="b"))
     source.query.combined_queries[0].model = None
     _, defect = _seal_or_defect(source, Category, None)
@@ -1464,12 +1467,12 @@ def test_combined_branch_missing_model_fails_closed_as_table():
 
 # ---------------------------------------------------------------------------
 # The hardened visibility boundary -- Prefetch rebuild + child-alias threading
-# (docs/feedback.md P1-4).
+# (Decision 4).
 # ---------------------------------------------------------------------------
 
 
 def test_prefetch_non_str_lookup_fails_closed():
-    """A non-exact-``str`` prefetch lookup entry fails closed (P1-4a)."""
+    """A non-exact-``str`` prefetch lookup entry fails closed."""
 
     class _StrSub(str):
         pass
@@ -1479,7 +1482,7 @@ def test_prefetch_non_str_lookup_fails_closed():
 
 
 def test_prefetch_non_str_path_fails_closed():
-    """A ``Prefetch`` whose ``prefetch_through`` is not an exact str fails closed (P1-4a)."""
+    """A ``Prefetch`` whose ``prefetch_through`` is not an exact str fails closed."""
     from django.db.models import Prefetch
 
     pf = Prefetch("items")
@@ -1489,7 +1492,7 @@ def test_prefetch_non_str_path_fails_closed():
 
 
 def test_prefetch_non_str_to_attr_fails_closed():
-    """A ``Prefetch`` whose ``to_attr`` is not an exact str / None fails closed (P1-4a)."""
+    """A ``Prefetch`` whose ``to_attr`` is not an exact str / None fails closed."""
     from django.db.models import Prefetch
 
     pf = Prefetch("items")
@@ -1499,7 +1502,7 @@ def test_prefetch_non_str_to_attr_fails_closed():
 
 
 def test_prefetch_unrouted_child_inherits_outer_alias():
-    """An unrouted prefetch child inherits the OUTER effective alias (P1-4b)."""
+    """An unrouted prefetch child inherits the OUTER effective alias."""
     from django.db.models import Prefetch
 
     sealed, defect = _sealed_prefetch_related_lookups(
@@ -1512,7 +1515,7 @@ def test_prefetch_unrouted_child_inherits_outer_alias():
 
 
 def test_prefetch_cross_alias_child_fails_closed():
-    """A prefetch child pinned to a DIFFERENT alias than the outer fails closed (P1-4b)."""
+    """A prefetch child pinned to a DIFFERENT alias than the outer fails closed."""
     from django.db.models import Prefetch
 
     _, defect = _sealed_prefetch_related_lookups(
@@ -1648,7 +1651,7 @@ async def test_post_process_async_rejects_residual_awaitable():
 
 @pytest.mark.django_db(transaction=True)
 async def test_identity_hook_result_is_resealed_dropping_injected_cache_async():
-    """Sync/async parity: the async runner also re-seals an identity return (P1-2).
+    """Sync/async parity: the async runner also re-seals an identity return.
 
     An async hook injects a synthetic unsaved row into the received sealed
     source's ``_result_cache`` and returns the SAME object; the async runner
@@ -1675,7 +1678,7 @@ async def test_identity_hook_result_is_resealed_dropping_injected_cache_async():
 
 
 # ---------------------------------------------------------------------------
-# Second adversarial round (docs/feedback.md Findings 1-6): sql.Query.clone and
+# Decision 2: sql.Query.clone and
 # add_q are NOT no-dispatch boundaries -- their bodies dispatch bound methods on
 # the graph's sub-objects. The seal now proves EVERY compiler-reachable node is a
 # genuine, unshadowed Django implementation (by object identity, not __module__)
@@ -1953,7 +1956,7 @@ def test_unrouted_parent_rejects_cross_routed_prefetch_child():
 
 
 # ---------------------------------------------------------------------------
-# Third adversarial round (docs/feedback.md P1/P2 round 3): the validation-vs-
+# Decisions 1-2: the validation-vs-
 # execution divergences that survived the prove-then-clone walk -- a poisoned
 # ``base_table`` cache, a stateful ``combined_queries`` iterator, isinstance-based
 # inert typing, dynamic ``as_<vendor>`` compiler methods, un-walked ``Func`` metadata /
@@ -2200,6 +2203,52 @@ def test_extra_order_by_none_and_string_sequence_seal():
     str_source.query.extra_order_by = ("name",)
     sealed, defect = _seal_or_defect(str_source, Category, None)
     assert defect is None and sealed is not None
+
+
+def test_query_extra_select_executable_sql_fails_closed_before_clone():
+    """A tampered ``Query.extra`` SQL object cannot execute during sealing or compilation."""
+    fired = []
+
+    class _HostileSQL:
+        def __str__(self):  # pragma: no cover - must never run
+            fired.append("str")
+            return "1"
+
+    source = Category.objects.all()
+    source.query.extra = {"hostile": (_HostileSQL(), [])}
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "query extra['hostile'] SQL is a _HostileSQL")
+    assert fired == []
+
+
+def test_extra_where_executable_sql_fails_closed_before_clone():
+    """An ``ExtraWhere`` raw fragment is validated despite having no expression children."""
+    fired = []
+
+    class _HostileSQL:
+        def __str__(self):  # pragma: no cover - must never run
+            fired.append("str")
+            return "1"
+
+    source = Category.objects.extra(where=[_HostileSQL()])
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "where clause sqls carries a _HostileSQL")
+    assert fired == []
+
+
+def test_raw_sql_executable_parameter_fails_closed_before_clone():
+    """A ``RawSQL`` parameter cannot defer consumer dispatch to backend adaptation."""
+    from django.db.models.expressions import RawSQL
+
+    class _HostileParameter:
+        pass
+
+    source = Category.objects.annotate(hostile=RawSQL("%s", [_HostileParameter()]))
+    sealed, defect = _seal_or_defect(source, Category, None)
+    assert sealed is None
+    assert defect == ("untrusted", "annotation 'hostile' params carries a _HostileParameter")
 
 
 def _filtered_relation_join():

@@ -3,9 +3,9 @@
 Built for `0.0.14` (card `DONE-064-0.0.14`). This is a **documentation-only**
 slice over an already-landed implementation: commit `60998b17`
 ("feat(visibility): seal get_queryset hook results into framework-owned
-querysets") shipped the sealed [visibility boundary][glossary-visibility-boundary],
-and the adversarial review recorded in [`docs/feedback.md`][feedback] closed
-every P1/P2 correctness finding in its `## Resolution` (2026-07-20). Only the
+querysets") shipped the sealed [visibility boundary][glossary-visibility-boundary].
+Successive adversarial review rounds closed their P1/P2 correctness findings on
+2026-07-20; Decisions 1–6 below are the durable record of those conclusions. Only the
 policy artifacts — a governing set of numbered security decisions, this spec, a
 KANBAN card, and the [glossary][glossary] fold-in — were deferred to a shipping
 slice. This card discharges that deferral so the standing documentation matches
@@ -62,7 +62,7 @@ A single documentation slice; the code shipped in commit `60998b17`.
         `docs/GLOSSARY.md` regenerated (never hand-edited).
   - [ ] `KANBAN.md` / `KANBAN.html` regenerated from the kanban DB with this
         card in Done.
-  - [ ] The `[P2]` policy residual in `docs/feedback.md` recorded as closed.
+  - [ ] The prior `[P2]` policy-artifact residual recorded as closed here.
 
 ## Problem statement
 
@@ -102,7 +102,7 @@ consumer object at all.
   sealed boundary changed.
 - Author the five glossary terms naming the contract's moving parts, and relink
   the four existing terms the contract composes with.
-- Close the deferred `[P2]` policy residual in `docs/feedback.md`.
+- Close the deferred `[P2]` policy-artifact residual in this durable spec.
 
 ## Non-goals
 
@@ -125,8 +125,8 @@ borrowing posture to pin. The contract is derived entirely from Django's own
 
 ## Architectural decisions
 
-The six decisions below are the governing security decisions for the boundary.
-Each is pinned to the enforcing symbols in
+The first six decisions below are the governing security decisions for the
+boundary; Decision 7 records release bookkeeping. Each is pinned to the enforcing symbols in
 [`django_strawberry_framework/utils/querysets.py`][querysets] and the tests that
 hold it.
 
@@ -184,7 +184,8 @@ defect][glossary-callable-shadow-defect]); (c) the `where` / `having` trees and
 their leaf operands, `annotations` (incl. nested `Func` / `Case` operands and
 inner `Subquery` graphs), the `order_by` / `group_by` / `distinct_fields` /
 `select` / `values_select` sequences, the `extra_order_by` / `extra_tables`
-raw-SQL slots, the `alias_map` joins (and any join's `filtered_relation` resolved
+raw-SQL slots, `Query.extra` select payloads, `ExtraWhere` fragments, `RawSQL`
+parameters, the `alias_map` joins (and any join's `filtered_relation` resolved
 condition), and `select_related` are each walked once under a single recursive
 id-memoized traversal; inert parameter leaves terminate by EXACT type (a `str` /
 `int` / `datetime` subclass carrying `resolve_expression` is NOT inert).
@@ -325,9 +326,9 @@ and `model = None` escaped the gate and compiled to malformed `SELECT  FROM`.
 [`::_bake_deferred_filter_or_defect`][querysets] and
 [`::_deferred_value_defect`][querysets] (deferred-filter safety); the
 `allow_sliced` threading in
-[`django_strawberry_framework/optimizer/walker.py #"_build_child_queryset"`][walker]
+[`django_strawberry_framework/optimizer/walker.py::_build_child_queryset`][walker]
 and the gate
-[`django_strawberry_framework/optimizer/nested_fetch.py #"unwindowable_child_queryset_reason"`][nested-fetch].
+[`django_strawberry_framework/optimizer/nested_fetch.py::unwindowable_child_queryset_reason`][nested-fetch].
 
 **Tests that pin it.** [`tests/utils/test_querysets.py`][queryset-tests]
 shape-defect cases (model-`None`, sliced, values projection, custom iterable,
@@ -420,7 +421,7 @@ This card's Slice 1 doc set (the only surface it touches):
   five new terms authored, the four existing terms relinked.
 - `KANBAN.md` / `KANBAN.html` via the kanban DB + re-render: this card in Done
   with its glossary links.
-- `docs/feedback.md` `[P2]` policy residual recorded as closed.
+- The prior `[P2]` policy-artifact residual recorded as closed in this spec.
 - This spec and its companion `docs/spec-064-visibility_boundary-0_0_14-terms.csv`.
 
 `README.md`, `docs/README.md`, `docs/TREE.md`, `GOAL.md`, `TODAY.md`, and
@@ -466,7 +467,7 @@ already shipped.
       `docs/GLOSSARY.md` regenerated.
 - [ ] `KANBAN.md` / `KANBAN.html` regenerated from the kanban DB with this card
       in Done.
-- [ ] The `[P2]` policy residual in `docs/feedback.md` recorded as closed.
+- [ ] The prior `[P2]` policy-artifact residual recorded as closed here.
 
 <!-- LINK DEFINITIONS -->
 
@@ -474,7 +475,6 @@ already shipped.
 
 <!-- docs/ -->
 
-[feedback]: feedback.md
 [glossary]: GLOSSARY.md
 [glossary-sealed-execution-queryset]: GLOSSARY.md#sealed-execution-queryset
 [glossary-visibility-boundary]: GLOSSARY.md#visibility-boundary

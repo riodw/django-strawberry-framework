@@ -31,7 +31,9 @@ surface.
 The boundary implements a SEALED-EXECUTION-QUERYSET contract
 (``_seal_or_defect``). An earlier design validated a finite inventory of method
 overrides on the consumer ``QuerySet`` *class* and then returned the consumer
-object; an adversarial review (``docs/feedback.md``) disproved that with
+object; the adversarial probes recorded by
+``docs/spec-064-visibility_boundary-0_0_14.md #"## Architectural decisions"``
+disproved that with
 zero-SQL probes -- an instance-shadowed ``.all()``, a replaced instance-level
 ``Query.chain``, and subclass ``.filter()`` / ``_values`` / ``.first()`` /
 ``.__aiter__()`` overrides each erased the visibility predicate or returned
@@ -79,6 +81,7 @@ from asgiref.sync import sync_to_async
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Prefetch, sql
+from django.db.models.expressions import RawSQL
 from django.db.models.query import (
     PROHIBITED_FILTER_KWARGS,
     FlatValuesListIterable,
@@ -87,7 +90,7 @@ from django.db.models.query import (
     ValuesIterable,
     ValuesListIterable,
 )
-from django.db.models.sql.where import WhereNode
+from django.db.models.sql.where import ExtraWhere, WhereNode
 
 from ..exceptions import ConfigurationError
 from .write_transaction import base_locked_queryset, current_write_pipeline, pin_write_queryset
@@ -344,7 +347,7 @@ def _base_table_defect(query: Any, concrete: type[models.Model]) -> str | None:
     poisoned in ``Query.__dict__`` to name a DIFFERENT alias than the one Django will
     use, and ``Query.clone`` deliberately DELETES that cache so the clone recomputes the
     first alias -- validation reading the poisoned cache would inspect one table while
-    the cloned query compiles against another (``docs/feedback.md`` P1 ``base_table``).
+    the cloned query compiles against another (spec-064 Decision 2).
     Iterating ``alias_map`` reproduces exactly what the cache-free clone does. The
     caller runs ``_query_ast_defect`` (which proves every ``alias_map`` join genuine and
     unshadowed) BEFORE this, so the ``.table_name`` read below dispatches no consumer
@@ -370,7 +373,7 @@ def _type_is_genuinely_django(node_type: type) -> bool:
     nodes -- must be a trusted Django implementation, because ``sql.Query.clone`` and
     the compiler dispatch that node's own ``clone`` / ``as_sql`` /
     ``resolve_expression`` while the seal is still deciding whether the graph is
-    trusted (``docs/feedback.md`` P1-3). An earlier check trusted
+    trusted (spec-064 Decision 2). An earlier check trusted
     ``type(node).__module__.startswith("django.")`` -- but ``__module__`` is a plain
     writable string, so a consumer class declaring ``__module__ = "django.evil"``
     spoofed it (an adversarial review reproduced this). Provenance is therefore
@@ -385,7 +388,7 @@ def _type_is_genuinely_django(node_type: type) -> bool:
     ``__module__`` and ``__qualname__`` are read through ``type.__getattribute__`` so a
     consumer METACLASS that overrides ``__getattribute__`` / ``__getattr__`` cannot run
     code (or return a lie) during the very read that is meant to reject the type
-    (``docs/feedback.md`` P2 metaclass): ``type.__getattribute__`` resolves both names
+    (spec-064 Decision 2): ``type.__getattribute__`` resolves both names
     from the class's own namespace without dispatching a metaclass hook.
     """
     try:
@@ -411,8 +414,8 @@ def _type_is_genuinely_django(node_type: type) -> bool:
 # Membership is tested by EXACT type, never ``isinstance``: a ``str`` / ``int`` /
 # ``datetime`` SUBCLASS can define ``resolve_expression`` (or an ``as_sql``) and would
 # then be dispatched by ``add_q`` / the compiler, so a subclass is NOT inert and must
-# prove genuine-Django provenance like any other object (``docs/feedback.md`` P1
-# inert-subclass). ``datetime.datetime`` is listed explicitly because exact-type
+# prove genuine-Django provenance like any other object (spec-064 Decision 2).
+# ``datetime.datetime`` is listed explicitly because exact-type
 # membership no longer inherits it from ``datetime.date``.
 _INERT_VALUE_TYPES: frozenset[type] = frozenset(
     {
@@ -438,7 +441,7 @@ def _is_inert_value(value: Any) -> bool:
 
     ``None`` is inert. Membership is by EXACT type, so a ``str`` / ``int`` /
     ``datetime`` SUBCLASS carrying a ``resolve_expression`` / ``as_sql`` is NOT treated
-    as inert (``docs/feedback.md`` P1 inert-subclass) -- it falls through to the
+    as inert (spec-064 Decision 2) -- it falls through to the
     genuine-Django provenance walk and fails closed. Anything else is a container
     (walked member-wise) or an object that must prove provenance before the seal lets
     the compiler dispatch it.
@@ -451,7 +454,7 @@ def _shadow_defect(node: Any, label: str) -> tuple[str, str] | None:
 
     Python methods are non-data descriptors, so an instance-``__dict__`` entry named
     after a class method wins over the genuine method even when ``type(node)`` is
-    exactly the expected class (``docs/feedback.md`` P1-1). ``sql.Query.clone`` and
+    exactly the expected class (spec-064 Decision 2). ``sql.Query.clone`` and
     the compiler dispatch bound methods -- ``where.clone()``, an expression's
     ``as_sql`` -- so ANY ``__dict__`` key naming a callable attribute of the node's
     (already-proven-genuine) type fails closed. A non-string ``__dict__`` key is
@@ -471,7 +474,7 @@ def _shadow_defect(node: Any, label: str) -> tuple[str, str] | None:
     node.as_sql)`` (``as_sqlite`` / ``as_postgresql`` / ...), so a shadow named for a
     vendor -- even one a mixin defines on this class (``SQLiteNumericMixin.as_sqlite``)
     -- gets dispatched at compile time through that dynamic lookup rather than the
-    fixed ``as_sql`` slot (``docs/feedback.md`` P1 vendor ``as_``). The vendor-prefix
+    fixed ``as_sql`` slot (spec-064 Decision 2). The vendor-prefix
     check therefore runs BEFORE the callable-class-attribute check so a mixin-provided
     ``as_<vendor>`` still takes the "compiler method" wording. Genuine Django nodes
     never carry an ``as_*`` INSTANCE attribute (their emitters are class methods), so
@@ -496,7 +499,7 @@ def _shadow_defect(node: Any, label: str) -> tuple[str, str] | None:
 # ...}``; ``CombinedExpression`` interpolates ``self.connector``; ``RawSQL`` emits
 # ``self.sql`` verbatim. An EXACT genuine node whose instance ``__dict__`` overrides one
 # of these with a non-``str`` object would run that object's ``join`` / ``__str__`` at
-# compile time (``docs/feedback.md`` P1 Func metadata), so each override present on the
+# compile time (spec-064 Decision 2), so each override present on the
 # instance must be exactly ``str``. Genuine Django only ever stores strings here.
 _SQL_TEMPLATE_ATTRS: tuple[str, ...] = (
     "template",
@@ -513,8 +516,8 @@ def _node_metadata_defect(node: Any, label: str) -> tuple[str, str] | None:
 
     ``get_source_expressions`` enumerates the operand sub-expressions the compiler
     recurses, but ``Func.as_sql`` (and its cousins) ALSO interpolate formatting metadata
-    the old walk never validated (``docs/feedback.md`` P1 -- the exact ``Func`` schema
-    gap): each ``_SQL_TEMPLATE_ATTRS`` name present on the instance ``__dict__`` must be
+    the old walk never validated (spec-064 Decision 2): each ``_SQL_TEMPLATE_ATTRS``
+    name present on the instance ``__dict__`` must be
     an exact ``str``, because it is formatted straight into the SQL string (``template %
     data``) or used as a ``.join`` separator, so a non-``str`` override would run that
     object's ``__str__`` / ``join`` at compile time.
@@ -536,13 +539,45 @@ def _node_metadata_defect(node: Any, label: str) -> tuple[str, str] | None:
     return None
 
 
+def _raw_sql_params_defect(params: Any, label: str) -> tuple[str, str] | None:
+    """Return a defect unless raw-SQL parameters are an exact inert sequence.
+
+    Django passes ``RawSQL.params`` and ``ExtraWhere.params`` straight to the database
+    adapter. A container subclass can dispatch while iterated, and an arbitrary parameter
+    object can dispatch from backend adaptation. Raw-SQL state therefore admits only the
+    exact builtin sequence shapes Django creates and the same exact inert leaf types the
+    expression-graph proof accepts.
+    """
+    if type(params) not in (list, tuple):
+        return ("untrusted", f"{label} params is a {type(params).__name__}")
+    for param in params:
+        if not _is_inert_value(param):
+            return ("untrusted", f"{label} params carries a {type(param).__name__}")
+    return None
+
+
+def _raw_sql_node_defect(node: Any, label: str) -> tuple[str, str] | None:
+    """Validate compiler-dispatched raw-SQL payloads outside expression children."""
+    if type(node) is RawSQL:
+        return _raw_sql_params_defect(node.params, label)
+    if type(node) is ExtraWhere:
+        sqls = node.sqls
+        if type(sqls) not in (list, tuple):
+            return ("untrusted", f"{label} sqls is a {type(sqls).__name__}")
+        for statement in sqls:
+            if type(statement) is not str:
+                return ("untrusted", f"{label} sqls carries a {type(statement).__name__}")
+        return _raw_sql_params_defect(node.params, label)
+    return None
+
+
 def _expr_graph_defect(node: Any, seen: set[int], label: str) -> tuple[str, str] | None:
     """Return the first non-genuine / shadowed node in an expression graph, or ``None``.
 
     The single recursive, identity-memoized traversal of every compiler-reachable
     node hanging off one expression slot (a ``where`` leaf, an annotation value, an
     ``order_by`` element). It replaces the old top-level-only inventory
-    (``docs/feedback.md`` Finding H / P1-3): each node must be an inert value, a plain
+    (spec-064 Decision 2): each node must be an inert value, a plain
     container walked member-wise, an EXACT ``WhereNode`` subtree, or an EXACT genuine
     Django expression that is unshadowed AND whose own operands
     (``get_source_expressions``) and any inner ``Subquery`` recurse under the same
@@ -604,6 +639,9 @@ def _expr_graph_defect(node: Any, seen: set[int], label: str) -> tuple[str, str]
     metadata_defect = _node_metadata_defect(node, label)
     if metadata_defect is not None:
         return metadata_defect
+    raw_sql_defect = _raw_sql_node_defect(node, label)
+    if raw_sql_defect is not None:
+        return raw_sql_defect
     if getattr(node_type, "get_source_expressions", None) is not None:
         for child in node.get_source_expressions():
             defect = _expr_graph_defect(child, seen, label)
@@ -628,7 +666,7 @@ def _expr_sequence_defect(holder: Any, seen: set[int], label: str) -> tuple[str,
     the compiler dispatches ``as_sql`` on. ``None`` and a bare ``bool`` (``group_by``
     is ``True`` / ``False`` for the default cases) carry no node. Every non-string
     element recurses through ``_expr_graph_defect`` so a consumer ``order_by``
-    expression (never walked before -- ``docs/feedback.md`` Finding 3) fails closed.
+    expression (never walked before spec-064 Decision 2) fails closed.
     """
     if holder is None or type(holder) is bool:
         return None
@@ -649,7 +687,7 @@ def _raw_sql_sequence_defect(holder: Any, label: str) -> tuple[str, str] | None:
     The ``.extra()`` raw-SQL slots the compiler emits VERBATIM (never compiled through an
     expression's ``as_sql``): ``extra_order_by`` fragments become ``ORDER BY`` text and
     ``extra_tables`` become ``FROM`` aliases. The old walk never touched them
-    (``docs/feedback.md`` P1 ``extra_order_by``), so a non-``str`` element -- an object
+    (spec-064 Decision 2), so a non-``str`` element -- an object
     whose ``__str__`` runs at SQL-assembly time -- or a sequence SUBCLASS with a stateful
     ``__iter__`` escaped. Django only ever stores an exact ``tuple`` / ``list`` of exact
     ``str`` here; anything else fails closed.
@@ -675,8 +713,8 @@ def _join_defect(join: Any, alias: str, seen: set[int]) -> tuple[str, str] | Non
     A ``Join`` produced by ``.filter()`` over a ``FilteredRelation`` (Django's
     ``FilteredRelation`` / ``FILTERED_RELATION``) carries ``join.filtered_relation``,
     whose ``resolved_condition`` (a ``WhereNode``) the compiler dispatches from
-    ``Join.as_sql`` -> ``FilteredRelation.as_sql`` (``docs/feedback.md`` P1
-    ``filtered_relation``). That condition is NOT reachable from ``alias_map`` alone, so
+    ``Join.as_sql`` -> ``FilteredRelation.as_sql`` (spec-064 Decision 2). That condition
+    is NOT reachable from ``alias_map`` alone, so
     when present the filtered relation must itself be genuine + unshadowed and its
     resolved condition must pass the ``where``-tree walk; otherwise a consumer
     expression buried there would strip / rewrite the visibility predicate at compile
@@ -710,7 +748,7 @@ def _where_tree_defect(node: Any, seen: set[int]) -> tuple[str, str] | None:
     ``sql.Query.clone`` calls ``self.where.clone()``, which dispatches
     ``child.clone()`` on every child, so a consumer ``WhereNode`` subclass -- OR an
     EXACT ``WhereNode`` whose instance ``__dict__`` shadows ``clone`` -- would run
-    during sealing and strip the visibility predicate (``docs/feedback.md`` P1-3, and
+    during sealing and strip the visibility predicate (spec-064 Decision 2, and
     the exact-``WhereNode`` shadow vector an adversarial review reproduced: the
     shadowed ``clone`` fired mid-seal and the sealed SQL lost its ``WHERE``). Every
     internal node must be EXACTLY ``WhereNode`` and unshadowed; every leaf and every
@@ -730,7 +768,7 @@ def _where_tree_defect(node: Any, seen: set[int]) -> tuple[str, str] | None:
     node_dict = object.__getattribute__(node, "__dict__")
     # ``WhereNode.as_sql`` interpolates ``self.connector`` (``AND`` / ``OR``) straight
     # into the emitted SQL, so an instance override with a non-``str`` connector would
-    # run its ``__str__`` at compile time (``docs/feedback.md`` P1 node metadata).
+    # run its ``__str__`` at compile time (spec-064 Decision 2).
     connector = node_dict.get("connector")
     if connector is not None and type(connector) is not str:
         return ("untrusted", f"where node connector is a {type(connector).__name__}")
@@ -751,7 +789,7 @@ def _select_related_defect(select_related: Any) -> tuple[str, str] | None:
     Django only ever stores a bool or a nested ``{str: {str: ...}}`` dict there, so
     any other object (or a non-string key / non-dict value) is a consumer-injected
     structure whose ``__deepcopy__`` would dispatch during sealing; it fails closed
-    as ``untrusted`` (``docs/feedback.md`` P1-3).
+    as ``untrusted`` (spec-064 Decision 2).
     """
     if isinstance(select_related, bool):
         return None
@@ -807,7 +845,7 @@ def _query_container_defect(query: Any) -> tuple[str, str] | None:
     ``Query.clone`` rebuilds it as ``tuple(q.clone() for q in self.combined_queries)``,
     re-ITERATING it, so a ``tuple`` SUBCLASS with a stateful ``__iter__`` could yield
     ``concrete``'s branches during validation and a foreign model's branches during the
-    clone / compile (``docs/feedback.md`` P1 ``combined_queries``). An exact tuple's
+    clone / compile (spec-064 Decision 2). An exact tuple's
     iteration is deterministic, so validation and execution see identical branches.
     """
     for attr in _EXACT_DICT_QUERY_ATTRS:
@@ -823,9 +861,26 @@ def _query_container_defect(query: Any) -> tuple[str, str] | None:
         value = getattr(query, attr, None)
         if value is not None and type(value) not in (set, frozenset):
             return ("untrusted", f"query {attr} is a {type(value).__name__}")
-    cache = getattr(query, "_extra_select_cache", None)
-    if cache is not None and type(cache) is not dict:
-        return ("untrusted", f"query _extra_select_cache is a {type(cache).__name__}")
+    for attr in ("extra", "_extra_select_cache"):
+        extra = getattr(query, attr, None)
+        if extra is None:
+            continue
+        if type(extra) is not dict:
+            return ("untrusted", f"query {attr} is a {type(extra).__name__}")
+        for alias, payload in extra.items():
+            if type(alias) is not str:
+                return ("untrusted", f"query {attr} has a non-string key")
+            if type(payload) is not tuple or len(payload) != 2:
+                return ("untrusted", f"query {attr}[{alias!r}] has a malformed payload")
+            statement, params = payload
+            if type(statement) is not str:
+                return (
+                    "untrusted",
+                    f"query {attr}[{alias!r}] SQL is a {type(statement).__name__}",
+                )
+            params_defect = _raw_sql_params_defect(params, f"query {attr}[{alias!r}]")
+            if params_defect is not None:
+                return params_defect
     combined = getattr(query, "combined_queries", None)
     if combined is not None and type(combined) is not tuple:
         return ("untrusted", f"query combined_queries is a {type(combined).__name__}")
@@ -836,14 +891,14 @@ def _query_ast_defect(query: Any, seen: set[int]) -> tuple[str, str] | None:
     """Return the first untrusted embedded AST node in ``query``, or ``None``.
 
     The complete genuineness walk over EVERY compiler-reachable expression slot the
-    old inventory missed (``docs/feedback.md`` Finding H / Finding 3): the ``where``
+    old inventory missed (spec-064 Decision 2): the ``where``
     and ``having`` trees and their leaf operands, ``annotations`` values (recursively,
     including nested ``Func`` / ``Case`` operands and inner ``Subquery`` graphs),
     the ``order_by`` / ``group_by`` / ``distinct_fields`` / ``select`` /
     ``values_select`` sequences, the ``alias_map`` joins (and any join's
     ``filtered_relation`` condition), the ``extra_order_by`` / ``extra_tables`` raw-SQL
-    sequences (emitted verbatim by the compiler -- ``docs/feedback.md`` P1
-    ``extra_order_by``), and the ``select_related`` structure. ``query`` is only ever
+    sequences (emitted verbatim by the compiler; spec-064 Decision 2), and the
+    ``select_related`` structure. ``query`` is only ever
     passed here after the caller proved it is EXACTLY ``sql.Query`` and shadow-checked,
     so attribute access dispatches no consumer code and correctly returns class-default
     slots (``select_related`` is ``False``, ``order_by`` is ``()``) that never reach the
@@ -933,18 +988,18 @@ def _combined_query_table_defect(
       mutable); the SQL-bearing ``Query.model`` is validated directly. A ``None`` or
       non-model ``Query.model`` fails closed as a table defect -- a model-row select
       query with no model compiles to ``SELECT  FROM ...`` and escapes as malformed
-      SQL otherwise (``docs/feedback.md`` P2-1).
+      SQL otherwise (spec-064 Decision 5).
     - Any callable ``sql.Query`` method shadowed on the instance ``__dict__`` is
       rejected (``_shadow_defect``), and every container ``sql.Query.clone`` copies is
       required to be an exact builtin (``_query_container_defect``) -- both before the
       clone, because ``clone`` shallow-copies ``__dict__`` and calls ``.copy()`` /
-      ``deepcopy`` on those containers (``docs/feedback.md`` P1-1).
+      ``deepcopy`` on those containers (spec-064 Decision 2).
     - Every compiler-reachable embedded node (the ``where`` / ``having`` trees and
       their operands, ``annotations``, ``order_by`` / ``group_by`` / ``select`` /
       ``distinct`` sequences, ``alias_map`` joins, subquery graphs, ``select_related``)
       is proven a genuine, unshadowed Django implementation by ``_query_ast_defect``
       before the clone dispatches its ``clone`` / the compiler dispatches its
-      ``as_sql`` (``docs/feedback.md`` P1-3 / Finding H / Finding 3).
+      ``as_sql`` (spec-064 Decision 2).
     - The alias map, once initialized, is the authoritative base table and can
       disagree with a since-reassigned ``Query.model`` -- ``_base_table_defect``
       catches that.
@@ -1015,7 +1070,7 @@ def _rebuilt_prefetch_or_defect(
     Every ``Prefetch`` -- including the ``queryset=None`` case -- is rebuilt from
     scratch so a consumer ``Prefetch`` subclass cannot survive with an executable
     ``get_current_querysets`` override that substitutes an unsealed child at fetch
-    time (``docs/feedback.md`` P1-4a). Only the exact-``str`` /
+    time (spec-064 Decision 4). Only the exact-``str`` /
     ``None`` path state Django itself stores (``prefetch_through``,
     ``prefetch_to``, ``to_attr``) is copied forward; a subclass-injected extra
     attribute or a non-``str`` path fails closed as ``untrusted``.
@@ -1077,7 +1132,7 @@ def _sealed_prefetch_related_lookups(
     # ``_prefetch_related_lookups`` must be an exact ``tuple`` / ``list`` before it is
     # iterated: Django stores an exact tuple, and a consumer object with a custom
     # ``__bool__`` / ``__iter__`` would otherwise dispatch on the truthiness test / the
-    # loop below (``docs/feedback.md`` P2 retained-state).
+    # loop below (spec-064 Decision 1).
     if lookups is None:
         return (), None
     if type(lookups) not in (tuple, list):
@@ -1087,8 +1142,7 @@ def _sealed_prefetch_related_lookups(
         if not isinstance(entry, Prefetch):
             # A non-``Prefetch`` lookup must be EXACTLY ``str`` (Django builds the
             # related queryset itself); a ``str`` subclass or arbitrary lookup
-            # object retains method dispatch and fails closed (``docs/feedback.md``
-            # P1-4a).
+            # object retains method dispatch and fails closed (spec-064 Decision 4).
             if type(entry) is not str:
                 return None, (
                     "untrusted",
@@ -1118,7 +1172,7 @@ def _sealed_prefetch_related_lookups(
             # the parent is unrouted), an explicitly routed child ALSO fails closed
             # rather than being accepted onto a divergent database, so one GraphQL
             # resolution never schedules the parent and its related rows across two
-            # connections (``docs/feedback.md`` P1-4b). An unrouted child inherits the
+            # connections (spec-064 Decision 4). An unrouted child inherits the
             # outer alias.
             # Prefetch children may legally be sliced (Django >= 4.2 top-N per
             # parent, e.g. ``Prefetch("items", queryset=Item.objects.all()[:5])``):
@@ -1155,7 +1209,7 @@ def _deferred_value_defect(value: Any, seen: set[int], label: str) -> tuple[str,
     ``build_filter``, which dispatches ``resolve_expression(self=query)`` on any value
     that is an expression -- a consumer expression could there erase the visibility
     predicate and return a genuine-looking ``Value`` that the post-bake walk cannot
-    detect (``docs/feedback.md`` Finding 2). So every value is proven BEFORE the bake:
+    detect (spec-064 Decision 5). So every value is proven BEFORE the bake:
 
     - an inert query parameter, a nested ``Q`` (its children recurse), or a plain
       container is safe;
@@ -1168,7 +1222,7 @@ def _deferred_value_defect(value: Any, seen: set[int], label: str) -> tuple[str,
       dispatch via ``hasattr(value, "resolve_expression")`` -- which finds an
       INSTANCE-level attribute too -- so a model instance carrying ``resolve_expression``
       in its own ``__dict__`` would still be dispatched and fails closed
-      (``docs/feedback.md`` P1 inert-subclass, model-instance half);
+      (spec-064 Decision 2);
     - anything else fails closed.
     """
     if _is_inert_value(value):
@@ -1247,7 +1301,7 @@ def _bake_deferred_filter_or_defect(
     mutating the candidate: the predicate is added to ``rebuilt_query`` (a
     framework-owned clone) through the UNBOUND ``sql.Query.add_q``. Every argument is
     proven inert / genuine-Django FIRST (``_deferred_value_defect``) so ``add_q``'s
-    ``resolve_expression`` dispatch (``docs/feedback.md`` Finding 2) only ever runs
+    ``resolve_expression`` dispatch (spec-064 Decision 5) only ever runs
     genuine Django code. A malformed shape Django never produces (a non-3-tuple, a
     non-dict / non-tuple args, a prohibited ``_connector`` / ``_negated`` kwarg, a bad
     field) fails closed as a typed ``untrusted`` defect, never a raw exception.
@@ -1291,7 +1345,7 @@ def _queryset_state_defect(state: dict, cls_name: str) -> tuple[str, str] | None
     equality / ``str`` comparison, or a ``dict`` copy; a consumer object overriding
     ``__bool__`` / ``__eq__`` / ``__str__`` / ``__iter__`` there would dispatch mid-seal
     even though the field was read from ``__dict__`` without dispatch
-    (``docs/feedback.md`` P2 retained-state). So each is pinned to the EXACT shape Django
+    (spec-064 Decision 1). So each is pinned to the EXACT shape Django
     stores before it is used:
 
     - ``_db``: ``None`` or an exact ``str`` alias;
@@ -1452,7 +1506,7 @@ def _seal_or_defect(
     # Pin every retained ``QuerySet`` state field (``_db`` / ``_hints`` / ``_fields`` /
     # ``_sticky_filter`` / ``_for_write``) to its exact shape BEFORE any truthiness /
     # comparison / copy runs on it, so a consumer ``__bool__`` / ``__eq__`` / ``__iter__``
-    # cannot dispatch mid-seal (``docs/feedback.md`` P2 retained-state).
+    # cannot dispatch mid-seal (spec-064 Decision 1).
     state_defect = _queryset_state_defect(state, cls_name)
     if state_defect is not None:
         return None, state_defect
@@ -1512,7 +1566,7 @@ def _seal_or_defect(
             return None, post_bake_defect
     # Identity membership, never ``in`` on the frozenset: set membership would hash the
     # candidate iterable, dispatching a consumer metaclass ``__hash__`` / ``__eq__``
-    # (``docs/feedback.md`` P2 retained-state). ``is`` compares object identity only.
+    # (spec-064 Decision 5). ``is`` compares object identity only.
     if not any(iterable is cls for cls in _DJANGO_ITERABLE_CLASSES):
         detail = getattr(iterable, "__name__", type(iterable).__name__)
         return None, ("untrusted", f"{cls_name}._iterable_class is {detail}")
@@ -1891,7 +1945,7 @@ def apply_type_visibility_sync(
     # immutability. A hook that held the sealed source can mutate ``_result_cache``
     # / ``_query`` / ``model`` / ``_db`` and return the SAME object, so the result
     # is ALWAYS re-sealed -- the second seal is the point that drops any injected
-    # result cache and re-validates post-hook state (``docs/feedback.md`` P1-2).
+    # result cache and re-validates post-hook state (spec-064 Decision 3).
     return _normalized_visibility_result(
         type_cls,
         result,
@@ -2139,7 +2193,7 @@ async def apply_type_visibility_async(
     # No identity fast path -- same contract as the sync runner: object identity
     # is not immutability, so a hook can mutate the sealed source's
     # ``_result_cache`` / ``_query`` and return it. The result is ALWAYS re-sealed
-    # so the second seal drops any injected cache (``docs/feedback.md`` P1-2).
+    # so the second seal drops any injected cache (spec-064 Decision 3).
     return _normalized_visibility_result(type_cls, result, required_alias)
 
 

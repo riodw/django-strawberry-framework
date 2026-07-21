@@ -105,6 +105,7 @@ TRACKED_FILE_PATHS = (
     "examples/fakeshop/apps/glossary/tests/test_models.py",
     "examples/fakeshop/apps/kanban/tests/__init__.py",
     "examples/fakeshop/apps/kanban/tests/test_commands.py",
+    "examples/fakeshop/apps/kanban/tests/test_migrations.py",
     "examples/fakeshop/apps/kanban/tests/test_mutations.py",
     "examples/fakeshop/apps/kanban/tests/test_services.py",
     "examples/fakeshop/apps/kanban/tests/test_services_gaps.py",

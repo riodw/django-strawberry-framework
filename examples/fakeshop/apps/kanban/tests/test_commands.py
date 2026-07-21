@@ -1,4 +1,4 @@
-"""Kanban command tests for the merged import_card_files workflow (and aliases)."""
+"""Kanban command tests for the merged ``import_card_files`` workflow."""
 
 import json
 from io import StringIO

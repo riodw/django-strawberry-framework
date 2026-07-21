@@ -1,8 +1,8 @@
 """Phase 0 data repairs: reference dedupe, milestone drift, stale blocked_by.
 
 Three self-contained, additive data steps that clean pre-existing rows before
-later schema constraints can be added (see ``kanban-improvement-plan.md`` Phase
-0). No schema changes: this migration only rewrites offending row data via
+later schema constraints can be added. No schema changes: this migration only
+rewrites offending row data via
 per-row ``.update()`` (avoiding ``Card.save`` / ``CardReference.save`` signal
 and renumber side effects) and deletes duplicate reference rows.
 

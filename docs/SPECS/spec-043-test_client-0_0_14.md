@@ -1032,7 +1032,7 @@ Alternatives considered (and rejected):
 - **Fakeshop runtime surface.** No settings, URL, or app changes; Slice 2
   edits `test_query/` only.
 - **Migration-guide prose.** The two import-diff rows and the
-  `query()`-return-type delta are recorded for [`TODO-BETA-056-0.1.6`][kanban]
+  `query()`-return-type delta are recorded for [`TODO-BETA-060-0.1.7`][kanban]
   ([Out of scope](#out-of-scope-explicitly-tracked-elsewhere)).
 
 Justification: the card's DoD names exactly the in-scope set; the two
@@ -2138,7 +2138,7 @@ to the joint `0.0.14` cut
 - **Response-extensions debug middleware** — the sibling
   [`TODO-ALPHA-044-0.0.14`][kanban]; when its tests want HTTP ergonomics,
   the helper is available to them like any other suite.
-- **The migration guide itself** — [`TODO-BETA-056-0.1.6`][kanban]; this card
+- **The migration guide itself** — [`TODO-BETA-060-0.1.7`][kanban]; this card
   hands it two import-diff rows
   (`strawberry_django.test.client.TestClient` →
   `django_strawberry_framework.testing.TestClient`;
@@ -2220,7 +2220,7 @@ to the joint `0.0.14` cut
       scoped per
       [Decision 11](#decision-11--test-strategy-the-live-switchover-is-the-primary-coverage-teststestingtest_clientpy-owns-the-rest)).
 - [ ] The migration-guide handoff rows are recorded for
-      [`TODO-BETA-056-0.1.6`][kanban] (the two import diffs + the three
+      [`TODO-BETA-060-0.1.7`][kanban] (the two import diffs + the three
       documented deltas) ([Out of scope](#out-of-scope-explicitly-tracked-elsewhere)).
 - [ ] Slice 3 doc updates land per [Doc updates](#doc-updates): both GLOSSARY
       entry bodies (status flips deferred), the auth entry's Channels

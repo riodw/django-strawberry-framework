@@ -2447,7 +2447,7 @@ joint `0.0.14` cut:
   the maintainer wants it; when it lands, the covering tests move live and the
   package stand-ins are deleted per the
   [live-first promotion rule][glossary-live-first-coverage-mandate].
-- **The migration guide itself** — [`TODO-BETA-056-0.1.6`][kanban]; this card
+- **The migration guide itself** — [`TODO-BETA-060-0.1.7`][kanban]; this card
   hands it the one-row settings-string mapping
   (`strawberry_django.middlewares.debug_toolbar.DebugToolbarMiddleware` →
   `django_strawberry_framework.middleware.debug_toolbar.DebugToolbarMiddleware`,
@@ -2533,7 +2533,7 @@ joint `0.0.14` cut:
       (`fail_under = 100`) holds with `middleware/debug_toolbar.py` included,
       each branch mapped to a named test owner.
 - [ ] The migration-guide handoff row content is recorded for
-      [`TODO-BETA-056-0.1.6`][kanban] (the one settings-string swap, behavior
+      [`TODO-BETA-060-0.1.7`][kanban] (the one settings-string swap, behavior
       unchanged) ([Goal 3](#goals)).
 - [ ] Slice 2 doc updates land per [Doc updates](#doc-updates): the GLOSSARY
       entry body (status flip deferred), the regenerated

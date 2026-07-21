@@ -102,6 +102,20 @@ class DjangoMutationExecutionContext(ExecutionContext):
         wrapped = getattr(base_resolver, "wrapped_func", None)
         return getattr(wrapped, MUTATION_CLASS_MARKER, None)
 
+    def _execution_errors(self) -> list:
+        """Return the execution's live error list across graphql-core versions.
+
+        graphql-core < 3.2.9 stores located errors directly as
+        ``ExecutionContext.errors`` (a plain list); 3.2.9 replaced that
+        attribute with a ``CollectedErrors`` container exposing the same list
+        as ``collected_errors.errors``. Both are append-only during execution,
+        so a before/after length comparison stays valid on either shape.
+        """
+        collected = getattr(self, "collected_errors", None)
+        if collected is not None:
+            return collected.errors
+        return self.errors
+
     def _execute_mutation_field_sync(
         self,
         alias: str,
@@ -115,12 +129,12 @@ class DjangoMutationExecutionContext(ExecutionContext):
         Under sync execution graphql-core completes the field's value INSIDE the
         ``super().execute_field`` call, so entering ``transaction.atomic`` before
         it and exiting after covers the whole resolve -> complete window on the
-        calling thread. Any error appended to ``self.errors`` during the window
-        (a resolver error is a *located* error, not an exception, so an
+        calling thread. Any located error the execution collects during the
+        window (a resolver error is a *located* error, not an exception, so an
         exception-based rollback would miss it) marks the transaction for
         rollback before the block exits.
         """
-        errors_before = len(self.errors)
+        errors_before = len(self._execution_errors())
         atomic = transaction.atomic(using=alias)
         atomic.__enter__()
         try:
@@ -130,7 +144,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
             if not atomic.__exit__(type(exc), exc, exc.__traceback__):
                 raise
             return None  # pragma: no cover - ``atomic.__exit__`` never suppresses.
-        if len(self.errors) > errors_before:
+        if len(self._execution_errors()) > errors_before:
             transaction.set_rollback(True, using=alias)
         atomic.__exit__(None, None, None)
         return result
@@ -154,7 +168,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
         worker's (idle) connection meanwhile, exactly the verified-prototype
         shape.
         """
-        errors_before = len(self.errors)
+        errors_before = len(self._execution_errors())
         atomic = transaction.atomic(using=alias)
         await run_in_one_sync_boundary(atomic.__enter__)
         try:
@@ -175,7 +189,7 @@ class DjangoMutationExecutionContext(ExecutionContext):
             return None  # pragma: no cover - ``atomic.__exit__`` never suppresses.
 
         def _exit_clean() -> None:
-            if len(self.errors) > errors_before:
+            if len(self._execution_errors()) > errors_before:
                 transaction.set_rollback(True, using=alias)
             atomic.__exit__(None, None, None)
 

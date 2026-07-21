@@ -1,4 +1,4 @@
-"""The 0.0.14 mutation-atomicity write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
+"""The 0.0.14 mutation write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 
 System-under-test is the completion-spanning mutation transaction and its
 supporting seams:
@@ -332,6 +332,29 @@ def test_sync_execution_context_exits_transaction_on_raised_base_exception(monke
     assert result.errors is not None
     assert "execution exploded" in str(result.errors[0])
     assert connections["default"].in_atomic_block is False
+
+
+def test_execution_errors_reads_both_graphql_core_error_shapes():
+    """``_execution_errors`` bridges the graphql-core 3.2.9 errors relocation.
+
+    graphql-core < 3.2.9 exposes the located-error list as
+    ``ExecutionContext.errors``; 3.2.9 moved it behind a ``CollectedErrors``
+    container at ``collected_errors.errors``. The installed version exercises
+    only one shape at runtime, so both are pinned here explicitly.
+    """
+    from django_strawberry_framework.schema import DjangoMutationExecutionContext
+
+    context = object.__new__(DjangoMutationExecutionContext)
+
+    class _Collected:
+        errors = ["located"]
+
+    context.collected_errors = _Collected()
+    assert context._execution_errors() == ["located"]
+
+    del context.collected_errors
+    context.errors = ["legacy"]
+    assert context._execution_errors() == ["legacy"]
 
 
 @pytest.mark.django_db
@@ -735,7 +758,7 @@ def test_select_for_update_false_update_still_succeeds_unlocked():
 
 
 def test_model_flavor_meta_select_for_update_defaults_true_and_rejects_non_bool():
-    """The model flavor shares the mutation-atomicity validator: default True, non-bool refused."""
+    """The model flavor shares the row-lock validator: default True, non-bool refused."""
 
     class DefaultLocked(DjangoMutation):
         class Meta:

@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>django-strawberry-framework — Captured traces (PROTOTYPE)</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --panel2: #1d2130; --border: #2a2f42;
+    --text: #e6e9f2; --muted: #9aa3b8; --accent: #7aa2f7; --gate: #e0af68;
+    --error: #f7768e; --result: #9ece6a; --fork: #bb9af7; --phase: #2ac3de;
+    --sql: #7dcfff;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f5f6fa; --panel: #ffffff; --panel2: #eef0f6; --border: #d6dae6;
+      --text: #1d2230; --muted: #5d6577; --accent: #2f5fd0; --gate: #a9741a;
+      --error: #cf2b4d; --result: #3e7d1f; --fork: #7a4fd0; --phase: #0d7f96;
+      --sql: #1c6f96;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 28px 32px 18px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  header h1 { margin: 0 0 6px; font-size: 22px; }
+  header .proto { display: inline-block; font-size: 11px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--gate); border: 1px solid var(--gate);
+    border-radius: 999px; padding: 2px 10px; margin-left: 8px; vertical-align: 2px; }
+  header p { margin: 8px 0 0; color: var(--muted); max-width: 940px; }
+  header .meta { margin-top: 10px; font-family: var(--mono); font-size: 12px; color: var(--muted); }
+  main { max-width: 1080px; margin: 0 auto; padding: 8px 24px 80px; }
+
+  .tabbar { display: flex; gap: 6px; flex-wrap: wrap; margin: 22px 0 4px; }
+  .tabbar button { background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 8px 15px; font-size: 13px; cursor: pointer; }
+  .tabbar button.active { border-color: var(--accent); color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent) inset; }
+
+  .op { margin-top: 18px; }
+  .op h2 { font-size: 18px; margin: 0 0 4px; }
+  .caption { color: var(--muted); border-left: 3px solid var(--phase);
+    background: var(--panel2); padding: 8px 14px; border-radius: 0 8px 8px 0; margin: 8px 0 18px; }
+  .badges { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0 4px; }
+  .badge { font-family: var(--mono); font-size: 12px; color: var(--muted);
+    border: 1px solid var(--border); border-radius: 6px; padding: 2px 9px; background: var(--panel); }
+  .badge b { color: var(--text); }
+  .badge.err { color: var(--error); border-color: var(--error); }
+
+  .block-label { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted); margin: 20px 0 8px; }
+  pre.code { background: var(--panel); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-family: var(--mono);
+    font-size: 12.5px; margin: 0; white-space: pre; }
+
+  /* waterfall */
+  .waterfall { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .wf-row { display: flex; align-items: center; border-top: 1px solid var(--border);
+    font-size: 12.5px; }
+  .wf-row:first-child { border-top: none; }
+  .wf-name { flex: 0 0 340px; padding: 5px 10px; font-family: var(--mono);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wf-track { position: relative; flex: 1 1 auto; height: 26px; background: var(--panel); }
+  .wf-bar { position: absolute; top: 5px; height: 16px; border-radius: 3px;
+    background: var(--accent); opacity: .85; min-width: 2px; }
+  .wf-bar.res { background: var(--result); }
+  .wf-bar.meta { background: var(--phase); }
+  .wf-dur { flex: 0 0 90px; text-align: right; padding: 5px 10px; font-family: var(--mono);
+    color: var(--muted); }
+  .attrs { margin: 4px 0 0 350px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+  /* SQL */
+  ol.sql-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+  ol.sql-list li { border: 1px solid var(--border); border-left: 3px solid var(--sql);
+    border-radius: 8px; background: var(--panel); padding: 8px 12px; }
+  ol.sql-list .sql-head { display: flex; justify-content: space-between; font-family: var(--mono);
+    font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  ol.sql-list code { font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-word; color: var(--text); }
+  .empty { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Captured request traces<span class="proto">prototype</span></h1>
+  <p>Real anonymous read queries run against the <code>fakeshop</code> example project through a
+     schema instrumented with Strawberry's <code>OpenTelemetryExtensionSync</code> and OpenTelemetry's
+     <code>InMemorySpanExporter</code>. Span trees and SQL are captured live and embedded as the
+     <code>CAPTURED_TRACES</code> object at the bottom of this file — the companion to the hand-curated
+     <code>LIFECYCLE.html</code>. This is throwaway evaluation output, not committed.</p>
+  <div class="meta" id="meta"></div>
+</header>
+<main>
+  <div class="tabbar" id="tabbar"></div>
+  <div id="pane"></div>
+</main>
+
+<script>
+const CAPTURED_TRACES = {
+  "generated_by": "capture_traces.py (prototype)",
+  "strawberry_extension": "OpenTelemetryExtensionSync",
+  "otel_exporter": "InMemorySpanExporter",
+  "row_counts": {
+    "library.Branch": 1,
+    "products.Category": 14,
+    "products.Item": 12,
+    "library.Genre": 5
+  },
+  "operations": [
+    {
+      "label": "Plain list field",
+      "caption": "A DjangoListField returns a flat list -- no cursors, no pageInfo. Watch the span count: one resolver span for the root, and the SQL is a single SELECT (the optimizer's .only() trims columns to the selection).",
+      "query": "query {\n              allLibraryBranchesViaListField {\n                id\n                name\n              }\n            }",
+      "variables": {},
+      "errors": [],
+      "response_shape": {
+        "allLibraryBranchesViaListField": [
+          "<1 items>",
+          {
+            "id": "<int>",
+            "name": "<str>"
+          }
+        ]
+      },
+      "sql_count": 1,
+      "sql": [
+        {
+          "sql": "SELECT \"library_branch\".\"id\", \"library_branch\".\"name\" FROM \"library_branch\" WHERE NOT (\"library_branch\".\"city\" = 'restricted')",
+          "time_s": "0.000"
+        }
+      ],
+      "span_count": 4,
+      "span_tree": [
+        {
+          "name": "GraphQL Query",
+          "span_id": "dac667a182d718fe",
+          "parent_id": null,
+          "duration_us": 6864.0,
+          "attributes": {},
+          "children": [
+            {
+              "name": "GraphQL Parsing",
+              "span_id": "466f41c4945c625c",
+              "parent_id": "dac667a182d718fe",
+              "duration_us": 105.0,
+              "attributes": {},
+              "children": [],
+              "offset_us": 44.0
+            },
+            {
+              "name": "GraphQL Validation",
+              "span_id": "1b436055c7afb348",
+              "parent_id": "dac667a182d718fe",
+              "duration_us": 363.0,
+              "attributes": {},
+              "children": [],
+              "offset_us": 188.0
+            },
+            {
+              "name": "GraphQL Resolving: allLibraryBranchesViaListField",
+              "span_id": "a14e925f4714afd6",
+              "parent_id": "dac667a182d718fe",
+              "duration_us": 385.0,
+              "attributes": {
+                "graphql.parentType": "Query",
+                "graphql.path": "allLibraryBranchesViaListField"
+              },
+              "children": [],
+              "offset_us": 638.0
+            }
+          ],
+          "offset_us": 0.0
+        }
+      ]
+    },
+    {
+      "label": "Root connection with nested relation",
+      "caption": "The headline claim: a root connection with a NESTED to-many relation (categories -> items) resolves in a small, bounded number of SELECTs -- the optimizer folds the nested selection into a prefetch at the ROOT walk, so there is no per-parent N+1. The nested items produce NO extra per-row SELECT.",
+      "query": "query {\n              allCategories(first: 3) {\n                edges {\n                  node {\n                    id\n                    name\n                    items {\n                      id\n                      name\n                    }\n                  }\n                }\n              }\n            }",
+      "variables": {},
+      "errors": [],
+      "response_shape": {
+        "allCategories": {
+          "edges": [
+            "<3 items>",
+            {
+              "node": {
+                "id": "<str>",
+                "name": "<str>",
+                "items": [
+                  "<0 items>"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "sql_count": 2,
+      "sql": [
+        {
+          "sql": "SELECT \"products_category\".\"id\", \"products_category\".\"name\" FROM \"products_category\" WHERE NOT \"products_category\".\"is_private\" ORDER BY \"products_category\".\"id\" ASC LIMIT 4",
+          "time_s": "0.000"
+        },
+        {
+          "sql": "SELECT \"products_item\".\"id\", \"products_item\".\"name\", \"products_item\".\"category_id\" FROM \"products_item\" WHERE (NOT \"products_item\".\"is_private\" AND \"products_item\".\"category_id\" IN (SELECT U0.\"id\" AS \"id\" FROM \"products_category\" U0 WHERE NOT U0.\"is_private\") AND \"products_item\".\"category_id\" IN (1, 2, 4, 6))",
+          "time_s": "0.000"
+        }
+      ],
+      "span_count": 12,
+      "span_tree": [
+        {
+          "name": "GraphQL Query",
+          "span_id": "45780c2a43a92848",
+          "parent_id": null,
+          "duration_us": 4081.0,
+          "attributes": {},
+          "children": [
+            {
+              "name": "GraphQL Parsing",
+              "span_id": "06596a980c249bce",
+              "parent_id": "45780c2a43a92848",
+              "duration_us": 131.0,
+              "attributes": {},
+              "children": [],
+              "offset_us": 25.0
+            },
+            {
+              "name": "GraphQL Validation",
+              "span_id": "780839227882e9e2",
+              "parent_id": "45780c2a43a92848",
+              "duration_us": 508.0,
+              "attributes": {},
+              "children": [],
+              "offset_us": 183.0
+            },
+            {
+              "name": "GraphQL Resolving: allCategories",
+              "span_id": "9152ac2c0bb951c6",
+              "parent_id": "45780c2a43a92848",
+              "duration_us": 2954.0,
+              "attributes": {
+                "graphql.parentType": "Query",
+                "graphql.path": "allCategories",
+                "graphql.param.filter": "None",
+                "graphql.param.orderBy": "None",
+                "graphql.param.before": "None",
+                "graphql.param.after": "None",
+                "graphql.param.first": 3,
+                "graphql.param.last": "None"
+              },
+              "children": [],
+              "offset_us": 756.0
+            },
+            {
+              "name": "GraphQL Resolving: id",
+              "span_id": "36c2019b22e22875",
+              "parent_id": "45780c2a43a92848",
+              "duration_us": 35.0,
+              "attributes": {
+                "graphql.parentType": "CategoryType",
+                "graphql.path": "allCategories.edges.0.node.id"
+              },
+              "children": [],
+              "offset_us": 3777.0
+            },
+            {
+              "name": "GraphQL Resolving: items",
+              "span_id": "194736879dd191fd",
+              "parent_id": "45780c2a43a92848",
+              "duration_us": 16.0,
+              "attributes": {
+                "graphql.parentType": "CategoryType",
+                "graphql.path": "allCategories.edges.0.node.items"
+              },
+              "children": [],
+              "offset_us": 3843.0
+            },
+            {
+              "name": "GraphQL Resolving: id",
+              "span_id": "9b093a4584976ca2",
+              "parent_id": "45780c2a43a92848",
+              "duration_us": 16.0,
+              "attributes": {
+                "graphql.parentType": "CategoryType",
+                "graphql.path": "allCategories.edges.1.node.id"
+              },
+              "children": [],
+              "offset_us": 3886.0
+            },
+            {
+              "name": "GraphQL Resolving: items",
+              "span_id": "ca866edd8e88c562",
+              "parent_id": "45780c2a43a92848",
+              "duration_us": 10.0,
+              "attributes": {
+                "graphql.parentType": "CategoryType",
+                "graphql.path": "allCategories.edges.1.node.items"
+              },
+              "children": [],
+              "offset_us": 3924.0
+            },
+            {
+              "name": "GraphQL Resolving: id",
+              "span_id": "b03b4643d7e003f6",
+              "parent_id": "45780c2a43a92848",
+              "duration_us": 13.0,
+              "attributes": {
+                "graphql.parentType": "ItemType",
+                "graphql.path": "allCategories.edges.1.node.items.0.id"
+              },
+              "children": [],
+              "offset_us": 3954.0
+            },
+            {
+              "name": "GraphQL Resolving: id",
+              "span_id": "c57d48423b0e1760",
+              "parent_id": "45780c2a43a92848",
+              "duration_us": 10.0,
+              "attributes": {
+                "graphql.parentType": "CategoryType",
+                "graphql.path": "allCategories.edges.2.node.id"
+              },
+              "children": [],
+              "offset_us": 3997.0
+            },
+            {
+              "name": "GraphQL Resolving: items",
+              "span_id": "fca218e86d1ec675",
+              "parent_id": "45780c2a43a92848",
+              "duration_us": 8.0,
+              "attributes": {
+                "graphql.parentType": "CategoryType",
+                "graphql.path": "allCategories.edges.2.node.items"
+              },
+              "children": [],
+              "offset_us": 4024.0
+            },
+            {
+              "name": "GraphQL Resolving: id",
+              "span_id": "04d6ab5164f5e89e",
+              "parent_id": "45780c2a43a92848",
+              "duration_us": 10.0,
+              "attributes": {
+                "graphql.parentType": "ItemType",
+                "graphql.path": "allCategories.edges.2.node.items.0.id"
+              },
+              "children": [],
+              "offset_us": 4047.0
+            }
+          ],
+          "offset_us": 0.0
+        }
+      ]
+    },
+    {
+      "label": "Node refetch by GlobalID",
+      "caption": "A Relay node(id:) refetch: the GlobalID is decoded and model-checked BEFORE any DB hit (no query on a malformed id). Then exactly one SELECT by pk after the visibility gate. The waterfall shows the decode happening inside the node resolver span with a single downstream query.",
+      "query": "query ($id: ID!) {\n                  node(id: $id) {\n                    id\n                    ... on GenreType { name }\n                  }\n                }",
+      "variables": {
+        "id": "bGlicmFyeS5nZW5yZToyOQ=="
+      },
+      "errors": [],
+      "response_shape": {
+        "node": {
+          "id": "<str>",
+          "name": "<str>"
+        }
+      },
+      "sql_count": 1,
+      "sql": [
+        {
+          "sql": "SELECT \"library_genre\".\"id\", \"library_genre\".\"name\" FROM \"library_genre\" WHERE \"library_genre\".\"id\" = 29 ORDER BY \"library_genre\".\"id\" ASC LIMIT 1",
+          "time_s": "0.000"
+        }
+      ],
+      "span_count": 5,
+      "span_tree": [
+        {
+          "name": "GraphQL Query",
+          "span_id": "83f9265ad2045eca",
+          "parent_id": null,
+          "duration_us": 1110.0,
+          "attributes": {},
+          "children": [
+            {
+              "name": "GraphQL Parsing",
+              "span_id": "315b41a5266b3893",
+              "parent_id": "83f9265ad2045eca",
+              "duration_us": 119.0,
+              "attributes": {},
+              "children": [],
+              "offset_us": 17.0
+            },
+            {
+              "name": "GraphQL Validation",
+              "span_id": "09c4935de85d6cd1",
+              "parent_id": "83f9265ad2045eca",
+              "duration_us": 547.0,
+              "attributes": {},
+              "children": [],
+              "offset_us": 159.0
+            },
+            {
+              "name": "GraphQL Resolving: node",
+              "span_id": "9af67375df6d1d84",
+              "parent_id": "83f9265ad2045eca",
+              "duration_us": 256.0,
+              "attributes": {
+                "graphql.parentType": "Query",
+                "graphql.path": "node",
+                "graphql.param.id": "bGlicmFyeS5nZW5yZToyOQ=="
+              },
+              "children": [],
+              "offset_us": 756.0
+            },
+            {
+              "name": "GraphQL Resolving: id",
+              "span_id": "89df6bf18145ba74",
+              "parent_id": "83f9265ad2045eca",
+              "duration_us": 16.0,
+              "attributes": {
+                "graphql.parentType": "GenreType",
+                "graphql.path": "node.id"
+              },
+              "children": [],
+              "offset_us": 1072.0
+            }
+          ],
+          "offset_us": 0.0
+        }
+      ]
+    },
+    {
+      "label": "Filtered connection",
+      "caption": "A filter: sidecar is applied AFTER the visibility gate and BEFORE the WHERE hits the DB. The optimizer still plans the page; the SQL shows the filter predicate folded into the same SELECT rather than a post-fetch Python filter.",
+      "query": "query {\n              allItems(filter: { name: { iContains: \"a\" } }, first: 3) {\n                edges { node { id name } }\n              }\n            }",
+      "variables": {},
+      "errors": [],
+      "response_shape": {
+        "allItems": {
+          "edges": [
+            "<3 items>",
+            {
+              "node": {
+                "id": "<str>",
+                "name": "<str>"
+              }
+            }
+          ]
+        }
+      },
+      "sql_count": 1,
+      "sql": [
+        {
+          "sql": "SELECT \"products_item\".\"id\", \"products_item\".\"name\" FROM \"products_item\" WHERE (NOT \"products_item\".\"is_private\" AND \"products_item\".\"category_id\" IN (SELECT U0.\"id\" AS \"id\" FROM \"products_category\" U0 WHERE NOT U0.\"is_private\") AND \"products_item\".\"name\" LIKE '%a%' ESCAPE '\\') ORDER BY \"products_item\".\"id\" ASC LIMIT 4",
+          "time_s": "0.000"
+        }
+      ],
+      "span_count": 7,
+      "span_tree": [
+        {
+          "name": "GraphQL Query",
+          "span_id": "9545e86bae1b6d62",
+          "parent_id": null,
+          "duration_us": 6749.0,
+          "attributes": {},
+          "children": [
+            {
+              "name": "GraphQL Parsing",
+              "span_id": "fdb8ee1f2ef1c2e2",
+              "parent_id": "9545e86bae1b6d62",
+              "duration_us": 107.0,
+              "attributes": {},
+              "children": [],
+              "offset_us": 15.0
+            },
+            {
+              "name": "GraphQL Validation",
+              "span_id": "757ecdcd9b4be18b",
+              "parent_id": "9545e86bae1b6d62",
+              "duration_us": 1018.0,
+              "attributes": {},
+              "children": [],
+              "offset_us": 142.0
+            },
+            {
+              "name": "GraphQL Resolving: allItems",
+              "span_id": "51337c9089d9a295",
+              "parent_id": "9545e86bae1b6d62",
+              "duration_us": 5294.0,
+              "attributes": {
+                "graphql.parentType": "Query",
+                "graphql.path": "allItems",
+                "graphql.param.filter": "{id: None, name: {exact: None, iExact: None, gt: None, gte: None, lt: None, lte: None, in: None, contains: None, iContains: a, startsWith: None, iStartsWith: None, endsWith: None, iEndsWith: None, range: None, isNull: None, regex: None, iRegex: None}, description: None, categoryName: None, category: None, entries: None, categoryId: None, categoryDescription: None, categoryItemsName: None, entriesId: None, entriesValue: None, entriesDescription: None, entriesPropertyName: None, entriesPropertyCategoryName: None, entriesPropertyId: None, entriesPropertyDescription: None, entriesPropertyCategoryId: None, entriesPropertyCategoryDescription: None, entriesPropertyCategoryItemsName: None, and: None, or: None, not: None}",
+                "graphql.param.orderBy": "None",
+                "graphql.param.before": "None",
+                "graphql.param.after": "None",
+                "graphql.param.first": 3,
+                "graphql.param.last": "None"
+              },
+              "children": [],
+              "offset_us": 1243.0
+            },
+            {
+              "name": "GraphQL Resolving: id",
+              "span_id": "42c483e8c9027f73",
+              "parent_id": "9545e86bae1b6d62",
+              "duration_us": 36.0,
+              "attributes": {
+                "graphql.parentType": "ItemType",
+                "graphql.path": "allItems.edges.0.node.id"
+              },
+              "children": [],
+              "offset_us": 6617.0
+            },
+            {
+              "name": "GraphQL Resolving: id",
+              "span_id": "3d1d44db0c367a06",
+              "parent_id": "9545e86bae1b6d62",
+              "duration_us": 12.0,
+              "attributes": {
+                "graphql.parentType": "ItemType",
+                "graphql.path": "allItems.edges.1.node.id"
+              },
+              "children": [],
+              "offset_us": 6683.0
+            },
+            {
+              "name": "GraphQL Resolving: id",
+              "span_id": "8d9c1365cc4bbf68",
+              "parent_id": "9545e86bae1b6d62",
+              "duration_us": 10.0,
+              "attributes": {
+                "graphql.parentType": "ItemType",
+                "graphql.path": "allItems.edges.2.node.id"
+              },
+              "children": [],
+              "offset_us": 6717.0
+            }
+          ],
+          "offset_us": 0.0
+        }
+      ]
+    }
+  ]
+};
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+}
+
+// Flatten a span tree into rows with depth, preserving chronological order.
+function flatten(nodes, depth, acc) {
+  nodes.forEach(n => {
+    acc.push({ node: n, depth: depth });
+    if (n.children && n.children.length) flatten(n.children, depth + 1, acc);
+  });
+  return acc;
+}
+
+function barClass(name) {
+  if (name.startsWith("GraphQL Resolving")) return "res";
+  if (name === "GraphQL Parsing" || name === "GraphQL Validation") return "meta";
+  return "";
+}
+
+function renderWaterfall(op) {
+  const rows = flatten(op.span_tree, 0, []);
+  // total span = max(offset + duration)
+  let total = 0;
+  rows.forEach(r => { total = Math.max(total, (r.node.offset_us || 0) + r.node.duration_us); });
+  total = total || 1;
+  const wrap = el("div", "waterfall");
+  rows.forEach(r => {
+    const n = r.node;
+    const row = el("div", "wf-row");
+    const name = el("div", "wf-name", "  ".repeat(r.depth) + n.name);
+    name.style.paddingLeft = (10 + r.depth * 16) + "px";
+    const track = el("div", "wf-track");
+    const bar = el("div", "wf-bar " + barClass(n.name));
+    bar.style.left = ((n.offset_us || 0) / total * 100) + "%";
+    bar.style.width = Math.max(n.duration_us / total * 100, 0.4) + "%";
+    bar.title = n.name + " — " + n.duration_us + " µs";
+    track.appendChild(bar);
+    const dur = el("div", "wf-dur", n.duration_us + " µs");
+    row.appendChild(name); row.appendChild(track); row.appendChild(dur);
+    wrap.appendChild(row);
+  });
+  return wrap;
+}
+
+function renderSql(op) {
+  if (!op.sql.length) return el("div", "empty", "No SQL executed (e.g. decode-only / validation error).");
+  const list = el("ol", "sql-list");
+  op.sql.forEach((q, i) => {
+    const li = el("li");
+    const head = el("div", "sql-head");
+    head.appendChild(el("span", null, "query #" + (i + 1)));
+    head.appendChild(el("span", null, q.time_s + " s"));
+    li.appendChild(head);
+    li.appendChild(el("code", null, q.sql));
+    list.appendChild(li);
+  });
+  return list;
+}
+
+function renderOp(op) {
+  const pane = document.getElementById("pane");
+  pane.innerHTML = "";
+  const wrap = el("div", "op");
+  wrap.appendChild(el("h2", null, op.label));
+  wrap.appendChild(el("div", "caption", op.caption));
+
+  const badges = el("div", "badges");
+  badges.appendChild(mkBadge("SQL queries", op.sql_count));
+  badges.appendChild(mkBadge("spans", op.span_count));
+  if (op.errors && op.errors.length) {
+    const b = el("div", "badge err");
+    b.textContent = op.errors.length + " GraphQL error(s)";
+    badges.appendChild(b);
+  }
+  wrap.appendChild(badges);
+
+  wrap.appendChild(el("div", "block-label", "GraphQL query"));
+  wrap.appendChild(mkPre(op.query));
+
+  wrap.appendChild(el("div", "block-label", "Span waterfall (width proportional to duration, indent = span depth)"));
+  wrap.appendChild(renderWaterfall(op));
+
+  wrap.appendChild(el("div", "block-label", "SQL executed (Django connection.queries under DEBUG)"));
+  wrap.appendChild(renderSql(op));
+
+  wrap.appendChild(el("div", "block-label", "Response shape (keys only — no captured values)"));
+  wrap.appendChild(mkPre(JSON.stringify(op.response_shape, null, 2)));
+
+  pane.appendChild(wrap);
+}
+
+function mkBadge(label, val) {
+  const b = el("div", "badge");
+  b.innerHTML = label + ": <b>" + val + "</b>";
+  return b;
+}
+function mkPre(text) {
+  const p = el("pre", "code");
+  p.textContent = text;
+  return p;
+}
+
+function render() {
+  const meta = document.getElementById("meta");
+  meta.textContent = "extension: " + CAPTURED_TRACES.strawberry_extension
+    + "  ·  exporter: " + CAPTURED_TRACES.otel_exporter
+    + "  ·  row counts: " + JSON.stringify(CAPTURED_TRACES.row_counts);
+
+  const bar = document.getElementById("tabbar");
+  const ops = CAPTURED_TRACES.operations;
+  ops.forEach((op, i) => {
+    const btn = el("button", null, op.label);
+    btn.addEventListener("click", () => {
+      bar.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      renderOp(op);
+    });
+    bar.appendChild(btn);
+    if (i === 0) { btn.classList.add("active"); }
+  });
+  renderOp(ops[0]);
+}
+render();
+</script>
+</body>
+</html>

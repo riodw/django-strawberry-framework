@@ -412,7 +412,7 @@ Strawberry port of django-graphene-filters' `AdvancedFieldSet` — the declarati
 
 #### Planning note
 
-Strawberry analogue of django-graphene-filters' `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Both dependencies have shipped (`DONE-027-0.0.8` Filtering and `DONE-030-0.0.9` `DjangoConnectionField`); the card is planned but unblocked.
+Strawberry analogue of django-graphene-filters' `Meta.search_fields`. The cookbook shape is a tuple of model-field paths including relation-traversal entries: `search_fields = ("name", "description", "object_type__name", "object_type__description")`. The framework adds a single `search: String` argument to `DjangoConnectionField` consumers; when supplied, the framework fans the input across every declared path as an OR'd `icontains` filter and joins the resulting Q-object into the queryset. Relation paths use Django's standard double-underscore lookup syntax; the framework relies on Django's existing relation traversal rather than a custom resolver. Both dependencies have shipped (`DONE-027-0.0.8` Filtering and `DONE-030-0.0.9` `DjangoConnectionField`); the card is planned but unblocked. To-many relation paths compile row-preserving: a correlated EXISTS branch through the shared predicate compiler (optimizer/predicates.py, pre-card groundwork), never a search-driven .distinct() — the root query keeps no membership join and totalCount stays a flat COUNT(*).
 
 #### Dependencies
 
@@ -422,7 +422,7 @@ Strawberry analogue of django-graphene-filters' `Meta.search_fields`. The cookbo
 #### Scope
 
 - Cookbook anchor: the `recipes/schema.py` example shipped with django-graphene-filters declares `search_fields = ("name", "description", "object_type__name", "object_type__description")` — flat field names AND relation-traversal paths in the same tuple. The framework must accept both shapes identically; relation traversal is built on Django's standard `<rel>__<field>` lookup syntax.
-- Argument shape: a single `search: String` argument on the connection field. Empty/null/whitespace-only input is a no-op (queryset passes through unchanged). Non-empty input produces a single Q-object that OR's `<path>__icontains=<input>` across every declared path.
+- Argument shape: a single `search: String` argument on the connection field. Empty/null/whitespace-only input is a no-op (queryset passes through unchanged). Non-empty input produces a single Q-object that OR's `<path>__icontains=<input>` across every declared path. Paths that traverse a to-many relation (reverse FK, M2M, generic) compile as correlated EXISTS branches OR'd with the direct-path predicates — one root row stays one SQL row through counting and pagination; JOIN-plus-DISTINCT is rejected as the implementation strategy.
 - Composition with `filterset_class`: `search` and `filter` compose by intersection — the resulting queryset matches every declared filter AND the search OR-clause. The argument-factory machinery is shared between `filterset_class` and `search_fields`, so adding `search` does not duplicate the factory infrastructure.
 - Composition with `get_queryset`: search runs against the post-visibility queryset (visibility narrows first), so a user cannot search for hidden rows by guessing field values.
 
@@ -430,10 +430,11 @@ Strawberry analogue of django-graphene-filters' `Meta.search_fields`. The cookbo
 
 - [ ] Add `docs/spec-search_fields.md`.
 - [ ] Search-fields argument generation lives in `django_strawberry_framework/filters/` and reuses the same DRF-style Meta surface and argument-factory machinery as `filterset_class`.
-- [ ] Single `search: String` argument surfaces on `DjangoConnectionField` consumers and produces an OR'd `icontains` queryset filter across every declared field path.
+- [ ] Single `search: String` argument surfaces on `DjangoConnectionField` consumers and produces an OR'd `icontains` queryset filter across every declared field path, compiled row-preserving: direct paths as plain Q predicates, to-many paths as correlated EXISTS branches via the shared predicate compiler; no search-driven `.distinct()`; root `alias_map` free of membership joins; `totalCount` counts the row-preserving queryset directly.
 - [ ] Promote `Meta.search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS` only when the pipeline applies it end-to-end (per `TODO-BETA-052-0.1.3`).
 - [ ] Tests under `tests/filters/test_search_fields.py` covering single-field, relation-path, and combined-with-filterset cases.
 - [ ] Live HTTP coverage under `examples/fakeshop/test_query/` exercising a search across at least one relation path.
+- [ ] SQL-shape regression tests pin the row-preserving compilation: root query `alias_map` excludes membership/child tables, `query.distinct is False`, EXISTS present exactly when a declared path is to-many, and the `totalCount` SQL has no distinct-wrapper subquery.
 
 #### Files likely touched
 
@@ -441,6 +442,8 @@ Strawberry analogue of django-graphene-filters' `Meta.search_fields`. The cookbo
 - `django_strawberry_framework/types/base.py` (Meta validation; promote key)
 - `tests/filters/test_search_fields.py` (new)
 - `examples/fakeshop/apps/products/schema.py` (activation)
+- `django_strawberry_framework/connection.py` (synthesized `search:` argument; pipeline step)
+- `django_strawberry_framework/optimizer/predicates.py` + `django_strawberry_framework/utils/relations.py` (consumed: pre-card row-preserving predicate compiler + structured path walker)
 
 #### Verified in upstream
 

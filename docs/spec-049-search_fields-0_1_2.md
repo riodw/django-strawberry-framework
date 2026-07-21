@@ -14,7 +14,10 @@ argument. A non-empty input fans out across every declared path as one OR'd
 visibility, alongside `filter:`, before `orderBy:`
 ([Decision 6](#decision-6--pipeline-position-visibility--filter--search--orderby)).
 Relation paths ride Django's standard `__` lookup traversal; no custom
-resolver machinery. Both dependencies have shipped (`DONE-027-0.0.8`
+resolver machinery. Paths that cross a to-many relation compile
+row-preserving — a correlated `EXISTS` branch through the shared
+row-preserving predicate compiler, never a search-driven `.distinct()`
+([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct)). Both dependencies have shipped (`DONE-027-0.0.8`
 Filtering, `DONE-030-0.0.9` `DjangoConnectionField`) and the landing seams
 already exist in the tree: `filters/inputs.py::LOOKUP_PREFIXES` +
 `construct_search` (landed by spec-027 Decision 3 Layer 5 under a broad
@@ -26,11 +29,20 @@ Status: **PLANNED — no slice built yet.**
 Five slices: Slice 1 (**`filters/search.py` core** — the `Q`-builder, path
 validation, unit tests), Slice 2 (**Meta surface** —
 declaration-time shape validation, the `DjangoTypeDefinition.search_fields`
-slot, phase-2.5 path validation, `DEFERRED_META_KEYS` promotion), Slice 3
+slot, phase-2.5 path validation + frozen search path plan,
+`DEFERRED_META_KEYS` promotion), Slice 3
 (**connection wiring** — the synthesized `search:` argument, the pipeline
-step, to-many `.distinct()`, guards), Slice 4 (**live fakeshop activation +
-composability tests**), Slice 5 (**card-local docs + card wrap — all public
-release status deferred**).
+step, row-preserving to-many compilation, guards), Slice 4 (**live fakeshop
+activation + composability tests**), Slice 5 (**card-local docs + card wrap
+— all public release status deferred**).
+
+This card consumes — and is gated on — the pre-card row-preserving
+predicate groundwork landing on `main` ahead of it: the structured
+path-classification walker in `utils/relations.py` and the shared
+correlated-`EXISTS` predicate compiler in `optimizer/predicates.py`
+(which also reroutes the generated to-many leaf filters off their
+`distinct=True` stamping). Search wires the `search:` surface onto that
+finished engine; it does not design a compilation strategy of its own.
 
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits
 without explicit permission. This card does not touch `CHANGELOG.md`; card
@@ -76,14 +88,17 @@ is the audit ledger. Load-bearing entries:
   `tests/filters/test_search_fields.py`.
 - [ ] **Slice 2 — Meta surface.** Declaration-time shape validation in
   `types/base.py`, the `DjangoTypeDefinition.search_fields` slot, phase-2.5
-  path validation + to-many precomputation in `types/finalizer.py`, promote
+  path validation + the frozen search path plan (direct vs to-many path
+  classification via the shared structured walker) in `types/finalizer.py`,
+  promote
   `search_fields` from `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`
   ([Decision 8](#decision-8--metasearch_fields-promotes-in-this-card)).
 - [ ] **Slice 3 — connection wiring.** `CONNECTION_SEARCH_KWARG` in
   `utils/connections.py`, the synthesized nullable `search: String`
   argument in `connection.py::_synthesized_signature`, the colorless search
-  step in `_pipeline_sync` / `_pipeline_async`, conditional `.distinct()`
-  ([Decision 7](#decision-7--conditional-distinct-only-when-a-declared-path-traverses-to-many)),
+  step in `_pipeline_sync` / `_pipeline_async`, row-preserving to-many
+  compilation through `optimizer/predicates.py`
+  ([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct)),
   non-queryset-source guard extension.
 - [ ] **Slice 4 — live activation + composability.** Uncomment all four
   `search_fields` declarations in `examples/fakeshop/apps/products/schema.py`
@@ -153,7 +168,15 @@ every other read-side layer without leaking rows the viewer cannot see.
 - `utils/relations.py::path_traverses_to_many` answers "does this
   `__`-separated path cross a to-many hop" from model metadata with a
   process-lifetime cache; filter generation and order resolution already
-  share it.
+  share it. The pre-card predicate groundwork widens it into the structured
+  path-classification walker (hops + terminal + validated lookups +
+  first-many index) that this card's frozen search path plan reads.
+- `optimizer/predicates.py` (pre-card groundwork, landing ahead of this
+  card) owns the row-preserving predicate compiler: correlated `EXISTS`
+  branches rooted at the outer model's `_base_manager` on the queryset's
+  own database alias, `_dst_`-reserved collision-checked aliases, no
+  `.distinct()`. The generated to-many leaf filters route through it in
+  the same groundwork, so search and filters share one compilation story.
 - `types/definition.py::DjangoTypeDefinition` carries `filterset_class` /
   `orderset_class` / `fields_class` slots; there is **no** `search_fields`
   slot yet.
@@ -184,8 +207,10 @@ every other read-side layer without leaking rows the viewer cannot see.
    Empty / null / whitespace-only input → no-op.
 4. Composition by intersection with `filter:`; strictly post-visibility so
    hidden rows cannot be discovered by probing field values.
-5. Correct row cardinality: `.distinct()` exactly when a declared path
-   traverses a to-many relation, never otherwise.
+5. Correct row cardinality, row-preserving: a declared path that traverses
+   a to-many relation compiles as a correlated `EXISTS` branch OR'd with
+   the direct-path predicates — one root model row stays one SQL row, no
+   search-driven `.distinct()`, `totalCount` stays a flat `COUNT(*)`.
 6. Promotion of `search_fields` out of `DEFERRED_META_KEYS` — the pipeline
    applies the key end-to-end in this card.
 
@@ -237,10 +262,10 @@ Element classification:
   ([Decision 4](#decision-4--whole-input-phrase-semantics-one-q-object-no-term-splitting));
   no `search` key duplicated into the filter input type
   ([Decision 9](#decision-9--no-search-key-inside-the-filter-input-type));
-  no blanket `.distinct()` — upstream applies one unconditionally after
-  filtering, this package applies it only when a declared path is
-  row-multiplying
-  ([Decision 7](#decision-7--conditional-distinct-only-when-a-declared-path-traverses-to-many));
+  no `.distinct()` at all — upstream applies one unconditionally after
+  filtering, this package compiles row-multiplying paths as correlated
+  `EXISTS` branches so the fan-out never exists
+  ([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct));
   typo'd paths fail loudly at finalize with
   [`ConfigurationError`][glossary-configurationerror] instead of upstream's
   silent runtime `FieldError`; shortcut-prefixed declarations fail loudly
@@ -424,8 +449,9 @@ after the filterset step and before the orderset step:
    narrows first, so search never sees (and can never confirm the existence
    of) hidden rows — the card's non-negotiable ordering.
 2. `FilterSet.apply_*` — unchanged.
-3. **search** — `qs.filter(build_search_q(...))` (+ conditional
-   `.distinct()`, [Decision 7](#decision-7--conditional-distinct-only-when-a-declared-path-traverses-to-many)).
+3. **search** — direct paths as plain `Q` predicates, to-many paths as
+   correlated `EXISTS` branches, OR'd and `.filter()`-joined
+   ([Decision 7](#decision-7--row-preserving-to-many-compilation-no-search-driven-distinct)).
 4. `OrderSet.apply_*` — unchanged.
 5. `_finalize_queryset` — deterministic total order + optimizer plan,
    unchanged; keyset-cursor connections compose because search mutates the
@@ -433,9 +459,8 @@ after the filterset step and before the orderset step:
 
 Filter-then-search vs search-then-filter is commutative (both are
 `.filter()` intersections on a lazy queryset); search goes after filter so
-the step order reads as "declared sidecars in declaration-surface order"
-and the `.distinct()` (when applied) lands after both row-multiplying
-joins. The step is **colorless** — building a `Q` and calling
+the step order reads as "declared sidecars in declaration-surface order".
+The step is **colorless** — building `Q`s and `EXISTS` aliases and calling
 `.filter()` on a lazy queryset does no I/O — so one shared helper serves
 both pipelines with no maybe-await wrapper, the same single-siting
 argument `_finalize_queryset` already makes for steps 5–6.
@@ -446,24 +471,51 @@ Alternative rejected: **apply search inside `FilterSet.apply_*`**
 `filterset_class` (a type may declare `search_fields` alone) and to the
 transactional permission machinery search does not need.
 
-### Decision 7 — Conditional `.distinct()`, only when a declared path traverses to-many
+### Decision 7 — Row-preserving to-many compilation; no search-driven `.distinct()`
 
-An OR'd predicate across a row-multiplying join (reverse FK, M2M)
+An OR'd predicate across a row-multiplying join (reverse FK, M2M, generic)
 duplicates parent rows, which corrupts `totalCount`, page sizes, and
-cursor math. Upstream fixes this with a blanket `.distinct()` after every
-filtered query; this package instead computes, once at finalize time,
-whether ANY declared path crosses a to-many hop — reusing
-`utils/relations.py::path_traverses_to_many`, the exact helper filter
-generation (`distinct=True` marking) and order resolution already share —
-and stores the boolean alongside the definition slot
-(`search_requires_distinct`). At resolve time the search step appends
-`.distinct()` exactly when the flag is set AND the input is non-empty.
-Blanket distinct is rejected because it silently rewrites consumer-visible
-SQL for the all-forward-paths common case (the `filters/sets.py` comment
-at the RelatedFilter constraint site pins the same "no `.distinct()`
-mutation of consumer-visible querysets" posture); per-request metadata
-walking is rejected because the answer depends only on model metadata,
-which is immutable after finalize.
+cursor math. Upstream fixes this with a blanket `.distinct()`; the earlier
+revision of this spec fixed it with a *conditional* `.distinct()`. Both
+are rejected: correct rows do not imply an acceptable query. JOIN plus
+DISTINCT keeps the membership fan-out in the root query, forces `LEFT
+OUTER JOIN` promotion (the to-many arm is one arm of an OR), and turns
+`totalCount` into `COUNT(*)` over a `SELECT DISTINCT` subquery wrapper.
+
+This card instead compiles row-preserving through the shared predicate
+compiler (`optimizer/predicates.py`, pre-card groundwork):
+
+- At finalize time, the structured path walker classifies every declared
+  path; the frozen search path plan on `DjangoTypeDefinition` records the
+  direct paths and the to-many path groups (grouped by identical complete
+  relation chain — for a same-value OR this grouping is a cost choice,
+  never a correctness one, since `EXISTS` distributes over OR; when in
+  doubt, one `EXISTS` per path is always correct). The plan replaces the
+  earlier `search_requires_distinct` boolean and carries no request data.
+- At resolve time, direct paths become ordinary `Q(<path>__icontains=v)`
+  predicates; each to-many group becomes a correlated `EXISTS` branch —
+  the outer model's `_base_manager` on `queryset.db`, correlated on the
+  root primary key, the group's `icontains` predicates OR'd inside the
+  subquery, attached under a `_dst_`-reserved alias. The direct predicates
+  and `EXISTS` branches OR together into the one search expression;
+  `.distinct()` is never applied.
+
+Consequences: the root query keeps no membership join (the subquery owns
+its own alias map), one root row stays one SQL row through counting and
+pagination, and `totalCount` counts the row-preserving queryset directly.
+`_base_manager` is deliberate — the outer queryset has already applied
+visibility and the consumer manager; the inner row exists only to test
+relation existence for an already-qualified outer pk, so a filtered
+default manager could only introduce false negatives.
+
+Alternatives rejected: **blanket `.distinct()`** (upstream) and
+**conditional `.distinct()`** (this spec's own earlier revision) — both
+retain the fan-out and the distinct-wrapper count; **post-processing
+`queryset.query`** to strip joins — a late private-API rewrite with
+insufficient semantic information; **`StringAgg`-style aggregation** —
+Postgres-specific and processes all child strings where `EXISTS` stops at
+the first match; **`.distinct("pk")`** — Postgres-specific, collides with
+ordering constraints, and still retains the fan-out.
 
 ### Decision 8 — `Meta.search_fields` promotes in this card
 
@@ -529,9 +581,9 @@ per declared path, the same order of work as any filter predicate.
 | Slice | Files touched | Delta |
 | --- | --- | --- |
 | 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `tests/filters/test_search_fields.py` (new) | `build_search_q` / `validate_search_fields`; retarget the superseded `get_filters` TODO and `construct_search` reservation to card 050; unit tests for Q shape, prefix rejection, empty-input no-op, path-validation raises |
-| 2 | `django_strawberry_framework/types/base.py`, `django_strawberry_framework/types/definition.py`, `django_strawberry_framework/types/finalizer.py`, `tests/types/` | shape validation + `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` promotion; `search_fields` + `search_requires_distinct` definition slots; phase-2.5 `validate_search_fields` call + to-many precompute |
-| 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/connection/` | `CONNECTION_SEARCH_KWARG` + sidecar-tuple extension; synthesized `search:` param; colorless pipeline step + conditional `.distinct()`; guard coverage |
-| 4 | `examples/fakeshop/apps/products/schema.py`, `examples/fakeshop/test_query/` | uncomment all four `search_fields` tuples (fix stale `TODO-BETA-047` comment IDs → this card); live HTTP tests incl. relation path, `filter:`+`search:` intersection, visibility composition, `totalCount` under distinct |
+| 2 | `django_strawberry_framework/types/base.py`, `django_strawberry_framework/types/definition.py`, `django_strawberry_framework/types/finalizer.py`, `tests/types/` | shape validation + `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` promotion; `search_fields` + frozen search-path-plan definition slots; phase-2.5 `validate_search_fields` call + path classification via the structured walker |
+| 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/connection/` | `CONNECTION_SEARCH_KWARG` + sidecar-tuple extension; synthesized `search:` param; colorless pipeline step calling the row-preserving predicate compiler; guard coverage |
+| 4 | `examples/fakeshop/apps/products/schema.py`, `examples/fakeshop/test_query/` | uncomment all four `search_fields` tuples (fix stale `TODO-BETA-047` comment IDs → this card); live HTTP tests incl. relation path, `filter:`+`search:` intersection, visibility composition, row-preserving `totalCount` over a to-many path |
 | 5 | `docs/TREE.md`, `KANBAN.md`/`KANBAN.html` (DB + regen) | card-local tree regeneration and card wrap only; all public release-state artifacts defer to card 050 (Decision 10) |
 
 ## Helper-reuse obligations (DRY)
@@ -542,8 +594,12 @@ per declared path, the same order of work as any filter predicate.
 - `django_filters.utils.get_model_field` via the
   `filters/inputs.py::_model_field_for_filter` precedent for path
   resolution — no hand-rolled `_meta.get_field` walk.
-- `utils/relations.py::path_traverses_to_many` for the distinct decision —
+- The structured path-classification walker in `utils/relations.py` (the
+  widened `path_traverses_to_many` machinery) for the search path plan —
   no third reimplementation of to-many detection.
+- `optimizer/predicates.py` for the runtime `EXISTS` construction — search
+  never builds its own correlated subqueries, alias allocation, or
+  database-alias handling.
 - `utils/connections.py::connection_sidecar_inputs_from_kwargs` /
   `has_connection_sidecar_input` for the non-queryset guard — extend the
   existing extraction/guard pair with a third search slot (and keep
@@ -563,8 +619,10 @@ per declared path, the same order of work as any filter predicate.
   `ConfigurationError` (Decision 2).
 - **Typo'd / unreachable path** — finalize-time `ConfigurationError`; never
   a runtime 500 on first search.
-- **To-many path** (`search_fields = ("tags__name",)`) — `.distinct()`
-  applied; `totalCount` and page cardinality stay correct (Decision 7).
+- **To-many path** (`search_fields = ("tags__name",)`) — compiled as a
+  correlated `EXISTS` branch; a parent with two matching children yields
+  one edge, `totalCount` and page cardinality stay correct with no
+  `.distinct()` (Decision 7).
 - **Shortcut prefix** — declaration-time `ConfigurationError` assigning the
   syntax to card 050; no backend-specific lookup reaches execution.
 - **`%` / `_` / quotes in input** — literal characters (Decision 11).
@@ -594,8 +652,10 @@ Unit (`tests/filters/test_search_fields.py`):
 - Empty / `None` / whitespace-only → no-op (queryset identity preserved).
 - `validate_search_fields`: flat path, relation path, typo → raises with
   type/path/model in the message; empty tuple → declaration raise.
-- Distinct precompute: forward-only tuple → `False`; any to-many entry →
-  `True`.
+- Path-plan classification: forward-only tuple → all direct, no `EXISTS`;
+  to-many entries land in to-many groups keyed by their complete relation
+  chain (same-chain terminals share a group; divergent later chains split,
+  including paths sharing only their first to-many hop).
 
 Integration (`tests/filters/`, `tests/connection/`):
 
@@ -604,8 +664,16 @@ Integration (`tests/filters/`, `tests/connection/`):
   (the card's three named cases) against the package test schema.
 - Post-visibility composition: a row matching the search but hidden by
   `get_queryset` never appears and never perturbs `totalCount`.
-- Distinct correctness: to-many search path, one parent with two matching
-  children → one edge, `totalCount == 1`.
+- Row-preserving correctness: to-many search path, one parent with two
+  matching children → one edge, `totalCount == 1`.
+- SQL-shape invariants (the load-bearing regression checks — a
+  result-count test alone cannot distinguish `EXISTS` from
+  JOIN-plus-DISTINCT): the root query's `alias_map` excludes the membership
+  and child tables (the correlated subquery owns its own alias map),
+  `queryset.query.distinct is False`, the compiled SQL contains `EXISTS`
+  for a to-many declaration and none for a direct-only declaration, and
+  the `totalCount` SQL is a flat `COUNT(*)` with no distinct-wrapper
+  subquery.
 - Sync and async pipelines both exercised (the colorless step under both
   colors).
 - Non-queryset source + `search:` → guard raise.
@@ -651,6 +719,12 @@ Live HTTP (`examples/fakeshop/test_query/`, per the
   descoped/retargeted after this card ships, the `0.1.2` cut ownership
   returns to this card as a post-ship follow-up; the maintainer owns that
   call.
+- **`EXISTS` vs JOIN-plus-DISTINCT performance regime (Decision 7).** N
+  independent correlated `EXISTS` groups OR'd over a large, low-selectivity
+  root set can lose to one N-way JOIN + DISTINCT on some planners. No
+  escape hatch ships in `0.1.2` (a `Meta.search_strategy` key stays in
+  reserve); the call is deferred until a real workload demonstrates the
+  regime. Tests gate SQL structure, never wall-clock.
 - **List-field / node-field search.** The card scopes `search:` to
   connection fields. Whether [`DjangoListField`][glossary-djangolistfield]
   should grow the same argument is left open; nothing in this design
@@ -691,8 +765,10 @@ Live HTTP (`examples/fakeshop/test_query/`, per the
   (paths), lands on `DjangoTypeDefinition`, and is promoted to
   `ALLOWED_META_KEYS`.
 - [ ] Every connection field serving a declaring type carries a nullable
-  `search: String` argument that produces the OR'd fan-out with correct
-  distinct behavior, post-visibility, intersecting with `filter:`.
+  `search: String` argument that produces the OR'd predicate
+  row-preserving — direct paths as plain `Q`s, to-many paths as correlated
+  `EXISTS` branches, no search-driven `.distinct()`, root `alias_map` free
+  of membership joins — post-visibility, intersecting with `filter:`.
 - [ ] `tests/filters/test_search_fields.py` covers single-field,
   relation-path, and combined-with-filterset cases; sync and async.
 - [ ] Live HTTP coverage under `examples/fakeshop/test_query/` exercises a

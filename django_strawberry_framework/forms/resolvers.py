@@ -531,7 +531,7 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
 
     Orchestration stays local (the model-backed ``run_write_pipeline_sync`` skeleton
     owns locate / refetch / object-slot payloads and cannot absorb this flavor
-    without a model-less seam), but the BETA-055 alias / auth / write-phase
+    without a model-less seam), but the mutation-atomicity alias / auth / write-phase
     invariants are the SAME shared helpers the model / ``ModelForm`` / serializer /
     delete paths call: ``pipeline_alias_guard`` spans every consumer-reachable
     phase, ``authorization_phase`` wraps the single permission evaluation, and
@@ -539,7 +539,7 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
     """
     payload_cls = payload_cls_for(mutation_cls)
     meta = mutation_cls._mutation_meta
-    # The managed-transaction gate + pinned alias (BETA-055): the model-less
+    # The managed-transaction gate + pinned alias (mutation atomicity, shipped 0.0.14): the model-less
     # plain form routes to ``DEFAULT_DB_ALIAS`` (``resolve_write_alias(None)``);
     # the completion-spanning ``DjangoSchema`` transaction must already be open,
     # so a plain ``strawberry.Schema`` execution fails here, before any DB work.

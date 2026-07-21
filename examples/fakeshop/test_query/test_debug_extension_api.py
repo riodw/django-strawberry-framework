@@ -104,7 +104,8 @@ def install_probe_schema(_reload_project_schema_for_acceptance_tests):
     def _install(extensions):
         finalize_django_types()
         # DjangoSchema: the probe mounts the generated products write surface,
-        # whose pipeline requires the completion-spanning transaction (BETA-055).
+        # whose pipeline requires the completion-spanning transaction
+        # (mutation atomicity, shipped 0.0.14).
         _current["schema"] = DjangoSchema(
             query=Query,
             mutation=Mutation,

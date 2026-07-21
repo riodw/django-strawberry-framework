@@ -1069,7 +1069,7 @@ def test_g2_mutation_response_keeps_relation_with_bounded_query_count():
     # Bounded count = 14, derived from a real run (stable across runs):
     #   BEGIN + COMMIT                                    = 2 (the DjangoSchema
     #                                                         completion-spanning
-    #                                                         transaction - BETA-055)
+    #                                                         transaction - mutation atomicity, shipped 0.0.14)
     #   SAVEPOINT + RELEASE                               = 2 (the pipeline's inner
     #                                                         atomic, now nested)
     #   session + auth_user + user_perms + group_perms    = 4 (authorized-caller
@@ -3785,7 +3785,7 @@ def test_g2_serializer_mutation_response_keeps_relation_with_bounded_query_count
     # attestation). Per-query breakdown:
     #   BEGIN + COMMIT                                       = 2 (the DjangoSchema
     #                                                            completion-spanning
-    #                                                            transaction - BETA-055)
+    #                                                            transaction - mutation atomicity, shipped 0.0.14)
     #   SAVEPOINT + RELEASE                                  = 2 (the pipeline's inner
     #                                                            atomic, now nested)
     #   session + auth_user + user_perms + group_perms       = 4 (authorized-caller

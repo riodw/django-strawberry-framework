@@ -706,7 +706,7 @@ class _ValidatedMutationMeta:
         # subtracted from the create-required guard AND verified present at runtime. The model +
         # form flavors leave it ``None``.
         self.injected_fields = injected_fields
-        # ``Meta.select_for_update`` (spec-039 rev6 #14, expanded by BETA-055): the
+        # ``Meta.select_for_update`` (spec-039 rev6 #14, expanded by the 0.0.14 mutation-atomicity cut): the
         # base-manager ``SELECT ... FOR UPDATE`` row lock on the update / delete
         # locate AND every relation-target check, constrained by the visibility pk
         # subquery inside the write transaction. Every model-backed flavor (model /
@@ -779,7 +779,7 @@ def _validate_permission_classes(
 
 
 def validate_select_for_update(flavor: str, mutation_name: str, meta: Any) -> bool:
-    """Validate ``Meta.select_for_update`` for a model-backed flavor (default True - BETA-055).
+    """Validate ``Meta.select_for_update`` for a model-backed flavor (mutation atomicity, shipped 0.0.14).
 
     Every model-backed write flavor (model / ``ModelForm`` / serializer) shares
     this ONE validator so the key's contract cannot drift: the update / delete

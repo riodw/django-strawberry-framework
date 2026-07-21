@@ -51,7 +51,7 @@ def test_public_api_surface_is_pinned():
     # auth-mutations card) owns the ``0.0.13`` cut (Decision 12) jointly with the
     # spec-039 serializer flavor, so ``test_version`` is asserted at ``0.0.13``
     # above; the auth surface adds NO package-root exports (submodule-only per
-    # Decision 3). BETA-055 adds the two schema symbols: ``DjangoSchema`` (the
+    # Decision 3). The 0.0.14 mutation-atomicity cut adds the two schema symbols: ``DjangoSchema`` (the
     # REQUIRED schema class for generated mutations - its execution context holds
     # each mutation's transaction open through response completion) and
     # ``DjangoMutationExecutionContext`` (the subclassing seam for consumers with

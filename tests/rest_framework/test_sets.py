@@ -920,7 +920,7 @@ def test_model_flavor_base_unregressed():
     from django_strawberry_framework.mutations.sets import _ALLOWED_MUTATION_META_KEYS
 
     # The model allowed-key set gained only the shared ``select_for_update``
-    # (BETA-055); no serializer-only keys leaked in.
+    # (mutation atomicity, shipped 0.0.14); no serializer-only keys leaked in.
     assert (
         frozenset(
             {
@@ -1079,7 +1079,7 @@ def test_meta_select_for_update_stored_on_snapshot():
 
 
 def test_meta_select_for_update_defaults_true():
-    """``Meta.select_for_update`` defaults to ``True`` when unset (BETA-055: locked writes).
+    """``Meta.select_for_update`` defaults to ``True`` when unset (mutation atomicity, shipped 0.0.14: locked writes).
 
     The default flipped from opt-in (rev6 #14) to opt-out: the update/delete
     locate and relation-target checks lock through the base manager unless the
@@ -1096,7 +1096,7 @@ def test_meta_select_for_update_defaults_true():
 
 
 def test_meta_select_for_update_explicit_false_opts_out():
-    """An explicit ``Meta.select_for_update = False`` opts into unlocked writes (BETA-055)."""
+    """An explicit ``Meta.select_for_update = False`` opts into unlocked writes (mutation atomicity, shipped 0.0.14)."""
 
     class UnlockedMut(SerializerMutation):
         class Meta:

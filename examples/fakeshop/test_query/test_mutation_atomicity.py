@@ -1,7 +1,7 @@
-"""Live ``/graphql/`` acceptance for the BETA-055 response-completion transaction contract.
+"""Live ``/graphql/`` acceptance for the 0.0.14 mutation-atomicity response-completion transaction contract.
 
-Pins the atomicity fix tracked by KANBAN card **BETA-055** ("Mutation
-transactions and idempotency"): a ``DjangoMutation`` runs its write inside a
+Pins the mutation-atomicity contract shipped at 0.0.14 (commit 1b06c39e;
+tracked pre-renumber as card BETA-055): a ``DjangoMutation`` runs its write inside a
 transaction that graphql-core historically committed when the resolver
 returned - BEFORE the returned payload was *completed* (serialized) - so a
 completion failure left the write committed while the client saw
@@ -17,7 +17,7 @@ completion as ``Cannot return null for non-nullable field ...createdDate`` -
 by which point the create/update/delete side effect must ROLL BACK, not stay
 committed.
 
-These began life as ``xfail(strict=True)`` regressions; BETA-055 landed, they
+These began life as ``xfail(strict=True)`` regressions; the 0.0.14 mutation-atomicity work landed, they
 XPASSed, and the markers were removed - the assertions encode the shipped
 contract (no 500, the completion error is surfaced, the write rolled back).
 The success-side contract (a serializable payload still commits, and serial

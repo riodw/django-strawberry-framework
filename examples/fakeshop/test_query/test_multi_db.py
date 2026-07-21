@@ -291,7 +291,7 @@ def test_debug_extension_captures_shard_b_alias_rows(_build_debug_test_schema):
 
 
 # ---------------------------------------------------------------------------
-# BETA-055: write-alias pinning for generated mutations (live sharded HTTP)
+# Mutation atomicity (shipped 0.0.14): write-alias pinning for generated mutations (live sharded HTTP)
 # ---------------------------------------------------------------------------
 #
 # The write tests drive the PROJECT schema (config.schema - the real products

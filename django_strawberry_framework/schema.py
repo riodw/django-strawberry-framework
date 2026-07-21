@@ -1,6 +1,6 @@
 """``DjangoSchema`` - the schema whose mutation transactions span response completion.
 
-The BETA-055 commit-gap fix. A generated mutation's write pipeline runs inside
+The 0.0.14 mutation-atomicity commit-gap fix. A generated mutation's write pipeline runs inside
 ``transaction.atomic()``, but graphql-core *completes* (serializes) the returned
 payload only after the resolver returns - historically after that transaction had
 already committed. A completion failure (a non-nullable field resolving ``null``,

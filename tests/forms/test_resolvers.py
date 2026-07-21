@@ -1425,7 +1425,7 @@ def test_perform_mutate_override_runs_only_on_success():
 
 @pytest.mark.django_db
 def test_plain_form_rejects_write_sql_outside_the_write_phase():
-    """A plain-form ``clean_*`` write on the pinned alias fails closed (BETA-055 phase).
+    """A plain-form ``clean_*`` write on the pinned alias fails closed (mutation-atomicity phase, shipped 0.0.14).
 
     The model-less body now rides ``pipeline_alias_guard`` + ``pipeline_write_phase``
     like every other write flavor: validation is database-read-only, so an ORM

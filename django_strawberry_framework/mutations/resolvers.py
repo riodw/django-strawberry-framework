@@ -203,7 +203,7 @@ def run_write_pipeline_sync(
     is_update = meta.operation == "update"
 
     model = model_for(primary_type)
-    # The managed-transaction gate + the pinned write alias (BETA-055): the
+    # The managed-transaction gate + the pinned write alias (mutation atomicity, shipped 0.0.14): the
     # completion-spanning ``DjangoSchema`` transaction must already be open on the
     # router's ONE write alias - a plain ``strawberry.Schema`` execution fails
     # HERE, before any database work. Every query below (locate, relation
@@ -218,8 +218,8 @@ def run_write_pipeline_sync(
             node_id, id_error = coerce_lookup_id(id, primary_type)
             if id_error is not None:
                 return _error_payload([id_error])
-            # ``Meta.select_for_update`` (default True since BETA-055): a base-manager
-            # ``SELECT ... FOR UPDATE`` on the update locate, constrained by the
+            # ``Meta.select_for_update`` (default True since the 0.0.14 mutation-atomicity cut): a
+            # base-manager ``SELECT ... FOR UPDATE`` on the update locate, constrained by the
             # visibility queryset's pk subquery, inside this transaction.
             instance = locate_instance(
                 primary_type,
@@ -314,7 +314,7 @@ def run_write_pipeline_sync(
 def error_payload_builder(payload_cls: type, slot: str, using: str) -> Any:
     """Build the roll-back-then-envelope closure every model-backed error path returns through.
 
-    The single error-envelope constructor (spec-039 H6, centralized for BETA-055):
+    The single error-envelope constructor (spec-039 H6, centralized for mutation atomicity, shipped 0.0.14):
     a ``FieldError`` envelope means the mutation did NOT succeed, so nothing it
     wrote may persist. A flavor ``write_step`` whose write made a partial change
     and THEN raised a validation error - the custom ``serializer.save()`` that
@@ -848,8 +848,8 @@ def locate_instance(
     raises ``SyncMisuseError`` (``apply_type_visibility_sync`` closes the
     coroutine first).
 
-    **Row lock (``Meta.select_for_update``, default True since BETA-055).** The lock is a
-    base-manager ``SELECT ... FOR UPDATE`` constrained by the visibility queryset reduced to a
+    **Row lock (``Meta.select_for_update``, default True since the 0.0.14 mutation-atomicity cut).**
+    The lock is a base-manager ``SELECT ... FOR UPDATE`` constrained by the visibility queryset reduced to a
     pk subquery (``base_locked_queryset``) - never ``select_for_update()`` attached to the
     consumer's own queryset, whose joins / unions / annotations a ``FOR UPDATE`` cannot legally
     carry. Visibility is still enforced (a hidden row is absent from the subquery: not locked,
@@ -1025,7 +1025,7 @@ def refetch_optimized(
     ``edges { node }`` navigator - so the walker plans ``select_related`` /
     ``prefetch_related`` for the actual response shape.
 
-    ``alias`` pins the re-fetch to the pipeline's write alias (BETA-055): the row
+    ``alias`` pins the re-fetch to the pipeline's write alias (mutation atomicity, shipped 0.0.14): the row
     was just written inside the transaction on that alias, so reading it anywhere
     else would miss the uncommitted write.
     """
@@ -1181,7 +1181,7 @@ def _model_write_step(
     ``list[FieldError]`` on a validation / write failure. ``instance`` (the located
     update row, ``None`` for create) selects the save mode: a create saves the
     ``decoded`` target normally, an update saves it with ``force_update=True``
-    (the BETA-055 disappearing-row contract via ``forced_save_or_field_errors``).
+    (the 0.0.14 mutation-atomicity disappearing-row contract via ``forced_save_or_field_errors``).
     """
     target, m2m_assignments, exclude = decoded
 
@@ -1196,7 +1196,7 @@ def _model_write_step(
         if instance is None:
             write_error = save_or_field_errors(target.save)
         else:
-            # A direct model UPDATE saves with ``force_update=True`` (BETA-055): a
+            # A direct model UPDATE saves with ``force_update=True`` (mutation atomicity, shipped 0.0.14): a
             # located row a concurrent transaction deleted would otherwise be
             # silently re-INSERTed by ``save()``'s update-else-insert fallback,
             # reporting success for a write the deleter never sees. The zero-row
@@ -1209,9 +1209,9 @@ def _model_write_step(
 
 
 def forced_save_or_field_errors(target: Any) -> list[FieldError] | None:
-    """Run ``target.save(force_update=True)``; map races to the envelope else ``None`` (BETA-055).
+    """Run ``target.save(force_update=True)``; map races to the envelope else ``None``.
 
-    The update-side counterpart of ``save_or_field_errors``, with the
+    The update-side counterpart of ``save_or_field_errors`` (mutation atomicity, shipped 0.0.14), with the
     disappearing-row contract on top: a constraint race is the ``"__all__"``
     ``IntegrityError`` envelope (the standing Major-2 mapping, checked FIRST -
     ``IntegrityError`` is itself a ``DatabaseError``, so the order matters under
@@ -1345,7 +1345,7 @@ def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:
     it keys to the model-level ``""`` (``"__all__"``) bucket, since the refusal
     is about OTHER rows referencing this one, not about the ``id`` input.
 
-    **Zero-target-row delete is a ``conflict`` (BETA-055).** ``Model.delete()``
+    **Zero-target-row delete is a ``conflict`` (mutation atomicity, shipped 0.0.14).** ``Model.delete()``
     reports how many rows each model lost; the TARGET model's own count being
     zero means a concurrent transaction removed the row between the locate and
     the ``DELETE`` (unreachable while the default locate lock holds, reachable

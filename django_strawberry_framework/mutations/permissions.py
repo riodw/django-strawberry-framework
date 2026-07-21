@@ -60,7 +60,7 @@ _PERMISSION_ASYNC_RECOURSE = (
 
 
 def _require_sync_bool_auth_result(value: Any, *, owner: str, method: str) -> bool:
-    """Return a sync authorization bool; reject awaitables and non-bools (BETA-055).
+    """Return a sync authorization bool; reject awaitables and non-bools (mutation atomicity, shipped 0.0.14).
 
     The ONE write-authorization result contract the three sync seams share:
     ``has_permission``, ``check_permission``, and ``user.has_perm``. Each must
@@ -167,7 +167,7 @@ class DjangoModelPermission:
         codename = f"{model._meta.app_label}.{action}_{model._meta.model_name}"
         # ``user.has_perm`` is sync Django auth; an awaitable / non-bool return
         # is the same authorization-bypass class ``_require_sync_bool_auth_result``
-        # closes for ``has_permission`` / ``check_permission`` (BETA-055).
+        # closes for ``has_permission`` / ``check_permission`` (mutation atomicity, shipped 0.0.14).
         return _require_sync_bool_auth_result(
             user.has_perm(codename),
             owner=type(user).__name__,

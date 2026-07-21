@@ -63,7 +63,8 @@ from .inputs import INPUTS_MODULE_PATH
 # The attribute name ``DjangoMutationField`` stamps its synthesized resolver with,
 # pointing at the bound mutation class. ``schema.py::DjangoMutationExecutionContext``
 # reads it back (through Strawberry's field extension) to recognize a generated
-# top-level mutation field and open its completion-spanning transaction (BETA-055).
+# top-level mutation field and open its completion-spanning transaction
+# (mutation atomicity, shipped 0.0.14).
 MUTATION_CLASS_MARKER = "_django_mutation_cls"
 
 
@@ -294,8 +295,8 @@ def DjangoMutationField(  # noqa: N802  # PascalCase for the field-factory famil
     signature, annotations = _synthesized_mutation_signature(mutation_cls)
     _resolve.__signature__ = signature
     _resolve.__annotations__ = annotations
-    # The BETA-055 marker: ``DjangoMutationExecutionContext`` finds this through the
-    # built field's ``strawberry-definition`` extension and wraps the field's
+    # The mutation-atomicity marker (shipped 0.0.14): ``DjangoMutationExecutionContext`` finds this
+    # through the built field's ``strawberry-definition`` extension and wraps the field's
     # execution in the completion-spanning transaction.
     setattr(_resolve, MUTATION_CLASS_MARKER, mutation_cls)
     return strawberry.field(

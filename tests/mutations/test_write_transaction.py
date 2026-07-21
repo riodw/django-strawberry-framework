@@ -1,4 +1,4 @@
-"""The BETA-055 write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
+"""The 0.0.14 mutation-atomicity write-transaction contract (``DjangoSchema`` + ``utils/write_transaction.py``).
 
 System-under-test is the completion-spanning mutation transaction and its
 supporting seams:
@@ -735,7 +735,7 @@ def test_select_for_update_false_update_still_succeeds_unlocked():
 
 
 def test_model_flavor_meta_select_for_update_defaults_true_and_rejects_non_bool():
-    """The model flavor shares the BETA-055 validator: default True, non-bool refused."""
+    """The model flavor shares the mutation-atomicity validator: default True, non-bool refused."""
 
     class DefaultLocked(DjangoMutation):
         class Meta:

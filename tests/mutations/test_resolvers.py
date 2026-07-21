@@ -2376,13 +2376,13 @@ def test_validation_error_to_field_errors_non_dict_root_has_empty_path():
 
 
 # ---------------------------------------------------------------------------
-# Row locking on the update/delete locate (spec-039 rev6 #14, expanded by BETA-055)
+# Row locking on the update/delete locate (spec-039 rev6 #14, expanded by the 0.0.14 mutation-atomicity cut)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.django_db
 def test_locate_instance_locks_through_base_manager_subquery_by_default():
-    """The default locate acquires a base-manager ``FOR UPDATE`` constrained by the visibility pk subquery (BETA-055).
+    """The default locate acquires a base-manager ``FOR UPDATE`` constrained by the visibility pk subquery (mutation atomicity, shipped 0.0.14).
 
     The lock query must NOT be the consumer's visibility queryset with
     ``.select_for_update()`` attached (joins / unions / annotations cannot legally

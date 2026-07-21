@@ -81,7 +81,7 @@ A five-point T-shirt estimate of build effort — a planning estimate, not a com
 
 ## Progress to 1.0.0
 
-**71.4% complete** toward `1.0.0` - 45 of 63 cards done (72.6% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
+**71.4% complete** toward `1.0.0` - 45 of 63 cards done (72.3% size-weighted). Past the 50% mark. Backlog excluded; size-weighted by relative size (XS=1 .. XL=5).
 
 | Milestone | Cards done | Size-weighted |
 | --- | --- | --- |
@@ -500,7 +500,7 @@ Strawberry analogue of django-graphene-filters' Postgres full-text search family
 - `SearchRankFilter`: `SearchRank` weighting with `weights` / `cover_density` / `normalization` options.
 - `TrigramFilter`: `pg_trgm` `TrigramSimilarity` / `TrigramWordSimilarity` with a `kind` selector and a similarity threshold.
 - Postgres-only: degrade with a clear `ConfigurationError` (or skip the filter) on non-Postgres backends; never emit a malformed query on SQLite.
-- Prefix-shortcut operators (parity watch-item, carried over from `docs/feedback.md`): `django-graphene-filters` also exposes single-character search shortcut operators (e.g. `^ = @ $`) over the full-text surface. The `@` full-text-search prefix ships fully in `TODO-BETA-049-0.1.2` (`Meta.search_fields`); this card is scoped to the `SearchQueryFilter` / `SearchRankFilter` / `TrigramFilter` classes plus PG-specific full-text, and the remaining shortcut operators (`^ = $`) stay a spec watch-item — the spec decides whether they are part of the ported surface or intentionally left out.
+- Prefix-shortcut operators are owned by this card. Card 049 deliberately ships only unprefixed OR-of-`icontains` search and rejects declarations beginning with `^`, `=`, `@`, or `$`. This card decides which shortcuts enter the ported surface and must pin a clear fail-closed non-Postgres contract for `@`; none of the four is considered shipped by card 049.
 
 #### Definition of done
 
@@ -756,7 +756,7 @@ The product-catalog root schema is already live: four `DjangoConnectionField` ro
 
 - [ ] Wire the Relay `node` (single-object refetch) and `nodes` (batch refetch) root entry points into the fakeshop product-catalog schema, built on the shipped Relay story (`DONE-032-0.0.9`).
 - [ ] Add the connection `totalCount` opt-in on the product-catalog `DjangoConnectionField` roots, leaving connections that do not opt in unchanged.
-- [ ] Add in-process `schema.execute_sync` coverage under `examples/fakeshop/tests/` for the `node` / `nodes` entry points and `totalCount`.
+- [ ] Add in-process `schema.execute_sync` coverage under `examples/fakeshop/apps/products/tests/` for the `node` / `nodes` entry points and `totalCount`.
 - [ ] Add live `/graphql/` coverage under `examples/fakeshop/test_query/` exercising a `node` refetch by GlobalID, a `nodes` batch refetch, and a `totalCount` query.
 
 #### Note
@@ -786,15 +786,11 @@ The product-catalog root schema is already live: four `DjangoConnectionField` ro
 
 - [ ] Add live `/graphql/` acceptance tests under `examples/fakeshop/test_query/` for the activated product-catalog schema, reusing the library app's placement and schema-reload pattern.
 - [ ] Cover the product-catalog connection / query fields and the other activated Layer 3 public surfaces end-to-end over HTTP.
-- [ ] Keep in-process `schema.execute_sync` tests under `examples/fakeshop/tests/`; live HTTP tests stay under `examples/fakeshop/test_query/`.
+- [ ] Keep per-app in-process `schema.execute_sync` tests under `examples/fakeshop/apps/products/tests/`; live HTTP tests stay under `examples/fakeshop/test_query/`.
 
 #### Why it matters
 
 - The library app already has live `/graphql/` acceptance tests under `examples/fakeshop/test_query/`.
-
-#### Dependencies
-
-- `TODO-BETA-055-0.1.5` (Fakeshop GraphQL schema activation) — these live HTTP tests exercise the product-catalog schema that card activates, so they land after it.
 
 #### Test plan
 
@@ -805,161 +801,14 @@ The product-catalog root schema is already live: four `DjangoConnectionField` ro
 - activating the product-catalog fakeshop GraphQL schema
 - connection/query fields and other Layer 3 public surfaces
 - Future product-catalog HTTP tests should use the same placement and schema-reload pattern.
-- In-process `schema.execute_sync` tests still go under `examples/fakeshop/tests/`.
+- In-process `schema.execute_sync` tests still go under `examples/fakeshop/apps/products/tests/`.
 
 #### Card references
 
 - Dependency: Depends on the activated product-catalog schema; these HTTP tests exercise the surface that card wires. -> `TODO-BETA-055-0.1.5` - Fakeshop GraphQL schema activation
 
-<a id="mutation_idempotency_keys"></a>
-### [TODO-BETA-057-0.1.6 - Mutation idempotency keys](KANBAN.html#mutation_idempotency_keys)
-
-- Priority: High
-- Status: To Do
-- Relative size: S
-- Labels: `mutations`, `performance`, `security`
-
-#### Predicted files
-
-- [`django_strawberry_framework/mutations/`](django_strawberry_framework/mutations/)
-- [`examples/fakeshop/test_query/`](examples/fakeshop/test_query/)
-- [`tests/mutations/`](tests/mutations/)
-
-#### Planning note
-
-Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutation surface exists and before migration/adoption docs lock the pre-1.0 story.
-
-#### Dependencies
-
-- `DONE-036-0.0.11` - Mutations + auto-generated Input types
-
-#### Scope
-
-- Shipped baseline (given, commit 1b06c39e): every top-level mutation field already runs inside an always-on `transaction.atomic()` wrap, with `Meta.select_for_update` available to lock the affected rows. This card builds on that baseline and adds idempotency only — it introduces no new transaction opt-in.
-- Add `Meta.idempotency_key = "request_id"` and `Meta.idempotency_ttl = 86400` support backed by `django.core.cache`, returning the first successful response for duplicate keys inside the TTL.
-- Cache only successful responses; validation, permission, and database failures roll back inside the always-on atomic wrap and skip the idempotency write so client retries naturally re-execute.
-- Keep the surface DRF-shaped and mutation-local: declaration lives on each `DjangoMutation.Meta`, with safe defaults and no global setting required.
-
-#### Definition of done
-
-- [ ] New or amended mutation spec documents the idempotency Meta keys (`Meta.idempotency_key` / `Meta.idempotency_ttl`), cache-key shape, TTL behavior, retry semantics, and failure rollback rules (the always-on atomic wrap is the shipped baseline this layers on).
-- [ ] Idempotency layers on the already-shipped always-on atomic mutation execution path (commit 1b06c39e); this card adds no new transaction wrapping, and the idempotency cache write happens only after the atomic write commits.
-- [ ] Idempotency cache entries are scoped by mutation class, key value, authenticated principal or anonymous scope, and operation arguments so unrelated calls do not collide.
-- [ ] Tests cover successful replay, validation failure retry, exception rollback, TTL expiration, cache backend errors failing loudly, and sync/async mutation paths where supported.
-- [ ] Live `/graphql/` coverage exercises a real fakeshop mutation twice with the same idempotency key and proves the second response does not double-write.
-
-#### Foundation-slice seam
-
-- `DONE-036-0.0.11` owns the base `DjangoMutation` class, generated input types, and shared `errors: list[FieldError]` envelope; this card layers safety semantics onto that lifecycle instead of inventing a separate mutation primitive.
-- DRF serializer and Form-based mutation cards inherit the same atomic/idempotency implementation through the shared mutation base once their adapters land.
-
-#### Files likely touched
-
-- `django_strawberry_framework/mutations/` or the mutation package introduced by `DONE-036-0.0.11`.
-- `tests/mutations/` plus live fakeshop GraphQL mutation tests.
-- `docs/GLOSSARY.md` and the mutation spec when the feature ships.
-
-#### Verified in upstream
-
-- Neither graphene-django nor strawberry-graphql-django ships mutation idempotency; this is a differentiator rather than an upstream-parity card.
-
-#### Why it matters
-
-- Stripe-style idempotency is production table stakes for payment, order, and inventory writes, but Django GraphQL packages leave it to each app.
-- Combining `transaction.atomic()` with keyed response replay makes generated mutations safe by default for retries, client timeouts, and duplicate submissions.
-
-#### Dependencies
-
-- Builds on the core DjangoMutation lifecycle and generated input envelope from DONE-036-0.0.11.
-
-#### Note
-
-- Original backlog score: Realistic 10/10, Impact 8/10, Difficulty 3/10; bang-for-buck score 26.67.
-
-#### Card references
-
-- Dependency: Builds on the core DjangoMutation lifecycle and generated input envelope from DONE-036-0.0.11. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
-
-<a id="migration_and_adoption_guides"></a>
-### [TODO-BETA-058-0.1.7 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
-
-- Priority: Medium
-- Status: To Do
-- Relative size: M
-- Labels: `docs`, `guides`, `public-api`
-
-#### Scope
-
-- Add a `graphene-django` migration guide covering `DjangoObjectType` to `DjangoType`, enum/field conversion differences, query optimizations, and Relay caveats.
-- Add a `strawberry-graphql-django` migration guide covering decorator-to-`Meta` translation, optimizer differences, `get_queryset`, and optimizer hints.
-- Add concise notes for DRF / django-filter users mapping serializers/filtersets/orders into the planned Layer 3 surfaces.
-
-#### Definition of done
-
-- [ ] New docs are added for the two major migration paths.
-- [ ] README and `GLOSSARY.md` link to the migration docs.
-- [ ] Guides distinguish shipped migration steps from planned Layer 3 migration targets.
-
-#### Files likely touched
-
-- future migration docs under `docs/`
-- `docs/README.md`
-- `docs/GLOSSARY.md`
-
-#### Note
-
-- docs-only but substantial: two full migration guides (graphene-django → and strawberry-graphql-django →) plus DRF / django-filter mapping notes, with README / GLOSSARY links. No code.
-- The package is intentionally shaped for teams coming from `django-filter`, DRF, `graphene-django`, and `strawberry-graphql-django`.
-- The feature docs explain the positioning, but there are no dedicated migration guides yet.
-
-<a id="adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines"></a>
-### [TODO-BETA-059-0.1.7 - Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
-
-- Priority: Medium-high
-- Status: To Do
-- Relative size: M
-- Labels: `adversarial-testing`, `hardening`, `tests`
-
-#### Predicted files
-
-- [`examples/fakeshop/test_query/README.md`](examples/fakeshop/test_query/README.md)
-- [`tests/`](tests/)
-
-#### Scope
-
-- Hostile wire values: bad-base64 / wrong-`type_name` GlobalIDs, oversized `in` lists, unicode / emoji / null bytes, `strawberry.UNSET` / `None` across every operator-bag slot.
-
-#### Definition of done
-
-- [ ] A dedicated adversarial suite under `tests/` exercises the categories above; every hostile input fails LOUDLY with a typed error rather than crashing.
-- [ ] Root `tests/` holds only genuinely-unreachable-from-live cases plus the new adversarial ones; any remaining live-reachable duplicates are pruned (per `examples/fakeshop/test_query/README.md`).
-- [ ] Coverage stays at 100% without relying on the pruned duplicates.
-
-#### Files likely touched
-
-- new adversarial test modules under `tests/`
-- `examples/fakeshop/test_query/README.md` (cross-reference the adversarial-vs-unreachable split)
-
-#### Why it matters
-
-- `fail_under = 100` proves every LINE executes, not that the code is CORRECT under abuse. The failures that matter — deeply nested logic trees, malformed / wrong-`type_name` GlobalIDs, cyclic `RelatedFilter` graphs, conflicting multi-owner reuse, UNSET/None permutations, oversized `Meta.fields = "__all__"` expansions, unicode / null-byte / oversized values — are exactly the ones a happy-path live query never exercises.
-
-#### Note
-
-- An in-process `tests/` (NON-`/graphql/`) hardening pass whose goal is to BREAK the framework, not to earn line coverage. Live-reachable coverage already lives in `examples/fakeshop/test_query/` per its README rule; the root `tests/` tree is reserved for cases a live query cannot reach — fill it with hostile / pathological inputs rather than coverage duplicates.
-- Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`).
-- There is no deliberate "try to break it" suite; adversarial inputs are covered only incidentally.
-- Property-based / fuzz-style tests (e.g. Hypothesis) for the filter input normalizer, GlobalID decode/validate, and `Meta.fields = "__all__"` expansion.
-- Pathological structure: logic-tree nesting past `_MAX_LOGIC_DEPTH`, cyclic / self-referential `RelatedFilter` graphs, conflicting multi-owner reuse, proxy / MTI model mixing.
-- Scale / resource: very large `"__all__"` field sets and many-relation BFS; assert every failure surfaces as `ConfigurationError` / `GraphQLError` (never a bare traceback) and finalize stays bounded.
-- Extend the same philosophy to the future order / aggregate / fieldset subsystems as they land.
-
-#### Card references
-
-- Related: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`). -> `DONE-027-0.0.8` - Filtering subsystem
-
 <a id="optimizer_explain_mode"></a>
-### [TODO-BETA-060-0.1.5 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
+### [TODO-BETA-057-0.1.5 - Optimizer explain mode](KANBAN.html#optimizer_explain_mode)
 
 - Priority: High
 - Status: To Do
@@ -1015,8 +864,77 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 
 - Original backlog score: Realistic 10/10, Impact 8/10, Difficulty 2/10; bang-for-buck score 40.0.
 
+<a id="mutation_idempotency_keys"></a>
+### [TODO-BETA-058-0.1.6 - Mutation idempotency keys](KANBAN.html#mutation_idempotency_keys)
+
+- Priority: High
+- Status: To Do
+- Relative size: M
+- Labels: `mutations`, `performance`, `security`
+
+#### Predicted files
+
+- [`django_strawberry_framework/mutations/`](django_strawberry_framework/mutations/)
+- [`examples/fakeshop/test_query/`](examples/fakeshop/test_query/)
+- [`tests/mutations/`](tests/mutations/)
+
+#### Planning note
+
+Promoted from BACKLOG.md item 23 as a Beta differentiator after the core mutation surface exists and before migration/adoption docs lock the pre-1.0 story.
+
+#### Dependencies
+
+- `DONE-036-0.0.11` - Mutations + auto-generated Input types
+
+#### Scope
+
+- Shipped baseline (given, commit 1b06c39e): every top-level mutation field already runs inside an always-on `transaction.atomic()` wrap, with `Meta.select_for_update` available to lock the affected rows. This card builds on that baseline and adds idempotency only — it introduces no new transaction opt-in.
+- Add `Meta.idempotency_key = "request_id"` and `Meta.idempotency_ttl = 86400` backed by a durable package-owned idempotency record. A database uniqueness constraint over the fully scoped key serializes concurrent first attempts; the stored terminal response and status are the replay source of truth.
+- Create the idempotency reservation and mutation side effects in the same database transaction, and persist the successful terminal response before that transaction commits. Validation, permission, completion, and database failures roll back both. `django.core.cache` may accelerate committed replays only; it is never the authority.
+- Keep the surface DRF-shaped and mutation-local: declaration lives on each `DjangoMutation.Meta`, with safe defaults and no global setting required.
+
+#### Definition of done
+
+- [ ] New or amended mutation spec documents the idempotency Meta keys (`Meta.idempotency_key` / `Meta.idempotency_ttl`), durable-record schema and migration, canonical scope key, reservation state machine, TTL/reclamation behavior, terminal-response replay, concurrent retry semantics, and failure rollback rules.
+- [ ] A unique durable reservation participates in the same always-on atomic boundary as the mutation write. The successful terminal response is stored before commit; a concurrent duplicate waits for or reads that committed outcome and never executes the mutation body twice. Any cache write is post-commit acceleration only.
+- [ ] The durable idempotency key is scoped by mutation class, key value, authenticated principal or anonymous scope, and a canonical digest of operation arguments so unrelated calls cannot collide; reuse with a different digest fails loudly.
+- [ ] Tests cover concurrent same-key submissions, a client retry after the database commit but before response receipt/cache fill, stale-reservation recovery and TTL expiry, successful replay, validation/completion/exception rollback, cache unavailability, and sync/async mutation paths where supported.
+- [ ] Live `/graphql/` coverage exercises a real fakeshop mutation twice with the same idempotency key and proves the second response replays without a second write; a database-backed concurrency regression proves simultaneous duplicates also write once.
+
+#### Foundation-slice seam
+
+- `DONE-036-0.0.11` owns the base `DjangoMutation` class, generated input types, and shared `errors: list[FieldError]` envelope; this card layers safety semantics onto that lifecycle instead of inventing a separate mutation primitive.
+- DRF serializer and Form-based mutation cards inherit the same atomic/idempotency implementation through the shared mutation base once their adapters land.
+
+#### Files likely touched
+
+- `django_strawberry_framework/mutations/` plus the package-owned durable idempotency model and migration.
+- `tests/mutations/` plus live fakeshop GraphQL mutation tests.
+- `docs/GLOSSARY.md` and the mutation spec when the feature ships.
+
+#### Verified in upstream
+
+- Neither graphene-django nor strawberry-graphql-django ships mutation idempotency; this is a differentiator rather than an upstream-parity card.
+
+#### Why it matters
+
+- Stripe-style idempotency is production table stakes for payment, order, and inventory writes, but Django GraphQL packages leave it to each app.
+- Combining the always-on transaction with a durable unique reservation and terminal-response replay makes generated mutations safe across retries, client timeouts, duplicate submissions, concurrent workers, and cache/process loss.
+
+#### Dependencies
+
+- Builds on the core DjangoMutation lifecycle and generated input envelope from DONE-036-0.0.11.
+
+#### Note
+
+- Revised score after the durable concurrency design: Realistic 9/10, Impact 8/10, Difficulty 6/10; the database record, migration, state machine, and crash/concurrency matrix make this a medium slice.
+
+#### Card references
+
+- Dependency: Builds on the core DjangoMutation lifecycle and generated input envelope from DONE-036-0.0.11. -> `DONE-036-0.0.11` - Mutations + auto-generated Input types
+
 <a id="configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key"></a>
-### [TODO-BETA-061-0.1.6 - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)](KANBAN.html#configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key)
+### [TODO-BETA-059-0.1.6 - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)](KANBAN.html#configurable_filterlogic_key_namespace_filter_keyand_keyor_keynot_key)
 
 - Priority: Low
 - Parity: ⚛️ graphene-django (Required)
@@ -1033,7 +951,7 @@ Promoted from BACKLOG.md item 7 as a pre-1.0 differentiator: expose the optimize
 
 #### Planning note
 
-Recreate django-graphene-filters' configurable filter-tree key namespace — `DJANGO_GRAPHENE_FILTERS` `FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY` (`django_graphene_filters/conf.py:13-16`, defaults `filter`/`and`/`or`/`not`) — the one DGF config surface with no analogue (`docs/feedback.md` finding P3). The package currently hardcodes the GraphQL names (`_LOGIC_KEYS` at `filters/inputs.py:131`, `CONNECTION_FILTER_KWARG` at `utils/connections.py:41`); this card makes them settings-driven while keeping the defaults and the default SDL byte-for-byte unchanged.
+Promoted from BACKLOG.md as the remaining django-graphene-filters configuration-parity gap: recreate the configurable filter-tree key namespace — `DJANGO_GRAPHENE_FILTERS` `FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY` (`django_graphene_filters/conf.py:13-16`, defaults `filter`/`and`/`or`/`not`). The package currently hardcodes the GraphQL names (`_LOGIC_KEYS` at `filters/inputs.py:131`, `CONNECTION_FILTER_KWARG` at `utils/connections.py:41`); this card makes them settings-driven while keeping the defaults and the default SDL byte-for-byte unchanged.
 
 #### Dependencies
 
@@ -1062,11 +980,11 @@ Recreate django-graphene-filters' configurable filter-tree key namespace — `DJ
 
 #### Architectural posture
 
-- This recreates DGF's one filtering config surface with no analogue (`docs/feedback.md` finding P3). The fixed wire names were a deliberate simplification; this card makes them configurable behind settings while keeping the defaults — and the byte-for-byte default SDL — unchanged. The cost is moving `_LOGIC_KEYS` off the import-time fast path to a settings-resolved value; the spec pins the resolution point so import ordering stays correct. It does not change the default schema and only the GraphQL wire names are configurable — the Python attribute names stay fixed.
+- This recreates the one DGF filtering configuration surface with no package analogue. The fixed wire names were a deliberate simplification; this card makes them configurable behind settings while keeping the defaults — and the byte-for-byte default SDL — unchanged. The cost is moving `_LOGIC_KEYS` off the import-time fast path to a settings-resolved value; the spec pins the resolution point so import ordering stays correct. It does not change the default schema and only the GraphQL wire names are configurable — the Python attribute names stay fixed.
 
 #### Why it matters
 
-- Closes the last django-graphene-filters config-surface gap recorded in `docs/feedback.md` (finding P3): `DJANGO_GRAPHENE_FILTERS` `FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY` had no analogue and no card.
+- Closes the remaining django-graphene-filters configuration-surface gap: `DJANGO_GRAPHENE_FILTERS` `FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY` has no package analogue.
 - Lets a django-graphene-filters consumer who renamed their filter-tree keys (e.g. to avoid clashing with an existing `filter`/`and`/`or`/`not` model field) migrate without a breaking schema rename.
 
 #### Dependencies
@@ -1078,6 +996,97 @@ Recreate django-graphene-filters' configurable filter-tree key namespace — `DJ
 
 - Dependency: `DONE-027-0.0.8` (Filtering subsystem) — owns `_LOGIC_KEYS` and the filter-tree input-type generation whose wire names this card makes configurable. -> `DONE-027-0.0.8` - Filtering subsystem
 - Dependency: `DONE-030-0.0.9` (`DjangoConnectionField`) — owns the `filter` argument (`CONNECTION_FILTER_KWARG`) that `FILTER_KEY` renames. -> `DONE-030-0.0.9` - `DjangoConnectionField`
+
+<a id="migration_and_adoption_guides"></a>
+### [TODO-BETA-060-0.1.7 - Migration and adoption guides](KANBAN.html#migration_and_adoption_guides)
+
+- Priority: Medium
+- Status: To Do
+- Relative size: M
+- Labels: `docs`, `guides`, `public-api`
+
+#### Dependencies
+
+- `TODO-BETA-059-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+
+#### Scope
+
+- Add a `graphene-django` migration guide covering `DjangoObjectType` to `DjangoType`, enum/field conversion differences, query optimizations, and Relay caveats.
+- Add a `strawberry-graphql-django` migration guide covering decorator-to-`Meta` translation, optimizer differences, `get_queryset`, and optimizer hints.
+- Add concise notes for DRF / django-filter users mapping serializers/filtersets/orders into the planned Layer 3 surfaces.
+
+#### Definition of done
+
+- [ ] New docs are added for the two major migration paths.
+- [ ] README and `GLOSSARY.md` link to the migration docs.
+- [ ] Guides distinguish shipped migration steps from planned Layer 3 migration targets.
+
+#### Files likely touched
+
+- future migration docs under `docs/`
+- `docs/README.md`
+- `docs/GLOSSARY.md`
+
+#### Note
+
+- docs-only but substantial: two full migration guides (graphene-django → and strawberry-graphql-django →) plus DRF / django-filter mapping notes, with README / GLOSSARY links. No code.
+- The package is intentionally shaped for teams coming from `django-filter`, DRF, `graphene-django`, and `strawberry-graphql-django`.
+- The feature docs explain the positioning, but there are no dedicated migration guides yet.
+
+#### Card references
+
+- Dependency: The final configurable filter/logic key namespace (`TODO-BETA-059-0.1.6`) must ship first so both migration guides describe the released public surface. -> `TODO-BETA-059-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+
+<a id="adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines"></a>
+### [TODO-BETA-061-0.1.7 - Adversarial non-live test suite (try to break it, not just cover lines)](KANBAN.html#adversarial_non_live_test_suite_try_to_break_it_not_just_cover_lines)
+
+- Priority: Medium-high
+- Status: To Do
+- Relative size: M
+- Labels: `adversarial-testing`, `hardening`, `tests`
+
+#### Predicted files
+
+- [`examples/fakeshop/test_query/README.md`](examples/fakeshop/test_query/README.md)
+- [`tests/`](tests/)
+
+#### Dependencies
+
+- `TODO-BETA-059-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+
+#### Scope
+
+- Hostile wire values: bad-base64 / wrong-`type_name` GlobalIDs, oversized `in` lists, unicode / emoji / null bytes, `strawberry.UNSET` / `None` across every operator-bag slot.
+
+#### Definition of done
+
+- [ ] A dedicated adversarial suite under `tests/` exercises the categories above; every hostile input fails LOUDLY with a typed error rather than crashing.
+- [ ] Root `tests/` holds only genuinely-unreachable-from-live cases plus the new adversarial ones; any remaining live-reachable duplicates are pruned (per `examples/fakeshop/test_query/README.md`).
+- [ ] Coverage stays at 100% without relying on the pruned duplicates.
+
+#### Files likely touched
+
+- new adversarial test modules under `tests/`
+- `examples/fakeshop/test_query/README.md` (cross-reference the adversarial-vs-unreachable split)
+
+#### Why it matters
+
+- `fail_under = 100` proves every LINE executes, not that the code is CORRECT under abuse. The failures that matter — deeply nested logic trees, malformed / wrong-`type_name` GlobalIDs, cyclic `RelatedFilter` graphs, conflicting multi-owner reuse, UNSET/None permutations, oversized `Meta.fields = "__all__"` expansions, unicode / null-byte / oversized values — are exactly the ones a happy-path live query never exercises.
+
+#### Note
+
+- An in-process `tests/` (NON-`/graphql/`) hardening pass whose goal is to BREAK the framework, not to earn line coverage. Live-reachable coverage already lives in `examples/fakeshop/test_query/` per its README rule; the root `tests/` tree is reserved for cases a live query cannot reach — fill it with hostile / pathological inputs rather than coverage duplicates.
+- Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`).
+- There is no deliberate "try to break it" suite; adversarial inputs are covered only incidentally.
+- Property-based / fuzz-style tests (e.g. Hypothesis) for the filter input normalizer, GlobalID decode/validate, and `Meta.fields = "__all__"` expansion.
+- Pathological structure: logic-tree nesting past `_MAX_LOGIC_DEPTH`, cyclic / self-referential `RelatedFilter` graphs, conflicting multi-owner reuse, proxy / MTI model mixing.
+- Scale / resource: very large `"__all__"` field sets and many-relation BFS; assert every failure surfaces as `ConfigurationError` / `GraphQLError` (never a bare traceback) and finalize stays bounded.
+- Extend the same philosophy to the future order / aggregate / fieldset subsystems as they land.
+
+#### Card references
+
+- Related: Root `tests/` historically mixed genuinely-unreachable-from-live cases with some that merely duplicated coverage already earned by the live `test_query/` suites (a first prune of redundant filter unit tests landed alongside `DONE-027-0.0.8`). -> `DONE-027-0.0.8` - Filtering subsystem
+- Dependency: The final configurable filter/logic key namespace (`TODO-BETA-059-0.1.6`) must ship first so the adversarial suite exercises the released public surface before the stable gate. -> `TODO-BETA-059-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
 
 <a id="stable_release_api_freeze_cleanup_verification_beta_stable"></a>
 ### [TODO-STABLE-062-1.0.0 - Stable release (API freeze, cleanup, verification, beta → stable)](KANBAN.html#stable_release_api_freeze_cleanup_verification_beta_stable)
@@ -1098,7 +1107,7 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Definition of done
 
-- [ ] Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`.
+- [ ] Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-061-0.1.7`) is in `DONE`.
 - [ ] API surface audit: top-level `__all__` confirmed stable; every public symbol documented; no `# experimental` markers in shipped code; no `_private` symbols accidentally referenced from docs.
 - [ ] SemVer policy committed in CHANGELOG header: every release after `1.0.0` follows MAJOR / MINOR / PATCH rules strictly; pre-`0.1.0` deprecation shims removed entirely.
 - [ ] Full async + sync coverage matrix validated; no `sync_to_async` workarounds remain on any resolver path.
@@ -1129,13 +1138,8 @@ planned; this is the final card in the Beta queue and gates the beta → stable 
 
 #### Card references
 
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-048-0.1.1` - `FieldSet`
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-058-0.1.7` - Migration and adoption guides
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-052-0.1.3` - Layer 3 Meta key promotion
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-056-0.1.5` - Product-catalog Layer 3 HTTP GraphQL tests
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-059-0.1.7` - Adversarial non-live test suite (try to break it, not just cover lines)
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-060-0.1.5` - Optimizer explain mode
-- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-058-0.1.7` plus `TODO-BETA-052-0.1.3` and `TODO-BETA-056-0.1.5`, and the pre-stable gate cards `TODO-BETA-059-0.1.7` / `TODO-BETA-060-0.1.5` / `TODO-BETA-061-0.1.6`) is in `DONE`. -> `TODO-BETA-061-0.1.6` - Configurable filter/logic key namespace (`FILTER_KEY`/`AND_KEY`/`OR_KEY`/`NOT_KEY`)
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-048-0.1.1` - `FieldSet`
+- Related: Every other Beta card (`TODO-BETA-048-0.1.1` through `TODO-BETA-061-0.1.7`) is in `DONE`. -> `TODO-BETA-061-0.1.7` - Adversarial non-live test suite (try to break it, not just cover lines)
 
 ## Done
 
@@ -1533,7 +1537,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 - [x] Implement `django_strawberry_framework/routers.py` exposing `DjangoGraphQLProtocolRouter` (final name pinned during implementation).
 - [x] `channels` is a soft dependency: top-level package import must not fail if `channels` is not installed. The helper wraps `channels` imports lazily and raises `ImportError` with an install hint when it is actually called.
 - [x] Tests under `tests/test_routers.py` exercise both the channels-present and channels-absent paths.
-- [x] Migration guide (`TODO-BETA-058-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
+- [x] Migration guide (`TODO-BETA-060-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location.
 
 #### Verified in upstream
 
@@ -1543,7 +1547,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 #### Architectural posture
 
 - The router helper must use a **distinctly-ours symbol name** (working name: `DjangoGraphQLProtocolRouter`) so the module is unambiguously ours and does not impersonate the upstream API. This respects the [`GOAL.md`][goal] non-goal "a thin wrapper around `strawberry-graphql-django`".
-- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-058-0.1.7`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
+- Migration ergonomics are preserved by the upstream-equivalent mapping in the migration guide (`TODO-BETA-060-0.1.7`), not by copying the symbol name. A migrant changes one import line: `from strawberry_django.routers import AuthGraphQLProtocolTypeRouter` → `from django_strawberry_framework.routers import DjangoGraphQLProtocolRouter`.
 
 #### Why it matters
 
@@ -1557,7 +1561,7 @@ Shipped cards, newest first. Each retains its spec link, parity claims, and comp
 
 #### Card references
 
-- Related: Migration guide (`TODO-BETA-058-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-058-0.1.7` - Migration and adoption guides
+- Related: Migration guide (`TODO-BETA-060-0.1.7`) gains a one-row entry in its "symbol equivalents" table mapping `AuthGraphQLProtocolTypeRouter` → `DjangoGraphQLProtocolRouter`, so the symbol rename is documented in one canonical location. -> `TODO-BETA-060-0.1.7` - Migration and adoption guides
 
 <a id="auth_mutations_login_logout_register"></a>
 ### [DONE-040-0.0.13 - Auth mutations (login / logout / register)](KANBAN.html#auth_mutations_login_logout_register)

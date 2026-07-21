@@ -82,6 +82,110 @@ The envelope core is shipped (`mutations/inputs.py::FieldError`, spec-036 Decisi
 
 ## Optimizer
 
+### `sqlite_correlated_json_nested_fetch`
+
+**Realistic**: 6/10 — Django exposes the required correlated-subquery and JSON-building
+primitives, but preserving model-field type fidelity across SQLite's JSON representation needs
+an explicit codec matrix.
+
+**Impact**: 3/10 — It would give SQLite a third batched nested-connection strategy, primarily
+benefiting local development and test deployments; production PostgreSQL already has the
+lateral strategy.
+
+**Difficulty**: 7/10 — The strategy is comparable in size to the lateral renderer and must prove
+pagination, null, decimal, date/time, UUID, JSON, and custom-field hydration parity.
+
+**Source**: Deferred from the completed optimizer-improvement program (2026-07-17). That program
+deliberately excluded a SQLite correlated-JSON strategy because it was an independent feature
+slice, not a hardening detail.
+
+**What we'd do**: add an opt-in nested-fetch strategy that renders each parent's page as a
+correlated JSON subquery on SQLite, then hydrates the typed rows through one documented codec
+boundary. Unsupported field types or queryset shapes must decline the strategy and preserve the
+existing per-parent fallback.
+
+**Spec**:
+
+- Define a capability gate independently of the windowed and PostgreSQL-lateral gates; never
+  select the strategy merely because `connection.vendor == "sqlite"`.
+- Pin exact JSON round-trip behavior for every Django scalar family used by the package, including
+  nulls and custom fields. A value whose database representation cannot be reconstructed without
+  loss makes the shape ineligible.
+- Preserve the existing nested connection contracts: one batched query, per-parent ordering and
+  bounds, marker/probe/count semantics, keyset cursor materialization, and strictness-visible
+  fallback when the strategy declines.
+- Keep JSON assembly and typed hydration behind one seam so a future backend can reuse either half
+  without copying the pagination planner.
+
+**Composes with**: the shipped windowed nested-fetch strategy, the PostgreSQL lateral strategy,
+and optimizer strictness diagnostics.
+
+### `backward_nested_keyset_pagination`
+
+**Realistic**: 8/10 — Root keyset pagination already proves the cursor algebra; the remaining work
+is carrying the backward range into the per-parent nested planner and both batched renderers.
+
+**Impact**: 6/10 — Clients can navigate large nested connections backwards without dropping to
+offset pagination or incurring per-parent queries.
+
+**Difficulty**: 6/10 — Reversed ordering, inclusive/exclusive cursor bounds, `hasPreviousPage`,
+and `last` plus `after` composition must agree across ORM windows, lateral SQL, and resolution.
+
+**Source**: Deferred from the completed optimizer-improvement program (2026-07-17), which treated
+backward nested keyset pagination as its own cursor-math feature rather than folding it into count
+policy work.
+
+**What we'd do**: batch nested keyset connections that use `before:` or the supported
+`last`-with-`after` form, preserving Relay page-info semantics and deterministic ordering for
+every parent.
+
+**Spec**:
+
+- Normalize the backward seek once in the shared nested range plan; the window and lateral
+  strategies consume the same structured predicate rather than reimplementing cursor math.
+- Prove mixed-direction and nullable order terms, deterministic primary-key tiebreakers, empty and
+  overshot ranges, alias-divergent windows, and cursor columns omitted from the node selection.
+- Derive `hasPreviousPage` and `hasNextPage` from explicit fetch modes and sentinels; do not force a
+  partition count unless an observed field genuinely requires one.
+- Decline unsupported queryset shapes before planning and retain the strictness-visible per-parent
+  fallback.
+
+**Composes with**: shipped root keyset pagination, nested windowed fetching, PostgreSQL lateral
+fetching, and the count-free probe policy.
+
+### `mti_aware_lateral_nested_fetch`
+
+**Realistic**: 7/10 — Django's inheritance metadata identifies the parent-link joins, but the raw
+SQL renderer needs a disciplined alias and hydration contract for every concrete table involved.
+
+**Impact**: 4/10 — Multi-table-inheritance schemas are less common, but affected nested
+connections currently lose the lateral fast path entirely.
+
+**Difficulty**: 6/10 — Join construction, duplicate column names, deferred projections, inherited
+ordering fields, and child-instance hydration all need cross-version PostgreSQL coverage.
+
+**Source**: Deferred from the completed optimizer-improvement program (2026-07-17). The shipped
+lateral recognizer safely declines multi-table inheritance; expanding it is a separate strategy
+capability.
+
+**What we'd do**: teach the lateral strategy to render the concrete parent-link join graph for a
+multi-table-inherited child model while preserving Django's instance-hydration and projection
+semantics.
+
+**Spec**:
+
+- Build joins from Django model metadata and the compiler's resolved table aliases; never infer
+  parent tables from naming conventions.
+- Select and alias all identity, parent-link, ordering, cursor, and requested projection columns
+  exactly once, then hydrate the most-derived model without lazy parent-table loads.
+- Apply visibility predicates to the table that owns each referenced column and reject subqueries
+  or joins outside the recognized inheritance graph.
+- Keep the current safe downgrade for every unrecognized shape and emit no lateral advisory when
+  the strategy declines.
+
+**Composes with**: the shipped PostgreSQL lateral nested-fetch strategy, projection extension,
+visibility-scope recognition, and composite-index advisory.
+
 ### `selection_aware_annotations`
 
 **Realistic**: 9/10 — The walker already does selection-tree injection for `only()`/`Prefetch`; annotations follow the same pattern.
@@ -1612,9 +1716,26 @@ Cards in this section are intentionally unscheduled — kept for design context,
 
 **Impact**: 3/10 — Guardrail ergonomics; catches accidental over-registration, adds no capability.
 
-**Source**: relocated 2026-07-20 from the migration-guides card (`TODO-BETA-058-0.1.7`, then targeting `0.1.6`), where it was implementation scope on a docs-only card.
+**Difficulty**: 3/10 — The count is available from finalizer/registry bookkeeping, but the spec
+must define exactly which concrete schema hookups count and keep multi-type-per-model support
+intentional.
+
+**Source**: relocated 2026-07-20 from the migration-guides card (now `TODO-BETA-060-0.1.7`; targeting `0.1.6` at relocation time), where it was implementation scope on a docs-only card.
 
 **What we'd do**: Add a DSF settings knob capping the number of schema hookups per model, raising a loud error when a model exceeds the cap (original card bullet: "Add ability to set dsf settings to cap the number of schema hookups per model and error if it is more").
+
+**Spec**:
+
+- Default to no cap so existing schemas are unchanged; add the setting only when this feature
+  lands.
+- Count the finalized, registry-owned hookups for each concrete model at the one finalization seam,
+  rather than re-counting independently in schema constructors.
+- Raise [`ConfigurationError`][glossary-configurationerror] naming the model, configured cap, and
+  observed count before schema construction completes.
+- Preserve deliberate multiple-`DjangoType`-per-model configurations under a cap chosen by the
+  consumer; this guard diagnoses accidental growth and does not replace `Meta.primary`.
+
+**Composes with**: the type registry, `Meta.primary`, and `finalize_django_types`.
 
 ---
 
@@ -1667,6 +1788,7 @@ If a card turns out to be wrong (the upstream packages ship it, real-world adopt
 [kanban]: KANBAN.md
 
 <!-- docs/ -->
+[glossary-configurationerror]: docs/GLOSSARY.md#configurationerror
 [spec-035]: docs/spec-035-optimizer_hardening-0_0_10.md
 
 <!-- docs/SPECS/ -->

@@ -29,12 +29,14 @@ rider instead of tripping a stale conflict raise.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 from typing import Any
 
 import strawberry
 from django.contrib import auth
 from django.contrib.auth import get_user_model
+from django.contrib.auth.models import AnonymousUser
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from strawberry.utils.inspect import in_async_context
@@ -66,6 +68,7 @@ from ..mutations.sets import (
 from ..registry import register_subsystem_clear, registry
 from ..utils.permissions import request_from_info
 from ..utils.querysets import run_in_one_sync_boundary
+from . import sessions
 
 # The one family label every auth surface resolves its request under (the
 # spec-040 D1 reuse directive): a single module-level constant, never a per-field
@@ -78,6 +81,37 @@ _AUTH_FAMILY_LABEL = "AuthMutation"
 # account-enumeration oracle - and byte-identical for both, pinned by the live
 # enumeration-guard test.
 _INCORRECT_CREDENTIALS_MESSAGE = "Incorrect username/password"
+
+# The actionable WebSocket-login rejection (auth session-lifecycle hardening,
+# Commit 3 / root cause 3): login rotates the session key, but an established
+# WebSocket cannot return the replacement cookie, so a "success" would establish a
+# server-side session the browser can never claim. The rejection fires BEFORE any
+# authentication or session mutation. This is NOT part of the byte-compatible
+# failed-login envelope (it is a transport-capability configuration error, a
+# top-level GraphQL error), so its wording is free.
+_WEBSOCKET_LOGIN_UNSUPPORTED = (
+    "login_mutation() cannot establish a session over a WebSocket connection: an "
+    "established WebSocket cannot return the rotated session cookie that login produces, "
+    "so the browser could never reuse the session. Perform login over an HTTP request "
+    "(Django HTTP or Channels HTTP) and connect the authenticated WebSocket afterwards."
+)
+
+# The actionable signed-cookie WebSocket-logout rejection (auth session-lifecycle
+# hardening, Commit 4 / root cause 3): logout is supportable on a server-side
+# session engine (deleting the record invalidates the old cookie without sending a
+# new one), but a signed-cookie-engine WebSocket has NO server-side record to
+# revoke and cannot delete or replace the browser cookie over an established
+# socket, so a "success" would falsely claim durable invalidation. The rejection
+# fires BEFORE any session mutation. Like the login rejection it is a
+# transport-capability configuration error (a top-level GraphQL error), NOT part
+# of the byte-compatible failed-login envelope, so its wording is free.
+_WEBSOCKET_LOGOUT_UNSUPPORTED = (
+    "logout_mutation() cannot truthfully invalidate a session over a signed-cookie "
+    "WebSocket connection: the signed-cookie session engine keeps no server-side record "
+    "to revoke, and an established WebSocket cannot delete or replace the browser cookie, "
+    "so logout could not prove the session was invalidated. Use a server-side session "
+    "engine for WebSocket logout, or perform logout over an HTTP request."
+)
 
 # The register rider's pinned public input name (spec-040 Decision 6): the
 # consumer-facing SDL contract, pinned via the ``input_type_name`` /
@@ -280,48 +314,62 @@ def _declare_fixed_auth_surface(surface: str, holder_name: str, permission_class
     return holder_cls
 
 
-async def _resolve_auth_async(resolve_body: Any, info: Any, kwargs: dict[str, Any]) -> Any:
-    """Run one auth field's gate-then-session-work body in ONE sync worker (spec-040 D17).
+def _sync_bridged_async_body(sync_body: Any) -> Any:
+    """Build the interim async resolver body that bridges to ``sync_body`` (spec-040 D17).
 
-    The single async boundary the three fixed auth fields share: the WHOLE
-    ``resolve_body`` - request resolution, the permission gate (whose
-    ``instance=request.user`` argument forces the ``SimpleLazyObject`` as it is
-    computed, a sync ORM touch - the Decision-10 async-gate fix), and the session
-    work - runs inside one ``sync_to_async(thread_sensitive=True)`` call via the
-    shared ``run_in_one_sync_boundary`` primitive. The ``SyncMisuseError``
-    discipline is unaffected: the worker is itself a sync context, so an ``async
-    def has_permission`` is still rejected there, never silently allowed.
+    The auth session-lifecycle hardening plan (Commit 2) splits ``_make_auth_field``
+    into a real sync resolver body and a real *async* resolver body so later stages
+    can inject native per-transport async work. This slice is the SEAM only, so the
+    async body is (for now) a genuine ``async def`` coroutine function that bridges
+    to ``sync_body`` through the ONE shared ``sync_to_async(thread_sensitive=True)``
+    worker - request resolution, the permission gate (whose ``instance=request.user``
+    argument forces the ``SimpleLazyObject`` as it is computed, a sync ORM touch),
+    and the session work all run inside that single boundary. The ``SyncMisuseError``
+    discipline is unaffected: the worker is itself a sync context, so an ``async def
+    has_permission`` is still rejected there, never silently allowed. Commits 3/4
+    replace this bridge, per surface, with native Django/Channels async bodies
+    without touching the dispatch seam below.
     """
-    return await run_in_one_sync_boundary(resolve_body, info, **kwargs)
+
+    async def _async_body(info: Any, **kwargs: Any) -> Any:
+        return await run_in_one_sync_boundary(sync_body, info, **kwargs)
+
+    return _async_body
 
 
 def _make_auth_field(
     *,
-    resolve_body: Any,
+    sync_body: Any,
+    async_body: Any,
     arguments: list[tuple[str, Any]],
     return_annotation: Any,
     description: str | None,
     deprecation_reason: str | None,
     directives: Any,
 ) -> Any:
-    """Build one fixed auth field around a sync gate-then-session-work body.
+    """Build one fixed auth field around split sync / async gate-then-session-work bodies.
 
     The ONE auth field-construction helper the three fixed factories share
-    (spec-040 D12 / P1 / P2): the dispatcher resolves sync-vs-async per call via
-    ``in_async_context()`` (the ``DjangoMutationField`` runtime dispatch), the
-    async path wraps ``resolve_body`` in the single shared boundary, and the
-    injected ``__signature__`` / ``__annotations__`` (the keyword-only GraphQL
-    args + the ``strawberry.lazy`` return forward-ref, unresolved at class-body
-    time) ride the promoted ``mutations/fields.py`` machinery -
-    ``build_lazy_field_signature`` over ``_lazy_ref``-built refs - never a
-    re-spelled copy. ``arguments`` is the ordered ``(name, annotation)`` list of
-    keyword-only GraphQL args (empty for ``logout`` / ``me``).
+    (spec-040 D12 / P1 / P2; auth session-lifecycle hardening Commit 2): the
+    dispatcher resolves sync-vs-async per call via ``in_async_context()`` (the
+    ``DjangoMutationField`` runtime dispatch). The sync path calls ``sync_body``
+    directly; the async path calls ``async_body`` - a real coroutine function whose
+    returned coroutine Strawberry awaits - so no native async work is hidden behind
+    a nested ``async_to_sync`` inside a sync body. ``sync_body`` and ``async_body``
+    are the per-surface injection points later stages specialize per transport; the
+    dispatch seam itself does not change. The injected ``__signature__`` /
+    ``__annotations__`` (the keyword-only GraphQL args + the ``strawberry.lazy``
+    return forward-ref, unresolved at class-body time) ride the promoted
+    ``mutations/fields.py`` machinery - ``build_lazy_field_signature`` over
+    ``_lazy_ref``-built refs - never a re-spelled copy. ``arguments`` is the ordered
+    ``(name, annotation)`` list of keyword-only GraphQL args (empty for ``logout`` /
+    ``me``).
     """
 
     def _resolve(root: Any, info: Any, **kwargs: Any) -> Any:  # noqa: ARG001
         if in_async_context():
-            return _resolve_auth_async(resolve_body, info, kwargs)
-        return resolve_body(info, **kwargs)
+            return async_body(info, **kwargs)
+        return sync_body(info, **kwargs)
 
     signature, annotations = build_lazy_field_signature(arguments, return_annotation)
     _resolve.__signature__ = signature
@@ -352,6 +400,186 @@ def _authenticated_actor_or_none(request: Any) -> Any:
     return None
 
 
+def _failed_login_payload(payload_cls: type, slot: str) -> Any:
+    """Build the ONE undifferentiated failed-login envelope (spec-040 Decision 5).
+
+    ``node``/``result`` is ``None`` and ``errors`` carries a single non-field-keyed
+    entry - the ``field_error("", ...)`` empty-path leaf owns the ``"__all__"``
+    sentinel (the D8 reuse directive). No error code, deliberately: the public
+    failed-login contract is ``field: "__all__"`` + the one message ONLY, so both
+    wrong-password / unknown-user / inactive-under-``ModelBackend`` / unstorable
+    credential collapse to a byte-identical payload (the enumeration guard).
+    """
+    from ..mutations import resolvers
+
+    error = resolvers.field_error("", _INCORRECT_CREDENTIALS_MESSAGE)
+    return resolvers.build_payload(payload_cls, slot, None, [error])
+
+
+def _transport_prologue(
+    info: Any,
+    *,
+    supported: Any,
+    unsupported_message: str,
+) -> tuple[Any, sessions.Transport, Any]:
+    """Resolve + classify the request, enforce transport capability, require a session.
+
+    The ONE shared transport prologue login and logout both open with (auth
+    session-lifecycle hardening): classify the transport, reject an unsupported
+    transport BEFORE any authentication or session mutation, then run the
+    missing-session-middleware guard. ``supported`` is the per-surface capability
+    predicate (``sessions.login_supported`` / ``sessions.logout_supported``) and
+    ``unsupported_message`` its actionable rejection. Step ordering is fixed:
+    classify -> capability -> require_session. Returns ``(request, transport,
+    session)``; logout ignores the returned session (its durability is the native
+    flush, not a resolver-side save) but still runs ``require_session`` for its
+    rejection side effect.
+    """
+    request = request_from_info(info, family_label=_AUTH_FAMILY_LABEL)
+    transport = sessions.classify_transport(request)
+    if not supported(transport):
+        raise ConfigurationError(unsupported_message)
+    session = sessions.require_session(request, transport)
+    return request, transport, session
+
+
+def _login_result_payload(payload_cls: type, slot: str, user: Any) -> Any:
+    """Build the failed-login envelope when ``user`` is ``None``, else the success payload.
+
+    The shared two-line payload construction both login bodies (sync + async) open
+    their post-authenticate step with (auth session-lifecycle hardening). Building
+    the failed envelope is a pure construction with no session mutation, so callers
+    build the payload here and THEN early-return on the failed case, preserving both
+    the failed-login early return and the payload-before-mutation ordering.
+    """
+    from ..mutations import resolvers
+
+    if user is None:
+        return _failed_login_payload(payload_cls, slot)
+    return resolvers.build_payload(payload_cls, slot, user, [])
+
+
+def _login_authenticate(
+    holder_cls: type,
+    info: Any,
+    username: str,
+    password: str,
+) -> tuple[Any, sessions.Transport, Any, type, str, Any]:
+    """The all-sync login prologue: classify, capability, gate, preflight, authenticate.
+
+    Runs steps 1-5 of the login state machine (auth session-lifecycle hardening,
+    Commit 3) with NO session mutation:
+
+    1. resolve + classify the transport (``sessions.classify_transport``);
+    2. capability check - a WebSocket login is rejected here, BEFORE authentication
+       or any session mutation (``sessions.login_supported``); a missing session
+       middleware is the actionable ``"session"`` configuration error
+       (``sessions.require_session``);
+    3. the permission gate (``data`` carries only the attempted ``username``, NEVER
+       the password, so an account-scoped rate-limit gate can key on it; a denial is
+       the top-level ``GraphQLError`` and credentials are never checked);
+    4. the shared storability preflight - a lone-surrogate credential is not UTF-8
+       encodable and would crash ``authenticate`` into a raw ``UnicodeEncodeError``
+       (the DB ``USERNAME_FIELD`` lookup / the password hasher's ``.encode()``), so
+       it short-circuits to the SAME undifferentiated envelope (``user`` ``None``),
+       reusing the ONE write-side ``unencodable_text_error`` primitive;
+    5. exactly ONE ``authenticate(request, username=, password=)`` call - no local
+       user-model query (the actor-not-lookup rule, D-N1).
+
+    Returns ``(request, transport, session, payload_cls, slot, user)``; ``user`` is
+    ``None`` for both the unstorable and the failed-authentication cases (the caller
+    maps either to ``_failed_login_payload`` without touching the session). This is
+    sync-only so BOTH the native sync body and the native async body (inside its one
+    ``sync_to_async`` boundary) reuse it without duplicating the state machine.
+    """
+    from ..mutations import resolvers
+    from ..utils.write_values import unencodable_text_error
+
+    request, transport, session = _transport_prologue(
+        info,
+        supported=sessions.login_supported,
+        unsupported_message=_WEBSOCKET_LOGIN_UNSUPPORTED,
+    )
+    resolvers.authorize_or_raise(holder_cls, info, "login", {"username": username}, instance=None)
+    payload_cls = resolvers.payload_cls_for(holder_cls)
+    slot = payload_object_slot(holder_cls._primary_type)
+    unstorable = (
+        unencodable_text_error("username", username) is not None
+        or unencodable_text_error("password", password) is not None
+    )
+    user = None if unstorable else auth.authenticate(request, username=username, password=password)
+    return request, transport, session, payload_cls, slot, user
+
+
+def _django_http_login_establish(request: Any, user: Any) -> None:
+    """Establish + durably persist the Django HTTP session; compensate fail-closed.
+
+    Django's native ``login`` performs session rotation (``cycle_key`` for
+    anonymous->auth, ``flush`` for a different / hash-mismatched user), selects the
+    backend from ``user.backend`` (never a framework second lookup), writes the auth
+    keys, assigns ``request.user``, rotates CSRF, and fires ``user_logged_in`` (which
+    updates ``user.last_login``). The explicit ``request.session.save()`` then makes
+    a store failure a GraphQL execution error BEFORE any success payload; the
+    ``modified`` flag is deliberately left set so ``SessionMiddleware`` still saves
+    and emits the rotated cookie (clearing it would suppress the cookie transition
+    that makes the durable session usable).
+
+    On ANY failure after partial mutation (backend-selection ``ValueError``, a
+    ``cycle_key``/``flush``/``save`` store outage, or a raising ``user_logged_in``
+    receiver) the local actor is made anonymous and the partially established
+    session is flushed - clearing the in-memory auth keys AND deleting the durable
+    rotated/empty row ``cycle_key``/``flush`` already wrote. If cleanup also raises,
+    the ORIGINAL failure is re-raised with the cleanup error chained via
+    ``__context__`` (PEP 3134), never a false clean-state claim, and never a success
+    payload. This path holds no asyncio lock - the lock is Channels-scope-only.
+    """
+    try:
+        auth.login(request, user)
+        request.session.save()
+    except BaseException as primary:  # incl. asyncio.CancelledError: compensate + re-raise
+        try:
+            request.user = AnonymousUser()
+            request.session.flush()
+        except Exception:
+            raise primary  # noqa: B904 - cleanup failure chains via __context__ (PEP 3134)
+        raise
+
+
+async def _channels_http_login_establish(request: Any, session: Any, user: Any) -> None:
+    """Establish + durably persist the Channels HTTP session; compensate fail-closed.
+
+    The Channels twin of ``_django_http_login_establish``, awaited natively (never a
+    nested ``async_to_sync`` on the router's async consumer). ``channels.auth.login``
+    (a ``database_sync_to_async`` callable) performs the same rotation, selects the
+    backend from ``user.backend``, writes the auth keys, sets ``scope["user"]``, and
+    fires ``user_logged_in`` (``request=None``, but ``update_last_login`` keys on
+    ``user`` so ``last_login`` still updates). Channels' ``login`` does NOT persist
+    the written keys, so the explicit ``await session.asave()`` is the durability
+    step the transport contract requires before success; Channels' response
+    middleware then sends the cookie.
+
+    The whole critical section runs under the per-scope ``asyncio.Lock`` acquired
+    ONCE here (``scope_session_lock`` is non-reentrant, so compensation runs inside
+    the already-held lock and calls no helper that re-acquires it). Compensation
+    makes the scope actor anonymous and flushes the session (clearing the in-memory
+    auth keys AND deleting the durable rotated/empty row); a cleanup failure chains
+    the original failure via ``__context__`` (PEP 3134).
+    """
+    from channels.auth import login as channels_login
+
+    async with sessions.scope_session_lock(request):
+        try:
+            await channels_login(request.scope, user)
+            await session.asave()
+        except BaseException as primary:  # incl. asyncio.CancelledError: compensate + re-raise
+            try:
+                request.scope["user"] = AnonymousUser()
+                await session.aflush()
+            except Exception:
+                raise primary  # noqa: B904 - cleanup chains via __context__ (PEP 3134)
+            raise
+
+
 def _login_resolve_body(
     holder_cls: type,
     info: Any,
@@ -359,83 +587,229 @@ def _login_resolve_body(
     username: str,
     password: str,
 ) -> Any:
-    """Authenticate + establish the session behind the envelope (spec-040 Decision 5).
+    """The native SYNC login body: prologue, then the transport critical section.
 
-    Gate first (``data`` carries the attempted username - NEVER the password - so
-    an account-scoped rate-limit / lockout gate can key on it; a denial is the
-    top-level ``GraphQLError`` and credential checking is never reached), then the
-    upstream-borrowed semantics: ``authenticate(request, username=, password=)``,
-    ``None`` -> the ONE non-field-keyed envelope entry (built via the
-    ``field_error("", ...)`` empty-path leaf ctor, which owns the ``"__all__"``
-    sentinel - the D8 reuse directive), success -> ``auth.login`` then the user in
-    the payload's uniform slot. The payload user is the RAW ``authenticate()``
-    instance - no ``get_queryset`` re-run (the actor-not-lookup rule, D-N1) and no
-    optimizer re-fetch (deliberately asymmetric with ``register``'s G2-planned
-    node).
+    Handles Django HTTP under synchronous execution directly, and a directly-invoked
+    Strawberry ``SyncGraphQLHTTPConsumer`` (a classified Channels HTTP scope) through
+    a SINGLE ``async_to_sync`` bridge at the private transport boundary (the plan's
+    one permitted sync->async hop; the package router's async consumer instead awaits
+    the native async body). The success payload is constructed BEFORE the session is
+    mutated (step 6) so a payload-construction failure cannot create a session the
+    client never sees, and it holds the authenticated user OBJECT (not a scalar
+    snapshot) so nested GraphQL fields resolve after login and observe the
+    signal-updated ``last_login``.
     """
-    from ..mutations import resolvers
-    from ..utils.write_values import unencodable_text_error
-
-    request = request_from_info(info, family_label=_AUTH_FAMILY_LABEL)
-    resolvers.authorize_or_raise(
+    request, transport, session, payload_cls, slot, user = _login_authenticate(
         holder_cls,
         info,
-        "login",
-        {"username": username},
-        instance=None,
+        username,
+        password,
     )
-    payload_cls = resolvers.payload_cls_for(holder_cls)
-    slot = payload_object_slot(holder_cls._primary_type)
-    # A credential carrying a lone surrogate code point (a GraphQL ``String`` can,
-    # via a JSON ``\uXXXX`` escape) is not UTF-8 encodable, so handing it to
-    # ``authenticate`` crashes it into a raw ``UnicodeEncodeError`` - the DB
-    # ``USERNAME_FIELD`` lookup for the username, the password hasher's ``.encode()``
-    # for the password - a top-level GraphQL error instead of the pinned failed-login
-    # envelope. Such a credential authenticates no one, so it is short-circuited to
-    # the SAME undifferentiated envelope (never a distinct field-keyed error, which
-    # would break the byte-identical enumeration guard), reusing the ONE write-side
-    # storability preflight so "unstorable text" stays single-sited with the shared
-    # scalar decode (``decode_scalar_leaf``) every other input runs through.
-    unstorable = (
-        unencodable_text_error("username", username) is not None
-        or unencodable_text_error("password", password) is not None
-    )
-    user = None if unstorable else auth.authenticate(request, username=username, password=password)
+    payload = _login_result_payload(payload_cls, slot, user)
     if user is None:
-        # No error code, deliberately: the user-facing failed-login contract is
-        # ``field: "__all__"`` + the one undifferentiated message ONLY. A code
-        # would become public GraphQL surface the moment a consumer keys on it
-        # (a breaking change to ever rename), and the spec pins no code.
-        error = resolvers.field_error("", _INCORRECT_CREDENTIALS_MESSAGE)
-        return resolvers.build_payload(payload_cls, slot, None, [error])
-    auth.login(request, user)
-    return resolvers.build_payload(payload_cls, slot, user, [])
+        return payload
+    if transport is sessions.Transport.CHANNELS_HTTP:
+        from asgiref.sync import async_to_sync
+
+        async_to_sync(_channels_http_login_establish)(request, session, user)
+    else:
+        _django_http_login_establish(request, user)
+    return payload
+
+
+async def _login_resolve_body_async(
+    holder_cls: type,
+    info: Any,
+    *,
+    username: str,
+    password: str,
+) -> Any:
+    """The native ASYNC login body: bridge Django HTTP, await Channels HTTP natively.
+
+    A Django ``HttpRequest`` under async execution stays inside the existing
+    thread-sensitive sync boundary (``run_in_one_sync_boundary`` around the sync body
+    exactly once - the same bridge the other auth fields use). A classified Channels
+    HTTP scope runs the all-sync prologue (gate + preflight + ``authenticate``) inside
+    ONE sync boundary, constructs the success payload before mutation, then awaits the
+    native ``channels.auth.login`` + ``session.asave()`` establishment - no nested
+    ``async_to_sync``. The transport classification runs on the event loop (pure, no
+    ORM), so it never trips ``SynchronousOnlyOperation``.
+    """
+    request = request_from_info(info, family_label=_AUTH_FAMILY_LABEL)
+    if sessions.classify_transport(request) is not sessions.Transport.CHANNELS_HTTP:
+        return await run_in_one_sync_boundary(
+            _login_resolve_body,
+            holder_cls,
+            info,
+            username=username,
+            password=password,
+        )
+    request, _transport, session, payload_cls, slot, user = await run_in_one_sync_boundary(
+        _login_authenticate,
+        holder_cls,
+        info,
+        username,
+        password,
+    )
+    payload = _login_result_payload(payload_cls, slot, user)
+    if user is None:
+        return payload
+    await _channels_http_login_establish(request, session, user)
+    return payload
+
+
+def _logout_prologue(holder_cls: type, info: Any) -> tuple[Any, sessions.Transport, type]:
+    """The all-sync logout prologue: classify, capability, missing-session, gate, payload class.
+
+    Runs steps 1-3 of the logout state machine (auth session-lifecycle hardening,
+    Commit 4) with NO session mutation:
+
+    1. resolve + classify the transport (``sessions.classify_transport``), then the
+       capability check - a signed-cookie-engine WebSocket logout is rejected here,
+       BEFORE any teardown (``sessions.logout_supported``); a missing session
+       middleware is the actionable ``"session"`` configuration error
+       (``sessions.require_session``) rather than a downstream ``AttributeError``;
+    2. the permission gate (the model-less denial target reads the holder
+       ``__name__`` - the pinned ``"Not authorized to logout Session."`` string);
+    3. resolve the ``{ ok, errors }`` payload class without mutating the session.
+
+    Returns ``(request, transport, payload_cls)``. This is sync-only so BOTH the
+    native sync body and the native async body (inside its one ``sync_to_async``
+    boundary) reuse it without duplicating the state machine. ``require_session`` is
+    called for its rejection side effect; its return is unused because logout's
+    durability is the native flush, not a resolver-side save.
+    """
+    from ..mutations import resolvers
+
+    request, transport, _session = _transport_prologue(
+        info,
+        supported=sessions.logout_supported,
+        unsupported_message=_WEBSOCKET_LOGOUT_UNSUPPORTED,
+    )
+    resolvers.authorize_or_raise(holder_cls, info, "logout", None, instance=None)
+    payload_cls = resolvers.payload_cls_for(holder_cls)
+    return request, transport, payload_cls
+
+
+def _logout_observation(request: Any, payload_cls: type) -> Any:
+    """Capture the pre-teardown ``ok`` observation and build the logout payload.
+
+    The shared pair both logout teardowns open their critical section with (auth
+    session-lifecycle hardening): ``ok`` is whether an authenticated actor existed
+    (the ONE anonymity definition shared with ``current_user``) and the
+    ``{ ok, errors }`` payload is constructed BEFORE any session mutation, so ``ok``
+    describes the state being transitioned and payload construction cannot fail after
+    teardown. The Channels caller invokes this inside the held per-scope lock, the
+    same point the observation is captured today.
+    """
+    ok = _authenticated_actor_or_none(request) is not None
+    return payload_cls(ok=ok, errors=[])
+
+
+def _django_http_logout(request: Any, payload_cls: type) -> Any:
+    """Capture the actor, build the payload, then run Django's native logout; fail closed.
+
+    The Django HTTP teardown (auth session-lifecycle hardening, Commit 4). The
+    ``ok`` observation is captured BEFORE teardown via ``_authenticated_actor_or_none``
+    (the ONE anonymity definition shared with ``current_user``) and the payload is
+    constructed before mutation, so ``ok`` describes the state actually being
+    transitioned and payload construction cannot fail after teardown. Django's native
+    ``logout`` fires ``user_logged_out``, then ``request.session.flush()`` (which
+    ``clear()`` + ``delete()`` - the durable invalidation, no resolver-side save
+    needed), then assigns ``request.user = AnonymousUser()``. Teardown runs
+    unconditionally, including for an anonymous request carrying residual session
+    data. On ANY failure (a raising ``user_logged_out`` receiver before flush, or a
+    store outage during ``flush``/``delete``) the local actor is made anonymous where
+    possible and the error propagates - never a false ``{ok: true}``. This path holds
+    no asyncio lock; the scope lock is Channels-scope-only.
+    """
+    payload = _logout_observation(request, payload_cls)
+    try:
+        auth.logout(request)
+    except BaseException:  # incl. asyncio.CancelledError: anonymize where possible + re-raise
+        with contextlib.suppress(Exception):
+            request.user = AnonymousUser()
+        raise
+    return payload
+
+
+async def _channels_logout(request: Any, payload_cls: type) -> Any:
+    """The Channels twin of ``_django_http_logout``, awaited natively under the scope lock.
+
+    ``channels.auth.logout`` (a ``database_sync_to_async`` callable) fires
+    ``user_logged_out``, then ``session.flush()`` (the durable invalidation: on a
+    server-side engine the record is deleted so the old cookie can never be
+    reclaimed, and on Channels HTTP the response middleware sees the emptied session
+    and deletes/replaces the browser cookie), then sets
+    ``scope["user"] = AnonymousUser()``. Channels' flush is itself durable, so no
+    explicit ``asave()`` is added here (that would double-flush); logout's durability
+    requirement is complete via the native teardown, unlike login's key-write which
+    needs the explicit save.
+
+    The whole critical section runs under the per-scope ``asyncio.Lock`` acquired
+    ONCE here (``scope_session_lock`` is non-reentrant): the under-lock actor capture
+    (the ``ok`` observation), payload construction, native teardown, and failure
+    handling are atomic against any other operation multiplexed on the same Channels
+    connection. On failure the scope actor is made anonymous where possible and the
+    error propagates - never a false ``{ok: true}`` and never a claimed clean durable
+    state the teardown did not achieve.
+    """
+    from channels.auth import logout as channels_logout
+
+    async with sessions.scope_session_lock(request):
+        payload = _logout_observation(request, payload_cls)
+        try:
+            await channels_logout(request.scope)
+        except BaseException:  # incl. asyncio.CancelledError: anonymize where possible + re-raise
+            with contextlib.suppress(Exception):
+                request.scope["user"] = AnonymousUser()
+            raise
+        return payload
 
 
 def _logout_resolve_body(holder_cls: type, info: Any) -> Any:
-    """End the session; ``ok`` is whether an authenticated one existed (Decision 5).
+    """The native SYNC logout body: prologue, then the transport critical section.
 
-    Gate first (denial target reads the holder ``__name__`` - the pinned
-    ``"Not authorized to logout Session."`` string), then the upstream-borrowed
-    semantics: capture whether the request has an authenticated actor via
-    ``_authenticated_actor_or_none`` (the ONE anonymity definition shared with
-    ``current_user``), then call Django's ``logout`` unconditionally. A request
-    with SessionMiddleware but no AuthenticationMiddleware has no ``user``
-    attribute, so the capture treats that shape as anonymous. Teardown still runs
-    because an anonymous request can carry session data that logout must flush.
-    Session-mutating auth continues to require Django's session transport;
-    Channels auth mutations remain outside the verified read-path-only adapter
-    contract. Returns the pinned model-less ``{ ok, errors }`` payload with empty
-    ``errors``.
+    Handles Django HTTP under synchronous execution directly, and a directly-invoked
+    Strawberry ``SyncGraphQLHTTPConsumer`` (a classified Channels HTTP scope) through
+    a SINGLE ``async_to_sync`` bridge at the private transport boundary (the plan's
+    one permitted sync->async hop; the package router's async consumer instead awaits
+    the native async body). ``ok`` retains the shipped meaning: it is ``true`` only
+    when an authenticated actor existed under the lock before teardown, and an
+    already-anonymous logout returns ``{ok: false, errors: []}`` after still flushing
+    any residual session data (idempotent teardown with an observational result). A
+    Channels WebSocket cannot reach the sync body (the router's WS consumer is async),
+    but is routed through the same bridge for completeness.
     """
-    from ..mutations import resolvers
+    request, transport, payload_cls = _logout_prologue(holder_cls, info)
+    if transport is sessions.Transport.DJANGO_HTTP:
+        return _django_http_logout(request, payload_cls)
+    from asgiref.sync import async_to_sync
 
+    return async_to_sync(_channels_logout)(request, payload_cls)
+
+
+async def _logout_resolve_body_async(holder_cls: type, info: Any) -> Any:
+    """The native ASYNC logout body: bridge Django HTTP, await Channels natively.
+
+    A Django ``HttpRequest`` under async execution stays inside the existing
+    thread-sensitive sync boundary (``run_in_one_sync_boundary`` around the sync body
+    exactly once - the same bridge the other auth fields use). A classified Channels
+    scope (HTTP, or a server-side-engine WebSocket) runs the all-sync prologue (gate +
+    capability + payload class) inside ONE sync boundary, then awaits the native
+    ``channels.auth.logout`` teardown - no nested ``async_to_sync``. The transport
+    classification runs on the event loop (pure, no ORM), so it never trips
+    ``SynchronousOnlyOperation``.
+    """
     request = request_from_info(info, family_label=_AUTH_FAMILY_LABEL)
-    resolvers.authorize_or_raise(holder_cls, info, "logout", None, instance=None)
-    ok = _authenticated_actor_or_none(request) is not None
-    auth.logout(request)
-    payload_cls = resolvers.payload_cls_for(holder_cls)
-    return payload_cls(ok=ok, errors=[])
+    if sessions.classify_transport(request) is sessions.Transport.DJANGO_HTTP:
+        return await run_in_one_sync_boundary(_logout_resolve_body, holder_cls, info)
+    request, _transport, payload_cls = await run_in_one_sync_boundary(
+        _logout_prologue,
+        holder_cls,
+        info,
+    )
+    return await _channels_logout(request, payload_cls)
 
 
 def login_mutation(
@@ -457,7 +831,8 @@ def login_mutation(
     """
     holder_cls = _declare_fixed_auth_surface("login", "Login", permission_classes)
     return _make_auth_field(
-        resolve_body=functools.partial(_login_resolve_body, holder_cls),
+        sync_body=functools.partial(_login_resolve_body, holder_cls),
+        async_body=functools.partial(_login_resolve_body_async, holder_cls),
         arguments=[("username", str), ("password", str)],
         return_annotation=_lazy_ref("LoginPayload", INPUTS_MODULE_PATH),
         description=description,
@@ -484,7 +859,8 @@ def logout_mutation(
     """
     holder_cls = _declare_fixed_auth_surface("logout", "Session", permission_classes)
     return _make_auth_field(
-        resolve_body=functools.partial(_logout_resolve_body, holder_cls),
+        sync_body=functools.partial(_logout_resolve_body, holder_cls),
+        async_body=functools.partial(_logout_resolve_body_async, holder_cls),
         arguments=[],
         return_annotation=_lazy_ref("LogoutPayload", INPUTS_MODULE_PATH),
         description=description,

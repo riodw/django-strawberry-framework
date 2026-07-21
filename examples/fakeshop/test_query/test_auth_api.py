@@ -55,6 +55,70 @@ def test_login_happy_path_sets_session_and_me_sees_the_user():
 
 
 @pytest.mark.django_db
+def test_login_anonymous_to_auth_cycles_key_preserves_anon_data_and_pins_backend():
+    """Rotation branch 1 (Django HTTP): anonymous->auth cycles the key, keeps anon data.
+
+    ``BACKEND_SESSION_KEY`` holds the exact authenticating backend
+    (``ModelBackend`` under the fakeshop default stack).
+    """
+    from django.contrib.auth import BACKEND_SESSION_KEY
+
+    create_users(1)
+    client = Client()
+    session = client.session
+    session["cart"] = ["item-1"]
+    session.save()
+    anon_key = session.session_key
+    payload = _login(client, "staff_1", TEST_USER_PASSWORD)
+    assert payload["errors"] == []
+    rotated = client.session
+    assert rotated.session_key != anon_key  # cycle_key rotated the fixation defense
+    assert rotated["cart"] == ["item-1"]  # non-auth anonymous data preserved
+    assert rotated[BACKEND_SESSION_KEY] == "django.contrib.auth.backends.ModelBackend"
+
+
+@pytest.mark.django_db
+def test_login_as_different_user_flushes_old_session_and_data():
+    """Rotation branch 2 (Django HTTP): a different user flushes old data + new key."""
+    create_users(1)
+    client = Client()
+    _login(client, "staff_1", TEST_USER_PASSWORD)
+    session = client.session
+    session["scratch"] = "staff-1-data"
+    session.save()
+    key_a = client.session.session_key
+    _login(client, "regular_1", TEST_USER_PASSWORD)  # a different authenticated user
+    rotated = client.session
+    assert rotated.session_key != key_a
+    assert "scratch" not in rotated  # old user's data flushed
+
+
+@pytest.mark.django_db
+def test_relogin_same_user_matching_hash_retains_the_session_key():
+    """Rotation branch 3 (Django HTTP): same user + matching auth hash keeps the key."""
+    create_users(1)
+    client = Client()
+    _login(client, "staff_1", TEST_USER_PASSWORD)
+    key1 = client.session.session_key
+    _login(client, "staff_1", TEST_USER_PASSWORD)  # same user, unchanged auth hash
+    assert client.session.session_key == key1
+
+
+@pytest.mark.django_db
+def test_relogin_same_user_mismatched_hash_flushes_and_replaces():
+    """Rotation branch 4 (Django HTTP): same user + mismatched auth hash flush+replace."""
+    create_users(1)
+    client = Client()
+    _login(client, "staff_1", TEST_USER_PASSWORD)
+    key1 = client.session.session_key
+    user = get_user_model().objects.get(username="staff_1")
+    user.set_password(_STRONG_PASSWORD)  # changes get_session_auth_hash()
+    user.save()
+    _login(client, "staff_1", _STRONG_PASSWORD)  # same user, new hash
+    assert client.session.session_key != key1
+
+
+@pytest.mark.django_db
 def test_wrong_password_and_unknown_username_return_identical_envelope():
     """The enumeration guard: both failures are the byte-identical non-field envelope."""
     create_users(1)
@@ -89,13 +153,19 @@ def test_inactive_user_gets_the_same_envelope():
 @pytest.mark.django_db
 def test_logout_round_trip_and_anonymous_logout():
     """Logout ends authenticated and anonymous sessions; ``ok`` reports actor state."""
+    from django.contrib.sessions.models import Session
+
     create_users(1)
     client = Client()
     _login(client, "staff_1", TEST_USER_PASSWORD)
     assert _graphql_data(_ME, client=client)["me"] is not None
+    authed_key = client.session.session_key
+    assert Session.objects.filter(session_key=authed_key).exists()
     payload = _graphql_data(_LOGOUT, client=client)["logout"]
     assert payload == {"ok": True, "errors": []}
-    # The session is gone: the same client's follow-up ``me`` is null.
+    # The session is durably gone: the DB row is deleted and the same client's
+    # follow-up ``me`` is null.
+    assert not Session.objects.filter(session_key=authed_key).exists()
     assert _graphql_data(_ME, client=client)["me"] is None
     # Anonymous requests can still carry session data. Teardown must flush it even
     # though ``ok`` reports that no authenticated actor existed.

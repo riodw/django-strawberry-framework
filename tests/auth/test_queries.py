@@ -17,7 +17,6 @@ from __future__ import annotations
 import pytest
 import strawberry
 from django.contrib.auth import get_user_model
-from django.contrib.auth.models import AnonymousUser
 from django.contrib.sessions.middleware import SessionMiddleware
 from django.test import RequestFactory
 from django.utils.functional import SimpleLazyObject
@@ -34,6 +33,7 @@ from django_strawberry_framework.auth.queries import (
 from django_strawberry_framework.exceptions import ConfigurationError
 from django_strawberry_framework.mutations.inputs import _materialized_names
 from django_strawberry_framework.registry import iter_subsystem_clears, registry
+from tests.auth._helpers import _session_request
 
 User = get_user_model()
 
@@ -73,13 +73,6 @@ def _declare_user_type():
             ),
         },
     )
-
-
-def _session_request(user=None):
-    request = RequestFactory().post("/graphql/")
-    SessionMiddleware(lambda _request: None).process_request(request)
-    request.user = user if user is not None else AnonymousUser()
-    return request
 
 
 def _me_schema(**current_user_kwargs) -> strawberry.Schema:
@@ -167,6 +160,28 @@ def test_conflicting_current_user_gates_raise_the_one_declaration_error():
     current_user()
     with pytest.raises(ConfigurationError, match=r"auth current_user\(\) is already declared"):
         current_user(permission_classes=[_IsAuthenticated])
+
+
+@pytest.mark.django_db
+def test_sync_me_dispatch_never_enters_the_async_boundary(_sync_boundary_spy):
+    """``execute_sync`` ``me`` runs the native sync body with no event-loop bridge."""
+    schema = _me_schema()
+    user = User.objects.create_user(username="me_sync", password="pw-9x-strong")
+    res = schema.execute_sync(_ME_Q, context_value=_session_request(user))
+    assert res.errors is None, res.errors
+    assert res.data["me"] == {"username": "me_sync"}
+    assert _sync_boundary_spy == []
+
+
+@pytest.mark.django_db(transaction=True)
+async def test_async_me_dispatch_awaits_the_native_async_body_exactly_once(_sync_boundary_spy):
+    """``await schema.execute`` ``me`` awaits the native async body exactly once."""
+    schema = _me_schema()
+    user = await User.objects.acreate_user(username="me_async", password="pw-9x-strong")
+    res = await schema.execute(_ME_Q, context_value=_session_request(user))
+    assert res.errors is None, res.errors
+    assert res.data["me"] == {"username": "me_async"}
+    assert len(_sync_boundary_spy) == 1
 
 
 @pytest.mark.django_db

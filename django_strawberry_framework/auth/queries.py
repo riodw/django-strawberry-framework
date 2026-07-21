@@ -32,6 +32,7 @@ from .mutations import (
     _authenticated_actor_or_none,
     _declare_fixed_auth_surface,
     _make_auth_field,
+    _sync_bridged_async_body,
 )
 
 AUTH_QUERIES_MODULE_PATH = "django_strawberry_framework.auth.queries"
@@ -108,8 +109,10 @@ def current_user(
     bind-materialized ``CurrentUserAlias`` lazy forward-ref.
     """
     holder_cls = _declare_fixed_auth_surface("current_user", "CurrentUser", permission_classes)
+    sync_body = functools.partial(_current_user_resolve_body, holder_cls)
     return _make_auth_field(
-        resolve_body=functools.partial(_current_user_resolve_body, holder_cls),
+        sync_body=sync_body,
+        async_body=_sync_bridged_async_body(sync_body),
         arguments=[],
         return_annotation=_lazy_ref(CURRENT_USER_ALIAS_NAME, AUTH_QUERIES_MODULE_PATH) | None,
         description=description,

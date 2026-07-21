@@ -182,7 +182,7 @@ def test_spec_maps_pk_alias_and_descending_order():
 
 
 # ---------------------------------------------------------------------------
-# WS-C: single-table visibility WHERE carried on the spec
+# Single-table visibility WHERE carried on the spec
 # ---------------------------------------------------------------------------
 
 
@@ -200,7 +200,7 @@ def test_spec_maps_pk_alias_and_descending_order():
     ],
 )
 def test_spec_carries_single_table_visibility_where(child_queryset):
-    """A DIRECT_FK single-table plain-column scope rides the spec (WS-C step 2).
+    """A DIRECT_FK single-table plain-column scope rides the spec.
 
     The common anonymous-traffic shape: a target-type ``get_queryset``
     ``exclude``/``filter`` on a base column no longer downgrades - it is cloned
@@ -429,7 +429,7 @@ def test_sql_forward_page_shape():
     )
     # DIRECT_FK drops the child alias: every child column ref is the real
     # ``library_book`` table name (so a spliced visibility WHERE, which Django
-    # compiles against the real name, agrees for free - WS-C step 3).
+    # compiles against the real name, agrees for free).
     assert (
         'ROW_NUMBER() OVER (ORDER BY "library_book"."title" ASC, "library_book"."id" ASC)'
         ' AS "_dst_row_number"' in sql
@@ -493,7 +493,7 @@ def test_sql_offset_shape_keeps_the_marker_row():
 
 
 def test_sql_offset_probe_composes_marker_and_fetch_upper_bound():
-    """WS-A: the bounded offset page binds ``fetch_upper_bound`` and keeps the marker.
+    """The bounded offset page binds ``fetch_upper_bound`` and keeps the marker.
 
     The load-bearing lateral half of A1: the rn-filter upper bound is
     ``fetch_upper_bound`` (page bound ``offset + limit`` plus the probe sentinel),
@@ -595,7 +595,7 @@ def test_sql_non_scalar_parent_keys_keep_typed_values_rows():
 
 
 def test_sql_splices_the_compiled_visibility_where_into_the_branch():
-    """WS-C step 3: the compiled scope is ``AND (...)``-spliced into the branch.
+    """The compiled scope is ``AND (...)``-spliced into the branch.
 
     The predicate lands next to the parent-link predicate (inside the lateral
     branch, before the in-branch ``LIMIT``) and its params come after the parent
@@ -713,7 +713,7 @@ def _shelf_books_visibility_request(**overrides):
 
 
 def test_extract_recognizes_the_planned_visibility_scope():
-    """WS-C step 4: the planned single-table scope in the fetch-time residue is
+    """The planned single-table scope in the fetch-time residue is
     proven byte-equal to the spec and consumed, leaving the parent ids AND the
     APPROVED compiled predicate the executor reuses (P3-1: no third compile)."""
     queryset = _prefetch_filtered(
@@ -1088,7 +1088,7 @@ def test_lateral_execution_instantiates_window_rows(monkeypatch):
 
 
 def test_lateral_execution_splices_the_visibility_predicate(monkeypatch):
-    """WS-C: the recognized visibility scope is compiled and spliced at execution.
+    """The recognized visibility scope is compiled and spliced at execution.
 
     The full path over the facade: a DIRECT_FK spec carrying a single-table
     ``exclude`` scope compiles that scope through the fetch-time compiler and

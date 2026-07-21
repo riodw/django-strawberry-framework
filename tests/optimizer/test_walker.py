@@ -2899,10 +2899,10 @@ def test_nested_connection_first_page_total_count_keeps_count_and_skips_probe():
 
 
 def test_nested_connection_offset_window_count_free_unless_total_selected():
-    """WS-A: an ``after``-offset window is count-free unless ``totalCount`` is selected.
+    """An ``after``-offset window is count-free unless ``totalCount`` is selected.
 
     The old policy shape-forced ``_dst_total_count`` on every ``offset > 0``
-    window. WS-A drops that: an offset page composes the count-free hasNextPage
+    window. The fetch-mode policy drops that: an offset page composes the count-free hasNextPage
     probe with the abs-first marker. The single ``WindowRangePlan.fetch_mode``
     decision resolves an edges-only / hasNextPage-only offset page to ``PROBED``
     (``with_total_count=False``), so it carries NO ``_dst_total_count``

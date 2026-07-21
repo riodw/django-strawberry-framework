@@ -472,7 +472,7 @@ def test_nested_keyset_count_free_page_uses_probe_not_partition_count():
 
 @pytest.mark.django_db
 def test_nested_keyset_unselected_cursor_column_is_not_lazy_loaded_per_edge():
-    """A node selection omitting the cursor columns still mints cursors in ONE query (WS-E step 3).
+    """A node selection omitting the cursor columns still mints cursors in ONE query.
 
     ``IssueType.cursor_field = ("-number", "id")``. When the node selection does
     NOT select ``number`` (only ``title``), the scalar-only window projection

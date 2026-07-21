@@ -1057,7 +1057,7 @@ def _build_lateral_spec(request: NestedConnectionRequest) -> LateralWindowSpec |
         return None
     visibility_where = None
     if query.where.children:
-        # WS-C: a single-table plain-column visibility WHERE (a target type's
+        # A single-table plain-column visibility WHERE (a target type's
         # ``get_queryset`` scope) is the one child filter the lateral SQL can
         # reproduce - carry it here, compile and splice it at fetch time. The
         # combined gate keeps refusing every shape the raw SQL cannot express:

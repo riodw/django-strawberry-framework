@@ -218,7 +218,7 @@ def run_write_pipeline_sync(
             node_id, id_error = coerce_lookup_id(id, primary_type)
             if id_error is not None:
                 return _error_payload([id_error])
-            # ``Meta.select_for_update`` (default True since the 0.0.14 mutation-atomicity cut): a
+            # ``Meta.select_for_update`` (default True since the 0.0.14 concurrency hardening): a
             # base-manager ``SELECT ... FOR UPDATE`` on the update locate, constrained by the
             # visibility queryset's pk subquery, inside this transaction.
             instance = locate_instance(
@@ -848,7 +848,7 @@ def locate_instance(
     raises ``SyncMisuseError`` (``apply_type_visibility_sync`` closes the
     coroutine first).
 
-    **Row lock (``Meta.select_for_update``, default True since the 0.0.14 mutation-atomicity cut).**
+    **Row lock (``Meta.select_for_update``, default True since the 0.0.14 concurrency hardening).**
     The lock is a base-manager ``SELECT ... FOR UPDATE`` constrained by the visibility queryset reduced to a
     pk subquery (``base_locked_queryset``) - never ``select_for_update()`` attached to the
     consumer's own queryset, whose joins / unions / annotations a ``FOR UPDATE`` cannot legally
@@ -1181,7 +1181,7 @@ def _model_write_step(
     ``list[FieldError]`` on a validation / write failure. ``instance`` (the located
     update row, ``None`` for create) selects the save mode: a create saves the
     ``decoded`` target normally, an update saves it with ``force_update=True``
-    (the 0.0.14 mutation-atomicity disappearing-row contract via ``forced_save_or_field_errors``).
+    (the 0.0.14 disappearing-row concurrency contract via ``forced_save_or_field_errors``).
     """
     target, m2m_assignments, exclude = decoded
 
@@ -1196,7 +1196,7 @@ def _model_write_step(
         if instance is None:
             write_error = save_or_field_errors(target.save)
         else:
-            # A direct model UPDATE saves with ``force_update=True`` (mutation atomicity, shipped 0.0.14): a
+            # A direct model UPDATE saves with ``force_update=True`` (0.0.14 concurrency hardening): a
             # located row a concurrent transaction deleted would otherwise be
             # silently re-INSERTed by ``save()``'s update-else-insert fallback,
             # reporting success for a write the deleter never sees. The zero-row
@@ -1211,7 +1211,7 @@ def _model_write_step(
 def forced_save_or_field_errors(target: Any) -> list[FieldError] | None:
     """Run ``target.save(force_update=True)``; map races to the envelope else ``None``.
 
-    The update-side counterpart of ``save_or_field_errors`` (mutation atomicity, shipped 0.0.14), with the
+    The update-side counterpart of ``save_or_field_errors`` (0.0.14 concurrency hardening), with the
     disappearing-row contract on top: a constraint race is the ``"__all__"``
     ``IntegrityError`` envelope (the standing Major-2 mapping, checked FIRST -
     ``IntegrityError`` is itself a ``DatabaseError``, so the order matters under
@@ -1345,7 +1345,7 @@ def _delete_or_field_errors(instance: Any) -> list[FieldError] | None:
     it keys to the model-level ``""`` (``"__all__"``) bucket, since the refusal
     is about OTHER rows referencing this one, not about the ``id`` input.
 
-    **Zero-target-row delete is a ``conflict`` (mutation atomicity, shipped 0.0.14).** ``Model.delete()``
+    **Zero-target-row delete is a ``conflict`` (0.0.14 concurrency hardening).** ``Model.delete()``
     reports how many rows each model lost; the TARGET model's own count being
     zero means a concurrent transaction removed the row between the locate and
     the ``DELETE`` (unreachable while the default locate lock holds, reachable

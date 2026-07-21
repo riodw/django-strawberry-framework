@@ -1,4 +1,4 @@
-"""In-process windowed GenericRelation connection acceptance tests (WS-B).
+"""In-process windowed GenericRelation connection acceptance tests.
 
 ``Branch.tags = GenericRelation(TaggedItem)`` is the package's generic-relation
 substrate; the public example schema deliberately does NOT expose it (a model
@@ -11,7 +11,7 @@ comment forbids exposing tags), so these tests build test-local Relay-Node
 fetch time INSIDE the window subquery - the planner never injects it), the
 scalar-only projection that includes both the ``object_id`` and
 ``content_type_id`` columns (the deferred-refetch N+1 fix), the count-free
-``hasNextPage`` probe composition with WS-A, and the lateral strategy degrading
+``hasNextPage`` probe composition, and the lateral strategy degrading
 to the windowed body.
 
 Library acceptance tests use inline ``Model.objects.create`` (the library app
@@ -160,7 +160,7 @@ def test_windowed_generic_connection_first_page_excludes_poison_row():
 
 @pytest.mark.django_db
 def test_generic_connection_has_next_page_probe_composes_with_ws_a():
-    """A hasNextPage-only generic page takes the count-free probe (WS-A composition).
+    """A hasNextPage-only generic page composes with the count-free probe.
 
     No ``totalCount`` selected on a bounded first page -> the window overfetches
     a sentinel row instead of paying a ``Count(1) OVER`` scan; the sentinel's
@@ -200,7 +200,7 @@ def test_scalar_only_generic_connection_has_no_per_row_refetch():
     The projection includes BOTH the ``object_id`` connector and the
     ``content_type_id`` that Django's generic-prefetch attach reads off each
     child (its attach key is ``(object_id, content_type_id)``), so a scalar-only
-    window never deferred-refetches either column once per row - the WS-B N+1
+    window never deferred-refetches either column once per row - the GenericRelation N+1
     fix. The query count must not scale with the number of tags.
     """
     schema = _build_schema()

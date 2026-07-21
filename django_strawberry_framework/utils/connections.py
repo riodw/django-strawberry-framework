@@ -184,7 +184,7 @@ def is_ambiguous_empty_window(offset: int, limit: int | None, *, reverse: bool =
     CONSUMES rows as marker-classified (``connection.py::_resolve_from_window``).
     The count decision is a SEPARATE axis owned by ``FetchMode`` /
     ``WindowRangePlan.fetch_mode`` - these ambiguous shapes are NO LONGER
-    shape-forced to a count (WS-A): the offset page composes the count-free probe
+    shape-forced to a count: the offset page composes the count-free probe
     with its marker, and only the ``first: 0`` marker still serves a count. One
     predicate so the plan side and the consume side cannot drift.
     """
@@ -214,8 +214,8 @@ class WindowRangePlan:
     ``COUNT(1) OVER (PARTITION BY ...)`` that scans the whole partition. It is
     honored on the ``plain_first_page`` shape AND on the bounded forward
     offset page (``offset > 0`` with a positive ``limit``); every OTHER shape
-    leaves the probe off, but that no longer implies a count. Under the WS-A
-    fetch policy (``FetchMode``) a shape needs the ``COUNT(1) OVER`` only when it
+    leaves the probe off, but that no longer implies a count. Under the
+    ``FetchMode`` policy a shape needs the ``COUNT(1) OVER`` only when it
     is ``COUNTED`` (``totalCount`` observed, or the ``first: 0`` marker shape) -
     an unbounded forward or reversed ``last``-only page is ``CONSTANT_FALSE``
     (``hasNextPage`` served as a constant ``False``, no count) and a bounded

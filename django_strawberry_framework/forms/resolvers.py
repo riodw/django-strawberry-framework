@@ -531,7 +531,7 @@ def _run_plain_form_pipeline_sync(mutation_cls: type, info: Any, data: Any) -> A
 
     Orchestration stays local (the model-backed ``run_write_pipeline_sync`` skeleton
     owns locate / refetch / object-slot payloads and cannot absorb this flavor
-    without a model-less seam), but the mutation-atomicity alias / auth / write-phase
+    without a model-less seam), but the 0.0.14 mutation-hardening alias / auth / write-phase
     invariants are the SAME shared helpers the model / ``ModelForm`` / serializer /
     delete paths call: ``pipeline_alias_guard`` spans every consumer-reachable
     phase, ``authorization_phase`` wraps the single permission evaluation, and

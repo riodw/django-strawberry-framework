@@ -2441,7 +2441,7 @@ def test_count_less_window_with_count_observer_falls_back_defensively():
     """A count-less window whose selection OBSERVES the count returns ``None``.
 
     The workstream-B defensive tail in ``_resolve_from_window``, narrowed by
-    WS-A's count-policy overhaul: the ONLY genuine drift left is a ``totalCount``
+    The count-policy overhaul leaves only a ``totalCount``
     observer (``want_count=True``) on a window that carries no count annotation.
     Plan-time (``connection_count_required``) and resolve-time (``want_count``)
     share the selection walk, so this is unreachable live until they DRIFT -

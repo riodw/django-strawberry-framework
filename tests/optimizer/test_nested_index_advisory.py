@@ -1,4 +1,4 @@
-"""Composite-index advisory unit matrix (optimizer-improvement-plan WS-D D2).
+"""Composite-index advisory unit matrix for nested connection strategies.
 
 Pins ``nested_planner.py``'s dev-mode advisory: it prefix-matches a child
 model's REPRESENTED physical index shapes - unconditional field-based

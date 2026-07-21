@@ -1175,8 +1175,9 @@ def test_node_refetch_of_cascade_hidden_row_returns_null():
 
 # ---------------------------------------------------------------------------
 # Sealed-execution boundary: a hostile hook-return subclass cannot widen the
-# refetched row set (docs/feedback.md P1 "unchecked terminal / transformation"
-# findings, surface-level). The hook returns a QuerySet SUBCLASS whose overrides
+# refetched row set
+# (docs/spec-064-visibility_boundary-0_0_14.md #"### Decision 1", surface-level).
+# The hook returns a QuerySet SUBCLASS whose overrides
 # would erase the visibility predicate (``.filter()``) or synthesize hidden rows
 # (``.first()`` / ``.get()`` / ``.afirst()`` / ``.aget()`` / ``.__aiter__()``) if
 # the framework ever dispatched through the consumer object. The boundary seals

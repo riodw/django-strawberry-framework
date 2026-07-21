@@ -3701,7 +3701,7 @@ def _seed_genre_books(*titles: str) -> models.Genre:
 def _genre_books_connection(arguments: str, selection: str):
     """Post one anonymous ``allLibraryGenres[0].booksConnection`` page + captured SQL.
 
-    Returns ``(connection_payload, captured)`` so the WS-A count-policy pins can
+    Returns ``(connection_payload, captured)`` so the count-policy pins can
     assert the served page AND the SQL shape (count-free vs counted) plus the
     fixed two-query cost (no per-parent fallback) in one place.
     """
@@ -3730,7 +3730,7 @@ def _array_cursor(index: int) -> str:
 
 @pytest.mark.django_db
 def test_genre_books_connection_offset_page_probe_composes_marker_count_free():
-    """WS-A A1: the bounded offset page serves ``hasNextPage`` from the composed probe.
+    """The bounded offset page serves ``hasNextPage`` from the composed probe.
 
     ``after:`` offset with ``first: N`` + ``hasNextPage`` (no ``totalCount``) now
     overfetches ONE sentinel row composed with the marker, so ``hasNextPage`` is
@@ -3767,7 +3767,7 @@ def test_genre_books_connection_offset_page_probe_composes_marker_count_free():
 
 @pytest.mark.django_db
 def test_genre_books_connection_offset_page_edges_only_served_count_free():
-    """WS-A: an edges-only bounded offset page serves the page count-free, no fallback.
+    """An edges-only bounded offset page serves the page count-free, no fallback.
 
     Neither ``hasNextPage`` nor ``totalCount`` is selected, so the window is
     planned without the probe - but the offset marker still lands and the
@@ -3788,7 +3788,7 @@ def test_genre_books_connection_offset_page_edges_only_served_count_free():
 
 @pytest.mark.django_db
 def test_genre_books_connection_offset_overshoot_served_count_free_no_fallback():
-    """WS-A: an overshot ``after:`` on the offset page serves an empty page, no fallback.
+    """An overshot ``after:`` on the offset page serves an empty page, no fallback.
 
     Both the ``hasNextPage``-only shape and the edges-only shape (the Gap-6b hole):
     the marker proves ``total <= offset``, so ``hasNextPage`` is False and the
@@ -3818,7 +3818,7 @@ def test_genre_books_connection_offset_overshoot_served_count_free_no_fallback()
 
 @pytest.mark.django_db
 def test_genre_books_connection_unbounded_overshoot_served_count_free_no_fallback():
-    """WS-A finding-2 hole: ``after:`` past the end with NO ``first`` is served count-free.
+    """An ``after:`` past the end with NO ``first`` is served count-free.
 
     An unbounded overshot page must serve the empty page from the marker-only
     window (``total <= offset``), never silently degrade to a per-parent
@@ -3839,7 +3839,7 @@ def test_genre_books_connection_unbounded_overshoot_served_count_free_no_fallbac
 
 @pytest.mark.django_db
 def test_genre_books_connection_empty_partition_on_page_two_served_count_free():
-    """WS-A: a childless parent queried with ``after:`` serves an empty page, no fallback.
+    """A childless parent queried with ``after:`` serves an empty page, no fallback.
 
     The empty-window branch on an offset page: no rows (not even a marker) means
     the parent has no children, so the empty page is served count-free with
@@ -3858,7 +3858,7 @@ def test_genre_books_connection_empty_partition_on_page_two_served_count_free():
 
 @pytest.mark.django_db
 def test_genre_books_connection_last_page_has_next_page_constant_false_count_free():
-    """WS-A A2: reversed ``last: N`` serves ``hasNextPage`` as a constant False, count-free.
+    """Reversed ``last: N`` serves ``hasNextPage`` as a constant False, count-free.
 
     A ``last``-only page is the partition's tail, so ``hasNextPage`` is False by
     construction - no ``Count(1) OVER`` needed. ``hasPreviousPage`` still derives
@@ -3881,7 +3881,7 @@ def test_genre_books_connection_last_page_has_next_page_constant_false_count_fre
 
 @pytest.mark.django_db
 def test_genre_books_connection_unbounded_edges_and_has_next_page_count_free():
-    """WS-A A2: an unbounded forward page serves ``hasNextPage`` False, count-free.
+    """An unbounded forward page serves ``hasNextPage`` False, count-free.
 
     A served unbounded page ends at the partition's last row, so ``hasNextPage``
     is a constant False - the count is dropped. Pinned: every edge, the constant
@@ -3902,7 +3902,7 @@ def test_genre_books_connection_unbounded_edges_and_has_next_page_count_free():
 
 @pytest.mark.django_db
 def test_genre_books_connection_offset_alias_merge_composes_probe_and_marker():
-    """WS-A: composed-offset aliases share ONE window; sentinel AND marker never leak.
+    """Composed-offset aliases share ONE window; sentinel AND marker never leak.
 
     ``a`` selects ``pageInfo { hasNextPage }`` (the offset probe) and ``b`` selects
     only ``edges`` under the SAME ``first: 2, after:`` args, so Decision 6 merges
@@ -3935,7 +3935,7 @@ def test_genre_books_connection_offset_alias_merge_composes_probe_and_marker():
 
 @pytest.mark.django_db
 def test_book_genres_connection_last_page_with_total_count_stays_counted():
-    """WS-A regression pin: ``last: N`` + ``totalCount`` keeps the count (unchanged).
+    """Regression pin: ``last: N`` + ``totalCount`` keeps the count.
 
     The A2 constant-False path applies ONLY when ``totalCount`` is not observed;
     a reversed page that DOES select ``totalCount`` still annotates the partition

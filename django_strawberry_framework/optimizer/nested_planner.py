@@ -1448,11 +1448,11 @@ def plan_connection_relation(
     # O(parents x aliases) per-parent fallbacks). A strategy returning
     # ``False`` leaves that window unplanned, keeping the Decision-6
     # strictness contract (no resolver identities recorded for it).
-    # Strategy selection (optimizer-improvement-plan WS-D D1): a per-field
+    # Per-field strategy selection: a
     # ``OptimizerHint.strategy(name)`` overrides the extension default; otherwise
     # the active strategy applies. It is field-static (the same for every keyed
     # window), so resolve it once here rather than per window. The composite-index
-    # advisory (WS-D D2) is likewise field-static, but it is emitted from INSIDE
+    # composite-index advisory is likewise field-static, but it is emitted from INSIDE
     # the loop, only after the FIRST window a strategy accepts - a public
     # consumer-authored strategy may return ``False`` for every window (no nested
     # window planned, the per-parent fallback runs), and advising a composite
@@ -1468,7 +1468,7 @@ def plan_connection_relation(
     advised = False
     for resp_key, (offset, limit, reverse), window_seek in keyed_windows:
         range_plan = window_range_plan(offset=offset, limit=limit, reverse=reverse)
-        # Count policy (optimizer-improvement-plan WS-A A0/A1/A2), now derived
+        # Count policy, derived
         # from the ONE shared ``FetchMode`` value instead of two independent
         # expressions: ``COUNTED`` annotates the per-partition ``Count(1) OVER``
         # (``totalCount`` observed, or the ``first: 0`` marker shape); ``PROBED``

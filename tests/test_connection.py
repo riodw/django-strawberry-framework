@@ -1560,7 +1560,8 @@ def test_consumer_resolver_pre_sliced_queryset_raises_clear_error():
 
 
 # =============================================================================
-# Sealed-execution boundary at the connection surface (docs/feedback.md P1).
+# Sealed-execution boundary at the connection surface
+# (docs/spec-064-visibility_boundary-0_0_14.md #"## Architectural decisions").
 # A hostile hook-return SUBCLASS whose overrides would erase the visibility
 # predicate or synthesize rows is neutralized by sealing: edges carry only the
 # visible rows and totalCount counts only the visible rows, sync AND async. Each
@@ -1684,7 +1685,7 @@ def test_connection_instance_shadowed_all_hook_is_sealed():
 
 @pytest.mark.django_db
 def test_connection_query_chain_shadow_hook_is_sealed():
-    """A hook whose ``query.chain`` is instance-replaced FAILS CLOSED (docs/feedback.md P1-1).
+    """A hook whose ``query.chain`` is instance-replaced FAILS CLOSED (Decision 2).
 
     ``sql.Query.clone`` shallow-copies the source ``Query.__dict__``, so an
     instance ``chain`` shadow would ride into the sealed query and dispatch on the

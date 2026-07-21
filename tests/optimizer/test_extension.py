@@ -2094,7 +2094,7 @@ def test_nested_pagination_variable_two_plans_two_windows():
 
 @pytest.mark.django_db
 def test_distinct_target_get_queryset_produces_no_window_prefetch():
-    """A target ``get_queryset`` returning ``.distinct()`` never windows (WS-E step 2).
+    """A target ``get_queryset`` returning ``.distinct()`` never windows.
 
     ``.distinct()`` can never reach ``apply_window_pagination``: the
     strategy-independent gate ``unwindowable_child_queryset_reason`` classifies
@@ -2154,7 +2154,7 @@ def test_distinct_target_get_queryset_produces_no_window_prefetch():
 
 @pytest.mark.django_db
 def test_per_field_nested_strategy_hint_selects_windowed(django_assert_num_queries):
-    """WS-D1: a ``nested_strategy`` hint drives the per-field strategy selection.
+    """A ``nested_strategy`` hint drives the per-field strategy selection.
 
     ``OptimizerHint.strategy("windowed")`` on a connection field routes
     ``nested_planner.py::_select_nested_strategy`` through

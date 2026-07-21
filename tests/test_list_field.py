@@ -1289,7 +1289,8 @@ def test_list_field_default_resolver_applies_cascade() -> None:
 
 
 # =============================================================================
-# Sealed-execution boundary at the list-field surface (docs/feedback.md P1).
+# Sealed-execution boundary at the list-field surface
+# (docs/spec-064-visibility_boundary-0_0_14.md #"## Architectural decisions").
 # Mirrors the connection-surface regressions in ``tests/test_connection.py`` (the
 # hostile-subclass, instance-shadowed ``.all()``, and Manager degrade / alias-drift
 # tests). A hostile hook-return whose overrides would erase the visibility

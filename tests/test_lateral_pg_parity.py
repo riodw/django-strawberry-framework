@@ -223,7 +223,7 @@ def test_reverse_fk_parity_across_pagination_shapes(arguments, page, count_free)
     ],
 )
 def test_count_free_has_next_page_parity_across_shapes(arguments):
-    """WS-A count-free ``hasNextPage`` shapes page byte-identically with NO count.
+    """Count-free ``hasNextPage`` shapes page byte-identically with NO count.
 
     The A1 composed offset probe (bounded offset page) and the A2 constant-False
     shapes (unbounded forward, reversed ``last: N``, offset overshoot) all resolve
@@ -441,7 +441,7 @@ def test_stray_executor_thread_connections_are_tracked_for_session_close():
 
 
 # =============================================================================
-# WS-C: single-table visibility WHERE (a get_queryset scope) on the lateral path
+# Single-table visibility WHERE (a get_queryset scope) on the lateral path
 # =============================================================================
 
 
@@ -505,7 +505,7 @@ def _seed_visibility():
 def test_visibility_scope_takes_the_lateral_path_with_parity():
     """A single-table ``get_queryset`` scope now takes the lateral path.
 
-    The headline WS-C win: anonymous traffic over a visibility-scoped connection
+    Anonymous traffic over a visibility-scoped connection
     executes ``CROSS JOIN LATERAL`` (not the windowed downgrade), the scope's
     column rides into the lateral SQL, and the response is byte-identical to the
     windowed strategy - the hidden ``repair`` books excluded under both.

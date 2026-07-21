@@ -331,7 +331,7 @@ def test_fetch_mode_probes_on_plain_first_and_offset_pages_with_has_next_not_tot
 
     True for the plain ``first: N`` shape AND the bounded forward offset page
     (``offset > 0`` with a positive ``limit``) when ``hasNextPage`` is selected
-    and ``totalCount`` is NOT (WS-A: the offset page composes the probe with its
+    and ``totalCount`` is NOT (the offset page composes the probe with its
     marker). ``COUNTED`` wins first when ``totalCount`` is observable, so probe
     XOR count holds.
     """
@@ -422,7 +422,7 @@ def test_fetch_bounds_are_none_for_an_unbounded_window():
 
 
 def test_probe_composes_with_marker_but_never_with_count():
-    """WS-A: probe and marker COMPOSE on the offset page; probe XOR count holds.
+    """Probe and marker COMPOSE on the offset page; probe XOR count holds.
 
     The whole design now rests on ``next_page_probe`` XOR ``with_total_count``
     (the marker is a co-resident on the offset page, no longer a mutually-exclusive
@@ -560,7 +560,7 @@ def test_split_window_rows_plain_shape_passes_rows_through():
 
 
 def test_split_window_rows_composed_offset_probe_drops_marker_and_sentinel():
-    """WS-A composed offset page: the marker (rn 1) AND the probe sentinel drop.
+    """Composed offset page: the marker (rn 1) AND the probe sentinel drop.
 
     ``after:`` offset 5, ``first: 2`` with the probe engaged fetches the abs-first
     marker (rn 1), the page rows (rn 6, 7), and the sentinel (rn 8 ==
@@ -662,7 +662,7 @@ def test_window_range_plan_mode_table(
     expect_probe,
     expect_mode,
 ):
-    """WS-A post-change decision table for ``window_range_plan`` (probe passed on).
+    """Fetch-mode decision table for ``window_range_plan`` (probe passed on).
 
     Pins the composed offset-page shape (marker AND probe both set), the
     probe-eligible plain first page, and the count-forcing / constant-False shapes

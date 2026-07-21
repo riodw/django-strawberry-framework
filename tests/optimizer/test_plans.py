@@ -892,12 +892,12 @@ class TestApplyWindowPagination:
         assert " OR " not in sql  # a probe is not a marker shape
 
     def test_next_page_probe_composes_with_marker_on_the_offset_page(self):
-        """WS-A: the bounded forward offset page overfetches the sentinel AND markers.
+        """The bounded forward offset page overfetches the sentinel AND markers.
 
         ``next_page_probe`` now engages on the offset page too, composing with the
         marker: the range bound becomes ``<= offset + limit + 1`` (the n+1 sentinel
         via ``fetch_upper_bound``) OR'd with the ``= 1`` marker alternative, and no
-        count is annotated. This is the load-bearing WS-A change - the offset page
+        count is annotated. This is load-bearing - the offset page
         stops paying ``Count(1) OVER`` for a ``hasNextPage``-only selection.
         """
         qs = self._windowed(offset=2, limit=3, with_total_count=False, next_page_probe=True)
@@ -1133,7 +1133,7 @@ class TestDeterministicOrderHoistParity:
         assert ends_in_unique_column((Lower("name"),), Category) is False
 
     def test_ends_in_unique_column_nullable_unique_is_not_total_order(self):
-        """A NULLABLE unique terminal is NOT a total order (WS-E step 1).
+        """A NULLABLE unique terminal is NOT a total order.
 
         SQL ``UNIQUE`` permits multiple NULLs, so terminal ties among NULL rows
         are nondeterministic - the pk must still be appended. ``NullableScalarSpecimen.label``

@@ -1,15 +1,13 @@
-"""Build ``KANBAN.html`` and the canonical ``KANBAN.json`` from the fakeshop GraphQL endpoint.
+"""Build ``KANBAN.html`` from the fakeshop GraphQL endpoint.
 
-``KANBAN.json`` is the first-class, machine-diffable board snapshot: the same
-dashboard payload embedded in ``KANBAN.html``, deep-sorted for stable diffs and
-carrying an ``asOf`` block (the max ``updatedDate`` across the kanban tables plus a
-render timestamp). Both artifacts derive from one :func:`fetch_dashboard_data` call.
+The dashboard payload is deep-sorted before embedding so the HTML data block
+diffs cleanly build over build; ``KANBAN.md`` (built separately) is the
+reviewable rendering of the same kanban DB.
 """
 
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import json
 import re
 import sys
@@ -36,7 +34,6 @@ except ModuleNotFoundError:  # imported as ``scripts.build_kanban_html`` (repo r
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FAKESHOP_ROOT = REPO_ROOT / "examples" / "fakeshop"
 DEFAULT_HTML_PATH = REPO_ROOT / "KANBAN.html"
-DEFAULT_JSON_PATH = REPO_ROOT / "KANBAN.json"
 DATA_BLOCK_RE = re.compile(
     r"(?s)<!-- KANBAN_DATA_START -->.*?<!-- KANBAN_DATA_END -->",
 )
@@ -451,16 +448,9 @@ def parse_args() -> argparse.Namespace:
         help="HTML file to update. Defaults to the repository-root KANBAN.html.",
     )
     parser.add_argument(
-        "--json",
-        type=Path,
-        default=DEFAULT_JSON_PATH,
-        dest="json_path",
-        help="Canonical JSON snapshot to write. Defaults to the repository-root KANBAN.json.",
-    )
-    parser.add_argument(
         "--check",
         action="store_true",
-        help="Exit 1 if KANBAN.html / KANBAN.json are not already up to date (0 fresh, 2 on error).",
+        help="Exit 1 if KANBAN.html is not already up to date (0 fresh, 2 on error).",
     )
     return parser.parse_args()
 
@@ -711,8 +701,8 @@ def fetch_dashboard_data() -> dict[str, Any]:
 def _sort_cards(cards: list[dict[str, Any]]) -> None:
     """Sort every per-card child list, then the cards themselves, in place.
 
-    Deterministic ordering (not resolver order) so both the HTML data block and
-    the KANBAN.json snapshot diff cleanly build over build.
+    Deterministic ordering (not resolver order) so the HTML data block diffs
+    cleanly build over build.
     """
     for card in cards:
         card.get("items", []).sort(
@@ -756,51 +746,6 @@ def build_dashboard_snapshot(dashboard_data: dict[str, Any]) -> dict[str, Any]:
     return dashboard_data
 
 
-def _max_updated_date(snapshot: dict[str, Any]) -> str | None:
-    """Return the maximum ``updatedDate`` across every row in the snapshot.
-
-    ISO-8601 UTC strings (identical ``+00:00`` offset) compare lexicographically,
-    so a plain ``max`` over the collected values is a correct as-of anchor.
-    """
-    best: str | None = None
-
-    def walk(node: Any) -> None:
-        nonlocal best
-        if isinstance(node, dict):
-            value = node.get("updatedDate")
-            if isinstance(value, str) and (best is None or value > best):
-                best = value
-            for child in node.values():
-                walk(child)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item)
-
-    walk(snapshot)
-    return best
-
-
-def build_canonical_export(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Wrap a (sorted) snapshot with the ``asOf`` block for the KANBAN.json artifact.
-
-    ``asOf.maxUpdatedDate`` is data-derived and deterministic (the board's freshness
-    anchor); ``asOf.generatedAt`` is the render wall-clock and is the ONLY field that
-    varies between two runs over unchanged data (``--check`` ignores it).
-    """
-    return {
-        "asOf": {
-            "maxUpdatedDate": _max_updated_date(snapshot),
-            "generatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
-        },
-        **snapshot,
-    }
-
-
-def render_json(export: dict[str, Any]) -> str:
-    """Render the canonical KANBAN.json text (indented, key-sorted, newline-terminated)."""
-    return json.dumps(export, ensure_ascii=True, indent=2, sort_keys=True) + "\n"
-
-
 def render_data_block(dashboard_data: dict[str, Any]) -> str:
     """Render the replaceable dashboard data block."""
     encoded = json.dumps(dashboard_data, ensure_ascii=True, separators=(",", ":"))
@@ -827,15 +772,6 @@ def embed_dashboard_data(html_path: Path, dashboard_data: dict[str, Any]) -> Non
     html_path.write_text(updated, encoding="utf-8")
 
 
-def _strip_volatile(export: dict[str, Any]) -> dict[str, Any]:
-    """Return ``export`` with the wall-clock ``asOf.generatedAt`` removed, for --check."""
-    clone = dict(export)
-    as_of = dict(clone.get("asOf", {}))
-    as_of.pop("generatedAt", None)
-    clone["asOf"] = as_of
-    return clone
-
-
 def _html_is_fresh(html_path: Path, data_block: str) -> bool:
     """Return whether ``html_path`` already carries the freshly rendered data block."""
     if not html_path.is_file():
@@ -844,50 +780,29 @@ def _html_is_fresh(html_path: Path, data_block: str) -> bool:
     return match is not None and match.group(0) == data_block
 
 
-def _json_is_fresh(json_path: Path, export: dict[str, Any]) -> bool:
-    """Return whether ``json_path`` matches ``export`` (ignoring the wall-clock field)."""
-    if not json_path.is_file():
-        return False
-    try:
-        current = json.loads(json_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return False
-    return _strip_volatile(current) == _strip_volatile(export)
-
-
 def main() -> int:
-    """Build the HTML dashboard and the canonical KANBAN.json (or check freshness)."""
+    """Build the HTML dashboard (or check its freshness)."""
     args = parse_args()
     configure_django()
     snapshot = build_dashboard_snapshot(fetch_dashboard_data())
     data_block = render_data_block(snapshot)
-    export = build_canonical_export(snapshot)
 
     if args.check:
-        stale = [
-            str(path)
-            for path, fresh in (
-                (args.html, _html_is_fresh(args.html, data_block)),
-                (args.json_path, _json_is_fresh(args.json_path, export)),
-            )
-            if not fresh
-        ]
-        if stale:
+        if not _html_is_fresh(args.html, data_block):
             print(
-                f"Stale (run scripts/build_kanban_html.py): {', '.join(stale)}",
+                f"Stale (run scripts/build_kanban_html.py): {args.html}",
                 file=sys.stderr,
             )
             return 1
-        print(f"{args.html} and {args.json_path} are up to date.")
+        print(f"{args.html} is up to date.")
         return 0
 
     embed_dashboard_data(args.html, snapshot)
-    args.json_path.write_text(render_json(export), encoding="utf-8")
     print(
         "Wrote "
         f"{len(snapshot['cards'])} cards, "
         f"{len(snapshot['boardDocs'])} board docs, and "
-        f"{len(snapshot['lookups'])} lookup arrays to {args.html} and {args.json_path}",
+        f"{len(snapshot['lookups'])} lookup arrays to {args.html}",
     )
     return 0
 

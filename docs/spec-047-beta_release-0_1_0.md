@@ -22,10 +22,11 @@ sequence:
    ([Decision 2](#decision-2--the-gating-set-is-the-whole-alpha-queue-not-the-cards-stale-done-range)):
    `TODO-ALPHA-045-0.0.15` ([`spec-045`][spec-045]) and
    `TODO-ALPHA-046-0.0.16` ([`spec-046`][spec-046]).
-2. **Run the parity audit.** Every ⚛️ (`graphene-django`) and 🍓
-   (`strawberry-graphql-django`) finding from the two upstream audits is
-   either `DONE` or explicitly deferred with a recorded reason
-   ([Decision 6](#decision-6--the-parity-audit-is-a-disposition-ledger-not-a-re-audit)) —
+2. **Run the parity audit.** Build a source-complete inventory against pinned
+   ⚛️ (`graphene-django`) and 🍓 (`strawberry-graphql-django`) revisions,
+   then disposition every finding as `DONE`, explicitly deferred, or
+   rejected with a recorded reason
+   ([Decision 6](#decision-6--the-parity-audit-starts-from-a-source-complete-pinned-inventory)) —
    `0.1.0` is, by definition, the feature-parity milestone.
 3. **Verify the matrix.** A full test pass under each supported
    `(Python, Django, Strawberry)` combination, with package coverage held at
@@ -139,12 +140,13 @@ is a distinct gate.
         `TODO-ALPHA-046-0.0.16` ([Decision 2](#decision-2--the-gating-set-is-the-whole-alpha-queue-not-the-cards-stale-done-range)).
         If either is not `DONE`, this card stops here.
   - [ ] Run the parity-disposition audit
-        ([Decision 6](#decision-6--the-parity-audit-is-a-disposition-ledger-not-a-re-audit)):
-        every ⚛️ / 🍓 card from the two upstream audits is `DONE` or
-        explicitly deferred with a recorded reason (a beta card, a
-        `BACKLOG.md` row, or a named non-goal). The output is a disposition
-        ledger appended to this spec (or a sibling audit note) — one row per
-        finding, no silent omissions.
+        ([Decision 6](#decision-6--the-parity-audit-starts-from-a-source-complete-pinned-inventory)):
+        record the exact upstream release/commit for each library, inventory
+        every public parity finding directly from those revisions, and join
+        every finding by stable ID to `DONE`, a recorded deferral (beta card
+        or `BACKLOG.md` row), or a named rejection/non-goal. The output is a
+        sibling audit artifact — one source row per finding and no
+        board-derived omissions.
   - [ ] Verify no stale skipped tests refer to already-shipped slices
         (board release-readiness item; `rg -n "skip" tests/ examples/` sweep
         with each hit dispositioned).
@@ -259,9 +261,12 @@ to happen once, in order, with evidence.
   `strawberry-graphql-django` audit) produced the card set that became the
   alpha queue; the "Alpha cards must claim upstream parity" board decision
   (2026-06-09) forced each shipped card to ground its claim in a specific
-  upstream `path::symbol`. What has never been produced is the closing
-  disposition ledger — the proof that no audit finding was silently
-  dropped.
+  upstream `path::symbol`. The original source inventories, stable finding
+  IDs, and audited revisions are not preserved as one immutable release
+  artifact. Board cards can prove the disposition of findings they contain,
+  not the absence of a finding dropped before card creation; Slice 1 must
+  reconstruct a complete pinned inventory before producing the closing
+  disposition ledger.
 
 ## Goals
 
@@ -298,7 +303,7 @@ to happen once, in order, with evidence.
   [`Meta.choice_enum_names`][glossary-metachoice_enum_names] (`0.1.4`) stay
   `planned`; the doc flips must not soften their status.
 - **No migration-guide authoring.** Migration and adoption guides are
-  `TODO-BETA-058-0.1.7`.
+  `TODO-BETA-060-0.1.7`.
 - **No CI matrix redesign.** The matrix is exercised as it exists; adding
   rows or version floors is not this card.
 
@@ -457,14 +462,16 @@ would duplicate — and eventually contradict — the workflow file.
 **Alternative rejected**: a local tox/nox matrix harness — new tooling for a
 one-card need; the CI matrix plus two spot rows covers the same evidence.
 
-### Decision 6 — The parity audit is a disposition ledger, not a re-audit
+### Decision 6 — The parity audit starts from a source-complete pinned inventory
 
-**Decision**: Slice 1 does not re-run the upstream audits. It takes the
-existing ⚛️ / 🍓 finding set — the audit-derived cards on the board plus each
-shipped card's `Verified in upstream` claims — and produces a **disposition
-ledger**: one row per finding, each marked `DONE` (naming the shipping
-card), `deferred` (naming the beta card or `BACKLOG.md` row and the recorded
-reason), or `rejected` (naming the decision that rejected it). The
+**Decision**: Slice 1 records the exact upstream release or commit used for
+each library and inventories the full audited public surface directly from
+those immutable revisions. Each source finding receives a stable ID before
+it is joined to board evidence in a **disposition ledger**: `DONE` (naming
+the shipping card), `deferred` (naming the beta card or `BACKLOG.md` row and
+the recorded reason), or `rejected` (naming the decision that rejected it).
+Existing audit-derived cards and shipped cards' `Verified in upstream`
+claims are evidence for the join, never the source universe. The
 [single-upstream parity][glossary-single-upstream-parity] rule applies to
 findings only one upstream ships; the
 [cookbook parity][glossary-cookbook-parity] rule governs any migration-claim
@@ -473,16 +480,14 @@ created (and the cut waits, per Decision 1) or a deferral is recorded with
 maintainer sign-off.
 
 **Rationale**: the parity claim is `0.1.0`'s entire semantic content — the
-version means "parity reached". The claim is only as good as the proof that
-nothing fell off the queue between the audits (which produced the cards) and
-the cut (which certifies them). A fresh re-audit of both upstreams would be
-a much larger card and would re-litigate settled deferrals; the ledger
-closes the loop at the right cost.
+version means "parity reached". Deriving the source set from cards makes the
+proof circular because it cannot detect a finding lost before card creation.
+Pinned revisions make the target immutable while the stable-ID one-to-one
+join proves completeness and preserves every settled deferral.
 
-**Alternative rejected**: full upstream re-audit against current upstream
-HEADs — upstream moved during alpha (new upstream features are future
-findings, not alpha debt); the parity target was always the audited surface,
-and chasing a moving target makes the milestone undefinable.
+**Alternative rejected**: auditing current moving upstream HEADs. New
+upstream features are future findings, not alpha debt; pinning the exact
+historical target makes the milestone reproducible without chasing drift.
 
 ### Decision 7 — The CHANGELOG `0.1.0` entry covers the whole shipped alpha line
 
@@ -669,7 +674,7 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
   convention. Fallback: the maintainer's existing habit wins — the git tag
   history at execution time is the tiebreaker.
 - **Upstream drift during alpha**: features either upstream shipped after
-  the audits are not alpha debt (Decision 6) — but Slice 1 should note any
+  the pinned audit revisions are not alpha debt (Decision 6) — but Slice 1 should note any
   obvious new upstream surface it trips over as candidate `BACKLOG.md`
   rows, without letting that grow into a re-audit.
 
@@ -683,9 +688,9 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
   primitives (`0.1.2`), the aggregation subsystem
   ([`AggregateSet`][glossary-aggregateset], `0.1.3`), Layer-3 Meta-key
   promotion (`0.1.3`), redaction tier + stable enum naming (`0.1.4`),
-  fakeshop activation + Layer-3 HTTP tests (`0.1.5`), mutation
-  idempotency + migration guides (`0.1.6`), the adversarial
-  suite / explain mode / filter-key namespace (`0.1.7`).
+  fakeshop activation + Layer-3 HTTP tests + optimizer explain mode
+  (`0.1.5`), mutation idempotency + the filter-key namespace (`0.1.6`),
+  and migration guides + the adversarial suite (`0.1.7`).
 - The API freeze and stable cut-over — `TODO-STABLE-062-1.0.0`.
 - Release-pipeline automation (CI-driven tag/publish) — raised and rejected
   in Decision 8; a future card if the beta cadence warrants it.
@@ -700,9 +705,10 @@ plus `import_spec_terms` for this spec's own term hygiene at card wrap.
       later 0.0.14-line `DONE-064-0.0.14`)
       verified, AND `TODO-ALPHA-045-0.0.15` / `TODO-ALPHA-046-0.0.16`
       shipped (Decision 2).
-- [ ] The parity disposition ledger exists: every ⚛️ / 🍓 audit finding is
-      `DONE`, `deferred`-with-reason, or `rejected`-with-decision; zero
-      undispositioned rows (Decision 6).
+- [ ] The parity artifact pins both upstream revisions and assigns a stable
+      ID to every source finding; the one-to-one disposition ledger marks
+      each `DONE`, `deferred`-with-reason, or `rejected`-with-decision, with
+      zero unjoined or undispositioned rows (Decision 6).
 - [ ] Full-matrix CI run green across every supported
       `(Python, Django, Strawberry)` row including the sharded variants;
       floor and ceiling isolated-venv spot runs green; package coverage at

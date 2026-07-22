@@ -56,7 +56,7 @@ finished engine; it does not design a compilation strategy of its own.
 
 That groundwork is formally **this spec's pre-card slice ("Slice 0")**,
 planned in [`docs/row-preserving-predicates-part1-plan.md`][part1-plan]
-(Rev 4), and **this card owns its completion bookkeeping**: the
+(Rev 5), and **this card owns its completion bookkeeping**: the
 `docs/GLOSSARY.md` / `docs/TREE.md` / `KANBAN.md` fold-in for the shipped
 `FilterSet` multiset-contract change, the new `optimizer/predicates.py`
 module, and the `OptimizerError` predicate-attachment raise-site
@@ -133,7 +133,10 @@ is the audit ledger. Load-bearing entries:
   `search_fields` declarations in `examples/fakeshop/apps/products/schema.py`
   (fixing their stale card-number comments), add the library to-many
   surface (`GenreType` `search_fields = ("name", "books__title")` over
-  `allLibraryGenresConnection`), live HTTP tests under
+  `allLibraryGenresConnection`) plus the reverse-FK acceptance surface
+  (`LoanType.Meta.search_fields = ("note", "book__loans__patron__email")`
+  over an acceptance-only `DjangoConnectionField(LoanType)` — the shared
+  Medtrics reproduction fixture, Decision 7), live HTTP tests under
   `examples/fakeshop/test_query/` covering the required-live-case list in
   the Test plan (to-many row preservation, the Category permission gate,
   related-row visibility, phrase semantics, literals, cache isolation,
@@ -309,6 +312,12 @@ viewer cannot see.
   ([Decision 13](#decision-13--search-honors-filterset-permission-gates));
   a dedicated hook would be a second permission truth for the same fields
   and no card owns one.
+- **Per-connection or request-time search-scope variation.** DRF's
+  `SearchFilter.get_search_fields(view, request)` lets each view action
+  expose a different field list; this card deliberately does not
+  translate that dynamism —
+  [Decision 14](#decision-14--search-scope-is-type-definition-wide-and-immutable)
+  pins the declared tuple as immutable, type-definition-wide metadata.
 
 ## Borrowing posture
 
@@ -336,6 +345,10 @@ Element classification:
   single-sited helpers, not by riding their form pipeline.
 - **Deliberately diverged**: no whitespace term-splitting
   ([Decision 4](#decision-4--whole-input-phrase-semantics-one-q-object-no-term-splitting));
+  no request/action-dependent search scope — the declared tuple is
+  immutable type-definition metadata, where DRF's `SearchFilter` offers
+  `get_search_fields(view, request)` dynamism
+  ([Decision 14](#decision-14--search-scope-is-type-definition-wide-and-immutable));
   no `search` key duplicated into the filter input type
   ([Decision 9](#decision-9--no-search-key-inside-the-filter-input-type));
   no `.distinct()` at all — upstream applies one unconditionally after
@@ -559,6 +572,22 @@ launching with term-AND and narrowing later silently drops rows.
 Term-splitting as the default is therefore rejected for `0.1.2`; the
 open question is recorded in Risks with the fallback named.
 
+Phrase semantics also enable a row-boundary oracle that makes aggregate
+implementations observably wrong (cross-spec review): one parent with two
+related rows valued `"red"` and `"dwarf"`, another parent with a single
+related row valued `"red dwarf"` — `search: "red dwarf"` must match only
+the second parent. A `StringAgg(..., delimiter=" ")` implementation can
+manufacture the phrase across the first parent's two children regardless
+of child order; a correctly correlated terminal predicate evaluated per
+related row cannot. The Test plan runs this through the live GraphQL
+surface (ordered edges + `totalCount`) and keeps the SQL-shape assertion
+in package tests proving the implementation is `EXISTS`, not a scalar
+aggregate that merely avoids outer fan-out. Because the existing
+multi-word test data can pass under both phrase and term-AND contracts
+when one value contains both words, the test plan retains a distinct
+multi-field phrase case where separate words match different fields — so
+the deliberate upstream divergence stays unmistakable.
+
 ### Decision 5 — Card 049 is `icontains`-only; shortcut prefixes fail loudly
 
 Every entry is a model-field path and always becomes `<path>__icontains`.
@@ -681,6 +710,29 @@ visibility and the consumer manager; the inner row exists only to test
 relation existence for an already-qualified outer pk (against the
 composed hop-visibility constraints), so a filtered default manager could
 only introduce false negatives.
+
+Two to-many search-path categories are proven independently (cross-spec
+review — neither test subsumes the other):
+
+- **a reverse FK after a to-one prefix**, matching the Medtrics
+  production topology — earned through the shared reproduction fixture
+  the pre-card groundwork defines
+  ([part1-plan][part1-plan] C.4: `Loan.book -> Book.loans ->
+  Loan.patron -> Patron.email` with its four named loans and
+  ordered-sequence oracle). This card's integration use: declare
+  `LoanType.Meta.search_fields = ("note", "book__loans__patron__email")`
+  on an acceptance-only surface (a `DjangoConnectionField(LoanType)`
+  exposed for the test schema), issue the real `/graphql/` search
+  request, and assert the exact ordered IDs
+  (`[relation_and_direct, relation_only, direct_only]`), `totalCount`
+  of three, both two-edge page boundaries, and the mixed
+  direct/relational OR behavior — a root matching the scalar branch
+  with several matching related rows, a root matching only the related
+  branch, and an unrelated root, pinning both boolean semantics and
+  cardinality under the precise mixed-branch shape that caused the
+  production issue; and
+- **a direct or nested M2M path**, matching the library
+  `GenreType.books__title` fixture.
 
 Alternatives rejected: **blanket `.distinct()`** (upstream) and
 **conditional `.distinct()`** (this spec's own earlier revision) — both
@@ -909,6 +961,39 @@ that can drift from the filter gates (and no card owns such a surface);
 — a documented bypass of an existing gate, the exact
 ship-it-today-defer-the-real-fix shape [`AGENTS.md`][agents] forbids.
 
+### Decision 14 — Search scope is type-definition-wide and immutable
+
+The Medtrics production reproduction (cross-spec review in
+[`feedback.md`][feedback]) surfaces a second application concern beyond
+cardinality: the same DRF viewset intentionally exposes group-name search
+on one action and withholds it from three others, via
+`SearchFilter.get_search_fields(view, request)` action/request dynamism.
+That view/action distinction must **not** be translated into request-time
+mutation of `DjangoType.Meta.search_fields` or a resolver-specific escape
+hatch. The goal's public shape is one declarative `DjangoType.Meta`
+sidecar, and this spec already assigns the frozen plan to the exact type
+definition. The explicit contract:
+
+- every connection serving the same `DjangoType` definition exposes the
+  same static search capability;
+- runtime request, resolver, and connection context never mutate or
+  narrow the declared path tuple;
+- viewer-dependent denial belongs to the existing visibility and
+  FilterSet gates
+  ([Decision 12](#decision-12--visibility-aware-relational-search),
+  [Decision 13](#decision-13--search-honors-filterset-permission-gates));
+- a report/custom GraphQL field that is not the model connection need
+  not expose the generated search sidecar; and
+- a genuinely different model-backed GraphQL surface uses a distinct
+  `DjangoType` definition, whose exact-owner plan is already covered by
+  the multi-type tests.
+
+This is documented as intentional scope, not left as an accidental
+limitation. A field-level override mechanism is rejected absent a
+separately demonstrated GraphQL use case — adding one now would work
+against the Meta-first, nothing-hand-rolled north star
+([`GOAL.md`][goal]).
+
 ## Implementation plan
 
 | Slice | Files touched | Delta |
@@ -916,7 +1001,7 @@ ship-it-today-defer-the-real-fix shape [`AGENTS.md`][agents] forbids.
 | 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `tests/filters/test_search_fields.py` (new) | `apply_search_sync` / `apply_search_async` / `build_direct_search_q` / `build_search_path_plan` / `active_search` / `SEARCH_MAX_LENGTH`; retarget the superseded `get_filters` TODO and `construct_search` reservation to card 050; unit tests for plan shape, prefix/duplicate/padding rejection, inactive-input identity, cap error, path-validation raises |
 | 2 | `django_strawberry_framework/types/base.py`, `django_strawberry_framework/types/definition.py`, `django_strawberry_framework/types/finalizer.py`, `tests/types/` | shape validation + `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` promotion; `search_fields` + frozen search-path-plan definition slots; phase-2.5 `build_search_path_plan` call (assign-after-success, retry-safe) |
 | 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/test_connection.py` | `CONNECTION_SEARCH_KWARG` + sidecar-tuple extension with the `active_search` presence predicate; synthesized `search:` param; sync/async pipeline steps (visibility-aware, permission-gated) calling the row-preserving predicate compiler; combined-queryset preflight; guard coverage |
-| 4 | `examples/fakeshop/apps/products/schema.py`, the library schema module declaring `GenreType`, `examples/fakeshop/test_query/` | uncomment all four products `search_fields` tuples (fix stale `TODO-BETA-047` comment IDs → this card); add `GenreType.Meta.search_fields = ("name", "books__title")`; live HTTP tests per the required-live-case list (products cases in `test_products_api.py` seeded via `seed_data(N)` / `create_users(N)`, library cases in `test_library_api.py` with inline creates); the non-gating PostgreSQL plan-evidence artifact |
+| 4 | `examples/fakeshop/apps/products/schema.py`, the library schema module declaring `GenreType`, `examples/fakeshop/test_query/` | uncomment all four products `search_fields` tuples (fix stale `TODO-BETA-047` comment IDs → this card); add `GenreType.Meta.search_fields = ("name", "books__title")` and the acceptance-only `LoanType` reverse-FK search surface (Decision 7); live HTTP tests per the required-live-case list (products cases in `test_products_api.py` seeded via `seed_data(N)` / `create_users(N)`, library cases in `test_library_api.py` with inline creates); the non-gating PostgreSQL plan-evidence artifact |
 | 5 | `docs/TREE.md`, `docs/GLOSSARY.md` (DB + regen), `KANBAN.md`/`KANBAN.html` (DB + regen) | card-local tree regeneration; glossary intermediate status ("implemented on `main`; release pending the joint `0.1.2` cut"); card wrap; version quintet / README marketing / CHANGELOG defer to card 050 (Decision 10) |
 
 ## Helper-reuse obligations (DRY)
@@ -1088,9 +1173,26 @@ library cases in `test_library_api.py`, inline creates):
   search; `filter:` + `search:` intersection; `search` + `orderBy` +
   `totalCount`, first and second page, and keyset mode.
 - Null / empty / whitespace-only / raw leading-and-trailing-space input;
-  multi-word phrase semantics (the deliberate upstream divergence);
-  `%`, `_`, and quotes as literals; the over-cap abuse case and its typed
-  error shape.
+  multi-word phrase semantics (the deliberate upstream divergence,
+  including the distinct multi-field case where separate words match
+  different fields — a case term-AND would pass but phrase semantics
+  reject); `%`, `_`, and quotes as literals; the over-cap abuse case and
+  its typed error shape.
+- **The reverse-FK Medtrics reproduction** (library, the shared
+  groundwork fixture — Decision 7):
+  `LoanType.Meta.search_fields = ("note", "book__loans__patron__email")`
+  over an acceptance-only `DjangoConnectionField(LoanType)` — exact
+  ordered edge IDs `[relation_and_direct, relation_only, direct_only]`,
+  `totalCount == 3`, both two-edge page boundaries, mixed
+  direct/relational OR behavior (a row matching both branches appears
+  once), with the SQL-shape proof (correlated `EXISTS`, no membership or
+  patron join in the root, no search-driven `DISTINCT`) kept in package
+  tests.
+- **The row-boundary phrase oracle** (Decision 4): one parent with two
+  related rows `"red"` and `"dwarf"`, another with a single related row
+  `"red dwarf"` — `search: "red dwarf"` matches only the second parent
+  (ordered edges + `totalCount`), proving no phrase is manufactured
+  across separate related rows.
 - Permission: anonymous vs staff on the Category `name` gate — anonymous
   active search on categories fails loudly with the gate's error while
   staff search succeeds; the equivalent `filter: {name: ...}` control;
@@ -1139,7 +1241,16 @@ compiler shape.
   explicit data-discovery grant; whole-phrase semantics and raw
   surrounding-whitespace behavior; the `SEARCH_MAX_LENGTH` cap; top-level
   `search:` only (no nested filter spelling) with migration guidance from
-  django-graphene-filters; the nested-connection per-parent fallback and
+  django-graphene-filters; the borrowing/migration documentation states
+  **both intentional DRF `SearchFilter` divergences together** —
+  whole-input phrase semantics instead of whitespace-split term-AND
+  (Decision 4), and static type-definition scope instead of
+  `get_search_fields(view, request)` action/request dynamism
+  (Decision 14) — so future maintainers cannot accidentally import DRF
+  term splitting or dynamic scoping while pursuing "DRF first"
+  ([`GOAL.md`][goal] promises a DRF-shaped, Meta-driven developer
+  experience, not byte-for-byte `SearchFilter` parity); the
+  nested-connection per-parent fallback and
   strictness behavior; leading-wildcard `icontains` generally needs a
   PostgreSQL trigram index for selective text lookup (row preservation
   and text-indexability are separate concerns).
@@ -1240,6 +1351,11 @@ compiler shape.
 - [ ] Relational search is visibility-aware (Decision 12) and honors
   FilterSet permission gates (Decision 13), with live anonymous/staff and
   hidden-related-row proofs.
+- [ ] Search scope is immutable and type-definition-wide (Decision 14);
+  the reverse-FK Medtrics reproduction (shared groundwork fixture) and
+  the row-boundary phrase oracle pass live with exact ordered IDs,
+  `totalCount`, and page boundaries; the borrowing docs state both DRF
+  `SearchFilter` divergences together.
 - [ ] The `SEARCH_MAX_LENGTH` cap, combined-queryset preflight, and
   active-search guard threading are live-tested.
 - [ ] `tests/filters/test_search_fields.py` + `tests/test_connection.py`
@@ -1261,6 +1377,7 @@ compiler shape.
 [goal]: ../GOAL.md
 
 <!-- docs/ -->
+[feedback]: feedback.md
 [part1-plan]: row-preserving-predicates-part1-plan.md
 [glossary-aggregateset]: GLOSSARY.md#aggregateset
 [glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions

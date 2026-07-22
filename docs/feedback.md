@@ -1189,6 +1189,75 @@ The reproduction therefore validates the desired **query shape**, not the workar
 the membership join belongs inside a correlated `EXISTS`; the outer query has neither the
 membership join nor a framework-added `DISTINCT`.
 
+## Non-negotiable executable reproduction shared by both specs
+
+The specifications should not leave the production issue as prose. Add one named,
+deterministic reproduction fixture that Part 1 and card 049 both consume. The existing
+fakeshop library models provide the Medtrics topology without a migration:
+
+```text
+Loan.book -> Book.loans -> Loan.patron -> Patron.email
+   to-one       to-many        to-one        scalar
+```
+
+Library acceptance tests may create these models inline. Build exactly four root loans:
+
+1. `relation_and_direct`: on `shared_book`, `note="Cardio direct"`, patron email
+   `"Cardio A"`;
+2. `relation_only`: on the same `shared_book`, an unrelated note, patron email
+   `"Cardio B"`;
+3. `direct_only`: on a second book, `note="Cardio direct"`, patron email
+   `"Neurology"`; and
+4. `unrelated`: on a third book, with neither field containing `"Cardio"`.
+
+The test-local pre-rewrite oracle is the literal outer predicate:
+
+```python
+baseline = Loan.objects.order_by("id").filter(
+    Q(note__icontains="Cardio")
+    | Q(book__loans__patron__email__icontains="Cardio")
+)
+```
+
+Because `shared_book` has two matching loans, that query's ordered primary-key sequence is
+`[relation_and_direct, relation_and_direct, relation_only, relation_only, direct_only]`.
+Its raw count is five. Adding DRF-style global `distinct()` makes the visible sequence
+look correct and reduces the count to three, but the SQL retains the outer joins and a
+distinct count shape. This is the exact failure signature the test must freeze; a set
+comparison cannot recreate it.
+
+The production oracle for both specs is the ordered sequence
+`[relation_and_direct, relation_only, direct_only]`, count three, with each row appearing
+once. On a two-edge page, page one contains the first two IDs, page two contains only
+`direct_only`, and `totalCount` remains three. The root SQL contains no `library_loan`
+self-join for `Book.loans`, no patron join, and no framework-added `DISTINCT`; one
+correlated `EXISTS` owns those inner joins. The row matching both direct and relational
+branches remains one row.
+
+Use the same fixture at three levels rather than creating three subtly different
+reproductions:
+
+- **Part 1 adapter test:** add the generated deep filter path
+  `book__loans__patron__email` to `LoanFilter`, activate its `icontains` leaf, and compare
+  the test-local outer-invocation baseline with the row-preserving production adapter.
+- **Spec 049 integration test:** declare
+  `LoanType.Meta.search_fields = ("note", "book__loans__patron__email")`, expose an
+  acceptance-only `DjangoConnectionField(LoanType)`, and issue the real `/graphql` search
+  request. Assert the exact ordered IDs, `totalCount`, both page boundaries, and the mixed
+  direct/relational OR behavior above.
+- **SQL-shape test:** inspect the package-level queryset separately to prove that the live
+  result came from a correlated `EXISTS`, not JOIN-plus-DISTINCT or a scalar aggregate.
+
+Add a second fixture to pin related-row boundaries. Put two loans on one book whose patron
+emails are both `"red"`, and one loan on another book whose patron email is `"red red"`.
+With unrelated notes, `search: "red red"` must match only the latter loan. Aggregating the
+first book's two child values with a space would manufacture `"red red"` and fail this
+test regardless of child order; a terminal predicate evaluated per related row cannot.
+
+These tests are the acceptance definition of “recreate the original issue.” A test that
+only asserts three unique IDs after deduplication, or merely checks that `DISTINCT` is
+absent, is insufficient.
+
 ## Required improvements to the Part 1 plan
 
 ### 1. Tie the multiset contract directly to the north star

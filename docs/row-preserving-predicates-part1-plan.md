@@ -1,4 +1,4 @@
-# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 4)
+# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 5)
 
 ## Identity and completion ownership
 
@@ -38,7 +38,13 @@ but never the `distinct` flag), the compositional multiset contract for
 pre-fanned inputs (finding 5, maintainer-decided), removal of the
 evaluated-outer-queryset rejection (finding 6), the permanent test-local
 baseline oracle (finding 7), the direct-deep live proof (finding 8), and
-the identity/documentation ownership above (findings 9–10).
+the identity/documentation ownership above (findings 9–10). Rev 5 folds in
+the cross-spec review of the Medtrics production reproduction
+([`feedback.md`][feedback]): the [`GOAL.md`][goal] rationale anchoring the
+multiset contract, the named reverse-FK-after-to-one classifier and
+adapter category, the shared `Loan` reproduction fixture with its
+ordered-sequence oracle, and the explicit rule that the original DRF
+endpoint's set-like response is never the multiset oracle.
 
 The first review's verified corrections continue to shape the plan:
 
@@ -94,6 +100,16 @@ never collapses duplicates already present because of the consumer's
 ordering and any explicit consumer-authored `.distinct()` are preserved
 untouched.
 
+This contract is not merely the least expensive answer to finding 5 — it
+follows from the package's public queryset-composition promise:
+[`GOAL.md`][goal] requires automatic planning to "cooperate with
+consumer-shaped querysets" and names "an ORM abstraction layer that hides
+Django querysets" as an explicit non-goal. A framework predicate is
+therefore a selection over the incoming queryset, never a normalization
+boundary over consumer SQL: explicit consumer `distinct()`, annotations,
+ordering, and pre-existing multiplicity are preserved while only
+framework-owned fan-out is prevented.
+
 The framework-added global `.distinct()` is removed: deduplicating
 arbitrary input is outside a filter predicate's responsibility, and today
 it masks consumer query semantics as a side effect. The root-cause fix is
@@ -111,6 +127,14 @@ pagination, across non-fanned, pre-fanned, explicitly-`distinct`, and
 custom-filter-produced inputs. Generated predicates introduce no
 duplicates; existing consumer duplicates survive unchanged; live
 `/graphql/` regression coverage wherever the shape is reachable.
+
+The Medtrics production endpoint is **not** the multiset oracle
+(cross-spec review): its SQL assertion starts from a plain
+`objects.all()` root and proves only that search itself no longer fans
+out, while its DRF-era global `distinct()` is exactly the behavior this
+contract corrects. The pre-fanned, explicitly-`distinct`, and
+custom-filter-produced C.4 rows are never weakened to match that
+endpoint's set-like response behavior.
 
 ## Architecture: three layers, filter semantics live in the adapter
 
@@ -176,6 +200,19 @@ forward and reverse M2M, `GenericRelation`, reverse O2O as single-valued,
 self-referential paths of differing depth, chained transforms (execution
 tests, not classifier-output-only), relation-terminal paths, unresolvable
 paths, `related_name="+"`, forward `GenericForeignKey`.
+
+One structural category is named and covered independently (cross-spec
+review — the Medtrics topology):
+
+```text
+root --forward FK--> intermediate --reverse FK--> membership --forward FK--> terminal
+```
+
+The frozen path plan must identify the **reverse FK** as the first
+multiplying boundary even though the path contains no `ManyToManyField`
+and the multiplying hop sits behind a to-one prefix. The direct and
+nested M2M cases remain a separate category; neither test subsumes the
+other.
 
 ## Slice B — the neutral correlated-EXISTS primitive
 
@@ -483,6 +520,60 @@ almost everywhere); sets appear only where a test explicitly targets
 boolean membership semantics. The flattened-path defect additionally
 asserts the old oracle duplicates while the production result does not.
 
+**The shared Medtrics reproduction fixture (cross-spec review).** The
+production issue does not stay prose: one named, deterministic fixture is
+consumed by this plan and later by card 049, built on existing library
+models with no migration —
+
+```text
+Loan.book -> Book.loans -> Loan.patron -> Patron.email
+   to-one       to-many        to-one        scalar
+```
+
+Exactly four root loans: `relation_and_direct` (on `shared_book`,
+`note="Cardio direct"`, patron email `"Cardio A"`), `relation_only` (same
+`shared_book`, an unrelated note, patron email `"Cardio B"`),
+`direct_only` (a second book, `note="Cardio direct"`, patron email
+`"Neurology"`), and `unrelated` (a third book, neither field containing
+`"Cardio"`). The test-local pre-rewrite oracle is the literal outer
+predicate:
+
+```python
+baseline = Loan.objects.order_by("id").filter(
+    Q(note__icontains="Cardio")
+    | Q(book__loans__patron__email__icontains="Cardio")
+)
+```
+
+Because `shared_book` carries two matching loans, that query's ordered
+primary-key sequence is `[relation_and_direct, relation_and_direct,
+relation_only, relation_only, direct_only]` with raw count five; adding
+DRF-style global `distinct()` makes the visible sequence look correct
+while retaining the outer joins and a distinct count shape. That is the
+exact failure signature the frozen test must pin — a set comparison
+cannot recreate it.
+
+The production oracle: ordered sequence `[relation_and_direct,
+relation_only, direct_only]`, count three, each row once; on a two-edge
+page, page one holds the first two IDs, page two holds only
+`direct_only`, `totalCount` stays three. The root SQL contains no
+`library_loan` self-join for `Book.loans`, no patron join, and no
+framework-added `DISTINCT` (the emitted outer query excludes both the
+membership and terminal tables); one correlated `EXISTS` owns those inner
+joins; the row matching both the direct and relational branches remains
+one row. A test that only asserts three unique IDs after deduplication,
+or merely checks that `DISTINCT` is absent, is insufficient.
+
+The same fixture serves three levels rather than three subtly different
+reproductions: (a) **Part 1 adapter test** — add the generated deep path
+`book__loans__patron__email` to a `LoanFilter`, activate its `icontains`
+leaf, and compare the test-local outer-invocation baseline against the
+row-preserving production adapter; (b) **card 049 integration test** —
+the live `/graphql/` `search:` request over the same rows (owned by the
+card); (c) **SQL-shape test** — inspect the package-level queryset
+separately to prove the result came from a correlated `EXISTS`, not
+JOIN-plus-`DISTINCT` or a scalar aggregate.
+
 For every supported candidate shape, baseline-vs-rewritten equivalence
 before the old behavior is removed:
 
@@ -552,7 +643,11 @@ path):
    lookup added to an existing library FilterSet (or, if none fits, a
    small no-migration FilterSet/type surface over an existing model),
    executed over HTTP: a duplicate-matching to-many relation yields one
-   edge and a correct `totalCount`.
+   edge and a correct `totalCount`. This case uses the Medtrics-shaped
+   **reverse-FK** path (`book__loans__patron__email` on the loan surface,
+   the shared C.4 fixture) so live cardinality coverage is not earned
+   solely through the `Book.genres` M2M: it asserts ordered edge IDs,
+   `totalCount`, and a page boundary with several matching children.
 
 ## Slice D — documentation of the shipped semantics (completion slice)
 
@@ -646,6 +741,7 @@ the previous commit added tracked files.
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
+[goal]: ../GOAL.md
 [repro]: ../to-many-search-optimizer-reproduction.md
 
 <!-- docs/ -->

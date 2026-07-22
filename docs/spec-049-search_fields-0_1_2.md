@@ -56,7 +56,7 @@ finished engine; it does not design a compilation strategy of its own.
 
 That groundwork is formally **this spec's pre-card slice ("Slice 0")**,
 planned in [`docs/row-preserving-predicates-part1-plan.md`][part1-plan]
-(Rev 5), and **this card owns its completion bookkeeping**: the
+(Rev 6), and **this card owns its completion bookkeeping**: the
 `docs/GLOSSARY.md` / `docs/TREE.md` / `KANBAN.md` fold-in for the shipped
 `FilterSet` multiset-contract change, the new `optimizer/predicates.py`
 module, and the `OptimizerError` predicate-attachment raise-site
@@ -144,7 +144,9 @@ is the audit ledger. Load-bearing entries:
   `search` + visibility, `search` + `totalCount`, `search` + keyset
   cursors), and the non-gating PostgreSQL plan-evidence artifact.
 - [ ] **Slice 5 — card-local docs + card wrap.** Regenerate `docs/TREE.md`
-  for the new module, update the glossary DB so
+  for the new module, update
+  `examples/fakeshop/test_query/README.md`'s suite descriptions for the
+  new live search coverage, update the glossary DB so
   [`Meta.search_fields`][glossary-metasearch_fields] reads "implemented on
   `main`; release pending the joint `0.1.2` cut" and regenerate
   `docs/GLOSSARY.md`, flip card 049 + regenerate the board. Leave
@@ -721,9 +723,19 @@ review — neither test subsumes the other):
   Loan.patron -> Patron.email` with its four named loans and
   ordered-sequence oracle). This card's integration use: declare
   `LoanType.Meta.search_fields = ("note", "book__loans__patron__email")`
-  on an acceptance-only surface (a `DjangoConnectionField(LoanType)`
-  exposed for the test schema), issue the real `/graphql/` search
-  request, and assert the exact ordered IDs
+  on the **existing** `LoanType`
+  (`examples/fakeshop/apps/library/schema.py` — declared before `Book` /
+  `Patron` to exercise finalization order, with real `LoanFilter` /
+  `LoanOrder` sidecars). Per
+  [Decision 14](#decision-14--search-scope-is-type-definition-wide-and-immutable)
+  that declaration is permanent, type-definition-wide public surface —
+  NOT test-scoped — and attaches to every current and future connection
+  serving `LoanType`. What is acceptance-only is the **connection
+  exposure**: no loan connection exists today (the existing loan surface
+  is a list field, which correctly gains nothing — `search:` is
+  connection-only), so Slice 4 adds a `DjangoConnectionField(LoanType)`
+  for the test schema. Issue the real `/graphql/` search request and
+  assert the exact ordered IDs
   (`[relation_and_direct, relation_only, direct_only]`), `totalCount`
   of three, both two-edge page boundaries, and the mixed
   direct/relational OR behavior — a root matching the scalar branch
@@ -876,6 +888,16 @@ consumes, never a parallel implementation:
   hop inside the `EXISTS` body (cascade narrowing never reaches inside a
   subquery). A live forward-FK search test on a type that does **not**
   call cascade proves the claim holds beyond the staged fakeshop types.
+- The per-hop rule **recurses onto the root model itself**: when a
+  declared path re-enters the root model (the Decision 7 reverse-FK
+  fixture does — `book__loans` from a `Loan` root makes the second hop's
+  target `Loan` again), the root type's own visibility composes into the
+  inner rows of the `EXISTS` body exactly like any other registered-type
+  hop. This is a deliberate divergence from the pre-card groundwork's
+  `filter:` adapter, which preserves the original filter invocation's
+  raw traversal (no hop visibility) — the same path yields different
+  inner constraints under `filter:` vs `search:`, by design, and the
+  test plan pins the recursion case.
 - A related model with **no registered type** has no GraphQL surface and
   therefore no visibility contract to honor; the hop traverses the raw
   relation. Declaring a search path across an unregistered model is the
@@ -1110,10 +1132,13 @@ Placement follows the
 [Live-first coverage mandate][glossary-live-first-coverage-mandate]: every
 behavior reachable through a real `/graphql/` request is earned in
 `examples/fakeshop/test_query/`; package tests keep only what inspects
-internal query objects or genuinely unreachable state. Any
-settings-dependent schema rebuild uses the live tier's
-`project_schema_override` / shared reload machinery, never ad hoc module
-reloads.
+internal query objects or genuinely unreachable state. Live suites route
+requests through the shared `examples/fakeshop/graphql_client.py`
+helpers (the spec-043 `TestClient` path), never a bare
+`django.test.Client`. Any schema rebuild — settings-dependent OR
+registry/type-state-mutating (the Decision 12 visibility-hook fixture is
+the latter) — uses the live tier's `project_schema_override` / shared
+`schema_reload.py` machinery, never ad hoc module reloads.
 
 Unit (`tests/filters/test_search_fields.py`):
 
@@ -1187,7 +1212,8 @@ library cases in `test_library_api.py`, inline creates):
   direct/relational OR behavior (a row matching both branches appears
   once), with the SQL-shape proof (correlated `EXISTS`, no membership or
   patron join in the root, no search-driven `DISTINCT`) kept in package
-  tests.
+  tests. Ordered assertions compare against pks captured at fixture
+  creation, never insertion-order faith about pk allocation.
 - **The row-boundary phrase oracle** (Decision 4): one parent with two
   related rows `"red"` and `"dwarf"`, another with a single related row
   `"red dwarf"` — `search: "red dwarf"` matches only the second parent
@@ -1205,7 +1231,10 @@ library cases in `test_library_api.py`, inline creates):
   match (fixture may add a visibility hook to an existing library type;
   no model/migration changes); a **forward-FK branch on a type that does
   not call `apply_cascade_permissions`** still carries the hop target's
-  visibility, AND'd only into its own OR arm (Decision 12).
+  visibility, AND'd only into its own OR arm (Decision 12); the
+  **root-model recursion case** — a hidden inner `Loan` row (hidden by
+  `LoanType`'s own visibility) cannot qualify a visible root loan
+  through the `book__loans` hop (Decision 12).
 - Cache isolation: the same operation document executed twice with
   different `$search` variables, and two aliases with different search
   values in one operation — results and `totalCount` independent while
@@ -1256,6 +1285,10 @@ compiler shape.
   and text-indexability are separate concerns).
 - `docs/TREE.md`: regen after `filters/search.py` lands (module docstring
   required by the renderer).
+- `examples/fakeshop/test_query/README.md`: update the suite
+  descriptions for the new live search coverage (the products
+  activations, the library to-many and loan reverse-FK surfaces) so the
+  tier guide stays accurate.
 - `KANBAN.md` / `KANBAN.html`: card flip via DB + regen only.
 
 ## Risks and open questions

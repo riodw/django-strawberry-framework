@@ -52,6 +52,30 @@ also keeps request values out of the selection optimizer's cross-request
 #      predicate body here. The caller owns boolean placement and applies the
 #      returned positive branch.
 #
+# SQL-shape tests in this module assert the emitted statement structure; the
+# adapter/live tiers assert the row semantics. Two multiplying-join categories
+# must be covered explicitly, and neither subsumes the other:
+# - Direct many-to-many: the outer query's ``alias_map`` must exclude the
+#   through/child tables, all such joins living inside the correlated EXISTS
+#   body.
+# - Deep reverse-FK behind a to-one prefix: for a path shaped
+#   ``root --forward FK--> intermediate --reverse FK--> membership
+#   --forward FK--> terminal``, the emitted OUTER query must exclude BOTH the
+#   membership table and the terminal table (all relational joins live inside
+#   the correlated EXISTS body). This four-hop shape is the production
+#   reproduction where a reverse FK behind a to-one prefix fanned out root rows,
+#   and it is a separate case from direct M2M.
+# - Same-table inner aliasing (a named shape assertion, not an accident): when
+#   the multiplying chain re-enters the root model's own table - the shared
+#   fixture does exactly this, ``book__loans`` from a ``Loan`` root puts two
+#   aliases of ``library_loan`` inside the existence body, correlated on the
+#   outer pk - the compiled subquery must alias the re-entered table correctly
+#   and the outer query must still exclude every inner alias.
+# The shared acceptance fixture for the deep reverse-FK shape is the fakeshop
+# library chain ``Loan.book -> Book.loans -> Loan.patron -> Patron.email`` (four
+# seeded loans; ordered primary-key-sequence oracle, not set comparison),
+# defined in the Part 1 plan's C.4 section.
+#
 # Identity/no-op handling stays above ``attach_exists``: a filter invocation
 # that returns its correlated inner root by identity must skip this primitive
 # before any guard or alias allocation. The existing RelatedFilter tree path in

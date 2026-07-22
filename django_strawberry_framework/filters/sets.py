@@ -1686,6 +1686,41 @@ class FilterSet(ClassBasedTypeNameMixin, filterset.BaseFilterSet, metaclass=Filt
         #   completes, run the existing ``_evaluate_logic_tree`` code below
         #   unchanged; its outer ``Q(pk__in=...)``/NOT composition remains the
         #   owner of branch logic.
+        #
+        # Multiset contract (why the applicator is a selection, not a
+        # normalization boundary): framework-generated relational predicates
+        # behave as SQL selections over the queryset they receive -- each
+        # root-row OCCURRENCE is retained exactly once or removed, never
+        # multiplied, and consumer duplicates arising from ``get_queryset`` /
+        # annotations / joins / earlier custom filters are never collapsed.
+        # Consumer ordering and any explicit consumer ``distinct()`` are
+        # preserved. This follows directly from the package's queryset-
+        # composition promise (GOAL.md: cooperate with consumer-shaped
+        # querysets; an ORM abstraction that hides querysets is a non-goal) --
+        # a predicate is never a normalization boundary. The framework-added
+        # GLOBAL ``distinct()`` is what gets removed at cut-over, not consumer
+        # state.
+        #
+        # Acceptance oracle (shared reproduction fixture defined in the Part 1
+        # plan's C.4): the fakeshop library chain ``Loan.book -> Book.loans ->
+        # Loan.patron -> Patron.email`` with four seeded loans named
+        # ``relation_and_direct`` / ``relation_only`` / ``direct_only`` /
+        # ``unrelated``. The adapter test adds the generated deep path
+        # ``book__loans__patron__email`` to a ``LoanFilter`` and compares two
+        # invocations. The pre-rewrite baseline (direct outer invocation)
+        # yields the ORDERED pk sequence [relation_and_direct,
+        # relation_and_direct, relation_only, relation_only, direct_only]
+        # (count 5) -- the frozen defect signature, which a set comparison
+        # cannot recreate. The production adapter yields ORDERED
+        # [relation_and_direct, relation_only, direct_only] (count 3), with the
+        # outer SQL free of the ``library_loan`` self-join, the patron join,
+        # and any framework-added ``DISTINCT``, and exactly one correlated
+        # ``EXISTS`` owning the inner joins.
+        #
+        # Caution: the original DRF endpoint's set-like (globally
+        # deduplicated) response is NEVER the equivalence oracle -- pre-fanned,
+        # explicitly-distinct, and custom-filter-produced consumer inputs keep
+        # ordered-sequence comparisons.
         qs = super().filter_queryset(queryset)
         # ``_logic_depth`` is stashed on instances built by
         # ``_q_for_branch``; for the top-level instance (constructed by

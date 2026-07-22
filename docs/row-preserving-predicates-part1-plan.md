@@ -1,4 +1,4 @@
-# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 5)
+# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 6)
 
 ## Identity and completion ownership
 
@@ -44,7 +44,14 @@ the cross-spec review of the Medtrics production reproduction
 multiset contract, the named reverse-FK-after-to-one classifier and
 adapter category, the shared `Loan` reproduction fixture with its
 ordered-sequence oracle, and the explicit rule that the original DRF
-endpoint's set-like response is never the multiset oracle.
+endpoint's set-like response is never the multiset oracle. Rev 6 enacts
+the post-anchor critical evaluation: the fixture's same-table inner-alias
+SQL shape named as an asserted case, nullable-intermediate-hop and
+`to_field` C.4 rows, explicit tier assignment and captured-pk oracles for
+the shared fixture, live-tier client/reload discipline per
+`examples/fakeshop/test_query/README.md`, the dead C.5 fallback clause
+removed (the loan surface exists), and the `test_query` README added to
+Slice D's bookkeeping.
 
 The first review's verified corrections continue to shape the plan:
 
@@ -214,6 +221,12 @@ and the multiplying hop sits behind a to-one prefix. The direct and
 nested M2M cases remain a separate category; neither test subsumes the
 other.
 
+The defect this category targets lives in the NEW machinery: the legacy
+lenient `path_traverses_to_many` already detects a reverse FK mid-walk,
+so it is not the at-risk site — the category exists to prove
+`classify_path`'s `first_many_index` computation over the full chain,
+and nobody should "fix" the legacy helper in response to it.
+
 ## Slice B — the neutral correlated-EXISTS primitive
 
 Files: `django_strawberry_framework/optimizer/predicates.py` (new),
@@ -300,7 +313,14 @@ Core SQL-shape tests: root `alias_map` excludes membership/child tables,
 one row per parent with duplicate matching children, aliases absent from
 selected columns, database alias preserved, **no `SELECT DISTINCT` inside
 the existence body** (finding 4's inner-shape assertion, proven end to end
-at the adapter in C.3a).
+at the adapter in C.3a). One named shape assertion covers **same-table
+inner aliasing**: when the multiplying chain re-enters the root model's
+own table (the shared C.4 fixture does exactly this — `book__loans` from
+a `Loan` root puts two aliases of `library_loan` inside the existence
+body, correlated on the outer pk), the compiled subquery must alias the
+re-entered table correctly and the outer query must still exclude every
+inner alias. This is the flagship fixture's actual compilation shape,
+proven deliberately rather than by accident.
 
 ## Slice C — candidate metadata + the FilterSet leaf adapter
 
@@ -565,14 +585,20 @@ one row. A test that only asserts three unique IDs after deduplication,
 or merely checks that `DISTINCT` is absent, is insufficient.
 
 The same fixture serves three levels rather than three subtly different
-reproductions: (a) **Part 1 adapter test** — add the generated deep path
-`book__loans__patron__email` to a `LoanFilter`, activate its `icontains`
-leaf, and compare the test-local outer-invocation baseline against the
-row-preserving production adapter; (b) **card 049 integration test** —
-the live `/graphql/` `search:` request over the same rows (owned by the
-card); (c) **SQL-shape test** — inspect the package-level queryset
-separately to prove the result came from a correlated `EXISTS`, not
-JOIN-plus-`DISTINCT` or a scalar aggregate.
+reproductions, with explicit tier ownership: (a) **Part 1 adapter test**
+— add the generated deep path `book__loans__patron__email` to the
+existing fakeshop `LoanFilter`, activate its `icontains` leaf, and
+compare the test-local outer-invocation baseline against the
+row-preserving production adapter; the row-semantics comparison lives in
+the fakeshop tier (live `/graphql/` where the surface is reachable,
+`examples/fakeshop/tests/` otherwise), per the live-first mandate;
+(b) **card 049 integration test** — the live `/graphql/` `search:`
+request over the same rows (owned by the card); (c) **SQL-shape test** —
+package-tier (`tests/`) query-object inspection proving the result came
+from a correlated `EXISTS`, not JOIN-plus-`DISTINCT` or a scalar
+aggregate, including the same-table inner-alias shape (Slice B). The
+ordered oracles assert against **pks captured at fixture creation**,
+never insertion-order faith about pk allocation.
 
 For every supported candidate shape, baseline-vs-rewritten equivalence
 before the old behavior is removed:
@@ -581,6 +607,12 @@ before the old behavior is removed:
 - duplicate matching children; no matching children; no related rows;
 - nullable child field `isnull=True` / `isnull=False` (including a parent
   with zero related rows);
+- a **nullable intermediate to-one hop** in the multiplying chain
+  (root, nullable FK, reverse FK, terminal): the baseline OR compiles
+  LEFT OUTER promotion while the `EXISTS` arm is simply false for a null
+  hop — the equivalence is tested, not assumed;
+- a **`to_field` (FK-to-non-pk) hop** inside the chain: correlation
+  stays on the root pk, the inner join binds the non-pk column;
 - two active leaves on the same relation matching different children
   (cross-row AND — separate existence branches asserted in SQL);
 - one positive multi-lookup invocation that must bind to a single child
@@ -640,14 +672,22 @@ path):
    `_apply_related_constraints` and cannot earn the new compiler's
    coverage.
 2. **Direct deep generated origin**: a non-colliding direct deep to-many
-   lookup added to an existing library FilterSet (or, if none fits, a
-   small no-migration FilterSet/type surface over an existing model),
-   executed over HTTP: a duplicate-matching to-many relation yields one
-   edge and a correct `totalCount`. This case uses the Medtrics-shaped
-   **reverse-FK** path (`book__loans__patron__email` on the loan surface,
+   lookup added to the existing library `LoanFilter`
+   (`examples/fakeshop/apps/library/filters.py` — the surface exists; no
+   fallback needed), executed over HTTP: a duplicate-matching to-many
+   relation yields one edge and a correct `totalCount`. This case uses
+   the Medtrics-shaped **reverse-FK** path (`book__loans__patron__email`,
    the shared C.4 fixture) so live cardinality coverage is not earned
    solely through the `Book.genres` M2M: it asserts ordered edge IDs,
    `totalCount`, and a page boundary with several matching children.
+
+Live-tier discipline (per `examples/fakeshop/test_query/README.md`):
+these suites route requests through the shared
+`examples/fakeshop/graphql_client.py` helpers (the spec-043 `TestClient`
+path), never a bare `django.test.Client`; and any fixture that mutates
+registry or type state beyond seeded rows goes through the shared
+`schema_reload.py` / `project_schema_override` isolation machinery, not
+an ad hoc reload.
 
 ## Slice D — documentation of the shipped semantics (completion slice)
 
@@ -665,6 +705,9 @@ make stale:
 - `docs/TREE.md` regenerates for the new `optimizer/predicates.py` and
   `tests/optimizer/test_predicates.py` modules (script-rendered — module
   docstrings required);
+- `examples/fakeshop/test_query/README.md`'s suite descriptions are
+  updated for the new live coverage (the loan reverse-FK surface and the
+  C.5 flat-leaf regressions) so the tier guide stays accurate;
 - `docs/GLOSSARY.md` / `KANBAN.md` updates flow through card 049's DB
   fold-in per the shipping-slice rule; the staged TODO pseudocode blocks
   in `filters/sets.py`, `optimizer/predicates.py`, and

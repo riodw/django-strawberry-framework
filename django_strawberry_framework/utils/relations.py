@@ -148,6 +148,28 @@ def is_many_side_relation_kind(kind: RelationKind | None) -> bool:
 #   ``PathResolutionError``. Preserve this function's cache and its legacy
 #   garbage-tail behavior for orders and existing filters; strict new callers
 #   use ``classify_path`` directly and fail loud.
+#
+# Coverage (Rev 5 - each category is independently covered; NONE subsumes
+# another, and a classifier/fixture proving only one is incomplete):
+# - Reverse-FK-behind-a-to-one-prefix (named four-hop category). Shape:
+#   ``root --forward FK--> intermediate --reverse FK--> membership
+#   --forward FK--> terminal`` (real example: ``Loan.book -> Book.loans ->
+#   Loan.patron -> Patron.email``, where ``Book.loans`` is the reverse side of
+#   the forward ``Loan.book`` FK). This path contains NO ``ManyToManyField``
+#   and the row-multiplying hop sits BEHIND a to-one prefix, yet the frozen
+#   plan MUST set ``first_many_index`` to that reverse FK - i.e. it MUST
+#   identify the reverse FK as the FIRST multiplying boundary. A production
+#   reproduction proved this defect class: it is not covered by generic
+#   reverse-FK coverage that only exercises a reverse FK at the leading hop.
+#   Note the at-risk site is the NEW machinery: the lenient
+#   ``path_traverses_to_many`` below already detects a reverse FK mid-walk,
+#   so this category exists to prove ``classify_path``'s ``first_many_index``
+#   computation over the full chain - do not "fix" the legacy helper in
+#   response to it.
+# - Direct AND nested ``ManyToManyField`` traversal is a SEPARATE category
+#   from the reverse-FK case above; neither test subsumes the other. A fixture
+#   or classifier that proves only direct M2M traversal is incomplete - nested
+#   M2M must be exercised too.
 @lru_cache(maxsize=2048)
 def path_traverses_to_many(model: type, field_path: str) -> bool:
     """Return whether an ORM ``field_path`` traverses a to-many relation.

@@ -1,4 +1,19 @@
-# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 3)
+# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 4)
+
+## Identity and completion ownership
+
+This document is the working plan for the **pre-card groundwork slice of
+[spec 049][spec-049]** (its "Slice 0"): the shipped-defect fixes and
+search-independent machinery land ahead of card `TODO-BETA-049-0.1.2`, and
+that card owns the completion bookkeeping for everything this plan ships —
+`docs/GLOSSARY.md`, `docs/TREE.md`, `KANBAN.md`, and the
+`django_strawberry_framework/exceptions.py::OptimizerError` raise-site
+documentation (second Part 1 review, findings 9 and 10). The plan itself
+carries a final documentation slice (Slice D) so the shipped `FilterSet`
+semantics change and the new `optimizer/predicates.py` module never sit
+undocumented between Part 1 landing and card 049 wrapping. Version and
+`CHANGELOG.md` ownership stay with the maintainer; no `CHANGELOG.md` entry
+is added unless separately requested.
 
 ## Purpose
 
@@ -11,11 +26,21 @@ finished engine ([spec-049][spec-049], Decision 7). The postponed half — the
 search fixtures, benchmarking — stays with the respecced card.
 
 Rev 2 incorporated the first adversarial review ([`feedback.md`][feedback])
-in full; Rev 3 folds in the second round (empirically verified against
-fakeshop / Django 6.0.5 / django-filter 25.2): the adapter's no-op
-detection contract (C.3), the metadata build-site mechanics (C.2), and the
-explicit eligibility of the package's own filter classes (C.2/C.4). The
-first review's verified corrections reshape the plan:
+in full; Rev 3 folded in the Fable-agent round (adapter no-op detection,
+metadata build-site mechanics, package filter-class eligibility). Rev 4
+incorporates the second maintainer review (all claims empirically
+verified): origin-scoped classification (finding 1), frozen
+generation-provenance records replacing the boolean marker and the
+class allowlist (finding 2), candidate metadata inside the atomic
+expansion/reset lifecycle (finding 3), `distinct` suppression inside the
+existence body (finding 4 — `Query.exists()` clears select and ordering
+but never the `distinct` flag), the compositional multiset contract for
+pre-fanned inputs (finding 5, maintainer-decided), removal of the
+evaluated-outer-queryset rejection (finding 6), the permanent test-local
+baseline oracle (finding 7), the direct-deep live proof (finding 8), and
+the identity/documentation ownership above (findings 9–10).
+
+The first review's verified corrections continue to shape the plan:
 
 - **The integration seam is `FilterSet.filter_queryset`, not
   `_apply_lookups`.** Flat leaves are delegated wholesale to
@@ -58,9 +83,38 @@ grouping is a cost choice there); no surveyed prior art implements a
 positive-filter `EXISTS` rewrite (Django core does it only for `exclude()`;
 admin's `lookup_spawns_duplicates` detects m2m only and misses reverse FK).
 
+## The multiset contract (finding 5 — maintainer-decided)
+
+Every framework-generated relational predicate behaves like a **SQL
+selection over the queryset it receives**: each existing root-row
+occurrence is either retained exactly once or removed. A framework
+predicate never multiplies rows through framework-generated joins and
+never collapses duplicates already present because of the consumer's
+`get_queryset()`, annotations, joins, or earlier custom filters. Consumer
+ordering and any explicit consumer-authored `.distinct()` are preserved
+untouched.
+
+The framework-added global `.distinct()` is removed: deduplicating
+arbitrary input is outside a filter predicate's responsibility, and today
+it masks consumer query semantics as a side effect. The root-cause fix is
+row-preserving correlation that leaves the incoming queryset's
+multiplicity alone — **not** inspecting Django's private `alias_map`,
+**not** rejecting valid pre-fanned querysets, and **not** a normalization
+boundary. Consumers that relied on the accidental global deduplication
+were depending on incorrect legacy behavior; the correction is documented
+as a behavioral fix (Slice D), without a `CHANGELOG.md` entry unless
+separately requested.
+
+This contract is testable and tested (C.4): ordered primary-key
+**sequences** — never sets — plus duplicate multiplicity, `count()`, and
+pagination, across non-fanned, pre-fanned, explicitly-`distinct`, and
+custom-filter-produced inputs. Generated predicates introduce no
+duplicates; existing consumer duplicates survive unchanged; live
+`/graphql/` regression coverage wherever the shape is reachable.
+
 ## Architecture: three layers, filter semantics live in the adapter
 
-Per review finding 8, the reusable machinery stays neutral and the
+Per first-review finding 8, the reusable machinery stays neutral and the
 django-filter semantics live in one adapter:
 
 1. **`utils/relations.py`** — immutable model-path classification
@@ -74,8 +128,9 @@ django-filter semantics live in one adapter:
    the correlated inner root, applies **one original eligible filter
    invocation** to that inner root (its actual `filter()` / `exclude()`
    boolean semantics, empty-list handling, GlobalID decoding, range
-   decomposition included), and asks layer 2 to attach the positive
-   `Exists(filtered_inner)`.
+   decomposition included — with the framework-added `distinct` flag
+   scoped out for the duration, per C.3a), and asks layer 2 to attach the
+   positive `Exists(filtered_inner)`.
 
 This "invoke the original filter against the correlated inner root" shape is
 what makes the rewrite semantics-preserving without reimplementing any
@@ -88,8 +143,8 @@ where the correlation — not a hand-built body — is the only new element.
 Files: `django_strawberry_framework/utils/relations.py`,
 `tests/utils/test_relations.py`.
 
-Per review finding 5, classification and lookup validation are **separate
-contracts**:
+Per first-review finding 5, classification and lookup validation are
+**separate contracts**:
 
 - `classify_path(model, field_path)` classifies a **model-field path only**
   (the shape `FilterSet.filter_for_field` and card 049 declarations
@@ -110,11 +165,9 @@ contracts**:
   `path_traverses_to_many` is reimplemented over `classify_path`, catching
   **only that typed error** to retain its lenient legacy `False` for
   existing callers; new machinery calls `classify_path` directly and fails
-  loud. The reimplementation preserves the existing `lru_cache`
-  characteristics and an explicit output-parity test covers garbage-tail
-  inputs (today's walker returns `False` at the first non-relation or
-  unresolvable segment regardless of trailing segments; `orders/sets.py`
-  consumes the helper too, so parity is load-bearing beyond filters).
+  loud — but **only on inputs proven to be framework-generated model
+  paths** (see C.2's origin rule; declared/custom names are never fed to
+  the strict classifier).
 - The complete relation chain is exposed as the (future) subquery grouping
   key — never reconstructed by callers.
 
@@ -147,8 +200,8 @@ Surface (two pieces, both value-free and filter-semantics-free):
   executes independently — it compiles inside the outer query — so the pin
   exists to keep the alias pair consistent, not to re-run routing.
   - Correlation is `pk=OuterRef("pk")` **as the default and only
-    implementation**, per review finding 6: on the validated runtime it
-    compiles composite pks to a correct tuple comparison. The version
+    implementation**, per first-review finding 6: on the validated runtime
+    it compiles composite pks to a correct tuple comparison. The version
     matrix step (see Sequencing) pins its compilation and execution on
     Django 5.2 and 6.0 for both single-column and composite pks; a
     per-column expansion is added only if a supported runtime demonstrably
@@ -160,6 +213,17 @@ Surface (two pieces, both value-free and filter-semantics-free):
   compose. No `negated` parameter: negation placement belongs to the caller
   whose boolean semantics are proven (the adapter never needs it — see
   Slice C; card 049's positive OR never needs it either).
+  - Input validation covers what actually creates hazards: the inner root
+    model matches the outer model and both resolve to the same database
+    alias. **There is no evaluated-outer-queryset rejection** (second
+    review, finding 6): Django permits further construction after
+    evaluation — `.filter()` / `.alias()` clone the query and execute a
+    fresh statement — and today's FilterSet path accepts such querysets;
+    an outer `_result_cache` is never embedded in SQL. That the *inner*
+    queryset must never execute independently is an implementation
+    invariant documented on the primitive, not an input guard. Test:
+    `list(source_qs)` followed by an eligible filter application, with
+    parity against the never-evaluated source.
 
 Alias allocation, per first-review finding 7, checks Django's **effective
 alias namespace**, not just `queryset.query.annotations`: model field names
@@ -174,32 +238,37 @@ ambiguous SQL without raising. Tests: colliding consumer alias, colliding
 model field, repeated invocations on one queryset, coexistence with
 `_dst_order_*` and window annotations.
 
-Guards and claims, per review finding 9:
+Guards and claims, per first-review finding 9:
 
 - Empty/no-op input returns the queryset untouched **before** any guard
   runs (the identity contract wins first).
 - The combined-queryset preflight (`queryset.query.combinator`) runs only
   when attachment is actually required, and raises a typed error whose
   family is chosen deliberately: this is runtime query state, not consumer
-  configuration, so it raises the optimizer's runtime error type rather
-  than `ConfigurationError`, with a message naming the combinator. The
-  branch is genuinely unreachable from a live `/graphql/` query (the
-  pipeline never produces combined querysets), so its coverage lands in
-  `tests/` under the live-first mandate's unreachability fallback.
+  configuration, so it raises `OptimizerError` rather than
+  `ConfigurationError`, with a message naming the combinator. The branch is
+  genuinely unreachable from a live `/graphql/` query (the pipeline never
+  produces combined querysets), so its coverage lands in `tests/` under
+  the live-first mandate's unreachability fallback. Slice D extends the
+  `OptimizerError` docstring with this raise site (second review,
+  finding 10); if a live consumer can ever reach it, the GraphQL wrapping
+  path is tested there too.
 - The count invariant is phrased and tested as "**the compiler adds no
   distinct wrapper**": flat-`COUNT(*)` assertions start from a plain root
-  queryset; separate compatibility tests cover consumer querysets that are
-  already distinct/annotated/projected and legitimately count through a
-  subquery.
+  queryset; the multiset contract's C.4 rows cover consumer querysets that
+  are already distinct/annotated/projected/pre-fanned.
 
 Core SQL-shape tests: root `alias_map` excludes membership/child tables,
 `query.distinct is False`, `EXISTS` present and correlated on the root pk,
 one row per parent with duplicate matching children, aliases absent from
-selected columns, database alias preserved.
+selected columns, database alias preserved, **no `SELECT DISTINCT` inside
+the existence body** (finding 4's inner-shape assertion, proven end to end
+at the adapter in C.3a).
 
 ## Slice C — candidate metadata + the FilterSet leaf adapter
 
 Files: `django_strawberry_framework/filters/sets.py` (adapter + metadata),
+`django_strawberry_framework/sets_mixins.py` (lifecycle registration),
 filter tests, live fakeshop coverage under `examples/fakeshop/test_query/`.
 
 ### C.1 — freeze both defects first
@@ -209,82 +278,137 @@ generated path fans out through JOIN+`distinct=True`; a flattened
 `RelatedFilter` leaf (`genres__name__icontains`-shaped) duplicates parent
 rows and corrupts a connection `totalCount` with `distinct=False`.
 
-### C.2 — immutable candidate metadata with provenance
+### C.2 — frozen generation provenance + origin-scoped classification
 
-Per first-review finding 4, eligibility is decided from a class-level
-mapping keyed by final form-filter name, classified against the final
-owning `FilterSet._meta.model` and final prefixed path — never trusting
-the child filter's original classification or `distinct` value — carrying:
+Second-review findings 1 and 2 rework this slice's mechanics. Two rules
+replace Rev 3's "classify every entry" build and its boolean
+pre-stamp marker:
 
-- the final classified path rooted at the owning model (Slice A);
-- filter origin: direct generated leaf, expanded generated leaf, or
-  declared/custom;
-- pre-framework `distinct` provenance;
-- inner-invocation eligibility.
+**Origin before classification (finding 1).** Declared/custom filters and
+`Meta.filter_overrides` products may legitimately target an annotation,
+alias, or method-owned name that is not a Django model path (a declared
+method filter with `field_name="computed_rank"` is valid when its method
+interprets that name). Strictly classifying such a name would turn a
+working, intentionally ineligible declaration into a finalization failure
+— violating both "ineligible leaves keep today's behavior byte-for-byte"
+and "the failure mode is a missed optimization." Therefore:
 
-**Build-site mechanics** (second review, M1 — the hard part, pinned
-explicitly):
+- framework-default-generated direct and expanded leaves are strict
+  candidates; a path-resolution failure **there** is a
+  framework/configuration defect and raises;
+- declared/custom and `filter_overrides` leaves are immediately
+  ineligible and are **never fed to the strict classifier** — their
+  metadata row carries `path_plan=None` (equivalently, the candidate
+  mapping contains only proven generated candidates);
+- an expanded leaf **inherits the child leaf's origin**; appearing in
+  `_expand_related_filter`'s output does not make a declared child
+  "expanded generated."
+
+Tests: a declared method filter and a declared custom-subclass filter
+whose `field_name` is not model-resolvable both still build and execute
+unchanged.
+
+**Frozen provenance record, not a saved boolean (finding 2).** A private
+"pre-framework distinct" attribute on `default` cannot carry the origin
+decisions eligibility needs, verified on the shipped code:
+
+- `filter_for_field` receives a `default` already produced through
+  `django_filters.filterset.BaseFilterSet.filter_for_lookup`, whose
+  defaults are pre-merged with `Meta.filter_overrides` — a bare `True`
+  cannot distinguish upstream default from consumer override;
+- the own-PK and Relay-relation branches of the package's
+  `filter_for_field` return **new** `GlobalIDFilter` /
+  `GlobalIDMultipleChoiceFilter` instances — an attribute left on
+  `default` never reaches the replacement;
+- upstream synthesizes dynamic `ConcreteInFilter` / `ConcreteRangeFilter`
+  subclasses inside `filter_for_lookup`, so an exact-class allowlist is
+  version-sensitive and drifts (Rev 3's M2 enumerated-class list is
+  **withdrawn** as the eligibility mechanism);
+- a consumer overriding `filter_for_field` can replace or mutate the
+  framework result, which must not retain a stale "safe" marker.
+
+The replacement: **one frozen provenance record persisted on the actual
+returned filter instance** at the moment of generation. It distinguishes
+at least framework-default generation, package-owned replacement
+(the GlobalID branches — safe because the framework constructed them),
+declared filter, and `filter_overrides` generation; records whether the
+framework added `distinct`; and survives every replacement and deepcopy
+explicitly — the package's replacement branches stamp the new instance
+themselves, and `_expand_related_filter`'s expanded copies inherit the
+child's record and **append** "expanded from `<name>`" rather than
+overwriting origin. Eligibility follows construction provenance:
+package-owned and framework-default generation reached through the
+unmodified default path are safe; declared, override-generated, and
+consumer-overridden generation fail closed. This is stricter and more DRY
+than any class list. A consumer that overrides `filter_for_field` and
+returns its own object simply produces an instance without a
+framework-stamped record — fail closed by construction.
+
+The candidate metadata row (built only for proven generated candidates)
+carries: the final classified path rooted at the owning
+`FilterSet._meta.model` (Slice A), the provenance record (origin +
+framework-added-`distinct` bit), and the inner-invocation eligibility
+bit. Eligible = framework-generated leaf (direct or expanded, per the
+provenance record), no consumer `method`, no consumer-origin `distinct`,
+path crosses a many-side hop. Eligibility is never inferred from a class
+name or from `method is None`. Ineligible leaves keep today's behavior
+byte-for-byte — the failure mode is a missed optimization, never a
+changed result set.
+
+**Build-site mechanics** (Fable review M1, retained):
 
 - The two filter surfaces diverge until lazy `RelatedFilter` targets
-  resolve: `django_strawberry_framework/filters/sets.py::FilterSet.get_filters`
-  writes the expanded set to `cls.base_filters` only under its
-  `should_cache_expansion` gate (unresolved string targets skip the cache),
-  and `FilterSetMetaclass.__new__` rebuilds `base_filters` bypassing the
+  resolve: `FilterSet.get_filters` writes the expanded set to
+  `cls.base_filters` only under its `should_cache_expansion` gate
+  (unresolved string targets skip the cache), and
+  `FilterSetMetaclass.__new__` rebuilds `base_filters` bypassing the
   expansion override. The metadata mapping is therefore built **inside the
   same expansion build, under the same gate as `should_cache_expansion`**
   — never as a separate "after get_filters()" pass that could observe the
-  unexpanded surface.
-- The mapping is stored with the same per-class `cls.__dict__` guard the
-  expansion cache uses, so subclasses never inherit a parent's mapping.
-- Pre-stamp `distinct` provenance cannot be recovered post-hoc: the
-  to-many stamp (`FilterSet.filter_for_field`
-  #"default.distinct = requires_distinct") runs at *child* filterset class
-  build, before `_expand_related_filter`'s `copy.deepcopy` and before
-  `BaseFilterSet.__init__`'s per-instance deepcopy. The pre-stamp value is
-  therefore **persisted on the filter instance inside `filter_for_field`
-  at the moment of stamping** (a private attribute the deepcopies carry),
-  and the mapping build reads it from the expanded instance.
+  unexpanded surface. Expanded origins are tracked per
+  `_expand_related_filter` call, never rediscovered from prefixed strings.
 - The adapter treats a `cleaned_data` name **absent from the mapping as a
   non-candidate** (fail closed). This path is reachable: a filterset
   constructed directly before finalization resolves lazy targets presents
   the unexpanded 5-field surface and must degrade to today's behavior.
 
-**Fail-closed eligibility rule:** declared filters,
-`Meta.filter_overrides` products, and unknown custom filter subclasses are
-ineligible unless their entire invocation is deliberately supported.
-Eligibility is never inferred from a class name or from `method is None`
-(an explicitly declared filter can override `filter()` with `method`
-unset). Per second-review M2, the package's **own generated filter
-classes are enumerated as deliberately supported** — without this, the
-`in=[]` / range / GlobalID rows of the acceptance matrix would be
-untestable: `django_strawberry_framework/filters/base.py::IntegerInFilter`,
-`IntegerRangeFilter`, `GlobalIDFilter`, `GlobalIDMultipleChoiceFilter`,
-`ArrayFilter`, `ListFilter` (audited: `IntegerInFilter` reads only
-`self.parent._meta.model`; GlobalID decoding is queryset-independent;
-`_apply_lookups`' `distinct` is inert inside an `EXISTS` body), alongside
-the standard upstream classes the generator emits. Their identity-return
-branches fold into C.3's no-op detection. Eligible = framework-generated
-leaf (direct or expanded), filter class on that enumerated list, no
-consumer `method`, no consumer-origin `distinct`, path crosses a many-side
-hop. Ineligible leaves keep today's behavior byte-for-byte — the failure
-mode is a missed optimization, never a changed result set.
+**Atomic lifecycle (finding 3).** `SetLifecycleAttrs.binding_attrs` names
+exactly owner / expansion cache / reentry guard, and
+`django_strawberry_framework/utils/inputs.py::clear_generated_input_namespace`
+deletes only those three — a fourth free-floating class attribute would
+survive `registry.clear()` and pair stale metadata with a rebuilt
+`base_filters`. The fix is single-sited: filters and candidate metadata
+are published as **one immutable expansion snapshot** — the completed
+build produces a frozen record owning both the filter mapping and the
+candidate metadata, stored under the existing per-class `cls.__dict__`
+gate, with `get_filters()` continuing to return the snapshot's filter
+mapping for API compatibility. The snapshot's storage slot(s) are
+registered in `SetLifecycleAttrs` (extended with family-specific extra
+reset attributes if a second slot is needed) so `registry.clear()` resets
+filters and metadata together, by construction. Both values publish only
+after a successful build. Tests: build failure (nothing published), retry
+after failure, subclass isolation (a subclass never observes its parent's
+snapshot), unresolved lazy targets (no snapshot cached), and
+clear/rebuild (no stale metadata observable between the clear and the
+next completed expansion).
 
 ### C.3 — the flat-leaf applicator
 
-Per review finding 1, `FilterSet.filter_queryset` stops delegating leaves
-wholesale to `BaseFilterSet.filter_queryset` and instead runs a
+Per first-review finding 1, `FilterSet.filter_queryset` stops delegating
+leaves wholesale to `BaseFilterSet.filter_queryset` and instead runs a
 framework-owned applicator mirroring upstream's loop exactly:
 
 - iterate `self.form.cleaned_data` in order;
 - non-candidates (including names absent from the C.2 mapping): call the
   original filter unchanged;
 - candidates: build `correlated_inner_root(queryset)`, apply **the
-  original filter invocation** to that inner root (so `filter()` vs
-  `exclude()`, multi-lookup decomposition, `in=[]` semantics, GlobalID
-  decoding all run exactly as upstream wrote them — Django's own
-  `split_exclude` handles negation *inside* the subquery), then
-  `attach_exists` and `.filter(positive_branch)`;
-- **no-op detection (second review, B1 — load-bearing control flow):**
+  original filter invocation** to that inner root through the C.3a
+  invocation helper (so `filter()` vs `exclude()`, multi-lookup
+  decomposition, `in=[]` semantics, GlobalID decoding all run exactly as
+  upstream wrote them — Django's own `split_exclude` handles negation
+  *inside* the subquery), then `attach_exists` and
+  `.filter(positive_branch)`;
+- **no-op detection (Fable review B1 — load-bearing control flow):**
   `cleaned_data` contains every declared form field, almost all empty on a
   real request (measured: 17 entries, 16 empty, for a one-filter
   `GenreFilter` input). Upstream's empty-value short circuit returns the
@@ -316,10 +440,51 @@ subquery; the `Exists`/`pk__in` equivalence is noted in
 `optimizer/predicates.py`'s docstring so the idioms cannot silently
 diverge.
 
+### C.3a — suppress the framework `distinct` inside the existence body
+
+Second-review finding 4, verified in Django source: `Query.exists()`
+clears the select list and ordering but **does not clear the `distinct`
+flag**, so invoking an eligible `distinct=True` filter unchanged against
+the inner root compiles `EXISTS(SELECT DISTINCT 1 … LIMIT 1)` — logically
+equivalent but not performance-inert (unique/sort planning inside every
+correlated branch), and this rewrite exists for performance. Rev 3's "the
+old stamp is inert inside the body" claim is withdrawn.
+
+The adapter therefore invokes eligible filters through a **named
+invocation helper** that suppresses the framework-added `distinct` for
+the duration of the inner invocation while still calling the filter's
+original `filter()` method. Only the framework-added flag (known from the
+C.2 provenance record) is suppressed — consumer-origin `distinct` filters
+are ineligible and never reach this helper. No class-level or base filter
+is ever mutated: the live FilterSet owns a per-instance deepcopy, so the
+helper scopes the change with `try/finally`, restoring the instance flag
+even when decoding or queryset construction raises (an isolated
+invocation copy is an acceptable alternative only with its cost
+measured).
+
+Assertions on emitted SQL, both sides: no outer `DISTINCT`, no inner
+`SELECT DISTINCT`, and the filter instance's flag restored after success
+**and** after an exception. The PostgreSQL plan artifact compares the
+actually emitted distinct-free inner shape, never an idealized
+hand-written query.
+
 ### C.4 — acceptance matrix (behavioral equivalence before cut-over)
 
-For every supported candidate shape, baseline-vs-rewritten primary-key-set
-equality before the old behavior is removed:
+**The permanent baseline oracle (finding 7).** "Freeze failing tests" is
+the local red/green sequence, but the committed final suite cannot depend
+on old production routing after cut-over. The suite therefore defines a
+**test-local oracle** that directly invokes the same filter instance on
+the outer queryset to obtain django-filter's baseline, while the
+production FilterSet invokes it inside `EXISTS`. The oracle is visibly
+test-local — no strategy flag, no second production compiler ships.
+Comparisons use **ordered rows and counts wherever multiplicity is part
+of the contract** (the multiset contract makes it part of the contract
+almost everywhere); sets appear only where a test explicitly targets
+boolean membership semantics. The flattened-path defect additionally
+asserts the old oracle duplicates while the production result does not.
+
+For every supported candidate shape, baseline-vs-rewritten equivalence
+before the old behavior is removed:
 
 - reverse FK, forward M2M, reverse M2M, `GenericRelation`;
 - duplicate matching children; no matching children; no related rows;
@@ -329,15 +494,30 @@ equality before the old behavior is removed:
   (cross-row AND — separate existence branches asserted in SQL);
 - one positive multi-lookup invocation that must bind to a single child
   row;
-- the negated split-across-rows range counterexample from the review
+- the negated split-across-rows range counterexample from the first review
   (baseline `exclude(children__value__gte=1, children__value__lte=9)`
   keeps split-row parents excluded);
 - `exclude=True` single-lookup leaves;
 - `in=[]`, mixed valid/invalid integer `in`, GlobalID list handling;
-- direct, `and`, `or`, `not` GraphQL filter-tree positions;
+- direct, `and`, `or`, `not` GraphQL filter-tree positions — with every
+  consumer-visible behavior here that the fakeshop schema can reach also
+  proven at the live HTTP tier (finding 8);
 - untouched: explicit consumer `distinct=True`, `method=` filters, custom
-  filter subclasses, `Meta.filter_overrides` — plus a test that an
-  expanded leaf is classified against the root model, not the child;
+  filter subclasses, `Meta.filter_overrides` — plus declared
+  method/custom filters with **non-model-resolvable** `field_name`s that
+  must build and execute unchanged (finding 1), and a test that an
+  expanded generated leaf is classified against the root model, not the
+  child;
+- **multiset-contract rows (finding 5):** ordered primary-key sequences,
+  duplicate multiplicity, `count()`, and connection pagination over
+  (a) a non-fanned input, (b) a deliberately pre-fanned consumer
+  `get_queryset`, (c) an explicitly consumer-`distinct()` input, and
+  (d) a custom-filter-produced input — generated predicates introduce no
+  duplicates, existing consumer duplicates survive unchanged, consumer
+  ordering preserved;
+- an **evaluated outer queryset** (`list(source_qs)` first) filtered by an
+  eligible candidate, with parity against the unevaluated source
+  (finding 6);
 - **inactive candidate leaves attach nothing**: a request activating one
   filter on a form with many to-many candidates produces exactly one
   `EXISTS` and one `_dst_` alias (the B1 no-op rule, asserted in SQL);
@@ -347,16 +527,54 @@ equality before the old behavior is removed:
 - regression coverage through an **ordinary generated `CharFilter`** (the
   common upstream path), not only the package's custom filter classes.
 
-### C.5 — live fakeshop proof
+Provenance/origin internals, snapshot-lifecycle transitions, and alias-map
+assertions stay in package tests; consumer-visible `and` / `or` / `not`,
+empty-list, GlobalID, count, and pagination behavior moves to live HTTP
+wherever the existing fakeshop schema can reach it (finding 8).
 
-The primary regression uses the existing `Genre -> books` reverse-M2M
-surface over `allLibraryGenresConnection` (no models, no migrations): seed
-one genre linked to two books whose titles both match, filter via the
-**public flat `booksTitle` input** (the defective path today), select
-`totalCount` + edges + page info, assert one genre edge and root count of
-one. The nested `books: {title: ...}` spelling rides along only as the
-row-preserving control — it already goes through
-`_apply_related_constraints` and cannot earn the new compiler's coverage.
+### C.5 — live fakeshop proof, both origins
+
+Two live regressions, one per generated-origin branch (finding 8 — the
+live-tier rule requires a live proof for each reachable metadata-origin
+path):
+
+1. **Expanded generated origin** (the public flattened-`RelatedFilter`
+   defect): the existing `Genre -> books` reverse-M2M surface over
+   `allLibraryGenresConnection` (no models, no migrations): seed one genre
+   linked to two books whose titles both match, filter via the **public
+   flat `booksTitle` input** (the defective path today), select
+   `totalCount` + edges + page info, assert one genre edge and root count
+   of one. The nested `books: {title: ...}` spelling rides along only as
+   the row-preserving control — it already goes through
+   `_apply_related_constraints` and cannot earn the new compiler's
+   coverage.
+2. **Direct deep generated origin**: a non-colliding direct deep to-many
+   lookup added to an existing library FilterSet (or, if none fits, a
+   small no-migration FilterSet/type surface over an existing model),
+   executed over HTTP: a duplicate-matching to-many relation yields one
+   edge and a correct `totalCount`.
+
+## Slice D — documentation of the shipped semantics (completion slice)
+
+Owned by card 049's completion bookkeeping (see Identity above), but the
+Part 1 landing itself updates the source-of-truth artifacts its changes
+make stale:
+
+- the **multiset contract** becomes the documented production contract for
+  framework-generated relational predicates, including the note that the
+  removed global deduplication was accidental legacy behavior (no
+  `CHANGELOG.md` entry unless separately requested);
+- `django_strawberry_framework/exceptions.py::OptimizerError`'s docstring
+  gains the predicate-attachment (combined-queryset) raise site
+  (finding 10);
+- `docs/TREE.md` regenerates for the new `optimizer/predicates.py` and
+  `tests/optimizer/test_predicates.py` modules (script-rendered — module
+  docstrings required);
+- `docs/GLOSSARY.md` / `KANBAN.md` updates flow through card 049's DB
+  fold-in per the shipping-slice rule; the staged TODO pseudocode blocks
+  in `filters/sets.py`, `optimizer/predicates.py`, and
+  `utils/relations.py` are consumed (deleted) by their implementing
+  steps.
 
 ## What this deliberately does not change
 
@@ -364,29 +582,39 @@ row-preserving control — it already goes through
   request value enters the plan cache.
 - `OrderSet`'s row-preserving `Min`/`Max` to-many ordering.
 - The nested `RelatedFilter` branch machinery (`pk__in` composition).
-- Consumer-visible result sets for currently-**correct** paths — identical
-  rows, better SQL. (The flattened-leaf duplicate-row defect is a bug fix:
-  result sets there change to the correct ones.)
+- Consumer-visible result sets for currently-**correct** paths over
+  row-preserving inputs — identical rows, better SQL. (Two deliberate
+  corrections are documented: the flattened-leaf duplicate-row defect fix,
+  and the multiset contract's end to accidental global deduplication of
+  pre-fanned consumer inputs.)
 - Everything card-049-shaped: no `search:` argument, no `Meta.search_fields`
   handling, no pipeline step, no same-value OR grouping, no
-  `Meta.search_strategy`, no benchmark harness, no release-state artifacts.
+  `Meta.search_strategy`, no benchmark harness. Release-state artifacts
+  beyond Slice D's source-of-truth updates stay with card 049.
 
 ## Sequencing and validation
 
 1. Freeze both defects (C.1 failing tests).
-2. Candidate metadata + provenance after expansion (C.2).
+2. Provenance records at generation + origin-scoped candidate metadata in
+   the atomic expansion snapshot (C.2, including the `SetLifecycleAttrs`
+   registration).
 3. Strict classifier + separate lookup validation (Slice A).
-4. Neutral correlated-`EXISTS` primitive + full-namespace alias allocator
-   (Slice B); pin `pk=OuterRef("pk")` on Django 5.2 and 6.0 (isolated
-   `/tmp` venvs per the matrix-testing rule) before considering per-column
-   expansion.
+4. Neutral correlated-`EXISTS` primitive + full-namespace alias allocator,
+   no evaluated-outer guard (Slice B); pin `pk=OuterRef("pk")` on Django
+   5.2 and 6.0 (isolated `/tmp` venvs per the matrix-testing rule) before
+   considering per-column expansion.
 5. FilterSet leaf adapter invoking the original filter against the
-   correlated inner root (C.3).
-6. Prove the acceptance matrix (C.4) before changing production routing.
-7. Cut over direct and flattened generated leaves.
-8. Live `booksTitle` connection regression + SQL-shape assertions (C.5).
-9. Validate Django 5.2/6.0, SQLite/PostgreSQL, multi-database aliases.
-10. Leave search grouping and the `search:` surface to card 049.
+   correlated inner root through the distinct-suppressing helper
+   (C.3 + C.3a).
+6. Prove the acceptance matrix against the test-local baseline oracle
+   (C.4) before changing production routing.
+7. Cut over direct and flattened generated leaves; remove the
+   framework-added global `distinct` per the multiset contract.
+8. Live proofs for both generated origins + SQL-shape assertions (C.5).
+9. Validate Django 5.2/6.0, SQLite/PostgreSQL, multi-database aliases;
+   capture the PostgreSQL plan artifact from actually emitted SQL.
+10. Slice D documentation updates; leave search grouping and the `search:`
+    surface to card 049.
 
 After every edit: `uv run ruff format .` and `uv run ruff check --fix .`
 only; tests run when explicitly requested; the change must hold
@@ -396,19 +624,24 @@ the previous commit added tracked files.
 
 ## Risks
 
-- **SQL-shape change on shipped filters.** Same rows on correct paths,
-  different plans; accepted per the root-cause mandate. The flattened-leaf
-  fix changes wrong result sets to right ones — called out in review notes.
+- **SQL-shape change on shipped filters.** Same rows on correct
+  row-preserving paths, different plans; accepted per the root-cause
+  mandate. The flattened-leaf fix and the multiset contract change wrong
+  or accidental result sets to correct ones — both called out in Slice D.
 - **Low-selectivity regime.** Many independent `EXISTS` branches over a
   large root set can lose to one multi-join + `DISTINCT` on some planners.
   No escape hatch here (card 049 holds `Meta.search_strategy` in reserve);
   structure is gated in tests, wall-clock never.
-- **Eligibility misclassification.** Fail-closed provenance means the
-  failure mode is a missed optimization, never a wrong result set.
+- **Eligibility misclassification.** Fail-closed construction provenance
+  means the failure mode is a missed optimization, never a wrong result
+  set — and never a finalization failure for a working declared filter.
 - **Upstream drift.** The applicator mirrors
   `BaseFilterSet.filter_queryset`'s loop; a django-filter upgrade that
   changes that loop shows up as a loud test diff against the retained
-  upstream assertion, not silent divergence.
+  upstream assertion, not silent divergence. Provenance is stamped at the
+  package's own generation sites, so upstream's dynamic
+  `ConcreteInFilter`/`ConcreteRangeFilter` synthesis cannot drift the
+  eligibility rule.
 
 <!-- LINK DEFINITIONS -->
 

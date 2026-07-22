@@ -817,10 +817,520 @@ primitive, and explicit security boundaries. Without them, the implementation wo
 authorization ambiguity and duplicated validation into a public API that will be costly to
 correct after `0.1.2`.
 
+# Second adversarial review: row-preserving predicates Part 1 (Rev 3)
+
+## Verdict
+
+Rev 3 of the [Part 1 plan][part1-plan] is materially stronger than the version reviewed
+above. It now identifies the correct flat-leaf seam, preserves one complete filter
+invocation inside the correlated query, keeps negation under Django's control, handles
+inactive form fields by identity, and recognizes the two distinct shipped defects. The
+three-layer split is the right architecture and should remain.
+
+It is still not implementation-ready. Four issues are blocking because the proposed
+mechanics cannot yet implement the advertised fail-closed and compatibility contracts:
+
+1. the metadata build strictly classifies filters that the plan promises to leave
+   untouched;
+2. a pre-stamp `distinct` boolean cannot carry the origin/provenance decisions the
+   eligibility rule needs, and the marker is lost on replacement-filter branches;
+3. the candidate map is not part of the existing registry-reset lifecycle;
+4. invoking the filter unchanged retains the framework's `distinct=True` inside every
+   eligible `EXISTS`, so the plan removes the outer wrapper but does not actually remove
+   the redundant distinct operation it introduced.
+
+There is also an unresolved compatibility decision: current framework-added `distinct`
+deduplicates pre-existing outer-query fan-out as a side effect, while the rewrite does
+not. Comparing primary-key *sets* cannot detect that observable list/count change.
+
+Resolve these points in the plan and update the staged TODO pseudocode before production
+implementation. The correlated-`EXISTS` direction itself does not need to change.
+
+## Blocking findings
+
+### 1. “Classify every filter” contradicts fail-closed treatment of declared filters
+
+Slice C.2 says to classify the final `field_name` of **every** entry in `all_filters`, then
+marks declared/custom filters ineligible. Those instructions conflict. Explicit
+django-filter declarations may legitimately target an annotation, alias, or entirely
+method-owned name that is not a Django model path. They bypass model-derived filter
+generation precisely because the consumer owns their meaning. For example, a declared
+method filter with `field_name="computed_rank"` can be valid when its method annotates or
+otherwise interprets that name, even though `classify_path(model, "computed_rank")` must
+raise.
+
+Strictly classifying that entry during `FilterSet.get_filters` turns an intentionally
+ineligible, currently working declaration into a finalization failure. That violates both
+“ineligible leaves keep today's behavior byte-for-byte” and “the failure mode is a missed
+optimization.” Expanded declared filters have the same problem after their names are
+prefixed by `django_strawberry_framework/filters/sets.py::_expand_related_filter`.
+
+Determine origin before strict path classification:
+
+- framework-default-generated direct and expanded leaves are strict candidates and a
+  path-resolution failure is a framework/configuration defect;
+- declared/custom and `Meta.filter_overrides` leaves are immediately ineligible and need
+  no structured path at all;
+- an expanded leaf inherits the child leaf's origin; merely appearing in the result of
+  `_expand_related_filter` does not make a declared child “expanded generated.”
+
+The metadata row should therefore permit `path_plan=None` for a proven non-candidate, or
+the candidate mapping should contain only proven generated candidates. Add declared
+method and declared custom-subclass tests whose `field_name` is not model-resolvable; both
+must still build and execute unchanged.
+
+### 2. Provenance must be a frozen origin record, not a saved boolean
+
+The proposed private “pre-framework distinct” attribute is insufficient for the rule the
+plan describes:
+
+- `FilterSet.filter_for_field` receives a `default` already produced through
+  `django_filters.filterset.BaseFilterSet.filter_for_lookup`, whose defaults have already
+  been merged with `Meta.filter_overrides`. A `True` value alone cannot identify whether
+  it came from an upstream standard class default or a consumer override.
+- The own-PK and Relay-relation branches of
+  `django_strawberry_framework/filters/sets.py::FilterSet.filter_for_field` return a **new**
+  `GlobalIDFilter` or `GlobalIDMultipleChoiceFilter`. A private attribute placed only on
+  `default` is not forwarded to that replacement, so expanded GlobalID leaves lose the
+  marker the plan relies on.
+- `_expand_related_filter` can preserve attributes through `deepcopy`, but it cannot
+  recover whether the child was model-generated, declared, or override-generated unless
+  that full origin was recorded on the child first.
+- Upstream synthesizes dynamic `ConcreteInFilter` and `ConcreteRangeFilter` subclasses in
+  `django_filters.filterset.BaseFilterSet.filter_for_lookup`. Consequently, “enumerate
+  the standard upstream classes the generator emits” is not a stable exact-class
+  allowlist and will drift with field defaults and django-filter releases.
+- A consumer can override `filter_for_field`; calling the framework implementation and
+  then replacing or mutating its result must not accidentally retain a stale “safe”
+  marker.
+
+Persist one frozen provenance record on the **actual returned filter instance**. It should
+distinguish at least framework-default generation, package-owned replacement, declared
+filter, and `filter_overrides` generation; record whether the framework added `distinct`;
+and survive every replacement/deepcopy explicitly. Expanded copies inherit the child's
+record and add “expanded from `<name>`” rather than overwriting its origin.
+
+Eligibility should follow that construction provenance, not a growing class allowlist.
+Package-owned replacements are safe because the framework created them; upstream dynamic
+classes are safe only when reached through the unmodified default-generation path;
+declared, override-generated, and consumer-overridden generation paths fail closed. This
+is both stricter and more DRY than maintaining a version-sensitive list of classes.
+
+### 3. Candidate metadata is not in the reset lifecycle
+
+Building the candidate map “under the same gate” as `_expanded_filters` makes the two
+writes temporally adjacent, but does not make their lifecycle atomic.
+`django_strawberry_framework/sets_mixins.py::SetLifecycleAttrs.binding_attrs` currently
+contains exactly the owner, expansion cache, and reentry guard.
+`django_strawberry_framework/utils/inputs.py::clear_generated_input_namespace` deletes
+only those three attributes from every subclass. A fourth class attribute therefore
+survives `registry.clear()` while `_expanded_filters` and `_owner_definition` disappear.
+
+That stale map directly violates C.2's stated “constructed before finalization degrades to
+today's behavior” rule: after a clear, direct construction can observe old candidate
+metadata before the next completed expansion. It also risks pairing rebuilt `base_filters`
+with metadata from the previous owner/finalization cycle.
+
+Make the reset contract explicit and single-sited. Two sound shapes are:
+
+1. extend `SetLifecycleAttrs` with family-specific extra reset attributes and include the
+   candidate map there; or
+2. store filters and candidate metadata in one immutable expansion snapshot, with
+   `get_filters()` continuing to return the snapshot's filter mapping for API
+   compatibility.
+
+Whichever shape is chosen, publish both filter and metadata values only after a successful
+build, clear both on registry reset, and test build failure, retry, subclass isolation,
+unresolved lazy targets, and clear/rebuild. “Ensure reset cannot expose stale metadata” is
+not enough pseudocode for this load-bearing state transition.
+
+### 4. The unchanged invocation preserves `DISTINCT` inside `EXISTS`
+
+Every direct deep generated candidate is stamped `distinct=True` by
+`django_strawberry_framework/filters/sets.py::FilterSet.filter_for_field`. Rev 3 then
+passes that same filter unchanged to the correlated inner root. Ordinary upstream
+`Filter.filter` and the package's `_apply_lookups` both execute `.distinct()` before the
+lookup. Django's `Query.exists()` clears the select list and ordering but does **not** clear
+the `distinct` flag, so the resulting shape is generally `EXISTS(SELECT DISTINCT 1 ...
+LIMIT 1)`, not a distinct-free existence test.
+
+That is logically equivalent, but it is not performance-inert. It can retain unnecessary
+unique/sort planning inside every correlated branch, and it contradicts the plan's claim
+that the old stamp is inert inside the body. Because performance is the reason for this
+rewrite, leaving the redundant operation in the permanent primitive is technical debt.
+
+The adapter needs a named invocation helper that suppresses `distinct` **inside the
+existence body** for proven eligible filters while still calling the filter's original
+`filter()` method. Do not mutate a class-level/base filter. The live FilterSet owns a
+per-instance deepcopy, so a scoped change with `try/finally` can restore the instance flag
+even when decoding or queryset construction raises; an isolated invocation copy is also
+valid if its cost is measured. Consumer-origin `distinct` filters remain ineligible as
+already planned.
+
+Add assertions for both outer and inner SQL: no outer `DISTINCT`, no inner `SELECT
+DISTINCT`, and the filter instance's flag restored after success and after an exception.
+The PostgreSQL plan artifact must compare the actually emitted distinct-free inner shape,
+not an idealized hand-written query.
+
+### 5. Primary-key-set equality misses an outer multiplicity regression
+
+The current framework stamp does more than remove duplicates introduced by the candidate
+lookup. `.distinct()` applies to the whole current queryset, so it also deduplicates rows
+already multiplied by a consumer `get_queryset`, an earlier custom filter, or another
+outer join. Replacing the candidate join with `EXISTS` and dropping outer distinct leaves
+those pre-existing duplicates visible.
+
+For a plain row-preserving input this is the desired result: the candidate adds no
+duplicates. For a pre-fanned input it changes edge multiplicity, `totalCount`, page size,
+and cursor behavior relative to today's observable result. The C.4 oracle compares
+primary-key **sets**, which necessarily hides the regression, and the “currently-correct
+paths have identical rows” claim is therefore too broad.
+
+The plan must make an explicit contract choice before cut-over:
+
+- define and enforce that FilterSet input querysets must already be root-row-preserving,
+  with a typed failure or an existing framework invariant that can actually prove it; or
+- accept and document the multiplicity change as a deliberate correction to accidental
+  global deduplication, including migration notes and a live consumer-queryset test; or
+- design a row-normalizing boundary that preserves arbitrary consumer querysets without
+  reintroducing the outer `DISTINCT` the work exists to remove.
+
+Do not silently choose the second option by testing sets. Add an ordered primary-key list,
+connection count, and pagination case over a deliberately pre-fanned consumer queryset.
+
+## Major implementation and contract gaps
+
+### 6. Rejecting evaluated querysets is an unnecessary breaking guard
+
+Slice B says `attach_exists` validates that both inputs are “unevaluated” querysets. Django
+allows further queryset construction after evaluation: `.filter()` / `.alias()` clone the
+query and execute a fresh statement, and today's FilterSet path accepts such a queryset.
+The outer `_result_cache` is not embedded in SQL and creates no correlation hazard.
+
+The inner queryset produced by `correlated_inner_root` will naturally be unevaluated and
+must never be executed independently, but that is an implementation invariant—not a
+reason to reject a valid evaluated outer queryset. Remove the outer evaluation-state
+guard unless a concrete wrong-result reproduction exists. Test `list(source_qs)` followed
+by application of an eligible filter and require parity with the unevaluated source.
+
+### 7. The final test suite needs an explicit baseline oracle
+
+“Freeze failing tests” is a useful local red/green sequence, but a committed final suite
+cannot depend on old production routing after cut-over. Likewise, “compare baseline and
+rewritten sets before the old behavior is removed” does not say how that comparison
+survives in the finished tree.
+
+Define a test-only oracle that directly invokes the same filter instance on the outer
+queryset to obtain django-filter's baseline, while the production FilterSet invokes it
+inside `EXISTS`. Keep that oracle visibly test-local; do not ship a strategy flag or a
+second production compiler. Compare ordered rows/counts where multiplicity is part of the
+contract, and sets only where the test explicitly targets boolean membership semantics.
+The flattened-path defect additionally needs a direct assertion that the old oracle
+duplicates while the production result does not.
+
+### 8. C.5 proves only the expanded-origin branch
+
+The proposed live `booksTitle` test is exactly the right regression for the public
+flattened `RelatedFilter` defect, but it exercises only expanded generated provenance.
+Direct deep generated leaves take a separate metadata-origin path and are reachable from a
+real GraphQL filter input, so the [live-tier rule][live-tier-readme] requires a live proof
+for that branch too.
+
+Add a non-colliding direct deep lookup to an existing library FilterSet, or add a small
+no-migration FilterSet/type surface over an existing model, and execute it over HTTP. The
+test must prove a duplicate-matching to-many relation yields one edge and correct
+`totalCount`. Keep origin/provenance internals and alias-map assertions in package tests;
+move consumer-visible `and` / `or` / `not`, empty-list, GlobalID, count, and pagination
+behavior to live HTTP wherever the existing fakeshop schema can reach it.
+
+### 9. The plan needs a completion/documentation slice of its own
+
+This work changes shipped `FilterSet` result multiplicity and adds
+`django_strawberry_framework/optimizer/predicates.py`, but “What this deliberately does
+not change” excludes every release-state artifact and the sequence has no documentation
+step. That conflicts with [`AGENTS.md`][agents]: shipped behavior must fold into
+`docs/GLOSSARY.md`, `docs/TREE.md`, and `KANBAN.md` when its work completes. The new
+optimizer module also makes the current tree inventory stale.
+
+The free-standing filename `docs/row-preserving-predicates-part1-plan.md` is not the
+required `spec-<NNN>-<topic>-<version>.md` form for an in-flight production design. Either
+make this groundwork an explicit pre-card slice of [spec 049][spec-049], with card-owned
+completion bookkeeping, or allocate it a real KANBAN card/spec identity. In either case,
+add a final docs slice for the shipped FilterSet semantics and tree inventory. Version and
+`CHANGELOG.md` ownership may remain wherever the maintainer assigns them; source-of-truth
+documentation may not.
+
+### 10. Update the runtime-error ownership documentation
+
+Using `OptimizerError` for a required attachment to a combined queryset is reasonable,
+but `django_strawberry_framework/exceptions.py::OptimizerError` currently documents only
+selection/window-planning raise sites. The Part 1 completion slice must add predicate
+attachment to that public exception contract and test the GraphQL wrapping path if a live
+consumer can reach it. Otherwise the implementation and exception documentation diverge
+on the first new raise site.
+
+## Downstream issues still present in the revised search spec
+
+These do not require changing the neutral Part 1 primitive, but the updated
+[spec 049][spec-049] still needs two clarifications before it can safely consume the
+groundwork.
+
+### 11. Direct relational branches must carry per-branch visibility
+
+Decision 12 first promises visibility composition for every relation hop, then says
+forward single-valued hops on the root side are already covered by cascade narrowing.
+That is not a framework invariant: `apply_cascade_permissions` is an explicit helper a
+consumer may or may not call, search paths need not be exposed output fields, and a type's
+custom `get_queryset` may narrow only its own model.
+
+For `search_fields=("title", "category__name")`, the `category__name` branch must include
+the registered Category type's visibility constraint even when the Item type does not
+call cascade. Applying that constraint to the whole query would incorrectly suppress an
+Item that matches `title`, so it must be ANDed only into the relational OR arm. The same
+rule applies to a chain of forward hops before the first to-many hop.
+
+Specify direct branches as structured `(hop visibility AND terminal icontains)` branches,
+not bare lookup `Q`s, and add a live forward-FK test without root cascade. Otherwise the
+spec's strongest security claim is true only for the staged fakeshop types that happen to
+call the helper.
+
+### 12. “Exactly when they could filter” overstates the permission contract
+
+Decision 13 can reuse applicable FilterSet gates, but it cannot make search permission
+identical to filter permission. A type may declare a search path absent from its
+FilterSet, or may declare no FilterSet at all—both are explicitly supported. In those
+cases the viewer cannot issue the equivalent `filter:` input, yet the spec says search is
+allowed because no gate exists.
+
+Narrow the contract to: “active search fires every applicable gate exposed by the
+declaring type's FilterSet; `Meta.search_fields` is the authorization grant for paths with
+no corresponding filter gate.” Then define what happens when several filter aliases map
+to one `field_name`, when only a prefix relation is gated, and when an expanded child path
+has no public flat filter because `HIDE_FLAT_FILTERS` is enabled. Tests should cover an
+ungated search-only path on a type that also has a FilterSet, not only the all-gated
+Category example and the no-FilterSet case.
+
+## Required Rev 4 changes before implementation
+
+1. Classify only proven generated candidates; leave declared/custom non-model paths
+   untouched.
+2. Replace the boolean marker and class allowlist with a frozen generation-provenance
+   record propagated to every actual returned/replacement/expanded filter.
+3. Make candidate metadata part of the atomic expansion/reset lifecycle.
+4. Suppress and restore `distinct` during eligible inner invocation; assert no inner or
+   outer distinct in emitted SQL.
+5. Decide the pre-fanned-input multiplicity contract and test ordered rows, counts, and
+   pages—not only PK sets.
+6. Remove the evaluated-outer-queryset rejection unless a real incompatibility is proven.
+7. Define the permanent baseline oracle and move every reachable adapter behavior to the
+   live HTTP tier, including a direct-deep generated origin.
+8. Give the groundwork a card/spec completion owner and update GLOSSARY/TREE/KANBAN plus
+   `OptimizerError` documentation.
+9. In spec 049, make forward-relation visibility branch-local and narrow the FilterSet
+   permission claim to applicable gates.
+
+With those changes, Rev 4 would have a clean implementation path: origin is captured once
+at generation, expansion transports it without inference, one atomic cache owns filters
+and metadata, the adapter invokes the original semantic operation without carrying a
+redundant distinct into `EXISTS`, and both current compatibility and future search
+security have explicit testable boundaries.
+
+# Cross-spec review: the Medtrics DRF reproduction against the project goal
+
+## Verdict
+
+The production reproduction from Medtrics makes the purpose of both plans clearer, but it
+does **not** call for copying the application's `StringAgg` workaround or adding a dynamic
+per-connection search API. Read together with [`GOAL.md`][goal], it confirms four project
+contracts:
+
+1. the framework owns fan-out introduced by its generated relational predicates;
+2. consumer-shaped Django querysets remain visible and compositional, so the framework
+   must not silently normalize their pre-existing multiplicity;
+3. `Meta.search_fields` is frozen metadata owned by the exact `DjangoType` definition,
+   not mutable DRF-view-action state; and
+4. a schema author declaring an ordinary reverse-relation search must receive portable,
+   row-preserving SQL without hand-building an aggregate alias in `get_queryset`.
+
+The current Part 1 Rev 4 architecture and spec 049's correlated-`EXISTS` decision are the
+right root-cause answer. The reproduction contributes sharper acceptance oracles and one
+documentation clarification for each spec.
+
+## What the reproduction establishes
+
+The concrete path is
+`UserSchedule.user -> User.group_list -> GroupUser.group -> Group.name`:
+
+- `UserSchedule.user` is a forward FK (to-one);
+- `User.group_list` is the reverse side of `GroupUser.user` (to-many);
+- `GroupUser.group` is a forward FK (to-one).
+
+One user may belong to several groups even though `GroupUser` makes each `(user, group)`
+pair unique. A search over `user__group_list__group__name` therefore multiplies each
+outer schedule by the number of matching memberships. DRF 3.14 detects that multiplying
+path and applies one global `distinct()` after combining it with the scalar name, class,
+role, and rotation branches. That keeps the response superficially correct while making
+the to-many branch's join and deduplication policy observable in count and pagination.
+
+This is important classifier evidence: the multiplying relation is a **reverse FK**, not
+a concrete `ManyToManyField`, and it appears after a to-one prefix. Any classifier or test
+fixture that proves only direct M2M traversal is incomplete.
+
+The Medtrics patch's scalar correlated `StringAgg` removes the outer fan-out, but it is an
+application-specific workaround, not prior art to adopt:
+
+- it is PostgreSQL-specific while this project promises portable basic `icontains` search;
+- it processes all related strings where `EXISTS` may stop at the first match;
+- an aliased aggregate may be expanded once per DRF search term;
+- concatenation erases related-row boundaries; and
+- it has no natural place to compose each related type's visibility constraint.
+
+The reproduction therefore validates the desired **query shape**, not the workaround:
+the membership join belongs inside a correlated `EXISTS`; the outer query has neither the
+membership join nor a framework-added `DISTINCT`.
+
+## Required improvements to the Part 1 plan
+
+### 1. Tie the multiset contract directly to the north star
+
+Rev 4's maintainer-decided multiset contract is correct and should remain unchanged.
+[`GOAL.md`][goal] supplies the architectural reason: automatic planning must “cooperate
+with consumer-shaped querysets,” and the package must not become an ORM abstraction that
+hides Django querysets. A framework predicate is therefore a selection over the incoming
+queryset, not a normalization boundary over consumer SQL.
+
+Add that rationale to the contract section. It makes clear that preserving consumer
+duplicates is not merely the least expensive answer to finding 5; it follows from the
+package's public queryset-composition promise. Continue preserving explicit consumer
+`distinct()`, annotations, ordering, and pre-existing multiplicity while preventing only
+framework-owned fan-out.
+
+### 2. Make reverse-FK-after-to-one a named classifier and adapter oracle
+
+Slice A and C coverage should include the exact structural category demonstrated here:
+
+```text
+root --forward FK--> intermediate --reverse FK--> membership --forward FK--> terminal
+```
+
+Require the frozen path plan to identify the reverse FK as the first multiplying boundary
+and require the adapter's emitted outer query to exclude both membership and terminal
+tables. Keep the existing direct M2M cases as a separate category; neither test subsumes
+the other.
+
+At least one consumer-visible fakeshop case should use a reverse FK rather than earning
+all live cardinality coverage through `Book.genres`. The test must use ordered IDs,
+`totalCount`, and a page boundary with several matching children.
+
+### 3. Do not use the DRF response as the multiset oracle
+
+The Medtrics example starts from a plain `UserSchedule.objects.all()` path for the SQL
+assertion. It proves that search itself no longer fans out, but it says nothing about a
+consumer queryset that was already fanned before search. DRF's old global `distinct()` is
+the behavior Part 1 deliberately corrects.
+
+Keep Rev 4's permanent test-local baseline and its pre-fanned, explicitly-distinct, and
+custom-filter-produced inputs. Do not weaken those cases to match the original endpoint's
+set-like response behavior.
+
+## Required improvements to spec 049
+
+### 4. State that search scope is type-definition-wide and immutable
+
+The Medtrics patch solves a second application concern: group-name search belongs on
+`detail_list`, but not on three Academic Progress actions. That is a DRF view/action
+distinction. It must not be translated into request-time mutation of
+`DjangoType.Meta.search_fields` or a resolver-specific escape hatch.
+
+The goal's public shape is one declarative `DjangoType.Meta` sidecar, and spec 049 already
+assigns the frozen plan to the exact type definition. Add an explicit contract:
+
+- every connection serving the same `DjangoType` definition exposes the same static
+  search capability;
+- runtime request, resolver, and connection context never mutate or narrow the declared
+  path tuple;
+- viewer-dependent denial belongs to existing visibility and FilterSet gates;
+- a report/custom GraphQL field that is not the model connection need not expose the
+  generated search sidecar; and
+- a genuinely different model-backed GraphQL surface uses a distinct `DjangoType`
+  definition, whose exact-owner plan is already covered by the multi-type tests.
+
+This should be documented as intentional scope, not left as an accidental limitation.
+Do not add a field-level override mechanism without a separate demonstrated GraphQL use
+case; doing so now would work against the Meta-first, no-hand-rolled north star.
+
+### 5. Add a row-boundary oracle that makes `StringAgg` observably wrong
+
+Whole-input phrase semantics make a particularly strong regression test possible. Give
+one parent two related rows whose values are `"red"` and `"dwarf"`, and another parent one
+related row whose value is `"red dwarf"`. Searching for `"red dwarf"` must match only the
+second parent.
+
+A `StringAgg(..., delimiter=" ")` implementation can incorrectly manufacture the phrase
+across the first parent's two children. A correctly correlated terminal predicate cannot.
+Run this through the live GraphQL surface and assert ordered edges and `totalCount`, then
+keep SQL-shape assertions in package tests proving the implementation is `EXISTS`, not a
+scalar aggregate that merely happens to avoid outer fan-out.
+
+### 6. Prove reverse FK and M2M search independently
+
+Decision 7 and its test plan currently speak generically about to-many declarations. Add
+two explicit search-path categories:
+
+- a reverse FK after a to-one prefix, matching the Medtrics topology; and
+- a direct or nested M2M path, matching the library fixture.
+
+For the reverse-FK case, combine a scalar direct path and the relational path in the same
+search OR. Include a root that matches the scalar branch and has several matching related
+rows, a root that matches only the related branch, and an unrelated root. This pins both
+boolean semantics and cardinality under the precise mixed-branch shape that caused the
+production issue.
+
+### 7. Clarify DRF-shaped compatibility versus DRF SearchFilter parity
+
+[`GOAL.md`][goal] promises a DRF-shaped, Meta-driven developer experience and unchanged
+reuse of django-filter `FilterSet` primitives. It does not promise byte-for-byte parity
+with DRF's `SearchFilter`. Spec 049 intentionally differs in two visible ways:
+
+- whole-input phrase semantics instead of DRF's whitespace-split term-AND; and
+- static type-definition scope instead of `SearchFilter.get_search_fields(view, request)`
+  action/request dynamism.
+
+Put both differences together in the borrowing/migration documentation. The existing
+`"Cardio Cohort"` Medtrics test cannot distinguish the contracts because one group name
+contains both terms. Keep spec 049's distinct multi-field phrase test, and add the
+split-across-children negative above, so future maintainers cannot accidentally import
+DRF term splitting or aggregate semantics while pursuing “DRF first.”
+
+## Cross-spec acceptance checklist from the reproduction
+
+Before production implementation, the two documents together should require:
+
+1. strict classification of forward-FK -> reverse-FK -> forward-FK paths;
+2. separate M2M classification coverage;
+3. one outer root occurrence for several matching related rows;
+4. scalar OR relational search returning both kinds of matches;
+5. a row matching both branches still appearing once;
+6. no membership/child joins in the outer query;
+7. one correlated `EXISTS` containing the relational joins;
+8. no framework-added outer or inner `DISTINCT` on a plain input;
+9. preserved consumer multiplicity, ordering, and explicit `distinct()`;
+10. correct ordered edges, `totalCount`, and page boundaries;
+11. no phrase manufactured across separate related rows;
+12. visibility and permission constraints composed inside only the relational branch;
+13. immutable exact-type ownership of the frozen search plan; and
+14. explicit documentation of phrase and scope differences from DRF SearchFilter.
+
+With those additions, the original issue becomes a high-value acceptance fixture rather
+than an architectural template: it proves the user-facing failure, while Part 1 and spec
+049 supply the portable, visibility-aware, compositional root-cause fix that the source
+application had to hand-build.
+
 <!-- LINK DEFINITIONS -->
 
 <!-- Root -->
 [agents]: ../AGENTS.md
+[goal]: ../GOAL.md
 [repro]: ../to-many-search-optimizer-reproduction.md
 
 <!-- docs/ -->

@@ -34,8 +34,14 @@ also keeps request values out of the selection optimizer's cross-request
 #   repeated compiler calls and existing ``_dst_order_*``/window aliases safely
 #   coexist.
 # - ``attach_exists(queryset, inner_queryset)``:
-#   1. Validate that both querysets are unevaluated model querysets for the same
-#      database alias and that the inner root model matches the outer model.
+#   1. Validate that both are model querysets for the same database alias and
+#      that the inner root model matches the outer model. Do NOT reject an
+#      evaluated outer queryset: Django permits further construction after
+#      evaluation (``.filter()``/``.alias()`` clone the query and run a fresh
+#      statement), today's FilterSet path accepts such querysets, and an outer
+#      ``_result_cache`` is never embedded in SQL. That the INNER queryset must
+#      never execute independently is a documented implementation invariant,
+#      not an input guard.
 #   2. If ``queryset.query.combinator`` is set, raise ``OptimizerError`` naming
 #      the combinator; attaching aliases to UNION/INTERSECT/DIFFERENCE is runtime
 #      query-state misuse, not consumer configuration.

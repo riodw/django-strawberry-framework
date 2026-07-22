@@ -54,6 +54,15 @@ and the shared correlated-`EXISTS` predicate compiler in
 `distinct=True` stamping). Search wires the `search:` surface onto that
 finished engine; it does not design a compilation strategy of its own.
 
+That groundwork is formally **this spec's pre-card slice ("Slice 0")**,
+planned in [`docs/row-preserving-predicates-part1-plan.md`][part1-plan]
+(Rev 4), and **this card owns its completion bookkeeping**: the
+`docs/GLOSSARY.md` / `docs/TREE.md` / `KANBAN.md` fold-in for the shipped
+`FilterSet` multiset-contract change, the new `optimizer/predicates.py`
+module, and the `OptimizerError` predicate-attachment raise-site
+documentation all wrap under this card (second Part 1 review, findings
+9–10). The groundwork ships no release-state artifacts of its own.
+
 Permission caveat: [`AGENTS.md`][agents] prohibits `CHANGELOG.md` edits
 without explicit permission. This card does not touch `CHANGELOG.md`; card
 050's joint-cut slice must carry the maintainer's explicit grant.
@@ -264,7 +273,8 @@ viewer cannot see.
    root or related — cannot be discovered by probing field values
    ([Decision 12](#decision-12--visibility-aware-relational-search)).
 5. Search honors the declaring type's FilterSet `check_<field>_permission`
-   gates: a viewer may search a path exactly when they could filter by it
+   gates: active search fires every applicable gate, and `Meta.search_fields`
+   is the grant for paths with no corresponding gate
    ([Decision 13](#decision-13--search-honors-filterset-permission-gates)).
 6. Correct row cardinality, row-preserving: a declared path that traverses
    a to-many relation compiles as a correlated `EXISTS` branch OR'd with
@@ -799,10 +809,21 @@ consumes, never a parallel implementation:
   predicate as a membership constraint on the hop — inside the correlated
   `EXISTS` body for to-many groups, AND'd with the group's `icontains`
   OR. A hidden related row then simply does not exist for the subquery.
-- Forward single-valued hops on the root side remain covered by the
-  existing cascade composition at step 1; hops beyond the first to-many
-  hop (inside the `EXISTS` body) get the same per-hop composition,
-  because cascade narrowing never reaches inside a subquery.
+- **Direct relational branches carry per-branch visibility themselves**
+  — never delegated to cascade. `apply_cascade_permissions` is an
+  explicit helper a consumer may or may not call, search paths need not
+  be exposed output fields, and a type's custom `get_queryset` may narrow
+  only its own model, so "cascade covers the forward hops" is not a
+  framework invariant. For `search_fields = ("title", "category__name")`,
+  the `category__name` branch compiles as a structured
+  `(hop visibility AND terminal icontains)` branch — never a bare lookup
+  `Q` — with the registered Category type's visibility constraint AND'd
+  **only into that relational OR arm** (applying it to the whole query
+  would wrongly suppress an Item matching `title`). The same per-hop rule
+  covers a chain of forward hops before the first to-many hop, and every
+  hop inside the `EXISTS` body (cascade narrowing never reaches inside a
+  subquery). A live forward-FK search test on a type that does **not**
+  call cascade proves the claim holds beyond the staged fakeshop types.
 - A related model with **no registered type** has no GraphQL surface and
   therefore no visibility contract to honor; the hop traverses the raw
   relation. Declaring a search path across an unregistered model is the
@@ -823,9 +844,15 @@ contract is a pragmatic shortcut, not an answer.
 
 ### Decision 13 — Search honors FilterSet permission gates
 
-Search has a permission contract, and it is the EXISTING one: **a viewer
-may search a declared path exactly when they could filter by it.** The
-information disclosed by searching a path is a strict subset of what
+Search has a permission contract, and it reuses the EXISTING gates
+without inventing new ones: **active search fires every applicable gate
+exposed by the declaring type's FilterSet; `Meta.search_fields` is the
+authorization grant for paths with no corresponding filter gate.**
+("Exactly when they could filter by it" would overstate this — a type may
+declare a search path absent from its FilterSet, or declare no FilterSet
+at all, both explicitly supported; there the viewer cannot issue the
+equivalent `filter:` input, and the declaration itself is the grant.)
+The information disclosed by searching a path is a strict subset of what
 `icontains`-filtering that path discloses, so a `check_<field>_permission`
 gate that denies the filter must deny the search — anything else is a
 permission bypass, and the fakeshop fixture proves it is a live one:
@@ -854,6 +881,19 @@ Mechanism:
   this package refuses, and the filter side's precedent is a loud raise.
   An author who wants anonymous search on a type with a gated field
   declares only ungated paths.
+- Edge semantics are pinned, not implied: when **several filter aliases
+  map to one `field_name`**, they share one gate method and it fires at
+  most once per request (the existing shared-helper rule); when **only a
+  prefix relation is gated** (e.g. a gate on the `category` relation but
+  none on `category__name`), the prefix gate is applicable to every
+  declared path it prefixes and fires; when `HIDE_FLAT_FILTERS` hides an
+  expanded child's public flat filter, the gate still applies — gate
+  applicability follows the filterset's declared filters and their
+  `field_name`s, never the public exposure of a flat alias.
+- A declared search path with **no applicable gate** on a type that HAS a
+  `filterset_class` is searchable: the declaration is the grant for that
+  path (tested — not only the all-gated Category example and the
+  no-FilterSet case).
 - A type with **no** `filterset_class` has no gates; its search is gated
   by visibility alone. That is not a bypass — no permission surface
   exists to bypass — and is documented plainly.
@@ -1053,12 +1093,17 @@ library cases in `test_library_api.py`, inline creates):
   error shape.
 - Permission: anonymous vs staff on the Category `name` gate — anonymous
   active search on categories fails loudly with the gate's error while
-  staff search succeeds; the equivalent `filter: {name: ...}` control.
+  staff search succeeds; the equivalent `filter: {name: ...}` control;
+  an **ungated search-only path on a type that HAS a FilterSet** is
+  searchable (the declaration is the grant — Decision 13); the
+  no-FilterSet visibility-only case.
 - Visibility: hidden ROOT rows never appear and never perturb
   `totalCount`; the Decision 12 related-row proof — a genre whose only
   matching book is hidden by the book surface's visibility hook does not
   match (fixture may add a visibility hook to an existing library type;
-  no model/migration changes).
+  no model/migration changes); a **forward-FK branch on a type that does
+  not call `apply_cascade_permissions`** still carries the hop target's
+  visibility, AND'd only into its own OR arm (Decision 12).
 - Cache isolation: the same operation document executed twice with
   different `$search` variables, and two aliases with different search
   values in one operation — results and `totalCount` independent while
@@ -1216,6 +1261,7 @@ compiler shape.
 [goal]: ../GOAL.md
 
 <!-- docs/ -->
+[part1-plan]: row-preserving-predicates-part1-plan.md
 [glossary-aggregateset]: GLOSSARY.md#aggregateset
 [glossary-apply_cascade_permissions]: GLOSSARY.md#apply_cascade_permissions
 [glossary-configurationerror]: GLOSSARY.md#configurationerror

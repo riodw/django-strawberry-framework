@@ -119,6 +119,35 @@ def is_many_side_relation_kind(kind: RelationKind | None) -> bool:
     return kind in MANY_SIDE_RELATION_KINDS
 
 
+# TODO(docs/row-preserving-predicates-part1-plan.md Slice A): replace the
+# boolean-only path walk below with one strict, immutable model-path classifier
+# shared by filters, orders, and the future search compiler.
+#
+# Pseudo:
+# - Define a typed ``PathResolutionError`` whose message always names the root
+#   model, complete path, and first offending segment. Keep it distinct from
+#   lookup validation errors so callers never turn a malformed declaration into
+#   a lenient "does not traverse many" answer accidentally.
+# - Define frozen ``RelationPathHop`` and ``ClassifiedPath`` records. Each hop
+#   carries the segment, ``relation_kind(field)``, target model, and many-side
+#   bit. The path record carries the ordered hops, the terminal descriptor
+#   (scalar field OR relation descriptor), ``first_many_index``, and the complete
+#   relation-chain key future predicate grouping consumes.
+# - ``classify_path(model, field_path)`` accepts model-field paths only. Resolve
+#   ``pk`` explicitly as Django's ORM alias, follow FK/O2O/MTI and every many-side
+#   relation through ``related_model``, preserve a relation reached at the final
+#   segment as a valid terminal, and raise ``PathResolutionError`` for an empty,
+#   missing, non-traversable, ``related_name='+'``, or forward-GFK path.
+# - Keep lookup parsing separate. ``validate_lookup_expr(terminal,
+#   lookup_expr)`` walks each transform from the CURRENT output field, then
+#   resolves the final lookup with ``get_lookup``. Never classify transform or
+#   lookup tokens as model relation hops and never restart transform validation
+#   from the original field.
+# - Reimplement ``path_traverses_to_many`` as
+#   ``classify_path(...).first_many_index is not None`` while catching ONLY
+#   ``PathResolutionError``. Preserve this function's cache and its legacy
+#   garbage-tail behavior for orders and existing filters; strict new callers
+#   use ``classify_path`` directly and fail loud.
 @lru_cache(maxsize=2048)
 def path_traverses_to_many(model: type, field_path: str) -> bool:
     """Return whether an ORM ``field_path`` traverses a to-many relation.

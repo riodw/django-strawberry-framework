@@ -426,6 +426,38 @@ def test_filter_for_field_keeps_generated_to_one_path_non_distinct():
     assert filter_instance.distinct is False
 
 
+# TODO(docs/row-preserving-predicates-part1-plan.md Slice C.1-C.4): replace
+# these staged cases with executable baseline-vs-rewrite equivalence tests before
+# cutting generated leaves over to the adapter.
+#
+# Pseudo:
+# - Freeze both shipped defects first: an explicit deep generated path emits an
+#   outer fan-out plus ``distinct=True``; an expanded RelatedFilter leaf is
+#   rooted against the child today, carries ``distinct=False``, duplicates a
+#   parent, and inflates a connection count.
+# - Pin candidate provenance after FINAL expansion: direct generated and
+#   expanded generated leaves classify against the owning root model; declared,
+#   method, custom-subclass, consumer-distinct, ``Meta.filter_overrides``, and
+#   names missing from a pre-finalization mapping remain ineligible.
+# - Compare baseline/rewrite PK sets for reverse FK, both M2M directions,
+#   GenericRelation, duplicate/no/zero children, nullable-child isnull true and
+#   false, exclude leaves, range, integer ``in`` (empty/mixed invalid), and
+#   GlobalID lists.
+# - Prove boolean fidelity: two active leaves on one relation attach separate
+#   EXISTS branches (cross-row AND); one multi-lookup invocation stays one inner
+#   invocation; the split-across-rows negated range matches Django baseline; and
+#   direct/and/or/not tree positions leave ``_q_for_branch`` negation outside
+#   each child queryset.
+# - With many candidate form fields but one active value, assert exactly one
+#   ``EXISTS`` and one reserved alias. Omitted/None/upstream no-op and
+#   exclude-empty match-all inputs attach nothing; restrictive empty membership
+#   produces false EXISTS and no rows.
+# - For ordinary generated CharFilter plus every explicitly supported package
+#   filter class, assert root alias_map excludes related tables,
+#   ``query.distinct`` is false, results are unique, direct-only leaves retain
+#   their simple SQL, and custom/ineligible filters are byte-for-byte unchanged.
+
+
 # ---------------------------------------------------------------------------
 # Apply pipeline - request extraction
 # ---------------------------------------------------------------------------

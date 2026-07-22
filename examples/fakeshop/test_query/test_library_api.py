@@ -2491,6 +2491,25 @@ def test_genre_connection_full_round_trip():
     assert conn_two["totalCount"] == 4
 
 
+# TODO(docs/row-preserving-predicates-part1-plan.md Slice C.5): add the live
+# reverse-M2M flat-leaf regression beside the connection/filter acceptance
+# surface.
+#
+# Pseudo:
+# - Seed one Genre linked to two Books whose titles both match, plus visible
+#   nonmatches, using inline ``Model.objects.create`` as required for library
+#   acceptance tests.
+# - Query ``allLibraryGenresConnection(filter: { booksTitle: { iContains:
+#   "needle" } })`` with ``totalCount``, edges, and pageInfo through /graphql/.
+# - Assert one Genre edge, ``totalCount == 1``, and stable page metadata.
+# - Capture SQL and assert both count/page root queries contain correlated
+#   EXISTS, contain no search/filter-driven SELECT DISTINCT, and do not own the
+#   book or membership tables in their outer query shape. Keep the nested
+#   ``books: { title: ... }`` spelling as a separate row-preserving control for
+#   the existing ``_apply_related_constraints`` path, not coverage for the new
+#   flat-leaf adapter.
+
+
 @pytest.mark.django_db
 def test_genre_connection_first_and_last_rejected():
     """(b) supplying both ``first`` and ``last`` surfaces the package guard error.

@@ -20,6 +20,23 @@ from django_strawberry_framework.utils.relations import (
     relation_kind as _relation_kind_submodule,
 )
 
+# TODO(docs/row-preserving-predicates-part1-plan.md Slice A): add the strict
+# classifier and lookup-validation matrix when the production records land.
+#
+# Pseudo:
+# - Assert immutable hop/terminal/first-many metadata for local fields,
+#   forward FK/O2O/MTI chains, reverse FK, forward/reverse M2M,
+#   GenericRelation, reverse O2O, and self-relations at differing depths.
+# - Pin terminal relations (including relation ``isnull`` use), ``pk`` alias
+#   acceptance, ``related_name='+'``, forward GenericForeignKey rejection, and
+#   path-rich ``PathResolutionError`` messages for empty/missing/bad-tail paths.
+# - Execute chained transform+lookup validation while advancing through each
+#   transform's ``output_field``; reject a lookup unavailable on that final
+#   output rather than rechecking the original field.
+# - Preserve the old ``path_traverses_to_many`` truth table, cache behavior, and
+#   garbage-tail leniency exactly; prove it catches only the named resolution
+#   error while strict classifier callers fail loud.
+
 
 def test_relation_kind_classifies_many_to_many_as_many():
     field = SimpleNamespace(

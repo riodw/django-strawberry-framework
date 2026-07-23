@@ -420,6 +420,14 @@ Cross-spec Medtrics-reproduction review (2026-07-22): part1-plan is Rev 5 and th
 
 Critical-evaluation fixes (2026-07-22): part1-plan is Rev 6. Enacted after the post-anchor deep evaluation: (1) the LoanType search_fields declaration is permanent type-wide surface on the EXISTING LoanType (Decision 14 cross-ref); acceptance-only describes only the added DjangoConnectionField exposure, the existing list field gains nothing; (2) Decision 12 pins root-model-as-hop-target recursion (LoanType visibility composes into inner loan rows of book__loans; deliberate divergence from the Part 1 raw-traversal filter: adapter) + a hidden-inner-loan live test; (3) dead C.5 fallback clause removed (LoanFilter exists); (4) same-table inner aliasing (library_loan re-entered inside EXISTS) is a named Slice B SQL-shape assertion; C.4 gains nullable-intermediate-to-one-hop and to_field rows; fixture oracles assert captured pks; three fixture levels tier-assigned; (5) Slice A note: legacy path_traverses_to_many is not the defect site, the category proves classify_path first_many_index; (6) live suites must use graphql_client.py helpers and route registry-mutating fixtures through schema_reload/project_schema_override (beyond settings-dependent); (7) test_query/README.md suite-description updates added to Slice D and Slice 5 bookkeeping; (8) confirmed no types/relay.py setting anchor exists, SEARCH_MAX_LENGTH stays a Decision 11 module constant. Code TODO anchors in utils/relations.py and optimizer/predicates.py synced.
 
+Implementation-gate review enacted (2026-07-22): five blockers folded into the spec —
+(1) P0-1 Decision 12 one-.filter()-call same-related-row rule (Q tree per relational arm, shared-inner-alias assertion, leak counterexamples incl. book__loans re-entry);
+(2) P0-2 exact-owner re-entry: build_search_path_plan(definition, paths) signature, frozen exact-owner reference, secondary-type regression;
+(3) P1-3 async permission gates via run_in_one_sync_boundary (Decision 6), live async ORM-reading-gate regression;
+(4) P1-4 named path-driven permission-plan helper in utils/permissions.py built post-_bind_filtersets, permission-plan test matrix, assign-after-both retry safety;
+(5) P1-5 active_search canonical home moved to utils/connections.py with filters/search.py re-export, lazy-subpackage import pin extended.
+Plus Decision 14 multi-type migration mechanics (Meta.primary, separate FilterSets, GlobalID strategy) and a DoD gate bullet. Part 1 plan unchanged (review: ready in principle).
+
 #### Dependencies
 
 - `DONE-027-0.0.8` - Filtering subsystem

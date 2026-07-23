@@ -109,15 +109,20 @@ is the audit ledger. Load-bearing entries:
   `apply_search_async` (the runtime queryset compilers), the internal
   `build_direct_search_q` helper, `build_search_path_plan` (the single
   strict finalize-time plan builder over the `utils/relations.py`
-  classifier + lookup validator), the shared `active_search` predicate, the
+  classifier + lookup validator; takes the exact owning definition), the
+  named path-driven permission-plan helper in `utils/permissions.py`
+  (Decision 13), the shared `active_search` predicate (canonical home
+  `utils/connections.py`, re-exported — Decision 3), the
   `SEARCH_MAX_LENGTH` cap, explicit rejection of the `LOOKUP_PREFIXES`
   vocabulary reserved to card 050, and unit tests under
   `tests/filters/test_search_fields.py`.
 - [ ] **Slice 2 — Meta surface.** Declaration-time shape validation
   (including duplicate-path and padded-path rejection) in `types/base.py`,
   the `DjangoTypeDefinition.search_fields` + frozen-plan slots, phase-2.5
-  `build_search_path_plan` in `types/finalizer.py` (assigned only after
-  every path succeeds — retry-safe), promote `search_fields` from
+  `build_search_path_plan` in `types/finalizer.py` (exact-owner
+  definition passed in; assigned only after both path classification and
+  the post-`_bind_filtersets` permission-dispatch plan succeed —
+  retry-safe), promote `search_fields` from
   `DEFERRED_META_KEYS` to `ALLOWED_META_KEYS`
   ([Decision 8](#decision-8--metasearch_fields-promotes-in-this-card)).
 - [ ] **Slice 3 — connection wiring.** `CONNECTION_SEARCH_KWARG` in
@@ -429,8 +434,12 @@ the runtime and validation surface: `apply_search_sync(queryset,
 path_plan, value, info)` / `apply_search_async(...)` (the runtime queryset
 compilers, [Decision 6](#decision-6--pipeline-position-visibility--filter--search--orderby)
 explains the color split), the internal `build_direct_search_q(paths,
-value)` helper, and `build_search_path_plan(type_name, model, paths)`
-(finalize-time strict plan construction). This satisfies the card's
+value)` helper, and `build_search_path_plan(definition, paths)`
+(finalize-time strict plan construction). The plan builder takes the
+exact owning `DjangoTypeDefinition`, never a bare `(type_name, model)`
+pair — a type name is diagnostic text, not an identity-safe visibility
+target, and the plan must record the exact owner for root-model re-entry
+hops ([Decision 12](#decision-12--visibility-aware-relational-search)). This satisfies the card's
 "argument generation lives in
 `django_strawberry_framework/filters/` and reuses the same DRF-style Meta
 surface and argument-factory machinery as `filterset_class`" DoD line while
@@ -498,7 +507,7 @@ waits for [`finalize_django_types`][glossary-finalize_django_types] phase
 2.5, after `apps.populate()` has resolved lazy FK strings
 ([Definition-order independence][glossary-definition-order-independence]).
 **There is exactly one acceptance oracle**:
-`build_search_path_plan(type_name, model, paths)` calls the strict
+`build_search_path_plan(definition, paths)` calls the strict
 structured classifier in `utils/relations.py` exactly once per unique
 path — classifying the model path, rejecting a relation-terminal path
 (search needs a concrete field to apply `icontains` to), and validating
@@ -510,7 +519,9 @@ in Edge cases). Any failure raises
 offending path, the failing segment, and the model — the typo-guard
 message discipline every Meta-key gate in `types/base.py` follows. The
 completed immutable plan is assigned to the definition **only after every
-path succeeds**, keeping partial-finalization retry safe.
+path succeeds AND the Decision 13 permission-dispatch plan builds** (that
+subplan requires the `_bind_filtersets` subpass to have completed —
+Decision 13 pins the ordering), keeping partial-finalization retry safe.
 `django_filters.utils.get_model_field` is deliberately NOT used — a
 second resolution oracle would disagree with the classifier on `pk`,
 relation terminals, generic relations, transforms, and error shape, and
@@ -548,8 +559,21 @@ non-queryset consumer resolver only for an ACTIVE search
 [Decision 11](#decision-11--input-hygiene-strip-check-only-literals-stay-literal)
 pins empty/whitespace input as an unconditional no-op; a naive
 `is not None` slot would turn `search: "  "` into an observable error.
-The predicate is defined once in `filters/search.py` and imported by the
-guard. The exact-value assertion in `tests/utils/test_connections.py`
+The predicate's canonical definition CANNOT live in `filters/search.py`:
+`utils/connections.py` is imported at package-root load through
+`connection.py`, and importing any `filters.*` submodule first executes
+`filters/__init__.py`'s full filter-subsystem imports — violating the
+documented lazy-subpackage invariant (bare
+`import django_strawberry_framework` must leave `filters` / `orders`
+absent from `sys.modules`; `connection.py::_synthesized_signature`'s
+function-local sidecar imports exist to preserve exactly this, and
+`tests/filters/test_finalizer.py::test_registry_clear_works_without_filters_imported`
+pins it in a subprocess). The canonical `active_search` therefore lives
+in the cycle-safe `utils/connections.py` (already root-imported, no
+filters dependency) and `filters/search.py` re-exports it — one predicate
+object shared by planner and resolver so whitespace-only search is
+inactive on both sides, and classifying `None` never imports the filter
+subsystem. The exact-value assertion in `tests/utils/test_connections.py`
 (`== ("filter", "order_by")`) updates in the same slice. The outcome is
 the same fail-loud posture `filter:` / `orderBy:` get — a consumer
 resolver returning a plain iterable rejects an active `search:` loudly
@@ -652,9 +676,23 @@ async-only, so the search step ships as sync/async twins —
 `apply_type_visibility_sync`), `apply_search_async` awaiting
 `apply_type_visibility_async` per hop — mirroring the FilterSet's
 existing `_derive_related_visibility_querysets_sync` / `_async` split.
-Everything except visibility derivation (plan reading, `Q` construction,
-`EXISTS` attachment, permission gates) remains shared, un-awaited helper
-code so the twins stay thin. An earlier revision of this spec claimed one
+Plan reading, `Q` construction, and `EXISTS` attachment remain shared,
+un-awaited helper code so the twins stay thin. **The permission-gate
+pass is NOT colorless-by-sharing** (implementation-gate review,
+[`feedback.md`][feedback] P1-3): it ships as one synchronous, path-driven
+gate runner that `apply_search_sync` calls directly, while
+`apply_search_async` awaits `run_in_one_sync_boundary(<gate runner>, ...)`
+— exactly the boundary `FilterSet.apply_async` and `OrderSet.apply_async`
+already put around their permission checks in `utils/querysets.py`. That
+lets a synchronous consumer gate perform a blocking ORM read without
+raising Django's async-safety error and without blocking the event loop,
+while `invoke_permission_method` keeps rejecting an
+`async def check_<field>_permission` gate loudly on BOTH surfaces.
+Calling the synchronous runner bare from the async twin is rejected: it
+would either raise the async-safety error on the first gate ORM read or
+block the loop on any synchronous I/O. Both colors preserve the ordered
+runtime sequence above verbatim: inactive gate, length cap, permission
+pass, combined-queryset preflight, visibility derivation, compilation. An earlier revision of this spec claimed one
 colorless helper; that claim was only true under visibility-blind
 relational traversal, which [Decision 12](#decision-12--visibility-aware-relational-search)
 rejects.
@@ -695,8 +733,10 @@ compiler (`optimizer/predicates.py`, pre-card groundwork):
   the outer model's `_base_manager` on `queryset.db`, correlated on the
   root primary key, the group's `icontains` predicates OR'd inside the
   subquery AND'd with the hop-visibility constraints of
-  [Decision 12](#decision-12--visibility-aware-relational-search),
-  attached under a `_dst_`-reserved alias. The direct predicates
+  [Decision 12](#decision-12--visibility-aware-relational-search) —
+  composed under Decision 12's one-`filter()`-call same-related-row rule,
+  never as successive `.filter()` calls — attached under a
+  `_dst_`-reserved alias. The direct predicates
   and `EXISTS` branches OR together into the one search expression;
   `.distinct()` is never applied.
 
@@ -812,12 +852,14 @@ Risks.
 
 ### Decision 11 — Input hygiene: strip-check no-op, a documented length cap, literals stay literal
 
-**Active-search predicate, defined once.** `filters/search.py` exports the
-single definition
-`active_search = search_input is not None and bool(search_input.strip())`;
-the pipeline no-op gate, the non-queryset sidecar guard
-([Decision 3](#decision-3--the-argument-is-synthesized-nullable-and-gated-on-the-declaration)),
-and every other presence test import it. Inactive input (`None`, `""`,
+**Active-search predicate, defined once.** The single definition
+`active_search = search_input is not None and bool(search_input.strip())`
+lives canonically in `utils/connections.py` and is re-exported by
+`filters/search.py`
+([Decision 3](#decision-3--the-argument-is-synthesized-nullable-and-gated-on-the-declaration)
+pins the import-cycle constraint forcing that home); the pipeline no-op
+gate, the non-queryset sidecar guard, and every other presence test
+import the one object. Inactive input (`None`, `""`,
 whitespace-only) is an unconditional no-op that returns the same queryset
 object — it runs before the length cap, the permission pass, the
 combinator preflight, and the guard, so whitespace input can never become
@@ -862,9 +904,23 @@ consumes, never a parallel implementation:
 
 - The frozen path plan records, for every relation hop in every declared
   path, the hop's target model and whether a `DjangoType` is registered
-  for it. Type resolution follows the registry's primary-type rule (the
-  same resolution the model registry already defines); the plan stores
-  the resolved type reference, never a queryset.
+  for it — with one exact-owner exception. **When a hop's target model is
+  the plan's root model (path re-entry), the plan records the exact
+  owning `DjangoTypeDefinition` passed into
+  `build_search_path_plan(definition, paths)`, never a model-keyed
+  registry lookup.** A model-only `registry.get(model)` resolves the
+  PRIMARY type, and for a connection serving a secondary `DjangoType`
+  (explicitly supported — Decision 14 and the exact-owner tests) that
+  would silently swap the secondary's visibility hook for the primary's:
+  an inner row hidden under the secondary hook but visible under the
+  primary could then qualify the secondary connection. This is also why
+  the plan builder takes the owning definition rather than
+  `(type_name, model)` — a type name is diagnostic text, not an
+  identity-safe visibility target. Every OTHER related model resolves
+  through the registry's primary-type rule (the same resolution the model
+  registry already defines). The plan stores resolved type references,
+  never querysets, and never rediscovers a type from the model at request
+  time.
 - At resolve time, each hop whose target model has a registered type
   derives that type's visibility-scoped queryset via
   `utils/querysets.py::apply_type_visibility_sync` / `_async` (the same
@@ -873,6 +929,34 @@ consumes, never a parallel implementation:
   predicate as a membership constraint on the hop — inside the correlated
   `EXISTS` body for to-many groups, AND'd with the group's `icontains`
   OR. A hidden related row then simply does not exist for the subquery.
+- **One relational arm compiles as one `Q` tree submitted in one
+  conjunctive `.filter()` call** on the correlated inner root — the
+  load-bearing ORM rule, not a style choice. Django deliberately treats
+  conditions split across successive `.filter()` calls on a multi-valued
+  relation as constraints on potentially different related rows
+  ([documented][django-spanning-multivalued]), and a compile-time probe
+  on the exact reproduction path confirmed the consequence: sequential
+  `book__loans__in=<visible loans>` then
+  `book__loans__patron__email__icontains=...` filters allocated two
+  separate inner `library_loan` relation aliases, while one filter
+  carrying both conjuncts shared one alias. The sequential form is a
+  related-data leak — a visible non-matching child satisfies the
+  visibility constraint while a hidden matching sibling satisfies the
+  terminal predicate, so the root qualifies solely through hidden data:
+  the precise existence oracle this decision exists to prevent.
+  Therefore: every hop-visibility membership predicate and the terminal
+  `icontains` predicate of one relational search arm (or same-chain
+  group) build into one structured `Q` tree applied in one `.filter()`
+  call; hop visibility is never implemented as a loop of successive
+  `.filter()` calls; and for direct to-one relational arms the visibility
+  constraint stays inside that arm's parentheses, never lifted outside
+  the final search OR. If a future compiler refactor cannot keep
+  single-call alias sharing an explicit invariant, it must fall back to
+  separately correlated nested existence predicates rather than rely on
+  accidental alias reuse. The package tests assert the shared inner
+  alias directly (one alias for the shared to-many path), not only the
+  result rows — a result-only test can pass by a fixture accidentally
+  making two aliases land on the same row.
 - **Direct relational branches carry per-branch visibility themselves**
   — never delegated to cascade. `apply_cascade_permissions` is an
   explicit helper a consumer may or may not call, search paths need not
@@ -891,9 +975,10 @@ consumes, never a parallel implementation:
 - The per-hop rule **recurses onto the root model itself**: when a
   declared path re-enters the root model (the Decision 7 reverse-FK
   fixture does — `book__loans` from a `Loan` root makes the second hop's
-  target `Loan` again), the root type's own visibility composes into the
-  inner rows of the `EXISTS` body exactly like any other registered-type
-  hop. This is a deliberate divergence from the pre-card groundwork's
+  target `Loan` again), the exact owning type's visibility — the
+  definition recorded in the frozen plan, primary or secondary, never
+  re-resolved through the registry — composes into the inner rows of the
+  `EXISTS` body exactly like any other registered-type hop. This is a deliberate divergence from the pre-card groundwork's
   `filter:` adapter, which preserves the original filter invocation's
   raw traversal (no hop visibility) — the same path yields different
   inner constraints under `filter:` vs `search:`, by design, and the
@@ -939,14 +1024,31 @@ Mechanism:
 
 - When the declaring type has a `filterset_class`, every **active** search
   (post the `active_search` gate, pre-compilation) fires the filterset's
-  `check_<field>_permission` gates that cover the declared paths — gate
-  matching keys on the filterset's declared filters whose `field_name`
-  is a segment-prefix of the declared search path, recursing through
-  declared `RelatedFilter` branches for relation paths exactly as
-  `FilterSet._run_permission_checks` does for nested filter input, and
-  firing each gate method at most once per request via the shared
-  `utils/permissions.py` helpers (single-sited with the filter and order
-  sides — never a reimplementation).
+  `check_<field>_permission` gates that cover the declared paths. The
+  existing permission core is input-driven —
+  `utils/permissions.py::run_active_input_permission_checks` requires a
+  concrete filter/order input to traverse — and search has no input, so
+  this card adds **one named, path-driven helper in
+  `utils/permissions.py`** rather than synthesizing a fake filter input
+  (which would couple search authorization to input normalization and
+  lookup coercion, and would still miss search-only paths). Timing is
+  pinned: `RelatedFilter` targets, expanded flat leaves, bound owners,
+  and hidden-flat policy are not settled until the finalizer's
+  `_bind_filtersets` subpass completes, so the **immutable
+  permission-dispatch plan** builds from the fully bound and expanded
+  FilterSet strictly after that subpass, and the completed search plan is
+  assigned to the definition only after BOTH path classification and
+  permission planning succeed (finalize retry safety, Decision 2). For
+  each search path the plan records the owning flat/source-path gates,
+  every renamed `RelatedFilter` parent-branch gate (matched on ORM
+  `field_name`, not the public attribute), and each resolved child
+  terminal gate — applicability matches the final declared filter
+  metadata (filters whose `field_name` is a segment-prefix of the search
+  path), never GraphQL exposure. At request time the runner dispatches
+  through the existing `invoke_permission_method` primitive with its
+  per-class fired sets, so aliases and repeated paths deduplicate exactly
+  as the filter surface does — single-sited with the filter and order
+  sides, never a reimplementation.
 - A firing gate raises its own error (the same loud `GraphQLError` the
   equivalent `filter:` input produces); the whole search request fails.
   Per-viewer silent path narrowing (dropping gated paths and searching
@@ -974,7 +1076,9 @@ Mechanism:
 - Gates are request-scoped predicates, not queryset transforms; the gate
   pass itself does no queryset work. If a consumer gate touches the
   database, it does so under the same contract the filter side already
-  gives it.
+  gives it — on the async pipeline, inside the
+  `run_in_one_sync_boundary` sync worker
+  ([Decision 6](#decision-6--pipeline-position-visibility--filter--search--orderby)).
 
 Alternatives rejected: **a dedicated `check_search_permission` /
 per-path search hook** — a second permission truth for the same fields
@@ -1016,13 +1120,26 @@ separately demonstrated GraphQL use case — adding one now would work
 against the Meta-first, nothing-hand-rolled north star
 ([`GOAL.md`][goal]).
 
+Representing a DRF action-dependent policy (the Medtrics
+Rotations-vs-Academic-Progress split) therefore takes distinct type
+definitions — one per scope — and the migration documentation states the
+mechanics plainly rather than implying a transparent port: both types
+register over one model, so one must set `Meta.primary = True`; Relay
+types with distinct GraphQL names generally need separate FilterSet
+subclasses (the existing `_check_filterset_owner_pk_identity` finalize
+check); and whether the secondary's GlobalIDs decode to the primary or
+carry distinct node identity is an explicit, pre-existing multi-type
+choice, not something the search surface decides. Each connection must
+serve its exact type — reusing one type across both connections does not
+implement the original per-action policy.
+
 ## Implementation plan
 
 | Slice | Files touched | Delta |
 | --- | --- | --- |
-| 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `tests/filters/test_search_fields.py` (new) | `apply_search_sync` / `apply_search_async` / `build_direct_search_q` / `build_search_path_plan` / `active_search` / `SEARCH_MAX_LENGTH`; retarget the superseded `get_filters` TODO and `construct_search` reservation to card 050; unit tests for plan shape, prefix/duplicate/padding rejection, inactive-input identity, cap error, path-validation raises |
-| 2 | `django_strawberry_framework/types/base.py`, `django_strawberry_framework/types/definition.py`, `django_strawberry_framework/types/finalizer.py`, `tests/types/` | shape validation + `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` promotion; `search_fields` + frozen search-path-plan definition slots; phase-2.5 `build_search_path_plan` call (assign-after-success, retry-safe) |
-| 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/test_connection.py` | `CONNECTION_SEARCH_KWARG` + sidecar-tuple extension with the `active_search` presence predicate; synthesized `search:` param; sync/async pipeline steps (visibility-aware, permission-gated) calling the row-preserving predicate compiler; combined-queryset preflight; guard coverage |
+| 1 | `django_strawberry_framework/filters/search.py` (new), `django_strawberry_framework/filters/inputs.py`, `django_strawberry_framework/filters/sets.py`, `django_strawberry_framework/utils/permissions.py`, `tests/filters/test_search_fields.py` (new) | `apply_search_sync` / `apply_search_async` / `build_direct_search_q` / `build_search_path_plan(definition, paths)` / `SEARCH_MAX_LENGTH`; `active_search` re-export (canonical definition lands in `utils/connections.py`, Decision 3); the named path-driven permission-plan helper + runner (Decision 13); retarget the superseded `get_filters` TODO and `construct_search` reservation to card 050; unit tests for plan shape, prefix/duplicate/padding rejection, inactive-input identity, cap error, path-validation raises, permission-plan matrix |
+| 2 | `django_strawberry_framework/types/base.py`, `django_strawberry_framework/types/definition.py`, `django_strawberry_framework/types/finalizer.py`, `tests/types/` | shape validation + `DEFERRED_META_KEYS` → `ALLOWED_META_KEYS` promotion; `search_fields` + frozen search-path-plan definition slots; phase-2.5 `build_search_path_plan` call with the exact owning definition, permission-dispatch plan built after `_bind_filtersets` (assign only after both succeed, retry-safe) |
+| 3 | `django_strawberry_framework/utils/connections.py`, `django_strawberry_framework/connection.py`, `tests/filters/test_search_fields.py`, `tests/test_connection.py` | `CONNECTION_SEARCH_KWARG` + sidecar-tuple extension with the `active_search` presence predicate (canonical definition lands here — Decision 3); synthesized `search:` param; sync/async pipeline steps (visibility-aware, permission-gated) calling the row-preserving predicate compiler; combined-queryset preflight; guard coverage |
 | 4 | `examples/fakeshop/apps/products/schema.py`, the library schema module declaring `GenreType`, `examples/fakeshop/test_query/` | uncomment all four products `search_fields` tuples (fix stale `TODO-BETA-047` comment IDs → this card); add `GenreType.Meta.search_fields = ("name", "books__title")` and the acceptance-only `LoanType` reverse-FK search surface (Decision 7); live HTTP tests per the required-live-case list (products cases in `test_products_api.py` seeded via `seed_data(N)` / `create_users(N)`, library cases in `test_library_api.py` with inline creates); the non-gating PostgreSQL plan-evidence artifact |
 | 5 | `docs/TREE.md`, `docs/GLOSSARY.md` (DB + regen), `KANBAN.md`/`KANBAN.html` (DB + regen) | card-local tree regeneration; glossary intermediate status ("implemented on `main`; release pending the joint `0.1.2` cut"); card wrap; version quintet / README marketing / CHANGELOG defer to card 050 (Decision 10) |
 
@@ -1042,20 +1159,30 @@ against the Meta-first, nothing-hand-rolled north star
 - `utils/querysets.py::apply_type_visibility_sync` / `_async` for every
   related-hop visibility derivation (Decision 12) — the same helpers the
   FilterSet's `_derive_related_visibility_querysets_*` consume.
-- `utils/permissions.py` for the gate pass (Decision 13) — the same
-  helpers behind `FilterSet._run_permission_checks`, single-sited with
-  the filter and order sides.
+- `utils/permissions.py` for the gate pass (Decision 13) — one new named
+  path-driven helper beside the input-driven core, dispatching through
+  the same `invoke_permission_method` primitive and per-class fired sets
+  as `FilterSet._run_permission_checks`; never a synthesized filter
+  input, never a reimplementation.
+- `utils/querysets.py::run_in_one_sync_boundary` for the async twin's
+  permission pass (Decision 6) — the same sync-worker boundary
+  `FilterSet.apply_async` / `OrderSet.apply_async` already use; never a
+  bare call to the synchronous gate runner from async code.
 - `utils/connections.py::connection_sidecar_inputs_from_kwargs` /
   `has_connection_sidecar_input` for the non-queryset guard — extend the
   existing extraction/guard pair with a third search slot using the
   shared `active_search` predicate (and keep `CONNECTION_SIDECAR_KWARGS`
   in sync), do not add a parallel guard (Decision 3 details the required
   threading; the tuple alone is inert).
-- The `active_search` predicate is defined once in `filters/search.py`
-  and imported everywhere a search-presence test is needed.
+- The `active_search` predicate is defined once — canonically in
+  `utils/connections.py` (Decision 3's import-cycle constraint),
+  re-exported by `filters/search.py` — and imported everywhere a
+  search-presence test is needed.
 - The sync/async search steps share every un-awaited helper (plan
-  reading, `Q` construction, gate pass, `EXISTS` attachment); only
-  visibility derivation forks by color, per the FilterSet precedent.
+  reading, `Q` construction, `EXISTS` attachment); visibility derivation
+  forks by color, and the synchronous gate runner crosses to the async
+  side only through `run_in_one_sync_boundary`, per the FilterSet
+  precedent (Decision 6).
 - Typo-guard `ConfigurationError` messages follow the existing
   `types/base.py` Meta-gate message shape (type name + offending value +
   corrective hint).
@@ -1096,7 +1223,9 @@ against the Meta-first, nothing-hand-rolled north star
 - **Multiple `DjangoType`s over one model** — each type's frozen plan is
   keyed to the exact type definition; a connection serving the secondary
   type uses the secondary's plan, visibility hook, and SDL argument, and
-  plan caching never collapses them by model identity.
+  plan caching never collapses them by model identity. A search path that
+  re-enters the root model composes the exact owning type's visibility —
+  primary or secondary — never a registry-primary fallback (Decision 12).
 - **Nested connection fields** — `search` joins the sidecar family, so a
   search-bearing nested connection is unwindowable under the current
   optimizer and falls back per parent exactly as `filter:` / `orderBy:`
@@ -1145,9 +1274,22 @@ Unit (`tests/filters/test_search_fields.py`):
 - `build_search_path_plan`: flat path, relation path, to-many grouping by
   complete relation chain (same-chain terminals share a group; divergent
   later chains split, including paths sharing only their first to-many
-  hop); typo / relation-terminal / non-text-terminal → raises with
+  hop); a root-model re-entry hop records the exact owning definition
+  passed in, never a registry-primary lookup (Decision 12); typo /
+  relation-terminal / non-text-terminal → raises with
   type/path/segment/model in the message; assign-after-success
-  (a failing later path leaves no partial plan).
+  (a failing later path OR a failing permission plan leaves no partial
+  plan).
+- Permission-plan matrix (the path-driven `utils/permissions.py` helper,
+  built post-`_bind_filtersets` — Decision 13): several filter aliases
+  sharing one `field_name` fire their shared gate at most once; a renamed
+  `RelatedFilter` branch whose public attribute differs from its ORM
+  `field_name` still matches; a prefix-only relation gate fires for every
+  declared path it prefixes; an expanded generated flat leaf hidden by
+  `HIDE_FLAT_FILTERS` keeps its gate; a search-only path on a type that
+  HAS a FilterSet stays authorized by the declaration; repeated
+  paths/aliases prove each `(FilterSet class, gate method)` fires at most
+  once per request.
 - Declaration validation: all four reserved prefixes, empty tuple,
   duplicates, padded paths → raise.
 - `active_search` truth table; inactive input returns the queryset by
@@ -1179,7 +1321,19 @@ query-object inspection only):
   distinct, no registry fallback by model identity, plan caching keeps
   them apart.
 - Visibility composition mechanics: hop-visibility constraints present
-  inside the `EXISTS` body; unregistered-model hops traverse raw.
+  inside the `EXISTS` body; unregistered-model hops traverse raw; the
+  **same-related-row alias assertion** (Decision 12) — for one relational
+  arm, the compiled inner query holds exactly one relation alias for the
+  shared to-many path (visibility membership + terminal predicate
+  submitted in one `.filter()`), asserted on a direct M2M path AND on the
+  `book__loans` root-model re-entry, because a result-only test cannot
+  rule out two aliases accidentally landing on the same row.
+- Import hygiene (Decision 3): bare `import django_strawberry_framework`
+  leaves `filters` / `orders` absent from `sys.modules` with the search
+  wiring in place (the existing subprocess pin extends to cover it);
+  planner and resolver agree through the one `active_search` object for
+  omitted, empty, whitespace-only, literal-active, and variable-provided
+  search values.
 - Sidecar guard threading (`connection_sidecar_inputs_from_kwargs` /
   `has_connection_sidecar_input` third slot with `active_search`).
 
@@ -1234,7 +1388,24 @@ library cases in `test_library_api.py`, inline creates):
   visibility, AND'd only into its own OR arm (Decision 12); the
   **root-model recursion case** — a hidden inner `Loan` row (hidden by
   `LoanType`'s own visibility) cannot qualify a visible root loan
-  through the `book__loans` hop (Decision 12).
+  through the `book__loans` hop (Decision 12); the **same-related-row
+  leak counterexample** (Decision 12) — a root with a visible
+  non-matching child and a hidden matching child on the same to-many hop
+  does NOT match, while the visible-matching-child control does, run on
+  a direct M2M path AND at the `book__loans` root-model re-entry (the
+  one-shared-alias structural assertion stays in package tests); and the
+  **exact-owner re-entry proof** (Decision 12) — primary and secondary
+  types registered over `Loan` with deliberately divergent `get_queryset`
+  hooks, searching through the SECONDARY connection: an inner loan
+  visible to the primary but hidden to the secondary cannot qualify a
+  visible secondary root through `book__loans__patron__email`.
+- Async permission boundary (Decision 6): the real async connection
+  pipeline with an active search and a synchronous
+  `check_<field>_permission` gate that performs an ORM read — the gate
+  fires exactly once, the request succeeds or denies with the gate's own
+  error, and no async-safety error escapes; the loud
+  `async def check_<field>_permission` rejection is retained on both the
+  sync and async search surfaces.
 - Cache isolation: the same operation document executed twice with
   different `$search` variables, and two aliases with different search
   values in one operation — results and `totalCount` independent while
@@ -1275,7 +1446,10 @@ compiler shape.
   whole-input phrase semantics instead of whitespace-split term-AND
   (Decision 4), and static type-definition scope instead of
   `get_search_fields(view, request)` action/request dynamism
-  (Decision 14) — so future maintainers cannot accidentally import DRF
+  (Decision 14), including Decision 14's multi-type mechanics for
+  porting an action-dependent policy (`Meta.primary`, separate FilterSet
+  subclasses, explicit GlobalID strategy) — so future maintainers cannot
+  accidentally import DRF
   term splitting or dynamic scoping while pursuing "DRF first"
   ([`GOAL.md`][goal] promises a DRF-shaped, Meta-driven developer
   experience, not byte-for-byte `SearchFilter` parity); the
@@ -1384,6 +1558,15 @@ compiler shape.
 - [ ] Relational search is visibility-aware (Decision 12) and honors
   FilterSet permission gates (Decision 13), with live anonymous/staff and
   hidden-related-row proofs.
+- [ ] The five implementation-gate findings
+  ([`feedback.md`][feedback]) are closed in code and tests:
+  one-`filter()`-call same-related-row compilation (shared inner alias
+  asserted, leak counterexample live), exact-owner visibility for
+  root-model re-entry (secondary-type regression), the
+  `run_in_one_sync_boundary` gate boundary on the async pipeline, the
+  named path-driven permission-plan helper built after
+  `_bind_filtersets`, and the cycle-safe `utils/connections.py` home for
+  `active_search` (lazy-subpackage import pin extended).
 - [ ] Search scope is immutable and type-definition-wide (Decision 14);
   the reverse-FK Medtrics reproduction (shared groundwork fixture) and
   the row-boundary phrase oracle pass live with exact ordered IDs,
@@ -1458,3 +1641,4 @@ compiler shape.
 <!-- .venv/ -->
 
 <!-- External -->
+[django-spanning-multivalued]: https://docs.djangoproject.com/en/6.0/topics/db/queries/#spanning-multi-valued-relationships

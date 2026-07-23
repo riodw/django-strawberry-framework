@@ -1,6 +1,7 @@
 """Live GraphQL HTTP tests for the library app's read/write, Relay, keyset, and optimizer surface."""
 
 import base64
+from typing import NamedTuple
 
 import pytest
 from apps.library import models
@@ -37,6 +38,79 @@ def _seed_branch_with_two_shelves(name: str = "Override"):
     branch = models.Branch.objects.create(name=name, city="Boston")
     models.Shelf.objects.create(code="A-1", topic="First floor", branch=branch)
     models.Shelf.objects.create(code="B-2", topic="Second floor", branch=branch)
+
+
+class _MedtricsLoanGraph(NamedTuple):
+    """Captured pks of the four root loans seeded by ``_seed_medtrics_loan_graph``.
+
+    Live-tier mirror of ``tests/filters/test_sets.py::_seed_medtrics_loan_graph``
+    (the package-tier fixture lives in a non-importable test tree, so the
+    four-loan graph is replicated inline per the library-acceptance
+    ``Model.objects.create`` convention). Pks are captured at creation time;
+    assertions compare against these rather than trusting insertion order.
+    """
+
+    relation_and_direct: int
+    relation_only: int
+    direct_only: int
+    unrelated: int
+
+
+def _seed_medtrics_loan_graph() -> _MedtricsLoanGraph:
+    """Seed the shared Medtrics reproduction graph on the library models.
+
+    Four root loans over three books and four patrons (distinct patrons per loan
+    - ``unique_open_loan_per_book_patron`` forbids repeating a ``(book, patron)``
+    pair):
+
+    - ``relation_and_direct``: on ``shared_book``, note "Cardio direct", patron
+      email "Cardio A" (matches BOTH the direct ``note`` leaf and the relational
+      ``book__loans__patron__email`` leaf);
+    - ``relation_only``: also on ``shared_book``, note "routine checkout", patron
+      email "Cardio B" (matches the relational leaf via the shared book);
+    - ``direct_only``: on ``second_book``, note "Cardio direct", patron email
+      "Neurology" (matches ONLY the direct ``note`` leaf);
+    - ``unrelated``: on ``third_book``, note "routine checkout", patron email
+      "Ortho" (matches neither leaf).
+    """
+    branch = models.Branch.objects.create(name="Medtrics Central", city="Boston")
+    shelf = models.Shelf.objects.create(branch=branch, code="MED-1", topic="ward")
+    shared_book = models.Book.objects.create(shelf=shelf, title="Shared Ward Manual")
+    second_book = models.Book.objects.create(shelf=shelf, title="Second Manual")
+    third_book = models.Book.objects.create(shelf=shelf, title="Third Manual")
+
+    patron_a = models.Patron.objects.create(name="Patron A", email="Cardio A")
+    patron_b = models.Patron.objects.create(name="Patron B", email="Cardio B")
+    patron_c = models.Patron.objects.create(name="Patron C", email="Neurology")
+    patron_d = models.Patron.objects.create(name="Patron D", email="Ortho")
+
+    relation_and_direct = models.Loan.objects.create(
+        book=shared_book,
+        patron=patron_a,
+        note="Cardio direct",
+    )
+    relation_only = models.Loan.objects.create(
+        book=shared_book,
+        patron=patron_b,
+        note="routine checkout",
+    )
+    direct_only = models.Loan.objects.create(
+        book=second_book,
+        patron=patron_c,
+        note="Cardio direct",
+    )
+    unrelated = models.Loan.objects.create(
+        book=third_book,
+        patron=patron_d,
+        note="routine checkout",
+    )
+
+    return _MedtricsLoanGraph(
+        relation_and_direct=relation_and_direct.pk,
+        relation_only=relation_only.pk,
+        direct_only=direct_only.pk,
+        unrelated=unrelated.pk,
+    )
 
 
 def _field_type(type_info: dict, field_name: str) -> dict:
@@ -2817,6 +2891,196 @@ def test_library_loans_deep_leaf_sql_shape_is_row_preserving():
     pre_where = sql.split("WHERE")[0]
     assert pre_where.count('FROM "library_loan"') == 1
     assert "library_patron" not in pre_where.lower()
+
+
+@pytest.mark.django_db
+def test_library_loans_mixed_direct_and_relational_or_is_row_preserving_over_http():
+    """The mixed direct/relational OR is row-preserving over the ``allLibraryLoans`` list field.
+
+    The central production oracle (feedback High 4): ``note icontains "Cardio" OR
+    book__loans__patron__email icontains "Cardio"`` unions a DIRECT scalar leaf
+    with a DEEP relational leaf that routes through the row-preserving correlated
+    ``EXISTS``. Over the Medtrics graph the result is EXACTLY
+    ``[relation_and_direct, relation_only, direct_only]`` (id-ordered, each once):
+
+    - ``relation_and_direct`` + ``relation_only`` match the relational leaf via the
+      shared book (whose loans include a "Cardio" patron);
+    - ``direct_only`` matches ONLY the direct ``note`` leaf ("Cardio direct" note,
+      "Neurology" patron on a book with no Cardio-patron loan);
+    - ``unrelated`` matches neither and is excluded.
+
+    The SQL-shape assertions pin the row-preserving guarantee at the wire: one
+    root query, a correlated ``EXISTS`` for the relational arm, NO framework
+    ``SELECT DISTINCT``, and NO ``library_loan`` self-join / ``library_patron``
+    join in the OUTER query (the membership re-entry lives inside the ``EXISTS``).
+    """
+    graph = _seed_medtrics_loan_graph()
+
+    with CaptureQueriesContext(connection) as captured:
+        response = _post_graphql(
+            """
+            query {
+              allLibraryLoans(filter: {
+                or: [
+                  { note: { iContains: "Cardio" } },
+                  { bookLoansPatronEmail: { iContains: "Cardio" } }
+                ]
+              }) {
+                id
+              }
+            }
+            """,
+        )
+    assert response.status_code == 200
+    payload = response.json()
+    assert "errors" not in payload, payload
+
+    # Row-preserving: exactly the three matching loans, id-ordered, each ONCE.
+    assert payload["data"]["allLibraryLoans"] == [
+        {"id": graph.relation_and_direct},
+        {"id": graph.relation_only},
+        {"id": graph.direct_only},
+    ]
+
+    loan_sql = [q["sql"] for q in captured.captured_queries if "library_loan" in q["sql"].lower()]
+    # A plain list field, filter-only: exactly one root query, no count.
+    assert len(loan_sql) == 1
+    sql = loan_sql[0]
+    assert "SELECT DISTINCT" not in sql.upper()
+    # The relational arm compiles to a correlated EXISTS re-entry.
+    assert "EXISTS(" in sql.upper()
+
+    # The outer query (everything before the outer WHERE) owns library_loan once;
+    # no self-join and no patron join leak into the outer shape - the membership
+    # re-entry and library_patron live inside the EXISTS subquery.
+    pre_where = sql.split("WHERE")[0]
+    assert pre_where.count('FROM "library_loan"') == 1
+    assert "library_patron" not in pre_where.lower()
+
+
+@pytest.mark.django_db
+def test_library_loans_connection_mixed_or_paginates_row_preserved_roots_over_http(
+    project_schema_override,
+):
+    """A test-scoped live Loan CONNECTION paginates the mixed-OR row-preserved roots.
+
+    The user-mandated connection contract (feedback High 4): under the default-OFF
+    ``FAKESHOP_TEST_LOAN_CONNECTION`` flag the real ``LoanType`` gains ``relay.Node``
+    and the root ``allLibraryLoansConnection`` (a ``DjangoConnectionField(LoanType)``
+    auto-deriving ``filter:`` from ``LoanFilter``) is exposed at ``/graphql/``. The
+    same mixed direct/relational OR as the list-field oracle above must page over
+    row-PRESERVED roots: ``totalCount == 3`` (NOT a fanned-out count), ``first: 2``
+    yields ``relation_and_direct`` then ``relation_only`` with ``hasNextPage`` and a
+    cursor, and ``after:`` returns ONLY ``direct_only`` with the boundary reached.
+
+    Teardown proves the default schema stays list-only: after the flag is off the
+    connection field is absent from ``Query`` and ``test_book_loans_relation_stays_list_only``
+    still holds.
+    """
+
+    def _edge_pks(conn: dict) -> list[int]:
+        # ``LoanType`` is a Relay Node under the flag, so ``node { id }`` is a
+        # model-anchored GlobalID (``base64("library.loan:<pk>")``); decode it
+        # back to the raw pk.
+        pks = []
+        for edge in conn["edges"]:
+            type_name, node_id = _decode_global_id(edge["node"]["id"])
+            assert type_name == "library.loan", type_name
+            pks.append(int(node_id))
+        return pks
+
+    with override_settings(FAKESHOP_TEST_LOAN_CONNECTION=True):
+        project_schema_override()
+        graph = _seed_medtrics_loan_graph()
+
+        filter_body = (
+            "{ or: ["
+            '{ note: { iContains: "Cardio" } }, '
+            '{ bookLoansPatronEmail: { iContains: "Cardio" } }'
+            "] }"
+        )
+
+        with CaptureQueriesContext(connection) as captured:
+            page_one = _post_graphql(
+                """
+                query {
+                  allLibraryLoansConnection(
+                    filter: %s
+                    orderBy: [{ id: ASC }]
+                    first: 2
+                  ) {
+                    totalCount
+                    edges { node { id } }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+                """
+                % filter_body,
+            )
+        assert page_one.status_code == 200
+        payload_one = page_one.json()
+        assert "errors" not in payload_one, payload_one
+        conn_one = payload_one["data"]["allLibraryLoansConnection"]
+
+        # Row-preserving pre-slice count: three loans, NOT a fanned-out total.
+        assert conn_one["totalCount"] == 3
+        assert _edge_pks(conn_one) == [graph.relation_and_direct, graph.relation_only]
+        assert conn_one["pageInfo"]["hasNextPage"] is True
+        end_cursor = conn_one["pageInfo"]["endCursor"]
+        assert isinstance(end_cursor, str) and end_cursor
+
+        # The outer connection query owns library_loan once with a correlated
+        # EXISTS and no framework DISTINCT / self-join / patron join.
+        loan_sql = [
+            q["sql"]
+            for q in captured.captured_queries
+            if "library_loan" in q["sql"].lower() and "SELECT" in q["sql"].upper()
+        ]
+        assert loan_sql, captured.captured_queries
+        row_sql = [sql for sql in loan_sql if "EXISTS(" in sql.upper()]
+        assert len(row_sql) >= 1, loan_sql
+        for sql in row_sql:
+            assert "SELECT DISTINCT" not in sql.upper()
+            assert sql.upper().count("EXISTS(") == 1
+            pre_where = sql.split("WHERE")[0]
+            assert pre_where.count('FROM "library_loan"') == 1
+            assert "library_patron" not in pre_where.lower()
+
+        page_two = _post_graphql(
+            """
+            query {
+              allLibraryLoansConnection(
+                filter: %s
+                orderBy: [{ id: ASC }]
+                first: 2
+                after: "%s"
+              ) {
+                totalCount
+                edges { node { id } }
+                pageInfo { hasNextPage endCursor }
+              }
+            }
+            """
+            % (filter_body, end_cursor),
+        )
+        assert page_two.status_code == 200
+        payload_two = page_two.json()
+        assert "errors" not in payload_two, payload_two
+        conn_two = payload_two["data"]["allLibraryLoansConnection"]
+
+        assert conn_two["totalCount"] == 3
+        assert _edge_pks(conn_two) == [graph.direct_only]
+        assert conn_two["pageInfo"]["hasNextPage"] is False
+
+    # Flag off: rebuild the default schema and prove the connection field is GONE.
+    project_schema_override()
+    introspection = _post_graphql('{ __type(name: "Query") { fields { name } } }')
+    assert introspection.status_code == 200
+    introspection_payload = introspection.json()
+    assert "errors" not in introspection_payload, introspection_payload
+    query_fields = {field["name"] for field in introspection_payload["data"]["__type"]["fields"]}
+    assert "allLibraryLoans" in query_fields
+    assert "allLibraryLoansConnection" not in query_fields
 
 
 @pytest.mark.django_db

@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 from apps.library import models
 from django.core.exceptions import ValidationError
+from django.db import connection
 from django.http import QueryDict
 from graphql import GraphQLError
 from strawberry import relay
@@ -30,12 +31,19 @@ from django_strawberry_framework.filters import (
     validate_range,
 )
 from django_strawberry_framework.filters.base import (
+    _GLOBALID_RELATION_PK_ATTR,
     IntegerRangeFilter,
     _accepted_globalid_type_names,
     _decode_and_validate_global_id,
+    _relation_uses_non_pk_to_field,
     _target_definition_for,
 )
 from django_strawberry_framework.registry import registry
+from tests._relation_fixtures import (
+    RpToFieldChild,
+    RpToFieldTarget,
+    relation_fixture_tables,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -389,6 +397,160 @@ def test_global_id_multiple_choice_filter_empty_excluded_exact_matches_everythin
     f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="exact", exclude=True)
 
     assert f.filter(qs, []) is qs
+
+
+# ---------------------------------------------------------------------------
+# GlobalID relation filtering against a non-pk ``to_field`` (High 3)
+# ---------------------------------------------------------------------------
+
+
+def test_relation_uses_non_pk_to_field_true_for_to_field_fk():
+    """A forward FK bound on a non-pk ``to_field`` (``target`` -> ``code``) is flagged."""
+    field = RpToFieldChild._meta.get_field("target")
+    assert _relation_uses_non_pk_to_field(field) is True
+
+
+def test_relation_uses_non_pk_to_field_false_for_ordinary_fk_to_pk():
+    """An ordinary FK whose target field IS the related pk is not flagged."""
+    field = models.Book._meta.get_field("shelf")
+    assert _relation_uses_non_pk_to_field(field) is False
+
+
+def test_relation_uses_non_pk_to_field_false_for_m2m():
+    """A ``ManyToManyField`` (non-concrete) is not flagged."""
+    field = models.Book._meta.get_field("genres")
+    assert _relation_uses_non_pk_to_field(field) is False
+
+
+def test_relation_uses_non_pk_to_field_false_for_reverse_relation():
+    """A reverse relation object (non-concrete) is not flagged."""
+    field = models.Book._meta.get_field("loans")
+    assert _relation_uses_non_pk_to_field(field) is False
+
+
+def test_relation_uses_non_pk_to_field_false_for_non_relation():
+    """A plain scalar column is not flagged."""
+    field = models.Book._meta.get_field("title")
+    assert _relation_uses_non_pk_to_field(field) is False
+
+
+@pytest.mark.django_db(transaction=True)
+def test_global_id_filter_non_pk_to_field_matches_by_target_pk():
+    """A marked forward-FK GlobalID filter compiles against the target's pk.
+
+    The Relay GlobalID carries the target's PRIMARY KEY, but the FK stores /
+    joins on ``code``. The pk-qualified predicate (``target__pk``) returns
+    exactly the children of the encoded target, whereas the OLD unqualified
+    predicate (``target=<pk>``) compares the PK value against the stored
+    ``code`` column and matches nothing -- the red->green proof that
+    ``pk != code`` matters.
+    """
+    with relation_fixture_tables(connection):
+        alpha = RpToFieldTarget.objects.create(code="ALPHA", label="A")
+        beta = RpToFieldTarget.objects.create(code="BETA", label="B")
+        RpToFieldChild.objects.create(target=alpha, name="a-child")
+        RpToFieldChild.objects.create(target=beta, name="b-child")
+
+        assert alpha.pk != alpha.code
+        encoded = relay.to_base64("RpToFieldTargetType", str(alpha.pk))
+
+        f = GlobalIDFilter(field_name="target", lookup_expr="exact")
+        # Boolean flag: ``filter`` derives ``f"{field_name}__pk"`` == "target__pk".
+        setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
+        result = f.filter(RpToFieldChild.objects.all(), encoded)
+        assert set(result.values_list("name", flat=True)) == {"a-child"}
+
+        # The old/unqualified predicate compared the pk value against the stored
+        # ``code`` column and returned the WRONG (empty) result.
+        wrong = RpToFieldChild.objects.filter(target__exact=str(alpha.pk))
+        assert wrong.count() == 0
+
+
+@pytest.mark.django_db(transaction=True)
+def test_global_id_multiple_choice_filter_non_pk_to_field_union_by_pk():
+    """A marked multi-choice ``in`` filter unions both targets' children by pk."""
+    with relation_fixture_tables(connection):
+        alpha = RpToFieldTarget.objects.create(code="ALPHA", label="A")
+        beta = RpToFieldTarget.objects.create(code="BETA", label="B")
+        gamma = RpToFieldTarget.objects.create(code="GAMMA", label="G")
+        RpToFieldChild.objects.create(target=alpha, name="a-child")
+        RpToFieldChild.objects.create(target=beta, name="b-child")
+        RpToFieldChild.objects.create(target=gamma, name="g-child")
+
+        encoded = [
+            relay.to_base64("RpToFieldTargetType", str(alpha.pk)),
+            relay.to_base64("RpToFieldTargetType", str(beta.pk)),
+        ]
+        f = GlobalIDMultipleChoiceFilter(field_name="target", lookup_expr="in")
+        # Boolean flag: ``filter`` derives ``f"{field_name}__pk"`` == "target__pk".
+        setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
+        result = f.filter(RpToFieldChild.objects.all(), encoded)
+        assert set(result.values_list("name", flat=True)) == {"a-child", "b-child"}
+
+        # The old/unqualified ``target__in`` compared the pk values against the
+        # stored ``code`` column and matched nothing.
+        wrong = RpToFieldChild.objects.filter(target__in=[str(alpha.pk), str(beta.pk)])
+        assert wrong.count() == 0
+
+
+def test_global_id_filter_fk_to_pk_predicate_is_byte_identical():
+    """Without the marker, the predicate is the unchanged ``{field__lookup: node_id}``."""
+    captured = {}
+
+    class _Qs:
+        def filter(self, **kwargs):
+            captured.update(kwargs)
+            return self
+
+    encoded = relay.to_base64("ShelfType", "7")
+    f = GlobalIDFilter(field_name="shelf", lookup_expr="exact")
+    assert getattr(f, _GLOBALID_RELATION_PK_ATTR, False) is not True
+    f.filter(_Qs(), encoded)
+    assert captured == {"shelf__exact": "7"}
+
+
+def test_global_id_multiple_choice_filter_in_predicate_is_byte_identical():
+    """Without the marker, the ``in`` predicate keeps the raw whole-list form."""
+    captured = {}
+
+    class _Qs:
+        def distinct(self):
+            return self
+
+        def filter(self, **kwargs):
+            captured.update(kwargs)
+            return self
+
+    encoded = [relay.to_base64("GenreType", "1"), relay.to_base64("GenreType", "2")]
+    f = GlobalIDMultipleChoiceFilter(field_name="genres", lookup_expr="in")
+    assert getattr(f, _GLOBALID_RELATION_PK_ATTR, False) is not True
+    # ``MultipleChoiceFilter`` defaults ``distinct=True``; the stub must accept it.
+    f.filter(_Qs(), encoded)
+    assert captured == {"genres__in": ["1", "2"]}
+
+
+@pytest.mark.django_db(transaction=True)
+def test_global_id_filter_marked_empty_node_id_short_circuits():
+    """A well-typed empty-id GlobalID no-ops on a marked filter (Finding 6).
+
+    ``to_base64(<accepted type>, "")`` decodes to ``node_id == ""``, which passes
+    decode + strategy validation (an unbound owner falls back to node-id-only). On a
+    MARKED leaf the pre-Finding-6 code compiled ``<relation>__pk__exact=""`` -- a 500
+    ``ValueError`` on the integer target pk -- because the marked branch skips the
+    ``super().filter`` delegation that no-ops empty values upstream. The new
+    ``EMPTY_VALUES`` short-circuit returns the queryset untouched instead.
+    """
+    with relation_fixture_tables(connection):
+        f = GlobalIDFilter(field_name="target", lookup_expr="exact")
+        setattr(f, _GLOBALID_RELATION_PK_ATTR, True)
+        qs = RpToFieldChild.objects.all()
+        encoded = relay.to_base64("RpToFieldTargetType", "")
+        # No exception, and the queryset is returned untouched (identity).
+        result = f.filter(qs, encoded)
+        assert result is qs
+        # Red->green witness: the marked predicate the guard bypasses would 500.
+        with pytest.raises(ValueError):
+            list(RpToFieldChild.objects.filter(target__pk__exact=""))
 
 
 # ---------------------------------------------------------------------------

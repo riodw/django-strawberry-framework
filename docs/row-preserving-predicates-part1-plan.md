@@ -1,4 +1,4 @@
-# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 7)
+# Part 1 plan: row-preserving predicate machinery, enacted now (Rev 8)
 
 ## Identity and completion ownership
 
@@ -59,7 +59,19 @@ name was false), `PathInfo` named as Slice A's SQL-multiplicity
 authority beside `relation_kind()`'s semantic topology, the
 admin-helper-as-differential-oracle-only rule, the reverse-FK category
 rationale recast from detection to compilation, and the exact
-Python 3.10 + `Django==5.2.0` acceptance floor.
+Python 3.10 + `Django==5.2.0` acceptance floor. Rev 8 enacts the first
+round-1 review ([`feedback.md`][feedback]): live capability-token
+authorization for routing a leaf through the correlated adapter (only a
+LIVE per-request token + fingerprint match, never a frozen candidate row,
+grants routing), resolved-field origin captured at generation time,
+GlobalID relation filtering pk-qualified against a `to_field` (FK-to-non-pk)
+target, the tests-local `to_field` / composite-pk fixture models added for
+those acceptance rows, the **test-scoped `FAKESHOP_TEST_LOAN_CONNECTION`**
+Loan connection (fakeshop's default schema stays permanently list-only; the
+real `LoanType` / `LoanFilter` connection is gated OFF by default and
+exposed only under `override_settings` + `project_schema_override` for the
+acceptance test), and the correction of this document's lenient-fallback
+wording to the actual three-part `path_traverses_to_many` rule.
 
 The first review's verified corrections continue to shape the plan:
 
@@ -252,12 +264,30 @@ Per first-review finding 5, classification and lookup validation are
   ORM name the generated surface can produce).
 - Strictness contract: `classify_path` raises one named, typed resolution
   error (message naming model, path, offending segment).
-  `path_traverses_to_many` is reimplemented over `classify_path`, catching
-  **only that typed error** to retain its lenient legacy `False` for
-  existing callers; new machinery calls `classify_path` directly and fails
-  loud — but **only on inputs proven to be framework-generated model
-  paths** (see C.2's origin rule; declared/custom names are never fed to
-  the strict classifier).
+  `path_traverses_to_many` is reimplemented over `classify_path` and answers
+  by a three-part rule, not a blanket lenient `False`:
+  - **Resolved valid paths** take their answer from
+    `classify_path(...).first_many_index is not None` — i.e. from
+    `PathInfo.m2m` per hop, the ORM's own SQL-cardinality bit.
+  - **Rejected paths** (any `PathResolutionError` — unresolvable head,
+    garbage tail, forward `GenericForeignKey`) replay the legacy lenient walk
+    (`_lenient_traverses_to_many`), which returns `True` the instant it
+    reaches a many-side hop and never sees the garbage beyond it. This
+    preserves early many-side detection on the raise paths (e.g.
+    `genres__nonexistent` -> `True`, `genres__name__icontains` -> `True`),
+    where a bare `False` on the raise would have regressed the pre-refactor
+    answer.
+  - **One deliberate resolved-path correction:** the reverse hop of a
+    `ForeignKey(unique=True)`. The old walk read cardinality from
+    `relation_kind` (every `ManyToOneRel` -> many-side -> `True`); the
+    classifier reads `PathInfo.m2m == not field.unique`, so a unique reverse
+    FK is now reported single-valued (`False`). A unique reverse FK genuinely
+    cannot fan out, so this is a correction (it drops the needless `distinct`
+    stamp / order aggregate), not a regression.
+
+  New machinery calls `classify_path` directly and fails loud — but **only on
+  inputs proven to be framework-generated model paths** (see C.2's origin
+  rule; declared/custom names are never fed to the strict classifier).
 - The complete relation chain is exposed as the (future) subquery grouping
   key — never reconstructed by callers.
 
@@ -760,6 +790,19 @@ path), never a bare `django.test.Client`; and any fixture that mutates
 registry or type state beyond seeded rows goes through the shared
 `schema_reload.py` / `project_schema_override` isolation machinery, not
 an ad hoc reload.
+
+**Loan connection is test-scoped (execution decision).** The direct deep
+reverse-FK proof (item 2) needs a Relay connection over `LoanType`, but
+fakeshop's default schema deliberately keeps the loan surface **list-only**
+in production shape — no `Loan` connection is added to the shipped schema.
+Instead a `FAKESHOP_TEST_LOAN_CONNECTION`-gated (default **OFF**) connection
+over the REAL `LoanType` / `LoanFilter` / `DjangoConnectionField` is exposed
+only for the acceptance test, activated under `override_settings` +
+`project_schema_override` so it never leaks into the default schema or any
+other suite. The connection exercises the production `LoanFilter` and
+`LoanType` unchanged; only its schema exposure is gated. This keeps the
+row-preserving cardinality proof running against genuine framework-generated
+machinery while leaving fakeshop's canonical schema permanently list-only.
 
 ## Slice D — documentation of the shipped semantics (completion slice)
 

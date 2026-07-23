@@ -27,6 +27,11 @@ from django_strawberry_framework.optimizer.predicates import (
     attach_exists,
     correlated_inner_root,
 )
+from tests._relation_fixtures import (
+    RpCompositeChild,
+    RpCompositeParent,
+    relation_fixture_tables,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -219,24 +224,48 @@ def test_evaluated_outer_parity():
     assert rows_e == rows_f == [matching.pk]
 
 
-def test_composite_pk_correlation_is_outerref_pk():
-    """Composite pks share the single ``pk=OuterRef("pk")`` implementation.
+@pytest.mark.django_db(transaction=True)
+def test_composite_pk_correlation_executes_on_composite_fixture():
+    """Composite pks share the single ``pk=OuterRef("pk")`` correlation, now
+    PROVEN executing against a real composite-primary-key table.
 
-    No composite-primary-key model with a DB table exists in the fakeshop
-    fixtures (``CompositePrimaryKey`` appears only as a monkeypatched relay gate,
-    never a migrated table), so DB-backed execution of the composite tuple
-    comparison is deferred to the supported-version matrix step. Here we prove
-    the correlation term is the sole ``pk=OuterRef("pk")`` implementation that
-    Django compiles to a tuple comparison for a composite pk on supported
-    Django.
+    The ``RpCompositeParent`` fixture (``CompositePrimaryKey("tenant_id",
+    "code")``) supplies the DB-backed composite table the fakeshop apps lack, so
+    execution is no longer deferred. Django compiles the sole
+    ``pk=OuterRef("pk")`` correlation to a tuple comparison over both member
+    columns: the structural pin below shows the lhs is a ``ColPairs`` over the
+    composite pk's member fields, and the execution below shows a parent with two
+    matching children returned exactly once (no fan-out), a childless parent
+    excluded, and ``EXISTS`` in the compiled SQL.
     """
-    inner = correlated_inner_root(Book.objects.all())
-    (child,) = inner.query.where.children
+    # Structural pin: the correlation is the single pk=OuterRef("pk") term, whose
+    # composite lhs targets exactly the primary key's member fields (a tuple
+    # comparison), keeping the single-implementation claim.
+    inner_root = correlated_inner_root(RpCompositeParent.objects.all())
+    (child,) = inner_root.query.where.children
     assert child.lookup_name == "exact"
-    assert child.lhs.target is Book._meta.pk
-    # The rhs is the resolved OuterRef correlating on the outer row's pk.
+    assert tuple(child.lhs.targets) == tuple(RpCompositeParent._meta.pk.fields)
     assert child.rhs.name == "pk"
     assert "OuterRef" in type(child.rhs).__name__
+
+    with relation_fixture_tables(connection):
+        matched = RpCompositeParent.objects.create(tenant_id=1, code="MATCH", label="m")
+        RpCompositeChild.objects.create(parent=matched, name="hit one")
+        RpCompositeChild.objects.create(parent=matched, name="hit two")
+        empty = RpCompositeParent.objects.create(tenant_id=1, code="EMPTY", label="e")
+
+        outer = RpCompositeParent.objects.all()
+        inner = correlated_inner_root(outer).filter(children__name__icontains="hit")
+        qs, cond = attach_exists(outer, inner)
+        result = qs.filter(cond)
+
+        codes = list(result.order_by("tenant_id", "code").values_list("code", flat=True))
+        # Only the parent with matching children, and the multi-child parent
+        # appears exactly once (no fan-out duplicate).
+        assert codes == ["MATCH"]
+        assert result.count() == 1
+        assert empty.code not in codes
+        assert "EXISTS" in str(result.query).upper()
 
 
 def test_base_manager_start_does_not_leak_outer_filters():

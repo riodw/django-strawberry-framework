@@ -3,6 +3,7 @@
 from typing import Any
 
 import strawberry
+from django.conf import settings
 from strawberry import relay
 from strawberry.types import Info
 
@@ -87,7 +88,17 @@ class Named:
 
 
 class LoanType(DjangoType):
-    """Loan declared before Book and Patron to exercise finalization."""
+    """Loan declared before Book and Patron to exercise finalization.
+
+    Default-OFF acceptance flag ``FAKESHOP_TEST_LOAN_CONNECTION`` (mirrors the
+    ``HIDE_FLAT_FILTERS`` settings-gated idiom): when set, ``relay.Node`` is added
+    to ``Meta.interfaces`` so a ``DjangoConnectionField(LoanType)`` has a
+    Node-shaped target. Read in the ``Meta`` body so a project-schema reload under
+    ``override_settings`` re-executes it; when the flag is absent (the default),
+    ``interfaces`` is not defined and the type stays exactly as shipped -
+    fakeshop's public loan API is permanently list-only (see
+    ``test_book_loans_relation_stays_list_only``).
+    """
 
     class Meta:
         model = models.Loan
@@ -100,6 +111,9 @@ class LoanType(DjangoType):
         filterset_class = filters.LoanFilter
         orderset_class = orders.LoanOrder
         optimizer_hints = {"book": OptimizerHint.prefetch_related(), "patron": OptimizerHint.SKIP}
+        if getattr(settings, "FAKESHOP_TEST_LOAN_CONNECTION", False):
+            interfaces = (relay.Node,)
+            connection = {"total_count": True}
 
 
 class BookType(DjangoType):
@@ -587,6 +601,20 @@ class Query:
         if order_by is not None:
             queryset = orders.LoanOrder.apply_sync(order_by, queryset, info)
         return queryset
+
+    # Default-OFF acceptance flag ``FAKESHOP_TEST_LOAN_CONNECTION`` (mirrors the
+    # ``HIDE_FLAT_FILTERS`` settings-gated idiom): when set, a live Relay CONNECTION
+    # over the real ``LoanType`` + ``LoanFilter`` is exposed at ``/graphql/`` beside
+    # the permanently list-only ``allLibraryLoans``. ``DjangoConnectionField(LoanType)``
+    # auto-derives its ``filter:`` argument from ``LoanType.Meta.filterset_class``
+    # (``LoanFilter``), and needs the same-flag ``relay.Node`` on ``LoanType.Meta``.
+    # Read in the class body so a project-schema reload under ``override_settings``
+    # re-executes it; absent the flag (the default) the field is not defined and the
+    # default schema stays list-only.
+    if getattr(settings, "FAKESHOP_TEST_LOAN_CONNECTION", False):
+        all_library_loans_connection: DjangoConnection[LoanType] = DjangoConnectionField(
+            LoanType,
+        )
 
 
 # --------------------------------------------------------------------------- #

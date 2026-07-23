@@ -131,7 +131,13 @@ def _apply_lookups(filter_instance: Any, qs: Any, lookups: dict[str, Any]) -> An
     return filter_instance.get_method(qs)(**lookups)
 
 
-def _apply_lookup_predicate(filter_instance: Any, qs: Any, value: Any) -> Any:
+def _apply_lookup_predicate(
+    filter_instance: Any,
+    qs: Any,
+    value: Any,
+    *,
+    field_name: str | None = None,
+) -> Any:
     """Apply ``distinct`` + ONE ``<field>__<lookup>`` predicate carrying ``value``.
 
     The whole-value-in-one-predicate form (never upstream's per-element OR
@@ -140,8 +146,16 @@ def _apply_lookup_predicate(filter_instance: Any, qs: Any, value: Any) -> Any:
     splitting per element would hand Django a scalar rhs it iterates
     (``pk__in="26"`` -> ``IN ('2','6')``). Shared so the two call sites - and
     any future list-lookup filter - cannot drift back to per-element form.
+
+    ``field_name`` overrides ``filter_instance.field_name`` for the lookup key
+    (the ``lookup_expr`` is always the instance's own). The GlobalID
+    non-pk-``to_field`` fix derives and passes the pk-qualified relation path
+    (``f"{live_field_name}__pk"``, computed from the LIVE ``field_name`` at filter
+    time) so the predicate compares the target's primary key - which a Relay
+    GlobalID carries - rather than the raw FK-stored ``to_field`` column.
     """
-    lookup = f"{filter_instance.field_name}__{filter_instance.lookup_expr}"
+    field = filter_instance.field_name if field_name is None else field_name
+    lookup = f"{field}__{filter_instance.lookup_expr}"
     return _apply_lookups(filter_instance, qs, {lookup: value})
 
 
@@ -154,6 +168,55 @@ def _match_none_queryset(filter_instance: Any, qs: Any) -> Any:
     would silently widen a restrictive predicate to no constraint).
     """
     return qs if filter_instance.exclude else qs.none()
+
+
+# Private instance-attribute slot a generated GlobalID RELATION filter carries a
+# BOOLEAN flag under, set ``True`` when, and only when, its forward FK/O2O binds
+# on a NON-pk ``to_field``. ``filter_for_field`` stamps the flag via
+# ``_relation_uses_non_pk_to_field``; ``GlobalIDFilter.filter`` /
+# ``GlobalIDMultipleChoiceFilter.filter`` read it and DERIVE the pk-qualified path
+# ``f"{self.field_name}__pk"`` at filter time from the LIVE ``field_name``. Storing
+# a boolean flag (never a frozen absolute path) is what makes the marker immune to
+# re-prefixing: ``_expand_related_filter`` deepcopies a child leaf and rebases its
+# ``field_name`` to ``"<relation>__<child_field>"``, and a boolean survives that
+# rebase while a saved absolute string (e.g. ``"target__pk"``) would go stale and
+# compile against the wrong relation (a ``FieldError`` on the parent model). Absent
+# / falsy (the common FK-to-pk / M2M / reverse / own-PK case) the predicate stays
+# byte-identical to upstream's ``{field_name__lookup_expr: node_id}`` - a Relay
+# GlobalID carries the target PK, which Django already resolves to the local FK
+# column for an FK-to-pk, so only the genuine non-pk-``to_field`` case needs the
+# ``__pk`` qualification.
+_GLOBALID_RELATION_PK_ATTR = "_dst_globalid_relation_pk"
+
+
+def _relation_uses_non_pk_to_field(model_field: Any) -> bool:
+    """Return True iff ``model_field`` is a forward FK/O2O bound on a non-pk ``to_field``.
+
+    A ``ForeignKey``/``OneToOneField`` declared with ``to_field="<col>"`` stores
+    and joins on the target's ``<col>`` (via ``model_field.target_field``), which
+    is NOT the target's primary key. A Relay GlobalID always carries the target's
+    PK, so ``filter(<relation>=<node_id>)`` would compare the PK value against the
+    stored ``to_field`` column and return wrong rows; the GlobalID relation filter
+    must qualify with ``__pk`` in exactly this case.
+
+    False for everything else - non-relations, M2M, and reverse relations
+    (``concrete`` is False on M2M / reverse-rel objects, including the composite
+    ``ForeignObject`` shape), and ordinary FK-to-pk (``target_field`` IS the
+    related model's pk) - so every other GlobalID relation predicate keeps its
+    current shape unchanged.
+
+    A field that clears both guards is a concrete single-valued forward relation
+    (``ForeignKey`` / ``OneToOneField``), which always carries a ``related_model``
+    and a single ``target_field``; the composite ``ForeignObject`` (whose
+    ``target_field`` would raise) is non-concrete and rejected by the first guard.
+    """
+    if not getattr(model_field, "concrete", False):
+        return False
+    if not (
+        getattr(model_field, "many_to_one", False) or getattr(model_field, "one_to_one", False)
+    ):
+        return False
+    return model_field.target_field is not model_field.related_model._meta.pk
 
 
 class ArrayFilterMethod(_EmptyListAwareFilterMethod):
@@ -556,10 +619,32 @@ class GlobalIDFilter(Filter):
     """
 
     def filter(self, qs: Any, value: Any) -> Any:
-        """Decode + validate the GlobalID; delegate to `Filter.filter` with `node_id`."""
+        """Decode + validate the GlobalID; delegate to `Filter.filter` with `node_id`.
+
+        When the filter targets a forward relation bound on a non-pk ``to_field``
+        (flagged at generation via the boolean ``_GLOBALID_RELATION_PK_ATTR``), the
+        predicate is compiled against the pk-qualified relation path
+        ``f"{self.field_name}__pk"`` - DERIVED from the LIVE ``field_name`` at filter
+        time so it stays correct after ``_expand_related_filter`` rebases the leaf -
+        so the decoded PK ``node_id`` compares against the target's primary key
+        rather than the raw FK-stored ``to_field`` column. Every other case delegates
+        to ``Filter.filter`` with the unchanged ``{field_name__lookup_expr: node_id}``
+        predicate.
+        """
         if value is None:
             return super().filter(qs, None)
         node_id = _decode_and_validate_global_id(value, self)
+        if node_id in EMPTY_VALUES:
+            # A well-typed GlobalID whose id part is empty decodes to ``""``, which
+            # passes decode + strategy validation but is not a filter value. Upstream
+            # ``Filter.filter`` no-ops the unmarked path via its own ``EMPTY_VALUES``
+            # short circuit; the marked path skips that delegation, so without this an
+            # empty ``node_id`` would compile ``<relation>__pk__exact=""`` and raise a
+            # 500 on an integer pk. Short-circuit to the untouched queryset either way.
+            return qs
+        if getattr(self, _GLOBALID_RELATION_PK_ATTR, False):
+            pk_field_name = f"{self.field_name}__pk"
+            return _apply_lookup_predicate(self, qs, node_id, field_name=pk_field_name)
         return super().filter(qs, node_id)
 
 
@@ -680,7 +765,18 @@ class GlobalIDMultipleChoiceFilter(MultipleChoiceFilter):
         ]
         if self.lookup_expr != "in":
             return super().filter(qs, node_ids)
-        return _apply_lookup_predicate(self, qs, node_ids)
+        # The boolean ``_GLOBALID_RELATION_PK_ATTR`` flag DERIVES the pk-qualified
+        # relation path ``f"{self.field_name}__pk"`` from the LIVE ``field_name`` at
+        # filter time (immune to ``_expand_related_filter`` rebasing) for a
+        # non-pk-``to_field`` forward relation; every other target passes
+        # ``field_name=None``, leaving the predicate byte-identical to the raw
+        # ``{field_name__in: node_ids}`` form. A framework-generated multiple-choice
+        # filter only ever targets a many-side relation (never a single-valued
+        # forward FK), so the flag is present here only when a caller hand-stamps it,
+        # but the ``in`` path honors it for symmetry with ``GlobalIDFilter``.
+        marked = getattr(self, _GLOBALID_RELATION_PK_ATTR, False)
+        pk_field_name = f"{self.field_name}__pk" if marked else None
+        return _apply_lookup_predicate(self, qs, node_ids, field_name=pk_field_name)
 
 
 class RelatedFilter(RelatedSetTargetMixin, ModelChoiceFilter):

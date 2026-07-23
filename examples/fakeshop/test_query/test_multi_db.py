@@ -151,6 +151,47 @@ def _build_debug_test_schema(_reload_project_schema_for_acceptance_tests):
     _current["schema"] = None
 
 
+@pytest.fixture
+def _build_loan_filter_test_schema(_reload_project_schema_for_acceptance_tests):
+    """Build a per-test schema exposing a ``.using('shard_b')`` Loan LIST field with ``LoanFilter``.
+
+    The shard-alias twin of ``_build_test_schema`` for the row-preserving
+    relational-leaf predicate proof (feedback High 4 / spec-049 Part 1): the
+    resolver applies the PRODUCTION ``LoanFilter`` (whose deep
+    ``book__loans__patron__email`` leaf compiles to a correlated ``EXISTS``) over a
+    queryset pinned to ``shard_b``, so the predicate primitive's ``.using(queryset.db)``
+    pin must carry the ``EXISTS`` subquery to that alias. ``LoanFilter`` / ``LoanType``
+    are imported inside the fixture body (like ``BookType`` above) so the freshly
+    reloaded classes are used after the autouse registry clear.
+    """
+    from apps.library import filters as library_filters
+    from apps.library.schema import LoanType
+
+    from django_strawberry_framework.filters import filter_input_type
+
+    @strawberry.type
+    class _LoanFilterShardQuery:
+        @strawberry.field
+        def loans_on_shard_b(
+            self,
+            info: Info,
+            filter: filter_input_type(library_filters.LoanFilter) | None = None,  # noqa: A002
+        ) -> list[LoanType]:
+            queryset = models.Loan.objects.using("shard_b").order_by("id")
+            if filter is not None:
+                queryset = library_filters.LoanFilter.apply_sync(filter, queryset, info)
+            return queryset
+
+    optimizer = DjangoOptimizerExtension()
+    _current["schema"] = strawberry.Schema(
+        query=_LoanFilterShardQuery,
+        config=strawberry_config(),
+        extensions=[lambda: optimizer],
+    )
+    yield
+    _current["schema"] = None
+
+
 # ---------------------------------------------------------------------------
 # Seed helper - full Branch -> Shelf -> Book chain per alias (rev2 H9)
 # ---------------------------------------------------------------------------
@@ -288,6 +329,108 @@ def test_debug_extension_captures_shard_b_alias_rows(_build_debug_test_schema):
     assert payload["exceptions"] == []
     for database_connection in connections.all():
         assert database_connection.force_debug_cursor is prior_flags[database_connection.alias]
+
+
+def _seed_loan_relation_graph_on_shard_b() -> dict[str, int]:
+    """Seed a small row-preserving relational-leaf graph on ``shard_b``.
+
+    A ``shared_book`` carries two loans whose patrons both have "Cardio" emails,
+    plus an ``other_book`` with a single non-matching ("Ortho") loan. The deep
+    leaf ``book__loans__patron__email icontains "Cardio"`` matches a root loan
+    when its BOOK has any loan to a "Cardio" patron - so both shared-book loans
+    match (each once, row-preserving) and the other-book loan does not. Returns
+    the captured pks (``unique_open_loan_per_book_patron`` forbids repeating a
+    ``(book, patron)`` pair, so patrons are distinct per loan).
+    """
+    branch = models.Branch.objects.using("shard_b").create(name="Shard Medtrics", city="Boston")
+    shelf = models.Shelf.objects.using("shard_b").create(
+        code="SHARD-MED-1",
+        topic="ward",
+        branch=branch,
+    )
+    shared_book = models.Book.objects.using("shard_b").create(shelf=shelf, title="Shard Shared")
+    other_book = models.Book.objects.using("shard_b").create(shelf=shelf, title="Shard Other")
+    patron_a = models.Patron.objects.using("shard_b").create(name="Shard A", email="Cardio A")
+    patron_b = models.Patron.objects.using("shard_b").create(name="Shard B", email="Cardio B")
+    patron_c = models.Patron.objects.using("shard_b").create(name="Shard C", email="Ortho")
+    relation_a = models.Loan.objects.using("shard_b").create(
+        book=shared_book,
+        patron=patron_a,
+        note="checkout",
+    )
+    relation_b = models.Loan.objects.using("shard_b").create(
+        book=shared_book,
+        patron=patron_b,
+        note="checkout",
+    )
+    unrelated = models.Loan.objects.using("shard_b").create(
+        book=other_book,
+        patron=patron_c,
+        note="checkout",
+    )
+    return {"relation_a": relation_a.pk, "relation_b": relation_b.pk, "unrelated": unrelated.pk}
+
+
+@pytest.mark.django_db(databases=["default", "shard_b"])
+def test_row_preserving_relational_leaf_predicate_executes_on_shard_b_alias(
+    _build_loan_filter_test_schema,
+):
+    """The correlated-``EXISTS`` relational-leaf predicate runs on the ``shard_b`` alias.
+
+    The production ``LoanFilter`` deep leaf ``book__loans__patron__email`` (spelled
+    ``bookLoansPatronEmail`` on the wire) is applied over a ``.using('shard_b')``
+    queryset. The predicate primitive pins its correlated ``EXISTS`` subquery to
+    ``queryset.db``, so the whole filter - outer root scan AND the ``EXISTS``
+    re-entry - must execute on ``shard_b``: the seeded shard rows return
+    row-preserved (both shared-book loans, each once), and the captured ``shard_b``
+    SQL carries the ``EXISTS`` with no framework ``DISTINCT``.
+    """
+    from django.db import connection as default_connection
+    from django.test.utils import CaptureQueriesContext
+
+    pks = _seed_loan_relation_graph_on_shard_b()
+
+    client = TestClient()
+    with override_settings(ROOT_URLCONF=__name__):
+        clear_url_caches()
+        try:
+            with (
+                CaptureQueriesContext(connections["shard_b"]) as shard_captured,
+                CaptureQueriesContext(default_connection) as default_captured,
+            ):
+                res = client.query(
+                    """
+                    query {
+                      loansOnShardB(filter: { bookLoansPatronEmail: { iContains: "Cardio" } }) {
+                        id
+                      }
+                    }
+                    """,
+                )
+        finally:
+            clear_url_caches()
+
+    # Row-preserving: exactly both shared-book loans, id-ordered, each once.
+    assert [loan["id"] for loan in res.data["loansOnShardB"]] == [
+        pks["relation_a"],
+        pks["relation_b"],
+    ]
+
+    # The correlated EXISTS re-entry ran on shard_b (the .using(queryset.db) pin),
+    # never on default.
+    shard_loan_sql = [
+        query["sql"]
+        for query in shard_captured.captured_queries
+        if "library_loan" in query["sql"].lower() and "EXISTS(" in query["sql"].upper()
+    ]
+    assert shard_loan_sql, shard_captured.captured_queries
+    for sql in shard_loan_sql:
+        assert "SELECT DISTINCT" not in sql.upper()
+    assert not [
+        query["sql"]
+        for query in default_captured.captured_queries
+        if "library_loan" in query["sql"].lower()
+    ], default_captured.captured_queries
 
 
 # ---------------------------------------------------------------------------

@@ -217,7 +217,14 @@ Per first-review finding 5, classification and lookup validation are
     is `path_infos[-1].to_opts.model` — one declared segment may expand to
     multiple ORM `PathInfo` records, so multiplicity collapses at the
     declared-segment boundary; empty `path_infos` on a relation segment
-    raises the typed resolution error. Despite its historical name,
+    raises the typed resolution error. `field.path_infos` is read ONLY
+    after the resolved segment is confirmed to be a traversable relation:
+    a scalar terminal remains a terminal and never reaches the hop logic
+    (plain fields have no `path_infos` attribute at all), and a forward
+    `GenericForeignKey` — which sets `is_relation=True` yet defines no
+    `path_infos` — raises the same typed resolution error, never a raw
+    `AttributeError` (`is_relation` alone does not imply a traversable
+    path; verified in Django source). Despite its historical name,
     `PathInfo.m2m` is true for an ordinary non-unique reverse FK as well
     as an M2M hop (`not self.unique` on the reverse side), which is
     exactly the SQL-cardinality answer the plan needs; it deliberately

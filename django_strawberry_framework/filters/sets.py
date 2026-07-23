@@ -250,10 +250,15 @@ class FilterGenerationProvenance:
 
     Known residual: a consumer that overrides ``filter_for_field``, calls
     ``super()``, and then MUTATES the returned instance (e.g. flips
-    ``.distinct``) keeps the framework stamp. This record cannot detect that on
-    its own; ``framework_added_distinct`` is recorded so the candidate-metadata
-    build requires provenance AND consistency between the recorded
-    framework-added-distinct bit and the instance's live ``.distinct``.
+    ``.distinct``) keeps the framework stamp, and this record cannot detect it.
+    Eligibility does NOT reconcile the recorded ``framework_added_distinct`` bit
+    against the instance's live ``.distinct``; it is decided purely from the
+    classified path, the provenance origin, and the absence of a consumer
+    ``method`` (see ``CandidateFilterMetadata.eligible``). That residual is
+    harmless: an eligible leaf is routed through the row-preserving correlated
+    ``EXISTS`` invocation, a pure selection over the incoming queryset whose
+    result does not depend on any ``.distinct`` a consumer mutated onto the
+    stamped instance.
 
     Fields:
 
@@ -266,7 +271,9 @@ class FilterGenerationProvenance:
       every to-many ``distinct`` is machinery-origin, and it is exactly the
       fan-out-compensating flag the row-preserving invocation later suppresses.
       Consumer-origin ``distinct`` can exist only on ``declared`` /
-      ``override_generated`` leaves, which are ineligible by origin.
+      ``override_generated`` leaves, which are ineligible by origin. The STORED
+      bit is provenance/audit only: eligibility and the invocation-time distinct
+      suppression both read the instance's live ``.distinct``, never this record.
     - ``expanded_from`` -- expansion breadcrumbs; empty for a non-expanded
       leaf. ``_expand_related_filter`` copies APPEND the child filter's name and
       INHERIT the child's ``origin`` + ``framework_added_distinct`` (an expanded

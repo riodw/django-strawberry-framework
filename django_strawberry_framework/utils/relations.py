@@ -331,9 +331,12 @@ def _lenient_traverses_to_many(model: type, field_path: str) -> bool:
     ``False`` answer, returning ``True`` the instant a many-side relation is
     reached - even if garbage follows it. ``path_traverses_to_many`` runs this
     ONLY when strict ``classify_path`` raises ``PathResolutionError``, which
-    guarantees byte-identical answers to the pre-refactor implementation: a
+    preserves the pre-refactor answer on every path the classifier REJECTS: a
     many-then-garbage path (e.g. ``genres__nonexistent``) still answers
     ``True`` here, whereas plain ``False`` on the raise would have regressed it.
+    On paths the classifier RESOLVES the answer comes from ``PathInfo.m2m``
+    instead; see ``path_traverses_to_many`` for the one deliberate divergence
+    from this lenient walk's cardinality rule.
     """
     current = model
     for segment in field_path.split(LOOKUP_SEP):
@@ -376,13 +379,23 @@ def path_traverses_to_many(model: type, field_path: str) -> bool:
     garbage tail, a forward ``GenericForeignKey``) it falls back to the legacy
     lenient walk (``_lenient_traverses_to_many``) rather than a bare ``False``.
 
-    That fallback is load-bearing for byte-identical compatibility: the old
-    walk returned ``True`` the instant it reached a many-side hop and never saw
-    a garbage tail beyond it, while ``classify_path`` raises on that tail. A
+    That fallback keeps the resolvable-vs-unresolvable boundary faithful: the
+    old walk returned ``True`` the instant it reached a many-side hop and never
+    saw a garbage tail beyond it, while ``classify_path`` raises on that tail. A
     32-path adversarial matrix (``tests/utils/test_relations.py``) confirms the
-    fallback reproduces the pre-refactor answers exactly, including
+    fallback reproduces the pre-refactor answers on the raise paths, including
     ``genres__nonexistent`` -> ``True`` and ``genres__name__icontains`` ->
     ``True`` (many-then-garbage), where a plain ``False`` would have diverged.
+
+    One DELIBERATE divergence remains on the RESOLVED path: the pre-refactor
+    walk read cardinality from ``relation_kind`` (every ``ManyToOneRel`` is
+    ``reverse_many_to_one`` -> many-side), whereas the strict classifier reads
+    ``PathInfo.m2m`` (``not field.unique``). The reverse side of a
+    ``ForeignKey(unique=True)`` is therefore reported single-valued here
+    (-> ``False``) where the old walk answered ``True``. This is a correction,
+    not a regression: a unique reverse FK is genuinely single-valued, so it
+    neither fans out nor needs the ``distinct`` stamp / order aggregate the old
+    ``True`` triggered.
 
     Filter generation uses the result to set ``distinct=True`` on plain
     generated leaf filters; order resolution uses it to replace a fan-out
